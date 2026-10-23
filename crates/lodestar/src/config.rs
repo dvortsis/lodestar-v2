@@ -38,6 +38,7 @@ pub struct Config {
     pub content: Content,
     pub blocklist: Blocklist,
     pub subscriptions: Subscriptions,
+    pub updates: Updates,
 }
 
 impl Default for Config {
@@ -56,6 +57,7 @@ impl Default for Config {
             content: Content::default(),
             blocklist: Blocklist::default(),
             subscriptions: Subscriptions::default(),
+            updates: Updates::default(),
         }
     }
 }
@@ -100,6 +102,16 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_DHT_ENABLED",
     "LODESTAR_SECURE_COOKIES",
     "LODESTAR_SHOW_ADULT",
+    "LODESTAR_UPDATES",
+    "LODESTAR_UPDATES_LEVEL",
+    "LODESTAR_UPDATES_SECURITY_FIXES",
+    "LODESTAR_UPDATES_CHANNEL",
+    "LODESTAR_UPDATES_WAIT_DAYS",
+    "LODESTAR_UPDATES_WINDOW",
+    "LODESTAR_UPDATES_ALLOW_REINDEX",
+    "LODESTAR_UPDATES_NOTIFY_BEFORE",
+    "LODESTAR_UPDATES_NOTIFY_AFTER",
+    "LODESTAR_UPDATES_NOTIFY_FAILURE",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -363,6 +375,101 @@ pub struct Content {
     pub show_adult: bool,
 }
 
+/// Self-updates (§12.2, owner §2.13): off until chosen. The settings
+/// section `updates` shows and saves the same keys.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    pub mode: UpdateMode,
+    pub level: UpdateLevel,
+    pub security_fixes: SecurityFixes,
+    pub channel: UpdateChannel,
+    /// Days a release waits after its date before it installs (0–14).
+    pub wait_days: u32,
+    /// The install window, local time, `HH:MM-HH:MM` (may wrap midnight).
+    pub window: String,
+    /// Install releases that rebuild the search index.
+    pub allow_reindex: bool,
+    pub notify_before: bool,
+    pub notify_after: bool,
+    pub notify_failure: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Updates {
+            mode: UpdateMode::Off,
+            level: UpdateLevel::Fixes,
+            security_fixes: SecurityFixes::Auto,
+            channel: UpdateChannel::Stable,
+            wait_days: 3,
+            window: "03:00-05:00".into(),
+            allow_reindex: true,
+            notify_before: false,
+            notify_after: true,
+            notify_failure: true,
+        }
+    }
+}
+
+impl Updates {
+    /// The checks a value from the file or the environment must pass
+    /// (the settings section repeats them for the app's own).
+    pub fn check(&self) -> Result<(), ConfigError> {
+        if self.wait_days > 14 {
+            return Err(ConfigError(format!(
+                "updates.wait_days: {} is more than 14",
+                self.wait_days
+            )));
+        }
+        crate::update::window::Window::parse(&self.window)
+            .map_err(|e| ConfigError(format!("updates.window: {e}")))?;
+        Ok(())
+    }
+}
+
+/// `off` (the default), `notify` (check and notify), `auto` (install
+/// automatically) or `image` (the container image updates it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateMode {
+    #[default]
+    Off,
+    Notify,
+    Auto,
+    Image,
+}
+
+/// Which releases install automatically: fixes ≤ features ≤ all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateLevel {
+    #[default]
+    Fixes,
+    Features,
+    All,
+}
+
+/// "Always install security fixes": `auto` is on under `auto`, off
+/// under `notify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecurityFixes {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+    Nightly,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Blocklist {
@@ -520,7 +627,9 @@ impl Config {
         if let Some(v) = env("LODESTAR_SHOW_ADULT") {
             config.content.show_adult = v.parse().map_err(|_| parse("LODESTAR_SHOW_ADULT", &v))?;
         }
+        config.updates_from_env(&env)?;
         config.ranking.check()?;
+        config.updates.check()?;
         Ok(config)
     }
 
@@ -590,6 +699,58 @@ impl Config {
             filter: Arc::new(filter),
             ..PipelineConfig::default()
         })
+    }
+}
+
+impl Config {
+    /// The `LODESTAR_UPDATES*` variables.
+    fn updates_from_env(
+        &mut self,
+        env: &impl Fn(&str) -> Option<String>,
+    ) -> Result<(), ConfigError> {
+        fn word<T: serde::de::DeserializeOwned>(name: &str, v: &str) -> Result<T, ConfigError> {
+            toml::Value::String(v.to_string())
+                .try_into()
+                .map_err(|_| ConfigError(format!("{name}: can't parse {v:?}")))
+        }
+        fn flag(name: &str, v: &str) -> Result<bool, ConfigError> {
+            v.parse()
+                .map_err(|_| ConfigError(format!("{name}: can't parse {v:?}")))
+        }
+        let u = &mut self.updates;
+        if let Some(v) = env("LODESTAR_UPDATES") {
+            u.mode = word("LODESTAR_UPDATES", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_LEVEL") {
+            u.level = word("LODESTAR_UPDATES_LEVEL", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_SECURITY_FIXES") {
+            u.security_fixes = word("LODESTAR_UPDATES_SECURITY_FIXES", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_CHANNEL") {
+            u.channel = word("LODESTAR_UPDATES_CHANNEL", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_WAIT_DAYS") {
+            u.wait_days = v.parse().map_err(|_| {
+                ConfigError(format!("LODESTAR_UPDATES_WAIT_DAYS: can't parse {v:?}"))
+            })?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_WINDOW") {
+            u.window = v;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_ALLOW_REINDEX") {
+            u.allow_reindex = flag("LODESTAR_UPDATES_ALLOW_REINDEX", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_BEFORE") {
+            u.notify_before = flag("LODESTAR_UPDATES_NOTIFY_BEFORE", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_AFTER") {
+            u.notify_after = flag("LODESTAR_UPDATES_NOTIFY_AFTER", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_FAILURE") {
+            u.notify_failure = flag("LODESTAR_UPDATES_NOTIFY_FAILURE", &v)?;
+        }
+        Ok(())
     }
 }
 

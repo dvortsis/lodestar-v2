@@ -12,6 +12,9 @@
 //! golden) is the same everywhere.
 
 #[cfg(unix)]
+#[allow(dead_code)] // The update engine's (part 4).
+pub mod check;
+#[cfg(unix)]
 pub mod control;
 #[cfg(unix)]
 pub mod history;
@@ -25,11 +28,19 @@ pub mod overlay;
 #[cfg(unix)]
 pub mod pending;
 #[cfg(unix)]
+#[allow(dead_code)] // The update engine's (part 4).
+pub mod policy;
+#[cfg(unix)]
 pub mod probation;
 #[cfg(unix)]
 pub mod supervisor;
 #[cfg(unix)]
 pub mod testing;
+#[cfg(unix)]
+#[allow(dead_code)] // The update engine's (part 4).
+pub mod trust_file;
+#[allow(dead_code)] // The update engine's (part 4); `Window::parse` checks settings now.
+pub mod window;
 
 #[cfg(unix)]
 use lodestar_update::semver::Version;

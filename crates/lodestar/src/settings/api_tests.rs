@@ -164,7 +164,7 @@ async fn settings_endpoints() {
     let c = Some(cookie.as_str());
 
     let index = golden(&f, "settings_index", get("/api/v1/settings", c)).await;
-    assert_eq!(index["sections"].as_array().unwrap().len(), 9);
+    assert_eq!(index["sections"].as_array().unwrap().len(), 10);
     let crawler = golden(&f, "settings_crawler", get("/api/v1/settings/crawler", c)).await;
     assert_eq!(crawler["fields"]["timeout_secs"]["source"], json!("file"));
     let network = golden(&f, "settings_network", get("/api/v1/settings/network", c)).await;
@@ -173,6 +173,25 @@ async fn settings_endpoints() {
         json!({ "env": "LODESTAR_DHT_PORT", "read_only": true, "restart_required": true, "source": "env", "value": 7000 })
     );
     golden(&f, "settings_general", get("/api/v1/settings/general", c)).await;
+    golden(&f, "settings_updates", get("/api/v1/settings/updates", c)).await;
+    // The window is checked: one that starts as it ends is refused.
+    golden(
+        &f,
+        "settings_patch_updates_window",
+        patch("/api/v1/settings/updates", c, r#"{"window":"04:00-04:00"}"#),
+    )
+    .await;
+    let updates = golden(
+        &f,
+        "settings_patch_updates",
+        patch(
+            "/api/v1/settings/updates",
+            c,
+            r#"{"mode":"notify","window":"23:30-01:00","wait_days":7}"#,
+        ),
+    )
+    .await;
+    assert_eq!(updates["fields"]["mode"]["value"], json!("notify"));
 
     // A partial patch: the live field and a restart-only one.
     let out = golden(

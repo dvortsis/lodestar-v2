@@ -51,6 +51,8 @@ utoipa = { version = "5.5.0", default-features = false, features = ["macros"] }
 # and *at syscalls, since the workspace forbids `unsafe` (and so libc). It is
 # already in the lock through tantivy's fs4 and tempfile.
 [target.'cfg(unix)'.dependencies]
+# The update window's local time (B-update, §12.2).
+jiff = { version = "=0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 rustix = { version = "1.1.5", features = ["fs", "process", "thread"] }
 
 [features]
