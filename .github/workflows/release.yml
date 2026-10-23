@@ -469,7 +469,8 @@ jobs:
 
       # Built from source, like the Dockerfile does: no third-party binary goes into a release build.
       - name: Install cargo-zigbuild
-        run: cargo install --locked cargo-zigbuild@0.24.0
+        # The build cache can bring back an earlier copy, so only install when the pinned version is not there.
+        run: cargo zigbuild --version 2>/dev/null | grep -q '0\.24\.0' || cargo install --locked --force cargo-zigbuild@0.24.0
 
 
       - name: Build
@@ -561,7 +562,10 @@ jobs:
       # Built from source, not downloaded: this job builds and signs the Windows files.
       - name: Install cargo-wix
         shell: pwsh
-        run: cargo install --locked cargo-wix --version 0.3.9
+        # The build cache can bring back an earlier copy, so only install when the pinned version is not there.
+        run: |
+          if (-not ((cargo wix --version 2>$null) -match '0\.3\.9')) { cargo install --locked --force cargo-wix --version 0.3.9 }
+          if ($LASTEXITCODE -ne 0) { throw 'installing cargo-wix failed' }
 
 
       - name: MSI
