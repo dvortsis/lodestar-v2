@@ -1,2 +1,2 @@
 400
-{"error":{"code":"unknown_sort","field":"sort","message":"Unknown sort \"seeders\": use relevance, discovered, size or files, with + or - for the order."}}
+{"error":{"code":"unknown_sort","field":"sort","message":"Unknown sort \"popularity\": use relevance, discovered, size, files, seeders, leechers, trackers or seen, with + or - for the order."}}

@@ -1,4 +1,4 @@
-# M-settings-form decisions (part 1/2: the form store)
+# M-settings-form decisions
 
 The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.7, §10.10.11). Part 1 is the store under `web/src/lib/features/settings/form/`; part 2 adds `SettingField`, `SettingsForm`, the widgets, the save bar, the dialogs and the leave guard. No owner decision is reversed or loosened. Items marked **(§2.19)** refine one and are for the runner to flag.
 
@@ -16,6 +16,10 @@ The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.
 - **Secrets are cleared after every save attempt**, including one refused by client validation, so a typed secret is never held longer than one try (§10.10.4).
 - **A secret is never reset through Save.** `reset()` on a `writeOnly` field does nothing: removing a saved secret is destructive and not undoable, so it runs only through `removeSecret` after its own confirmation (§10.10.7). Instant mode offers no Undo for a secret either.
 - **Instant mode runs the same danger gates**, failing closed the same way, and holds `settings` events for the section while its own change is in flight, so the user's own change never shows as a conflict.
+- **An edit to a field whose save is in flight is kept**, even when it sets the field back to the value saved before: `saved` is about to change, so the edit is judged against the response. Instant mode then sends the change back as the next change on its chain.
+- **In instant mode a secret is sent only by an explicit `save()`** (the field's own commit button, part 2), never on the 300 ms debounce, so a half-typed secret never reaches the server. It's cleared after the attempt either way.
+- **A save that resolves after `destroy()` returns `cancelled`**, whatever the server did: the form is gone, and the next screen loads the saved values.
+- **A stale refusal's `current` is checked for shape** before the merge; malformed entries are ignored, and the save still returns `conflict`.
 - **The draft is written before a save is sent**, not only after the debounce, so a `401` redirect or a crash right after ⌘S keeps it.
 - **Editing a field in conflict rebases it on theirs**, as Keep mine does: the new value is the user's choice over theirs.
 - **Retry re-runs what failed:** a failed Undo is retried as the Undo. If its window closed meanwhile, the banner clears.
@@ -31,7 +35,7 @@ The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.
 - **A field that becomes locked in a merge** keeps a note on the field ("Your change was dropped: {variable} now sets this setting") until it's edited or saved.
 
 ## Drafts
-- **Key `lodestar.settings.draft.v1.<id>`, format `{ v: 1, at, sections: { [section]: { revision, base, mine, reset } } }`.** A reset has no value, so it's listed in `reset` with its base rather than in `mine`. Never secrets, never locked or read-only fields, at most 64 KiB (`JSON.stringify` length).
+- **Key `lodestar.settings.draft.v1.<id>`, format `{ v: 1, at, sections: { [section]: { revision, base, mine, reset } } }`.** A reset has no value, so it's listed in `reset` with its base rather than in `mine`. Never secrets, never locked or read-only fields, at most 64 KiB of UTF-8.
 - **An offered draft isn't overwritten or cleared** before the user restores or discards it, not by a save or Discard either: edits made meanwhile are kept in the form, and drafts resume once the offer is answered. On Restore, edits made since the page loaded win over the draft's.
 - **Section and field names from storage or events are looked up as own properties only**, so a draft naming `constructor` can't break loading; a draft that can't be planned is cleared.
 - **The 64 KiB cap counts UTF-8 bytes.**

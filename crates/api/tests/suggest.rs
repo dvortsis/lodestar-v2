@@ -106,6 +106,8 @@ fn fixture() -> Fixture {
             user_data: None,
             insights: None,
             adult: AdultVisibility::follow(move || *rx.borrow()),
+            hot: None,
+            events: None,
         }),
     );
     Fixture {

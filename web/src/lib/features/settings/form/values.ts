@@ -74,11 +74,17 @@ function withField(s: SectionState, name: string, f: FieldModel): SectionState {
 }
 
 /** Stages a value. Locked fields never take one. Setting the saved value back makes it clean. */
+/**
+ * Stages a value. Locked fields never take one. Setting the saved value back makes it clean,
+ * except with `keep`: while the field's save is in flight `saved` is about to change, so an edit
+ * back to it is a real change, judged against the response (`applySaved`).
+ */
 export function stage(
 	s: SectionState,
 	name: string,
 	value: Staged,
-	spec?: FieldSpec
+	spec?: FieldSpec,
+	keep = false
 ): SectionState {
 	const f = s.fields[name];
 	if (!f || isLocked(f.saved) || spec?.readOnly) return s;
@@ -94,7 +100,7 @@ export function stage(
 		mine: value
 	};
 	if (value === undefined) return withField(s, name, { saved: f.saved });
-	return withField(s, name, normalize(next));
+	return withField(s, name, keep ? next : normalize(next));
 }
 
 /** Drops every staged value and conflict; saved values stay. */

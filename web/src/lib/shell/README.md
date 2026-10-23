@@ -14,7 +14,7 @@ App chrome (§10.3, §10.13, §10.19). `routes/+layout.svelte` renders `Shell.sv
 ## Hand-off points
 
 - **M-auth:** merged. `Chrome.svelte` calls `installAuthHandlers()` from `features/auth/session.svelte` (it owns W5's single `onLoginRequired` slot: a 401 goes to `/login?next=…` or `/setup`) and uninstalls it with the chrome. `chrome.ts` lists the screens that render bare.
-- **S-keys:** the shortcut sheet reads `keys.list()` and registers `shortcuts.open` (`?`). See `lib/keys/README.md`.
+- **S-keys:** the shortcut sheet reads `keys.list()` and registers `help.shortcuts` (`?`). See `lib/keys/README.md`.
 - **Appearance:** the shell has no theme or density switch. Density is carried in nav links; the scene variant follows `color-scheme` (`theme-mode.ts`).
 
 ## Keep the first load small

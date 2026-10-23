@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { createRawSnippet } from 'svelte';
 import { stubLayout } from '../lists/testing/layout';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import Dialog from './Dialog.svelte';
 import DialogHarness from './testing/DialogHarness.svelte';
 import OverlayHarness from './testing/OverlayHarness.svelte';
 import DrawerHarness from './testing/DrawerHarness.svelte';
@@ -47,6 +49,43 @@ describe('Dialog', () => {
 		await screen.findByRole('dialog');
 		await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+	});
+});
+
+describe('Dialog initialFocus', () => {
+	const body = createRawSnippet(() => ({
+		render: () => '<div><input aria-label="First" /><button type="button">Keep</button></div>'
+	}));
+	const open = async (initialFocus?: () => HTMLElement | null | undefined) => {
+		const invoker = document.createElement('button');
+		invoker.textContent = 'Invoker';
+		document.body.append(invoker);
+		invoker.focus();
+		const r = render(Dialog, {
+			props: { open: true, title: 'Remove', closeLabel: 'Close', children: body, initialFocus }
+		});
+		const dialog = await screen.findByRole('dialog', { name: 'Remove' });
+		return { r, dialog, invoker };
+	};
+
+	it('starts focus on the element it returns and restores it to the invoker on close', async () => {
+		const { dialog, invoker } = await open(() => screen.getByRole('button', { name: 'Keep' }));
+		await waitFor(() => expect(document.activeElement?.textContent).toBe('Keep'));
+		await key(dialog, 'Escape');
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		await waitFor(() => expect(document.activeElement).toBe(invoker));
+		invoker.remove();
+	});
+
+	it('keeps the default focus when it returns nothing, or is absent', async () => {
+		for (const initialFocus of [() => null, undefined]) {
+			const { r, dialog, invoker } = await open(initialFocus);
+			// Bits' own choice (jsdom can't tell what's tabbable, so it focuses the panel itself).
+			await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+			expect(document.activeElement?.textContent).not.toBe('Keep');
+			r.unmount();
+			invoker.remove();
+		}
 	});
 });
 

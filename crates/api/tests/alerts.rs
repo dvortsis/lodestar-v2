@@ -211,6 +211,8 @@ fn fixture() -> Fixture {
                 user_data: Some(store.clone()),
                 adult: visibility,
                 insights: None,
+                hot: None,
+                events: None,
             }),
         )
         .layer(Extension(hub.clone()));

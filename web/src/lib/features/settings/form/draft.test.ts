@@ -212,5 +212,7 @@ describe('drafts', () => {
 		now.crawler = stage(now.crawler!, 'intensity', 'aggressive');
 		const plan = planRestore(d, now, specOf);
 		expect(plan.sections.crawler!.fields.intensity!.mine).toBe('aggressive');
+		// Counted: only what the draft brings back (timeout_secs' reset), not the two newer edits.
+		expect(plan.fields).toBe(1);
 	});
 });
