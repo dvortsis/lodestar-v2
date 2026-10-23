@@ -6048,7 +6048,7 @@
       },
       "TorrentsEvent": {
         "type": "object",
-        "description": "`event: torrents`: torrents became searchable. Commits close together\nmay arrive as one event.",
+        "description": "`event: torrents`: torrents you can see became searchable. Commits\nclose together may arrive as one event. While \"Show adult content\" is\noff, Adult torrents are left out entirely: not counted, and a commit\nof only those sends no event.",
         "required": [
           "added",
           "max_id"
@@ -6057,13 +6057,13 @@
           "added": {
             "type": "integer",
             "format": "int64",
-            "description": "Torrents new to the index since the previous `torrents` event;\ncan be 0 when only `max_id` moved on.",
+            "description": "Torrents new to the index since the previous `torrents` event,\nleaving out Adult while it's hidden; at least 1.",
             "minimum": 0
           },
           "max_id": {
             "type": "integer",
             "format": "int64",
-            "description": "The highest torrent id searchable now."
+            "description": "The highest torrent id searchable now, of any class: searches\nstill apply the Adult visibility."
           }
         },
         "example": {
