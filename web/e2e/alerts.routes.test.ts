@@ -305,14 +305,13 @@ test.describe('one alert', () => {
 		await expect(page.getByTestId('alert-row-5')).toBeVisible();
 		await connected(page);
 		await expect.poll(() => mock.calls('markAlertsRead').length).toBe(1);
-		// Another search's event does nothing here.
+		// Another search's event does nothing here: it comes first, then this search's, so by the
+		// time the banner shows the first has been handled (events arrive in order).
 		await events.send('alerts', { saved_search: 2, matched: 1, alert: 9, max_id: 9, notify: true });
-		await page.waitForTimeout(300);
-		await expect(page.getByTestId('alert-banner')).toHaveCount(0);
-
 		mock.on('getSavedSearch', { ...LANTERN, unread: 1, alerts: 6 });
 		await events.send('alerts', { saved_search: 1, matched: 1, alert: 6, max_id: 6, notify: true });
 		await expect(page.getByTestId('alert-banner')).toHaveText('1 new alert');
+		expect(mock.calls('getSavedSearch')).toHaveLength(2); // the page's own load, then one event
 		await expect(page.getByTestId('alert-live')).toHaveText('1 new alert');
 		// The list stays as it was until Show.
 		await expect(page.getByTestId('alert-row-6')).toHaveCount(0);
