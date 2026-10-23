@@ -917,8 +917,8 @@
       "session": "session_015dmwui9D3HewnFepxVMSL2",
       "pr": 129,
       "attempt": 1,
-      "review_rounds": 1,
-      "notes": "from #86 | 2026-10-23T10:12:55Z unblocked by B-log1; brief drafting (Opus helper). Runs before B-log1b (both own logging/**; B-log1b also blocked by B11b on pipeline/**) | 2026-10-23T10:28:52Z launched (brief by Opus helper + runner decisions: redacted downloads hide client IPs; /events proxy gap reported as follow-up) | 2026-10-23T12:32:25Z PR #127 part 1/2 head 7b020eb (~7.7k vs main, ~half tests); fresh + security reviewers launched | 2026-10-23T13:10:14Z round 1 FIX (both reviews): gzip index bomb (take/len bounds/cost), history skips file compressed mid-read (retry .gz); stalled stream session re-check, resume purges, file-line truncation, unindexed gz O(n^2), fold cap scan + template cut; polish | 2026-10-23T13:58:29Z 160a1bc round-1 fixes, CI green; delta review (security reviewer resumed) | 2026-10-23T14:00:08Z part 1 #127 merged (security delta MERGE); part 2 starting | 2026-10-23T14:40:26Z part 2 PR #129 head 0015913 (files, redacted downloads, archive.zip, DELETE); self-review 2b/3i/3p fixed; fresh + security reviewers launched; proposes bounded graceful shutdown in services.rs"
+      "review_rounds": 2,
+      "notes": "from #86 | 2026-10-23T10:12:55Z unblocked by B-log1; brief drafting (Opus helper). Runs before B-log1b (both own logging/**; B-log1b also blocked by B11b on pipeline/**) | 2026-10-23T10:28:52Z launched (brief by Opus helper + runner decisions: redacted downloads hide client IPs; /events proxy gap reported as follow-up) | 2026-10-23T12:32:25Z PR #127 part 1/2 head 7b020eb (~7.7k vs main, ~half tests); fresh + security reviewers launched | 2026-10-23T13:10:14Z round 1 FIX (both reviews): gzip index bomb (take/len bounds/cost), history skips file compressed mid-read (retry .gz); stalled stream session re-check, resume purges, file-line truncation, unindexed gz O(n^2), fold cap scan + template cut; polish | 2026-10-23T13:58:29Z 160a1bc round-1 fixes, CI green; delta review (security reviewer resumed) | 2026-10-23T14:00:08Z part 1 #127 merged (security delta MERGE); part 2 starting | 2026-10-23T14:40:26Z part 2 PR #129 head 0015913 (files, redacted downloads, archive.zip, DELETE); self-review 2b/3i/3p fixed; fresh + security reviewers launched; proposes bounded graceful shutdown in services.rs | 2026-10-23T15:13:09Z #129 fresh MERGE + security MERGE; short round: badge gap during compress/rotate (default unredacted), corrupt index fail-open after save, polish"
     },
     "S-logs": {
       "status": "pending",
@@ -1363,6 +1363,16 @@
       "from": "M4",
       "what": "swarm_trackers in detail and /api/status show full tracker URLs (passkeys); redact for diagnostics and multi-user",
       "to": "security settings / multi-user"
+    },
+    "bounded-graceful-shutdown": {
+      "from": "B-log2",
+      "what": "services.rs: race with_graceful_shutdown against ~10s after signal, then handles.shutdown(); non-reading clients (downloads, exports) block shutdown",
+      "to": "next services.rs slice / B-log1b"
+    },
+    "win-log-folder-owner-check": {
+      "from": "B-log2",
+      "what": "Windows custom log folder: owner/permission checks are Unix-only",
+      "to": "win-hardening-followup"
     }
   },
   "blocked_on_owner": [],
