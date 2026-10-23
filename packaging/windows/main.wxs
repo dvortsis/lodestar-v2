@@ -93,15 +93,7 @@
                         ErrorControl="normal"
                         Account="NT SERVICE\Lodestar"
                         Arguments="serve"
-                        Vital="no">
-          <!-- Pre-shutdown: give the final commit up to 60 s before Windows
-               stops the service at shutdown (needs the entrypoint to accept
-               the pre-shutdown control; M6-win). -->
-          <util:ServiceConfig PreShutdownDelay="60000"
-                              FirstFailureActionType="none"
-                              SecondFailureActionType="none"
-                              ThirdFailureActionType="none" />
-        </ServiceInstall>
+                        Vital="no" />
         <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </DirectoryRef>
@@ -150,6 +142,13 @@
     <CustomAction Id="SecureDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
                   ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DATAFOLDER].&quot;" />
 
+    <!-- Pre-shutdown: give the final commit up to 60 s before Windows stops the
+         service at shutdown (WiX 3 has no attribute for it, so this is the
+         service's PreshutdownTimeout value, in ms). It matters once the entrypoint
+         accepts the pre-shutdown control (M6-win). -->
+    <CustomAction Id="SetPreshutdownTimeout" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[System64Folder]reg.exe&quot; add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v PreshutdownTimeout /t REG_DWORD /d 60000 /f" />
+
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
     <CustomAction Id="AddDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
@@ -163,6 +162,7 @@
 
     <InstallExecuteSequence>
       <Custom Action="SecureDataFolder" After="InstallServices">NOT Installed</Custom>
+      <Custom Action="SetPreshutdownTimeout" After="SecureDataFolder">NOT Installed</Custom>
             <Custom Action="AddDefenderExclusion" After="InstallFiles">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="RemoveDefenderExclusion" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveDataFolder" Before="RemoveFiles">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
