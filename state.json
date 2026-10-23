@@ -386,13 +386,19 @@
    "notes": ""
   },
   "B10b": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_018gReKT5Ef1ESyRwSB6wkhg",
-   "pr": null,
+   "pr": 115,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult).",
+   "self_review": {
+    "raised": 4,
+    "fixed": 4,
+    "left": 0,
+    "detail": "1 blocking + 3 important fixed"
+   }
   },
   "B15": {
    "status": "merged_elsewhere",
@@ -1062,7 +1068,7 @@
   "F-perf": {
    "status": "review",
    "model": "opus",
-   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready. | 02:52 #110 ready 0f4610e (7763-scaled: 10% 33.6us, mixed 43.8, shapes 32-42). Reviewer started (exactness vs reference = content safety). | 03:05 review FIX: fuzzy shape best-case only (q/z words); realistic fuzzy -> mixed 64.5us (fails). Fix: realistic words + cheaper fuzzy (length buckets/q-gram/Myers/shared scan) or \u00a72.21 fallback for fuzzy. Exactness verified 0 FN. | 04:09 asked: drift -> retry up to 3 attempts instead of fail.",
+   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready. | 02:52 #110 ready 0f4610e (7763-scaled: 10% 33.6us, mixed 43.8, shapes 32-42). Reviewer started (exactness vs reference = content safety). | 03:05 review FIX: fuzzy shape best-case only (q/z words); realistic fuzzy -> mixed 64.5us (fails). Fix: realistic words + cheaper fuzzy (length buckets/q-gram/Myers/shared scan) or \u00a72.21 fallback for fuzzy. Exactness verified 0 FN. | 04:09 asked: drift -> retry up to 3 attempts instead of fail. | 04:12 65e4b7e: drift retry; fuzzy cheaper (mixed 46.7-47.2 scaled on VM, fuzzy 10% 46.6-47.2) -> no fallback. Waiting 7763 CI run.",
    "session": "session_01JuPFjxS6u9KwGugz27C7KL",
    "pr": 110,
    "review_rounds": 1
@@ -1310,7 +1316,8 @@
   "\u00a72.19 (M6-win/P-release): Windows service runs as virtual account NT SERVICE\\Lodestar (per-service SID), not LocalSystem/LocalService; data folder ACL SYSTEM+Administrators+service SID only, inheritance removed.",
   "\u00a72.19 (B10a #111): saved-search alert counts count shown torrents only; collection position/next_after are among shown entries; reorder keeps withheld entries in their slots.",
   "\u00a72.19 (B12 #112): key \"reveal\" replaced by regenerate; a bad X-Forwarded-For entry ends the walk at the peer (safer than skipping); revoke/delete need no password; at most 500 keys/tokens; login limiter map strictly bounded with overflow bucket.",
-  "Process: B7 (#102) exceeded review_rounds_before_escalation (now 4 FIX rounds on natural phrasing). Runner chose not to park: fix scope narrowed each round; if another blocking round, natural phrasing is split into a follow-up slice and /suggest merges without it. Owner may prefer parking."
+  "Process: B7 (#102) exceeded review_rounds_before_escalation (now 4 FIX rounds on natural phrasing). Runner chose not to park: fix scope narrowed each round; if another blocking round, natural phrasing is split into a follow-up slice and /suggest merges without it. Owner may prefer parking.",
+  "\u00a72.19 (B10b #115): exports include Adult only per content.export_adult (\u00a720.9/B17), not the \"Show adult content\" view setting; until wired, no Adult is exported."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
