@@ -10,7 +10,7 @@
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::user_data::{check_name, check_text, sql_limit, write_tx};
+use crate::user_data::{check_name, check_text, sql_limit};
 use crate::{Error, Result, Store};
 
 /// What a caller sets on a saved search.
@@ -211,7 +211,7 @@ impl Store {
         now: i64,
     ) -> Result<bool> {
         check(s)?;
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let old: Option<(String, String, String)> = tx
             .prepare_cached("SELECT name, query, ast FROM saved_searches WHERE id = ?1")?
             .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -283,7 +283,7 @@ impl Store {
         {
             return Err(Error::Invalid("hit above the percolation range"));
         }
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let mut created = Vec::new();
         for r in results {
             record_hits(&tx, through, r, now, &mut created)?;
@@ -362,7 +362,7 @@ impl Store {
     /// rest, read or not, so a broad search can't grow without bound.
     /// Returns how many were deleted.
     pub fn prune_alerts(&mut self, keep: usize) -> Result<usize> {
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let ids: Vec<i64> = {
             let mut stmt = tx.prepare("SELECT id FROM saved_searches")?;
             stmt.query_map([], |r| r.get(0))?

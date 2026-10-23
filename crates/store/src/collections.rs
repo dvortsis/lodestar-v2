@@ -7,7 +7,7 @@
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::user_data::{check_name, check_note, sql_limit, write_tx};
+use crate::user_data::{check_name, check_note, sql_limit};
 use crate::{Error, Result, Store};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +83,7 @@ impl Store {
         now: i64,
     ) -> Result<bool> {
         check(name, note)?;
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let old: Option<(String, Option<String>)> = tx
             .prepare_cached("SELECT name, note FROM collections WHERE id = ?1")?
             .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -174,7 +174,7 @@ impl Store {
     /// torrent is [`Error::NotFound`] and adds none. Returns how many were
     /// added.
     pub fn add_to_collection(&mut self, id: i64, torrent_ids: &[i64], now: i64) -> Result<usize> {
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         exists(&tx, id)?;
         let mut next: i64 = tx
             .prepare_cached(
@@ -214,7 +214,7 @@ impl Store {
         torrent_ids: &[i64],
         now: i64,
     ) -> Result<usize> {
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let mut removed = 0;
         {
             let mut stmt = tx.prepare_cached(
@@ -238,7 +238,7 @@ impl Store {
     /// each of its torrents exactly once ([`Error::Invalid`] otherwise, so
     /// a reorder from a stale page can't drop or duplicate entries).
     pub fn reorder_collection(&mut self, id: i64, torrent_ids: &[i64], now: i64) -> Result<()> {
-        let tx = write_tx(&mut self.conn)?;
+        let tx = crate::begin_write(&mut self.conn)?;
         exists(&tx, id)?;
         let mut current: Vec<i64> = {
             let mut stmt = tx.prepare_cached(
