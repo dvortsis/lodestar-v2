@@ -1677,6 +1677,128 @@
         ]
       }
     },
+    "/insights/events": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Trend annotations (`restart`, `stopped`, `paused`, `resumed`,\n`intensity`; other events are skipped) and the paused spans\noverlapping `from..to`, so the client draws gaps.",
+        "operationId": "getInsightsEvents",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Unix seconds.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Unix seconds, exclusive.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/overview": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "The Insights overview (§10.9.2): stage strip, KPIs, trend with\nannotations, the cohort funnel, segments, exceptions and Serve, from\nthe rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.\nEvent time for the trend, new searchable, stages and Serve; discovery\ncohort for the funnel, yield and time to searchable.",
+        "operationId": "getInsightsOverview",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "`24h`, `7d` (the default), `30d`, `all` or `custom` (with `from`\nand `to`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Unix seconds; `custom` only. Rounded down to its UTC hour (day,\nfor ranges over 7 days).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Unix seconds, exclusive; `custom` only. Rounded up to its UTC hour\n(day), and to the current one at most.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`, the period of equal length before, and\n`kpi.searchable_delta`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/keys": {
       "get": {
         "tags": [
@@ -3803,6 +3925,30 @@
           }
         }
       },
+      "Annotation": {
+        "type": "object",
+        "description": "A trend annotation.",
+        "required": [
+          "at",
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`restart`, `stopped`, `paused`, `resumed` or `intensity`."
+          },
+          "text": {
+            "type": "string",
+            "description": "The event's detail: the version for `restart`, the new level for\n`intensity`; empty when there's none."
+          }
+        }
+      },
       "ApplyResponse": {
         "type": "object",
         "description": "`POST /filters/apply`: the change took effect.",
@@ -4431,6 +4577,13 @@
             "description": "No password yet: claim the instance with the setup token from the\nlogs."
           }
         }
+      },
+      "Bucket": {
+        "type": "string",
+        "enum": [
+          "hour",
+          "day"
+        ]
       },
       "Change": {
         "oneOf": [
@@ -5590,6 +5743,46 @@
           }
         }
       },
+      "Conversion": {
+        "type": "object",
+        "description": "Each stage ÷ the one before, 0–1; null when the one before is 0.",
+        "required": [
+          "fetched",
+          "peer_found",
+          "searchable",
+          "stored"
+        ],
+        "properties": {
+          "fetched": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "peer_found": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "searchable": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "stored": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "CoreRuleState": {
         "type": "object",
         "required": [
@@ -6284,6 +6477,35 @@
         ],
         "description": "One frame of the stream: `event:` names the variant and `data:` holds\nits payload. Every event but `resync` has an `id:` of the form\n`<epoch>-<seq>` to send back as `Last-Event-ID`."
       },
+      "EventsResponse": {
+        "type": "object",
+        "description": "`GET /insights/events`: annotations and paused spans.",
+        "required": [
+          "annotations",
+          "paused",
+          "truncated"
+        ],
+        "properties": {
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            },
+            "description": "Oldest first; at most 1,000 (`truncated`)."
+          },
+          "paused": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PausedSpan"
+            },
+            "description": "The paused spans overlapping the range, oldest first, so the\nclient draws gaps."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More than 1,000 annotations: the oldest 1,000 are listed."
+          }
+        }
+      },
       "ExceptionEntry": {
         "type": "object",
         "required": [
@@ -6873,6 +7095,24 @@
           }
         }
       },
+      "Fix": {
+        "type": "object",
+        "description": "Where an exception's fix is: a settings section or a stage page.",
+        "required": [
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`settings` or `stage`."
+          },
+          "target": {
+            "type": "string",
+            "description": "The section or stage (`index`, `fetch`, …)."
+          }
+        }
+      },
       "FixtureCounts": {
         "type": "object",
         "required": [
@@ -6915,6 +7155,154 @@
           }
         }
       },
+      "FunnelCohort": {
+        "type": "object",
+        "description": "One discovery cohort (or a UTC day of them) in the funnel (§10.9.3).",
+        "required": [
+          "cohort",
+          "conversion",
+          "final",
+          "in_progress",
+          "losses",
+          "stages"
+        ],
+        "properties": {
+          "cohort": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cohort's first hour, unix seconds."
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/Conversion"
+          },
+          "final": {
+            "type": "boolean",
+            "description": "Final: nothing in progress and everything stored searchable, or\npast the 72 h retry horizon. A day is final when all its hours\nare. Not final is \"incomplete\" (hatched)."
+          },
+          "in_progress": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Harvested − stored − lost, at least 0.",
+            "minimum": 0
+          },
+          "losses": {
+            "type": "object",
+            "description": "Losses by reason (`no_peers`, `timed_out`, `refused`,\n`encryption_failed`, `oversize`, `invalid`, `blocked`, `evicted`,\n`gave_up`, `unreachable`), every reason listed.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stages": {
+            "$ref": "#/components/schemas/FunnelStages"
+          }
+        }
+      },
+      "FunnelStages": {
+        "type": "object",
+        "description": "Hashes of the cohort that reached each stage.",
+        "required": [
+          "fetched",
+          "harvested",
+          "peer_found",
+          "searchable",
+          "stored"
+        ],
+        "properties": {
+          "fetched": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "peer_found": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stored": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FunnelTotal": {
+        "type": "object",
+        "description": "The funnel over every cohort in the range.",
+        "required": [
+          "cohorts",
+          "conversion",
+          "final_cohorts",
+          "in_progress",
+          "loss_share",
+          "losses",
+          "stages"
+        ],
+        "properties": {
+          "cohorts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cohort hours in the range with any count.",
+            "minimum": 0
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/Conversion"
+          },
+          "final_cohorts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of those, final.",
+            "minimum": 0
+          },
+          "in_progress": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "loss_share": {
+            "type": "object",
+            "description": "Each reason's share of all losses, 0–1; null when nothing was\nlost.",
+            "additionalProperties": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "losses": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stages": {
+            "$ref": "#/components/schemas/FunnelStages"
+          }
+        }
+      },
       "GroupStatus": {
         "type": "string",
         "enum": [
@@ -6937,6 +7325,34 @@
             "description": "1–500 40-character hex info hashes."
           }
         }
+      },
+      "Health": {
+        "type": "object",
+        "description": "Health (§10.9.2): running, paused or degraded, with the reason.",
+        "required": [
+          "reason",
+          "state"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`paused`, `writer_stalled` or `index_lag`; null while running."
+          },
+          "state": {
+            "$ref": "#/components/schemas/HealthState"
+          }
+        }
+      },
+      "HealthState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "paused",
+          "degraded"
+        ]
       },
       "Histogram": {
         "type": "object",
@@ -7199,6 +7615,79 @@
           }
         }
       },
+      "InsightsException": {
+        "type": "object",
+        "description": "An exception (§10.9.2 level 5): text + icon + a fix action.",
+        "required": [
+          "fix",
+          "kind",
+          "severity",
+          "since",
+          "unit",
+          "value"
+        ],
+        "properties": {
+          "fix": {
+            "$ref": "#/components/schemas/Fix"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`index_lag` (the index more than 30 s behind) or `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours)."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`s` or `torrents`."
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "InsightsRange": {
+        "type": "object",
+        "description": "The range as the server normalized it: whole UTC hours, or whole UTC\ndays past 7 days.",
+        "required": [
+          "bucket",
+          "from",
+          "to",
+          "tz"
+        ],
+        "properties": {
+          "bucket": {
+            "$ref": "#/components/schemas/Bucket",
+            "description": "`hour` up to 7 days, `day` (UTC days) beyond."
+          },
+          "from": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, inclusive."
+          },
+          "to": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, exclusive. The current hour (day) counts so far."
+          },
+          "tz": {
+            "type": "string",
+            "description": "The time zone buckets are in: always `UTC`."
+          }
+        }
+      },
       "InsightsStages": {
         "type": "object",
         "description": "`docs/metrics.md` §7.5 `stages`.",
@@ -7457,6 +7946,82 @@
           "expired",
           "revoked"
         ]
+      },
+      "Kpi": {
+        "type": "object",
+        "description": "The KPI row (§10.9.2 level 1, `docs/metrics.md` §6.2).",
+        "required": [
+          "health",
+          "imported",
+          "new_searchable",
+          "searchable",
+          "searchable_delta",
+          "time_to_searchable_p50_s",
+          "time_to_searchable_p95_s",
+          "yield"
+        ],
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "imported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searchable torrents that were imported (bitmagnet import), part of\n`searchable`; null until the count taken at start is in.",
+            "minimum": 0
+          },
+          "new_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents that first became searchable in the range, imports\nincluded. Event time; 0 is real.",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Documents in the search index now; null when search is off.",
+            "minimum": 0
+          },
+          "searchable_delta": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The change since the previous period's end: now's count less\n`previous.kpi.searchable`. Null without `compare=1`, for `all`,\nwith search off, or with no snapshot from then."
+          },
+          "time_to_searchable_p50_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "First harvest → searchable, p50 and p95 seconds over the final\ncohorts in the range. Always approximate (log buckets ≤ 10%).\nNull when no cohort in the range is final.",
+            "minimum": 0
+          },
+          "time_to_searchable_p95_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searchable ÷ harvested over the final cohorts in the range, 0–1.\nImports excluded. Null when no cohort in the range is final."
+          }
+        }
       },
       "LabelCount": {
         "type": "object",
@@ -7872,6 +8437,103 @@
           }
         }
       },
+      "OverviewResponse": {
+        "type": "object",
+        "description": "The overview (§10.9.2): status, movement, the funnel, segments,\nexceptions and Serve, for one range.",
+        "required": [
+          "annotations",
+          "exceptions",
+          "funnel",
+          "funnel_total",
+          "ingest_per_hour",
+          "kpi",
+          "range",
+          "segments",
+          "serve",
+          "stages",
+          "stale",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            },
+            "description": "Trend annotations in the range, oldest first, at most 1,000\n(`/insights/events` says when there were more). Event time."
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InsightsException"
+            },
+            "description": "What needs attention now, whatever the range (§10.9.2 level 5)."
+          },
+          "funnel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FunnelCohort"
+            },
+            "description": "The discovery cohorts in the range that have any count, oldest\nfirst: hours up to 7 days, UTC days beyond (`range.bucket`)."
+          },
+          "funnel_total": {
+            "$ref": "#/components/schemas/FunnelTotal",
+            "description": "The funnel over every cohort in the range."
+          },
+          "ingest_per_hour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents newly stored in the last full UTC hour (§10.12). Event\ntime. Null when that hour wasn't measured (the crawler paused or\nnot running) and stored nothing.",
+            "minimum": 0
+          },
+          "kpi": {
+            "$ref": "#/components/schemas/Kpi"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/PreviousPeriod",
+            "description": "The period of equal length just before, in the same shape;\npresent only with `compare=1`, and never for `all`."
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "segments": {
+            "$ref": "#/components/schemas/Segments"
+          },
+          "serve": {
+            "$ref": "#/components/schemas/Serve"
+          },
+          "stages": {
+            "$ref": "#/components/schemas/Stages"
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale",
+                "description": "Set when the rollups haven't been flushed for over 2 minutes\n(§10.9.6); null when fresh."
+              }
+            ]
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            },
+            "description": "Movement, one point per bucket (`range.bucket`), oldest first.\nEvent time."
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the numbers were read (unix seconds)."
+          }
+        }
+      },
       "PackRuleState": {
         "type": "object",
         "required": [
@@ -7945,6 +8607,28 @@
           },
           "old": {
             "type": "string"
+          }
+        }
+      },
+      "PausedSpan": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds: when it paused (before the range if it was already\npaused then)."
+          },
+          "to": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When it resumed; null while still paused."
           }
         }
       },
@@ -8078,6 +8762,125 @@
         "example": {
           "code": "search_stops",
           "message": "Search stops after the restart, until you turn it back on."
+        }
+      },
+      "PreviousKpi": {
+        "type": "object",
+        "description": "The KPIs over the previous period.",
+        "required": [
+          "new_searchable",
+          "searchable",
+          "time_to_searchable_p50_s",
+          "time_to_searchable_p95_s",
+          "yield"
+        ],
+        "properties": {
+          "new_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searchable at the period's end: the last hourly snapshot in the\nday before it ends. Null when there's none (search off, or not\nrunning then).",
+            "minimum": 0
+          },
+          "time_to_searchable_p50_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "time_to_searchable_p95_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "PreviousPeriod": {
+        "type": "object",
+        "description": "The previous period, for Compare: the fields that depend on the range.",
+        "required": [
+          "kpi",
+          "range",
+          "serve",
+          "stages",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/PreviousKpi"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "serve": {
+            "$ref": "#/components/schemas/Serve"
+          },
+          "stages": {
+            "$ref": "#/components/schemas/PreviousStages"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            }
+          }
+        }
+      },
+      "PreviousStages": {
+        "type": "object",
+        "description": "The stage strip over the previous period.",
+        "required": [
+          "discover",
+          "fetch",
+          "serve",
+          "understand"
+        ],
+        "properties": {
+          "discover": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fetch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "serve": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "understand": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
         }
       },
       "ProxySettings": {
@@ -9100,6 +9903,141 @@
           "section": "crawler"
         }
       },
+      "SegmentCount": {
+        "type": "object",
+        "required": [
+          "key",
+          "searchable"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SegmentYield": {
+        "type": "object",
+        "required": [
+          "harvested",
+          "key",
+          "searchable",
+          "yield"
+        ],
+        "properties": {
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "The source plugin's name."
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searchable ÷ harvested, 0–1; null when it harvested nothing."
+          }
+        }
+      },
+      "Segments": {
+        "type": "object",
+        "description": "Segments (§10.9.2 level 4). Rows are sorted by value, descending, then\nkey. Adult is left out entirely while \"Show adult content\" is off.",
+        "required": [
+          "by_content_type",
+          "by_group",
+          "by_source"
+        ],
+        "properties": {
+          "by_content_type": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCount"
+            },
+            "description": "Newly searchable by content type (`movie`, `tv`, …, `adult`, and\n`unclassified` for none yet). Event time."
+          },
+          "by_group": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCount"
+            },
+            "description": "The same by the content type's group: `video` (movie, tv, video),\n`audio` (music, audiobook), `documents` (ebook, comic),\n`software` (software, game), `images`, `other`, `adult`,\n`unclassified`. Event time."
+          },
+          "by_source": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentYield"
+            },
+            "description": "Yield by the source that found each hash first, over final\ncohorts. Discovery cohort."
+          }
+        }
+      },
+      "Serve": {
+        "type": "object",
+        "description": "Serve (§10.9.2 level 6). Every field is null until its counter exists:\nsearches and latency with #48, alerts with B9, sends with the\nintegrations' counters.",
+        "required": [
+          "alerts_fired",
+          "latency_p95_ms",
+          "searches",
+          "sends",
+          "zero_result_rate"
+        ],
+        "properties": {
+          "alerts_fired": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "latency_p95_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Always approximate (log buckets)."
+          },
+          "searches": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "sends": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "zero_result_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searches that found nothing ÷ searches, 0–1; null with no searches."
+          }
+        }
+      },
       "SettingField": {
         "type": "object",
         "description": "One field of a section, for its form.",
@@ -9550,6 +10488,13 @@
           }
         }
       },
+      "Severity": {
+        "type": "string",
+        "enum": [
+          "warning",
+          "error"
+        ]
+      },
       "SiblingsResponse": {
         "type": "object",
         "description": "`GET /torrents/{hash}/siblings`: the torrents related to one, in three\ngroups. Each is either available (possibly empty) or unavailable with\na reason.",
@@ -9857,6 +10802,77 @@
         "example": {
           "enabled": true,
           "priority": "high"
+        }
+      },
+      "Stages": {
+        "type": "object",
+        "description": "The stage strip (§10.9.1, `docs/metrics.md` §6.1).",
+        "required": [
+          "discover",
+          "fetch",
+          "index",
+          "serve",
+          "understand"
+        ],
+        "properties": {
+          "discover": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unique hashes harvested in the range (first harvests: the cohorts'\nharvested counts). Always approximate (≈).",
+            "minimum": 0
+          },
+          "fetch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Metadata retrieved in the range, by event time. Null until the\npipeline counts fetches by event time (B11b).",
+            "minimum": 0
+          },
+          "index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searchable torrents now; null when search is off.",
+            "minimum": 0
+          },
+          "serve": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searches answered in the range; null until search counters exist\n(#48).",
+            "minimum": 0
+          },
+          "understand": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents newly stored in the range. Event time.",
+            "minimum": 0
+          }
+        }
+      },
+      "Stale": {
+        "type": "object",
+        "description": "The stale banner (§10.9.6).",
+        "required": [
+          "reason",
+          "since"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "`paused` (nothing to flush while paused) or `writer_stalled`."
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last flush, or the start when there was none since."
+          }
         }
       },
       "StatsResponse": {
@@ -10732,6 +11748,40 @@
           "max_id": 48211
         }
       },
+      "TrendPoint": {
+        "type": "object",
+        "description": "One trend bucket. A count is null where nothing was measured (a gap:\npaused, or not running), and 0 where it was measured and was 0.",
+        "required": [
+          "at",
+          "harvested",
+          "searchable"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The bucket's start, unix seconds."
+          },
+          "harvested": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unique hashes first harvested in the bucket. Always ≈.",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents newly searchable in the bucket.",
+            "minimum": 0
+          }
+        }
+      },
       "Unavailable": {
         "type": "string",
         "description": "Why a section isn't available. Stable keys; the UI words them.",
@@ -11111,6 +12161,10 @@
     {
       "name": "meta",
       "description": "This document."
+    },
+    {
+      "name": "insights",
+      "description": "The Insights dashboard's rollups (§10.9)."
     }
   ]
 }

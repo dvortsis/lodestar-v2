@@ -32,6 +32,7 @@ pub mod events;
 pub mod extract;
 mod facets;
 pub mod filters;
+pub mod insights;
 pub mod keys;
 pub mod openapi;
 pub mod ops;
@@ -73,6 +74,8 @@ pub struct ApiState {
     pub user_data: Option<Arc<Mutex<Store>>>,
     /// "Show adult content" (§20.9), followed live; hidden by default.
     pub adult: AdultVisibility,
+    /// `None` when Insights isn't served (tests, tools).
+    pub insights: Option<Arc<dyn insights::InsightsSource>>,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -89,6 +92,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(ops::routes())
         .merge(compare::routes())
         .merge(discover::routes())
+        .merge(insights::routes())
         .merge(events::routes())
         .merge(keys::routes())
         .merge(user_items::routes())
