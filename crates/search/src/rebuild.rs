@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lodestar_store::{Store, StoreConfig};
 use tantivy::directory::{Directory, DirectoryLock, Lock, MmapDirectory};
 
+use crate::cache::{CacheConfig, ResultCache};
 use crate::index::{Compat, Error, Indexer, Result, SearchIndex};
 use crate::lease::{LeaseConfig, Leases};
 use crate::live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
@@ -364,6 +365,8 @@ pub struct ServingConfig {
     pub version: IndexVersion,
     /// The searcher leases cursors read through ([`Serving::leases`]).
     pub leases: LeaseConfig,
+    /// The result cache's bounds ([`Serving::cache`]).
+    pub cache: CacheConfig,
     /// Tests only: while set, a rebuild that has caught up waits before
     /// finishing, so a test can act at that point.
     #[doc(hidden)]
@@ -391,6 +394,7 @@ impl Default for ServingConfig {
             rebuild_commit_docs: 50_000,
             version: IndexVersion::CURRENT,
             leases: LeaseConfig::default(),
+            cache: CacheConfig::default(),
             hold_before_finish: None,
             hold_before_start: None,
             #[cfg(test)]
@@ -413,6 +417,7 @@ struct Shared {
     /// Every live indexer reports its commits here, across swaps (B4).
     hook: Arc<CommitHook>,
     leases: Arc<Leases>,
+    cache: Arc<ResultCache>,
     stop: AtomicBool,
 }
 
@@ -581,6 +586,7 @@ impl Serving {
             stats,
             hook,
             leases: Arc::new(Leases::new(config.leases.clone())),
+            cache: Arc::new(ResultCache::new(config.cache.clone())),
             stop: AtomicBool::new(false),
         });
 
@@ -615,10 +621,17 @@ impl Serving {
             None => thread.spawn(move || clean(&sh, &root_buf, want)),
         }
         .map_err(Error::Io)?;
-        let sweeper = spawn_sweeper(&shared, every).inspect_err(|_| {
-            // No `Serving` to stop the rebuild thread: it stops itself.
-            shared.stop.store(true, Ordering::Relaxed);
-        })?;
+        let sweeper = match spawn_sweeper(&shared, every) {
+            Ok(t) => t,
+            Err(e) => {
+                // No `Serving` to stop the rebuild thread: it stops
+                // itself, and is joined before the error returns, so it
+                // never outlives the start that failed.
+                shared.stop.store(true, Ordering::Relaxed);
+                let _ = background.join();
+                return Err(e);
+            }
+        };
         Ok(Serving {
             shared,
             background: Mutex::new(Some(background)),
@@ -658,6 +671,11 @@ impl Serving {
     /// The searcher leases taken on the indexes this handle serves.
     pub fn leases(&self) -> &Arc<Leases> {
         &self.shared.leases
+    }
+
+    /// The result cache over the indexes this handle serves.
+    pub fn cache(&self) -> &Arc<ResultCache> {
+        &self.shared.cache
     }
 
     /// Stops the rebuild (which commits what it has, to resume next
@@ -719,6 +737,8 @@ fn spawn_sweeper(shared: &Arc<Shared>, every: Duration) -> Result<JoinHandle<()>
                 std::thread::park_timeout(every);
                 if !sh.stopping() {
                     sh.leases.sweep();
+                    let serving = lock(&sh.current).clone();
+                    sh.cache.sweep(&serving);
                 }
             }
         })
@@ -892,6 +912,8 @@ fn rebuild_and_swap(
     };
     *lock(&shared.live) = Some(live);
     let old = std::mem::replace(&mut *lock(&shared.current), Arc::new(new));
+    // Nothing cached reads the new index.
+    shared.cache.clear();
     *lock(&shared.progress) = None;
     if let Some(((docs_added, adult_added), max_torrent_id)) = fresh.filter(|f| f.0.0 > 0) {
         shared.hook.publish(Committed {
@@ -1368,9 +1390,10 @@ mod tests {
         let held = Arc::downgrade(&lease);
         handle.leases().insert(lease, 1);
         // Nothing takes or reads a lease again; the sweeper drops it, and
-        // with it the searcher it pinned.
-        wait_for("the sweep", || handle.leases().is_empty());
-        assert!(held.upgrade().is_none());
+        // with it the searcher it pinned. It leaves the map first and is
+        // dropped after the lock, so wait for the drop itself.
+        wait_for("the sweep", || held.upgrade().is_none());
+        assert!(handle.leases().is_empty());
         drop(handle);
         Arc::try_unwrap(serving).unwrap().shutdown().unwrap();
     }

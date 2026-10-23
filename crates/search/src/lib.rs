@@ -2,11 +2,13 @@
 //! index schema, near-real-time indexing that follows the store, and
 //! queries, paged through searcher leases and cursors.
 
+mod cache;
 mod cancel;
 mod compile;
 mod count;
 mod cursor;
 mod doc;
+mod explain;
 pub mod facets;
 pub mod files;
 mod filter;
@@ -23,10 +25,15 @@ mod stem;
 mod testing;
 pub mod tokenizer;
 
+pub use cache::{
+    CacheConfig, CacheStats, CachedFacets, CachedSearch, FacetSpec, Generation, KindStats, Outcome,
+    ResultCache, SearchSpec,
+};
 pub use cancel::{CancelOnDrop, CancelToken};
 pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
 pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
+pub use explain::{EXPLAIN_MAX, Explained, Explanation, Parts, WEIGHTS, Weights, explain};
 pub use facets::{
     Bin, Facet, FacetParams, Facets, Histo, Histogram, TermCounts, Unit, ValueCount, facets,
     with_filters,
