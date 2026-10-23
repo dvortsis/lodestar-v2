@@ -1618,7 +1618,7 @@
     "m4-swarm-fields": "satisfied 035ca7f",
     "m4-done": "satisfied 035ca7f",
     "main_red": "2026-10-23T21:28Z resolved: #150 merged 2bef5df (macOS FIFO test)",
-    "csp_test": "2026-10-23T21:53Z runner PR #153: CSP test expected 2 inline scripts, boot-nav made 3 (only with real web/build; prod CSP derived, unaffected)"
+    "csp_test": "2026-10-23T21:53Z runner PR #153: CSP test expected 2 inline scripts, boot-nav made 3 (only with real web/build; prod CSP derived, unaffected) | 2026-10-23T22:47Z #153 merged 21cff90"
   },
   "registered_sessions": {},
   "landing_lane": null,
