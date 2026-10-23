@@ -93,6 +93,7 @@ async function typeText(editor: HTMLElement, text: string) {
 
 /** The strip's and the popover's chunks load on first use: a cold run can take a while. */
 const LAZY = { timeout: 10_000 };
+const wait = <T>(check: () => T) => waitFor(check, LAZY);
 
 const message = () => document.getElementById('search-query-message')!;
 
@@ -259,15 +260,37 @@ describe('the active-filter strip', () => {
 		// Free text stays in the bar: no chip for "lantern".
 		expect(screen.queryByRole('button', { name: /lantern/ })).toBeNull();
 		await fireEvent.click(chip);
-		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
+		await wait(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
 		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern'), limit: 1 });
-		await waitFor(() =>
+		await wait(() =>
 			expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
 				'Removed filter: Resolution: 1080p'
 			)
 		);
-		await waitFor(() => expect(document.activeElement).toBe(editor));
-		await waitFor(() => expect(screen.queryByRole('group', { name: 'Active filters' })).toBeNull());
+		await wait(() => expect(document.activeElement).toBe(editor));
+		await wait(() => expect(screen.queryByRole('group', { name: 'Active filters' })).toBeNull());
+	});
+
+	it('two removals in a row both land, and both are announced', async () => {
+		visit('/search?q=lantern+res%3A1080p+res%3A2160p');
+		const { editor } = setup();
+		const first = await screen.findByRole(
+			'button',
+			{ name: 'Remove filter: Resolution: 1080p' },
+			LAZY
+		);
+		const second = screen.getByRole('button', { name: 'Remove filter: Resolution: 2160p' });
+		// The second press comes before the server answers the first.
+		await fireEvent.click(first);
+		await fireEvent.click(second);
+		await wait(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
+		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
+		await wait(() =>
+			expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
+				'Removed filter: Resolution: 1080p Removed filter: Resolution: 2160p'
+			)
+		);
+		await wait(() => expect(document.activeElement).toBe(editor));
 	});
 
 	it('keeps the chip and offers Retry when the removal fails', async () => {
@@ -282,13 +305,11 @@ describe('the active-filter strip', () => {
 			throw new TypeError('Failed to fetch');
 		});
 		await fireEvent.click(chip);
-		const banner = await screen.findByRole('alert');
+		const banner = await screen.findByRole('alert', {}, LAZY);
 		expect(banner.textContent).toContain("Couldn't change the filters");
 		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-		await waitFor(() =>
-			expect(navCalls.at(-1)).toEqual({ url: '/search?q=res%3A2160p', push: true })
-		);
+		await wait(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=res%3A2160p', push: true }));
 	});
 
 	it('keeps the last good chips while a syntax error shows', async () => {
@@ -297,7 +318,7 @@ describe('the active-filter strip', () => {
 		await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' }, LAZY);
 		await typeText(editor, 'res:1080p (');
 		await fireEvent.keyDown(editor, { key: 'Enter' });
-		await waitFor(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
+		await wait(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
 		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
 	});
 
@@ -312,18 +333,24 @@ describe('the active-filter strip', () => {
 		);
 		await fireEvent.click(chip);
 		expect(setHidden).toHaveBeenCalledWith(false);
-		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search', push: true }));
+		await wait(() => expect(navCalls.at(-1)).toEqual({ url: '/search', push: true }));
 	});
 
 	it('Clear all keeps the free text and clears hidden', async () => {
 		visit('/search?q=lantern+res%3A1080p+res%3A2160p&hidden=1');
 		const { editor } = setup();
 		await screen.findByRole('button', { name: 'Remove filter: Resolution: 2160p' }, LAZY);
+		const before = navCalls.length;
 		await fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
-		await waitFor(() => expect(navCalls.at(-1)?.url).toBe('/search?q=lantern'));
+		await wait(() => expect(navCalls.at(-1)?.url).toBe('/search?q=lantern'));
+		// Two history entries (the AST, then `hidden`): W5 has no single write for both yet.
+		expect(navCalls.slice(before)).toEqual([
+			{ url: '/search?q=lantern&hidden=1', push: true },
+			{ url: '/search?q=lantern', push: true }
+		]);
 		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
-		await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull());
-		await waitFor(() => expect(document.activeElement).toBe(editor));
+		await wait(() => expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull());
+		await wait(() => expect(document.activeElement).toBe(editor));
 	});
 });
 
@@ -339,12 +366,32 @@ describe('the Syntax popover', () => {
 		);
 		expect(dialog.textContent).toContain('big buck bunny res:1080p');
 		await fireEvent.click(screen.getByRole('button', { name: 'Try big buck bunny res:1080p' }));
-		await waitFor(() =>
+		await wait(() =>
 			expect(navCalls.at(-1)).toEqual({ url: '/search?q=big+buck+bunny+res%3A1080p', push: true })
 		);
-		await waitFor(() => expect(editor.textContent).toBe('big buck bunny res:1080p'));
-		await waitFor(() =>
+		await wait(() => expect(editor.textContent).toBe('big buck bunny res:1080p'));
+		await wait(() =>
 			expect(screen.queryByLabelText('Search syntax', { selector: '[role="dialog"]' })).toBeNull()
 		);
+	});
+
+	it('Esc closes the popover and gives focus back to its button, leaving the text', async () => {
+		visit('/search?q=bunny');
+		const { editor } = setup();
+		await wait(() => expect(editor.textContent).toBe('bunny'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Syntax' }));
+		const dialog = await screen.findByLabelText(
+			'Search syntax',
+			{ selector: '[role="dialog"]' },
+			LAZY
+		);
+		await fireEvent.keyDown(document.activeElement ?? dialog, { key: 'Escape' });
+		await wait(() =>
+			expect(screen.queryByLabelText('Search syntax', { selector: '[role="dialog"]' })).toBeNull()
+		);
+		await wait(() =>
+			expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Syntax' }))
+		);
+		expect(editor.textContent).toBe('bunny');
 	});
 });

@@ -316,10 +316,16 @@ for (const [name, themeId, colorMode] of [
 				await expect(page.getByRole('dialog', { name: 'Search syntax' })).toBeVisible();
 				await expectNoA11yViolations(page);
 			});
-			test(`a parse error at ${width} px`, async ({ page, go }) => {
+			test(`a parse error, with the last good chips, at ${width} px`, async ({ page, go }) => {
 				await page.setViewportSize({ width, height: 800 });
-				await go('/search?q=big+%22buck');
+				await go('/search?q=res%3A1080p');
+				await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+				await editor(page).click();
+				await page.keyboard.press('End');
+				await page.keyboard.type(' big "buck');
+				await page.keyboard.press('Enter');
 				await expect(editor(page)).toHaveAttribute('aria-invalid', 'true');
+				await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible(); // still explains the results
 				await expectNoA11yViolations(page);
 			});
 		}

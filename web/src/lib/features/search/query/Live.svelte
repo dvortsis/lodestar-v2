@@ -10,7 +10,7 @@
 	import { search, type Ast } from '$lib/state/search.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
-	import { chipClauses, rootWithout, withoutFilters, type Clause } from './clauses';
+	import { chipClauses, rootWithout, topLevel, withoutFilters, type Clause } from './clauses';
 	import { attach, type Editor } from './editor';
 	import { ensureSearchPath } from './path';
 	import { errorRange } from './spans';
@@ -126,11 +126,29 @@
 		requestAnimationFrame(() => (said = text));
 	}
 
+	/** A removal in flight: the next one builds on it, so quick removals in a row all land. */
+	let pending: { ast: Ast; labels: string[] } | null = null;
+
+	const removed = (labels: string[]) =>
+		labels.map((label) => m.search_filters_removed({ label })).join(' ');
+
 	async function remove(clause: Clause) {
-		if (!shown) return;
+		const base = pending?.ast ?? shown;
+		if (!base) return;
+		// By identity: the clause may have moved (an earlier removal) or gone (a new query).
+		const index = topLevel(base).indexOf(clause.node);
+		if (index < 0) return;
+		const sent = rootWithout(base, index);
+		const labels = [...(pending?.labels ?? []), clause.label.text];
+		pending = { ast: sent, labels };
 		ensureSearchPath();
-		await s.setAst(rootWithout(shown, clause.index));
-		announce(m.search_filters_removed({ label: clause.label.text }));
+		try {
+			await s.setAst(sent);
+		} finally {
+			if (pending?.ast === sent) pending = null;
+		}
+		// Superseded by a newer removal, which carries this label and announces it.
+		if (s.ast === sent) announce(removed(labels));
 	}
 
 	async function removeHidden(label: string) {
@@ -141,7 +159,18 @@
 
 	async function clearAll() {
 		ensureSearchPath();
-		if (clauses.length) await s.setAst(withoutFilters(shown));
+		const base = pending?.ast ?? shown;
+		if (base && clauses.length) {
+			const sent = withoutFilters(base);
+			pending = { ast: sent, labels: [] };
+			try {
+				await s.setAst(sent);
+			} finally {
+				if (pending?.ast === sent) pending = null;
+			}
+			if (s.ast !== sent) return; // superseded
+		}
+		// W5 has no single write for both, so this is a second history entry (decisions file).
 		if (s.hidden) await s.setHidden(false);
 		announce(m.search_filters_cleared());
 	}

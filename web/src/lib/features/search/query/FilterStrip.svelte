@@ -2,6 +2,7 @@
 	// The active-filter strip (§10.4): one removable chip per structured clause, the `hidden=1` chip
 	// and "Clear all". Loaded only once there is a chip. Changes swap in place, with no animation
 	// (§10.2: filter changes never re-animate).
+	import { tick, untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -32,26 +33,31 @@
 			await change();
 		} catch {
 			failed = change; // the chip stays: nothing changed
+			return;
 		}
+		// The focused chip can go with the change (the last one, or two removed at once): focus
+		// the editor rather than leave it on <body>.
+		await tick();
+		if (!document.activeElement || document.activeElement === document.body) el.focus();
 	}
 
 	const count = $derived(clauses.length + (hidden ? 1 : 0));
 
-	// Keyed by label, not position: removing one chip must not re-create its neighbours, which
-	// would take the focus Chip hands to the next one.
-	const keyed = $derived(
-		clauses.map((clause, i) => ({
-			clause,
-			key: `${clause.label.text}#${clauses.slice(0, i).filter((c) => c.label.text === clause.label.text).length}`
-		}))
-	);
+	// Keyed by the clause's node, not its position or label: removing one chip must not re-create
+	// its neighbours (even one with the same label), which would take the focus Chip hands on.
+	const ids = new WeakMap<object, number>();
+	let nextId = 0;
+	const keyOf = (clause: Clause) => {
+		let id = ids.get(clause.node);
+		if (id === undefined) ids.set(clause.node, (id = nextId++));
+		return id;
+	};
 
-	async function clear() {
-		await run(onclear);
-		// The strip goes with its last chip: focus the editor rather than <body>.
-		if (!failed && (!document.activeElement || document.activeElement === document.body))
-			el.focus();
-	}
+	// A Retry belongs to the filters it failed on: a new query drops it.
+	$effect(() => {
+		void clauses;
+		untrack(() => (failed = null));
+	});
 </script>
 
 {#snippet text(label: Label)}
@@ -70,7 +76,7 @@
 	data-testid="filter-strip"
 	class="flex flex-wrap items-center gap-2"
 >
-	{#each keyed as { clause, key } (key)}
+	{#each clauses as clause (keyOf(clause))}
 		<Chip
 			removeLabel={m.search_filters_remove({ label: clause.label.text })}
 			fallbackFocus={() => el}
@@ -89,7 +95,7 @@
 		</Chip>
 	{/if}
 	{#if count}
-		<Button variant="quiet" dense onclick={() => void clear()}>
+		<Button variant="quiet" dense onclick={() => void run(onclear)}>
 			{m.search_filters_clear_all()}
 		</Button>
 	{/if}

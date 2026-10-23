@@ -130,7 +130,7 @@ const NUM_KEY: Record<Of<'range'>['field'], () => string> = {
 	year: m.search_filters_year,
 	season: m.search_filters_season,
 	episode: m.search_filters_episode,
-	junk: m.junk,
+	junk: m.search_filters_junk_score,
 	seeders: m.seeders,
 	leechers: m.leechers,
 	trackers: m.trackers_reporting,
@@ -315,6 +315,9 @@ function shareLabel(node: Of<'share'>): Part[] {
 	const pct = (n: number) => formatShare(n, currentLocale());
 	// Shares run 0–100: an open end is 0 or 100 (the server prints `cat:video>=80` the same way).
 	const { lo, hi } = node;
+	// A bare `cat:video` is 1–100% of the files: it reads as "has some", not as a percentage.
+	if (node.by === 'count' && lo === 1 && hi === 100)
+		return [m.search_filters_share_some({ cat: name })];
 	if (lo === hi) return bounds(key, lo, hi, pct);
 	return bounds(key, lo > 0 ? lo : null, hi < 100 ? hi : null, pct);
 }
@@ -394,7 +397,10 @@ function truncate(all: Part[]): Part[] {
 			left -= shown.length;
 			continue;
 		}
-		const cut = shown.slice(0, Math.max(0, left)) + ELLIPSIS;
+		let at = Math.max(0, left);
+		// Never between the halves of a surrogate pair (an emoji in a tag value).
+		if (at > 0 && /[\uD800-\uDBFF]/.test(shown.charAt(at - 1))) at--;
+		const cut = shown.slice(0, at) + ELLIPSIS;
 		out.push(typeof p === 'string' ? cut : { mono: cut, full: p.full ?? p.mono });
 		break;
 	}
