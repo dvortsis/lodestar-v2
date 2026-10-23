@@ -1,9 +1,15 @@
 // ⌘/Ctrl+S in the shortcut registry for a form (§10.10.5), loaded with the registry itself,
-// so neither is in a section's first view (W9). Returns the unregister.
+// so neither is in a section's first view (W9). Returns the unregister; nothing is registered
+// when `gone()` says the form unmounted while the registry loaded.
 import { m } from '$lib/paraglide/messages.js';
 
-export async function registerSaveKey(id: string, save: () => void): Promise<() => void> {
+export async function registerSaveKey(
+	id: string,
+	save: () => void,
+	gone: () => boolean
+): Promise<() => void> {
 	const { keys } = await import('$lib/keys');
+	if (gone()) return () => {};
 	const scope = `settings-form:${id}`;
 	const pop = keys.pushScope(scope);
 	let unregister: (() => void) | undefined;

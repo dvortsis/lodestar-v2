@@ -44,6 +44,7 @@
 	let summaryShown = $state(false);
 	let summaryFocus = $state(0);
 	let summaryFocused = $state(0);
+	let focusSeq = 0; // per component: a new `form` starts its saves at 1 again
 	let bypass = false;
 
 	const barShown = $derived(
@@ -90,7 +91,7 @@
 			if (last.result.ok) summaryShown = false;
 			else if (form.errors.length) {
 				summaryShown = true;
-				summaryFocus = last.id;
+				summaryFocus = ++focusSeq;
 			}
 		});
 	});
@@ -144,7 +145,13 @@
 		let gone = false;
 		// Loaded on demand, as the shell does (W9): the registry never enters a static import.
 		void import('./save-key')
-			.then(({ registerSaveKey }) => registerSaveKey(form.id, () => void save()))
+			.then(({ registerSaveKey }) =>
+				registerSaveKey(
+					form.id,
+					() => void save(),
+					() => gone
+				)
+			)
 			.then(
 				(unregister) => {
 					if (gone) unregister();

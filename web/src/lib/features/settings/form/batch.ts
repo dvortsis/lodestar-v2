@@ -1,5 +1,5 @@
 // What the save pipeline builds from staged values: the batch body, its keys, and applying a
-// response. Pure; loaded with the edit chunk, not the first view (`values.ts` has the rest).
+// response. Pure (`values.ts` has the rest).
 import type { Batch } from './requests';
 import type { SectionValues } from './types';
 import {

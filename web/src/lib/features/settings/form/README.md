@@ -8,17 +8,17 @@ A Settings screen has the owner's 45 KB route budget (§10.1), and the engine is
 
 **Eager (static imports):**
 
-| File                                                                                                      | Why it's in the first view                                                                                                                                          |
-| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `form.svelte.ts`                                                                                          | The store: loading, the field view, staging an edit, the debounces, events. Its `Engine` class is the `SettingsForm` the screen holds.                              |
-| `saving.ts`, `batch.ts`, `merge.ts`, `draft.ts`, `draft-store.ts`, `validate.ts`                          | The save pipeline, Undo, the merge, drafts and validation: kept in the first view by the owner's decision, so a merge or a draft restore never waits on a download. |
-| `schema.ts`, `types.ts`, `requests.ts`, `values.ts`                                                       | Reading the schema into fields, the requests, saved values and staging.                                                                                             |
-| `messages.ts`, `message-map*`                                                                             | Field labels and help.                                                                                                                                              |
-| `widgets.ts`                                                                                              | Picking each field's control.                                                                                                                                       |
-| `SettingsForm.svelte`, `SaveBar`, `ErrorSummary`, `FormNotice`, `DraftBanner`, `questions.ts`, `leave.ts` | The form's frame and everything the save pipeline shows: the bar, the summary, the banners, the draft offer, the discard, leave and disruptive questions.           |
-| `SettingField.svelte`, `FieldConflict`, `FieldSaved`                                                      | The field: label, help, error, Automatic, the status line, a conflict, what a save did.                                                                             |
-| `Control.svelte`                                                                                          | The two controls cheap enough to keep: the toggle and the text input.                                                                                               |
-| `LazyControl.svelte`, `controls.svelte.ts`, `lazy.svelte.ts`                                              | Loading the rest, with a placeholder of the right height so nothing moves.                                                                                          |
+| File                                                                                                                    | Why it's in the first view                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `form.svelte.ts`                                                                                                        | The store: loading, the field view, staging an edit, the debounces, events. Its `Engine` class is the `SettingsForm` the screen holds.                              |
+| `saving.ts`, `batch.ts`, `merge.ts`, `draft.ts`, `validate.ts`, `units.ts`, `display.ts`                                | The save pipeline, Undo, the merge, drafts and validation: kept in the first view by the owner's decision, so a merge or a draft restore never waits on a download. |
+| `schema.ts`, `types.ts`, `requests.ts`, `values.ts`                                                                     | Reading the schema into fields, the requests, saved values and staging.                                                                                             |
+| `messages.ts`, `message-map*`                                                                                           | Field labels and help.                                                                                                                                              |
+| `widgets.ts`                                                                                                            | Picking each field's control.                                                                                                                                       |
+| `SettingsForm.svelte`, `SaveBar`, `ErrorSummary`, `FormNotice`, `DraftBanner`, `questions.ts`, `dialogs.ts`, `leave.ts` | The form's frame and everything the save pipeline shows: the bar, the summary, the banners, the draft offer, the discard, leave and disruptive questions.           |
+| `SettingField.svelte`, `FieldConflict`, `FieldSaved`                                                                    | The field: label, help, error, Automatic, the status line, a conflict, what a save did.                                                                             |
+| `Control.svelte`                                                                                                        | The two controls cheap enough to keep: the toggle and the text input.                                                                                               |
+| `LazyControl.svelte`, `controls.svelte.ts`, `lazy.svelte.ts`                                                            | Loading the rest, with a placeholder of the right height so nothing moves.                                                                                          |
 
 **On demand (dynamic imports):**
 
@@ -35,7 +35,7 @@ A Settings screen has the owner's 45 KB route budget (§10.1), and the engine is
 **Keep it that way.**
 
 - A message used only on a lazy path belongs in a lazy file.
-- A lazy file imports shared code from the eager files, never the other way round: an eager import of a lazy file makes it eager.
+- A lazy file imports shared code from the eager files, never the other way round: an eager import of a lazy file makes it eager. `lazy-imports.test.ts` fails on one; add a new on-demand file to its list.
 - The `index.ts` barrel exports only what screens use; a re-export there keeps its module in the first view.
 - Rolldown pays about 400 B gz per chunk, so group what loads together into one entry (as `menu.ts` does) rather than many small ones.
 - A chunk that fails to load can't be retried (browsers keep the failure), so every lazy path has a visible fallback: the control's "couldn't load" line, or instant mode putting the value back with it.

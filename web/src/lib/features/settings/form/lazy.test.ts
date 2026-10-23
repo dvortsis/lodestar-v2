@@ -1,7 +1,7 @@
 // The parts the engine loads on demand (form.svelte.ts's header): instant mode and previews.
 // Each test starts from a fresh module graph, so nothing is loaded yet, and records which load.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DRAFT_PREFIX } from './draft-store';
+import { DRAFT_PREFIX } from './draft';
 import type { SettingsForm } from './form.svelte';
 import { fakeServer } from './testing/fake-server';
 import { spec, sv, values } from './testing/values';
@@ -51,7 +51,8 @@ beforeEach(() => {
 	sessionStorage.clear();
 	server = fakeServer([
 		values('crawler', 3, { intensity: sv('balanced'), timeout_secs: sv(12), max_sockets: sv(0) }),
-		values('transport', 7, { utp: sv(true) })
+		values('transport', 7, { utp: sv(true) }),
+		values('secrets', 1, { token: sv(null, 'db') })
 	]);
 	vi.stubGlobal('fetch', server.fetch);
 });
@@ -115,6 +116,17 @@ describe('an instant section', { timeout: 20_000 }, () => {
 			{ transport: { if_revision: 7, utp: false } },
 			{ crawler: { if_revision: 3, intensity: 'low' } }
 		]);
+	});
+
+	it('drops a staged secret and says so when Save can’t load it', async () => {
+		failing = new Set(['instant']);
+		const form = await open({
+			mode: 'instant',
+			fields: [...SPECS, spec('secrets.token', { writeOnly: true })]
+		});
+		form.set('secrets.token', 'hunter2');
+		expect(await form.save()).toEqual({ ok: false, reason: 'network' });
+		expect(form.field('secrets.token')).toMatchObject({ dirty: false, error: expect.any(String) });
 	});
 
 	it('puts the value back with an error when it can’t load', async () => {

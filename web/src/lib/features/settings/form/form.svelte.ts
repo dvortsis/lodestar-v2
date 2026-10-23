@@ -1,4 +1,4 @@
-// One form per screen or wizard step (§10.10.1, §10.10.5). A plain store: everything tied to a
+// One form per screen or wizard step (§10.10.1, §10.10.5). A store: everything tied to a
 // component's lifetime (the `settings` subscription, ⌘/Ctrl+S, the leave guard) is wired by
 // `SettingsForm.svelte`, which calls `received`/`resync` and registers the default gate.
 //
@@ -12,7 +12,7 @@
 /* eslint-disable svelte/prefer-svelte-reactivity */
 import { ApiError, isAbort, latest } from '$lib/api/client';
 import { m } from '$lib/paraglide/messages.js';
-import { draftOf, writeDraft, type Draft } from './draft-store';
+import { draftOf, writeDraft, type Draft } from './draft';
 import type { Instant } from './instant';
 import { getSection, type Batch } from './requests';
 import * as pipeline from './saving';
@@ -135,9 +135,8 @@ const ignore = () => {};
 export const loadedPreview = () => previewMod;
 
 /**
- * Loads now what the engine otherwise loads on demand: the edit chunk and previews, and with
- * `instant` instant mode. `SettingsForm.svelte` calls it once the browser is idle after the
- * first view.
+ * Loads now what the engine otherwise loads on demand: previews, and with `instant` instant
+ * mode. `SettingsForm.svelte` calls it on an instant form once the browser is idle.
  */
 export async function preloadSettingsForm(instant = true): Promise<void> {
 	await Promise.all([instant ? loadInstant() : undefined, loadPreview()]);
@@ -186,6 +185,8 @@ export class Engine implements SettingsForm {
 	destroyed = false;
 	announceSeq = 0;
 	instant: Instant | undefined;
+	/** Instant changes waiting for instant mode to load. */
+	instantPending = 0;
 	readonly confirms = new Map<string, ConfirmHandler>();
 	readonly gates = new Map<Danger, GateHandler>();
 	readonly fallbackGates = new Map<Danger, GateHandler>();
@@ -401,11 +402,14 @@ export class Engine implements SettingsForm {
 			(this.instant ??= instantMod.createInstant(this)).schedule(spec);
 			return;
 		}
+		this.instantPending++;
 		this.instantMode().then(
 			(i) => {
+				this.instantPending--;
 				if (!this.destroyed) i.schedule(spec);
 			},
 			() => {
+				this.instantPending--;
 				// Its code didn't load: put the old value back, as a failed send does.
 				const s = this.sec(spec.section);
 				if (s) this.setSection(stage(s, spec.name, undefined, spec));

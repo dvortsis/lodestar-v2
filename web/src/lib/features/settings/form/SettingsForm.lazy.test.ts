@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe('SettingsForm, cold', { timeout: 20_000 }, () => {
-	it('shows the bar with the first edit, once its code is in', async () => {
+	it('shows the bar with the first edit', async () => {
 		render(FormHarness, { form });
 		expect(screen.queryByTestId('save-bar')).toBeNull();
 		form.set('crawler.intensity', 'balanced');
@@ -50,7 +50,7 @@ describe('SettingsForm, cold', { timeout: 20_000 }, () => {
 		const summary = await screen.findByTestId('error-summary');
 		await until(() => expect(document.activeElement).toBe(within(summary).getByRole('heading')));
 		// Fixing the field hides the summary; a new bad value brings the error and the summary back.
-		const input = screen.getByLabelText('timeout_secs');
+		const input = await screen.findByLabelText('timeout_secs', {}, { timeout: 10_000 });
 		input.focus();
 		form.set('crawler.timeout_secs', 50);
 		await until(() => expect(screen.queryByTestId('error-summary')).toBeNull());
