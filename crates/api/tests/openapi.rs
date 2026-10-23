@@ -34,6 +34,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/search"),
     ("GET", "/facets"),
     ("POST", "/facets"),
+    ("GET", "/suggest"),
     ("GET", "/torrents/{hash}"),
     ("GET", "/torrents/{hash}/files"),
     ("GET", "/torrents/{hash}/siblings"),
