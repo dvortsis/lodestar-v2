@@ -1081,12 +1081,13 @@
    "notes": "01:15 owner approved process change (verified \"Yes, I approve this change\"); PR now ~190 lines (merge-guard hook, steward skill, ci-ok, README rules, \u00a72.20/2.21 + code-signing deferral). Fresh reviewer started. Numbering conflict with #107 \u00a72.20/21. Before merge: create ~/.lodestar-runner in runner container."
   },
   "S-snapshots": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
-   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots | 01:31 PR #109 f596b13 ready; reviewer started (security pass). | 02:00 review FIX: reported hash pre-existing in cs_hashes (added_at) missed -> origin 0/1 full lookup + test; important: incremental per-snapshot mark (0.96s/snapshot/tick @200k tombstones blocks ingest), before-rollback copies in list, one name parser. | 02:58 delta review MERGE at 60f4452; asked: main(+#106), I1 clock full-pass, I2 purge deleted/revoked api_keys + saved_searches/collections by id, I3 size line, polish. Runner verifies delta then merges. | 03:07 b8a0130 delta verified by runner (full_at daily/clock-back, V10 deleted-by-id + revoked copy, size line, polish). APPROVED; merge on green.",
+   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots | 01:31 PR #109 f596b13 ready; reviewer started (security pass). | 02:00 review FIX: reported hash pre-existing in cs_hashes (added_at) missed -> origin 0/1 full lookup + test; important: incremental per-snapshot mark (0.96s/snapshot/tick @200k tombstones blocks ingest), before-rollback copies in list, one name parser. | 02:58 delta review MERGE at 60f4452; asked: main(+#106), I1 clock full-pass, I2 purge deleted/revoked api_keys + saved_searches/collections by id, I3 size line, polish. Runner verifies delta then merges. | 03:07 b8a0130 delta verified by runner (full_at daily/clock-back, V10 deleted-by-id + revoked copy, size line, polish). APPROVED; merge on green. | 04:38 MERGED 51d90a4 (CI fully green; main since base touched only lodestar/metrics.rs, not overlapping).",
    "session": "session_01KNQRrRWSAMYLC5vJRhERho",
    "pr": 109,
-   "review_rounds": 1
+   "review_rounds": 1,
+   "merge": "51d90a4"
   },
   "runner-delegated": {
    "status": "approved",
