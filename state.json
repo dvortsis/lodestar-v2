@@ -399,7 +399,7 @@
    "pr": 115,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult). | 05:05 review FIX: dropped request leaks job slot (drop-guard) ; important: global throttle across 4 jobs (+6% p95 at 5k/s), #48 swarm note.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult). | 05:05 review FIX: dropped request leaks job slot (drop-guard) ; important: global throttle across 4 jobs (+6% p95 at 5k/s), #48 swarm note. | 05:31 0a8032c drop-guard + shared pacer (4 concurrent: p95 mean +1.2%) + notes. Runner delta-checked; approved; merge on green.",
    "self_review": {
     "raised": 4,
     "fixed": 4,
