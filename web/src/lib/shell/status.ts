@@ -15,12 +15,13 @@ export type PillKind =
 	| 'busy'
 	| 'crawling'
 	| 'idle'
+	| 'paused'
 	| 'rebuilding'
 	| 'failed';
 
 export interface PillState {
 	kind: PillKind;
-	/** Torrents in the store (crawling, idle); null when unknown. */
+	/** Torrents in the store (crawling, idle, paused); null when unknown. */
 	torrents: number | null;
 	/** Rebuild progress; null outside a rebuild. */
 	done: number | null;
@@ -45,6 +46,8 @@ export function pillState(input: {
 		return { kind: 'rebuilding', torrents: null, done: rebuild.done, total: rebuild.total };
 	if (rebuild?.phase === 'failed') return { kind: 'failed', ...none };
 	if (!crawler) return { kind: 'unknown', ...none };
+	if (crawler.paused)
+		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
 	const working = crawler.fetch_active > 0 || crawler.fetch_pending > 0;
 	return {
 		kind: working ? 'crawling' : 'idle',

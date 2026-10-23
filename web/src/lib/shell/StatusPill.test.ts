@@ -21,6 +21,12 @@ describe('StatusPill', () => {
 		expect(screen.getByTestId('status-pill-count').textContent).toBe('· 1.2M torrents');
 	});
 
+	it('shows paused with the count', () => {
+		pill({ kind: 'paused', ...none, torrents: 2500 });
+		expect(screen.getByTestId('status-pill-text').textContent).toBe('Paused');
+		expect(screen.getByTestId('status-pill-count').textContent).toBe('· 2.5K torrents');
+	});
+
 	it('says "1 torrent", not "1 torrents"', () => {
 		pill({ kind: 'idle', ...none, torrents: 1 });
 		expect(screen.getByTestId('status-pill-count').textContent).toBe('· 1 torrent');

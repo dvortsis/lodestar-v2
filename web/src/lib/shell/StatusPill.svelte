@@ -26,6 +26,7 @@
 		busy: IconWarning,
 		crawling: IconBroadcast,
 		idle: IconPause,
+		paused: IconPause,
 		rebuilding: IconRebuild,
 		failed: IconWarning
 	};
@@ -36,13 +37,16 @@
 		busy: () => m.shell_status_busy(),
 		crawling: () => m.shell_status_crawling(),
 		idle: () => m.shell_status_idle(),
+		paused: () => m.shell_status_paused(),
 		rebuilding: () => m.shell_status_rebuilding(),
 		failed: () => m.shell_status_failed()
 	};
 
 	const Icon = $derived(icons[state.kind]);
 	const locale = $derived(currentLocale());
-	const showsCount = $derived(state.kind === 'crawling' || state.kind === 'idle');
+	const showsCount = $derived(
+		state.kind === 'crawling' || state.kind === 'idle' || state.kind === 'paused'
+	);
 	const count = $derived(
 		state.kind === 'rebuilding'
 			? m.shell_status_rebuild_progress({
