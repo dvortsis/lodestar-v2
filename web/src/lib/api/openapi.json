@@ -1156,7 +1156,7 @@
         "tags": [
           "insights"
         ],
-        "summary": "The Insights overview (§10.9.2): stage strip, KPIs, trend with\nannotations, the cohort funnel, segments, exceptions and Serve, from\nthe rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.\nEvent time for the trend, new searchable, stages and Serve; discovery\ncohort for the funnel, yield and time to searchable.",
+        "summary": "The Insights overview (§10.9.2): stage strip, KPIs, trend with\nannotations, the cohort funnel, segments, exceptions and Serve, from\nthe rollups. `compare=1` adds `previous`.\nEvent time for the trend, new searchable, stages and Serve; discovery\ncohort for the funnel, yield and time to searchable.",
         "operationId": "getInsightsOverview",
         "parameters": [
           {
@@ -1191,7 +1191,7 @@
           {
             "name": "compare",
             "in": "query",
-            "description": "`1` adds `previous`, the period of equal length before, and\n`kpi.searchable_delta`.",
+            "description": "`1` adds `previous`, the period of equal length before.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5352,7 +5352,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Torrents made searchable in this range, as the change since the\nprevious period's end; null without `compare=1` (and for `all`).\nRemovals aren't counted yet (B11b)."
+            "description": "The change since the previous period's end. Always null for now:\nit needs removals, which nothing counts until B11b's lifecycle\ncounters."
           },
           "time_to_searchable_p50_s": {
             "type": [
@@ -6080,7 +6080,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Searchable at the period's end: now's, less what this range made\nsearchable. Null when search is off.",
+            "description": "Searchable at the period's end. Null until removals are counted\n(B11b), as `kpi.searchable_delta`.",
             "minimum": 0
           },
           "time_to_searchable_p50_s": {

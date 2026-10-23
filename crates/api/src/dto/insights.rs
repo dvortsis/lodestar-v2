@@ -22,8 +22,7 @@ pub struct OverviewQuery {
     /// Unix seconds, exclusive; `custom` only. Rounded up to its UTC hour
     /// (day), and to the current one at most.
     pub to: Option<i64>,
-    /// `1` adds `previous`, the period of equal length before, and
-    /// `kpi.searchable_delta`.
+    /// `1` adds `previous`, the period of equal length before.
     pub compare: Option<u8>,
 }
 
@@ -132,9 +131,9 @@ pub struct Kpi {
     /// Documents in the search index now; null when search is off.
     #[schema(required = true)]
     pub searchable: Option<u64>,
-    /// Torrents made searchable in this range, as the change since the
-    /// previous period's end; null without `compare=1` (and for `all`).
-    /// Removals aren't counted yet (B11b).
+    /// The change since the previous period's end. Always null for now:
+    /// it needs removals, which nothing counts until B11b's lifecycle
+    /// counters.
     #[schema(required = true)]
     pub searchable_delta: Option<i64>,
     /// First harvest → searchable, p50 and p95 seconds over the final
@@ -375,8 +374,8 @@ pub struct PreviousStages {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct PreviousKpi {
     pub new_searchable: u64,
-    /// Searchable at the period's end: now's, less what this range made
-    /// searchable. Null when search is off.
+    /// Searchable at the period's end. Null until removals are counted
+    /// (B11b), as `kpi.searchable_delta`.
     #[schema(required = true)]
     pub searchable: Option<u64>,
     #[schema(required = true)]
