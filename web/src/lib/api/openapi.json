@@ -1187,6 +1187,35 @@
         "security": []
       }
     },
+    "/logs/catalog": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Every log event (id, component, level, label and help keys, default,\ncurrent, data kinds, required, rate per hour), every data kind with its\nswitch per output and its deadline, the presets and the outputs. Admin\nsession only.",
+        "operationId": "getLogCatalog",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/network/check": {
       "get": {
         "tags": [
@@ -5615,6 +5644,320 @@
           }
         }
       },
+      "LogCatalog": {
+        "type": "object",
+        "description": "`GET /logs/catalog`.",
+        "required": [
+          "events",
+          "kinds",
+          "now",
+          "outputs",
+          "presets"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEvent"
+            }
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogKind"
+            }
+          },
+          "now": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The server's clock (Unix seconds): deadlines are set from it."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogOutput"
+            }
+          },
+          "presets": {
+            "$ref": "#/components/schemas/LogPresets"
+          }
+        }
+      },
+      "LogComponent": {
+        "type": "string",
+        "description": "Where an event comes from (§12.1's per-component levels; `system` is\nthe process's own: start, stop, settings, logging).",
+        "enum": [
+          "system",
+          "dht",
+          "fetch",
+          "pipeline",
+          "search",
+          "api",
+          "sources",
+          "filters",
+          "integrations",
+          "workers",
+          "companions",
+          "auth",
+          "libraries"
+        ]
+      },
+      "LogDataKind": {
+        "type": "string",
+        "description": "A kind of data a line may contain (§12.1). `peer_activity` and\n`filter_changes` are the opt-ins.",
+        "enum": [
+          "hash",
+          "name",
+          "path",
+          "url",
+          "query",
+          "client",
+          "peer",
+          "size",
+          "peer_activity",
+          "filter_changes"
+        ]
+      },
+      "LogEvent": {
+        "type": "object",
+        "description": "One catalogued event.",
+        "required": [
+          "component",
+          "current",
+          "default_on",
+          "help_key",
+          "id",
+          "kinds",
+          "label_key",
+          "level",
+          "opt_in",
+          "rate_per_hour",
+          "required"
+        ],
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/LogComponent"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "On now."
+          },
+          "default_on": {
+            "type": "boolean",
+            "description": "On in the default preset (Normal). One that's off by default joins\nat Detailed."
+          },
+          "help_key": {
+            "type": "string",
+            "description": "The message key of one line of help."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable: `fetch.failed`."
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogDataKind"
+            },
+            "description": "The data kinds it can carry (the badges)."
+          },
+          "label_key": {
+            "type": "string",
+            "description": "The message key of its plain name (\"Each failed metadata fetch\")."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "opt_in": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LogDataKind",
+                "description": "On only while this opt-in is."
+              }
+            ]
+          },
+          "rate_per_hour": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lines per hour since start, from its counter, which counts while\nit's off too.",
+            "minimum": 0
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Can't be turned off."
+          }
+        }
+      },
+      "LogKind": {
+        "type": "object",
+        "description": "One data kind and its switch.",
+        "required": [
+          "default_on",
+          "identifying",
+          "kind",
+          "opt_in",
+          "outputs",
+          "until"
+        ],
+        "properties": {
+          "default_on": {
+            "type": "boolean",
+            "description": "On in the Private preset."
+          },
+          "identifying": {
+            "type": "boolean",
+            "description": "Identifies torrents or people: turning it on is time-limited."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LogDataKind"
+          },
+          "opt_in": {
+            "type": "boolean",
+            "description": "Only by opt-in, for at most 24 hours, never by a preset, never on\nthe console or the Event Log."
+          },
+          "outputs": {
+            "$ref": "#/components/schemas/LogKindOutputs"
+          },
+          "until": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it turns off: 0 off, -1 until turned off, else Unix seconds."
+          }
+        }
+      },
+      "LogKindOutputs": {
+        "type": "object",
+        "description": "Whether a kind shows on each output.",
+        "required": [
+          "console",
+          "event_log",
+          "file",
+          "live"
+        ],
+        "properties": {
+          "console": {
+            "type": "boolean"
+          },
+          "event_log": {
+            "type": "boolean"
+          },
+          "file": {
+            "type": "boolean"
+          },
+          "live": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LogLevel": {
+        "type": "string",
+        "description": "A level, from the least to the most verbose.",
+        "enum": [
+          "error",
+          "warn",
+          "info",
+          "debug",
+          "trace"
+        ]
+      },
+      "LogOutput": {
+        "type": "object",
+        "description": "One output's state.",
+        "required": [
+          "detail",
+          "enabled",
+          "format",
+          "level",
+          "output"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`private` or `file` (the console's data kinds)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`text` or `json` (console); `jsonl` (file)."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel",
+            "description": "Its minimum level."
+          },
+          "output": {
+            "$ref": "#/components/schemas/LogOutputName"
+          }
+        }
+      },
+      "LogOutputName": {
+        "type": "string",
+        "description": "An output (§12.1): each has its own level and data kinds.",
+        "enum": [
+          "console",
+          "file",
+          "live",
+          "event_log"
+        ]
+      },
+      "LogPresets": {
+        "type": "object",
+        "description": "The presets now.",
+        "required": [
+          "data",
+          "temporary",
+          "verbosity"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "`private`, `hashes`, `full` or `custom`."
+          },
+          "temporary": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LogTemporary"
+              }
+            ]
+          },
+          "verbosity": {
+            "type": "string",
+            "description": "`errors`, `warnings`, `normal`, `detailed`, `everything` or\n`custom`."
+          }
+        }
+      },
+      "LogTemporary": {
+        "type": "object",
+        "description": "A timed verbosity (\"Detailed for 30 minutes\").",
+        "required": [
+          "until",
+          "verbosity"
+        ],
+        "properties": {
+          "until": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "verbosity": {
+            "type": "string",
+            "description": "`detailed` or `everything`…"
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "description": "`POST /login`.\n`Debug` redacts the secrets.",
@@ -8640,6 +8983,10 @@
     {
       "name": "events",
       "description": "The live server-sent event stream (§9)."
+    },
+    {
+      "name": "logs",
+      "description": "What gets logged: events, data kinds and outputs (§12.1)."
     },
     {
       "name": "meta",
