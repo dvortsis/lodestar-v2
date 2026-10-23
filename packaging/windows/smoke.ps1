@@ -234,6 +234,14 @@ if ($Msi) {
     } catch { Write-Host "::warning::could not read Defender settings: $_" }
   }
   Invoke-Msiexec @('/x', "`"$Msi`"", '/qn', '/norestart', 'REMOVE_DATA=1', '/l*v', "`"$logs\msi-uninstall2.log`"") 'uninstall with REMOVE_DATA'
+  if (Test-Path $dataDir) {
+    # Show why: run the repository copy of the script here, where its output is visible.
+    Write-Host '--- data folder contents'
+    Get-ChildItem -LiteralPath $dataDir -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { Write-Host ("{0} {1}" -f $_.Attributes, $_.FullName) }
+    Write-Host '--- remove-datadir.ps1 run by hand'
+    & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'remove-datadir.ps1') -Path "$dataDir\."
+    Write-Host "exit code: $LASTEXITCODE"
+  }
   Assert (-not (Test-Path $dataDir)) 'REMOVE_DATA=1 left the data folder behind'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
     try { Assert (-not (@((Get-MpPreference).ExclusionPath) -like "$dataDir*")) 'Defender exclusion left behind after uninstall' } catch [System.Management.Automation.RuntimeException] { throw } catch { }
