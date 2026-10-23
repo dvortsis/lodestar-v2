@@ -2799,7 +2799,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights.",
+        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights. With\n`natural=true`, also the query `q` means as natural phrasing\n(`natural_too_long` past 512 bytes or 32 words).",
         "operationId": "parseQuery",
         "parameters": [
           {
@@ -2809,6 +2809,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "natural",
+            "in": "query",
+            "description": "Also read `q` as natural phrasing (\"4k movies from 2020 over\n10gb\") and propose the query it means, in `natural`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -3999,6 +4008,75 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/suggest": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Suggestions for the token at the caret: field names, values with\ncounts, titles, smart chips and \"did you mean\". `replace` ranges are\nin characters, so the client never tokenises the query again.",
+        "operationId": "suggest",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The query text as typed so far.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pos",
+            "in": "query",
+            "description": "The caret, in characters from the start; the end by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items at most: 8 by default, 1–20.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3), as `/search`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestResponse"
                 }
               }
             }
@@ -5934,6 +6012,24 @@
               "null"
             ],
             "description": "The admin password, for a change that weakens filtering (§20.11);\nignored by previews."
+          }
+        }
+      },
+      "CharRange": {
+        "type": "object",
+        "description": "A range of characters (Unicode scalar values) in the query, end\nexclusive.",
+        "required": [
+          "end",
+          "start"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -9257,6 +9353,81 @@
           }
         }
       },
+      "NaturalChip": {
+        "type": "object",
+        "description": "One recognised clause and the words it came from.",
+        "required": [
+          "from",
+          "text"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/CharRange",
+            "description": "Characters of `q`, end exclusive."
+          },
+          "text": {
+            "type": "string",
+            "description": "The clause as query text (`res:2160p`)."
+          }
+        }
+      },
+      "NaturalProposal": {
+        "type": "object",
+        "description": "What natural phrasing proposes (§10.4): recognised words become\nclauses, and every other word stays as text.",
+        "required": [
+          "ast",
+          "canonical",
+          "chips",
+          "text"
+        ],
+        "properties": {
+          "ast": {
+            "$ref": "#/components/schemas/AstNode"
+          },
+          "canonical": {
+            "type": "string",
+            "description": "The proposed query; it always parses back to `ast`."
+          },
+          "chips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NaturalChip"
+            },
+            "description": "The recognised clauses, in the order they appear."
+          },
+          "text": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The words kept as text."
+          }
+        },
+        "example": {
+          "ast": {
+            "of": [],
+            "op": "and"
+          },
+          "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+          "chips": [
+            {
+              "from": {
+                "end": 2,
+                "start": 0
+              },
+              "text": "res:2160p"
+            },
+            {
+              "from": {
+                "end": 9,
+                "start": 3
+              },
+              "text": "type:movie"
+            }
+          ],
+          "text": []
+        }
+      },
       "NetworkCheck": {
         "type": "object",
         "description": "`GET /network/check` and `POST /network/check`: the first-run\nwizard's network check and the dashboard's \"reachable\" flag. Every\nprobe is ordinary DHT traffic; no outside service is asked (§18.7).",
@@ -9754,6 +9925,10 @@
           },
           "canonical": {
             "type": "string"
+          },
+          "natural": {
+            "$ref": "#/components/schemas/NaturalProposal",
+            "description": "With `natural=true`: the query `q` means as natural phrasing, for\nthe UI to preview as chips. Nothing applies it."
           }
         }
       },
@@ -12394,6 +12569,89 @@
           "url": {
             "type": "string"
           }
+        }
+      },
+      "SuggestItem": {
+        "type": "object",
+        "description": "One suggestion: replace the query's characters `replace.start` to\n`replace.end` (end exclusive) with `insert`. A leading `-` or `!`\nstays outside the range.",
+        "required": [
+          "insert",
+          "kind",
+          "replace",
+          "text"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents it would find, of those this search may show; absent for\nfield names, categories and \"did you mean\".",
+            "minimum": 0
+          },
+          "insert": {
+            "type": "string",
+            "description": "The query text to put in."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SuggestKind"
+          },
+          "replace": {
+            "$ref": "#/components/schemas/CharRange"
+          },
+          "text": {
+            "type": "string",
+            "description": "What to show: the value, title or field, or for `did_you_mean`\nthe whole corrected query."
+          }
+        }
+      },
+      "SuggestKind": {
+        "type": "string",
+        "description": "What an item offers.",
+        "enum": [
+          "field",
+          "value",
+          "title",
+          "chip",
+          "did_you_mean"
+        ]
+      },
+      "SuggestResponse": {
+        "type": "object",
+        "description": "`GET /suggest`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SuggestItem"
+            },
+            "description": "\"Did you mean\" first, then chips, field names, values and titles."
+          }
+        },
+        "example": {
+          "items": [
+            {
+              "count": 1284,
+              "insert": "res:2160p",
+              "kind": "chip",
+              "replace": {
+                "end": 5,
+                "start": 0
+              },
+              "text": "res:2160p"
+            },
+            {
+              "count": 12,
+              "insert": "title:\"The Dark Knight\"",
+              "kind": "title",
+              "replace": {
+                "end": 5,
+                "start": 0
+              },
+              "text": "The Dark Knight"
+            }
+          ]
         }
       },
       "SwarmBuckets": {

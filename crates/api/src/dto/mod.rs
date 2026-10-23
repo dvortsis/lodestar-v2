@@ -30,6 +30,7 @@ pub mod ops;
 pub mod saved;
 pub mod search;
 pub mod settings;
+pub mod suggest;
 pub mod torrents;
 pub mod user_items;
 
