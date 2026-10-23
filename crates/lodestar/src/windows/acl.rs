@@ -89,21 +89,31 @@ pub fn trusted(sid: &str, own_sid: Option<&str>) -> bool {
 /// DACL (`NO_ACCESS_CONTROL`), object or conditional entries, and
 /// anything unparsed are refused.
 pub fn check_dacl(dacl: &str, own_sid: Option<&str>) -> Result<(), String> {
+    check_entries(dacl, true, &|sid| trusted(sid, own_sid))
+}
+
+/// [`check_dacl`]'s rules, with `allowed` deciding who an allow entry may
+/// name, and `protected` whether the DACL must not inherit.
+fn check_entries(
+    dacl: &str,
+    protected: bool,
+    allowed: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
     let mut rest = dacl;
-    let mut protected = false;
+    let mut is_protected = false;
     while !rest.is_empty() && !rest.starts_with('(') && !rest.starts_with("S:") {
         if rest.starts_with("NO_ACCESS_CONTROL") {
             return Err("it has no access control at all (a NULL DACL)".into());
         } else if let Some(r) = rest.strip_prefix("AI").or_else(|| rest.strip_prefix("AR")) {
             rest = r;
         } else if let Some(r) = rest.strip_prefix('P') {
-            protected = true;
+            is_protected = true;
             rest = r;
         } else {
             return Err("its permissions have flags Lodestar doesn't know".into());
         }
     }
-    if !protected {
+    if protected && !is_protected {
         return Err("it inherits permissions from its parent folder".into());
     }
     while let Some(body) = rest.strip_prefix('(') {
@@ -113,7 +123,7 @@ pub fn check_dacl(dacl: &str, own_sid: Option<&str>) -> Result<(), String> {
             return Err("an entry Lodestar doesn't know".into());
         };
         match kind {
-            "A" if trusted(sid, own_sid) => {}
+            "A" if allowed(sid) => {}
             "A" => return Err(format!("it grants access to {sid}")),
             "D" => {}
             _ => return Err(format!("it has an entry of type {kind}")),
@@ -125,6 +135,82 @@ pub fn check_dacl(dacl: &str, own_sid: Option<&str>) -> Result<(), String> {
     } else {
         Err("a malformed entry".into())
     }
+}
+
+/// Whether a logs folder is private (B-log1b), from its security
+/// descriptor: its owner and its DACL decide, never a flag in its
+/// `index.json` that anyone who can write there could plant.
+///
+/// - Its owner is `SYSTEM`, `Administrators`, or `own`, the account
+///   Lodestar runs as (a user's SID, or the service's `NT SERVICE\…`).
+/// - Its DACL, inherited entries included, allows only those, `OWNER
+///   RIGHTS` (`OW`, how `restrict_dir_acl` grants the owner) and `CREATOR
+///   OWNER` (`CO`, which only ever names whoever made an entry inside, and
+///   only those who may write there can). Deny entries are fine.
+/// - Unlike the data folder's, the DACL may inherit: the service's logs
+///   folder inherits the private data folder's (`windows::logfile`).
+pub fn log_folder_private(sddl: &str, own: Option<&str>) -> Result<(), String> {
+    let d = parse_sddl(sddl)?;
+    let ok = |sid: &str| {
+        let sid = full_sid(sid, own);
+        matches!(
+            sid.as_str(),
+            "S-1-5-18" | "S-1-5-32-544" | "S-1-3-4" | "S-1-3-0"
+        ) || Some(sid.as_str()) == own
+    };
+    let owner = full_sid(&d.owner, own);
+    if !matches!(owner.as_str(), "S-1-5-18" | "S-1-5-32-544") && Some(owner.as_str()) != own {
+        return Err(format!("it belongs to {}", d.owner));
+    }
+    check_entries(&d.dacl, false, &ok)
+}
+
+/// A SID as SDDL writes it, spelled out. SDDL abbreviates well-known
+/// SIDs (`SY`, `LS`), and a machine's own accounts by their RID (`LA`, the
+/// built-in Administrator, which a CI runner may run as), while `whoami`
+/// gives the full SID. The machine-relative ones take `own`'s machine
+/// prefix, when `own` is a local account. An alias not listed stays as it
+/// is, so it matches nothing: fail closed.
+pub fn full_sid(sid: &str, own: Option<&str>) -> String {
+    let well_known = match sid {
+        "SY" => Some("S-1-5-18"),
+        "BA" => Some("S-1-5-32-544"),
+        "BU" => Some("S-1-5-32-545"),
+        "OW" => Some("S-1-3-4"),
+        "CO" => Some("S-1-3-0"),
+        "LS" => Some("S-1-5-19"),
+        "NS" => Some("S-1-5-20"),
+        "WD" => Some("S-1-1-0"),
+        "AU" => Some("S-1-5-11"),
+        _ => None,
+    };
+    if let Some(full) = well_known {
+        return full.to_string();
+    }
+    let rid = match sid {
+        "LA" => Some("500"),
+        "LG" => Some("501"),
+        _ => None,
+    };
+    let prefix = own
+        .filter(|o| o.starts_with("S-1-5-21-"))
+        .and_then(|o| o.rsplit_once('-'))
+        .map(|(prefix, _)| prefix);
+    match (rid, prefix) {
+        (Some(rid), Some(prefix)) => format!("{prefix}-{rid}"),
+        _ => sid.to_string(),
+    }
+}
+
+/// The SID in `whoami /user /fo csv /nh` output (`"host\\user","S-1-5-…"`).
+pub fn parse_whoami_sid(text: &str) -> Option<String> {
+    text.split(',')
+        .map(|f| f.trim().trim_matches('"'))
+        .find(|f| {
+            f.strip_prefix("S-1-")
+                .is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_digit() || c == '-'))
+        })
+        .map(String::from)
 }
 
 /// What [`Ops::inspect`] reports: the folder and each entry directly in
@@ -342,6 +428,46 @@ impl Ops for Windows<'_> {
     }
 }
 
+/// The folder's own SDDL, or nothing for a link or junction. The path
+/// arrives in an environment variable, as [`INSPECT_SCRIPT`]'s does.
+pub const FOLDER_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
+$p = $env:LODESTAR_ACL_PATH
+$f = Get-Item -LiteralPath $p -Force
+if (\"$($f.Attributes)\" -match 'ReparsePoint') { exit 0 }
+(Get-Acl -LiteralPath $p).Sddl";
+
+/// The account this process runs as, from `whoami` (the workspace forbids
+/// `unsafe`, so no token call): read once.
+#[cfg(windows)]
+pub fn process_sid() -> Option<&'static str> {
+    static SID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    SID.get_or_init(|| {
+        let out = super::system32_command("whoami.exe")?
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .ok()?;
+        parse_whoami_sid(&String::from_utf8_lossy(&out.stdout))
+    })
+    .as_deref()
+}
+
+/// Why the logs folder `dir` isn't private, or `Ok` when it is
+/// ([`log_folder_private`] for the account this process runs as). A
+/// folder whose descriptor can't be read isn't private: fail closed.
+#[cfg(windows)]
+pub fn log_folder(dir: &Path) -> Result<(), String> {
+    let own = process_sid();
+    let ops = Windows { own_sid: own };
+    let sddl = ops
+        .powershell(FOLDER_SCRIPT, dir)
+        .map_err(|e| format!("its permissions couldn't be read ({e})"))?;
+    let sddl = sddl.trim();
+    if sddl.is_empty() {
+        return Err("it's a link or junction".into());
+    }
+    log_folder_private(sddl, own)
+}
+
 /// The SID of service `name` (`NT SERVICE\<name>`), from `sc showsid`.
 #[cfg(windows)]
 pub fn service_sid(name: &str) -> io::Result<String> {
@@ -382,6 +508,78 @@ mod tests {
         assert!(parse_sddl("D:P(A;;FA;;;SY)").is_err());
         assert!(parse_sddl("O:BAG:SY").is_err());
         assert!(parse_sddl("").is_err());
+    }
+
+    #[test]
+    fn judges_a_logs_folder_by_owner_and_dacl() {
+        const USER: &str = "S-1-5-21-1-2-3-1001";
+        // Made by `restrict_dir_acl` as a user, or as the service.
+        let made = "O:S-1-5-21-1-2-3-1001G:S-1-5-21-1-2-3-513D:PAI(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+        assert_eq!(log_folder_private(made, Some(USER)), Ok(()));
+        assert_eq!(
+            log_folder_private(&made.replace(USER, OWN), Some(OWN)),
+            Ok(())
+        );
+        // The service's logs folder: inherited from the private data folder.
+        let inherited = "O:S-1-5-80-1-2-3-4-5D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;S-1-5-80-1-2-3-4-5)";
+        assert_eq!(log_folder_private(inherited, Some(OWN)), Ok(()));
+        // Another account's folder, or Lodestar's run as someone else.
+        assert!(
+            log_folder_private(made, Some(OWN))
+                .unwrap_err()
+                .contains("belongs to")
+        );
+        // A folder anyone may read: Users, Everyone, Authenticated Users.
+        for who in ["BU", "WD", "AU", "S-1-5-32-545", "S-1-5-21-1-2-3-1002"] {
+            let shared = format!("{made}(A;OICI;0x1200a9;;;{who})");
+            assert!(log_folder_private(&shared, Some(USER)).is_err(), "{who}");
+        }
+        // A NULL DACL, an unknown entry, a malformed descriptor.
+        assert!(log_folder_private("O:BAD:NO_ACCESS_CONTROL", None).is_err());
+        assert!(log_folder_private("O:BAD:P(OA;;FA;;;SY)", None).is_err());
+        assert!(log_folder_private("garbage", None).is_err());
+        // The built-in Administrator (a CI runner's account) is written
+        // `LA`, and LocalService `LS`: spelled out against `whoami`'s SID.
+        const ADMIN: &str = "S-1-5-21-1-2-3-500";
+        let la =
+            "O:LAG:S-1-5-21-1-2-3-513D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)";
+        assert_eq!(log_folder_private(la, Some(ADMIN)), Ok(()));
+        assert!(
+            log_folder_private(la, Some(USER)).is_err(),
+            "another machine account's"
+        );
+        assert!(
+            log_folder_private(la, Some(OWN)).is_err(),
+            "a service SID has no machine prefix"
+        );
+        assert_eq!(
+            log_folder_private("O:LSD:P(A;;FA;;;LS)(A;;FA;;;SY)", Some("S-1-5-19")),
+            Ok(())
+        );
+        assert!(
+            log_folder_private("O:BAD:P(A;;FA;;;XX)", None).is_err(),
+            "an unknown alias"
+        );
+        assert_eq!(full_sid("LA", Some(ADMIN)), ADMIN);
+        assert_eq!(full_sid("LA", None), "LA");
+        // Deny entries and CREATOR OWNER are fine.
+        assert_eq!(
+            log_folder_private("O:BAD:P(D;;FA;;;WD)(A;OICIIO;GA;;;CO)(A;;FA;;;SY)", None),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn reads_whoami() {
+        assert_eq!(
+            parse_whoami_sid("\"host\\user\",\"S-1-5-21-1-2-3-1001\"\r\n").as_deref(),
+            Some("S-1-5-21-1-2-3-1001")
+        );
+        assert_eq!(
+            parse_whoami_sid("\"nt service\\lodestar\",\"S-1-5-80-9-8\"").as_deref(),
+            Some("S-1-5-80-9-8")
+        );
+        assert_eq!(parse_whoami_sid("ERROR: no"), None);
     }
 
     #[test]

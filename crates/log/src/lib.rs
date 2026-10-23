@@ -264,20 +264,36 @@ mod tests {
         let before = QUIET::EVENT.count();
         log_event!(QUIET);
         assert_eq!(QUIET::EVENT.count(), before + 1);
-        let before = PLAIN::EVENT.count();
-        PLAIN::EVENT.set_on(false);
-        log_event!(PLAIN, size = size(), client = "x");
+        // Its own event: the module's are shared statics, and another
+        // test reading `PLAIN`'s switch mustn't see this one toggle it.
+        mod toggled {
+            crate::catalogue! {
+                "toggled";
+                TOGGLED {
+                    id: "test.toggled",
+                    component: System,
+                    level: Info,
+                    message: "toggled",
+                    fields: { torrent: Hash, size: Size, client: Label },
+                }
+            }
+        }
+        use toggled::TOGGLED;
+        check_ids(&[&toggled::CATALOGUE]).unwrap();
+        let before = TOGGLED::EVENT.count();
+        TOGGLED::EVENT.set_on(false);
+        log_event!(TOGGLED, size = size(), client = "x");
         assert_eq!(evaluated.get(), 0, "fields aren't evaluated while it's off");
-        assert_eq!(PLAIN::EVENT.count(), before + 1, "but it counts");
-        PLAIN::EVENT.set_on(true);
+        assert_eq!(TOGGLED::EVENT.count(), before + 1, "but it counts");
+        TOGGLED::EVENT.set_on(true);
         log_event!(
-            PLAIN,
+            TOGGLED,
             torrent = Torrent(&[1; 20]),
             size = size(),
             client = "x"
         );
         assert_eq!(evaluated.get(), 1);
-        assert_eq!(PLAIN::EVENT.count(), before + 2);
+        assert_eq!(TOGGLED::EVENT.count(), before + 2);
     }
 
     #[test]
