@@ -20,7 +20,7 @@ pub enum Topic {
     Crawler,
     /// Index rebuild progress when it changes ([`RebuildEvent`]).
     Rebuild,
-    /// Saved-search alerts (reserved for B9; [`AlertsEvent`]).
+    /// Saved-search alerts ([`AlertsEvent`]).
     Alerts,
     /// Insights deltas every 30 s (reserved for B11a; [`InsightsEvent`]).
     Insights,
@@ -155,16 +155,24 @@ pub struct RebuildEvent {
     pub unavailable: Vec<String>,
 }
 
-/// `event: alerts` (reserved: B9 publishes it): a saved search matched
-/// new torrents. The matches themselves come from the API.
+/// `event: alerts`: a saved search matched torrents that just became
+/// searchable. One event per saved search per percolation run; the
+/// matches themselves come from `GET /saved-searches/{id}/alerts`. Only
+/// torrents search would show count: none a filter rule hid, and no
+/// Adult while "Show adult content" is off (§20.9). A run whose new
+/// matches are all hidden sends no event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "alert": 913, "matched": 2, "max_id": 48211, "notify": true, "saved_search": 4 }))]
 pub struct AlertsEvent {
-    /// The alert's id.
+    /// The highest new alert's id (shown ones only).
     pub alert: i64,
-    /// New matches.
+    /// New alerts on torrents you can see; at least 1.
     pub matched: u64,
-    /// The highest matching torrent id.
+    /// The highest of their torrent ids.
     pub max_id: i64,
+    /// The saved search alerts in the app (its `alert` flag): notify only
+    /// when true. Otherwise the event only refreshes counts.
+    pub notify: bool,
     /// The saved search's id.
     pub saved_search: i64,
 }

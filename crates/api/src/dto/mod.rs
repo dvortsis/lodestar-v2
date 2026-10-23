@@ -13,17 +13,28 @@
 //! the golden tests (`tests/golden.rs`) hold the typed responses to those
 //! bytes. Keep new fields in order too; the tests catch a slip.
 
+pub mod alerts;
 pub mod auth;
+pub mod collections;
 pub mod compare;
 pub mod discover;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod facets;
 pub mod filters;
+pub mod insights;
+pub mod jobs;
+pub mod keys;
+pub mod logs;
 pub mod ops;
+pub mod saved;
 pub mod search;
 pub mod settings;
+pub mod suggest;
+pub mod system;
 pub mod torrents;
+pub mod user_items;
 
 /// What a secret (a password, the setup token) shows as in `Debug`
 /// output, so one never reaches a log.

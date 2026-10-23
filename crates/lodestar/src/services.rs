@@ -29,7 +29,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{floor, http, ops, settings, subscriptions};
+use crate::{floor, http, insights, ops, settings, subscriptions, system};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -37,12 +37,16 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub struct Services {
     /// The API's state (auth, index, reader), as `/api/v1` sees it.
     pub api: lodestar_api::ApiState,
+    /// Export's own adult setting, followed live (§20.9).
+    pub export_adult: lodestar_api::export::ExportAdult,
     /// The status page's and metrics' state.
     pub http: http::AppState,
     /// `/api/v1/events`: the live stream's hub.
     pub events: Arc<EventHub>,
     pub handles: Handles,
     listener: TcpListener,
+    /// `/system` (B2c), layered beside the hub.
+    system: Arc<dyn lodestar_api::system::SystemApi>,
 }
 
 /// What has to be stopped on the way out.
@@ -52,6 +56,10 @@ pub struct Handles {
     pipeline: Pipeline,
     /// The index, its live indexer and any rebuild (§8).
     search: Option<Arc<Serving>>,
+    /// Insights' searchable-time recorder and its stop signal.
+    insights: (watch::Sender<bool>, JoinHandle<()>),
+    /// Saved searches → alerts (B9), while search is on.
+    percolator: Option<(watch::Sender<bool>, JoinHandle<()>)>,
 }
 
 impl Services {
@@ -60,6 +68,10 @@ impl Services {
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        // `/system`'s start time, whichever entry point runs this (B2c).
+        system::Restart::global().started();
+        // A pending HTTP-address change, before the registry loads (B2c).
+        let address = system::address::prepare(config, &system::address::SystemClock).await;
         // The settings registry (§11) over its own connection: saved
         // values join the file and environment before anything starts.
         let settings = {
@@ -104,40 +116,57 @@ impl Services {
         let subs_config = config.subscriptions.clone();
         let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
-        let (store, control, reader, serving) = tokio::task::spawn_blocking(move || {
-            let store = Store::open(&db, store_config.clone())?;
-            // Settings and lists change through a second connection, so
-            // they never wait behind the ingest writer for long.
-            let mut control = Store::open(&db, store_config.clone())?;
-            subscriptions::sync_config(&mut control, &subs_config)?;
-            // Before the pipeline loads the floor from the store.
-            floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
-            floor::report(&control)?;
-            subscriptions::apply(&control, &filter, &subs_ips)?;
-            let reader = Store::open_reader(&db, store_config.clone())?;
-            // The index this build serves (rebuilt in the background from
-            // an older one if need be); its indexer follows the store
-            // through its own connection.
-            let serving = if search {
-                let config = ServingConfig {
-                    live: LiveConfig {
-                        heap_bytes: heap,
-                        ..LiveConfig::default()
-                    },
-                    store: store_config,
-                    ..ServingConfig::default()
+        let (store, control, user_data, reader, serving, percolation) =
+            tokio::task::spawn_blocking(move || {
+                let mut store = Store::open(&db, store_config.clone())?;
+                // After an unclean stop, the counts a crash can lose are
+                // recounted (§7), before the pipeline writes any.
+                match insights::repair_after_unclean_stop(&mut store) {
+                    Ok(Some(r)) if r.changed() => tracing::info!(
+                        "insights: repaired the rollups after an unclean stop: {r:?}"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("insights: the repair after an unclean stop failed: {e}")
+                    }
+                }
+                // Settings and lists change through a second connection, so
+                // they never wait behind the ingest writer for long.
+                let mut control = Store::open(&db, store_config.clone())?;
+                subscriptions::sync_config(&mut control, &subs_config)?;
+                // Before the pipeline loads the floor from the store.
+                floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
+                floor::report(&control)?;
+                subscriptions::apply(&control, &filter, &subs_ips)?;
+                let user_data = Store::open(&db, store_config.clone())?;
+                let reader = Store::open_reader(&db, store_config.clone())?;
+                // The percolator records alerts through its own connection.
+                let percolation = search
+                    .then(|| Store::open(&db, store_config.clone()))
+                    .transpose()?;
+                // The index this build serves (rebuilt in the background from
+                // an older one if need be); its indexer follows the store
+                // through its own connection.
+                let serving = if search {
+                    let config = ServingConfig {
+                        live: LiveConfig {
+                            heap_bytes: heap,
+                            ..LiveConfig::default()
+                        },
+                        store: store_config,
+                        ..ServingConfig::default()
+                    };
+                    Some(Arc::new(Serving::open_or_rebuild(
+                        &index_root,
+                        &db,
+                        config,
+                    )?))
+                } else {
+                    None
                 };
-                Some(Arc::new(Serving::open_or_rebuild(
-                    &index_root,
-                    &db,
-                    config,
-                )?))
-            } else {
-                None
-            };
-            Ok::<_, BoxError>((store, control, reader, serving))
-        })
-        .await??;
+                Ok::<_, BoxError>((store, control, user_data, reader, serving, percolation))
+            })
+            .await??;
 
         let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
         let mut dht_stats = None;
@@ -159,6 +188,14 @@ impl Services {
             )
             .map_err(|e| format!("loading auth: {e}"))?,
         );
+        // The way back in after a proxy change locks you out (§12).
+        let proxy_env = std::env::var(lodestar_api::auth::PROXY_AUTH_ENV).ok();
+        if auth.apply_proxy_override(proxy_env.as_deref()) {
+            tracing::warn!(
+                "{} is set: trusted-proxy sign-in is off for this run",
+                lodestar_api::auth::PROXY_AUTH_ENV
+            );
+        }
         if let Some(token) = auth.setup_token() {
             // §12: whoever can read the logs claims the instance.
             tracing::warn!(
@@ -197,6 +234,7 @@ impl Services {
             quarantine_secs,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
+        let subscriptions_stopped = crate::fixture::unless_offline(subscriptions_stopped);
         let refresher = tokio::spawn(subscriptions::run(
             control.clone(),
             subscriptions::Limits::from_config(&config.subscriptions),
@@ -210,6 +248,30 @@ impl Services {
             stats: s.stats(),
         });
         let paused_now = crawl.clone();
+        // Insights (B11a): searchable time from the index's commits.
+        let insights = Arc::new(insights::Insights::new(pipeline.monitor()));
+        let (stop_insights, insights_stopped) = watch::channel(false);
+        let recorder = {
+            let crawl = crawl.clone();
+            insights::spawn(
+                insights.clone(),
+                insights::Follow {
+                    db: config.db_path(),
+                    store: config.store_config(),
+                    index: serving
+                        .as_ref()
+                        .map(|s| (s.commit_hook().clone(), s.stats())),
+                    paused: Box::new(move || crawl.status().paused),
+                    // As `/stats` counts them.
+                    searchable: {
+                        let index = search.clone();
+                        Box::new(move || index.as_ref().map(|i| i.index().num_docs()))
+                    },
+                    tick: insights::TICK,
+                },
+                insights_stopped,
+            )
+        };
         let ops = Arc::new(ops::Ops::new(
             crawl,
             settings.subscribe(),
@@ -224,7 +286,9 @@ impl Services {
             filters: Some(filters),
             settings: Some(settings.clone()),
             ops: Some(ops),
+            user_data: Some(Arc::new(Mutex::new(user_data))),
             adult: settings::content::follow(settings.subscribe()),
+            insights: Some(insights),
         };
         settings::log::follow(settings.subscribe());
         let http = http::AppState {
@@ -268,15 +332,32 @@ impl Services {
                 adult: api.adult.clone(),
             },
         );
-        let listener = TcpListener::bind(config.http.bind)
-            .await
-            .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
+        // Saved searches → alerts (B9): it follows the serving index's
+        // commits and publishes on the hub. Never in fixture mode.
+        let percolator = serving.as_ref().zip(percolation).map(|(s, store)| {
+            let (stop, stopped) = watch::channel(false);
+            let task = crate::percolator::spawn(
+                SearchHandle::serving(s.clone()),
+                s.commit_hook(),
+                store,
+                events.clone(),
+                api.adult.clone(),
+                crate::fixture::unless_offline(stopped),
+                crate::percolator::PercolatorConfig::default(),
+            );
+            (stop, task)
+        });
+        let (listener, bound) =
+            system::address::bind(address, config, &control, &system::address::SystemClock).await?;
+        let served = bound.serving;
+        let system = system::System::start(config, bound, &api, &settings, control, &events);
         tracing::info!(
             "UI on {}, status page on /status (data in {})",
-            ops::ui_address(config.http.bind),
+            ops::ui_address(served),
             config.data_dir.display()
         );
         Ok(Services {
+            export_adult: settings::content::follow_export(settings.subscribe()),
             api,
             http,
             events,
@@ -284,8 +365,11 @@ impl Services {
                 subscriptions: (stop_subscriptions, refresher),
                 pipeline,
                 search: serving,
+                insights: (stop_insights, recorder),
+                percolator,
             },
             listener,
+            system,
         })
     }
 
@@ -296,20 +380,30 @@ impl Services {
     ) -> Result<(), BoxError> {
         let Services {
             api,
+            export_adult,
             http,
             events,
             handles,
             listener,
+            system,
         } = self;
+        // Exports and other background jobs (§9): one registry, closed at
+        // shutdown so open downloads end rather than hold it.
+        let jobs = Arc::new(lodestar_api::jobs::Jobs::default());
         let app = http::router(http, api)
             .layer(Extension(events.clone()))
+            .layer(Extension(jobs.clone()))
+            .layer(Extension(export_adult))
+            .layer(Extension(system))
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
-        // so the graceful shutdown doesn't wait on them.
+        // and closing the jobs ends open exports, so the graceful
+        // shutdown doesn't wait on them.
         let hub = events.clone();
         let signal = async move {
             signal.await;
             hub.close();
+            jobs.close();
         };
         axum::serve(listener, app)
             .with_graceful_shutdown(signal)
@@ -322,7 +416,7 @@ impl Services {
 impl Handles {
     /// Stops every service in order: the blocklist refresher, the
     /// pipeline (which saves the queue and DHT state and commits the last
-    /// batch), then the indexer.
+    /// batch), then the indexer, then the percolator.
     pub async fn shutdown(self) -> Result<(), BoxError> {
         tracing::info!("shutting down: saving the queue and DHT state");
         let (stop, refresher) = self.subscriptions;
@@ -334,6 +428,15 @@ impl Handles {
             // handles (requests still finishing) may hold it: stopping
             // works through a shared one.
             tokio::task::spawn_blocking(move || search.stop()).await??;
+        }
+        // After the indexer's last commit, which it then records.
+        let (stop, recorder) = self.insights;
+        let _ = stop.send(true);
+        let _ = recorder.await;
+        if let Some((stop, task)) = self.percolator {
+            // After the indexer, whose last commit it may still record.
+            let _ = stop.send(true);
+            let _ = task.await;
         }
         tracing::info!("stopped cleanly");
         Ok(())

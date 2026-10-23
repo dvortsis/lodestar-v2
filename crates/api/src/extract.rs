@@ -9,9 +9,10 @@ use axum::body::Bytes;
 use axum::extract::rejection::PathRejection;
 use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Request};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{Extensions, HeaderMap, StatusCode, header};
 use serde::de::DeserializeOwned;
 
+use crate::auth::SessionAuth;
 use crate::error::{ApiError, ApiResult};
 
 /// A JSON body; a bad one is an [`ApiError`] whose `field` is the path
@@ -141,9 +142,10 @@ impl<S: Send + Sync, T: DeserializeOwned + Send> FromRequestParts<S> for Path<T>
     }
 }
 
-/// The peer address (from `ConnectInfo`), for per-IP login limits.
-/// Behind a reverse proxy this is the proxy; trusted-proxy headers come
-/// with proxy auth (§12).
+/// The client's address, for per-client login and key limits: the TCP
+/// peer (from `ConnectInfo`), or, when it's a trusted proxy and proxy
+/// auth is on, the rightmost `X-Forwarded-For` address that isn't one
+/// (see [`crate::auth::proxy`]). Outside [`crate::router`] it's the peer.
 #[derive(Debug, Clone, Copy)]
 pub struct ClientIp(pub IpAddr);
 
@@ -151,12 +153,33 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let ip = parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .map_or(IpAddr::from([0, 0, 0, 0]), |c| c.0.ip());
+        let peer = peer_ip(&parts.extensions);
+        let ip = match parts.extensions.get::<SessionAuth>() {
+            Some(s) => s.auth.client_ip(peer, &parts.headers),
+            None => peer,
+        };
         Ok(ClientIp(ip))
     }
+}
+
+/// The TCP peer itself, as the session guard sees it (for checks that
+/// repeat the guard's later, such as an event stream's heartbeats).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Peer(pub IpAddr);
+
+impl<S: Send + Sync> FromRequestParts<S> for Peer {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Peer(peer_ip(&parts.extensions)))
+    }
+}
+
+/// The TCP peer's address (`0.0.0.0` without `ConnectInfo`).
+pub(crate) fn peer_ip(extensions: &Extensions) -> IpAddr {
+    extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or(IpAddr::from([0, 0, 0, 0]), |c| c.0.ip())
 }
 
 fn not_json() -> ApiError {

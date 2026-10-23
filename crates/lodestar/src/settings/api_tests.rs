@@ -58,7 +58,9 @@ fn fixture() -> Fixture {
                 filters: None,
                 settings: Some(registry.clone()),
                 ops: None,
+                user_data: None,
                 adult: Default::default(),
+                insights: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -160,7 +162,7 @@ async fn settings_endpoints() {
     let c = Some(cookie.as_str());
 
     let index = golden(&f, "settings_index", get("/api/v1/settings", c)).await;
-    assert_eq!(index["sections"].as_array().unwrap().len(), 8);
+    assert_eq!(index["sections"].as_array().unwrap().len(), 9);
     let crawler = golden(&f, "settings_crawler", get("/api/v1/settings/crawler", c)).await;
     assert_eq!(crawler["fields"]["timeout_secs"]["source"], json!("file"));
     let network = golden(&f, "settings_network", get("/api/v1/settings/network", c)).await;

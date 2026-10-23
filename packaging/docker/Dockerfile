@@ -29,6 +29,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Pin the toolchain to the image's own; rust-toolchain.toml says "stable",
 # which would otherwise make rustup download whatever is newest. The release
 # profile keeps line tables (Cargo.toml); the image drops them (~100 MB).
+# Built without the `fixture` feature (`serve --fixture` test data), like every
+# release artifact.
 ENV RUSTUP_TOOLCHAIN=1.97.1 \
     CARGO_TERM_COLOR=never \
     CARGO_INCREMENTAL=0 \
@@ -77,7 +79,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       arm64) triple=aarch64-unknown-linux-musl ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac \
-    && cargo zigbuild --locked --release -p lodestar --bin lodestar --target "$triple" \
+    && cargo zigbuild --locked --release -p lodestar --bin lodestar --no-default-features --features web --target "$triple" \
     && install -D "target/$triple/release/lodestar" /out/lodestar \
     && mkdir -p /out/data
 

@@ -11,6 +11,84 @@
     }
   ],
   "paths": {
+    "/alerts/read": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Marks alerts read up to `through` (the highest alert id you saw), for\none saved search or all of them. Alerts that arrived since stay unread.\nIt returns no count: one would reveal alerts that are withheld.",
+        "operationId": "markAlertsRead",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertsRead"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/alerts/unread": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Unread alerts across every saved search, on torrents search would show:\nthe nav badge, equal to the sum of the saved searches' `unread`.",
+        "operationId": "getUnreadAlerts",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadAlerts"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/auth": {
       "get": {
         "tags": [
@@ -34,6 +112,72 @@
           }
         },
         "security": []
+      }
+    },
+    "/auth/proxy": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The trusted reverse-proxy header settings (§12). `forced_off` says\n`LODESTAR_PROXY_AUTH=off` turned them off for this run.",
+        "operationId": "getProxyAuth",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Changes the trusted reverse-proxy header settings. Needs the password\n(428 `confirm_required` without it).",
+        "operationId": "putProxyAuth",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/classify": {
@@ -167,6 +311,517 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ClassRuleRemoved"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every collection, most recently changed first, with the number of\nentries search would show.",
+        "operationId": "listCollections",
+        "parameters": [
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Count torrents a filter rule hid too (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollectionSummary"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Makes a collection.",
+        "operationId": "createCollection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or note isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A collection and a page of its entries in order. Entries search\nwouldn't show are skipped (a page is full unless the collection ends)\nand `items` counts the ones it would.",
+        "operationId": "getCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The previous response's `next_after`: how many shown entries to\nskip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Entries per page: 1–200, 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Deletes a collection (not the torrents in it).",
+        "operationId": "deleteCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Renames a collection or changes its note; absent leaves a field as it\nis, and `note: null` removes the note.",
+        "operationId": "patchCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or note isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}/items": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Adds torrents to the end of a collection; ones already in it stay\nwhere they are. All or nothing: a hash that is unknown, or that search\nwouldn't show, is the one `404 torrent_not_found` (`field: \"hashes\"`)\nand nothing is added.",
+        "operationId": "addToCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HashList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`, or `torrent_not_found` with `field: \"hashes\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: not 1–500 hashes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}/items/remove": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Takes torrents out of a collection. A hash that isn't in it, is\nunknown or isn't shown is skipped, so nothing about a withheld\ntorrent is revealed.",
+        "operationId": "removeFromCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HashList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: not 1–500 hashes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}/order": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Puts a collection's entries in the order given. The list must name\nevery entry shown by default once (it may also name ones a filter rule\nhid), with no cap, and may be empty only when none is shown;\n`409 stale_order` otherwise, so a reorder from an old page can't\ndrop or duplicate entries. Entries not shown to the client (Adult while\nhidden, and filter-hidden ones it did not name) keep their slots.",
+        "operationId": "reorderCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HashList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`stale_order`: the list isn't exactly the entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: not 1–500 hashes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -527,6 +1182,283 @@
         ]
       }
     },
+    "/export": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Downloads a query's results as a file. To export an AST or a\nselection of hashes, POST.",
+        "operationId": "exportGet",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The query text, as `/search` takes it; empty (or no source at all) exports everything.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "As `/search`'s.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "description": "Export a collection instead, in its order.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`csv` (the default), `json` (NDJSON) or `magnets`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ExportFormat"
+            }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "A comma-separated subset of `ExportField`; every field but `magnet` by default.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, streamed. Its job's id is in `X-Export-Job`; poll `/jobs/{id}` for progress, `skipped` and `truncated`.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`."
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt>`."
+              },
+              "X-Export-Job": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "The export's job id."
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_jobs`: four jobs are running or paused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`search_disabled` (a query while search is off), or `shutting_down`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Downloads a query's results (text or AST), a selection of up to\n10,000 hashes, or a collection as a file.",
+        "operationId": "exportPost",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The file, streamed, as `GET /export`'s.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`."
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`attachment` with a generated name."
+              },
+              "X-Export-Job": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "The export's job id."
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "As `GET /export`'s, or `too_many_hashes`, `bad_hash`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_jobs`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`search_disabled`, or `shutting_down`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/facets": {
       "get": {
         "tags": [
@@ -626,6 +1558,89 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FacetsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/feeds/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A saved search's alerts as RSS 2.0: the 50 newest on torrents search\nwould show, each with a magnet enclosure. Feed readers that can't sign\nin pass a feed token as `?token=`; an API key with the `feeds` scope\nworks too. Private-source torrents never appear. Anything the caller\ncan't have (another search's token, a search without RSS, an unknown\nid) is the same `404 feed_not_found`.",
+        "operationId": "getFeed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "description": "A feed token (`lsf_…`), for feed readers that can't sign in. A\nsession or an API key with the `feeds` scope also works.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The feed.",
+            "content": {
+              "application/rss+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` sent in `If-None-Match`."
+          },
+          "401": {
+            "description": "`login_required` or `bad_api_key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`key_scope`: an API key without the `feeds` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`feed_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1100,6 +2115,649 @@
         ]
       }
     },
+    "/insights/events": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Trend annotations (`restart`, `stopped`, `paused`, `resumed`,\n`intensity`; other events are skipped) and the paused spans\noverlapping `from..to`, so the client draws gaps.",
+        "operationId": "getInsightsEvents",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Unix seconds.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Unix seconds, exclusive.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/overview": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "The Insights overview (§10.9.2): stage strip, KPIs, trend with\nannotations, the cohort funnel, segments, exceptions and Serve, from\nthe rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.\nEvent time for the trend, new searchable, stages and Serve; discovery\ncohort for the funnel, yield and time to searchable.",
+        "operationId": "getInsightsOverview",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "`24h`, `7d` (the default), `30d`, `all` or `custom` (with `from`\nand `to`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Unix seconds; `custom` only. Rounded down to its UTC hour (day,\nfor ranges over 7 days).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Unix seconds, exclusive; `custom` only. Rounded up to its UTC hour\n(day), and to the current one at most.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`, the period of equal length before, and\n`kpi.searchable_delta`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/jobs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Every job kept: running and paused ones, and those finished in the\nlast 10 minutes, newest first.",
+        "operationId": "listJobs",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJobs"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/jobs/{id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "One job.",
+        "operationId": "getJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`: unknown, or finished more than 10 minutes ago.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/jobs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancels a job: it stops at its next step (a paused one at once). A\ncancelled export's download ends with an error, so it's never taken\nfor a complete file.",
+        "operationId": "cancelJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`job_finished`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/jobs/{id}/pause": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Pauses a job: it stops at its next step and holds nothing while it\nwaits (an export's download waits too). Unless it's resumed within\n10 minutes it fails with `pause_expired`. Pausing a paused job does\nnothing.",
+        "operationId": "pauseJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`job_finished`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/jobs/{id}/resume": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Resumes a paused job. Resuming a running job does nothing.",
+        "operationId": "resumeJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`job_finished`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Every API key and feed token, oldest first: never a secret.",
+        "operationId": "listKeys",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Makes an API key or feed token. Needs the password (428\n`confirm_required` without it). The secret is in this response only.",
+        "operationId": "createKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Made; `secret` is shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Deletes a key or token and its hash.",
+        "operationId": "deleteKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys/{id}/regenerate": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Replaces a key's secret: the old one stops working at once. The key\nkeeps its name, kind, scopes, feed and expiry, under a new id and\nprefix. Needs the password (428 `confirm_required` without it).",
+        "operationId": "regenerateKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced; `secret` is shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revokes a key or token: it stops working and stays listed as revoked.\nRevoking one already revoked changes nothing.",
+        "operationId": "revokeKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/login": {
       "post": {
         "tags": [
@@ -1185,6 +2843,35 @@
           }
         },
         "security": []
+      }
+    },
+    "/logs/catalog": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Every log event (id, component, level, label and help keys, default,\ncurrent, data kinds, required, rate per hour), every data kind with its\nswitch per output and its deadline, the presets and the outputs. Admin\nsession only.",
+        "operationId": "getLogCatalog",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/network/check": {
@@ -1273,7 +2960,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights.",
+        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights. With\n`natural=true`, also the query `q` means as natural phrasing\n(`natural_too_long` past 512 bytes or 32 words).",
         "operationId": "parseQuery",
         "parameters": [
           {
@@ -1283,6 +2970,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "natural",
+            "in": "query",
+            "description": "Also read `q` as natural phrasing (\"4k movies from 2020 over\n10gb\") and propose the query it means, in `natural`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -1340,6 +3036,364 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/saved-searches": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every saved search, oldest first, with its alert counts.",
+        "operationId": "listSavedSearches",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedSearchView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Saves a search. It alerts only on torrents indexed from now on.",
+        "operationId": "createSavedSearch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedSearchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSearchView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`too_many_saved_searches`: 1,000 are kept at most.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or query isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/saved-searches/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "One saved search.",
+        "operationId": "getSavedSearch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSearchView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Deletes a saved search with its alerts and feed tokens.",
+        "operationId": "deleteSavedSearch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Changes a saved search. Any subset: a field not sent keeps its value,\nthe notifier's channels included. Resuming a paused search skips what\nwas indexed while it was paused; editing the query does not move\nwhere it left off.",
+        "operationId": "patchSavedSearch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedSearchPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSearchView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or query isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/saved-searches/{id}/alerts": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A saved search's alerts, newest first. Only alerts on torrents search\nwould show: none a filter rule hid, and Adult only while \"Show adult\ncontent\" is on. A page is full unless the list ends: withheld rows are\nskipped, never counted.",
+        "operationId": "listAlerts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1–200; 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_cursor`: a cursor this server didn't give out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1482,6 +3536,53 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/sessions/revoke-others": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs out every other browser: rotates the session key and sets a new\ncookie for this one. Needs the password (428 `confirm_required`\nwithout it).",
+        "operationId": "revokeOtherSessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Every other session ended; a new session cookie is set.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new session cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
                 }
               }
             }
@@ -2173,6 +4274,221 @@
         ]
       }
     },
+    "/suggest": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Suggestions for the token at the caret: field names, values with\ncounts, titles, smart chips and \"did you mean\". `replace` ranges are\nin characters, so the client never tokenises the query again.",
+        "operationId": "suggest",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The query text as typed so far.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pos",
+            "in": "query",
+            "description": "The caret, in characters from the start; the end by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items at most: 8 by default, 1–20.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3), as `/search`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "The build, this installation, the restart and any pending address\nchange: everything About, the Overview and General show. A value this\nplatform can't measure is null, never 0.",
+        "operationId": "getSystem",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system/address/keep": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Keeps the new HTTP address: this process is serving on it, so the\nrequest itself shows it's reachable (whatever `Host` says: a reverse\nproxy may rewrite it). `409 no_address_change` unless one is awaiting\nconfirmation.",
+        "operationId": "keepAddress",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressOutcome"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_address_change`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system/address/revert": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Goes back to the previous HTTP address now. Awaiting confirmation,\nthe previous value is saved again and the server restarts onto it\n(`restarting`); awaiting the restart, the saved change is undone and\nnothing restarts. `409 no_address_change` when there's no change.",
+        "operationId": "revertAddress",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressOutcome"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_address_change`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system/restart": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Restarts Lodestar: a graceful shutdown (the queue, DHT state and last\ncommit are saved), then the same program again. It answers first;\npoll `/healthz` until it's back. `409 restart_unavailable` where it\ncan't restart itself, with how to restart instead.",
+        "operationId": "restartSystem",
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartAccepted"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`restart_unavailable`: restart it the way it was started (the message says how).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/torrents/{hash}": {
       "get": {
         "tags": [
@@ -2332,40 +4648,511 @@
           }
         ]
       }
+    },
+    "/user-items": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Your marked torrents, newest change first. Only torrents search would\nshow: those a filter rule hid appear with `hidden=true`, and Adult\nonly while \"Show adult content\" is on. A page is full unless the list\nends: withheld rows are skipped, never counted.",
+        "operationId": "listUserItems",
+        "parameters": [
+          {
+            "name": "favourite",
+            "in": "query",
+            "description": "Only torrents you marked as a favourite.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "hidden_mark",
+            "in": "query",
+            "description": "Only torrents you marked Hide (your own mark, not a filter\nrule's).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Only torrents carrying this label.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3), as in search.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page: 1–200, 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserItemsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_cursor`: a cursor this server didn't give out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/user-items/labels": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every label in use with the number of visible torrents carrying it.",
+        "operationId": "listLabels",
+        "parameters": [
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Count torrents a filter rule hid too (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LabelCount"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/user-items/{hash}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A torrent's marks, and the collections it is in. A torrent without\nmarks answers with all-false, empty marks; an unknown torrent, or one\nwithheld (Adult while hidden), is `404 torrent_not_found`.",
+        "operationId": "getUserItem",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserItemDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Clears every mark on a torrent.",
+        "operationId": "clearUserItem",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Changes some marks: absent leaves one as it is, `note: null` removes\nthe note. Labels and the note are trimmed first (and CRLF becomes LF).\nReturns the marks after, all-false when none are left.",
+        "operationId": "patchUserItem",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserItemPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMarks"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: a label or the note isn't allowed (`field` names which).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AddressChange": {
+        "type": "object",
+        "description": "A pending HTTP-address change (§10.10.6's lockout protection).",
+        "required": [
+          "deadline",
+          "kind",
+          "previous_url",
+          "state",
+          "stored",
+          "url"
+        ],
+        "properties": {
+          "deadline": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds when it reverts, while awaiting confirmation.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "What a keep-or-revert timer guards.",
+            "enum": [
+              "http_bind"
+            ]
+          },
+          "previous_url": {
+            "type": "string",
+            "description": "Where the UI was before the change."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_restart",
+              "awaiting_confirmation",
+              "reverted"
+            ]
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "False when the pending change couldn't be stored: the protection\nlasts only until the process ends, and the log has the error."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where the UI is after it."
+          }
+        }
+      },
+      "AddressOutcome": {
+        "type": "object",
+        "description": "`POST /system/address/keep` and `/revert`: the change as it is now.",
+        "required": [
+          "address_change",
+          "restarting"
+        ],
+        "properties": {
+          "address_change": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AddressChange",
+                "description": "Null once kept (or a revert before the restart undid it)."
+              }
+            ]
+          },
+          "restarting": {
+            "type": "boolean",
+            "description": "The server restarts on the previous address once this answer has\ngone out."
+          }
+        },
+        "example": {
+          "address_change": null,
+          "restarting": false
+        }
+      },
+      "AlertRow": {
+        "type": "object",
+        "description": "One alert: a torrent a saved search matched once it became searchable.",
+        "required": [
+          "created_at",
+          "id",
+          "read",
+          "torrent"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it was recorded, Unix seconds."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The alert's id, never reused. `POST /alerts/read` takes the\nhighest one you saw."
+          },
+          "read": {
+            "type": "boolean",
+            "description": "Marked read."
+          },
+          "torrent": {
+            "$ref": "#/components/schemas/SearchHit"
+          }
+        }
+      },
       "AlertsEvent": {
         "type": "object",
-        "description": "`event: alerts` (reserved: B9 publishes it): a saved search matched\nnew torrents. The matches themselves come from the API.",
+        "description": "`event: alerts`: a saved search matched torrents that just became\nsearchable. One event per saved search per percolation run; the\nmatches themselves come from `GET /saved-searches/{id}/alerts`. Only\ntorrents search would show count: none a filter rule hid, and no\nAdult while \"Show adult content\" is off (§20.9). A run whose new\nmatches are all hidden sends no event.",
         "required": [
           "alert",
           "matched",
           "max_id",
+          "notify",
           "saved_search"
         ],
         "properties": {
           "alert": {
             "type": "integer",
             "format": "int64",
-            "description": "The alert's id."
+            "description": "The highest new alert's id (shown ones only)."
           },
           "matched": {
             "type": "integer",
             "format": "int64",
-            "description": "New matches.",
+            "description": "New alerts on torrents you can see; at least 1.",
             "minimum": 0
           },
           "max_id": {
             "type": "integer",
             "format": "int64",
-            "description": "The highest matching torrent id."
+            "description": "The highest of their torrent ids."
+          },
+          "notify": {
+            "type": "boolean",
+            "description": "The saved search alerts in the app (its `alert` flag): notify only\nwhen true. Otherwise the event only refreshes counts."
           },
           "saved_search": {
             "type": "integer",
             "format": "int64",
             "description": "The saved search's id."
+          }
+        },
+        "example": {
+          "alert": 913,
+          "matched": 2,
+          "max_id": 48211,
+          "notify": true,
+          "saved_search": 4
+        }
+      },
+      "AlertsPage": {
+        "type": "object",
+        "description": "`GET /saved-searches/{id}/alerts`.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertRow"
+            },
+            "description": "Newest first: only alerts on torrents search would show."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; null on the last."
+          }
+        }
+      },
+      "AlertsRead": {
+        "type": "object",
+        "description": "`POST /alerts/read`: marks alerts read up to the highest one you saw,\nso alerts that arrived while the page was open stay unread (§10.8's\n\"New since …\" divider).",
+        "required": [
+          "through"
+        ],
+        "properties": {
+          "saved_search": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "One saved search's alerts; every saved search's when absent."
+          },
+          "through": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest alert id you saw."
           }
         }
       },
@@ -2382,6 +5169,30 @@
           },
           "query": {
             "type": "string"
+          }
+        }
+      },
+      "Annotation": {
+        "type": "object",
+        "description": "A trend annotation.",
+        "required": [
+          "at",
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`restart`, `stopped`, `paused`, `resumed` or `intensity`."
+          },
+          "text": {
+            "type": "string",
+            "description": "The event's detail: the version for `restart`, the new level for\n`intensity`; empty when there's none."
           }
         }
       },
@@ -3014,6 +5825,187 @@
           }
         }
       },
+      "BackgroundJob": {
+        "type": "object",
+        "description": "One job (`GET /jobs/{id}`, and each entry of `GET /jobs`).",
+        "required": [
+          "done",
+          "eta_s",
+          "finished_at",
+          "id",
+          "kind",
+          "rate",
+          "skipped",
+          "started_at",
+          "state",
+          "total",
+          "total_approx"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items done: rows written, for an export.",
+            "minimum": 0
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody",
+            "description": "Once `failed`: what went wrong."
+          },
+          "eta_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds left at the current rate; null while it isn't running,\nbefore the first items, or when `total` is unknown.",
+            "minimum": 0
+          },
+          "export": {
+            "$ref": "#/components/schemas/ExportJob",
+            "description": "An export's own details."
+          },
+          "finished_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds; null while it runs."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BackgroundJobKind"
+          },
+          "rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Items read per second (`done` and `skipped`), paused time left\nout; null before the first items."
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items left out: for an export, torrents it may not include\n(withheld, private-source, deleted or unknown), counted without\nsaying which or why.",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "state": {
+            "$ref": "#/components/schemas/BackgroundJobState"
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Items expected; null when unknown.",
+            "minimum": 0
+          },
+          "total_approx": {
+            "type": "boolean",
+            "description": "`total` is an estimate (a query with more than 100,000 matches)."
+          }
+        }
+      },
+      "BackgroundJobKind": {
+        "type": "string",
+        "description": "What a job does. `import` is reserved for the importer framework\n(§18.8): nothing starts one yet, but the Jobs view can render both.",
+        "enum": [
+          "export",
+          "import"
+        ]
+      },
+      "BackgroundJobState": {
+        "type": "string",
+        "description": "Where a job is. `running` and `paused` hold one of the running\nslots; the rest are finished and kept for 10 minutes.",
+        "enum": [
+          "running",
+          "paused",
+          "done",
+          "cancelled",
+          "failed"
+        ]
+      },
+      "BackgroundJobs": {
+        "type": "object",
+        "description": "`GET /jobs`: every job kept, newest first.",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackgroundJob"
+            }
+          }
+        }
+      },
+      "Bucket": {
+        "type": "string",
+        "enum": [
+          "hour",
+          "day"
+        ]
+      },
+      "BuildInfo": {
+        "type": "object",
+        "description": "How the build was made.",
+        "required": [
+          "commit",
+          "date",
+          "rustc",
+          "target",
+          "ui_build_id"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full commit hash; null when the build didn't know it."
+          },
+          "date": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds: `SOURCE_DATE_EPOCH`, else the commit's date; null\nwhen neither was known (never the time of the build, so builds\nstay reproducible).",
+            "minimum": 0
+          },
+          "rustc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`rustc -V` of the compiler that built it."
+          },
+          "target": {
+            "type": "string",
+            "description": "The target triple, e.g. `x86_64-unknown-linux-musl`."
+          },
+          "ui_build_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The embedded UI's build id (SvelteKit's `_app/version.json`); null\nwhen the binary embeds the stub page."
+          }
+        }
+      },
       "Change": {
         "oneOf": [
           {
@@ -3633,6 +6625,48 @@
           }
         }
       },
+      "ChangedSetting": {
+        "type": "object",
+        "description": "One setting changed from its default, by name only.",
+        "required": [
+          "name",
+          "source"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "`section.field`."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where a setting's effective value comes from, lowest to highest:\nthe built-in default, `config.toml`, a change saved in the app, or a\n`LODESTAR_*` environment variable.",
+            "enum": [
+              "default",
+              "file",
+              "db",
+              "env"
+            ]
+          }
+        }
+      },
+      "CharRange": {
+        "type": "object",
+        "description": "A range of characters (Unicode scalar values) in the query, end\nexclusive.",
+        "required": [
+          "end",
+          "start"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ClassRule": {
         "type": "object",
         "required": [
@@ -3741,6 +6775,217 @@
               "$ref": "#/components/schemas/ClassRule"
             }
           }
+        }
+      },
+      "CollectionCreate": {
+        "type": "object",
+        "description": "`POST /collections`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1–200 characters."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1–4,000 characters."
+          }
+        }
+      },
+      "CollectionEntry": {
+        "type": "object",
+        "description": "One torrent in a collection.",
+        "required": [
+          "added_at",
+          "position",
+          "torrent"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64",
+            "description": "1-based place among the entries shown, so it never reveals how\nmany were left out."
+          },
+          "torrent": {
+            "$ref": "#/components/schemas/SearchHit"
+          }
+        },
+        "example": {
+          "added_at": 1700000150,
+          "position": 1,
+          "torrent": {
+            "adult_kind": null,
+            "completed": null,
+            "composition": [],
+            "content_type": "movie",
+            "discovered_at": 1700000000,
+            "files": 1,
+            "flags": [
+              "single_file"
+            ],
+            "hash": "0123456789abcdef0123456789abcdef01234567",
+            "hash_v2": null,
+            "id": 1,
+            "junk_reasons": [],
+            "junk_score": 0,
+            "last_scrape_at": null,
+            "leechers": null,
+            "metadata_at": 1700000001,
+            "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+            "piece_len": 65536,
+            "resolved_via": null,
+            "score": 0.0,
+            "seeders": null,
+            "size": 8589934592,
+            "title": "The Dark Knight",
+            "trackers_checked": null,
+            "trackers_reporting": null
+          }
+        }
+      },
+      "CollectionPage": {
+        "type": "object",
+        "description": "`GET /collections/{id}`: the collection and a page of its entries.",
+        "required": [
+          "created_at",
+          "entries",
+          "id",
+          "items",
+          "name",
+          "next_after",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionEntry"
+            },
+            "description": "In order, only torrents search would show."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Send as `after` for the next page; null on the last."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "entries": [],
+          "id": 1,
+          "items": 0,
+          "name": "Weekend watchlist",
+          "next_after": null,
+          "note": null,
+          "updated_at": 1700000200
+        }
+      },
+      "CollectionPatch": {
+        "type": "object",
+        "description": "`PATCH /collections/{id}`: absent leaves a field as it is.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` removes the note.",
+            "default": null
+          }
+        }
+      },
+      "CollectionSummary": {
+        "type": "object",
+        "description": "A collection. `items` counts the torrents search would show.",
+        "required": [
+          "created_at",
+          "id",
+          "items",
+          "name",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "id": 1,
+          "items": 2,
+          "name": "Weekend watchlist",
+          "note": null,
+          "updated_at": 1700000200
         }
       },
       "CompareRequest": {
@@ -3948,6 +7193,119 @@
             "format": "int32",
             "description": "The same, of the non-padding files.",
             "minimum": 0
+          }
+        }
+      },
+      "ConfirmRequest": {
+        "type": "object",
+        "description": "`POST /sessions/revoke-others`, and any other change that only needs\nthe password (§20.11). `Debug` redacts it.",
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The admin password, every time. Without it the answer is 428\n`confirm_required`."
+          }
+        }
+      },
+      "Connection": {
+        "type": "object",
+        "required": [
+          "count",
+          "kind",
+          "last_checked_at",
+          "settings",
+          "state"
+        ],
+        "properties": {
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many are enabled (sources, lists, integrations); null for the\nDHT, and for what this build doesn't have yet.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "Something Lodestar connects to (§10.10.13 \"No telemetry, ever\").",
+            "enum": [
+              "dht",
+              "sources",
+              "blocklist_subscriptions",
+              "integrations",
+              "updates",
+              "companions",
+              "workers"
+            ]
+          },
+          "last_checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds of the last contact, where it's recorded (a list's\nlast refresh).",
+            "minimum": 0
+          },
+          "settings": {
+            "type": "string",
+            "description": "The Settings screen that changes it (`/settings/<screen>`)."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "on",
+                  "paused",
+                  "off"
+                ]
+              }
+            ],
+            "description": "Null for what this build doesn't have yet (updates until the\nupdate engine, companions and workers until v0.6)."
+          }
+        }
+      },
+      "Conversion": {
+        "type": "object",
+        "description": "Each stage ÷ the one before, 0–1; null when the one before is 0.",
+        "required": [
+          "fetched",
+          "peer_found",
+          "searchable",
+          "stored"
+        ],
+        "properties": {
+          "fetched": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "peer_found": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "searchable": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "stored": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -4214,6 +7572,166 @@
           "state": "running"
         }
       },
+      "CreateKeyRequest": {
+        "type": "object",
+        "description": "`POST /keys`. `Debug` redacts the password.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, in the future; absent: never expires."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KeyKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "1–200 characters."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin password (428 `confirm_required` without it)."
+          },
+          "saved_search_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "A feed token's saved search; absent: every feed. API keys take\nnone."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyScope"
+            },
+            "description": "An API key's scopes, at least one. A feed token takes none (it\nreads feeds only)."
+          }
+        }
+      },
+      "CreatedKey": {
+        "type": "object",
+        "description": "`POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,\nits secret. `Debug` redacts the secret.",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/KeyInfo"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar\nkeeps its hash, not the secret."
+          }
+        }
+      },
+      "DataFormats": {
+        "type": "object",
+        "description": "The data formats a bug report needs, and why an upgrade might reindex.",
+        "required": [
+          "index",
+          "rebuild",
+          "store_schema"
+        ],
+        "properties": {
+          "index": {
+            "type": "string",
+            "description": "The search index's version, `v{schema}-t{tokenizer}`."
+          },
+          "rebuild": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RebuildEvent",
+                "description": "A background index rebuild's progress; null when none runs."
+              }
+            ]
+          },
+          "store_schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The store's schema version (the last migration applied); null if\nthe store couldn't be read."
+          }
+        }
+      },
+      "DataInfo": {
+        "type": "object",
+        "description": "The data directory and what it holds.",
+        "required": [
+          "cold_bytes",
+          "database_bytes",
+          "dir",
+          "filesystem_warning",
+          "free_bytes",
+          "index_bytes",
+          "logs_bytes"
+        ],
+        "properties": {
+          "cold_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the cold store; null when there is none.",
+            "minimum": 0
+          },
+          "database_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the database, its WAL and shared memory.",
+            "minimum": 0
+          },
+          "dir": {
+            "type": "string",
+            "description": "The data directory, as configured."
+          },
+          "filesystem_warning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What's wrong with its filesystem and the safe alternative (FUSE,\na network share, Unraid's user share); null when nothing is."
+          },
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes free on its volume.",
+            "minimum": 0
+          },
+          "index_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the search index, every version included.",
+            "minimum": 0
+          },
+          "logs_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the log files; null when nothing is logged to files.",
+            "minimum": 0
+          }
+        }
+      },
       "Decision": {
         "type": "object",
         "required": [
@@ -4254,6 +7772,43 @@
           "shadow": {
             "type": "boolean",
             "description": "Decided in shadow mode: recorded, not acted on."
+          }
+        }
+      },
+      "Deployment": {
+        "type": "object",
+        "required": [
+          "image_digest",
+          "image_tag",
+          "kind"
+        ],
+        "properties": {
+          "image_digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image's digest, when the image sets it."
+          },
+          "image_tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image's tag, when the image sets it."
+          },
+          "kind": {
+            "type": "string",
+            "description": "How Lodestar is installed.",
+            "enum": [
+              "docker",
+              "unraid",
+              "windows_service",
+              "windows_portable",
+              "systemd",
+              "tarball",
+              "unknown"
+            ]
           }
         }
       },
@@ -4323,6 +7878,40 @@
             "type": "integer",
             "format": "int64",
             "description": "Nodes across its routing tables.",
+            "minimum": 0
+          }
+        }
+      },
+      "Diagnostics": {
+        "type": "object",
+        "description": "The copyable diagnostics block's server half: never a value.",
+        "required": [
+          "changed",
+          "logging",
+          "recent_errors"
+        ],
+        "properties": {
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedSetting"
+            },
+            "description": "Settings that aren't at their default, and where each comes from."
+          },
+          "logging": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The logging preset; null until file logging lands."
+          },
+          "recent_errors": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Errors logged recently; null until file logging lands.",
             "minimum": 0
           }
         }
@@ -4590,6 +8179,35 @@
         ],
         "description": "One frame of the stream: `event:` names the variant and `data:` holds\nits payload. Every event but `resync` has an `id:` of the form\n`<epoch>-<seq>` to send back as `Last-Event-ID`."
       },
+      "EventsResponse": {
+        "type": "object",
+        "description": "`GET /insights/events`: annotations and paused spans.",
+        "required": [
+          "annotations",
+          "paused",
+          "truncated"
+        ],
+        "properties": {
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            },
+            "description": "Oldest first; at most 1,000 (`truncated`)."
+          },
+          "paused": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PausedSpan"
+            },
+            "description": "The paused spans overlapping the range, oldest first, so the\nclient draws gaps."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More than 1,000 annotations: the oldest 1,000 are listed."
+          }
+        }
+      },
       "ExceptionEntry": {
         "type": "object",
         "required": [
@@ -4796,6 +8414,123 @@
             "type": "number",
             "format": "double",
             "description": "Phase-2 boost of a word found in the parsed title."
+          }
+        }
+      },
+      "ExportFormat": {
+        "type": "string",
+        "description": "An export's format.",
+        "enum": [
+          "csv",
+          "json",
+          "magnets"
+        ]
+      },
+      "ExportJob": {
+        "type": "object",
+        "description": "What an export job reports besides its progress.",
+        "required": [
+          "cap",
+          "format",
+          "truncated"
+        ],
+        "properties": {
+          "cap": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows one export writes at most.",
+            "minimum": 0
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The export stopped at `cap` with more rows left: the file holds\nthe first `cap`."
+          }
+        }
+      },
+      "ExportRequest": {
+        "type": "object",
+        "description": "`GET /export`'s parameters and `POST /export`'s body. Name one\nsource: a query (`q` or `ast`, with `sort` and `hidden` as `/search`\ntakes them; neither exports everything), `hashes` or `collection`.\n`ast` and `hashes` need POST.",
+        "properties": {
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode",
+                "description": "A query AST, as `/parse` returns it (POST only)."
+              }
+            ],
+            "default": null
+          },
+          "collection": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A collection's id: its torrents in the collection's order.",
+            "default": null
+          },
+          "fields": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A comma-separated subset of [`ExportField`] names, written in\nthat type's order whatever the order given. Every field but\n`magnet` by default; `magnets` takes none.",
+            "default": null,
+            "example": "hash,name,size,seeders"
+          },
+          "format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExportFormat",
+                "description": "`csv` (the default), `json` (NDJSON) or `magnets`."
+              }
+            ],
+            "default": null
+          },
+          "hashes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 10,000 info hashes (40 hex digits), such as the bulk bar's\nselection (POST only). Repeats are exported once, in the order\nfirst given.",
+            "default": null
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "default": null
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The query text, as `/search` takes it.",
+            "default": null
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "As `/search`'s; only with a query. Selections and collections\nkeep their own order.",
+            "default": null,
+            "example": "-discovered"
           }
         }
       },
@@ -5179,6 +8914,24 @@
           }
         }
       },
+      "Fix": {
+        "type": "object",
+        "description": "Where an exception's fix is: a settings section or a stage page.",
+        "required": [
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`settings` or `stage`."
+          },
+          "target": {
+            "type": "string",
+            "description": "The section or stage (`index`, `fetch`, …)."
+          }
+        }
+      },
       "FixtureCounts": {
         "type": "object",
         "required": [
@@ -5221,11 +8974,203 @@
           }
         }
       },
+      "FunnelCohort": {
+        "type": "object",
+        "description": "One discovery cohort (or a UTC day of them) in the funnel (§10.9.3).",
+        "required": [
+          "cohort",
+          "conversion",
+          "final",
+          "in_progress",
+          "losses",
+          "stages"
+        ],
+        "properties": {
+          "cohort": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cohort's first hour, unix seconds."
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/Conversion"
+          },
+          "final": {
+            "type": "boolean",
+            "description": "Final: nothing in progress and everything stored searchable, or\npast the 72 h retry horizon. A day is final when all its hours\nare. Not final is \"incomplete\" (hatched)."
+          },
+          "in_progress": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Harvested − stored − lost, at least 0.",
+            "minimum": 0
+          },
+          "losses": {
+            "type": "object",
+            "description": "Losses by reason (`no_peers`, `timed_out`, `refused`,\n`encryption_failed`, `oversize`, `invalid`, `blocked`, `evicted`,\n`gave_up`, `unreachable`), every reason listed.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stages": {
+            "$ref": "#/components/schemas/FunnelStages"
+          }
+        }
+      },
+      "FunnelStages": {
+        "type": "object",
+        "description": "Hashes of the cohort that reached each stage.",
+        "required": [
+          "fetched",
+          "harvested",
+          "peer_found",
+          "searchable",
+          "stored"
+        ],
+        "properties": {
+          "fetched": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "peer_found": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stored": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FunnelTotal": {
+        "type": "object",
+        "description": "The funnel over every cohort in the range.",
+        "required": [
+          "cohorts",
+          "conversion",
+          "final_cohorts",
+          "in_progress",
+          "loss_share",
+          "losses",
+          "stages"
+        ],
+        "properties": {
+          "cohorts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cohort hours in the range with any count.",
+            "minimum": 0
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/Conversion"
+          },
+          "final_cohorts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of those, final.",
+            "minimum": 0
+          },
+          "in_progress": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "loss_share": {
+            "type": "object",
+            "description": "Each reason's share of all losses, 0–1; null when nothing was\nlost.",
+            "additionalProperties": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "losses": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stages": {
+            "$ref": "#/components/schemas/FunnelStages"
+          }
+        }
+      },
       "GroupStatus": {
         "type": "string",
         "enum": [
           "available",
           "unavailable"
+        ]
+      },
+      "HashList": {
+        "type": "object",
+        "description": "A list of torrents by info hash: `POST /collections/{id}/items`,\n`…/items/remove` and `PUT …/order`.",
+        "required": [
+          "hashes"
+        ],
+        "properties": {
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1–500 40-character hex info hashes."
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "description": "Health (§10.9.2): running, paused or degraded, with the reason.",
+        "required": [
+          "reason",
+          "state"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`paused`, `writer_stalled` or `index_lag`; null while running."
+          },
+          "state": {
+            "$ref": "#/components/schemas/HealthState"
+          }
+        }
+      },
+      "HealthState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "paused",
+          "degraded"
         ]
       },
       "Histogram": {
@@ -5326,6 +9271,52 @@
           "truncated": {
             "type": "boolean",
             "description": "More matched than the group lists."
+          }
+        }
+      },
+      "HostInfo": {
+        "type": "object",
+        "description": "The machine Lodestar runs on.",
+        "required": [
+          "arch",
+          "cpus",
+          "memory_bytes",
+          "os",
+          "time_zone"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string",
+            "description": "`x86_64`, `aarch64`, …"
+          },
+          "cpus": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "CPU cores this process may use.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Memory this process may use: the machine's, or a container's\nlimit when lower.",
+            "minimum": 0
+          },
+          "os": {
+            "type": "string",
+            "description": "`linux`, `macos`, `windows`, …"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA time zone, e.g. `Europe/Berlin`."
           }
         }
       },
@@ -5489,6 +9480,79 @@
           }
         }
       },
+      "InsightsException": {
+        "type": "object",
+        "description": "An exception (§10.9.2 level 5): text + icon + a fix action.",
+        "required": [
+          "fix",
+          "kind",
+          "severity",
+          "since",
+          "unit",
+          "value"
+        ],
+        "properties": {
+          "fix": {
+            "$ref": "#/components/schemas/Fix"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`index_lag` (the index more than 30 s behind) or `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours)."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`s` or `torrents`."
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "InsightsRange": {
+        "type": "object",
+        "description": "The range as the server normalized it: whole UTC hours, or whole UTC\ndays past 7 days.",
+        "required": [
+          "bucket",
+          "from",
+          "to",
+          "tz"
+        ],
+        "properties": {
+          "bucket": {
+            "$ref": "#/components/schemas/Bucket",
+            "description": "`hour` up to 7 days, `day` (UTC days) beyond."
+          },
+          "from": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, inclusive."
+          },
+          "to": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, exclusive. The current hour (day) counts so far."
+          },
+          "tz": {
+            "type": "string",
+            "description": "The time zone buckets are in: always `UTC`."
+          }
+        }
+      },
       "InsightsStages": {
         "type": "object",
         "description": "`docs/metrics.md` §7.5 `stages`.",
@@ -5615,6 +9679,552 @@
           }
         }
       },
+      "KeyInfo": {
+        "type": "object",
+        "description": "A key or token as listed: never its secret or hash.",
+        "required": [
+          "created_at",
+          "expires_at",
+          "id",
+          "kind",
+          "last_used_at",
+          "name",
+          "prefix",
+          "revoked_at",
+          "saved_search_id",
+          "scopes",
+          "status"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds; null: never expires."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KeyKind"
+          },
+          "last_used_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds, written at most once a minute; null: never used."
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The secret's public start, to tell keys apart."
+          },
+          "revoked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds; null: not revoked."
+          },
+          "saved_search_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A feed token's saved search; null: every feed (or an API key)."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyScope"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/KeyStatus"
+          }
+        },
+        "example": {
+          "created_at": 1700000000,
+          "expires_at": null,
+          "id": 3,
+          "kind": "api_key",
+          "last_used_at": 1700000600,
+          "name": "Prowlarr",
+          "prefix": "lsk_Q7f2bX9a",
+          "revoked_at": null,
+          "saved_search_id": null,
+          "scopes": [
+            "torznab"
+          ],
+          "status": "active"
+        }
+      },
+      "KeyKind": {
+        "type": "string",
+        "enum": [
+          "api_key",
+          "feed_token"
+        ]
+      },
+      "KeyList": {
+        "type": "object",
+        "description": "`GET /keys`, oldest first.",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyInfo"
+            }
+          }
+        }
+      },
+      "KeyScope": {
+        "type": "string",
+        "description": "What a key may reach (see `keys::scope`). A route opts in to one.",
+        "enum": [
+          "search",
+          "torznab",
+          "feeds"
+        ]
+      },
+      "KeyStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "expired",
+          "revoked"
+        ]
+      },
+      "Kpi": {
+        "type": "object",
+        "description": "The KPI row (§10.9.2 level 1, `docs/metrics.md` §6.2).",
+        "required": [
+          "health",
+          "imported",
+          "new_searchable",
+          "searchable",
+          "searchable_delta",
+          "time_to_searchable_p50_s",
+          "time_to_searchable_p95_s",
+          "yield"
+        ],
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "imported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searchable torrents that were imported (bitmagnet import), part of\n`searchable`; null until Insights' state is read at start.",
+            "minimum": 0
+          },
+          "new_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents that first became searchable in the range, imports\nincluded. Event time; 0 is real.",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Documents in the search index now; null when search is off.",
+            "minimum": 0
+          },
+          "searchable_delta": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The change since the previous period's end: now's count less\n`previous.kpi.searchable`. Null without `compare=1`, for `all`,\nwith search off, or with no snapshot from then."
+          },
+          "time_to_searchable_p50_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "First harvest → searchable, p50 and p95 seconds over the final\ncohorts in the range. Always approximate (log buckets ≤ 10%).\nNull when no cohort in the range is final.",
+            "minimum": 0
+          },
+          "time_to_searchable_p95_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searchable ÷ harvested over the final cohorts in the range, 0–1.\nImports excluded. Null when no cohort in the range is final."
+          }
+        }
+      },
+      "LabelCount": {
+        "type": "object",
+        "description": "One label in use.",
+        "required": [
+          "count",
+          "label"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Visible torrents carrying it.",
+            "minimum": 0
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "count": 3,
+          "label": "4K"
+        }
+      },
+      "LogCatalog": {
+        "type": "object",
+        "description": "`GET /logs/catalog`.",
+        "required": [
+          "events",
+          "kinds",
+          "now",
+          "outputs",
+          "presets"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEvent"
+            }
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogKind"
+            }
+          },
+          "now": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The server's clock (Unix seconds): deadlines are set from it."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogOutput"
+            }
+          },
+          "presets": {
+            "$ref": "#/components/schemas/LogPresets"
+          }
+        }
+      },
+      "LogComponent": {
+        "type": "string",
+        "description": "Where an event comes from (§12.1's per-component levels; `system` is\nthe process's own: start, stop, settings, logging).",
+        "enum": [
+          "system",
+          "dht",
+          "fetch",
+          "pipeline",
+          "search",
+          "api",
+          "sources",
+          "filters",
+          "integrations",
+          "workers",
+          "companions",
+          "auth",
+          "libraries"
+        ]
+      },
+      "LogDataKind": {
+        "type": "string",
+        "description": "A kind of data a line may contain (§12.1). `peer_activity` and\n`filter_changes` are the opt-ins.",
+        "enum": [
+          "hash",
+          "name",
+          "path",
+          "url",
+          "query",
+          "client",
+          "peer",
+          "size",
+          "peer_activity",
+          "filter_changes"
+        ]
+      },
+      "LogEvent": {
+        "type": "object",
+        "description": "One catalogued event.",
+        "required": [
+          "component",
+          "current",
+          "default_on",
+          "help_key",
+          "id",
+          "kinds",
+          "label_key",
+          "level",
+          "opt_in",
+          "rate_per_hour",
+          "required"
+        ],
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/LogComponent"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "On now."
+          },
+          "default_on": {
+            "type": "boolean",
+            "description": "On in the default preset (Normal). One that's off by default joins\nat Detailed."
+          },
+          "help_key": {
+            "type": "string",
+            "description": "The message key of one line of help."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable: `fetch.failed`."
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogDataKind"
+            },
+            "description": "The data kinds it can carry (the badges)."
+          },
+          "label_key": {
+            "type": "string",
+            "description": "The message key of its plain name (\"Each failed metadata fetch\")."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "opt_in": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LogDataKind",
+                "description": "On only while this opt-in is."
+              }
+            ]
+          },
+          "rate_per_hour": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lines per hour since start, from its counter, which counts while\nit's off too.",
+            "minimum": 0
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Can't be turned off."
+          }
+        }
+      },
+      "LogKind": {
+        "type": "object",
+        "description": "One data kind and its switch.",
+        "required": [
+          "default_on",
+          "identifying",
+          "kind",
+          "opt_in",
+          "outputs",
+          "until"
+        ],
+        "properties": {
+          "default_on": {
+            "type": "boolean",
+            "description": "On in the Private preset."
+          },
+          "identifying": {
+            "type": "boolean",
+            "description": "Identifies torrents or people: turning it on is time-limited."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LogDataKind"
+          },
+          "opt_in": {
+            "type": "boolean",
+            "description": "Only by opt-in, for at most 24 hours, never by a preset, never on\nthe console or the Event Log."
+          },
+          "outputs": {
+            "$ref": "#/components/schemas/LogKindOutputs"
+          },
+          "until": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it turns off: 0 off, -1 until turned off, else Unix seconds."
+          }
+        }
+      },
+      "LogKindOutputs": {
+        "type": "object",
+        "description": "Whether a kind shows on each output.",
+        "required": [
+          "console",
+          "event_log",
+          "file",
+          "live"
+        ],
+        "properties": {
+          "console": {
+            "type": "boolean"
+          },
+          "event_log": {
+            "type": "boolean"
+          },
+          "file": {
+            "type": "boolean"
+          },
+          "live": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LogLevel": {
+        "type": "string",
+        "description": "A level, from the least to the most verbose.",
+        "enum": [
+          "error",
+          "warn",
+          "info",
+          "debug",
+          "trace"
+        ]
+      },
+      "LogOutput": {
+        "type": "object",
+        "description": "One output's state.",
+        "required": [
+          "detail",
+          "enabled",
+          "format",
+          "level",
+          "output"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`private` or `file` (the console's data kinds)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`text` or `json` (console); `jsonl` (file)."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel",
+            "description": "Its minimum level."
+          },
+          "output": {
+            "$ref": "#/components/schemas/LogOutputName"
+          }
+        }
+      },
+      "LogOutputName": {
+        "type": "string",
+        "description": "An output (§12.1): each has its own level and data kinds.",
+        "enum": [
+          "console",
+          "file",
+          "live",
+          "event_log"
+        ]
+      },
+      "LogPresets": {
+        "type": "object",
+        "description": "The presets now.",
+        "required": [
+          "data",
+          "temporary",
+          "verbosity"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "`private`, `hashes`, `full` or `custom`."
+          },
+          "temporary": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LogTemporary"
+              }
+            ]
+          },
+          "verbosity": {
+            "type": "string",
+            "description": "`errors`, `warnings`, `normal`, `detailed`, `everything` or\n`custom`."
+          }
+        }
+      },
+      "LogTemporary": {
+        "type": "object",
+        "description": "A timed verbosity (\"Detailed for 30 minutes\").",
+        "required": [
+          "until",
+          "verbosity"
+        ],
+        "properties": {
+          "until": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "verbosity": {
+            "type": "string",
+            "description": "`detailed` or `everything`…"
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "description": "`POST /login`.\n`Debug` redacts the secrets.",
@@ -5660,6 +10270,81 @@
               "null"
             ]
           }
+        }
+      },
+      "NaturalChip": {
+        "type": "object",
+        "description": "One recognised clause and the words it came from.",
+        "required": [
+          "from",
+          "text"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/CharRange",
+            "description": "Characters of `q`, end exclusive."
+          },
+          "text": {
+            "type": "string",
+            "description": "The clause as query text (`res:2160p`)."
+          }
+        }
+      },
+      "NaturalProposal": {
+        "type": "object",
+        "description": "What natural phrasing proposes (§10.4): recognised words become\nclauses, and every other word stays as text.",
+        "required": [
+          "ast",
+          "canonical",
+          "chips",
+          "text"
+        ],
+        "properties": {
+          "ast": {
+            "$ref": "#/components/schemas/AstNode"
+          },
+          "canonical": {
+            "type": "string",
+            "description": "The proposed query; it always parses back to `ast`."
+          },
+          "chips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NaturalChip"
+            },
+            "description": "The recognised clauses, in the order they appear."
+          },
+          "text": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The words kept as text."
+          }
+        },
+        "example": {
+          "ast": {
+            "of": [],
+            "op": "and"
+          },
+          "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+          "chips": [
+            {
+              "from": {
+                "end": 2,
+                "start": 0
+              },
+              "text": "res:2160p"
+            },
+            {
+              "from": {
+                "end": 9,
+                "start": 3
+              },
+              "text": "type:movie"
+            }
+          ],
+          "text": []
         }
       },
       "NetworkCheck": {
@@ -6006,6 +10691,103 @@
           }
         }
       },
+      "OverviewResponse": {
+        "type": "object",
+        "description": "The overview (§10.9.2): status, movement, the funnel, segments,\nexceptions and Serve, for one range.",
+        "required": [
+          "annotations",
+          "exceptions",
+          "funnel",
+          "funnel_total",
+          "ingest_per_hour",
+          "kpi",
+          "range",
+          "segments",
+          "serve",
+          "stages",
+          "stale",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            },
+            "description": "Trend annotations in the range, oldest first, at most 1,000\n(`/insights/events` says when there were more). Event time."
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InsightsException"
+            },
+            "description": "What needs attention now, whatever the range (§10.9.2 level 5)."
+          },
+          "funnel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FunnelCohort"
+            },
+            "description": "The discovery cohorts in the range that have any count, oldest\nfirst: hours up to 7 days, UTC days beyond (`range.bucket`)."
+          },
+          "funnel_total": {
+            "$ref": "#/components/schemas/FunnelTotal",
+            "description": "The funnel over every cohort in the range."
+          },
+          "ingest_per_hour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents newly stored in the last full UTC hour (§10.12). Event\ntime. Null when that hour wasn't measured (the crawler paused or\nnot running) and stored nothing.",
+            "minimum": 0
+          },
+          "kpi": {
+            "$ref": "#/components/schemas/Kpi"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/PreviousPeriod",
+            "description": "The period of equal length just before, in the same shape;\npresent only with `compare=1`, and never for `all`."
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "segments": {
+            "$ref": "#/components/schemas/Segments"
+          },
+          "serve": {
+            "$ref": "#/components/schemas/Serve"
+          },
+          "stages": {
+            "$ref": "#/components/schemas/Stages"
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale",
+                "description": "Set when the rollups haven't been flushed for over 2 minutes\n(§10.9.6); null when fresh."
+              }
+            ]
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            },
+            "description": "Movement, one point per bucket (`range.bucket`), oldest first.\nEvent time."
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the numbers were read (unix seconds)."
+          }
+        }
+      },
       "PackRuleState": {
         "type": "object",
         "required": [
@@ -6062,6 +10844,10 @@
           },
           "canonical": {
             "type": "string"
+          },
+          "natural": {
+            "$ref": "#/components/schemas/NaturalProposal",
+            "description": "With `natural=true`: the query `q` means as natural phrasing, for\nthe UI to preview as chips. Nothing applies it."
           }
         }
       },
@@ -6079,6 +10865,28 @@
           },
           "old": {
             "type": "string"
+          }
+        }
+      },
+      "PausedSpan": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds: when it paused (before the range if it was already\npaused then)."
+          },
+          "to": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When it resumed; null while still paused."
           }
         }
       },
@@ -6214,6 +11022,206 @@
           "message": "Search stops after the restart, until you turn it back on."
         }
       },
+      "PreviousKpi": {
+        "type": "object",
+        "description": "The KPIs over the previous period.",
+        "required": [
+          "new_searchable",
+          "searchable",
+          "time_to_searchable_p50_s",
+          "time_to_searchable_p95_s",
+          "yield"
+        ],
+        "properties": {
+          "new_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searchable at the period's end: the last hourly snapshot in the\nday before it ends. Null when there's none (search off, or not\nrunning then).",
+            "minimum": 0
+          },
+          "time_to_searchable_p50_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "time_to_searchable_p95_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "PreviousPeriod": {
+        "type": "object",
+        "description": "The previous period, for Compare: the fields that depend on the range.",
+        "required": [
+          "kpi",
+          "range",
+          "serve",
+          "stages",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/PreviousKpi"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "serve": {
+            "$ref": "#/components/schemas/Serve"
+          },
+          "stages": {
+            "$ref": "#/components/schemas/PreviousStages"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            }
+          }
+        }
+      },
+      "PreviousStages": {
+        "type": "object",
+        "description": "The stage strip over the previous period.",
+        "required": [
+          "discover",
+          "fetch",
+          "serve",
+          "understand"
+        ],
+        "properties": {
+          "discover": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fetch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "serve": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "understand": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ProxySettings": {
+        "type": "object",
+        "description": "`GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.",
+        "required": [
+          "allowed_users",
+          "enabled",
+          "forced_off",
+          "header",
+          "trusted"
+        ],
+        "properties": {
+          "allowed_users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty: any user the proxy names."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "forced_off": {
+            "type": "boolean",
+            "description": "`LODESTAR_PROXY_AUTH=off` turned proxy auth off for this run; the\nsaved settings shown here don't apply until it's removed."
+          },
+          "header": {
+            "type": "string",
+            "description": "The header the proxy names the signed-in user in."
+          },
+          "trusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The proxies whose header is believed, as canonical CIDRs."
+          }
+        },
+        "example": {
+          "allowed_users": [],
+          "enabled": true,
+          "forced_off": false,
+          "header": "Remote-User",
+          "trusted": [
+            "172.17.0.1/32"
+          ]
+        }
+      },
+      "ProxyUpdate": {
+        "type": "object",
+        "description": "`PUT /auth/proxy`. `Debug` redacts the password.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "allowed_users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At most 64 user names; empty allows any."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "header": {
+            "type": "string",
+            "description": "Defaults to `Remote-User`."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin password (428 `confirm_required` without it)."
+          },
+          "trusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IP addresses or CIDR ranges, at most 64. Required to turn it on."
+          }
+        }
+      },
       "QuarantineEntry": {
         "type": "object",
         "required": [
@@ -6343,6 +11351,65 @@
           "done"
         ]
       },
+      "RestartAccepted": {
+        "type": "object",
+        "description": "`POST /system/restart`: accepted; the server restarts once this\nanswer has gone out.",
+        "required": [
+          "estimated_seconds",
+          "restarting"
+        ],
+        "properties": {
+          "estimated_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "About how long until it answers again.",
+            "minimum": 0
+          },
+          "restarting": {
+            "type": "boolean"
+          }
+        },
+        "example": {
+          "estimated_seconds": 4,
+          "restarting": true
+        }
+      },
+      "RestartInfo": {
+        "type": "object",
+        "description": "Whether Restart now is offered (§10.10.6).",
+        "required": [
+          "available",
+          "estimated_seconds",
+          "hint",
+          "method"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "estimated_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds this run took from start to listening: about how long a\nrestart pauses crawling.",
+            "minimum": 0
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it isn't available, how to restart instead."
+          },
+          "method": {
+            "type": "string",
+            "description": "How this process restarts itself.",
+            "enum": [
+              "reexec",
+              "manual"
+            ]
+          }
+        }
+      },
       "ResyncEvent": {
         "type": "object",
         "description": "`event: resync`: events were missed; refetch what the page shows, then\ncarry on with the events that follow. It has no `id:`.",
@@ -6463,6 +11530,221 @@
           }
         ],
         "description": "A sample's file: a path, or a path and its size."
+      },
+      "SavedSearchCreate": {
+        "type": "object",
+        "description": "`POST /saved-searches`.",
+        "required": [
+          "name",
+          "alert",
+          "rss"
+        ],
+        "properties": {
+          "alert": {
+            "type": "boolean",
+            "description": "Alert in the app about new hits."
+          },
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode",
+                "description": "A query AST, as `/parse` returns it."
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "1–200 characters."
+          },
+          "paused": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Start paused; false by default."
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The query text. Send `q` or `ast`, not both; with neither it\nmatches everything."
+          },
+          "rss": {
+            "type": "boolean",
+            "description": "Serve the hits as an RSS feed."
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "As search's `sort`."
+          }
+        }
+      },
+      "SavedSearchPatch": {
+        "type": "object",
+        "description": "`PATCH /saved-searches/{id}`: any subset; absent leaves a field as it\nis (the notifier's channels too).",
+        "properties": {
+          "alert": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "paused": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Pausing and resuming is a toggle; resuming skips what was\nindexed meanwhile.",
+            "default": null
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send `q` or `ast`, not both.",
+            "default": null
+          },
+          "rss": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` opens with relevance.",
+            "default": null
+          }
+        }
+      },
+      "SavedSearchView": {
+        "type": "object",
+        "description": "A saved search with what the list view shows beside it. The\nnotifier's channels and the watermark are not part of it.",
+        "required": [
+          "alert",
+          "alerts",
+          "ast",
+          "created_at",
+          "id",
+          "last_alert_at",
+          "name",
+          "paused",
+          "q",
+          "rss",
+          "sort",
+          "unread",
+          "updated_at"
+        ],
+        "properties": {
+          "alert": {
+            "type": "boolean",
+            "description": "Alert in the app about new hits."
+          },
+          "alerts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Alerts recorded in all.",
+            "minimum": 0
+          },
+          "ast": {
+            "$ref": "#/components/schemas/AstNode"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_alert_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the newest alert was recorded; null before the first."
+          },
+          "name": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Skipped by the notifier; its channels are kept."
+          },
+          "q": {
+            "type": "string",
+            "description": "The query text."
+          },
+          "rss": {
+            "type": "boolean",
+            "description": "Serve the hits as an RSS feed."
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sort the results open with; null = relevance."
+          },
+          "unread": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "alert": true,
+          "alerts": 4,
+          "ast": {
+            "op": "all"
+          },
+          "created_at": 1700000100,
+          "id": 1,
+          "last_alert_at": 1700000300,
+          "name": "New 4K releases",
+          "paused": false,
+          "q": "",
+          "rss": false,
+          "sort": "-discovered",
+          "unread": 2,
+          "updated_at": 1700000200
+        }
       },
       "SearchExplain": {
         "type": "object",
@@ -6938,6 +12220,141 @@
           "section": "crawler"
         }
       },
+      "SegmentCount": {
+        "type": "object",
+        "required": [
+          "key",
+          "searchable"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SegmentYield": {
+        "type": "object",
+        "required": [
+          "harvested",
+          "key",
+          "searchable",
+          "yield"
+        ],
+        "properties": {
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "The source plugin's name."
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searchable ÷ harvested, 0–1; null when it harvested nothing."
+          }
+        }
+      },
+      "Segments": {
+        "type": "object",
+        "description": "Segments (§10.9.2 level 4). Rows are sorted by value, descending, then\nkey. Adult is left out entirely while \"Show adult content\" is off.",
+        "required": [
+          "by_content_type",
+          "by_group",
+          "by_source"
+        ],
+        "properties": {
+          "by_content_type": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCount"
+            },
+            "description": "Newly searchable by content type (`movie`, `tv`, …, `adult`, and\n`unclassified` for none yet). Event time."
+          },
+          "by_group": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCount"
+            },
+            "description": "The same by the content type's group: `video` (movie, tv, video),\n`audio` (music, audiobook), `documents` (ebook, comic),\n`software` (software, game), `images`, `other`, `adult`,\n`unclassified`. Event time."
+          },
+          "by_source": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentYield"
+            },
+            "description": "Yield by the source that found each hash first, over final\ncohorts. Discovery cohort."
+          }
+        }
+      },
+      "Serve": {
+        "type": "object",
+        "description": "Serve (§10.9.2 level 6). Every field is null until its counter exists:\nsearches and latency with #48, alerts with B9, sends with the\nintegrations' counters.",
+        "required": [
+          "alerts_fired",
+          "latency_p95_ms",
+          "searches",
+          "sends",
+          "zero_result_rate"
+        ],
+        "properties": {
+          "alerts_fired": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "latency_p95_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Always approximate (log buckets)."
+          },
+          "searches": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "sends": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "zero_result_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searches that found nothing ÷ searches, 0–1; null with no searches."
+          }
+        }
+      },
       "SettingField": {
         "type": "object",
         "description": "One field of a section, for its form.",
@@ -7388,6 +12805,13 @@
           }
         }
       },
+      "Severity": {
+        "type": "string",
+        "enum": [
+          "warning",
+          "error"
+        ]
+      },
       "SiblingsResponse": {
         "type": "object",
         "description": "`GET /torrents/{hash}/siblings`: the torrents related to one, in three\ngroups. Each is either available (possibly empty) or unavailable with\na reason.",
@@ -7695,6 +13119,77 @@
         "example": {
           "enabled": true,
           "priority": "high"
+        }
+      },
+      "Stages": {
+        "type": "object",
+        "description": "The stage strip (§10.9.1, `docs/metrics.md` §6.1).",
+        "required": [
+          "discover",
+          "fetch",
+          "index",
+          "serve",
+          "understand"
+        ],
+        "properties": {
+          "discover": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unique hashes harvested in the range (first harvests: the cohorts'\nharvested counts). Always approximate (≈).",
+            "minimum": 0
+          },
+          "fetch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Metadata retrieved in the range, by event time (the writer's\nflush). Null when the range starts before fetches were counted by\nevent time (the first whole hour after the upgrade that added it):\nunknown, not 0.",
+            "minimum": 0
+          },
+          "index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searchable torrents now; null when search is off.",
+            "minimum": 0
+          },
+          "serve": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Searches answered in the range; null until search counters exist\n(#48).",
+            "minimum": 0
+          },
+          "understand": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents newly stored in the range. Event time.",
+            "minimum": 0
+          }
+        }
+      },
+      "Stale": {
+        "type": "object",
+        "description": "The stale banner (§10.9.6).",
+        "required": [
+          "reason",
+          "since"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "`paused` (nothing to flush while paused) or `writer_stalled`."
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last flush, or the start when there was none since."
+          }
         }
       },
       "StatsResponse": {
@@ -8054,6 +13549,89 @@
           }
         }
       },
+      "SuggestItem": {
+        "type": "object",
+        "description": "One suggestion: replace the query's characters `replace.start` to\n`replace.end` (end exclusive) with `insert`. A leading `-` or `!`\nstays outside the range.",
+        "required": [
+          "insert",
+          "kind",
+          "replace",
+          "text"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents it would find, of those this search may show; absent for\nfield names, categories and \"did you mean\".",
+            "minimum": 0
+          },
+          "insert": {
+            "type": "string",
+            "description": "The query text to put in."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SuggestKind"
+          },
+          "replace": {
+            "$ref": "#/components/schemas/CharRange"
+          },
+          "text": {
+            "type": "string",
+            "description": "What to show: the value, title or field, or for `did_you_mean`\nthe whole corrected query."
+          }
+        }
+      },
+      "SuggestKind": {
+        "type": "string",
+        "description": "What an item offers.",
+        "enum": [
+          "field",
+          "value",
+          "title",
+          "chip",
+          "did_you_mean"
+        ]
+      },
+      "SuggestResponse": {
+        "type": "object",
+        "description": "`GET /suggest`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SuggestItem"
+            },
+            "description": "\"Did you mean\" first, then chips, field names, values and titles."
+          }
+        },
+        "example": {
+          "items": [
+            {
+              "count": 1284,
+              "insert": "res:2160p",
+              "kind": "chip",
+              "replace": {
+                "end": 5,
+                "start": 0
+              },
+              "text": "res:2160p"
+            },
+            {
+              "count": 12,
+              "insert": "title:\"The Dark Knight\"",
+              "kind": "title",
+              "replace": {
+                "end": 5,
+                "start": 0
+              },
+              "text": "The Dark Knight"
+            }
+          ]
+        }
+      },
       "SwarmBuckets": {
         "type": "object",
         "description": "Seeders and trackers reporting, as `≥1`, `≥5`, `≥50` and\n`never_scraped` values (§10.4).",
@@ -8136,6 +13714,178 @@
             "format": "int32",
             "minimum": 0
           }
+        }
+      },
+      "SystemInfo": {
+        "type": "object",
+        "description": "`GET /system`.",
+        "required": [
+          "address_change",
+          "build",
+          "channel",
+          "connections",
+          "data",
+          "data_formats",
+          "deployment",
+          "diagnostics",
+          "fixture",
+          "host",
+          "repository",
+          "restart",
+          "restart_required",
+          "started_at",
+          "uptime_s",
+          "version"
+        ],
+        "properties": {
+          "address_change": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AddressChange",
+                "description": "A pending HTTP-address change; null when there is none."
+              }
+            ]
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildInfo"
+          },
+          "channel": {
+            "type": "string",
+            "description": "The release channel this build came from. `dev` is a local build.",
+            "enum": [
+              "stable",
+              "beta",
+              "nightly",
+              "dev"
+            ]
+          },
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Connection"
+            },
+            "description": "Everything Lodestar connects to, each with its state."
+          },
+          "data": {
+            "$ref": "#/components/schemas/DataInfo"
+          },
+          "data_formats": {
+            "$ref": "#/components/schemas/DataFormats"
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/Deployment"
+          },
+          "diagnostics": {
+            "$ref": "#/components/schemas/Diagnostics"
+          },
+          "fixture": {
+            "type": "boolean",
+            "description": "Serving a fixture's test data (`lodestar serve --fixture`), not a\nreal install."
+          },
+          "host": {
+            "$ref": "#/components/schemas/HostInfo"
+          },
+          "repository": {
+            "type": "string",
+            "description": "The source repository (`Cargo.toml`'s `repository`), so a fork\nlinks to itself."
+          },
+          "restart": {
+            "$ref": "#/components/schemas/RestartInfo"
+          },
+          "restart_required": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Saved settings that apply at the next restart, as `section.field`."
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds this run started.",
+            "minimum": 0
+          },
+          "uptime_s": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "address_change": null,
+          "build": {
+            "commit": "2e64daaddf4df35b41908529eed3de8102b64e30",
+            "date": 1792677600,
+            "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+            "target": "x86_64-unknown-linux-musl",
+            "ui_build_id": "1792677600123"
+          },
+          "channel": "stable",
+          "connections": [
+            {
+              "count": null,
+              "kind": "dht",
+              "last_checked_at": null,
+              "settings": "network",
+              "state": "on"
+            }
+          ],
+          "data": {
+            "cold_bytes": null,
+            "database_bytes": 6442450944,
+            "dir": "/data",
+            "filesystem_warning": null,
+            "free_bytes": 107374182400,
+            "index_bytes": 2684354560,
+            "logs_bytes": null
+          },
+          "data_formats": {
+            "index": "v3-t1",
+            "rebuild": null,
+            "store_schema": 14
+          },
+          "deployment": {
+            "image_digest": null,
+            "image_tag": "0.5.2",
+            "kind": "docker"
+          },
+          "diagnostics": {
+            "changed": [
+              {
+                "name": "crawler.intensity",
+                "source": "db"
+              }
+            ],
+            "logging": null,
+            "recent_errors": null
+          },
+          "fixture": false,
+          "host": {
+            "arch": "x86_64",
+            "cpus": 4,
+            "memory_bytes": 8589934592,
+            "os": "linux",
+            "time_zone": "Europe/Berlin"
+          },
+          "repository": "https://github.com/dvortsis/lodestar-v2",
+          "restart": {
+            "available": true,
+            "estimated_seconds": 4,
+            "hint": null,
+            "method": "reexec"
+          },
+          "restart_required": [
+            "network.dht_port"
+          ],
+          "started_at": 1792677600,
+          "uptime_s": 86400,
+          "version": "0.5.2"
         }
       },
       "TermFacet": {
@@ -8570,6 +14320,40 @@
           "max_id": 48211
         }
       },
+      "TrendPoint": {
+        "type": "object",
+        "description": "One trend bucket. A count is null where nothing was measured (a gap:\npaused, or not running), and 0 where it was measured and was 0.",
+        "required": [
+          "at",
+          "harvested",
+          "searchable"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The bucket's start, unix seconds."
+          },
+          "harvested": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unique hashes first harvested in the bucket. Always ≈.",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents newly searchable in the bucket.",
+            "minimum": 0
+          }
+        }
+      },
       "Unavailable": {
         "type": "string",
         "description": "Why a section isn't available. Stable keys; the UI words them.",
@@ -8581,6 +14365,325 @@
           "needs_payload_signature",
           "needs_piece_roots"
         ]
+      },
+      "UnreadAlerts": {
+        "type": "object",
+        "description": "`GET /alerts/unread`: the nav badge.",
+        "required": [
+          "unread"
+        ],
+        "properties": {
+          "unread": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unread alerts across every saved search, on torrents search would\nshow: the sum of the saved searches' `unread`.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "unread": 3
+        }
+      },
+      "UserItemDetail": {
+        "type": "object",
+        "description": "`GET /user-items/{hash}`: the marks and the collections it is in.",
+        "required": [
+          "collections",
+          "created_at",
+          "favourite",
+          "hash",
+          "hidden",
+          "labels",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Ids of the collections the torrent is in (\"In collections\")."
+          },
+          "created_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "example": {
+          "collections": [
+            1
+          ],
+          "created_at": 1700000100,
+          "favourite": true,
+          "hash": "0123456789abcdef0123456789abcdef01234567",
+          "hidden": false,
+          "labels": [
+            "4K"
+          ],
+          "note": null,
+          "updated_at": 1700000200
+        }
+      },
+      "UserItemPatch": {
+        "type": "object",
+        "description": "`PATCH /user-items/{hash}`: what to change. Absent leaves a mark as\nit is.",
+        "properties": {
+          "favourite": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Your own Hide mark.",
+            "default": null
+          },
+          "labels": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces the labels (at most 32, 1–64 characters each); an empty\nlist removes them.",
+            "default": null
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1–4,000 characters; `null` removes the note.",
+            "default": null
+          }
+        }
+      },
+      "UserItemRow": {
+        "type": "object",
+        "description": "One marked torrent: your marks and the torrent beside them.",
+        "required": [
+          "created_at",
+          "favourite",
+          "hash",
+          "hidden",
+          "labels",
+          "note",
+          "torrent",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "40 hex digits."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Your own Hide mark."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted, unique, case-sensitive."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "torrent": {
+            "$ref": "#/components/schemas/SearchHit"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "favourite": true,
+          "hash": "0123456789abcdef0123456789abcdef01234567",
+          "hidden": false,
+          "labels": [
+            "4K"
+          ],
+          "note": "Watch with subs",
+          "torrent": {
+            "adult_kind": null,
+            "completed": null,
+            "composition": [],
+            "content_type": "movie",
+            "discovered_at": 1700000000,
+            "files": 1,
+            "flags": [
+              "single_file"
+            ],
+            "hash": "0123456789abcdef0123456789abcdef01234567",
+            "hash_v2": null,
+            "id": 1,
+            "junk_reasons": [],
+            "junk_score": 0,
+            "last_scrape_at": null,
+            "leechers": null,
+            "metadata_at": 1700000001,
+            "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+            "piece_len": 65536,
+            "resolved_via": null,
+            "score": 0.0,
+            "seeders": null,
+            "size": 8589934592,
+            "title": "The Dark Knight",
+            "trackers_checked": null,
+            "trackers_reporting": null
+          },
+          "updated_at": 1700000200
+        }
+      },
+      "UserItemsResponse": {
+        "type": "object",
+        "description": "`GET /user-items`: marked torrents, newest change first.",
+        "required": [
+          "items",
+          "limit",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserItemRow"
+            },
+            "description": "Only torrents search would show (§20.3, §20.9)."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null on the last page."
+          }
+        },
+        "example": {
+          "items": [],
+          "limit": 50,
+          "next_cursor": null
+        }
+      },
+      "UserMarks": {
+        "type": "object",
+        "description": "A torrent's marks. Without any, `favourite` and `hidden` are false,\n`labels` is empty and the rest is null.",
+        "required": [
+          "created_at",
+          "favourite",
+          "hash",
+          "hidden",
+          "labels",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when there are no marks."
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "40 hex digits."
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when there are no marks."
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "favourite": true,
+          "hash": "0123456789abcdef0123456789abcdef01234567",
+          "hidden": false,
+          "labels": [
+            "4K"
+          ],
+          "note": null,
+          "updated_at": 1700000200
+        }
       }
     },
     "responses": {
@@ -8642,8 +14745,28 @@
       "description": "The live server-sent event stream (§9)."
     },
     {
+      "name": "library",
+      "description": "Your marks, collections and saved searches (§7, §10.5, §10.8)."
+    },
+    {
+      "name": "logs",
+      "description": "What gets logged: events, data kinds and outputs (§12.1)."
+    },
+    {
       "name": "meta",
       "description": "This document."
+    },
+    {
+      "name": "insights",
+      "description": "The Insights dashboard's rollups (§10.9)."
+    },
+    {
+      "name": "export",
+      "description": "Search results, selections and collections as files (§9, §10.4)."
+    },
+    {
+      "name": "jobs",
+      "description": "Background jobs: exports now, imports later (§9, §18.8)."
     }
   ]
 }

@@ -61,6 +61,7 @@ fn markup_in_every_field_is_escaped() {
         published: 0,
         description: hostile.into(),
         private_source: false,
+        magnet: None,
     };
     let xml = render(&c, &[item]).unwrap();
     assert!(!xml.contains("<script"), "{xml}");
@@ -92,6 +93,7 @@ fn a_caller_cant_leak_a_private_item_through_the_renderer() {
         published: 0,
         description: String::new(),
         private_source: private,
+        magnet: None,
     };
     let xml = render(
         &channel(),

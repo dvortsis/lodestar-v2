@@ -126,7 +126,9 @@ fn fixture(n: usize) -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            user_data: None,
             adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
+            insights: None,
         }),
     );
     let mut f = Fixture {

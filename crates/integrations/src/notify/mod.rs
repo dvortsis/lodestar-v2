@@ -313,12 +313,12 @@ pub async fn deliver(
             Ok(()) => break Ok(()),
             Err(e) if e.retry && attempts < max => {
                 let wait = policy.delay(attempts, e.retry_after);
-                tracing::debug!(
-                    channel = ?notifier.channel(),
-                    attempt = attempts,
-                    error = %e.error,
-                    wait_ms = wait.as_millis() as u64,
-                    "notification attempt failed; retrying"
+                lodestar_log::log_event!(
+                    crate::log_events::NOTIFY_RETRY,
+                    channel = crate::log_events::channel(notifier.channel()),
+                    attempt = lodestar_log::Count(u64::from(attempts)),
+                    error = lodestar_log::Error::plain(&e.error),
+                    wait_ms = wait.as_millis() as u64
                 );
                 tokio::time::sleep(wait).await;
             }
@@ -326,7 +326,12 @@ pub async fn deliver(
         }
     };
     if let Err(e) = &result {
-        tracing::info!(channel = ?notifier.channel(), attempts, error = %e, "notification not delivered");
+        lodestar_log::log_event!(
+            crate::log_events::NOTIFY_FAILED,
+            channel = crate::log_events::channel(notifier.channel()),
+            attempts = lodestar_log::Count(u64::from(attempts)),
+            error = lodestar_log::Error::plain(e)
+        );
     }
     DeliveryOutcome {
         channel: notifier.channel(),

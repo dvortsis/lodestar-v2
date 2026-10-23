@@ -1,0 +1,2 @@
+200
+{"key":{"created_at":0,"expires_at":null,"id":3,"kind":"api_key","last_used_at":null,"name":"Prowlarr","prefix":"…","revoked_at":null,"saved_search_id":null,"scopes":["search","torznab"],"status":"active"},"secret":"…"}

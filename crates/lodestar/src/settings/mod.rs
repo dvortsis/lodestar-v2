@@ -31,6 +31,7 @@ pub mod content;
 pub mod crawler;
 pub mod general;
 pub mod log;
+pub mod logging;
 pub mod network;
 mod portable;
 pub mod preferences;
@@ -55,6 +56,8 @@ use serde_json::{Map, Value};
 use tokio::sync::watch;
 
 use crate::config::Config;
+use crate::logging::events;
+use lodestar_log::log_event;
 
 /// Every key the registry saves starts with this, then
 /// `<section>.<field>`, or `<section>#revision` for the section's
@@ -423,17 +426,30 @@ impl<T: Section> Entry<T> {
         for (k, text) in saved_rows {
             let name = &k[prefix.len()..];
             let Some(field) = find::<T>(name) else {
-                tracing::warn!("settings: ignoring saved {k}: no such setting");
+                // Its name came from the store: only the section is named.
+                log_event!(
+                    events::SETTINGS_SAVED_IGNORED,
+                    section = T::SECTION,
+                    reason = "no_such_setting"
+                );
                 continue;
             };
+            let ignored = |reason: &'static str| {
+                log_event!(
+                    events::SETTINGS_SAVED_IGNORED,
+                    section = T::SECTION,
+                    field = field.name,
+                    reason = reason
+                )
+            };
             if field.read_only {
-                tracing::warn!("settings: ignoring saved {k}: it can't be set in the app");
+                ignored("read_only");
                 continue;
             }
             let value = match serde_json::from_str::<Value>(&text) {
                 Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("settings: ignoring saved {k}: {}", not_valid(field, e));
+                Err(_) => {
+                    ignored("not_json");
                     continue;
                 }
             };
@@ -445,16 +461,16 @@ impl<T: Section> Entry<T> {
                     if entry.base_source[field.name] == SettingSource::File
                         && entry.base.get(field.name) != Some(&value)
                     {
-                        tracing::info!(
-                            "settings: {}.{} is saved in the app and overrides config.toml; \
-                             set it to null in the app to reset",
-                            T::SECTION,
-                            field.name
+                        log_event!(
+                            events::SETTINGS_OVERRIDES_FILE,
+                            section = T::SECTION,
+                            field = field.name
                         );
                     }
                     saved.insert(field.name.to_string(), value);
                 }
-                Err(message) => tracing::warn!("settings: ignoring saved {k}: {message}"),
+                // The message can quote the value: never logged.
+                Err(_) => ignored("invalid"),
             }
         }
         let effective = entry.effective_map(&saved);
@@ -666,6 +682,8 @@ trait Erased: Send + Sync + std::fmt::Debug {
     /// Each field with its effective value, its source and whether the
     /// environment sets it.
     fn current(&self) -> Vec<(&'static Field, Value, SettingSource, bool)>;
+    /// A field's name as declared (`'static`, for a log line).
+    fn field(&self, name: &str) -> Option<&'static str>;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -813,6 +831,10 @@ impl<T: Section> Erased for Entry<T> {
             .collect()
     }
 
+    fn field(&self, name: &str) -> Option<&'static str> {
+        find::<T>(name).map(|f| f.name)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -896,6 +918,7 @@ impl Registry {
         store: Arc<Mutex<Store>>,
     ) -> Result<Registry, lodestar_store::Error> {
         let mut registry = Registry::empty(store);
+        registry.move_log_level()?;
         // One line per section, in display order (README.md).
         registry.register::<general::General>(config)?;
         registry.register::<network::Network>(config)?;
@@ -905,7 +928,34 @@ impl Registry {
         registry.register::<search::Search>(config)?;
         registry.register::<content::Content>(config)?;
         registry.register::<preferences::Preferences>(config)?;
+        registry.register::<logging::Logging>(config)?;
         Ok(registry)
+    }
+
+    /// An earlier build saved the log filter as `general.log_level`; it's
+    /// the `logging` section's `verbosity`, `components` and `libraries`
+    /// now (§12.1's aliases). Moved once, in one transaction, before the
+    /// sections load. A value saved under the new keys already wins.
+    fn move_log_level(&self) -> Result<(), lodestar_store::Error> {
+        let old = key("general", "log_level");
+        let mut store = self.store.lock().expect("store lock");
+        let Some(text) = store.setting_text(&old)? else {
+            return Ok(());
+        };
+        let saved: Vec<(String, String)> = store.settings_with_prefix(&key("logging", ""))?;
+        let moved: Vec<(String, String)> = logging::move_log_level(&text)
+            .into_iter()
+            .map(|(field, value)| (key("logging", field), value))
+            .filter(|(k, _)| !saved.iter().any(|(s, _)| s == k))
+            .collect();
+        let set: Vec<(&str, &str)> = moved
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        store.update_settings_text(&set, &[old.as_str()])?;
+        drop(store);
+        lodestar_log::log_event!(crate::logging::events::SETTINGS_LOG_LEVEL_MOVED);
+        Ok(())
     }
 
     fn empty(store: Arc<Mutex<Store>>) -> Registry {
@@ -975,18 +1025,18 @@ impl Registry {
             let keys: Vec<&str> = retired.iter().map(|(k, _)| k.as_str()).collect();
             store.update_settings_text(&[], &keys)?;
             for k in keys {
-                tracing::info!(
-                    "settings: removed saved {}: it can only be set in config.toml or the environment now",
-                    &k[KEY_PREFIX.len()..]
-                );
+                if let Some(f) = find::<T>(&k[prefix.len()..]) {
+                    log_event!(
+                        events::SETTINGS_RETIRED,
+                        section = T::SECTION,
+                        field = f.name
+                    );
+                }
             }
         }
         let revision = match store.setting_text(&revision_key(T::SECTION)) {
             Ok(Some(text)) => text.parse().unwrap_or_else(|_| {
-                tracing::warn!(
-                    "settings: the saved revision of {} isn't a number; starting again",
-                    T::SECTION
-                );
+                log_event!(events::SETTINGS_REVISION_RESET, section = T::SECTION);
                 0
             }),
             Ok(None) => 0,
@@ -1110,6 +1160,17 @@ impl Registry {
             let s = &self.sections[i];
             if planned.changed {
                 saved.changed.push((s.name().to_string(), planned.revision));
+                // Field names only, never values (§12.1).
+                for (name, _) in &planned.fields {
+                    if let Some(field) = s.field(name) {
+                        log_event!(
+                            events::SETTINGS_SAVED,
+                            section = s.name(),
+                            field = field,
+                            revision = lodestar_log::Count(planned.revision)
+                        );
+                    }
+                }
             }
             saved.sections.push(s.commit(planned));
         }
@@ -1161,6 +1222,8 @@ impl SettingsApi for Registry {
 
 #[cfg(test)]
 mod api_tests;
+#[cfg(test)]
+mod logging_tests;
 #[cfg(test)]
 mod screen_tests;
 #[cfg(test)]

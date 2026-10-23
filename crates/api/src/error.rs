@@ -143,8 +143,12 @@ impl IntoResponse for ApiError {
 }
 
 /// Logs `e` and returns a 500 that reveals nothing about it.
-pub fn internal(e: impl std::fmt::Display) -> ApiError {
-    tracing::error!("api: {e}");
+pub fn internal<E: std::fmt::Display>(e: E) -> ApiError {
+    // Its type only: an error's message can name a torrent or a path.
+    lodestar_log::log_event!(
+        crate::log_events::API_INTERNAL_ERROR,
+        error = lodestar_log::Error::new(&e)
+    );
     ApiError::new(
         StatusCode::INTERNAL_SERVER_ERROR,
         "internal",

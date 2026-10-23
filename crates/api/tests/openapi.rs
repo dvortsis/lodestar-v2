@@ -21,16 +21,27 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/login"),
     ("POST", "/logout"),
     ("POST", "/password"),
+    ("GET", "/auth/proxy"),
+    ("PUT", "/auth/proxy"),
+    ("POST", "/sessions/revoke-others"),
+    ("GET", "/keys"),
+    ("POST", "/keys"),
+    ("DELETE", "/keys/{id}"),
+    ("POST", "/keys/{id}/regenerate"),
+    ("POST", "/keys/{id}/revoke"),
     ("GET", "/parse"),
     ("GET", "/search"),
     ("POST", "/search"),
     ("GET", "/facets"),
     ("POST", "/facets"),
+    ("GET", "/suggest"),
     ("GET", "/torrents/{hash}"),
     ("GET", "/torrents/{hash}/files"),
     ("GET", "/torrents/{hash}/siblings"),
     ("POST", "/compare"),
     ("GET", "/discover"),
+    ("GET", "/insights/overview"),
+    ("GET", "/insights/events"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
     ("GET", "/filters/tombstones"),
@@ -64,6 +75,40 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/network/check"),
     ("POST", "/network/check"),
     ("GET", "/events"),
+    ("GET", "/user-items"),
+    ("GET", "/user-items/labels"),
+    ("GET", "/user-items/{hash}"),
+    ("PATCH", "/user-items/{hash}"),
+    ("DELETE", "/user-items/{hash}"),
+    ("GET", "/collections"),
+    ("POST", "/collections"),
+    ("GET", "/collections/{id}"),
+    ("PATCH", "/collections/{id}"),
+    ("DELETE", "/collections/{id}"),
+    ("POST", "/collections/{id}/items"),
+    ("POST", "/collections/{id}/items/remove"),
+    ("PUT", "/collections/{id}/order"),
+    ("GET", "/saved-searches"),
+    ("POST", "/saved-searches"),
+    ("GET", "/saved-searches/{id}"),
+    ("PATCH", "/saved-searches/{id}"),
+    ("DELETE", "/saved-searches/{id}"),
+    ("GET", "/export"),
+    ("POST", "/export"),
+    ("GET", "/jobs"),
+    ("GET", "/jobs/{id}"),
+    ("POST", "/jobs/{id}/pause"),
+    ("POST", "/jobs/{id}/resume"),
+    ("POST", "/jobs/{id}/cancel"),
+    ("GET", "/system"),
+    ("POST", "/system/restart"),
+    ("POST", "/system/address/keep"),
+    ("POST", "/system/address/revert"),
+    ("GET", "/saved-searches/{id}/alerts"),
+    ("POST", "/alerts/read"),
+    ("GET", "/alerts/unread"),
+    ("GET", "/feeds/{id}"),
+    ("GET", "/logs/catalog"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];
@@ -194,24 +239,141 @@ fn it_lists_exactly_the_served_routes() {
 }
 
 fn app() -> (tempfile::TempDir, Router) {
+    let (dir, app, _, _) = app_with_keys();
+    (dir, app)
+}
+
+/// The app, its auth and its user-data store (where keys live).
+fn app_with_keys() -> (tempfile::TempDir, Router, Arc<Auth>, Arc<Mutex<Store>>) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
-    drop(Store::open(&db, StoreConfig::default()).unwrap());
+    let store = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
         "/api/v1",
         router(ApiState {
-            auth,
+            auth: auth.clone(),
             index: None,
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
             ops: None,
+            user_data: Some(store.clone()),
             adult: Default::default(),
+            insights: None,
         }),
     );
-    (dir, app)
+    (dir, app, auth, store)
+}
+
+/// Every route stays session-only (§12): a valid API key with every
+/// scope, or a feed token, presented every way, gets the same 401 as no
+/// credentials at all. The one exception is the feed route (B9), which a
+/// key with `feeds` reaches as a key and a feed token as `?token=` only:
+/// there they're let through (to a 404, as no search exists), and the
+/// other way round is a bad key.
+#[tokio::test]
+async fn keys_reach_no_existing_route() {
+    use lodestar_api::keys::{mint, scope};
+    use lodestar_store::{KeyKind, NewApiKey};
+
+    let (_dir, app, auth, store) = app_with_keys();
+    let token = auth.setup_token().unwrap();
+    auth.setup(
+        "127.0.0.1".parse().unwrap(),
+        &token,
+        "correct horse battery",
+    )
+    .unwrap();
+    let mut secrets = Vec::new();
+    for kind in [KeyKind::ApiKey, KeyKind::FeedToken] {
+        let m = mint(kind).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .create_api_key(
+                &NewApiKey {
+                    kind,
+                    name: "everything",
+                    prefix: &m.prefix,
+                    hash: m.hash,
+                    scopes: scope::ALL,
+                    saved_search_id: None,
+                    expires_at: None,
+                },
+                0,
+            )
+            .unwrap();
+        secrets.push(m.secret.expose().to_string());
+    }
+    for (method, path) in ROUTES {
+        if OPEN.contains(path) {
+            continue;
+        }
+        let path = path
+            .replace("{hash}", &"ab".repeat(20))
+            .replace("{id}", "1")
+            .replace("{section}", "crawler");
+        for secret in &secrets {
+            let bearer = format!("Bearer {secret}");
+            let forms: [(String, Option<(&str, &str)>); 4] = [
+                (format!("/api/v1{path}"), Some(("authorization", &bearer))),
+                (format!("/api/v1{path}"), Some(("x-api-key", secret))),
+                (format!("/api/v1{path}?apikey={secret}"), None),
+                (format!("/api/v1{path}?token={secret}"), None),
+            ];
+            for (uri, h) in forms {
+                let mut b = Request::builder()
+                    .method(Method::from_bytes(method.as_bytes()).unwrap())
+                    .uri(&uri)
+                    .header(header::CONTENT_TYPE, "application/json");
+                if let Some((k, v)) = h {
+                    b = b.header(k, v);
+                }
+                let resp = app
+                    .clone()
+                    .oneshot(b.body(Body::from("{}")).unwrap())
+                    .await
+                    .unwrap();
+                let status = resp.status();
+                let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let want = if path.starts_with("/feeds/") {
+                    let token = secret.starts_with("lsf_");
+                    let as_token = uri.contains("?token=");
+                    if token == as_token {
+                        (StatusCode::NOT_FOUND, Some("feed_not_found"))
+                    } else {
+                        (StatusCode::UNAUTHORIZED, Some("bad_api_key"))
+                    }
+                } else {
+                    (StatusCode::UNAUTHORIZED, Some("login_required"))
+                };
+                assert_eq!(
+                    (status, body["error"]["code"].as_str()),
+                    want,
+                    "{method} {uri}"
+                );
+            }
+        }
+    }
+    // A use is recorded only once a key is let through: on the feed
+    // route, which each of them reached. Every other route answered 401
+    // before any key was checked.
+    assert!(
+        store
+            .lock()
+            .unwrap()
+            .api_keys()
+            .unwrap()
+            .iter()
+            .all(|k| k.last_used_at.is_some())
+    );
 }
 
 #[tokio::test]

@@ -1,0 +1,5 @@
+magnet:?xt=urn:btih:ecbe3df36b71db2ddf9eb5e87fa43c216fb4bd2f&dn=The.Dark.Knight.2008.1080p.BluRay.x264-GRP
+magnet:?xt=urn:btih:423cf3846bd5047bd2d502bb5bd786346b87a57a&dn=%3DHYPERLINK%28%22http%3A%2F%2Fexample.invalid%22%2C%22click%22%29%2C%202024
+magnet:?xt=urn:btih:baba91e0cd8d803a62eade210e4e289ab429d3a5&dn=%40SUM%281%2B1%29-cmd
+magnet:?xt=urn:btih:7fb066870ed33d485c7abdb08cefa8ea40f0f2e1&dn=%E3%83%86%E3%82%B9%E3%83%88%20%E3%82%A2%E3%83%AB%E3%83%90%E3%83%A0%20FLAC
+magnet:?xt=urn:btih:84a5567140c0ceacfd0f05737596af624cf1aa38&dn=Holiday%07Clips%E2%80%AE4pm.exe

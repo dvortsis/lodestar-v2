@@ -7,6 +7,8 @@
 //! - `rollback`: restore a pre-migration snapshot, server stopped;
 //! - `vacuum`: compact the store, server stopped;
 //! - `reindex`: rebuild the search index at the next start;
+//! - `rollup --repair`: recount the Insights rollups from the store,
+//!   server stopped;
 //! - `stats`: counts, sizes and the index's state, read-only.
 //!
 //! Each refuses while B-update's rollback journal exists (§12.2), and the
@@ -16,6 +18,7 @@ mod backup;
 mod lock;
 mod reindex;
 mod rollback;
+mod rollup;
 mod stats;
 mod util;
 mod vacuum;
@@ -57,7 +60,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum Command {
     /// Run the crawler, search, UI, status page and metrics (the default)
-    Serve,
+    Serve {
+        /// Serve test data instead, offline: built in DIR if it's empty or
+        /// new, reused if it holds a fixture (a temporary folder without
+        /// DIR); any other folder is refused
+        #[arg(long, value_name = "DIR", num_args = 0..=1)]
+        fixture: Option<Option<PathBuf>>,
+    },
     /// Exit 0 if the local instance answers /healthz, 1 otherwise
     Healthcheck,
     /// Import a bitmagnet database (read-only, resumable); run it while
@@ -86,6 +95,22 @@ pub enum Command {
     /// Show counts, sizes and the index's state; safe while the server
     /// runs
     Stats(StatsArgs),
+    /// Recount the Insights rollups from the stored torrents (server
+    /// stopped)
+    ///
+    /// Rebuilds, for the window: stored and searchable counts per discovery
+    /// cohort, newly stored and newly searchable per hour, the
+    /// time-to-searchable histogram, and the imported total. It only raises
+    /// totals. Lodestar runs it by itself over the 72 hours before the
+    /// last activity when it starts after an unclean stop.
+    ///
+    /// Lost for good: counts from before storage (keys harvested, keys
+    /// reported and rediscovered, peers found, metadata fetched, losses,
+    /// drops), coverage and the hourly
+    /// searchable snapshots, and torrents indexed before searchable time
+    /// was tracked. Hourly detail older than 30 days is folded into days,
+    /// so those days are repaired at daily grain.
+    Rollup(RollupArgs),
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -104,6 +129,17 @@ pub struct RollbackArgs {
     /// Restore without asking
     #[arg(long)]
     pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct RollupArgs {
+    /// Recount and raise what the store can rebuild (required)
+    #[arg(long, required = true)]
+    pub repair: bool,
+    /// How far back, in days, like 90d (default: 30d, the hourly part);
+    /// older days are repaired at daily grain
+    #[arg(long, value_name = "Nd", value_parser = rollup::parse_days)]
+    pub since: Option<u32>,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -155,7 +191,8 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Vacuum => ("vacuum", vacuum::run(&config)),
         Command::Reindex => ("reindex", reindex::run(&config)),
         Command::Stats(a) => ("stats", stats::run(&config, a.json)),
-        Command::Serve
+        Command::Rollup(a) => ("rollup", rollup::run(&config, a.since)),
+        Command::Serve { .. }
         | Command::Healthcheck
         | Command::ImportBitmagnet { .. }
         | Command::Lists => unreachable!("main.rs runs these"),
@@ -196,6 +233,8 @@ mod tests {
             .map_err(|e| e.kind())
     }
 
+    const SERVE: Command = Command::Serve { fixture: None };
+
     fn cmd(s: &str) -> (Option<PathBuf>, Option<Command>) {
         let c = args(s).unwrap();
         (c.config, c.command)
@@ -204,11 +243,23 @@ mod tests {
     #[test]
     fn serve_stays_the_default() {
         assert_eq!(cmd(""), (None, None));
-        assert_eq!(cmd("serve"), (None, Some(Command::Serve)));
+        assert_eq!(cmd("serve"), (None, Some(SERVE)));
+        assert_eq!(
+            cmd("serve --fixture").1,
+            Some(Command::Serve {
+                fixture: Some(None)
+            })
+        );
+        assert_eq!(
+            cmd("serve --fixture /tmp/fx --config c.toml").1,
+            Some(Command::Serve {
+                fixture: Some(Some("/tmp/fx".into()))
+            })
+        );
         assert_eq!(cmd("--config /x.toml"), (Some("/x.toml".into()), None));
         assert_eq!(
             cmd("serve --config /x.toml"),
-            (Some("/x.toml".into()), Some(Command::Serve))
+            (Some("/x.toml".into()), Some(SERVE))
         );
         assert_eq!(
             cmd("--config c.toml healthcheck"),
@@ -279,6 +330,29 @@ mod tests {
         assert_eq!(
             cmd("stats --json").1,
             Some(Command::Stats(StatsArgs { json: true }))
+        );
+        assert_eq!(
+            cmd("rollup --repair").1,
+            Some(Command::Rollup(RollupArgs {
+                repair: true,
+                since: None
+            }))
+        );
+        assert_eq!(
+            cmd("rollup --repair --since 90d").1,
+            Some(Command::Rollup(RollupArgs {
+                repair: true,
+                since: Some(90)
+            }))
+        );
+        use clap::error::ErrorKind;
+        assert_eq!(
+            args("rollup").err(),
+            Some(ErrorKind::MissingRequiredArgument)
+        );
+        assert_eq!(
+            args("rollup --repair --since 90").err(),
+            Some(ErrorKind::ValueValidation)
         );
         assert!(args("vacuum --yes").is_err());
         assert!(args("rollback a b").is_err());
