@@ -315,7 +315,7 @@
    "pr": 102,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line."
   },
   "B12": {
    "status": "running",
@@ -1305,7 +1305,7 @@
   "sweep": "02:07 sweep: nothing fully complete yet; background CI waiter running for 79,101,97,88,105,106.",
   "heartbeat": "02:39 heartbeat: no new PRs; reviews/waiters in flight.",
   "launch_template": "From now on, launch prompts use runner/README.md standing instructions (steward skill, message runner_session).",
-  "106-adoption": "filter session (01N83...) and settings session (01Npc...) have no open branches; acknowledged steward. B2b, V6-cluster2, DOC-install merged #106.",
+  "106-adoption": "03:20 check: every in-flight slice branch contains d243361 except #48 (M4). M4 session is blocked in plan mode waiting on owner ExitPlanMode approval (owner notified). No PR merged by any session since 02:55; filter session merged nothing.",
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description."
  }
 }
