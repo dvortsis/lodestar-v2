@@ -21,14 +21,44 @@
 param([Parameter(Mandatory)][string]$Path, [string]$Service = 'Lodestar')
 $ErrorActionPreference = 'Stop'
 
+$system = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
+$admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+
 # A deferred MSI action's output is lost, so keep a log the install failure can point to.
-$log = Join-Path $env:SystemRoot 'Temp\lodestar-secure-datadir.log'
-function Log($msg) { Add-Content -LiteralPath $log -Value ("{0:s} {1}" -f (Get-Date), $msg) }
+# This runs as SYSTEM and C:\Windows\Temp is writable by every user, so the log never goes
+# to a name someone else could have prepared (a symlink would turn an append into a write
+# anywhere): it goes into a new folder with a random name that only SYSTEM and
+# Administrators can use, in a file opened with CreateNew, which fails if the name exists.
+$script:logWriter = $null
+try {
+  $logDir = Join-Path $env:SystemRoot ('Temp\lodestar-secure-' + [guid]::NewGuid().ToString('N'))
+  $logSec = New-Object Security.AccessControl.DirectorySecurity
+  $logSec.SetAccessRuleProtection($true, $false)
+  foreach ($sid in $system, $admins) {
+    $logSec.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+      $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+  }
+  (New-Object IO.DirectoryInfo $logDir).Create($logSec)
+  $stream = [IO.File]::Open((Join-Path $logDir 'secure-datadir.log'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+  $script:logWriter = New-Object IO.StreamWriter($stream)
+} catch {
+  Write-Host "LODESTAR: no log kept: $($_.Exception.Message)"
+}
+
+# File and folder names come from whoever could write there: keep only printable ASCII, and
+# break up "::" so a name cannot pass for a CI workflow command when a log is printed.
+function Safe($text) { ([string]$text -replace '[^\x20-\x7E]', '?') -replace '::', ': :' }
+function Log($msg) {
+  if ($script:logWriter) {
+    $script:logWriter.WriteLine(("{0:s} {1}" -f (Get-Date), (Safe $msg)))
+    $script:logWriter.Flush()
+  }
+}
 Log "start: $Path"
 
 function Stop-Install($msg) {
   Log "STOPPED: $msg"
-  Write-Host "LODESTAR INSTALL STOPPED: $msg"
+  Write-Host ("LODESTAR INSTALL STOPPED: " + (Safe $msg))
   exit 1
 }
 
@@ -36,8 +66,6 @@ trap { Log "ERROR: $($_ | Out-String)"; exit 2 }
 
 $dir = [IO.Path]::GetFullPath($Path).TrimEnd('\')
 $marker = '.lodestar-secured'
-$system = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
-$admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
 # The service's own SID, worked out (see service-sid.ps1): translating NT SERVICE\<name>
 # fails while the service has no SID type yet, as in this install.
 . (Join-Path $PSScriptRoot 'service-sid.ps1')
