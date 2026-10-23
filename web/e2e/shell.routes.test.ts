@@ -412,6 +412,9 @@ test.describe('skip link', () => {
 		const skip = page.getByRole('link', { name: 'Skip to main content' });
 		// It is in the first paint, before the chrome (top bar) has loaded.
 		await expect(skip).toBeAttached();
+		// Let the page's own request settle first: its content arriving between Tab and Enter
+		// (the Alerts page calls the API on load) made the focus on main flaky.
+		await expect(page.getByRole('heading', { name: 'No saved searches yet' })).toBeVisible();
 		await page.keyboard.press('Tab');
 		await expect(skip).toBeFocused();
 		await expect(skip).toBeInViewport();
