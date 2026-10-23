@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use proptest::prelude::*;
 
 use super::*;
-use crate::testing::{append, delete, index_with, slow, tripwire};
+use crate::testing::{append, delete, hot_index, index_with, slow, tripwire};
 
 const NOW: i64 = 1_700_000_100;
 
@@ -190,6 +190,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
             approx: true,
         }),
         now: 0,
+        utc_offset: 0,
     }
 }
 
@@ -442,4 +443,61 @@ proptest! {
         prop_assert_eq!(unique.len(), got.len(), "a duplicate");
         prop_assert_eq!(got, want);
     }
+}
+
+/// An index of `n` torrents (ids `1..=n`) with swarm stats for four in
+/// five of them; the rest were never scraped.
+#[test]
+fn hot_sorts_page_by_cursor_like_by_offset_with_never_scraped_last() {
+    let (index, hot) = hot_index(500);
+    for sort in [
+        Sort::Seeders { desc: true },
+        Sort::Seeders { desc: false },
+        Sort::Trackers { desc: true },
+    ] {
+        let l = lease(&index, "", sort);
+        assert!(matches!(l.mode(), Mode::Field(_)));
+        let all = by_offset(&l, 1_000);
+        assert_eq!(all.len(), 500);
+        for size in [1, 7, 50, 201] {
+            assert_eq!(scroll(&l, size, |_| {}), all, "{sort:?} pages of {size}");
+        }
+        let col = match sort {
+            Sort::Trackers { .. } => HotCol::Trackers,
+            _ => HotCol::Seeders,
+        };
+        let desc = matches!(
+            sort,
+            Sort::Seeders { desc: true } | Sort::Trackers { desc: true }
+        );
+        let values: Vec<u32> = all.iter().map(|&id| hot.get(col, id)).collect();
+        let scraped = values.iter().take_while(|v| **v != NEVER).count();
+        assert_eq!(scraped, 400, "{sort:?}: never scraped last");
+        assert!(values[scraped..].iter().all(|v| *v == NEVER));
+        assert!(
+            values[..scraped]
+                .windows(2)
+                .all(|w| if desc { w[0] >= w[1] } else { w[0] <= w[1] }),
+            "{sort:?}"
+        );
+    }
+}
+
+#[test]
+fn relevance_with_hot_columns_reranks_and_explains() {
+    let (index, _) = hot_index(500);
+    let l = lease(&index, "common", Sort::Relevance);
+    assert!(matches!(l.mode(), Mode::TwoPhase));
+    let page = l.page(Start::Offset(0), 50, &CancelToken::new()).unwrap();
+    assert_eq!(page.explain.len(), page.hits.len());
+    for (h, p) in page.hits.iter().zip(&page.explain) {
+        assert_eq!(h.score, p.score);
+        assert!(p.seeders >= 1.0 && p.freshness > 0.0);
+    }
+    assert_eq!(scroll(&l, 37, |_| {}), by_offset(&l, 1_000));
+    // Without hot columns or boosts there's no second phase to explain.
+    let (plain, _) = index_with(50, 1);
+    let l = lease(&Arc::new(plain), "", Sort::Relevance);
+    let page = l.page(Start::Offset(0), 10, &CancelToken::new()).unwrap();
+    assert!(page.explain.is_empty());
 }

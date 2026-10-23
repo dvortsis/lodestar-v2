@@ -214,6 +214,8 @@ fn fixture_with(method: Option<RestartMethod>) -> Fixture {
         user_data: None,
         insights: None,
         adult: Default::default(),
+        hot: None,
+        events: None,
     });
     let system = method.map(|method| {
         Arc::new(FakeSystem {

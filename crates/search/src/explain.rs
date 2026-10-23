@@ -10,21 +10,24 @@
 //! - **Phase 2** re-ranks windows of [`RERANK_WINDOW`] phase-1 candidates
 //!   by adding each unfielded word's **name** boost (BM25 on `name`,
 //!   ×[`NAME_BOOST`]) and **title** boost (BM25 on the parsed title,
-//!   ×[`TITLE_BOOST`]).
+//!   ×[`TITLE_BOOST`]), then, on an index with hot columns (M4),
+//!   multiplying in the quality **priors**: seeders, freshness, trackers
+//!   reporting, junk and swarm consistency ([`Priors`]).
 //!
-//! So `score = phase1 + name + title`, to float rounding. The other §8
-//! features (phrase/proximity, exact name, the file contribution cap)
-//! and the quality priors (seeders, freshness, junk, trackers, swarm
-//! consistency) aren't part of ranking yet; [`Explained`] has no value
-//! for them, and the API reports them as null. Under a field sort the
-//! order is the field's, and no hit has relevance components.
+//! So `score = (phase1 + name + title) × seeders × freshness × trackers ×
+//! junk × swarm_consistency`, to float rounding, with the priors 1 where
+//! the index has none. The other §8 features (phrase/proximity, exact
+//! name, the file contribution cap) aren't part of ranking yet;
+//! [`Explained`] has no value for them, and the API reports them as null.
+//! Under a field sort the order is the field's, and no hit has relevance
+//! components.
 
 use tantivy::query::{BoostQuery, EnableScoring, Query, Weight};
 use tantivy::{DocId, DocSet, SegmentReader};
 
 use crate::cancel::CancelToken;
 use crate::compile;
-use crate::index::{self, RERANK_WINDOW, Result, Sort};
+use crate::index::{RERANK_WINDOW, Result, Sort};
 use crate::lease::{Lease, Page, Start};
 use crate::query::{Node, TextField};
 use crate::schema::{NAME_BOOST, PATH_BOOST, STEM_SCORE, TITLE_BOOST};
@@ -59,6 +62,9 @@ pub struct Explained {
     pub id: u64,
     /// `None` under a field sort: the order isn't by score.
     pub parts: Option<Parts>,
+    /// The quality priors multiplied in, when the index ranks with them
+    /// (hot columns, M4); `None` under a field sort or without them.
+    pub priors: Option<Priors>,
     /// The score the hit was ranked by (0 under a field sort).
     pub score: f32,
 }
@@ -73,13 +79,33 @@ pub struct Parts {
     pub title: f32,
 }
 
+/// Phase 2's multipliers (`index::ScoreParts`); each is 1 when it has no
+/// effect.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Priors {
+    pub seeders: f32,
+    pub freshness: f32,
+    pub trackers: f32,
+    pub junk: f32,
+    /// The suspect-swarm penalty (fake seeding, §8).
+    pub swarm_consistency: f32,
+}
+
+impl Priors {
+    /// All of them multiplied: what relevance is scaled by.
+    pub fn product(&self) -> f32 {
+        self.seeders * self.freshness * self.trackers * self.junk * self.swarm_consistency
+    }
+}
+
 /// A first page and its explanation, hit by hit in the page's order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Explanation {
     pub page: Page,
     /// The sort the lease ranks by.
     pub sort: Sort,
-    /// Whether phase 2 ran: the query has unfielded words.
+    /// Whether phase 2 ran: the query has unfielded words, or the index
+    /// ranks with priors.
     pub two_phase: bool,
     pub hits: Vec<Explained>,
 }
@@ -90,14 +116,16 @@ pub fn explain(lease: &Lease, limit: usize, cancel: &CancelToken) -> Result<Expl
     let limit = limit.clamp(1, EXPLAIN_MAX);
     let (page, addrs) = lease.page_at(Start::Offset(0), limit, cancel)?;
     let sort = lease.sort();
-    let two_phase = lease.compiled().boosts.is_some();
-    let by_score = index::sort_field(sort).is_none();
+    let boosted = lease.compiled().boosts.is_some();
+    let ranked_with_priors = lease.compiled().hot.is_some();
+    let two_phase = boosted || ranked_with_priors;
+    let by_score = sort == Sort::Relevance;
     let searcher = lease.searcher();
     let mut hits = Vec::with_capacity(page.hits.len());
     if by_score {
         let index = lease.index();
         let fields = index.fields();
-        let (names, titles): (Vec<Q>, Vec<Q>) = if two_phase {
+        let (names, titles): (Vec<Q>, Vec<Q>) = if boosted {
             boost_words(lease.node())
                 .iter()
                 .map(|toks| {
@@ -152,15 +180,34 @@ pub fn explain(lease: &Lease, limit: usize, cancel: &CancelToken) -> Result<Expl
             }
             at = end;
         }
-        hits.extend(page.hits.iter().zip(parts).map(|(h, p)| Explained {
-            id: h.id,
-            parts: Some(p),
-            score: h.score,
-        }));
+        // The page's own phase-2 parts (`Page::explain`), one per hit.
+        let priors = |i: usize| {
+            let p = page.explain.get(i).filter(|_| ranked_with_priors)?;
+            Some(Priors {
+                seeders: p.seeders,
+                freshness: p.freshness,
+                trackers: p.trackers,
+                junk: p.junk,
+                swarm_consistency: p.penalty,
+            })
+        };
+        hits.extend(
+            page.hits
+                .iter()
+                .zip(parts)
+                .enumerate()
+                .map(|(i, (h, p))| Explained {
+                    id: h.id,
+                    parts: Some(p),
+                    priors: priors(i),
+                    score: h.score,
+                }),
+        );
     } else {
         hits.extend(page.hits.iter().map(|h| Explained {
             id: h.id,
             parts: None,
+            priors: None,
             score: h.score,
         }));
     }
@@ -228,7 +275,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::testing::index_with;
+    use crate::testing::{hot_index, index_with};
 
     const NOW: i64 = 1_700_000_100;
 
@@ -258,6 +305,7 @@ mod tests {
             assert_eq!(e.two_phase, l.compiled().boosts.is_some(), "{q}");
             for h in &e.hits {
                 let p = h.parts.expect("relevance");
+                assert_eq!(h.priors, None, "no hot columns, no priors");
                 if !e.two_phase {
                     assert_eq!((p.name, p.title), (0.0, 0.0), "{q}");
                 }
@@ -268,6 +316,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn with_hot_columns_the_priors_scale_the_parts_to_the_score() {
+        let (index, _) = hot_index(500);
+        for q in ["common", "half common", "", "name:half"] {
+            let l = lease(&index, q, Sort::Relevance);
+            let cancel = CancelToken::new();
+            let e = explain(&l, 50, &cancel).unwrap();
+            assert_eq!(
+                e.page,
+                l.page(Start::Offset(0), 50, &cancel).unwrap(),
+                "{q}"
+            );
+            assert!(e.two_phase, "{q}: priors re-rank");
+            assert!(!e.hits.is_empty(), "{q}");
+            for h in &e.hits {
+                let p = h.parts.expect("relevance");
+                let priors = h.priors.expect("an index with hot columns");
+                assert!(priors.seeders >= 1.0 && priors.freshness > 0.0, "{q}");
+                assert!(
+                    close((p.phase1 + p.name + p.title) * priors.product(), h.score),
+                    "{q}: {p:?} × {priors:?} vs {}",
+                    h.score
+                );
+            }
+        }
+        // A field sort has neither.
+        let l = lease(&index, "common", Sort::Seeders { desc: true });
+        let e = explain(&l, 20, &CancelToken::new()).unwrap();
+        assert!(
+            e.hits
+                .iter()
+                .all(|h| h.parts.is_none() && h.priors.is_none())
+        );
     }
 
     #[test]

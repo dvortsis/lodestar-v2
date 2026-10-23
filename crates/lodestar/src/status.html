@@ -42,7 +42,14 @@ tr:last-child td { border-bottom: 0; }
 th { color: var(--muted-text); font-weight: 600; font-size: 13px; }
 td.n { text-align: right; font-variant-numeric: tabular-nums; }
 td.name { word-break: break-all; }
-.ok { color: var(--success); } .bad { color: var(--error); }
+.ok { color: var(--success); } .bad { color: var(--error); } .wait { color: var(--muted-text); }
+/* Health is text first; the marker shape differs per state (disc, ring, square) so colour is never the only cue. */
+td.health { white-space: nowrap; }
+td.health::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: currentColor; border-radius: 50%; }
+td.health.wait::before { background: none; border: 2px solid currentColor; }
+td.health.bad::before { border-radius: 0; }
+.scroll { overflow-x: auto; }
+.scroll table { min-width: 560px; }
 code { font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace; }
 form.auth { max-width: 360px; display: grid; gap: 10px; margin-top: 16px; }
 input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--field-border); border-radius: 6px; padding: 8px 10px; }
@@ -99,6 +106,17 @@ button.link { background: none; color: var(--primary-ink); padding: 0; }
   <h2>Funnel, last 24 hours (by discovery hour)</h2>
   <table><thead><tr><th>Stage</th><th class="n">Keys</th></tr></thead><tbody id="funnel"></tbody></table>
 
+  <div id="swarm" hidden>
+    <h2>Swarm health</h2>
+    <div class="kpis" style="margin-top:0">
+      <div class="kpi"><b id="sw-scraped">—</b><span>torrents scraped</span></div>
+      <div class="kpi"><b id="sw-alive">—</b><span>alive</span></div>
+      <div class="kpi"><b id="sw-suspect">—</b><span>suspect (fake seeding)</span></div>
+    </div>
+    <p class="meta" id="sw-meta" style="margin:8px 0"></p>
+    <div class="scroll"><table><thead><tr><th>Tracker</th><th>Health</th><th class="n">OK</th><th class="n">Timeouts</th><th class="n">Errors</th><th class="n">Skipped</th><th>Last answer</th></tr></thead><tbody id="trackers"></tbody></table></div>
+  </div>
+
   <h2>Latest torrents</h2>
   <table><thead><tr><th>Name</th><th class="n">Size</th><th class="n">Files</th></tr></thead><tbody id="latest"></tbody></table>
 
@@ -115,6 +133,16 @@ function bytes(n) {
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return (i ? n.toFixed(1) : n) + " " + units[i];
 }
+function ago(at, now) {
+  const d = Math.max(0, now - at);
+  if (d < 60) return "just now";
+  if (d < 3600) return Math.floor(d / 60) + " min ago";
+  if (d < 86400) return Math.floor(d / 3600) + " h ago";
+  return Math.floor(d / 86400) + " d ago";
+}
+const HEALTH = {
+  ok: ["OK", "ok"], backoff: ["Backoff", "wait"], down: ["Down", "bad"], banned: ["Banned", "bad"],
+};
 function row(cells) {
   const tr = document.createElement("tr");
   for (const [text, cls] of cells) {
@@ -145,6 +173,18 @@ async function refresh() {
       const rows = [["Harvested", f.harvested], ["Peer found", f.peer_found], ["Metadata fetched", f.fetched], ["Stored", f.stored]];
       for (const [reason, n] of Object.entries(f.lost)) if (n) rows.push(["Lost: " + reason.replace(/_/g, " "), n]);
       fill("funnel", rows.map(([k, n]) => [[k], [fmt.format(n), "n"]]));
+    }
+    const w = s.swarm;
+    $("swarm").hidden = !w;
+    if (w) {
+      $("sw-scraped").textContent = fmt.format(w.alive + w.dead);
+      $("sw-alive").textContent = fmt.format(w.alive);
+      $("sw-suspect").textContent = fmt.format(w.suspect);
+      $("sw-meta").textContent = fmt.format(w.unreached) + " unreachable · DHT estimates " + fmt.format(w.dht_estimates) + " of " + fmt.format(w.dht_requested) + " requested · " + fmt.format(w.private_skipped) + " private skipped · " + fmt.format(w.rounds) + " rounds";
+      fill("trackers", (w.trackers || []).map((t) => {
+        const [label, cls] = HEALTH[t.health] || [String(t.health), "wait"];
+        return [[t.url, "name"], [label, "health " + cls], [fmt.format(t.ok), "n"], [fmt.format(t.timeout), "n"], [fmt.format(t.error), "n"], [fmt.format(t.skipped), "n"], [t.last_ok_at == null ? "—" : ago(t.last_ok_at, s.now)]];
+      }));
     }
     if (s.latest) fill("latest", s.latest.map((t) => [[t.name, "name"], [bytes(t.size), "n"], [fmt.format(t.files), "n"]]));
   } catch (e) {
