@@ -6,6 +6,7 @@
 	// connection states are plain markup here, so they work before the chrome arrives and when the
 	// server (and so every lazy chunk) is gone. The page is rendered once, here, and never remounted.
 	import { onMount, type Snippet } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { isBareRoute } from './chrome';
@@ -35,11 +36,31 @@
 		addEventListener('keydown', first, { capture: true, passive: true });
 		return () => removeEventListener('keydown', first, true);
 	});
+	// Keyboard focus survives the swap: a user who pressed Tab before the app loaded keeps their
+	// place. Kit resets focus to <body> once it has hydrated, so the focus is put back after that.
+	let regain: HTMLElement | undefined;
 	onMount(() => {
 		const header = document.getElementById('boot-header');
+		const boot = document.getElementById('boot');
+		const active = document.activeElement;
 		// eslint-disable-next-line svelte/no-dom-manipulating -- adopts the static bar app.html painted
 		if (header && slot) slot.replaceChildren(header);
-		document.getElementById('boot')?.remove();
+		const skipped = active instanceof HTMLElement && active.matches('#boot > a:first-child');
+		boot?.remove();
+		if (skipped) regain = document.querySelector<HTMLElement>('a[href="#main"]') ?? undefined;
+		else if (active instanceof HTMLElement && header?.contains(active)) regain = active;
+	});
+	afterNavigate((nav) => {
+		if (nav.type !== 'enter' || !regain) return;
+		const target = regain;
+		regain = undefined;
+		setTimeout(() => {
+			if (
+				target.isConnected &&
+				(!document.activeElement || document.activeElement === document.body)
+			)
+				target.focus({ preventScroll: true });
+		});
 	});
 
 	onMount(() => {
