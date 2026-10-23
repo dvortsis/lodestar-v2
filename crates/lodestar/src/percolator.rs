@@ -884,43 +884,12 @@ mod tests {
     }
 
     /// The log names saved-search ids and counts, never a query or a
-    /// torrent name. The capture is the process's global subscriber, so
-    /// every thread's events reach it (a thread-local one races other
-    /// tests' scoped subscribers over each callsite's cached interest);
-    /// the secrets are spelled so no other test logs them.
+    /// torrent name. The capture is [`crate::test_log`]'s, so every
+    /// thread's events reach it; the secrets are spelled so no other test
+    /// logs them.
     #[test]
     fn logs_carry_no_query_or_name() {
-        use std::sync::OnceLock;
-
-        use tracing_subscriber::fmt::MakeWriter;
-
-        static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-        struct Buf;
-        impl std::io::Write for Buf {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                LOG.lock().unwrap().extend_from_slice(b);
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        struct MakeBuf;
-        impl<'a> MakeWriter<'a> for MakeBuf {
-            type Writer = Buf;
-            fn make_writer(&'a self) -> Buf {
-                Buf
-            }
-        }
-        static ONCE: OnceLock<()> = OnceLock::new();
-        ONCE.get_or_init(|| {
-            let subscriber = tracing_subscriber::fmt()
-                .with_ansi(false)
-                .with_max_level(tracing::Level::TRACE)
-                .with_writer(MakeBuf)
-                .finish();
-            tracing::subscriber::set_global_default(subscriber).expect("no other global");
-        });
+        crate::test_log::install();
 
         let mut s = setup(0);
         add(&mut s.store, &["Zq7SecretTorrent.1080p".to_string()]);
@@ -956,7 +925,7 @@ mod tests {
         let run = run_once(&s.index, &mut s.store, None, 1, &quick(), NOW, &mut seen).unwrap();
         assert_eq!(run.unreadable, 1);
         prune(&mut s.store, 0);
-        let log = String::from_utf8(LOG.lock().unwrap().clone()).unwrap();
+        let log = crate::test_log::text();
         let line = format!("saved_search={broken} event=\"alerts.search_unreadable\"");
         assert_eq!(log.matches(&line).count(), 1, "{log}");
         assert!(log.contains("alerts=1 event=\"alerts.pruned\""), "{log}");

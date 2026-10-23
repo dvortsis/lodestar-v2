@@ -15,6 +15,10 @@
 //!   then the forward-only write of the next trust state.
 //! - **Events:** `checking` when a check starts, `available` when it
 //!   found a candidate, `failed` with its code.
+//! - **A failed check** keeps the last good check's releases: `/updates`
+//!   shows them with `state: failed` and the error, so the screen says
+//!   what's known and that the newest check failed. Nothing installs from
+//!   a result older than its manifest's expiry.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -97,6 +101,11 @@ struct Inner {
     fetch: Arc<dyn Fetch>,
     zone: (jiff::tz::TimeZone, String),
     found: Mutex<Found>,
+    /// `updater.json` as the engine knows it: the source of truth, which
+    /// the file only keeps across restarts. Were the file the truth, a
+    /// `<data>/bin` that can't be written would leave no next check, and
+    /// the schedule would check back to back.
+    updater: Mutex<Updater>,
     /// One check at a time.
     checking: tokio::sync::Mutex<()>,
     last_manual: Mutex<Option<Instant>>,
@@ -151,6 +160,10 @@ impl Engine {
         >,
     ) -> Engine {
         let bin = Bin::open(&ctx.data_dir).ok();
+        let updater = bin
+            .as_ref()
+            .and_then(|b| b.read::<Updater>(UPDATER_FILE).ok().flatten())
+            .unwrap_or_default();
         Engine {
             inner: Arc::new(Inner {
                 ctx,
@@ -160,6 +173,7 @@ impl Engine {
                 fetch,
                 zone,
                 found: Mutex::new(Found::default()),
+                updater: Mutex::new(updater),
                 checking: tokio::sync::Mutex::new(()),
                 last_manual: Mutex::new(None),
                 clock,
@@ -206,18 +220,19 @@ impl Engine {
     }
 
     fn updater(&self) -> Updater {
-        self.inner
-            .bin
-            .as_ref()
-            .and_then(|b| b.read::<Updater>(UPDATER_FILE).ok().flatten())
-            .unwrap_or_default()
+        lock(&self.inner.updater).clone()
     }
 
+    /// Changes the engine's `updater.json`, then writes it if it can: a
+    /// failed write loses it only across a restart.
     fn save_updater(&self, f: impl FnOnce(&mut Updater)) {
-        if let Some(bin) = &self.inner.bin {
-            let mut u = self.updater();
+        let u = {
+            let mut u = lock(&self.inner.updater);
             u.format = 1;
             f(&mut u);
+            u.clone()
+        };
+        if let Some(bin) = &self.inner.bin {
             let _ = bin.write(UPDATER_FILE, &u);
         }
     }
@@ -234,7 +249,15 @@ impl Engine {
 
     /// One check: fetch, verify, advance `trust.json`, keep the result.
     async fn run_check(&self) -> Result<(), &'static str> {
-        let _one = self.inner.checking.lock().await;
+        let one = self.inner.checking.lock().await;
+        self.run_check_holding(one).await
+    }
+
+    /// [`Engine::run_check`] with the one-at-a-time lock already held.
+    async fn run_check_holding(
+        &self,
+        _one: tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), &'static str> {
         let settings = self.inner.settings.borrow().clone();
         let channel = settings.channel.update();
         self.set_state(CheckState::Checking);
@@ -275,6 +298,11 @@ impl Engine {
     }
 
     async fn check_once(&self, channel: lodestar_update::Channel) -> Result<(), &'static str> {
+        // Without `<data>/bin` there's no trust state to check against:
+        // nothing is fetched.
+        let Some(bin) = self.inner.bin.clone() else {
+            return Err("bin_unavailable");
+        };
         let url = check::source(&self.inner.ctx.repository, channel).map_err(CheckError::code)?;
         let body = check::fetch(&*self.inner.fetch, url)
             .await
@@ -287,9 +315,6 @@ impl Engine {
             return Ok(());
         };
         let embedded = (self.inner.keys)().map_err(lodestar_update::Error::code)?;
-        let Some(bin) = self.inner.bin.clone() else {
-            return Err("bin_unavailable");
-        };
         let now = (self.inner.clock)();
         let checked = tokio::task::spawn_blocking(move || {
             // The floor (§12.2): every installed overlay's statements and
@@ -552,7 +577,7 @@ impl Engine {
 
     /// A manual check, at most once a minute and one at a time.
     pub async fn check_now(&self) -> Result<UpdatesStatus, UpdatesError> {
-        {
+        let one = {
             let mut last = lock(&self.inner.last_manual);
             if let Some(at) = *last {
                 let since = at.elapsed();
@@ -562,12 +587,15 @@ impl Engine {
                     });
                 }
             }
-            if self.inner.checking.try_lock().is_err() {
+            // Held through the check, so a scheduled one can't slip in
+            // between and make this a second check right after it.
+            let Ok(one) = self.inner.checking.try_lock() else {
                 return Err(UpdatesError::RateLimited { retry_after: 5 });
-            }
+            };
             *last = Some(Instant::now());
-        }
-        let _ = self.run_check().await;
+            one
+        };
+        let _ = self.run_check_holding(one).await;
         Ok(self.status())
     }
 
@@ -775,6 +803,12 @@ mod tests {
     }
 
     fn env(mode: Mode) -> Env {
+        env_in(mode, None)
+    }
+
+    /// An engine whose data folder is `data` (a temporary folder when
+    /// `None`).
+    fn env_in(mode: Mode, data: Option<PathBuf>) -> Env {
         let dir = tempfile::tempdir().unwrap();
         let fake = Arc::new(Fake::default());
         let trust = Arc::new(TestTrust::default());
@@ -787,7 +821,7 @@ mod tests {
         let keys = trust.clone();
         let engine = Engine::with(
             Context {
-                data_dir: dir.path().to_path_buf(),
+                data_dir: data.unwrap_or_else(|| dir.path().to_path_buf()),
                 running: Version::new(0, 5, 0),
                 image: Version::new(0, 5, 0),
                 supervised: true,
@@ -940,42 +974,79 @@ mod tests {
     /// version.
     #[tokio::test]
     async fn a_failed_check_logs_only_its_code() {
-        #[derive(Clone, Default)]
-        struct Buf(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Buf {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                lock(&self.0).extend_from_slice(b);
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let buf = Buf::default();
-        let writer = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .without_time()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(move || writer.clone())
-            .finish();
-        // The test runs on one thread, so the scoped subscriber sees the
-        // engine's events.
-        let _guard = tracing::subscriber::set_default(subscriber);
+        crate::test_log::install();
         let e = env(Mode::Notify);
         e.fake.serve(
             STABLE,
             302,
-            Some("https://evil.example/m.json?token=Zq7Secret"),
+            Some("https://zq7evil.example/m.json?token=Zq7UpdateSecret"),
             b"",
         );
         assert_eq!(e.engine.run_check().await, Err("redirect_refused"));
-        let text = String::from_utf8(lock(&buf.0).clone()).unwrap();
-        assert!(text.contains("update.check_failed"), "{text}");
-        assert!(text.contains("redirect_refused"), "{text}");
-        for secret in ["Zq7Secret", "evil.example", "github.com", "stable.json"] {
+        // Every test's events are in the capture: this one's is the line
+        // with its code, and its secrets appear nowhere.
+        let text = crate::test_log::text();
+        assert!(
+            text.lines()
+                .any(|l| l.contains("update.check_failed") && l.contains("redirect_refused")),
+            "{text}"
+        );
+        for secret in ["Zq7UpdateSecret", "zq7evil.example"] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
+    }
+
+    /// An overlay folder planted under `<data>/bin` (a manifest dated far
+    /// ahead, signed by a key the build doesn't trust) raises no mark: only
+    /// a verified overlay's mark counts, so it can't freeze updates.
+    #[tokio::test]
+    async fn a_planted_overlay_raises_no_mark() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let e = env(Mode::Notify);
+        let planted = e.dir.path().join("bin").join("0.9.0");
+        std::fs::create_dir_all(&planted).unwrap();
+        let body = bytes(&manifest(
+            Channel::Stable,
+            (NOW + 86_400) as u64,
+            "0.9.0",
+            b"binary",
+        ));
+        let forged = lodestar_update::testing::TestKey::new(77).signed(&body);
+        std::fs::write(planted.join(super::super::overlay::MANIFEST), &body).unwrap();
+        std::fs::write(
+            planted.join(super::super::overlay::SIGNATURE),
+            forged.minisig.as_bytes(),
+        )
+        .unwrap();
+        let binary = planted.join(super::super::overlay::BINARY);
+        std::fs::write(&binary, b"binary").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        e.serve(NOW - 100, "0.6.0", None);
+        assert_eq!(e.engine.run_check().await, Ok(()));
+        assert_eq!(e.trust_mark(), Some((NOW - 100) as u64));
+        assert_eq!(e.engine.status().releases.len(), 1);
+    }
+
+    /// A data folder whose `bin` can't be opened (here, a file in its
+    /// place): the check fails without a request, and the next one is
+    /// still six hours away, so the schedule doesn't check back to back.
+    #[tokio::test]
+    async fn without_a_bin_folder_the_schedule_still_waits() {
+        let scratch = tempfile::tempdir().unwrap();
+        let data = scratch.path().join("data");
+        std::fs::write(&data, b"not a folder").unwrap();
+        let e = env_in(Mode::Notify, Some(data));
+        e.serve(NOW - 100, "0.6.0", None);
+        assert_eq!(e.engine.until_scheduled(), Some(Duration::ZERO));
+        assert_eq!(e.engine.run_check().await, Err("bin_unavailable"));
+        assert!(e.fake.asked.lock().unwrap().is_empty(), "nothing fetched");
+        let wait = e.engine.until_scheduled().unwrap();
+        assert!(wait >= EVERY, "{wait:?}");
+        let s = e.engine.status();
+        assert_eq!(s.status.checked_at, Some(NOW));
+        assert_eq!(s.status.error.as_deref(), Some("bin_unavailable"));
     }
 
     #[tokio::test]

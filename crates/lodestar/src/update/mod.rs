@@ -48,6 +48,8 @@ pub mod testing;
 #[cfg(unix)]
 pub mod trust_file;
 pub mod unavailable;
+// Off Unix only `Window::parse` is used (the settings check).
+#[cfg_attr(not(unix), allow(dead_code))]
 pub mod window;
 
 #[cfg(unix)]

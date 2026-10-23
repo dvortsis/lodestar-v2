@@ -19,6 +19,8 @@ mod services;
 mod settings;
 mod subscriptions;
 mod system;
+#[cfg(test)]
+mod test_log;
 mod update;
 mod web;
 #[cfg(test)]

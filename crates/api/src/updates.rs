@@ -151,7 +151,10 @@ fn answer(r: Result<UpdatesStatus, UpdatesError>) -> Response {
     get,
     path = "/updates",
     tag = "settings",
-    responses((status = 200, body = UpdatesStatus))
+    responses(
+        (status = 200, body = UpdatesStatus),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
+    )
 )]
 pub(crate) async fn status(handle: Handle) -> ApiResult<Json<UpdatesStatus>> {
     Ok(Json(api(handle)?.status().await))
@@ -167,7 +170,8 @@ pub(crate) async fn status(handle: Handle) -> ApiResult<Json<UpdatesStatus>> {
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 429, description = "`rate_limited`, with `Retry-After`.", body = ErrorEnvelope),
-        (status = 409, description = "`updates_unavailable`.", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Response> {
@@ -186,6 +190,8 @@ pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Respo
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn skip(
@@ -208,6 +214,8 @@ pub(crate) async fn skip(
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 422, description = "`invalid_value` for any other number of days.", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
 pub(crate) async fn pause(
@@ -231,7 +239,11 @@ pub(crate) async fn pause(
     post,
     path = "/updates/history/clear",
     tag = "settings",
-    responses((status = 200, body = UpdatesStatus))
+    responses(
+        (status = 200, body = UpdatesStatus),
+        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
+    )
 )]
 pub(crate) async fn clear_history(handle: Handle, headers: HeaderMap) -> ApiResult<Response> {
     same_origin_json(&headers)?;
