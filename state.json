@@ -324,7 +324,7 @@
    "pr": 112,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open. | 03:43 4b442d6 review items 1-3 done. Waiting: B10a merge, then ping B12 to merge main (keep B10a user_data open), then merge on green.",
    "self_review": {
     "raised": 7,
     "fixed": 7,
