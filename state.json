@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:34:16Z",
+ "updated_at": "2026-10-23T06:36:24Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -345,13 +345,13 @@
    }
   },
   "B9": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01A5U5nutWzMJ5yTeLGHtYrt",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper"
+   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start)"
   },
   "B5c": {
    "status": "merged",
@@ -1319,7 +1319,7 @@
   "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI"
  },
  "blocked_on_owner": [],
- "launches_today": 15,
+ "launches_today": 16,
  "last_heartbeat": "2026-10-22T20:39Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
