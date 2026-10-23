@@ -21,6 +21,7 @@ pub mod error;
 pub mod events;
 pub mod facets;
 pub mod filters;
+pub mod keys;
 pub mod logs;
 pub mod ops;
 pub mod saved;
