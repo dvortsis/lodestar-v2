@@ -40,6 +40,8 @@ export async function engage(page: Page) {
 	// The chrome's listeners attach when it mounts, a moment after load: nudge until it has.
 	for (let i = 0; i < 40; i++) {
 		await page.evaluate(() => window.dispatchEvent(new Event('focusin')));
+		// Paces the nudges: whether the chrome has mounted is not observable on every screen (the
+		// sign-in screens have none), so this keeps sending rather than waiting for a signal.
 		await page.waitForTimeout(100);
 	}
 }
