@@ -102,6 +102,28 @@ impl SeenFilter {
         true
     }
 
+    /// Records a sighting that must stay remembered for a full
+    /// generation from now: unlike [`SeenFilter::insert`], a key only in
+    /// the previous generation is copied into the current one, so a key
+    /// renewed often is never forgotten.
+    pub fn remember(&mut self, hash: &InfoHash) {
+        let h = self.positions(hash);
+        if self.current.contains(h, self.k) {
+            return;
+        }
+        if self.current.items >= self.capacity {
+            std::mem::swap(&mut self.current, &mut self.previous);
+            self.current.clear();
+        }
+        self.current.insert(h, self.k);
+    }
+
+    /// Whether the hash was seen recently, without recording it.
+    pub fn contains(&self, hash: &InfoHash) -> bool {
+        let h = self.positions(hash);
+        self.current.contains(h, self.k) || self.previous.contains(h, self.k)
+    }
+
     /// Bytes held by both generations.
     pub fn memory(&self) -> usize {
         (self.current.bits.len() + self.previous.bits.len()) * 8
@@ -116,6 +138,27 @@ mod tests {
         let mut x = [0u8; 20];
         x[..4].copy_from_slice(&i.to_le_bytes());
         InfoHash(x)
+    }
+
+    #[test]
+    fn remember_renews_a_key_across_rotations() {
+        // A tiny false-positive rate, so the test doesn't flake.
+        let mut f = SeenFilter::new(100, 1e-6);
+        f.remember(&h(0));
+        // Renewed every half generation over ~20 rotations: never lost
+        // (`insert` would lose it two rotations after the first sighting).
+        for i in 1..2000 {
+            f.remember(&h(i));
+            if i % 50 == 0 {
+                assert!(f.contains(&h(0)), "forgotten at {i}");
+                f.remember(&h(0));
+            }
+        }
+        // Not renewed: gone within two rotations.
+        for i in 5000..5300 {
+            f.remember(&h(i));
+        }
+        assert!(!f.contains(&h(0)));
     }
 
     #[test]
