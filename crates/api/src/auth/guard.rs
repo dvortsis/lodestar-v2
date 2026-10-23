@@ -78,6 +78,10 @@ impl Access {
 /// besides sessions. With [`scope::FEEDS`] feed tokens may too: that's
 /// [`feed_token`].
 pub fn key_or_session(routes: Router<ApiState>, scope: u32) -> Router<ApiState> {
+    debug_assert!(
+        scope != 0 && scope & !scope::ALL == 0,
+        "a route opts in to defined scope bits"
+    );
     routes
         .method_not_allowed_fallback(wrong_method)
         .route_layer(middleware::from_fn(move |req: Request, next: Next| {
@@ -203,17 +207,11 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
         )
         .into_response();
     };
+    let verify_store = store.clone();
     let checked = tokio::task::spawn_blocking(move || {
-        let mut st = keys::lock(&store)?;
-        let now = crate::unix_now();
-        let check = st.verify_api_key(&prefix, &hash, now).map_err(internal)?;
-        if let KeyCheck::Valid(k) = &check {
-            if st.touch_api_key(k.id, now).is_err() {
-                // Bookkeeping only: the request goes ahead.
-                tracing::warn!("api keys: couldn't record a key's last use");
-            }
-        }
-        Ok::<_, ApiError>(check)
+        let st = keys::lock(&verify_store)?;
+        st.verify_api_key(&prefix, &hash, crate::unix_now())
+            .map_err(internal)
     })
     .await;
     let key = match checked {
@@ -244,6 +242,17 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     };
     if let Err(wait) = auth.key_requests.take(key.id) {
         return limited(wait);
+    }
+    // Recorded only once the key is let through.
+    let touched = tokio::task::spawn_blocking(move || {
+        let mut st = keys::lock(&store)?;
+        st.touch_api_key(key.id, crate::unix_now())
+            .map_err(internal)
+    })
+    .await;
+    if !matches!(touched, Ok(Ok(_))) {
+        // Bookkeeping only: the request goes ahead.
+        tracing::warn!("api keys: couldn't record a key's last use");
     }
     req.extensions_mut().insert(access);
     let mut resp = next.run(req).await;

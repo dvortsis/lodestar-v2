@@ -466,8 +466,12 @@ pub(crate) async fn create_key(
         Ok(created(&k, secret, now))
     })
     .await?;
-    Ok((StatusCode::CREATED, axum::Json(out)).into_response())
+    Ok((StatusCode::CREATED, NO_STORE, axum::Json(out)).into_response())
 }
+
+/// The secret is in the body: no cache may keep it.
+const NO_STORE: [(axum::http::HeaderName, &str); 1] =
+    [(axum::http::header::CACHE_CONTROL, "no-store")];
 
 /// Replaces a key's secret: the old one stops working at once. The key
 /// keeps its name, kind, scopes, feed and expiry, under a new id and
@@ -487,7 +491,7 @@ pub(crate) async fn regenerate_key(
     headers: HeaderMap,
     Path(id): Path<i64>,
     Json(body): Json<ConfirmRequest>,
-) -> ApiResult<axum::Json<CreatedKey>> {
+) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     // Unknown or retired keys are answered before the password is asked.
     with_store(&s, move |st| replaceable(st, id).map(drop)).await?;
@@ -513,7 +517,7 @@ pub(crate) async fn regenerate_key(
         Ok(created(&k, secret, now))
     })
     .await?;
-    Ok(axum::Json(out))
+    Ok((NO_STORE, axum::Json(out)).into_response())
 }
 
 /// The key `id`, if it can be regenerated: it exists and is active.
