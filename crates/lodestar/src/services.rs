@@ -14,16 +14,18 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Extension;
 use lodestar_api::dto::events::CrawlerEvent;
 use lodestar_api::events::{EventHub, EventSources, EventsConfig};
 use lodestar_filter::Sealer;
 use lodestar_filter::lists::SharedIps;
-use lodestar_pipeline::{Control, DhtSource, Pipeline};
-use lodestar_search::{LiveConfig, SearchHandle, Serving, ServingConfig};
+use lodestar_pipeline::health::HealthHandle;
+use lodestar_pipeline::{Control, DhtSource, HealthSetup, Pipeline, Rollups, metric};
+use lodestar_search::{LiveConfig, Ranking, SearchHandle, Serving, ServingConfig};
 use lodestar_sources::SourcePlugin;
-use lodestar_store::Store;
+use lodestar_store::{HotColumns, Store, hot};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -56,6 +58,9 @@ pub struct Handles {
     pipeline: Pipeline,
     /// The index, its live indexer and any rebuild (§8).
     search: Option<Arc<Serving>>,
+    /// Swarm stats (§7), snapshotted to `hot_dir` after the pipeline stops.
+    hot: Arc<HotColumns>,
+    hot_dir: std::path::PathBuf,
     /// Insights' searchable-time recorder and its stop signal.
     insights: (watch::Sender<bool>, JoinHandle<()>),
     /// Saved searches → alerts (B9), while search is on.
@@ -94,8 +99,14 @@ impl Services {
         pipeline_config.pool.paused = crawl_settings.paused;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
+        // A fixture is served offline: no tracker is ever asked (its swarm
+        // rows come from the manifest).
+        let health = config
+            .health_config()?
+            .filter(|_| !crate::fixture::active());
         // Subscribed IP lists (§20.13): one shared set, consulted by the
-        // fetch pool and the DHT before talking to anyone.
+        // fetch pool, the DHT and the tracker scraper before talking to
+        // anyone.
         let ips = Arc::new(SharedIps::default());
         let denied = {
             let ips = ips.clone();
@@ -116,8 +127,14 @@ impl Services {
         let subs_config = config.subscriptions.clone();
         let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
-        let (store, control, user_data, reader, serving, percolation) =
+        let hot_dir = config.data_dir.join("hot");
+        let weights = config.ranking.weights();
+        let suspect_penalty = config.ranking.suspect.clamp(0.0, 1.0);
+        // The scrape scheduler opens its own connection (below).
+        let (db2, store_config2, hot_dir2) = (db.clone(), store_config.clone(), hot_dir.clone());
+        let (store, control, user_data, reader, serving, percolation, hot) =
             tokio::task::spawn_blocking(move || {
+                let (db, store_config) = (db2, store_config2);
                 let mut store = Store::open(&db, store_config.clone())?;
                 // After an unclean stop, the counts a crash can lose are
                 // recounted (§7), before the pipeline writes any.
@@ -138,6 +155,21 @@ impl Services {
                 floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
                 floor::report(&control)?;
                 subscriptions::apply(&control, &filter, &subs_ips)?;
+                // Swarm stats for search and the writer (§7): last run's
+                // snapshot, or rebuilt from SQLite after a crash.
+                let started = std::time::Instant::now();
+                let (hot, from_snapshot) = lodestar_pipeline::open_hot(&mut store, &hot_dir2)?;
+                tracing::info!(
+                    torrents = hot.len(),
+                    ms = started.elapsed().as_millis() as u64,
+                    "hot columns {}",
+                    if from_snapshot {
+                        "loaded"
+                    } else {
+                        "rebuilt from the store"
+                    }
+                );
+                let hot = Arc::new(hot);
                 let user_data = Store::open(&db, store_config.clone())?;
                 let reader = Store::open_reader(&db, store_config.clone())?;
                 // The percolator records alerts through its own connection.
@@ -146,14 +178,29 @@ impl Services {
                     .transpose()?;
                 // The index this build serves (rebuilt in the background from
                 // an older one if need be); its indexer follows the store
-                // through its own connection.
+                // through its own connection. Every index it serves ranks
+                // with the swarm stats.
                 let serving = if search {
+                    let suspect = hot.clone();
+                    let ranking = Ranking {
+                        hot: Some(hot.clone()),
+                        weights,
+                        // §8: a fake-seeding swarm ranks well below its claim.
+                        penalty: Some(Arc::new(move |id| {
+                            if suspect.flags(id) & hot::flags::SUSPECT != 0 {
+                                suspect_penalty
+                            } else {
+                                1.0
+                            }
+                        })),
+                    };
                     let config = ServingConfig {
                         live: LiveConfig {
                             heap_bytes: heap,
                             ..LiveConfig::default()
                         },
                         store: store_config,
+                        ranking,
                         ..ServingConfig::default()
                     };
                     Some(Arc::new(Serving::open_or_rebuild(
@@ -164,12 +211,13 @@ impl Services {
                 } else {
                     None
                 };
-                Ok::<_, BoxError>((store, control, user_data, reader, serving, percolation))
+                Ok::<_, BoxError>((store, control, user_data, reader, serving, percolation, hot))
             })
             .await??;
 
         let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
         let mut dht_stats = None;
+        let mut dht_node = None;
         let mut dht_source = None;
         if config.dht.enabled {
             let mut dht_config = config.dht_config();
@@ -177,10 +225,22 @@ impl Services {
             dht_config.paused = crawl_settings.paused;
             let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
+            dht_node = Some(dht.node_handle());
             settings::crawler::follow_intensity(settings.subscribe(), dht.node_handle());
             dht_source = Some(dht.clone());
             plugins.push(dht);
         }
+        pipeline_config.hot = Some(hot.clone());
+        pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
+            config: lodestar_pipeline::health::HealthConfig {
+                deny: Some(lodestar_tracker_scrape::Deny(denied.clone())),
+                ..cfg
+            },
+            trackers,
+            db: db.clone(),
+            store: store_config.clone(),
+            dht: dht_node,
+        });
         let auth = Arc::new(
             lodestar_api::Auth::load(
                 &config.data_dir.join("auth.json"),
@@ -287,12 +347,18 @@ impl Services {
             search_state.clone(),
             config.data_dir.clone(),
         ));
+        let monitor = pipeline.monitor();
         let api = lodestar_api::ApiState {
             auth,
             index: search.clone(),
             reader: reader.clone(),
             filters: Some(filters),
             settings: Some(settings.clone()),
+            hot: Some(hot.clone()),
+            events: Some(Arc::new(Events {
+                health: monitor.health().cloned(),
+                rollups: monitor.rollups().clone(),
+            })),
             ops: Some(ops),
             user_data: Some(Arc::new(Mutex::new(user_data))),
             adult: settings::content::follow(settings.subscribe()),
@@ -374,6 +440,8 @@ impl Services {
                 subscriptions: (stop_subscriptions, refresher),
                 pipeline,
                 search: serving,
+                hot,
+                hot_dir,
                 insights: (stop_insights, recorder),
                 percolator,
             },
@@ -434,7 +502,19 @@ impl Handles {
         let (stop, refresher) = self.subscriptions;
         let _ = stop.send(true);
         let _ = refresher.await;
-        self.pipeline.shutdown().await?;
+        let mut store = self.pipeline.shutdown().await?;
+        // A failed snapshot only costs a rebuild from SQLite at the next
+        // start; the indexer still gets to stop cleanly.
+        let (hot, hot_dir) = (self.hot, self.hot_dir);
+        match tokio::task::spawn_blocking(move || {
+            lodestar_pipeline::save_hot(&mut store, &hot, &hot_dir)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::error!("saving hot columns: {e}"),
+            Err(e) => tracing::error!("saving hot columns: {e}"),
+        }
         if let Some(search) = self.search {
             // After the writer, so the last batch gets indexed too. Other
             // handles (requests still finishing) may hold it: stopping
@@ -479,4 +559,37 @@ fn seal_key(path: &Path) -> Result<[u8; 32], BoxError> {
     file.write_all(&key)?;
     file.sync_all()?;
     Ok(key)
+}
+
+/// The API's interest hints go to the scrape scheduler; its searches to
+/// the Serve rollups (§10.9.5).
+#[derive(Debug)]
+struct Events {
+    health: Option<HealthHandle>,
+    rollups: Arc<Rollups>,
+}
+
+impl lodestar_api::ApiEvents for Events {
+    fn interest(&self, id: i64) {
+        if let Some(h) = &self.health {
+            h.interest(id);
+        }
+    }
+
+    fn searched(&self, took: Duration, total: Option<usize>) {
+        let now = crate::unix_now();
+        let outcome = match total {
+            Some(0) => 1,
+            Some(_) => 0,
+            None => 2,
+        };
+        self.rollups.add_dim(now, metric::SEARCHES, 0, outcome, 1);
+        self.rollups.add_dim(
+            now,
+            metric::SEARCH_LATENCY,
+            0,
+            metric::latency_bucket(took),
+            1,
+        );
+    }
 }

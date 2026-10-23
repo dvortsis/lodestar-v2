@@ -58,7 +58,8 @@ describe('requests', () => {
 				hidden: null,
 				limit: null,
 				offset: null,
-				sort: null
+				sort: null,
+				tz: null
 			}
 		});
 		const [, init] = fetchMock.mock.calls[0]!;

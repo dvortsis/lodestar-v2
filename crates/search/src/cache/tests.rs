@@ -18,6 +18,8 @@ fn key(what: &str, at: &Generation) -> Key {
             files: None,
         },
         now: None,
+        utc_offset: None,
+        hot: None,
     }
 }
 
@@ -262,6 +264,7 @@ fn a_cached_first_page_is_the_leases_and_page_two_reads_its_snapshot() {
         sort: Sort::Relevance,
         limit: 20,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     let (first, o) = cache.search(&index, &spec, &c).unwrap();
@@ -296,6 +299,7 @@ fn relative_dates_are_keyed_by_the_second() {
         sort: Sort::Relevance,
         limit: 10,
         now,
+        utc_offset: 0,
     };
     assert_eq!(cache.search(&index, &at(NOW), &c).unwrap().1, Outcome::Miss);
     assert_eq!(cache.search(&index, &at(NOW), &c).unwrap().1, Outcome::Hit);
@@ -317,6 +321,127 @@ fn relative_dates_are_keyed_by_the_second() {
 }
 
 #[test]
+fn time_of_day_is_keyed_by_the_zone() {
+    let (index, _) = index_with(200, 1);
+    let index = Arc::new(index);
+    let cache = ResultCache::default();
+    let node = crate::parse("time:9..17").unwrap();
+    let c = CancelToken::new();
+    let at = |utc_offset| SearchSpec {
+        node: &node,
+        scope: "",
+        sort: Sort::Relevance,
+        limit: 10,
+        now: NOW,
+        utc_offset,
+    };
+    assert_eq!(cache.search(&index, &at(0), &c).unwrap().1, Outcome::Miss);
+    assert_eq!(cache.search(&index, &at(0), &c).unwrap().1, Outcome::Hit);
+    let (east, o) = cache.search(&index, &at(5 * 3600), &c).unwrap();
+    assert_eq!(o, Outcome::Miss, "another zone is another result");
+    let fresh = Lease::new_at(index.clone(), &node, NOW, 5 * 3600, Sort::Relevance, &c).unwrap();
+    assert_eq!(east.lease.total(), fresh.total());
+    assert_eq!(east.page, fresh.page(Start::Offset(0), 10, &c).unwrap());
+    // Without `time:`, the zone isn't in the key.
+    let plain = crate::parse("common").unwrap();
+    let spec = |utc_offset| SearchSpec {
+        node: &plain,
+        ..at(utc_offset)
+    };
+    cache.search(&index, &spec(0), &c).unwrap();
+    assert_eq!(
+        cache.search(&index, &spec(3600), &c).unwrap().1,
+        Outcome::Hit
+    );
+}
+
+#[test]
+fn results_that_read_hot_columns_last_until_their_epoch_moves() {
+    let (index, _) = index_with(200, 1);
+    let hot = Arc::new(lodestar_store::HotColumns::with_epoch_every(Duration::ZERO));
+    let swarm = |seeders| lodestar_store::SwarmHot {
+        seeders,
+        leechers: 1,
+        trackers: 1,
+        dht: lodestar_store::NEVER,
+    };
+    for id in 1..=200 {
+        hot.set_swarm(id, swarm(id as u32 % 10));
+    }
+    let index = Arc::new(index.with_hot(hot.clone()));
+    let cache = ResultCache::default();
+    let c = CancelToken::new();
+    let common = crate::parse("common").unwrap();
+    let spec = |node, sort| SearchSpec {
+        node,
+        scope: "",
+        sort,
+        limit: 10,
+        now: NOW,
+        utc_offset: 0,
+    };
+    let by_seeders = spec(&common, Sort::Seeders { desc: true });
+    let relevance = spec(&common, Sort::Relevance);
+    let by_size = spec(&common, Sort::Size { desc: true });
+    let filtered_node = crate::parse("seeders:>=5").unwrap();
+    let filtered = spec(&filtered_node, Sort::Size { desc: true });
+    for s in [&by_seeders, &relevance, &by_size, &filtered] {
+        assert_eq!(cache.search(&index, s, &c).unwrap().1, Outcome::Miss);
+        assert_eq!(cache.search(&index, s, &c).unwrap().1, Outcome::Hit);
+    }
+    let params = FacetParams::default();
+    let facet = |query| FacetSpec {
+        query,
+        node: query,
+        filters: &[],
+        params: &params,
+        scope: "",
+        sort: Sort::Relevance,
+        now: NOW,
+        utc_offset: 0,
+    };
+    for q in [&common, &filtered_node] {
+        assert_eq!(
+            cache.facets(&index, &facet(q), &c).unwrap().1,
+            Outcome::Miss
+        );
+        assert_eq!(cache.facets(&index, &facet(q), &c).unwrap().1, Outcome::Hit);
+    }
+
+    // A scrape: one torrent jumps to the top, with no index commit.
+    let top = cache.search(&index, &by_seeders, &c).unwrap().0;
+    let new_top = top.page.hits.last().unwrap().id;
+    hot.set_swarm(new_top, swarm(1_000));
+    let (moved, o) = cache.search(&index, &by_seeders, &c).unwrap();
+    assert_eq!(o, Outcome::Miss, "a hot sort reads the new counts");
+    assert_eq!(moved.page.hits[0].id, new_top);
+    assert_eq!(
+        cache.search(&index, &relevance, &c).unwrap().1,
+        Outcome::Miss,
+        "relevance ranks with the swarm priors"
+    );
+    assert_eq!(
+        cache.search(&index, &filtered, &c).unwrap().1,
+        Outcome::Miss,
+        "a swarm filter reads them"
+    );
+    assert_eq!(
+        cache.search(&index, &by_size, &c).unwrap().1,
+        Outcome::Hit,
+        "a field sort without swarm clauses doesn't"
+    );
+    assert_eq!(
+        cache.facets(&index, &facet(&filtered_node), &c).unwrap().1,
+        Outcome::Miss
+    );
+    assert_eq!(
+        cache.facets(&index, &facet(&common), &c).unwrap().1,
+        Outcome::Hit,
+        "counts without swarm clauses don't depend on the columns"
+    );
+}
+
+#[test]
 fn an_older_leases_facets_never_retire_the_serving_generations() {
     let (index, _) = index_with(100, 1);
     let index = Arc::new(index);
@@ -331,6 +456,7 @@ fn an_older_leases_facets_never_retire_the_serving_generations() {
         scope: "",
         sort: Sort::Relevance,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     let old = Arc::new(Lease::new(index.clone(), &node, NOW, Sort::Relevance, &c).unwrap());
@@ -372,6 +498,7 @@ fn a_search_with_a_file_clause_isnt_kept() {
         sort: Sort::Relevance,
         limit: 10,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     for _ in 0..2 {
