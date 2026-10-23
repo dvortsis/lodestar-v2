@@ -300,12 +300,23 @@ async fn record(
             // days' sums are out of date. Read them again.
             let sealed = api::sealed_hour(crate::unix_now(), insights.seal_floor());
             let stale = r.first_cohort.filter(|&c| c < sealed);
-            // Only onto a count that's in. The recorder is the only
-            // writer, so the check and the add can't interleave.
-            if r.imported > 0 && insights.imported.load(Ordering::Acquire) >= 0 {
-                insights
-                    .imported
-                    .fetch_add(r.imported as i64, Ordering::AcqRel);
+            // Only onto a count that's in. A compare-exchange loop:
+            // `fetch_update` is deprecated and its replacement is newer
+            // than the MSRV.
+            if r.imported > 0 {
+                let add = r.imported as i64;
+                let mut cur = insights.imported.load(Ordering::Acquire);
+                while cur >= 0 {
+                    match insights.imported.compare_exchange_weak(
+                        cur,
+                        cur + add,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(now) => cur = now,
+                    }
+                }
             }
             insights.bump();
             if let Some(c) = stale {
