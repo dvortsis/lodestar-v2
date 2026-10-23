@@ -369,8 +369,9 @@ impl Default for Pacer {
 
 impl Pacer {
     /// Books `items` at `per_sec` (0: unpaced) and waits for the time
-    /// they're due. Behind by more than a second (everything paused, or
-    /// slow clients), it paces from now rather than bursting to catch up.
+    /// they're due. Time nobody booked (idle, everything paused, slow
+    /// clients) is never banked: booking starts again from now, so no
+    /// export can burst to catch up.
     pub(crate) async fn wait(&self, items: u64, per_sec: u32) {
         if per_sec == 0 {
             return;
@@ -379,7 +380,7 @@ impl Pacer {
         let due = {
             let mut next = lock(&self.next);
             let now = tokio::time::Instant::now();
-            if now.saturating_duration_since(*next) > Duration::from_secs(1) {
+            if *next < now {
                 *next = now;
             }
             *next += per_item * u32::try_from(items).unwrap_or(u32::MAX);
@@ -770,6 +771,16 @@ mod tests {
         let took = start.elapsed();
         assert!(took >= Duration::from_millis(390), "{took:?}");
         assert!(took < Duration::from_secs(3), "{took:?}");
+        // Idle time, short or long, is never banked: after it the pacer
+        // paces from now, with no burst to catch up.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let resumed = Instant::now();
+        jobs.pacer().wait(100, 1000).await;
+        let took = resumed.elapsed();
+        assert!(
+            took >= Duration::from_millis(95),
+            "a short idle stretch was banked: {took:?}"
+        );
         // After a long idle stretch it paces from now, not from where it was.
         tokio::time::sleep(Duration::from_millis(1100)).await;
         let resumed = Instant::now();
