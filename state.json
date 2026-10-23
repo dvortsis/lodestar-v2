@@ -259,7 +259,8 @@
       "pr": 132,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum | 2026-10-23T17:07:42Z blocked draft #132: bare /search 104,825 B > 102,400, LCP 3.03s. Runner decision: defer Shell Chrome chunk to first interaction/idle/30s (auth handlers stay eager, 401 spec), static bar in app.html #boot-main (+236 B); assigned Shell.svelte edit; keep W9 focus/CLS/first-key specs; INP check | 2026-10-23T17:26:28Z told: interaction that loads Chrome must count as engaged (whenEngaged attached late), spec for single first key | 2026-10-23T17:37:17Z assigned build-level chunking fix (vite.config.ts, .size-limit.mjs) so /search initial set has only its own modules + manifest guard test (leaks seen in #135, #138) | 2026-10-23T17:55:35Z told: chunk fix must also keep other routes' static imports out of app.js preload map (lhci 102,362/102,400)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum | 2026-10-23T17:07:42Z blocked draft #132: bare /search 104,825 B > 102,400, LCP 3.03s. Runner decision: defer Shell Chrome chunk to first interaction/idle/30s (auth handlers stay eager, 401 spec), static bar in app.html #boot-main (+236 B); assigned Shell.svelte edit; keep W9 focus/CLS/first-key specs; INP check | 2026-10-23T17:26:28Z told: interaction that loads Chrome must count as engaged (whenEngaged attached late), spec for single first key | 2026-10-23T17:37:17Z assigned build-level chunking fix (vite.config.ts, .size-limit.mjs) so /search initial set has only its own modules + manifest guard test (leaks seen in #135, #138) | 2026-10-23T17:55:35Z told: chunk fix must also keep other routes' static imports out of app.js preload map (lhci 102,362/102,400)",
+      "catch_ups": 0
     },
     "S-search-2": {
       "status": "pending",
@@ -286,7 +287,8 @@
       "pr": 139,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review",
+      "catch_ups": 0
     },
     "D-docker": {
       "status": "merged",
@@ -477,7 +479,8 @@
       "pr": 137,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched | 2026-10-23T17:55:35Z review FIX: own() ignores dynamic imports (reports 591 B; real ~22.7 KB). Rule: entries = measured+10% (<=45 KB \u00a710.1), 15 KB target w/ reason; refinements accepted; polish; merge main | 2026-10-23T18:04:25Z fixes committed locally (own() dynamic closure, Compare 22.74/25 KB); lhci 102,421 with main merged -> waits for #132 then push"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched | 2026-10-23T17:55:35Z review FIX: own() ignores dynamic imports (reports 591 B; real ~22.7 KB). Rule: entries = measured+10% (<=45 KB \u00a710.1), 15 KB target w/ reason; refinements accepted; polish; merge main | 2026-10-23T18:04:25Z fixes committed locally (own() dynamic closure, Compare 22.74/25 KB); lhci 102,421 with main merged -> waits for #132 then push",
+      "catch_ups": 1
     },
     "S-discover": {
       "status": "review",
@@ -486,7 +489,8 @@
       "pr": 140,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason",
+      "catch_ups": 0
     },
     "S-alerts": {
       "status": "review",
@@ -495,7 +499,8 @@
       "pr": 138,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch)",
+      "catch_ups": 0
     },
     "S-insights-1": {
       "status": "merged",
@@ -558,7 +563,8 @@
       "pr": 144,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed",
+      "catch_ups": 1
     },
     "S-filters": {
       "status": "pending",
@@ -886,7 +892,8 @@
       "pr": 143,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48 | 2026-10-23T18:54:05Z part 1 PR #143 dddb14e review FIX: in-flight revert-to-saved edit lost (staged+instant); gate test table; instant writeOnly guard; polish. No security findings. Engine ~10.6 KB (part 1)"
+      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48 | 2026-10-23T18:54:05Z part 1 PR #143 dddb14e review FIX: in-flight revert-to-saved edit lost (staged+instant); gate test table; instant writeOnly guard; polish. No security findings. Engine ~10.6 KB (part 1)",
+      "catch_ups": 1
     },
     "S-settings-2": {
       "status": "pending",
@@ -950,7 +957,8 @@
       "pr": 128,
       "attempt": 1,
       "review_rounds": 4,
-      "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched | 2026-10-23T10:28:52Z PR1 round 1 FIX: trust_damaged across builds (revoked equality), merge lets marks drop on seq rise, merge main; polish (skip, 64-cap, normalised storage, mark bound, fuzz modes, drift, ctutils, README) | 2026-10-23T11:46:48Z af3874e round-1 fixes (revoked additive, merge resets only rotated roles, main merged, all polish), CI green; delta review (security reviewer resumed) | 2026-10-23T11:50:08Z delta FIX (round 2): un-normalised trust.json freezes merges (normalise on load, compare bodies); clock-behind reads trust_damaged (-> Ahead, drop part-3 rebuild note); polish: tie keeps digest, same-seq per-mark max | 2026-10-23T12:22:03Z PR1 #125 merged (security delta MERGE); PR2 started with merge-seq polish + MSI downgrade note | 2026-10-23T13:01:59Z PR2 ~3.8k (2.1k code): runner agreed one PR; reminded log_lint + hub lines | 2026-10-23T13:45:09Z PR2 #128 head b20241e (~4.4k); self-review 2 blocking fixed; fresh + security reviewers launched. Hub line for B-log2: register update::log_events::CATALOGUE | 2026-10-23T13:58:29Z PR2 security review FIX: B1 manual rollback strands migrated store w/o snapshot; I1 supervisor same UID as child (compromised child = data-dir write) -> owner flag on separate UID; I2 versions-only-go-up on switch; I3 skipped listing; polish P1-P10. Waiting fresh review. | 2026-10-23T14:19:17Z PR2 round 1 FIX (both): manual rollback w/o snapshot; /proc/self/exe child; memfd sealed exec; versions only up; skipped fail-closed + cleared by newer image + manual reason; migration.json fail-closed; .bad only on definitive mismatch; journal/pending validation; regular-file restore; caps; polish | 2026-10-23T15:39:30Z round-1 fixes at 4294067 (main merged to #127); CI tests running; fresh + security delta reviews launched | 2026-10-23T15:53:20Z session reports 4294067 ready, ci-ok green; it added the logging::CATALOGUES hub line + logs_catalog golden itself (B-log2 told not to); delta reviews already running | 2026-10-23T16:33:39Z security delta MERGE at 4294067; important: unrecorded migration path (mark_migrating from=None, damaged pending) reopens B1 -> fail closed + restore_plan schema>latest check when previous==image; 3 non-discriminating tests + 5 untested fixes; polish restore post-rename check, read_capped InvalidData, halted.json message. Waiting fresh delta | 2026-10-23T16:38:56Z fresh delta MERGE + security delta MERGE at 4294067; short round 2: unrecorded-migration paths (fail closed; restore_plan schema>latest when previous==image; damaged pending -> fresh probation, runner \u00a72.19), non-discriminating tests + 5 untested fixes, load race (healthy before stop), polish, main merge | 2026-10-23T17:19:17Z round 2 at 1d2f17e (main merged 7188476), ci-ok green; security delta launched | 2026-10-23T18:13:44Z final security delta MERGE at 1d2f17e (all mutation-verified); small local round: repair_pending kind (Restored unless no rollback to active in history/skipped), test deadline, kill-on-drop; push after #48; runner checks delta"
+      "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched | 2026-10-23T10:28:52Z PR1 round 1 FIX: trust_damaged across builds (revoked equality), merge lets marks drop on seq rise, merge main; polish (skip, 64-cap, normalised storage, mark bound, fuzz modes, drift, ctutils, README) | 2026-10-23T11:46:48Z af3874e round-1 fixes (revoked additive, merge resets only rotated roles, main merged, all polish), CI green; delta review (security reviewer resumed) | 2026-10-23T11:50:08Z delta FIX (round 2): un-normalised trust.json freezes merges (normalise on load, compare bodies); clock-behind reads trust_damaged (-> Ahead, drop part-3 rebuild note); polish: tie keeps digest, same-seq per-mark max | 2026-10-23T12:22:03Z PR1 #125 merged (security delta MERGE); PR2 started with merge-seq polish + MSI downgrade note | 2026-10-23T13:01:59Z PR2 ~3.8k (2.1k code): runner agreed one PR; reminded log_lint + hub lines | 2026-10-23T13:45:09Z PR2 #128 head b20241e (~4.4k); self-review 2 blocking fixed; fresh + security reviewers launched. Hub line for B-log2: register update::log_events::CATALOGUE | 2026-10-23T13:58:29Z PR2 security review FIX: B1 manual rollback strands migrated store w/o snapshot; I1 supervisor same UID as child (compromised child = data-dir write) -> owner flag on separate UID; I2 versions-only-go-up on switch; I3 skipped listing; polish P1-P10. Waiting fresh review. | 2026-10-23T14:19:17Z PR2 round 1 FIX (both): manual rollback w/o snapshot; /proc/self/exe child; memfd sealed exec; versions only up; skipped fail-closed + cleared by newer image + manual reason; migration.json fail-closed; .bad only on definitive mismatch; journal/pending validation; regular-file restore; caps; polish | 2026-10-23T15:39:30Z round-1 fixes at 4294067 (main merged to #127); CI tests running; fresh + security delta reviews launched | 2026-10-23T15:53:20Z session reports 4294067 ready, ci-ok green; it added the logging::CATALOGUES hub line + logs_catalog golden itself (B-log2 told not to); delta reviews already running | 2026-10-23T16:33:39Z security delta MERGE at 4294067; important: unrecorded migration path (mark_migrating from=None, damaged pending) reopens B1 -> fail closed + restore_plan schema>latest check when previous==image; 3 non-discriminating tests + 5 untested fixes; polish restore post-rename check, read_capped InvalidData, halted.json message. Waiting fresh delta | 2026-10-23T16:38:56Z fresh delta MERGE + security delta MERGE at 4294067; short round 2: unrecorded-migration paths (fail closed; restore_plan schema>latest when previous==image; damaged pending -> fresh probation, runner \u00a72.19), non-discriminating tests + 5 untested fixes, load race (healthy before stop), polish, main merge | 2026-10-23T17:19:17Z round 2 at 1d2f17e (main merged 7188476), ci-ok green; security delta launched | 2026-10-23T18:13:44Z final security delta MERGE at 1d2f17e (all mutation-verified); small local round: repair_pending kind (Restored unless no rollback to active in history/skipped), test deadline, kill-on-drop; push after #48; runner checks delta",
+      "catch_ups": 3
     },
     "S-updates": {
       "status": "pending",
@@ -1143,12 +1151,19 @@
     "fix-fixture-rollups": {
       "status": "review",
       "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests) | 2026-10-23T18:04:25Z committed locally 1943fde on fix/fixture-searchable-rollups (worktree fx3); tests 7+4 pass; push after #48 | 2026-10-23T18:42:25Z merged main (M4), pushed 3cd7285; re-testing before PR",
-      "pr": 142
+      "pr": 142,
+      "catch_ups": 1
     },
     "multi-session-rules": {
-      "status": "review",
+      "status": "merged",
       "pr": 145,
-      "notes": "2026-10-23T18:56:17Z owner-requested docs+settings PR; runner reviewed MERGE; waiting CI"
+      "notes": "2026-10-23T18:56:17Z owner-requested docs+settings PR; runner reviewed MERGE; waiting CI | 2026-10-23T19:00:53Z merged #145 as 8ad1971; runner re-read rules; landing_lane/catch_ups added"
+    },
+    "X-sleeps": {
+      "status": "pending",
+      "model": "sonnet",
+      "deps": [],
+      "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1173,14 +1188,6 @@
     "push_state_every_wake": "Watchdog trig_0172BngAUoA4NRaRWBYiRWVf (every 4h from 04:12) judges liveness by runner-state commit age: push state.json on every wake, even if nothing changed."
   },
   "watched_sessions": {
-    "session_015F9H2aHowz7TJLffFYxUvf": {
-      "title": "M4 continuation",
-      "work": "M4 swarm health, branch claude/relaxed-knuth-vexgae (PR #32), migration V5"
-    },
-    "session_01N83eB81W8xkqJgXiD7JLM3": {
-      "title": "Modern DHT crawler architecture",
-      "work": "content filter rule persistence and writer judging, migration V6"
-    },
     "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
   },
   "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
@@ -1579,7 +1586,7 @@
     "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
     "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
     "launch_freeze": "2026-10-23T17:22:16Z owner: <30% Max plan usage left; don't spin up more sessions. No new slice sessions until the owner lifts it. Reviews: delta checks by resuming existing reviewers or by the runner directly; no new review agents for small deltas.",
-    "heartbeat_cadence": "2026-10-23T17:27:56Z owner: heartbeat every 4 h (cron 38 */4 * * *), was hourly",
+    "heartbeat_cadence": "2026-10-23T19:00:53Z every 3 h (38 */3) so runner-state commits stay under the watchdog's 4 h 'gone' threshold (owner allowed 3-4 h)",
     "review_policy": "2026-10-23T17:27:56Z owner: tighter review rule. New PRs: one fresh reviewer (combined fresh+security where security is required). Small deltas/fix rounds: resume the existing reviewer or runner checks the diff directly; no new reviewer agents.",
     "owner_decision_insights_budget": "2026-10-23T17:34:45Z owner: Insights budget = first view <=45 KB (uPlot and below-fold lazy); runner total cap 65 KB. Needs a docs/decisions entry (S-insights-1 records it).",
     "route_budget_rule": "2026-10-23T17:45:34Z runner: per-route hard limit = \u00a710.1 45 KB route JS (beyond shell, gz); 15 KB own JS+CSS is a target needing a one-line reason if exceeded",
@@ -1606,5 +1613,6 @@
       ],
       "registered": "2026-10-23T18:56:17Z"
     }
-  }
+  },
+  "landing_lane": null
 }
