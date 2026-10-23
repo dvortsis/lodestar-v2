@@ -253,13 +253,13 @@
       "merge": "8db37c8"
     },
     "S-search-1": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_015U1ernRx1MK1knzFVYDnee",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum"
     },
     "S-search-2": {
       "status": "pending",
@@ -280,13 +280,13 @@
       "notes": ""
     },
     "S-detail": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01Vw3taNg7BTdtsCqWtZVMP3",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
     },
     "D-docker": {
       "status": "merged",
@@ -470,40 +470,40 @@
       "notes": ""
     },
     "S-compare": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_019pb4Nm949Ek47p7KFYxL5X",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
     },
     "S-discover": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01WDCNhJgVXT9PMQKAiwhGkv",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
     },
     "S-alerts": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01U8jmv1AgG1PAfYYHH4yu19",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
     },
     "S-insights-1": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01BUTPSv1ncvHgVTLY5JMVAY",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
     },
     "S-insights-2": {
       "status": "pending",
@@ -551,13 +551,13 @@
       "notes": ""
     },
     "M-filters-dialogs": {
-      "status": "pending",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01PWJPAR99QvqkMzwdG1hG29",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum"
     },
     "S-filters": {
       "status": "pending",
@@ -569,13 +569,13 @@
       "notes": ""
     },
     "S-keys": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_016cp8XLoMXn6BdcZs7uwRnr",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
     },
     "S-e2e": {
       "status": "pending",
@@ -878,13 +878,13 @@
       }
     },
     "M-settings-form": {
-      "status": "pending",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01Bt3QbxVvS5sAU3VJp3wHet",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
+      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum"
     },
     "S-settings-2": {
       "status": "pending",
@@ -1385,10 +1385,35 @@
       "from": "B11b",
       "what": "search live::tests::each_commit_reports_once... Access denied on Windows: watermark() reads meta.json during commit; make test tolerate transient PermissionDenied; check request paths calling load_metas without retry",
       "to": "X-flakes follow-up"
+    },
+    "detail-drawer-sections": {
+      "from": "S-detail brief",
+      "what": "drawer Swarm, Related, Notes & labels sections and secondary menu (Favorite, Hide, Labels, Fix parse, Block this\u2026) unowned",
+      "to": "new slice S-detail-2 after S-detail"
+    },
+    "search-messages-nested": {
+      "from": "S-search-1 brief",
+      "what": "S-search-4/5/6 all append to features/search/messages: serialise or extend scripts/messages.ts to nested folders",
+      "to": "S-search-2 brief"
+    },
+    "search-2-interim-rows": {
+      "from": "S-discover/S-alerts briefs",
+      "what": "S-search-2 must replace Discover's and Alerts' interim result rows",
+      "to": "S-search-2 brief"
+    },
+    "backend-detail-fields": {
+      "from": "web briefs",
+      "what": "TorrentDetail lacks title/content_type/adult_kind/composition/junk/release fields; FileEntry no category; raw info-dict endpoint; CompareTorrent magnet/flags; SearchHit magnet; discover query+swarm_trend+resolved_at; saved-search channels; localized parse error codes; insights per-stage losses/serve series/starting-up flag; settings schema defaults; filters effect warning i18n",
+      "to": "backend follow-up slice(s)"
+    },
+    "size-limit-insights-entry": {
+      "from": "S-insights-1 brief",
+      "what": "add Insights (<=45KB incl uPlot) size-limit entry after S-compare helper merges",
+      "to": "runner after S-compare + S-insights-1"
     }
   },
   "blocked_on_owner": [],
-  "launches_today": 20,
+  "launches_today": 29,
   "last_heartbeat": "2026-10-23T13:39:57Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
@@ -1417,7 +1442,8 @@
     "2026-10-23T09:08:06Z B-update: security fixes still wait for the install window (reading of \u00a72.13; \u00a712.2 exempts only the wait) - veto if they should skip the window",
     "2026-10-23T09:08:06Z B-update: new 6-hour cap on a migration during update (runner-set number, \u00a72.19)",
     "2026-10-23T13:45:09Z B-update PR2 \u00a72.19 refinements: control-channel exit codes 80\u201382, 6 h migration cap, a failed version is never reinstalled, `lodestar rollback --update`",
-    "2026-10-23T14:19:17Z B-update supervisor runs as the same dropped UID as the server (D-puid 'drop first'): a compromised server process can tamper with update state (pin an older genuine release, block updates, halt). PR2 closes the cheap parts (versions only go up, sealed exec, newer image clears skipped). Fully separating needs the supervisor to keep a separate UID - owner call; default: keep current design"
+    "2026-10-23T14:19:17Z B-update supervisor runs as the same dropped UID as the server (D-puid 'drop first'): a compromised server process can tamper with update state (pin an older genuine release, block updates, halt). PR2 closes the cheap parts (versions only go up, sealed exec, newer image clears skipped). Fully separating needs the supervisor to keep a separate UID - owner call; default: keep current design",
+    "2026-10-23T16:26:19Z \u00a72.19 refinements (web): Block this\u2026 defaults to hide; revealed sealed names have no Copy; per-route budgets 15 KB own JS+CSS (runner); global CSS treated as zero headroom (20 KB limit unchanged). S-search-1 may come back needing a first-load budget decision (Lighthouse 102,400 B, ~0.5 KB left)."
   ],
   "decisions_log": [
     "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
