@@ -32,8 +32,53 @@ export const ROUTES: RouteCase[] = [
 		mock: (m) => m.on('parseQuery', { ast: { op: 'all' }, canonical: '' })
 	},
 	{ name: 'discover', path: '/discover' },
-	{ name: 'alerts', path: '/alerts' },
-	{ name: 'alert-detail', path: '/alerts/1' },
+	{
+		name: 'alerts',
+		path: '/alerts',
+		heading: 'Alerts',
+		mock: (m) =>
+			m.on('listSavedSearches', [
+				{
+					alert: true,
+					alerts: 0,
+					ast: { op: 'all' as const },
+					created_at: 1_700_000_000,
+					id: 1,
+					last_alert_at: null,
+					name: 'Lantern Keeper releases',
+					paused: false,
+					q: '',
+					rss: false,
+					sort: null,
+					unread: 0,
+					updated_at: 1_700_000_000
+				}
+			])
+	},
+	{
+		name: 'alert-detail',
+		path: '/alerts/1',
+		heading: 'Lantern Keeper releases',
+		mock: (m) => {
+			m.on('getSavedSearch', {
+				alert: true,
+				alerts: 0,
+				ast: { op: 'all' as const },
+				created_at: 1_700_000_000,
+				id: 1,
+				last_alert_at: null,
+				name: 'Lantern Keeper releases',
+				paused: false,
+				q: '',
+				rss: false,
+				sort: null,
+				unread: 0,
+				updated_at: 1_700_000_000
+			});
+			m.on('listAlerts', { items: [], next_cursor: null });
+			m.on('markAlertsRead', { ok: true });
+		}
+	},
 	{
 		name: 'insights',
 		path: '/insights',
