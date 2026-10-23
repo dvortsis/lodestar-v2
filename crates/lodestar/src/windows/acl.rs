@@ -428,9 +428,10 @@ fn icacls(dir: &Path, args: &[String]) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::other(format!(
-            "icacls {}: {}",
+            "icacls {}: {} {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stdout).trim()
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
         )))
     }
 }
@@ -769,8 +770,10 @@ mod tests {
         if !admin() {
             return;
         }
-        // `sc showsid` names any service's SID, installed or not.
-        let sid = service_sid("Lodestar").unwrap();
+        // `icacls` grants only to accounts it can resolve, so the test
+        // stands in a service every Windows has for Lodestar's (which the
+        // installer registers before the service first runs).
+        let sid = service_sid("EventLog").unwrap();
         assert!(sid.starts_with("S-1-5-80-"), "{sid}");
         let ops = Windows {
             own_sid: Some(&sid),
@@ -786,8 +789,7 @@ mod tests {
         std::fs::write(dir.join("auth.json"), "{}").unwrap();
         let acl = run("icacls.exe", &[dir.join("auth.json").as_os_str()]);
         assert!(!acl.contains("BUILTIN\\Users"), "{acl}");
-        // No "Lodestar" service exists here, so icacls shows the bare SID.
-        assert!(acl.contains(&sid), "{acl}");
+        assert!(acl.contains("NT SERVICE\\EventLog"), "{acl}");
         secure_dir(&dir, Some(&sid), &ops).unwrap();
         // Another service's SID isn't this one's.
         let other = service_sid("LodestarOther").unwrap();
