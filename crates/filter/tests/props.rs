@@ -203,37 +203,52 @@ const REVERSED: &[(&str, &str)] = &[
 /// alternatives, and a few rules no word narrows (sizes, prefixes and
 /// fuzzy words, which get the full match), none matching the set.
 fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
-    let word = |i: usize, salt: &str| format!("{salt}{}q{i}", ["zor", "vel", "mik", "tas"][i % 4]);
-    let common = |i: usize| COMMON[i / 5 % COMMON.len()];
+    rules(|i| (i % 100 < share).then(|| on_common(i)))
+}
+
+/// A word no torrent has.
+fn unique(i: usize, salt: &str) -> String {
+    format!("{salt}{}q{i}", ["zor", "vel", "mik", "tas"][i % 4])
+}
+
+fn common(i: usize) -> &'static str {
+    COMMON[i / 5 % COMMON.len()]
+}
+
+/// One of [`ten_thousand_rules`]' shapes on common words.
+fn on_common(i: usize) -> String {
+    match i % 5 {
+        0 => format!("{} {}", common(i), unique(i, "u")),
+        1 => {
+            let (a, b) = REVERSED[i / 5 % REVERSED.len()];
+            format!("\"{a} {b}\"")
+        }
+        2 => format!("{} size:>{}TB", common(i), i % 7 + 2),
+        3 => format!("file:({} size:>{}TB)", common(i), i % 7 + 2),
+        _ => format!("{} type:software", common(i)),
+    }
+}
+
+/// 10,000 rules: rule `i` is `pick(i)`'s, or else one of the rest
+/// [`ten_thousand_rules`] describes, none matching the set.
+fn rules(pick: impl Fn(usize) -> Option<String>) -> Vec<lodestar_filter::UserRule> {
+    let word = unique;
     (0..10_000)
         .map(|i| {
-            let q = if i % 100 < share {
-                match i % 5 {
-                    0 => format!("{} {}", common(i), word(i, "u")),
-                    1 => {
-                        let (a, b) = REVERSED[i / 5 % REVERSED.len()];
-                        format!("\"{a} {b}\"")
-                    }
-                    2 => format!("{} size:>{}TB", common(i), i % 7 + 2),
-                    3 => format!("file:({} size:>{}TB)", common(i), i % 7 + 2),
-                    _ => format!("{} type:software", common(i)),
-                }
-            } else {
-                match i % 100 {
-                    0..=53 => word(i, "k"),
-                    54..=73 => format!("\"{} {}\"", word(i, "a"), word(i, "b")),
-                    74..=83 => format!("group:{}", word(i, "g")),
-                    84..=93 => format!("{} type:movie -{}", word(i, "c"), word(i, "d")),
-                    94..=98 => format!("{} | {}", word(i, "e"), word(i, "f")),
-                    // Rules no word narrows: sizes, prefixes that start
-                    // like the set's words but match none, fuzzy words.
-                    _ => match i / 100 % 3 {
-                        0 => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
-                        1 => format!("{}*", PREFIXES[i / 300 % PREFIXES.len()]),
-                        _ => format!("~{}", word(i, "z")),
-                    },
-                }
-            };
+            let q = pick(i).unwrap_or_else(|| match i % 100 {
+                0..=53 => word(i, "k"),
+                54..=73 => format!("\"{} {}\"", word(i, "a"), word(i, "b")),
+                74..=83 => format!("group:{}", word(i, "g")),
+                84..=93 => format!("{} type:movie -{}", word(i, "c"), word(i, "d")),
+                94..=98 => format!("{} | {}", word(i, "e"), word(i, "f")),
+                // Rules no word narrows: sizes, prefixes that start
+                // like the set's words but match none, fuzzy words.
+                _ => match i / 100 % 3 {
+                    0 => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
+                    1 => format!("{}*", PREFIXES[i / 300 % PREFIXES.len()]),
+                    _ => format!("~{}", word(i, "z")),
+                },
+            });
             lodestar_filter::UserRule {
                 id: i as u32 + 1,
                 query: lodestar_search::parse(&q).unwrap(),
@@ -244,6 +259,91 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
             }
         })
         .collect()
+}
+
+/// The rule shapes the cheap check can't decide, each built on words
+/// the set has, so the narrowing and the cheap check leave it to the
+/// full match, and matching nothing.
+#[derive(Debug, Clone, Copy)]
+enum Shape {
+    /// Two common words always further apart than one token.
+    Near,
+    /// A common word, without a word every torrent has.
+    Negation,
+    /// A made-up word within one or two edits of nothing.
+    Fuzzy,
+    /// A prefix whose first four letters the set's words have.
+    Prefix,
+    /// A common word in the title, where titles never have it.
+    Title,
+}
+
+/// Pairs of the set's words never within two tokens of each other.
+const FAR: &[(&str, &str)] = &[
+    ("mkv", "1080p"),
+    ("mkv", "720p"),
+    ("srt", "2160p"),
+    ("nfo", "web"),
+    ("sample", "x264"),
+    ("mkv", "bluray"),
+    ("srt", "hevc"),
+    ("subs", "atmos"),
+];
+
+/// Prefixes of letters only (a prefix with digits splits), whose first
+/// four the set's words have.
+const LETTER_PREFIXES: &[&str] = &[
+    "webdz", "blurx", "samplz", "hevcq", "atmox", "subsx", "truehx", "webrx",
+];
+
+impl Shape {
+    const ALL: [Shape; 5] = [
+        Shape::Near,
+        Shape::Negation,
+        Shape::Fuzzy,
+        Shape::Prefix,
+        Shape::Title,
+    ];
+
+    fn rule(self, i: usize) -> String {
+        match self {
+            Shape::Near => {
+                let (a, b) = FAR[i / 7 % FAR.len()];
+                format!("{a} NEAR/1 {b}")
+            }
+            Shape::Negation => format!("{} -mkv", common(i)),
+            // Half short (one edit), half long (two).
+            Shape::Fuzzy if i % 2 == 0 => format!("~qz{}", i % 997),
+            Shape::Fuzzy => format!("~{}", unique(i, "f")),
+            Shape::Prefix => format!("{}*", LETTER_PREFIXES[i / 7 % LETTER_PREFIXES.len()]),
+            Shape::Title => format!("title:{}", common(i)),
+        }
+    }
+}
+
+/// The held mixed set: of every 100 rules, 10 on common words (the 10%
+/// case), 1 NEAR, 2 negations, 2 fuzzy words and 3 prefixes, all on the
+/// set's words, and the rest as in [`ten_thousand_rules`]. Most rules
+/// people write are words, phrases and groups; the expensive shapes are
+/// a few of them each (§2.21).
+fn mixed_rules() -> Vec<lodestar_filter::UserRule> {
+    rules(|i| match i % 100 {
+        0..10 => Some(on_common(i)),
+        10 => Some(Shape::Near.rule(i)),
+        11..13 => Some(Shape::Negation.rule(i)),
+        13..15 => Some(Shape::Fuzzy.rule(i)),
+        15..18 => Some(Shape::Prefix.rule(i)),
+        _ => None,
+    })
+}
+
+/// 10% of the rules of one shape, 1% on common words, and the rest.
+fn shape_rules(shape: Shape) -> Vec<lodestar_filter::UserRule> {
+    rules(|i| match i % 100 {
+        0..10 => Some(shape.rule(i)),
+        10 => Some(on_common(i)),
+        _ => None,
+    })
 }
 
 /// The runner's speed, from work that runs no Lodestar code: fold the
@@ -428,9 +528,25 @@ fn budget() {
     // reading the classification as ingest does.
     let mut engine = lodestar_filter::Engine::new(core);
     engine.packs = lodestar_filter::PackSwitches::all();
-    for (share, held) in [(1, true), (10, true), (25, false)] {
-        engine.rules = ten_thousand_rules(share).into();
-        let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
+    let mut sets: Vec<(String, Vec<lodestar_filter::UserRule>, bool)> =
+        [(1, true), (10, true), (25, false)]
+            .into_iter()
+            .map(|(share, held)| {
+                let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
+                (what, ten_thousand_rules(share), held)
+            })
+            .collect();
+    sets.push((
+        "engine, packs on, 10,000 rules, mixed (10% common, 1% NEAR, 2% negation, 2% fuzzy, 3% prefix)".into(),
+        mixed_rules(),
+        true,
+    ));
+    for shape in Shape::ALL {
+        let what = format!("engine, packs on, 10,000 rules, 10% {shape:?}");
+        sets.push((what, shape_rules(shape), false));
+    }
+    for (what, rules, held) in sets {
+        engine.rules = rules.into();
         let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
             let (a, b) = engine.rule_counts(&items[i], Some(&facts[i]));
             (m + a, f + b)
@@ -444,8 +560,10 @@ fn budget() {
             let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
             assert!(
                 v.decision
+                    .as_ref()
                     .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
-                "no rule of yours matches the set"
+                "no rule of yours matches the set: {what}: {:?}",
+                v.decision
             );
         });
         cases.push((what, per, held));

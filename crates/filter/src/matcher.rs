@@ -31,7 +31,7 @@ use lodestar_search::{Node, flag_names};
 use crate::core::Item;
 use crate::fasttok::{self, Text};
 use crate::hash::{IdSet, term_hash};
-use crate::prefilter::{self, DocKeys, Gate, RuleList};
+use crate::prefilter::{self, DocKeys, Gate, NearTerms, RuleList};
 
 /// What the rules can read beyond the core's [`Item`].
 #[derive(Debug, Clone, Copy)]
@@ -297,6 +297,24 @@ pub(crate) fn compile(node: &Node) -> Compiled {
     }
 }
 
+/// Each NEAR in `q`, as the hashes of its words' tokens and its span
+/// (words plus slop), whatever field it reads.
+pub(crate) fn near_words(q: &Compiled, f: &mut dyn FnMut(Vec<u64>, u32)) {
+    match q {
+        Compiled::And(of) | Compiled::Or(of) => of.iter().for_each(|c| near_words(c, f)),
+        Compiled::Not(of) | Compiled::File(of) => near_words(of, f),
+        Compiled::Near { words, slop, .. } => {
+            let hashes = words
+                .iter()
+                .flat_map(|w| w.parts.iter().chain(&w.whole))
+                .map(|t| t.hash)
+                .collect();
+            f(hashes, words.len() as u32 + slop);
+        }
+        _ => {}
+    }
+}
+
 /// A [`Gate`] of a compiled query: a clause every match needs, which the
 /// cheap check answers *no* for when the gate isn't passed
 /// ([`Doc::passes`]). Inside `file:(…)` (`in_file`) every text field is
@@ -397,6 +415,8 @@ pub struct Doc<'a> {
     normalized: OnceCell<Vec<Vec<crate::normalize::Token>>>,
     enrichment: OnceCell<Option<DocEnrichment>>,
     keys: OnceCell<DocKeys>,
+    /// The rule set's NEAR terms, whose nearness the keys record.
+    near: Option<&'a std::sync::Arc<NearTerms>>,
     tag_keys: OnceCell<IdSet>,
     exts: OnceCell<Vec<lodestar_classify::ext::Ext>>,
     content: OnceCell<Content>,
@@ -432,6 +452,7 @@ impl<'a> Doc<'a> {
             normalized: OnceCell::new(),
             enrichment: OnceCell::new(),
             keys: OnceCell::new(),
+            near: None,
             tag_keys: OnceCell::new(),
             exts: OnceCell::new(),
             content: OnceCell::new(),
@@ -440,7 +461,7 @@ impl<'a> Doc<'a> {
 
     fn keys(&self) -> &DocKeys {
         self.keys
-            .get_or_init(|| DocKeys::new(self.item.name, self.item.files))
+            .get_or_init(|| DocKeys::with_near(self.item.name, self.item.files, self.near))
     }
 
     fn tag_keys(&self) -> &IdSet {
@@ -450,6 +471,13 @@ impl<'a> Doc<'a> {
 
     fn has_key(&self, t: &Term) -> bool {
         self.keys().has_text(t.hash)
+    }
+
+    /// The keys record how close `near`'s terms come (a rule set's NEAR
+    /// words, [`RuleList::near_terms`]). Before the keys are built.
+    pub(crate) fn with_near(mut self, near: Option<&'a std::sync::Arc<NearTerms>>) -> Doc<'a> {
+        self.near = near;
+        self
     }
 
     /// The positions of your rules that could match, in order.
@@ -548,6 +576,31 @@ impl<'a> Doc<'a> {
             || (!parts.is_empty()
                 && parts.iter().all(|t| self.has_key(t))
                 && self.could_follow(parts))
+    }
+
+    /// Whether some word never comes within `span - 1` positions of the
+    /// first in any text, by the nearness the keys recorded: a NEAR's
+    /// places within its window have a token of each that close (two
+    /// ends `gap` apart, or a shared position). Only for words all of
+    /// whose tokens were recorded, within the recorded window.
+    fn never_near(&self, words: &[Operand], span: u32) -> bool {
+        let Some(near) = self.keys().nearness() else {
+            return false;
+        };
+        fn terms(w: &Operand) -> impl Iterator<Item = u64> + '_ {
+            w.parts.iter().chain(&w.whole).map(|t| t.hash)
+        }
+        let Some((first, rest)) = words.split_first() else {
+            return false;
+        };
+        if span == 0
+            || span - 1 > near.window()
+            || !words.iter().all(|w| terms(w).all(|h| near.covers(h)))
+        {
+            return false;
+        }
+        rest.iter()
+            .any(|w| !terms(first).any(|x| terms(w).any(|y| near.within(x, y, span - 1))))
     }
 
     /// Whether these parts could follow one another somewhere.
@@ -656,8 +709,10 @@ impl<'a> Doc<'a> {
                 start: Some(k),
                 ..
             } if keyed(field) && !self.keys().could_start(*k) => Tri::No,
-            Compiled::Near { field, words, .. } if keyed(field) => {
-                if words.iter().all(|w| self.could_have(&w.whole, &w.parts)) {
+            Compiled::Near { field, words, slop } if keyed(field) => {
+                if words.iter().all(|w| self.could_have(&w.whole, &w.parts))
+                    && !self.never_near(words, words.len() as u32 + slop)
+                {
                     Tri::Maybe
                 } else {
                     Tri::No
@@ -743,17 +798,30 @@ impl<'a> Doc<'a> {
                 whole,
                 parts,
                 fold,
-            } => !neutral_word(fold) && texts(*field, &|t| has_word(t, whole, parts)),
+            } => {
+                !neutral_word(fold)
+                    && match (field, file) {
+                        (TextField::Any, None) => self.word_anywhere(whole, parts),
+                        _ => None,
+                    }
+                    .unwrap_or_else(|| texts(*field, &|t| has_word(t, whole, parts)))
+            }
             Compiled::Phrase { field, parts, fold } => {
                 !neutral_word(fold) && texts(*field, &|t| sequence(t, parts))
             }
             Compiled::Near { field, words, slop } => texts(*field, &|t| has_near(t, words, *slop)),
             // Prefixes and fuzzy words read each distinct token once.
-            Compiled::Prefix { field, prefix, .. } => {
+            Compiled::Prefix {
+                field,
+                prefix,
+                start,
+            } => {
                 let starts = |t: &str| t.starts_with(&**prefix);
                 !prefix.is_empty()
                     && match (field, file) {
-                        (TextField::Any, None) => self.keys().vocabulary().any(starts),
+                        (TextField::Any, None) => {
+                            self.keys().vocabulary_starting(prefix, *start).any(starts)
+                        }
                         _ => texts(*field, &|t| t.toks.iter().any(|x| starts(t.text(x)))),
                     }
             }
@@ -794,6 +862,24 @@ impl<'a> Doc<'a> {
                         .any(|i| !self.item.files[i].padding && self.eval(of, Some(i), neutral))
             }
             Compiled::Leaf(node) => self.leaf(node),
+        }
+    }
+
+    /// A word anywhere in the name or paths, from the torrent's distinct
+    /// token texts where they decide it: one of its whole forms is there,
+    /// or its one part, or one of its parts isn't. Several parts all
+    /// there need their positions, so `None` leaves it to the texts.
+    fn word_anywhere(&self, whole: &[Term], parts: &[Term]) -> Option<bool> {
+        let keys = self.keys();
+        let has = |t: &Term| keys.has_exact(t.hash, &t.text);
+        if whole.iter().any(has) {
+            return Some(true);
+        }
+        match parts {
+            [] => Some(false),
+            [one] => Some(has(one)),
+            _ if !parts.iter().all(has) => Some(false),
+            _ => None,
         }
     }
 
@@ -1318,6 +1404,116 @@ mod tests {
             };
             assert_eq!(m1, old, "{q:?}");
         }
+    }
+
+    /// Names and paths of the words NEAR tests repeat, files sharing
+    /// folders.
+    fn near_text() -> impl Strategy<Value = String> {
+        (
+            prop::collection::vec(near_word(), 0..14),
+            prop::collection::vec(prop::sample::select(vec![" ", ".", "-", "_", "+ "]), 14),
+        )
+            .prop_map(|(w, s)| {
+                w.iter()
+                    .zip(s)
+                    .map(|(w, s)| format!("{w}{s}"))
+                    .collect::<String>()
+            })
+    }
+
+    fn near_torrent() -> impl Strategy<Value = (String, Vec<FileInfo>)> {
+        let segs = prop::collection::vec(near_text(), 1..5);
+        (
+            near_text(),
+            segs,
+            prop::collection::vec((0usize..5, 0usize..5, 0usize..3), 0..6),
+        )
+            .prop_map(|(name, segs, layout)| {
+                let files = layout
+                    .iter()
+                    .map(|&(a, b, depth)| {
+                        let mut path: Vec<String> = (0..depth)
+                            .map(|d| segs[(a + d) % segs.len()].clone())
+                            .collect();
+                        path.push(segs[b % segs.len()].clone());
+                        FileInfo::new(path, 1)
+                    })
+                    .collect();
+                (name, files)
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+        /// The nearness the scan records turns a NEAR away only when the
+        /// full match says no, inside `file:(…)` too, whatever the words,
+        /// slop and folders.
+        #[test]
+        fn nearness_never_turns_a_match_away(
+            (name, files) in near_torrent(),
+            q in prop::collection::vec(near_word(), 2..4),
+            slop in 1u32..9,
+            other in prop::collection::vec(near_word(), 2..3),
+            in_file in any::<bool>(),
+        ) {
+            let near = q.join(&format!(" NEAR/{slop} "));
+            let query = if in_file { format!("file:({near})") } else { near.clone() };
+            let compiled = compile(&parse(&query).unwrap());
+            // The rule set's terms: this NEAR's, and another's.
+            let another = compile(&parse(&other.join(" NEAR/2 ")).unwrap());
+            let terms = prefilter::NearTerms::of([&compiled, &another].into_iter()).map(std::sync::Arc::new);
+            let item = Item { hashes: &[[1; 20]], name: &name, files: &files, content_type: ContentType::Video };
+            let full = Doc::new(&item, None).eval(&compiled, None, &[]);
+            let doc = Doc::new(&item, None).with_near(terms.as_ref());
+            if doc.check(&compiled, false) == Tri::No {
+                prop_assert!(!full, "{} on {:?} {:?}", query, name, files);
+            }
+            prop_assert_eq!(doc.eval(&compiled, None, &[]), full);
+        }
+    }
+
+    /// A join's compound is found after the word it sits at (`webdl`, at
+    /// `web`, comes with `dl`): the nearness kept for it reaches back far
+    /// enough, so the NEAR isn't turned away.
+    #[test]
+    fn nearness_reaches_back_for_compounds() {
+        for (name, q) in [
+            ("x a WEB-DL", "x NEAR/1 webdl"),
+            ("x a b c d e f g WEB-DL", "x NEAR/7 webdl"),
+            ("x a h.264", "x NEAR/1 h264"),
+            ("x DD+", "x NEAR/1 \"dd+\""),
+        ] {
+            let compiled = compile(&parse(q).unwrap());
+            let terms =
+                prefilter::NearTerms::of(std::iter::once(&compiled)).map(std::sync::Arc::new);
+            let item = Item {
+                hashes: &[[1; 20]],
+                name,
+                files: &[],
+                content_type: ContentType::Video,
+            };
+            let doc = Doc::new(&item, None).with_near(terms.as_ref());
+            assert!(doc.eval(&compiled, None, &[]), "{q} on {name}");
+            assert_ne!(doc.check(&compiled, false), Tri::No, "{q} on {name}");
+        }
+    }
+
+    /// Recording nearness stays in proportion to the name (§6): a name
+    /// repeating NEAR terms four times as long takes about four times the
+    /// steps.
+    #[test]
+    fn hostile_names_record_nearness_in_proportion() {
+        let compiled = compile(&parse("1080p NEAR/8 x264 NEAR/8 web-dl").unwrap());
+        let terms = prefilter::NearTerms::of(std::iter::once(&compiled)).map(std::sync::Arc::new);
+        let steps = |n: usize| {
+            let name = "1080p.x264.WEB-DL.1080p ".repeat(n);
+            crate::work::counted(|| DocKeys::with_near(&name, &[], terms.as_ref())).1
+        };
+        let (small, big) = (steps(500), steps(2_000));
+        assert!(
+            big <= 5 * small,
+            "{small} steps, then {big} on four times the name"
+        );
     }
 
     /// Words a phrase or NEAR test text repeats: single tokens, words of

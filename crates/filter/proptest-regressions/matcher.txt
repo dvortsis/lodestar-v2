@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a4f4017649a54d0bd152596ff9e1d1b2c5b1bd182c1f499fdb44f344d0739d60 # shrinks to (name, files) = ("", [FileInfo { path: ["b ", "x x a x264 dd+ x x x 1080p ", "b "], size: 1, padding: false }]), q = ["dd+", "b"], slop = 5, other = ["a", "a"], in_file = false
