@@ -366,3 +366,43 @@ segments: {
 ```
 
 Rows are sorted by the server (descending value, then key).
+
+### 7.6 Stats, crawler and network check (B14)
+
+`GET /stats` feeds the global bar and the status pill; `GET /crawler` the
+bar's Pause/Resume and intensity control; `GET /network/check` the
+first-run wizard's step 3 and the dashboard's "reachable" flag;
+`GET /sources` Settings → Sources (§18.8). Every count reads the counter
+`/metrics` (or the status page) shows; rates are the server's, from
+samples of those counters every 10 s. All **main** (B14).
+
+| Field | Type | Nullable | Unit / meaning | Formatter | Time base |
+|---|---|---|---|---|---|
+| `stats.searchable_torrents` | integer | yes: null = search is off | Documents in the index (`lodestar_search_docs`) | `formatCompact` | Snapshot |
+| `stats.stored_torrents` | integer | no | Torrents stored (`lodestar_torrents`) | `formatCompact` | Snapshot |
+| `stats.harvested_per_hour` | number | yes: null in the first minute after start or a resume, and while paused (a gap, not a zero); after a resume the 5 min window starts at the resume | Keys the sources reported (`lodestar_intake_received_total`), per hour over the last 5 min | `formatRate` | Event time |
+| `stats.fetched_per_hour` | number | yes (as `harvested_per_hour`) | Info dicts fetched (the pool's `fetched`, as on the status page), per hour over the last 5 min | `formatRate` | Event time |
+| `stats.queue_depth` | integer | no | Keys queued or in flight in the fetch pool (`lodestar_fetch_pending`) | `formatCount` | Snapshot |
+| `stats.index_lag_s` | integer (s) | yes: null when search is off, or the index is behind and hasn't committed since the start (a backlog after a restart) | 0 when everything stored is searchable (the index watermark ≥ the store's highest torrent id); while behind, seconds since the index last committed (the indexer's `last_commit`), so a stalled index shows a growing lag | `formatSpan` | Snapshot |
+| `stats.data_bytes` | integer (bytes) | yes: null when the directory can't be read | Bytes in the data directory (database, index, state), measured at most every 30 s | `formatBytes` | Snapshot |
+| `stats.disk_free_bytes` | integer (bytes) | yes: **always null in this build** (std has no free-space call; see §16 B14) | Free bytes on the data directory's volume | `formatBytes` | Snapshot |
+| `stats.uptime_s` | integer (s) | no | Seconds since the pipeline started (`lodestar_start_time_seconds`) | `formatSpan` | Snapshot |
+| `stats.paused`, `crawler.paused` | boolean | no | The crawler is paused | — | Snapshot |
+| `stats.updated_at` | integer | no | When the numbers were read | `formatDateTime` | — |
+| `crawler.state` | string | no | `running` / `paused` (icon + text, glossary) | — | Snapshot |
+| `crawler.since` | integer | no | Last pause or resume; the start when running since then | `formatRelative` | — |
+| `crawler.intensity` | string | no | `low` / `balanced` / `aggressive` (`/settings/crawler`'s `intensity`) | — | Snapshot |
+| `crawler.intensity_env` | string | yes: null = editable | The variable that sets it | — | — |
+| `crawler.dht` | `{bootstrapped: boolean, outstanding: integer, routing_nodes: integer}` | yes: null = DHT off or not started | Routing-table size, queries awaiting an answer (`lodestar_dht_*`) | `formatCount` | Snapshot |
+| `crawler.fetch` | `{in_flight, lookups, queued: integer}` | no | Fetches running, peer lookups out, keys waiting | `formatCount` | Snapshot |
+| `network.reachable` | boolean | **yes: null = unknown** (DHT off, bootstrapping, or under `min_window_s` since bootstrap or a restart) | Unsolicited inbound DHT queries arrive on the DHT port | Text + icon | Snapshot |
+| `network.reason` | string | no | `dht_off`, `bootstrapping`, `measuring`, `unsolicited_queries` (≥ 3 networks), `few_unsolicited_sources` (1–2 networks: not enough), `no_unsolicited_queries` | Text (glossary) | — |
+| `network.inbound_queries`, `network.unsolicited_queries` | integer | yes: null until measuring | Queries received in the window, and those from nodes we hadn't sent anything to lately | `formatCount` | Event time (the window) |
+| `network.unsolicited_sources` | integer | yes: null until measuring | Distinct networks (/24 or /64) the unsolicited queries came from, at most the 64 most recent; `reachable` needs ≥ 3 | `formatCount` | Event time (the window) |
+| `network.measured_s`, `network.min_window_s` (120), `network.window_s` (600) | integer (s) | no | Seconds of evidence; the least before a verdict; the longest looked at | `formatSpan` | — |
+| `network.window_started_at` | integer | yes: null before bootstrap | Bootstrap or the last restart | `formatDateTime` | — |
+| `network.external` | `{ip: string\|null, port: integer\|null, voters: integer, agreeing: integer}` | ip/port yes: null until ≥ 5 voters and a majority agree | Our address as other nodes report it (BEP 42 `ip`): one vote per /24 or /64, the last 32 voting networks, IPv4 and IPv6 apart (IPv4 wins when both agree on one) | `formatCount` for the counts | Snapshot |
+| `network.mapping` | string | no | UPnP / NAT-PMP: `unavailable` (not in this build) | Text | — |
+| `sources[].health.harvested_24h`, `.stored_24h` | integer | no | Keys this source was first to report in the last 24 discovery cohorts, and of those, stored | `formatCount` | Discovery cohort |
+| `sources[].health.last_run` | integer | yes: null = not started this run | When it last started | `formatRelative` | — |
+| `sources[].health.last_error` | string | yes: null = no error | Why it last stopped | Text | — |

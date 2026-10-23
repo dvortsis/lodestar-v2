@@ -40,6 +40,7 @@ fn fixture() -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
             adult: Default::default(),
         }),
     );

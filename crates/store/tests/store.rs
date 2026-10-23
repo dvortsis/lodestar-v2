@@ -438,6 +438,26 @@ fn counters_add_up_inside_writes() {
     assert_eq!(store.cohorts(0, i64::MAX).unwrap(), vec![cohort(8)]);
     assert_eq!(store.events(0, i64::MAX).unwrap(), events);
     assert_eq!(store.count().unwrap(), 1);
+    // The newest event of the asked kinds, by insertion order.
+    let ev = |at, kind| Event {
+        at,
+        kind,
+        detail: String::new(),
+    };
+    store
+        .write(&WriteBatch {
+            events: &[ev(10, 3), ev(5, 4), ev(20, 9)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(store.last_event(&[3, 4]).unwrap(), Some(ev(5, 4)));
+    assert_eq!(store.last_event(&[3]).unwrap(), Some(ev(10, 3)));
+    assert_eq!(
+        store.last_event(&[1]).unwrap().map(|e| e.at),
+        Some(1_692_000_000)
+    );
+    assert_eq!(store.last_event(&[42]).unwrap(), None);
+    assert_eq!(store.last_event(&[]).unwrap(), None);
 }
 
 #[test]
@@ -748,4 +768,123 @@ fn enrichment_is_stored_with_a_prepared_torrent_and_backfilled() {
     let log = store.reindex_after(0, 100).unwrap();
     assert_eq!(log.len(), seq + 1);
     assert_eq!(log.last().unwrap().1, b);
+}
+
+#[test]
+fn deleted_rows_leave_no_trace_in_the_file() {
+    // secure_delete: a purged value is zeroed, not left in a free page that
+    // a copy of the data folder could recover.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let store = Store::open(&path, StoreConfig::default()).unwrap();
+    let conn = store.connection();
+    let secret = "purged-quarantine-name-7f3a9c";
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('probe', ?1)",
+        [secret],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    assert!(contains(&std::fs::read(&path).unwrap(), secret.as_bytes()));
+
+    conn.execute("DELETE FROM settings WHERE key = 'probe'", [])
+        .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    let file = std::fs::read(&path).unwrap();
+    assert!(
+        !contains(&file, secret.as_bytes()),
+        "the deleted value survived"
+    );
+    let wal = std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default();
+    assert!(!contains(&wal, secret.as_bytes()), "the WAL kept the value");
+}
+
+#[test]
+fn deleted_torrents_leave_no_trace_on_disk() {
+    // The WAL is truncated after the delete, so the frames written when
+    // the torrent went in go too, and secure_delete zeroes the freed pages
+    // in the main file. (Names are capped at 4 KiB, under the 16 KiB page,
+    // so the overflow-page case is covered by the quarantine test in
+    // filter.rs.)
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+    let marker = "deleted-torrent-marker-91d2";
+    let name: String = (0..4_000u32)
+        .map(|i| char::from(b'a' + ((i.wrapping_mul(2_654_435_761) >> 24) % 26) as u8))
+        .chain(marker.chars())
+        .collect();
+    let raw = single(name.as_bytes(), vec![]);
+    let info = Info::parse(&raw).unwrap();
+    store.insert(&[new(&info, &raw)]).unwrap();
+    let on_disk = || {
+        let mut all = std::fs::read(&path).unwrap();
+        all.extend(std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default());
+        all
+    };
+    assert!(
+        contains(&on_disk(), marker.as_bytes()),
+        "the name was written"
+    );
+    let gone = store.delete_torrents(&[info.primary_hash().0]).unwrap();
+    assert_eq!(gone.len(), 1);
+    assert!(
+        !contains(&on_disk(), marker.as_bytes()),
+        "the deleted name survived"
+    );
+}
+
+#[test]
+fn a_relabelled_torrent_held_back_leaves_no_trace_on_disk() {
+    // An Is-adult relabel (§20.9) that quarantines a stored torrent
+    // deletes it in `set_enrichments_at`: its name goes from the file and
+    // the WAL too.
+    use lodestar_store::{Filtered, Held, Refiled};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+    let marker = "relabelled-torrent-marker-3e8a";
+    let raw = single(format!("Some.Name.{marker}").as_bytes(), vec![]);
+    let info = Info::parse(&raw).unwrap();
+    let [Inserted::New(id)] = store.insert(&[new(&info, &raw)]).unwrap()[..] else {
+        panic!("expected one new row");
+    };
+    let on_disk = || {
+        let mut all = std::fs::read(&path).unwrap();
+        all.extend(std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default());
+        all
+    };
+    assert!(
+        contains(&on_disk(), marker.as_bytes()),
+        "the name was written"
+    );
+    let hashes = [info.primary_hash().0];
+    let refiled = Refiled {
+        id,
+        filtered: Filtered {
+            hashes: &hashes,
+            rule: "CS-5a+adult",
+            action: 4,
+            held: Some(Held::Quarantine),
+            sealed: Some(b"sealed"),
+            evidence: &[],
+            at: 10,
+            expires_at: 20,
+            adult_hold: true,
+        },
+        flags: 0,
+    };
+    let g = store.class_gen().unwrap();
+    store.set_enrichments_at(g, &[], &[refiled]).unwrap();
+    assert!(store.torrent(id).unwrap().is_none(), "the torrent is gone");
+    assert!(
+        !contains(&on_disk(), marker.as_bytes()),
+        "the relabelled torrent's name survived"
+    );
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
 }

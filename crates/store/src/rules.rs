@@ -342,7 +342,7 @@ impl Store {
     /// correction. Returns false when the torrent isn't stored. The caller
     /// re-enriches the torrent, which logs it for re-indexing.
     pub fn set_correction(&mut self, id: i64, c: ClassCorrection) -> Result<bool> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let exists = tx
             .query_row("SELECT 1 FROM torrents WHERE id = ?1", [id], |_| Ok(()))
             .optional()?
@@ -409,7 +409,7 @@ impl Store {
 
     /// Removes a classification rule, returning its query.
     pub fn remove_class_rule(&mut self, id: i64) -> Result<Option<String>> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let query: Option<String> = tx
             .query_row("SELECT query FROM class_rules WHERE id = ?1", [id], |r| {
                 r.get(0)
@@ -485,7 +485,7 @@ impl Store {
     /// Moves the classification rules to a new generation, so enrichment
     /// made under the old rules is no longer written. Returns it.
     pub fn bump_class_gen(&mut self) -> Result<i64> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let next = bump_class_gen(&tx)?;
         tx.commit()?;
         Ok(next)
