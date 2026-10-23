@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T10:39:30Z",
+ "updated_at": "2026-10-23T10:39:51Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1339,7 +1339,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 19,
- "last_heartbeat": "2026-10-23T09:39:51Z",
+ "last_heartbeat": "2026-10-23T10:39:51Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
@@ -1390,6 +1390,7 @@
   "fix-export-race": "2026-10-23T08:59:12Z #122 merged (reviewed APPROVE, CI green). Follow-up: export worker pacer wait doesn't select on tx.closed()",
   "slices-yaml-124": "2026-10-23T09:15:07Z #124 merged: B-update owns crates/update/** + fuzz target; B-log1b owns windows/**",
   "heartbeat-0938": "open: #123 B11b (eba938a, round), #119 B-log1 (3542db1, round 3), #92 P-release (86910cf, round 1), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B-update PR1; nothing new ready",
-  "fix-events-proxy": "2026-10-23T10:39:30Z runner PR #126 fix/events-proxy-heartbeat (heartbeat uses guard's logged_in; per-client cap for proxy sessions; regression test fails on main); reviewer running"
+  "fix-events-proxy": "2026-10-23T10:39:30Z runner PR #126 fix/events-proxy-heartbeat (heartbeat uses guard's logged_in; per-client cap for proxy sessions; regression test fails on main); reviewer running",
+  "heartbeat-1038": "open: #126 runner fix (review), #125 B-update PR1 (round 1 fixing), #92 P-release (c8962fd round 1), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B11b part 2, B-log2; nothing newly ready"
  }
 }
