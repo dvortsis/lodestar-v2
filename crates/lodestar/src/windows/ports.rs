@@ -143,8 +143,11 @@ impl fmt::Display for Warning {
             Some(cmd) => write!(
                 f,
                 "To fix it, run this in a Command Prompt opened as administrator \
-                 (it takes effect at once): {cmd}. Or lower the crawler's \
-                 intensity or its max_sockets setting."
+                 (it takes effect at once): {cmd}. Then check again with \
+                 `netsh int {} show excludedportrange protocol=tcp`: Hyper-V and \
+                 WinNAT can reserve more ports. Or lower the crawler's intensity \
+                 or its max_sockets setting.",
+                self.family.netsh()
             ),
             None => f.write_str(
                 "No port range is large enough: lower the crawler's intensity \
@@ -375,8 +378,9 @@ mod tests {
              Fetches may fail, and other programs may lose network access. \
              To fix it, run this in a Command Prompt opened as administrator \
              (it takes effect at once): netsh int ipv4 set dynamicport tcp \
-             start=47104 num=18432. Or lower the crawler's intensity or its \
-             max_sockets setting."
+             start=47104 num=18432. Then check again with `netsh int ipv4 show \
+             excludedportrange protocol=tcp`: Hyper-V and WinNAT can reserve more \
+             ports. Or lower the crawler's intensity or its max_sockets setting."
         );
     }
 }
