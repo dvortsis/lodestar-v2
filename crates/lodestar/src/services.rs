@@ -373,6 +373,24 @@ impl Services {
         })
     }
 
+    /// What an update's self-test probes (§12.2, B-update): the bound HTTP
+    /// address, whether the DHT is up (when it's on), and the index.
+    #[cfg(unix)]
+    pub fn probe(&self) -> crate::update::probation::Probe {
+        crate::update::probation::Probe {
+            http: self
+                .listener
+                .local_addr()
+                .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 0))),
+            dht: self.http.dht.clone().map(|d| {
+                let up: Arc<dyn Fn() -> bool + Send + Sync> =
+                    Arc::new(move || d.lock().is_ok_and(|s| s.is_some()));
+                up
+            }),
+            search: self.handles.search.clone().map(SearchHandle::serving),
+        }
+    }
+
     /// Serves HTTP until `signal` resolves, then shuts everything down.
     pub async fn run(
         self,
