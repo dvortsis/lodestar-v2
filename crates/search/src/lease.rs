@@ -254,6 +254,16 @@ impl Lease {
 
     /// Up to `limit` hits from `start`, and the position after them.
     pub fn page(&self, start: Start, limit: usize, cancel: &CancelToken) -> Result<Page> {
+        Ok(self.page_at(start, limit, cancel)?.0)
+    }
+
+    /// [`Lease::page`], with each hit's address (`explain.rs`).
+    pub(crate) fn page_at(
+        &self,
+        start: Start,
+        limit: usize,
+        cancel: &CancelToken,
+    ) -> Result<(Page, Vec<DocAddress>)> {
         cancel.check()?;
         let limit = limit.max(1);
         let s = &self.searcher;
@@ -296,10 +306,11 @@ impl Lease {
             }
             _ => return Err(Error::Corrupt("the cursor doesn't fit its lease")),
         };
-        Ok(Page {
+        let page = Page {
             hits: hits(s, &ranked)?,
             next,
-        })
+        };
+        Ok((page, ranked.iter().map(|r| r.addr).collect()))
     }
 
     /// The windows covering hits `o..o + limit`, from one phase-1 pass.

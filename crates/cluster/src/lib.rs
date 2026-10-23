@@ -13,12 +13,23 @@
 //!   issued and revoked certificates and one-time [`JoinToken`]s, and the
 //!   worker's [`Joining`] and [`Credentials`];
 //! - mutual TLS 1.3 for the cluster port ([`CoordinatorTls`] and the
-//!   worker's client configurations), pinned to the cluster CA.
+//!   worker's client configurations), pinned to the cluster CA;
+//! - the protocol (§19.2): [`proto`] messages in bounded [`frame`]s over a
+//!   [`Link`] (a WebSocket, or in-process channels for the local worker),
+//!   the coordinator's [`ClusterServer`] (pre-auth limits, sessions,
+//!   heartbeats, clock offsets, leases and re-grants, revocation) and the
+//!   worker's [`WorkerSession`].
 
+mod client;
+mod clock;
 mod coordinator;
+pub mod frame;
 mod hex;
 mod join;
 mod leases;
+mod link;
+pub mod proto;
+mod server;
 mod tls;
 mod worker;
 mod x509;
@@ -28,12 +39,21 @@ mod tests;
 
 use std::fmt;
 
+pub use client::{ClientError, WorkerConfig, WorkerEvent, WorkerSession, connect, join};
+pub use clock::{Clock, ClockTime, ManualClock, OffsetClock, SystemClock};
 pub use coordinator::{
     CA_LIFETIME_SECS, Coordinator, IssuedCert, JOIN_TOKEN_TTL_SECS, JoinError, JoinGrant,
-    LEAF_LIFETIME_SECS, MAX_OPEN_TOKENS, ROTATION_OVERLAP_SECS,
+    LEAF_LIFETIME_SECS, MAX_OPEN_TOKENS, RENEW_MIN_INTERVAL_SECS, ROTATION_OVERLAP_SECS,
 };
-pub use join::{JoinToken, TokenFormatError, valid_worker_name};
+pub use join::{
+    JoinToken, TokenFormatError, TokenInputError, read_join_token, read_join_token_file,
+    valid_worker_name,
+};
 pub use leases::{Claim, Claimed, Lease, LeaseTable, RestoredLease, Token, WorkerId};
+pub use link::{CoordinatorLink, Link, LinkError, WorkerLink, local_pair};
+pub use server::{
+    CLUSTER_PATH, ClusterServer, FleetSnapshot, Pki, ServerConfig, StoredKeys, WorkerStatus,
+};
 pub use tls::{ALPN_CLUSTER, ALPN_JOIN, CoordinatorTls, PeerIdentity, coordinator_server_name};
 pub use worker::{Credentials, Joining, Renewal};
 pub use x509::{CLOCK_SKEW_SECS, COORDINATOR_NAME, Fingerprint, KeyPair};
@@ -65,6 +85,8 @@ pub enum ClusterError {
     RotationInProgress,
     /// A join or renewal answer that doesn't match what was asked.
     BadGrant,
+    /// The worker renewed less than an hour ago.
+    TooSoon,
 }
 
 impl fmt::Display for ClusterError {
@@ -90,6 +112,7 @@ impl fmt::Display for ClusterError {
             ClusterError::Expired => f.write_str("this worker's certificate has expired"),
             ClusterError::RotationInProgress => f.write_str("a CA rotation is already in progress"),
             ClusterError::BadGrant => f.write_str("the coordinator's answer doesn't match"),
+            ClusterError::TooSoon => f.write_str("this worker renewed less than an hour ago"),
         }
     }
 }

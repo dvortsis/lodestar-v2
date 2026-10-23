@@ -1,2 +1,2 @@
 400
-{"error":{"code":"unknown_field","field":"intensty","message":"This section has no setting \"intensty\"."}}
+{"error":{"code":"unknown_field","field":"intensty","message":"This section has no setting \"intensty\".","section":"crawler"}}
