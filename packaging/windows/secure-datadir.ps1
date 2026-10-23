@@ -21,10 +21,18 @@
 param([Parameter(Mandatory)][string]$Path, [string]$Service = 'Lodestar')
 $ErrorActionPreference = 'Stop'
 
+# A deferred MSI action's output is lost, so keep a log the install failure can point to.
+$log = Join-Path $env:SystemRoot 'Temp\lodestar-secure-datadir.log'
+function Log($msg) { Add-Content -LiteralPath $log -Value ("{0:s} {1}" -f (Get-Date), $msg) }
+Log "start: $Path"
+
 function Stop-Install($msg) {
+  Log "STOPPED: $msg"
   Write-Host "LODESTAR INSTALL STOPPED: $msg"
   exit 1
 }
+
+trap { Log "ERROR: $($_ | Out-String)"; exit 2 }
 
 $dir = [IO.Path]::GetFullPath($Path).TrimEnd('\')
 $marker = '.lodestar-secured'
@@ -86,10 +94,10 @@ if (Test-Path -LiteralPath $dir) {
   $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($link) { Stop-Install "$($link.FullName) is a link or junction inside the data folder. Remove it and install again." }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)
-  Write-Host "re-secured $dir"
+  Log "re-secured $dir"
 } else {
   $parent = Split-Path -Parent $dir
   if (-not (Test-Path -LiteralPath $parent)) { Stop-Install "$parent does not exist." }
   (New-Object IO.DirectoryInfo $dir).Create((New-DataSecurity))
-  Write-Host "created $dir"
+  Log "created $dir"
 }
