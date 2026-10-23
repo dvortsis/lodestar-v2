@@ -607,10 +607,121 @@ export interface paths {
         /**
          * Every settings section, with the fields and JSON schema its form is
          *     generated from.
+         * @description Each property of a section's schema carries hints for the form (the
+         *     server checks everything regardless): `x-group` (the group's id; its
+         *     heading is the message `settings.group.<id>`), `x-order`, `x-advanced`,
+         *     `x-preview` (`POST /settings/preview` has estimates or warnings for
+         *     it) and, where they apply, `x-unit` (`seconds`, `mebibytes`,
+         *     `connections`), `x-widget` (`radio`, `slider`, `theme`, `shortcuts`,
+         *     `language`, `time-zone`), `x-auto` (the value that means "automatic"),
+         *     `x-keywords` (a message key of search synonyms), `x-danger`
+         *     (`disruptive`, `privacy`, `destructive`, `security`, §10.10.7),
+         *     `x-config` (the `config.toml` key), `x-env` (the `LODESTAR_*`
+         *     variable), `format` (`socket-addr`, `log-filter`) and `writeOnly`
+         *     (a secret, never sent back).
          */
         get: operations["listSettings"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Changes several sections at once (`{section: {field: value}}`), as a
+         *     screen showing fields from several sections saves them: every
+         *     section's patch is checked as `PATCH /settings/{section}` checks it,
+         *     then all are saved in one transaction. One refused field saves
+         *     nothing; the error names its `section` and `field`.
+         */
+        patch: operations["patchSettingsBatch"];
+        trace?: never;
+    };
+    "/settings/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved settings as a TOML file to keep or move to another install,
+         *     laid out by section (`[crawler]`), each key with its `config.toml`
+         *     key and environment variable in a comment. It holds only values saved
+         *     in the app: never a secret, a value an environment variable sets, or
+         *     filter, floor, pack or subscription state (§20 has its own export).
+         *     `preferences` is included only when asked.
+         */
+        get: operations["exportSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reads a file from `GET /settings/export` and reports what it would
+         *     change. Keys that aren't settings, read-only ones, secrets and ones an
+         *     environment variable sets are listed in `skipped` and left alone.
+         *     Unless `dry_run=true`, the changes are then saved as one batch with
+         *     `PATCH /settings`' checks: all or nothing.
+         */
+        post: operations["importSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What `PATCH /settings` with the same body would do, without saving:
+         *     the same checks and refusals, then for each patched field whether it
+         *     applies now or after a restart, warnings, and estimates where the
+         *     section can make them (fetch sockets, the new address, memory).
+         */
+        post: operations["previewSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tests a download client with the values on screen, before they're
+         *     saved: logs in and asks its version. It goes through the integrations
+         *     SSRF guard (download clients may be on this machine or the LAN, never
+         *     on link-local, metadata or reserved addresses). Nothing is saved, and
+         *     the result never repeats the URL or a credential.
+         */
+        post: operations["testSettings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -625,8 +736,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One section's effective values, where each comes from, and which
-         *     can't be changed here or wait for a restart.
+         * One section's effective values, where each comes from, which can't be
+         *     changed here or wait for a restart, and its revision.
          */
         get: operations["getSettings"];
         put?: never;
@@ -638,7 +749,8 @@ export interface paths {
          * Changes some of a section's settings. Every field is checked first,
          *     then all are saved together; live ones apply at once, and the rest
          *     are listed in `restart_required`. A field an environment variable
-         *     sets is refused, naming the variable.
+         *     sets is refused, naming the variable. With `if_revision`, a section
+         *     changed since is refused with its current values.
          */
         patch: operations["patchSettings"];
         trace?: never;
@@ -1492,6 +1604,30 @@ export interface components {
             /** @description The top torrents by swarm trend. */
             rising: components["schemas"]["HitGroup"];
         };
+        /** @description A download client's settings as the form has them, unsaved. */
+        DownloadClientDraft: {
+            client: components["schemas"]["DownloadClientKind"];
+            /**
+             * @description The password (qBittorrent, Deluge, Transmission and rTorrent with
+             *     authentication) or the RPC secret (Aria2).
+             */
+            password?: string;
+            /**
+             * @description The client's address, as the form has it.
+             * @example http://192.168.1.5:8080/
+             */
+            url: string;
+            /**
+             * @description The user name (qBittorrent; Transmission and rTorrent with
+             *     authentication).
+             */
+            username?: string;
+        };
+        /**
+         * @description A download client a connection test can reach.
+         * @enum {string}
+         */
+        DownloadClientKind: "qbittorrent" | "transmission" | "deluge" | "rtorrent" | "aria2";
         ErrorBody: {
             /**
              * @description A stable snake_case identifier to branch on.
@@ -1549,6 +1685,10 @@ export interface components {
             data: components["schemas"]["InsightsEvent"];
             /** @enum {string} */
             event: "insights";
+        } | {
+            data: components["schemas"]["SettingsEvent"];
+            /** @enum {string} */
+            event: "settings";
         } | {
             data: components["schemas"]["ResyncEvent"];
             /** @enum {string} */
@@ -1801,6 +1941,15 @@ export interface components {
              */
             queued: number;
         };
+        /** @description One patched field, as it would be saved. */
+        FieldPreview: {
+            estimates: components["schemas"]["PreviewEstimate"][];
+            /** @description It would apply at the next restart; otherwise at once. */
+            restart_required: boolean;
+            /** @description The value it would have (null for a secret). */
+            value: unknown;
+            warnings: components["schemas"]["PreviewWarning"][];
+        };
         /**
          * @description The file lists compared: files match when their path (inside the
          *     torrent, `/`-separated, decoded) and size are equal. Padding files
@@ -1911,6 +2060,78 @@ export interface components {
         IdBody: {
             /** Format: int64 */
             id: number;
+        };
+        /** @description One setting an import changes. */
+        ImportChange: {
+            field: string;
+            /** @description The value now. */
+            from: unknown;
+            /**
+             * @description Where the value now comes from: to undo, send it back, or `null`
+             *     when this isn't `db`.
+             */
+            from_source: components["schemas"]["SettingSource"];
+            /** @description It applies at the next restart. */
+            restart_required: boolean;
+            section: string;
+            to: unknown;
+        };
+        /**
+         * @description `POST /settings/import`: the diff, and whether it was applied.
+         * @example {
+         *       "applied": false,
+         *       "changes": [
+         *         {
+         *           "field": "intensity",
+         *           "from": "balanced",
+         *           "from_source": "default",
+         *           "restart_required": false,
+         *           "section": "crawler",
+         *           "to": "low"
+         *         }
+         *       ],
+         *       "revisions": {
+         *         "crawler": 3
+         *       },
+         *       "skipped": [
+         *         {
+         *           "env": "LODESTAR_DHT_PORT",
+         *           "key": "network.dht_port",
+         *           "reason": "set_by_environment"
+         *         }
+         *       ],
+         *       "unchanged": 2
+         *     }
+         */
+        ImportReport: {
+            /** @description Saved (false on a dry run, or when nothing changes). */
+            applied: boolean;
+            changes: components["schemas"]["ImportChange"][];
+            /**
+             * @description Every section's revision after the import: pass them back with
+             *     the real import to refuse it if anything changed after a dry run.
+             */
+            revisions: {
+                [key: string]: number;
+            };
+            skipped: components["schemas"]["ImportSkip"][];
+            /**
+             * Format: int32
+             * @description Settings in the file that already have its value.
+             */
+            unchanged: number;
+        };
+        /** @description A key in the file that an import leaves alone. */
+        ImportSkip: {
+            /** @description The variable that sets it, for `set_by_environment`; null otherwise. */
+            env: string | null;
+            /** @description `section.field`, or the key as the file has it. */
+            key: string;
+            /**
+             * @description `unknown` (no such setting), `read_only`, `secret` (never imported)
+             *     or `set_by_environment`.
+             */
+            reason: string;
         };
         /**
          * @description `event: insights` (reserved: B11a publishes it every 30 s): the stage
@@ -2224,6 +2445,34 @@ export interface components {
             stored: number;
             /** @description Dropped items it would let be fetched again. */
             tombstones: number;
+        };
+        /**
+         * @description A consequence the preview can put a number on, for the UI to format.
+         * @example {
+         *       "name": "sockets",
+         *       "value": 400
+         *     }
+         */
+        PreviewEstimate: {
+            /**
+             * @description What it measures: `sockets` (concurrent metadata fetches), `url`
+             *     (where the UI will be after a restart), `memory_mib`.
+             */
+            name: string;
+            value: unknown;
+        };
+        /**
+         * @description Something worth knowing before saving; it doesn't stop the save.
+         * @example {
+         *       "code": "search_stops",
+         *       "message": "Search stops after the restart, until you turn it back on."
+         *     }
+         */
+        PreviewWarning: {
+            /** @description A stable snake_case identifier. */
+            code: string;
+            /** @description A sentence for people. */
+            message: string;
         };
         QuarantineEntry: {
             /**
@@ -2547,6 +2796,17 @@ export interface components {
              */
             total_approx: boolean;
         };
+        /** @description One section's patched fields. */
+        SectionPreview: {
+            fields: {
+                [key: string]: components["schemas"]["FieldPreview"];
+            };
+            /**
+             * Format: int64
+             * @description The section's revision now.
+             */
+            revision: number;
+        };
         /**
          * @description `GET /settings/{section}` and `PATCH /settings/{section}`: the
          *     section's effective values.
@@ -2570,6 +2830,7 @@ export interface components {
          *       "restart_required": [
          *         "timeout_secs"
          *       ],
+         *       "revision": 4,
          *       "section": "crawler"
          *     }
          */
@@ -2582,6 +2843,12 @@ export interface components {
              *     effect at the next restart.
              */
             restart_required: string[];
+            /**
+             * Format: int64
+             * @description Goes up by one with every save that changes the section. Send it
+             *     back as `if_revision` to refuse a save over someone else's.
+             */
+            revision: number;
             section: string;
         };
         /** @description One field of a section, for its form. */
@@ -2619,6 +2886,85 @@ export interface components {
             source: components["schemas"]["SettingSource"];
             /** @description Any JSON value, of the type the section's schema gives the field. */
             value: unknown;
+        };
+        /**
+         * @description `PATCH /settings` and `POST /settings/preview`: patches for several
+         *     sections, `{section: {field: value}}`, each as `PATCH
+         *     /settings/{section}` takes it. Saved all together or not at all.
+         */
+        SettingsBatch: Record<string, never>;
+        /** @description `PATCH /settings`: every patched section's new values. */
+        SettingsBatchValues: {
+            sections: {
+                [key: string]: components["schemas"]["SectionValues"];
+            };
+        };
+        SettingsErrorBody: {
+            /**
+             * @description A stable snake_case identifier to branch on.
+             * @example invalid_setting
+             */
+            code: string;
+            /** @description The field at fault. */
+            field?: string;
+            /** @description A sentence for people. It never repeats a secret's value. */
+            message: string;
+            /** @description The section at fault. */
+            section?: string;
+        };
+        /**
+         * @description A refused settings change: the API's error envelope, plus the
+         *     `section` at fault and, for `409 stale_revision`, the current values
+         *     of every section that changed meanwhile.
+         * @example {
+         *       "error": {
+         *         "code": "invalid_setting",
+         *         "field": "timeout_secs",
+         *         "message": "Must be from 1 to 120.",
+         *         "section": "crawler"
+         *       }
+         *     }
+         */
+        SettingsErrorEnvelope: {
+            /**
+             * @description On `409 stale_revision`: each stale section's values now, to merge
+             *     the edit with.
+             */
+            current?: {
+                [key: string]: components["schemas"]["SectionValues"];
+            };
+            error: components["schemas"]["SettingsErrorBody"];
+        };
+        /**
+         * @description `event: settings`: a section was saved (by any tab, device or API
+         *     client) and is now at `revision`. It carries no values: fetch them
+         *     with `GET /settings/{section}`.
+         * @example {
+         *       "revision": 4,
+         *       "section": "crawler"
+         *     }
+         */
+        SettingsEvent: {
+            /** Format: int64 */
+            revision: number;
+            section: string;
+        };
+        /** @description `POST /settings/import`: a file from `GET /settings/export`. */
+        SettingsImport: {
+            /**
+             * @description The 18+ confirmation, needed when the file turns on an adult
+             *     setting (as `PATCH /settings/content` needs it).
+             */
+            confirm_adult?: boolean;
+            /**
+             * @description The sections' revisions the dry run reported: the import is refused
+             *     with `409 stale_revision` if any changed since.
+             */
+            revisions?: {
+                [key: string]: number;
+            };
+            /** @description The file's text (TOML), at most 64 KiB. */
+            toml: string;
         };
         /**
          * @description `GET /settings`: every section, in display order.
@@ -2665,8 +3011,42 @@ export interface components {
          *     out keep their values; an unknown field is refused. `null` resets a
          *     field: its saved value is removed, and the `config.toml` value or the
          *     default applies again.
+         *
+         *     Two keys aren't fields and are never saved: `if_revision` (the
+         *     section's `revision` the edit started from; a save over a newer one is
+         *     refused with `409 stale_revision`) and a section's confirmations
+         *     (`content`'s `confirm_adult`).
          */
         SettingsPatch: Record<string, never>;
+        /**
+         * @description `POST /settings/preview`: what a `PATCH /settings` with the same body
+         *     would do, without saving it.
+         * @example {
+         *       "sections": {
+         *         "crawler": {
+         *           "fields": {
+         *             "intensity": {
+         *               "estimates": [
+         *                 {
+         *                   "name": "sockets",
+         *                   "value": 100
+         *                 }
+         *               ],
+         *               "restart_required": false,
+         *               "value": "low",
+         *               "warnings": []
+         *             }
+         *           },
+         *           "revision": 3
+         *         }
+         *       }
+         *     }
+         */
+        SettingsPreview: {
+            sections: {
+                [key: string]: components["schemas"]["SectionPreview"];
+            };
+        };
         /** @description One section: its fields and the JSON schema of its values. */
         SettingsSection: {
             fields: components["schemas"]["SettingField"][];
@@ -2678,6 +3058,46 @@ export interface components {
              */
             schema: Record<string, never>;
             section: string;
+        };
+        /** @description `POST /settings/test`: what to test, with the values on screen. */
+        SettingsTest: components["schemas"]["DownloadClientDraft"] & {
+            /** @enum {string} */
+            kind: "download_client";
+        };
+        /**
+         * @description Why a connection test failed.
+         * @example {
+         *       "code": "bad_credentials",
+         *       "message": "The client refused the user name or password."
+         *     }
+         */
+        SettingsTestFailure: {
+            /**
+             * @description `bad_credentials`, `banned`, `origin_refused`, `session_refused`,
+             *     `address_refused`, `unreachable`, `rejected`, `timeout`, `blocked`,
+             *     `invalid`, `protocol` or `unsupported`.
+             */
+            code: string;
+            /** @description A sentence for people; never the URL or a credential. */
+            message: string;
+        };
+        /**
+         * @description `POST /settings/test`: the result, shown beside the button. Nothing is
+         *     saved either way.
+         * @example {
+         *       "api_version": "2.9.3",
+         *       "error": null,
+         *       "ok": true,
+         *       "version": "v4.6.3"
+         *     }
+         */
+        SettingsTestResult: {
+            /** @description The client's API version, when it has one apart from its version. */
+            api_version: string | null;
+            error: null | components["schemas"]["SettingsTestFailure"];
+            ok: boolean;
+            /** @description The client's version, as it reports it; null unless `ok`. */
+            version: string | null;
         };
         /**
          * @description `POST /setup`: claims the instance.
@@ -3124,7 +3544,7 @@ export interface components {
          * @description What a client subscribes to with `?topics=`.
          * @enum {string}
          */
-        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights";
+        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings";
         /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
@@ -4149,6 +4569,265 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    patchSettingsBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsBatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBatchValues"];
+                };
+            };
+            /** @description `unknown_field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_section`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `read_only`, `set_by_environment`, or `stale_revision` with each stale section's `current` values. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_setting`, `adult_confirmation_required`. Nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportSettings: {
+        parameters: {
+            query?: {
+                /** @description Include the `preferences` section (off by default). */
+                preferences?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as an attachment (`lodestar-settings.toml`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/toml": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    importSettings: {
+        parameters: {
+            query?: {
+                /** @description Only report what the import would change (the diff); save nothing. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsImport"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReport"];
+                };
+            };
+            /** @description `stale_revision`: a section changed since the dry run's `revisions`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `import_too_large`: over 64 KiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_import` (not an export file), or a value `PATCH /settings` refuses (`invalid_setting`, `adult_confirmation_required`). Nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsBatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsPreview"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    testSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsTest"];
+            };
+        };
+        responses: {
+            /** @description The test ran; `ok` says whether it passed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsTestResult"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not `application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`: not a test this endpoint runs. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `tests_busy`: four tests are running already; try again shortly. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -4167,6 +4846,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SectionValues"];
+                };
+            };
+            /** @description `unknown_section`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4196,13 +4884,40 @@ export interface operations {
                     "application/json": components["schemas"]["SectionValues"];
                 };
             };
-            /** @description `adult_confirmation_required`: a patch turning on an adult setting without `"confirm_adult": true`; nothing is saved. */
+            /** @description `unknown_field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_section`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `read_only`, `set_by_environment`, or `stale_revision` with the section's `current` values. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_setting`; `adult_confirmation_required`: turning on an adult setting without `"confirm_adult": true`. Nothing is saved. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
