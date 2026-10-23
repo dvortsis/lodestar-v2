@@ -159,7 +159,11 @@ describe('packageOf', () => {
 });
 
 /** An in-memory file system: path -> content. */
-function memFs(files: Record<string, string>): Fs {
+function memFs(all: Record<string, string | undefined>): Fs {
+	// An undefined value deletes a default file.
+	const files = Object.fromEntries(
+		Object.entries(all).filter((e): e is [string, string] => e[1] !== undefined)
+	);
 	return {
 		exists: (p) => p in files,
 		read: (p) => {
@@ -186,7 +190,10 @@ function pkg(name: string, version: string, extra: Record<string, unknown> = {})
 	return JSON.stringify({ name, version, ...extra });
 }
 
-function inputs(over: Partial<Inputs> = {}, files: Record<string, string> = {}): Inputs {
+function inputs(
+	over: Partial<Inputs> = {},
+	files: Record<string, string | undefined> = {}
+): Inputs {
 	const fs = memFs({
 		'/w/node_modules/svelte/package.json': pkg('svelte', '5.0.0', { license: 'MIT' }),
 		'/w/node_modules/svelte/LICENSE.md': MIT,
@@ -306,6 +313,63 @@ describe('buildDocument', () => {
 			)
 		);
 		expect(problems).toEqual(["svelte 5.0.0: licence 'SSPL-1.0' not allowed: SSPL-1.0 (refused)"]);
+	});
+
+	it('fails a shipped package with no licence text unless a reviewed file supplies one', () => {
+		const packages = [{ name: '@iconify-json/ph', dir: '/w/node_modules/@iconify-json/ph' }];
+		const files = {
+			'/w/node_modules/@iconify-json/ph/package.json': pkg('@iconify-json/ph', '1.2.2', {
+				license: 'MIT'
+			}),
+			'/w/licenses/texts/phosphor-MIT.txt': 'MIT License\r\n\r\nCopyright (c) Phosphor Icons\r\n'
+		};
+		const bare = buildDocument(inputs({ packages }, files));
+		expect(bare.problems).toEqual([
+			'@iconify-json/ph 1.2.2: ships no licence text; add a reviewed `texts` entry with a `file` under web/licenses/texts/ to web/licenses/overrides.json'
+		]);
+		const text = {
+			ecosystem: 'npm',
+			name: '@iconify-json/ph',
+			version: '1.2.2',
+			file: 'licenses/texts/phosphor-MIT.txt'
+		};
+		const fixed = buildDocument(inputs({ packages, overrides: { texts: [text] } }, files));
+		expect(fixed.problems).toEqual([]);
+		const entry = fixed.doc.npm[0]!;
+		const h = sha256('MIT License\n\nCopyright (c) Phosphor Icons\n');
+		expect(entry.texts).toEqual({ 'phosphor-MIT.txt': h });
+		expect(entry.texts_from).toBe('web/licenses/texts/phosphor-MIT.txt');
+		expect(fixed.doc.texts[h]).toContain('Phosphor Icons');
+		const gone = buildDocument(
+			inputs(
+				{ packages, overrides: { texts: [{ ...text, file: 'licenses/texts/nope.txt' }] } },
+				files
+			)
+		).problems;
+		expect(gone).toContain(
+			'@iconify-json/ph 1.2.2: overrides.json `texts` file web/licenses/texts/nope.txt not found'
+		);
+		const shipsOwn = buildDocument(
+			inputs(
+				{ packages, overrides: { texts: [text] } },
+				{ ...files, '/w/node_modules/@iconify-json/ph/LICENSE': 'own\n' }
+			)
+		).problems;
+		expect(shipsOwn[0]).toContain('now ships its own licence text');
+	});
+
+	it('fails an extra with no licence text', () => {
+		const extra = { name: 'daisyUI', package: 'daisyui', license: 'MIT' };
+		const { problems } = buildDocument(
+			inputs(
+				{ overrides: { extra: [extra] } },
+				{
+					'/w/node_modules/daisyui/package.json': pkg('daisyui', '5.0.0', { license: 'MIT' }),
+					'/w/node_modules/daisyui/LICENSE': undefined
+				}
+			)
+		);
+		expect(problems[0]).toContain('daisyui 5.0.0: ships no licence text');
 	});
 
 	it('adds reviewed extras that are not in the module graph', () => {

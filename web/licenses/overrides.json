@@ -58,6 +58,20 @@
 			"name": "tantivy-tokenizer-api",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "htmlescape",
+			"version": "0.3.1",
+			"file": "licenses/texts/htmlescape-MIT.txt",
+			"note": "The crate ships no licence text. Of 'Apache-2.0 / MIT / MPL-2.0' the MIT branch is taken; the copyright holder is the Cargo.toml `authors` entry (no year is given there, so none is stated)."
+		},
+		{
+			"ecosystem": "npm",
+			"name": "@iconify-json/ph",
+			"version": "1.2.2",
+			"file": "licenses/texts/phosphor-MIT.txt",
+			"note": "The package ships no licence file. Its info.json gives the licence (MIT, https://github.com/phosphor-icons/core/blob/main/LICENSE) and the author (Phosphor Icons); no year is given in the package, so none is stated."
 		}
 	],
 	"extra": [

@@ -279,9 +279,18 @@ interface Extra {
 	note?: string;
 }
 
+interface TextOverride {
+	ecosystem: string;
+	name: string;
+	version?: string;
+	/** A reviewed text, relative to web/ (kept under web/licenses/texts/). */
+	file?: string;
+	note?: string;
+}
+
 export interface Overrides {
 	missing?: Override[];
-	texts?: unknown[];
+	texts?: TextOverride[];
 	extra?: Extra[];
 	notices?: unknown[];
 }
@@ -298,6 +307,8 @@ export interface NpmEntry {
 	texts: Texts;
 	/** `override`: the licence comes from overrides.json `missing`. */
 	license_source?: 'override';
+	/** The texts come from a reviewed file (overrides.json `texts`), not the package. */
+	texts_from?: string;
 	/** Shipped outside the module graph (overrides.json `extra`). */
 	extra?: { component: string; note: string };
 }
@@ -381,6 +392,42 @@ export function buildDocument(input: Inputs): {
 		return out;
 	};
 
+	const textOverrides = new Map(
+		(input.overrides.texts ?? []).filter((o) => o.ecosystem === 'npm').map((o) => [o.name, o])
+	);
+	const usedTexts = new Set<string>();
+	/** The package's own texts, else a reviewed override's; none at all is an error. */
+	const textsFor = (entry: NpmEntry, found: Texts) => {
+		const label = `${entry.name} ${entry.version}`;
+		const o = textOverrides.get(entry.name);
+		entry.texts = found;
+		if (o) {
+			usedTexts.add(entry.name);
+			if (o.version && o.version !== entry.version)
+				problems.push(
+					`${label}: overrides.json \`texts\` was reviewed for ${o.version}; check the new version's files and update it`
+				);
+			if (Object.keys(found).length)
+				problems.push(
+					`${label}: now ships its own licence text; drop its overrides.json \`texts\` entry`
+				);
+			else if (o.file && fs.exists(`${root}/${o.file}`)) {
+				const text = fs.read(`${root}/${o.file}`).replace(/\r\n/g, '\n');
+				const h = sha256(text);
+				texts[h] = text;
+				entry.texts = { [posix.basename(o.file)]: h };
+				entry.texts_from = `web/${o.file}`;
+			} else
+				problems.push(
+					`${label}: overrides.json \`texts\` file ${o.file ? `web/${o.file} not found` : 'missing'}`
+				);
+		}
+		if (!Object.keys(entry.texts).length)
+			problems.push(
+				`${label}: ships no licence text; add a reviewed \`texts\` entry with a \`file\` under web/licenses/texts/ to web/licenses/overrides.json`
+			);
+	};
+
 	const readPackage = (dir: string): Record<string, unknown> | null => {
 		const path = `${dir}/package.json`;
 		return fs.exists(path) ? (JSON.parse(fs.read(path)) as Record<string, unknown>) : null;
@@ -428,7 +475,7 @@ export function buildDocument(input: Inputs): {
 			license = override.license;
 			entry.license_source = 'override';
 		}
-		entry.texts = store(ref.dir, override?.file);
+		textsFor(entry, store(ref.dir, override?.file));
 		if (!license) {
 			problems.push(
 				`${ref.name} ${version}: no licence field; add a reviewed \`missing\` entry to web/licenses/overrides.json`
@@ -472,15 +519,22 @@ export function buildDocument(input: Inputs): {
 			problems.push(
 				`${extra.name} (${extra.package}): licence '${extra.license}' ${verdict.reason}`
 			);
-		npm.push({
+		const entry: NpmEntry = {
 			name: extra.package,
 			version: String(pkg.version ?? ''),
 			license: extra.license,
 			repository: repositoryOf(pkg),
-			texts: store(dir),
+			texts: {},
 			extra: { component: extra.name, note: extra.note ?? '' }
-		});
+		};
+		textsFor(entry, store(dir));
+		npm.push(entry);
 	}
+
+	for (const name of [...textOverrides.keys()].filter((n) => !usedTexts.has(n)).sort())
+		warnings.push(
+			`overrides.json \`texts\` names ${name}, which the client build doesn't bundle (yet)`
+		);
 
 	npm.sort((a, b) =>
 		a.name === b.name

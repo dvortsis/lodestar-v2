@@ -14,7 +14,9 @@ It lives under web/ because the Docker web stage copies only web/.
 
 Every shipped crate's licence must pass web/licenses/allow.json (owner's
 decision §2.12). A crate without a licence field needs a reviewed entry in
-web/licenses/overrides.json `missing`.
+web/licenses/overrides.json `missing`, and one that ships no licence text a
+`texts` entry: `from` a crate of the same repository, or a reviewed `file`
+under web/licenses/texts/.
 
 Usage:
     licenses.py            regenerate web/licenses/rust.json
@@ -363,20 +365,46 @@ def generate(
         donor_entry = donors.get(name)
         if donor_entry is not None:
             used_donors.add(name)
-            source = donor_entry["from"]
-            donor = next((q for (n, _v), q in sorted(all_packages.items()) if n == source), None)
-            if donor is None:
+            if donor_entry.get("version") not in (None, version):
                 problems.add(
-                    f"{name} {version}: overrides.json `texts` names {source!r}, not in the build"
+                    f"{name} {version}: overrides.json `texts` was reviewed for "
+                    f"{donor_entry['version']}; check the new version's files and update it"
                 )
-            elif files:
+            if files:
                 problems.add(
                     f"{name} {version}: now ships its own licence text; drop its overrides.json "
                     "`texts` entry"
                 )
+            elif donor_entry.get("file"):
+                # A reviewed text kept under web/ (the Docker web stage copies only web/).
+                rel = donor_entry["file"]
+                path = root / "web" / rel
+                if path.is_file():
+                    files = {path.name: path.read_text(encoding="utf-8").replace("\r\n", "\n")}
+                    record["texts_from"] = f"web/{rel}"
+                else:
+                    problems.add(
+                        f"{name} {version}: overrides.json `texts` file web/{rel} not found"
+                    )
             else:
-                files = text_files(donor)
-                record["texts_from"] = f"{donor['name']} {donor['version']}"
+                source = donor_entry.get("from")
+                donor = next(
+                    (q for (n, _v), q in sorted(all_packages.items()) if n == source), None
+                )
+                if donor is None:
+                    problems.add(
+                        f"{name} {version}: overrides.json `texts` names {source!r}, "
+                        "not in the build"
+                    )
+                else:
+                    files = text_files(donor)
+                    record["texts_from"] = f"{donor['name']} {donor['version']}"
+        if not files:
+            problems.add(
+                f"{name} {version}: ships no licence text; add a reviewed `texts` entry to "
+                "web/licenses/overrides.json (`from` a crate of the same repository, or a `file` "
+                "under web/licenses/texts/)"
+            )
         if not expr:
             lf = p.get("license_file")
             problems.add(

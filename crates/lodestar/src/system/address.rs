@@ -430,8 +430,28 @@ pub async fn bind(
             );
             (listener, Some(record))
         }
-        _ => {
+        other => {
+            if other.is_some() {
+                // Bound on the pending address, but the registry has since
+                // disagreed: nothing to confirm.
+                tracing::info!(
+                    "address: dropping the pending address change: it no longer applies"
+                );
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || {
+                    write(&mut store.lock().expect("store lock"), Kind::HttpBind, None);
+                })
+                .await?;
+            }
             let addr = fallback.unwrap_or(config.http.bind);
+            if fallback.is_some() {
+                tracing::warn!(
+                    "address: serving on {} although the saved address is {}; the previous \
+                     address couldn't be saved back, and the next start tries again",
+                    ui_address(addr),
+                    ui_address(config.http.bind)
+                );
+            }
             let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|e| format!("binding {addr}: {e}"))?;
@@ -465,7 +485,13 @@ pub struct Address {
     inner: Mutex<Inner>,
     /// Wakes the timer when the record changes.
     changed: Notify,
+    /// The longest the timer sleeps before reading the clock again.
+    tick: u64,
 }
+
+/// [`Address::tick`]: how late a revert may be after the wall clock
+/// jumps past the deadline.
+const TICK_SECS: u64 = 30;
 
 #[derive(Debug)]
 struct Inner {
@@ -510,6 +536,7 @@ impl Address {
                 serving: bound.serving,
             }),
             changed: Notify::new(),
+            tick: TICK_SECS,
         }
     }
 
@@ -577,10 +604,12 @@ impl Address {
         if self.env_set {
             return;
         }
+        // Read under the lock, so a revert (which saves and updates `seen`
+        // under it) can't land between the read and the comparison.
+        let mut inner = self.lock();
         let Some((addr, source)) = current(self.settings.as_ref()) else {
             return;
         };
-        let mut inner = self.lock();
         let before = inner.seen.replace((addr, source));
         let Some((before, before_source)) = before else {
             return;
@@ -752,7 +781,10 @@ impl Address {
                         continue;
                     }
                     tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(deadline - now)) => {}
+                        // Never one long sleep: the deadline is wall-clock
+                        // time, which may jump (a host without a clock
+                        // corrected by NTP after boot, a suspend).
+                        _ = tokio::time::sleep(Duration::from_secs((deadline - now).min(self.tick))) => {}
                         _ = notified => {}
                     }
                 }

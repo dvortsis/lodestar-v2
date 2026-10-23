@@ -11,9 +11,11 @@ paths scrubbed and unused package fields trimmed.
 
 from __future__ import annotations
 
+import atexit
 import copy
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -55,8 +57,31 @@ OWNER_ALLOWED = {
 POLICY = licenses.Policy.load()
 
 
+# The recorded paths are scrubbed; give each registry package a folder with a LICENSE.
+CRATES = Path(tempfile.mkdtemp(prefix="licenses-test-"))
+atexit.register(shutil.rmtree, CRATES, ignore_errors=True)
+
+
 def fixture(target: str) -> dict:
-    return json.loads((FIXTURES / f"metadata-{target}.json").read_text(encoding="utf-8"))
+    meta = json.loads((FIXTURES / f"metadata-{target}.json").read_text(encoding="utf-8"))
+    for p in meta["packages"]:
+        if p["source"] is None:
+            continue
+        folder = CRATES / f"{p['name']}-{p['version']}"
+        folder.mkdir(exist_ok=True)
+        (folder / "LICENSE").write_text(f"licence of {p['name']}\n")
+        p["manifest_path"] = str(folder / "Cargo.toml")
+    return meta
+
+
+def recorded(tmp: str, *targets: str) -> list[str]:
+    """`--metadata` arguments for the fixtures, written with their folders."""
+    out = []
+    for t in targets:
+        path = Path(tmp) / f"metadata-{t}.json"
+        path.write_text(json.dumps(fixture(t)))
+        out.append(f"{t}={path}")
+    return out
 
 
 def metas() -> dict[str, dict]:
@@ -205,6 +230,45 @@ class Generate(unittest.TestCase):
         _, problems = self.run_generate(ms, {"missing": [stale]})
         self.assertTrue(any("reviewed for 1.0.4" in p for p in problems), problems)
 
+    def test_no_licence_text_fails_unless_a_reviewed_file_supplies_it(self):
+        ms = metas()
+        for m in ms.values():
+            package(m, "cfg-if")["manifest_path"] = "/nonexistent/cfg-if/Cargo.toml"
+        _, problems = self.run_generate(ms)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("cfg-if 1.0.5: ships no licence text", problems[0])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            text = Path(tmp) / "web" / "licenses" / "texts" / "cfg-if-MIT.txt"
+            text.parent.mkdir(parents=True)
+            text.write_text("MIT License\r\n\r\nCopyright (c) someone\r\n")
+            entry = {
+                "ecosystem": "cargo",
+                "name": "cfg-if",
+                "version": "1.0.5",
+                "file": "licenses/texts/cfg-if-MIT.txt",
+            }
+            ov = {"texts": [entry]}
+            doc, problems = licenses.generate(ms, POLICY, ov, root=Path(tmp))
+            self.assertEqual(problems, [])
+            crate = self.crates(doc)["cfg-if"]
+            h = licenses.sha256("MIT License\n\nCopyright (c) someone\n")
+            self.assertEqual(crate["texts"], {"cfg-if-MIT.txt": h})
+            self.assertEqual(crate["texts_from"], "web/licenses/texts/cfg-if-MIT.txt")
+            self.assertIn(h, doc["texts"])
+
+            missing = {"texts": [{**entry, "file": "licenses/texts/nope.txt"}]}
+            _, problems = licenses.generate(ms, POLICY, missing, root=Path(tmp))
+            self.assertIn("file web/licenses/texts/nope.txt not found", problems[0])
+
+            stale = {"texts": [{**entry, "version": "1.0.4"}]}
+            _, problems = licenses.generate(ms, POLICY, stale, root=Path(tmp))
+            self.assertTrue(any("reviewed for 1.0.4" in p for p in problems), problems)
+
+        # A crate that ships its own text must not keep an override.
+        _, problems = self.run_generate(overrides={"texts": [entry]})
+        self.assertTrue(any("now ships its own licence text" in p for p in problems), problems)
+
     def test_override_never_replaces_a_licence_field(self):
         override = {"ecosystem": "cargo", "name": "cfg-if", "license": "MIT"}
         _, problems = self.run_generate(overrides={"missing": [override]})
@@ -248,7 +312,7 @@ class Generate(unittest.TestCase):
             crates["memchr"]["texts"], {"COPYING": licenses.sha256("other\n"), "LICENSE-MIT": h}
         )
         self.assertEqual(doc["texts"][h], mit)
-        refs = {h for c in doc["crates"] for h in c["texts"].values()}
+        refs = {h for n in ("cfg-if", "memchr") for h in crates[n]["texts"].values()}
         self.assertEqual(len(refs), 2)  # the shared MIT text is stored once
         self.assertEqual(set(doc["lodestar"]["texts"]), {"LICENSE"})
 
@@ -283,8 +347,8 @@ class Cli(unittest.TestCase):
             out = Path(tmp) / "rust.json"
             ov = Path(tmp) / "overrides.json"
             ov.write_text('{"missing": [], "texts": [], "notices": []}')
-            recorded = [f"{t}={FIXTURES / f'metadata-{t}.json'}" for t in (LINUX, WINDOWS)]
-            common = ["--out", str(out), "--overrides", str(ov), "--metadata", *recorded]
+            metadata = recorded(tmp, LINUX, WINDOWS)
+            common = ["--out", str(out), "--overrides", str(ov), "--metadata", *metadata]
             self.assertEqual(self.main(*common)[0], 0)
             self.assertEqual(self.main("--check", *common)[0], 0)
             out.write_text(out.read_text().replace("1.0.5", "1.0.6"))
