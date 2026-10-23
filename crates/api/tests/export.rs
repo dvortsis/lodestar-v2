@@ -943,8 +943,9 @@ async fn reads_are_throttled() {
     let (id, body) = export(&f, &c, "/api/v1/export?format=magnets", None).await;
     let took = started.elapsed();
     assert_eq!(lines(&body).len(), 300);
-    // 300 rows at 500 a second: the last chunk's wait is after its rows.
-    assert!(took >= Duration::from_millis(550), "{took:?}");
+    // 300 rows at 500 a second book 600 ms (the pacer banks no idle
+    // time, so nothing is free); 10% off for coarse timers (Windows).
+    assert!(took >= Duration::from_millis(540), "{took:?}");
     let rate = finished(&f, &c, id).await["rate"].as_f64().unwrap();
     assert!(rate < 600.0, "{rate}");
 }
@@ -971,8 +972,9 @@ async fn concurrent_exports_share_one_rate() {
     );
     let took = started.elapsed();
     assert_eq!(lines(&a.1).len() + lines(&b.1).len(), 300);
-    // 300 rows between them at 500 a second, not 500 each.
-    assert!(took >= Duration::from_millis(550), "{took:?}");
+    // 300 rows between them at 500 a second, not 500 each: 600 ms
+    // booked, 10% off for coarse timers. Separate rates would take 300.
+    assert!(took >= Duration::from_millis(540), "{took:?}");
 }
 
 #[tokio::test]
