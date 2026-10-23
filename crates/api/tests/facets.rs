@@ -169,6 +169,7 @@ fn fixture(n: usize) -> Fixture {
             settings: None,
             adult: Default::default(),
             ops: None,
+            insights: None,
             user_data: None,
         }),
     );
@@ -661,6 +662,7 @@ async fn search_disabled() {
             settings: None,
             adult: Default::default(),
             ops: None,
+            insights: None,
             user_data: None,
         }),
     );
