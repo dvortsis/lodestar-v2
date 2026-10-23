@@ -10,8 +10,8 @@
   the service's own account only.
 
   Existing folder (a reinstall, or something planted): refused unless it is a
-  real folder (no link or junction anywhere inside), owned by SYSTEM or
-  Administrators, and either empty or already secured by an earlier install:
+  real folder (no link or junction anywhere inside), owned by SYSTEM,
+  Administrators or the service, and either empty or already secured by an earlier install:
   the .lodestar-secured marker, a protected ACL that allows only SYSTEM,
   Administrators and the service, and top-level entries owned by those. Then the
   same ACL is applied again.
@@ -54,35 +54,72 @@ function New-DataSecurity {
   $sec
 }
 
+$trusted = @($system, $admins, $svc)
+
+# Why the folder is not private yet, or $null if it is: protected (no inheritance from
+# ProgramData) and every Allow entry names SYSTEM, Administrators or the service. A NULL
+# DACL and object-specific ACEs are not looked at: wherever this is used the ACL is
+# re-applied afterwards, so they cannot survive.
+function Get-NotPrivateReason($folder) {
+  $acl = Get-Acl -LiteralPath $folder
+  if (-not $acl.AreAccessRulesProtected) { return 'it inherits permissions from ProgramData' }
+  foreach ($rule in $acl.Access) {
+    $who = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier])
+    if ($rule.AccessControlType -eq 'Allow' -and $trusted -notcontains $who) {
+      return "it lets $($rule.IdentityReference) in"
+    }
+  }
+  return $null
+}
+
+# Creates the folder with its descriptor, then checks that what is there is ours: if someone
+# created it in the meantime, its owner or its ACL will not be.
+function New-DataFolder {
+  (New-Object IO.DirectoryInfo $dir).Create((New-DataSecurity))
+  $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
+  $why = Get-NotPrivateReason $dir
+  if ($trusted -notcontains $owner -or $why) {
+    Stop-Install "$dir was created by someone else while Lodestar was installing (owner $owner). Check it, move it away, then install again."
+  }
+}
+
 if (Test-Path -LiteralPath $dir) {
   $item = Get-Item -LiteralPath $dir -Force
   if (-not $item.PSIsContainer) { Stop-Install "$dir is a file, not a folder." }
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
     Stop-Install "$dir is a link or junction. Remove it and install again."
   }
+  # The service creates a missing folder under its own SID, so that owner is fine too.
   $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
-  if ($owner -ne $system -and $owner -ne $admins) {
-    Stop-Install "$dir already exists and is owned by $owner, not SYSTEM or Administrators. Check it, move it away, then install again."
+  if ($trusted -notcontains $owner) {
+    Stop-Install "$dir already exists and is owned by $owner, not SYSTEM, Administrators or the Lodestar service. Check it, move it away, then install again."
   }
   $inside = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop)
-  if ($inside.Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $dir $marker))) {
-    Stop-Install "$dir already exists, is not empty and was not secured by Lodestar, so another user could have put files in it. Move its contents somewhere else, check them, then install again (an empty folder is fine)."
-  }
-  if ($inside.Count -gt 0) {
+
+  if ($inside.Count -eq 0) {
+    $why = Get-NotPrivateReason $dir
+    if ($why) {
+      # Empty but not private: someone may hold a handle opened while it was open to
+      # them (with WRITE_DAC, say), and changing the ACL in place would not close it.
+      # Make a new folder instead.
+      Log "replacing the empty folder $dir ($why)"
+      try { [IO.Directory]::Delete($dir, $false) }
+      catch { Stop-Install "$dir is empty but $why, and it could not be removed (something has it open): $($_.Exception.Message) Close whatever uses it, or delete it yourself, then install again." }
+      New-DataFolder
+      Log "created $dir"
+      exit 0
+    }
+  } else {
+    if (-not (Test-Path -LiteralPath (Join-Path $dir $marker))) {
+      Stop-Install "$dir already exists, is not empty and was not secured by Lodestar, so another user could have put files in it. Move its contents somewhere else, check them, then install again (an empty folder is fine)."
+    }
     # The marker is only a hint: anyone who can write the folder can drop one. Trust
     # existing contents only if the folder is already locked down and everything in
     # it belongs to SYSTEM, Administrators or the service (same rules as the service's
     # start-up check, windows/acl.rs).
-    $trusted = @($system, $admins, $svc)
-    $acl = Get-Acl -LiteralPath $dir
-    if (-not $acl.AreAccessRulesProtected) {
-      Stop-Install "$dir inherits permissions from ProgramData, so other users may have put files in it. Move its contents somewhere else, check them, then install again."
-    }
-    foreach ($rule in $acl.Access) {
-      $who = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier])
-      if ($rule.AccessControlType -eq 'Allow' -and $trusted -notcontains $who) {
-        Stop-Install "$dir lets $($rule.IdentityReference) in. Only SYSTEM, Administrators and the Lodestar service may. Fix or move the folder, then install again."
-      }
+    $why = Get-NotPrivateReason $dir
+    if ($why) {
+      Stop-Install "$dir is not empty and $why, so other users may have put files in it. Move its contents somewhere else, check them, then install again."
     }
     foreach ($child in $inside) {
       $o = (Get-Acl -LiteralPath $child.FullName).GetOwner([Security.Principal.SecurityIdentifier])
@@ -91,13 +128,14 @@ if (Test-Path -LiteralPath $dir) {
       }
     }
   }
-  $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction SilentlyContinue | Select-Object -First 1
+  # Fail closed: if the scan itself cannot run, the install stops (trap, exit 2).
+  $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction Stop | Select-Object -First 1
   if ($link) { Stop-Install "$($link.FullName) is a link or junction inside the data folder. Remove it and install again." }
   Set-Acl -LiteralPath $dir -AclObject (New-DataSecurity)
   Log "re-secured $dir"
 } else {
   $parent = Split-Path -Parent $dir
   if (-not (Test-Path -LiteralPath $parent)) { Stop-Install "$parent does not exist." }
-  (New-Object IO.DirectoryInfo $dir).Create((New-DataSecurity))
+  New-DataFolder
   Log "created $dir"
 }
