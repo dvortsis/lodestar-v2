@@ -6,7 +6,10 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lodestar_api::settings::SettingsPatch;
+use lodestar_api::settings::{
+    Imported, Saved, SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPatch,
+    SettingsPreview,
+};
 use lodestar_api::system::RestartMethod;
 use lodestar_store::StoreConfig;
 use serde_json::json;
@@ -121,16 +124,52 @@ async fn start(base: &Config, clock: Arc<FakeClock>, method: RestartMethod) -> R
     let (_listener, bound) = bind(prepared, &effective, &store, clock.as_ref())
         .await
         .unwrap();
-    let restart = Arc::new(Restart::new(method));
-    let address = Arc::new(Address::new(
+    start_with(bound, &effective, store, registry, clock, method)
+}
+
+/// [`start`]'s last step, with any `SettingsApi` in place of the registry
+/// for the address's saves.
+fn start_with(
+    bound: Bound,
+    effective: &Config,
+    store: Arc<Mutex<Store>>,
+    registry: Arc<Registry>,
+    clock: Arc<FakeClock>,
+    method: RestartMethod,
+) -> Running {
+    start_over(
         bound,
-        &effective,
+        effective,
         store,
         registry.clone(),
+        registry,
+        clock,
+        method,
+    )
+}
+
+fn start_over(
+    bound: Bound,
+    effective: &Config,
+    store: Arc<Mutex<Store>>,
+    settings: Arc<dyn SettingsApi>,
+    registry: Arc<Registry>,
+    clock: Arc<FakeClock>,
+    method: RestartMethod,
+) -> Running {
+    let restart = Arc::new(Restart::new(method));
+    let mut address = Address::new(
+        bound,
+        effective,
+        store,
+        settings,
         None,
         restart.clone(),
         clock.clone(),
-    ));
+    );
+    // The timer reads the fake clock every second, not every 30.
+    address.tick = 1;
+    let address = Arc::new(address);
     Running {
         address,
         registry,
@@ -554,4 +593,127 @@ fn the_record_is_stored_outside_settings() {
     );
     let saved = serde_json::to_value(Previous::Saved(json!("10.0.0.2:8090"))).unwrap();
     assert_eq!(saved, json!({ "saved": "10.0.0.2:8090" }));
+}
+
+#[tokio::test]
+async fn the_follower_records_a_save_through_the_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), local(free_port()), &[]);
+    let run = start(&config, FakeClock::at(T0), RestartMethod::Reexec).await;
+    run.address.start(run.registry.subscribe());
+    let new = local(free_port());
+    save_bind(&run.registry, json!(new.to_string()));
+    let start = std::time::Instant::now();
+    while stored(&config).is_none() {
+        assert!(start.elapsed() < Duration::from_secs(5), "never recorded");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stored(&config).unwrap().new, json!(new.to_string()));
+    // Undone before the restart: the revert's own save isn't recorded as
+    // a change by the running follower.
+    run.address.revert().unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(stored(&config), None);
+    assert_eq!(run.address.change(), None);
+}
+
+#[tokio::test]
+async fn a_clock_jump_past_the_deadline_still_reverts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), local(free_port()), &[]);
+    let new = local(free_port());
+    save_bind(&registry(&config), json!(new.to_string()));
+    // Booted with the clock a day behind (no RTC): the stored deadline
+    // looks a day away.
+    put(
+        &config,
+        &pending(
+            new,
+            Previous::Reset,
+            Pending::AwaitingConfirmation,
+            Some(T0 + 86_400),
+        ),
+    );
+    let run = start(&config, FakeClock::at(T0), RestartMethod::Reexec).await;
+    run.address.start(run.registry.subscribe());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!run.restart.was_requested());
+    // NTP corrects it.
+    run.clock.advance(86_400);
+    tokio::time::timeout(Duration::from_secs(5), run.restart.requested())
+        .await
+        .expect("reverted within a tick of the jump");
+}
+
+/// The registry's reads, with every save failing.
+#[derive(Debug)]
+struct FailingSaves(Arc<Registry>);
+
+impl SettingsApi for FailingSaves {
+    fn index(&self) -> SettingsIndex {
+        self.0.index()
+    }
+    fn section(&self, section: &str) -> Option<lodestar_api::settings::SectionValues> {
+        self.0.section(section)
+    }
+    fn save(&self, _: SettingsBatch) -> Result<Saved, SettingsFailure> {
+        Err(SettingsError::Store("disk I/O error".into()).into())
+    }
+    fn preview(&self, batch: SettingsBatch) -> Result<SettingsPreview, SettingsFailure> {
+        self.0.preview(batch)
+    }
+    fn export(&self, preferences: bool) -> String {
+        self.0.export(preferences)
+    }
+    fn import(&self, import: SettingsImport, dry_run: bool) -> Result<Imported, SettingsFailure> {
+        self.0.import(import, dry_run)
+    }
+}
+
+#[tokio::test]
+async fn a_revert_that_cant_be_saved_restarts_so_the_start_reverts() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = local(free_port());
+    let config = config(dir.path(), base, &[]);
+    let new = local(free_port());
+    save_bind(&registry(&config), json!(new.to_string()));
+    put(
+        &config,
+        &pending(new, Previous::Reset, Pending::AwaitingRestart, None),
+    );
+    let clock = FakeClock::at(T0);
+    let prepared = prepare(&config, clock.as_ref()).await;
+    let store = store(&config);
+    let registry = Arc::new(Registry::load(&config, store.clone()).unwrap());
+    let running = registry.effective_config(&config);
+    let (listener, bound) = bind(prepared, &running, &store, clock.as_ref())
+        .await
+        .unwrap();
+    let run = start_over(
+        bound,
+        &running,
+        store,
+        Arc::new(FailingSaves(registry.clone())),
+        registry,
+        clock,
+        RestartMethod::Reexec,
+    );
+    run.clock.advance(WINDOW_SECS);
+    assert!(!run.address.expire());
+    // The record stays, past its deadline, and the server restarts...
+    let left = stored(&config).unwrap();
+    assert_eq!(left.deadline, Some(T0 + WINDOW_SECS));
+    assert!(run.restart.was_requested());
+    drop(listener);
+    drop(run);
+    // ...so the next start goes back before binding.
+    let next = start(
+        &config,
+        FakeClock::at(T0 + WINDOW_SECS + 5),
+        RestartMethod::Reexec,
+    )
+    .await;
+    assert_eq!(next.address.inner.lock().unwrap().serving, base);
+    assert_eq!(stored(&config), None);
+    assert_eq!(effective(&config), (base, SettingSource::File));
 }

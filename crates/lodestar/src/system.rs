@@ -250,9 +250,15 @@ impl SystemApi for System {
                     .filter(|s| s.plugin != "dht" && s.enabled)
                     .count() as u64
             });
+            // Off the runtime: a revert holds the address lock across a save.
+            let address = self.address.clone();
+            let address_change = tokio::task::spawn_blocking(move || address.change())
+                .await
+                .ok()
+                .flatten();
             let started_at = self.restart.started_at();
             SystemInfo {
-                address_change: self.address.change(),
+                address_change,
                 build: info::build(),
                 channel: info::channel(),
                 connections: self.connections(sources, subscriptions),

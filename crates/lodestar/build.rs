@@ -63,20 +63,28 @@ fn build_info(bundle: &web_build::Bundle) {
         println!("cargo:rerun-if-env-changed={var}");
     }
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
-    let git = root.join(".git");
-    if git.is_dir() {
-        for watched in ["HEAD", "packed-refs", "refs/heads", "refs/tags"] {
-            let path = git.join(watched);
-            if path.exists() {
-                println!("cargo:rerun-if-changed={}", path.display());
-            }
+    // Only this checkout's own git, never an unrelated repository the
+    // source tree happens to sit inside.
+    let git = git_dirs(&root);
+    if let Some((dir, common)) = &git {
+        let watched = [
+            dir.join("HEAD"),
+            common.join("packed-refs"),
+            common.join("refs/heads"),
+            common.join("refs/tags"),
+        ];
+        for path in watched.iter().filter(|p| p.exists()) {
+            println!("cargo:rerun-if-changed={}", path.display());
         }
     }
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
-    let commit = var("LODESTAR_COMMIT").or_else(|| git_out(&root, &["rev-parse", "HEAD"]));
-    let date = var("SOURCE_DATE_EPOCH").or_else(|| match &commit {
-        Some(c) => git_out(&root, &["log", "-1", "--format=%ct", c]),
-        None => None,
+    let commit = var("LODESTAR_COMMIT").or_else(|| {
+        git.as_ref()
+            .and_then(|_| git_out(&root, &["rev-parse", "HEAD"]))
+    });
+    let date = var("SOURCE_DATE_EPOCH").or_else(|| match (&commit, &git) {
+        (Some(c), Some(_)) => git_out(&root, &["log", "-1", "--format=%ct", c]),
+        _ => None,
     });
     let channel = match var("LODESTAR_CHANNEL").as_deref() {
         None => "dev".to_string(),
@@ -109,6 +117,35 @@ fn build_info(bundle: &web_build::Bundle) {
         let value = value.unwrap_or_default().replace(['\n', '\r'], " ");
         println!("cargo:rustc-env=LODESTAR_BUILD_{name}={}", value.trim());
     }
+}
+
+/// The checkout's git directory and its common directory (they differ in
+/// a worktree, where `.git` is a file naming the git directory).
+fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot = root.join(".git");
+    let dir = if dot.is_dir() {
+        dot
+    } else {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let named = PathBuf::from(text.strip_prefix("gitdir:")?.trim());
+        if named.is_absolute() {
+            named
+        } else {
+            root.join(named)
+        }
+    };
+    let common = match std::fs::read_to_string(dir.join("commondir")) {
+        Ok(text) => {
+            let named = PathBuf::from(text.trim());
+            if named.is_absolute() {
+                named
+            } else {
+                dir.join(named)
+            }
+        }
+        Err(_) => dir.clone(),
+    };
+    Some((dir, common))
 }
 
 /// A git command's trimmed output, if git ran and succeeded.
