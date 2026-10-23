@@ -76,7 +76,7 @@ At most **384 KiB**. Stable and Beta manifests are signed by the release key; Ni
 ```
 
 - `format` other than 1 is refused; a higher one as "needs a newer Lodestar". `min_from` and `notes_url` may be null or left out.
-- **Caps** (refused, never truncated): at most 64 statements, 64 releases and 8 artifacts per release; notes at most 16 KiB; versions strict semver, at most 64 bytes, unique (build metadata doesn't make two versions different); one artifact per target and kind.
+- **Caps** (refused, never truncated): at most 64 statements, 64 releases and 8 artifacts per release; notes at most 16 KiB; versions strict semver without build metadata (`+…`), at most 64 bytes, unique; one artifact per target and kind.
 - `url`: at most 512 bytes, `https` only, a lower-case host on the download allowlist (`github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`), no user, port, query or fragment. `notes_url` follows the same rules on any host.
 - `size`: 1 byte to 256 MiB. `target`: one of `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-pc-windows-msvc`. A new target needs a new format, because older versions refuse unknown values.
 - `notes` are signed text, but the UI renders them as plain text or sanitised Markdown.
@@ -103,9 +103,10 @@ It extends the manifest's expiry only, and can't carry new content.
 
 ## The key chain
 
+- **Adding a key is a one-time choice.** A nightly or freshness key is added either as generation 0 or by a statement, never both: a key that a statement already introduced can't later be embedded as generation 0 (it would be a reused key and every chain would fail).
 - **Generation 0** is what the build embeds (`keys/`): the recovery key, and the release key (Stable and Beta). Nightly and freshness have no key until the owner creates them; then their `.pub` is copied into `keys/` (a one-line change in `src/keys.rs`, the default) or a recovery-signed statement introduces the role. Until then Nightly verifies nothing (`no_nightly_key`) and freshness statements are refused (`no_freshness_key`); both are reported, never silent.
 - **A statement is accepted** only with a valid recovery signature, a `timestamp` at most a day ahead of the local clock, and a `seq` exactly one above the current sequence (one sequence for all roles). Accepting it revokes the previous key of that role only. A role with no key is introduced by its first statement. A key that has been used before, by any role (or the recovery key), or that shares a key number with one, is refused.
-- **Contiguity and equivocation:** statements go in ascending `seq` order. A document's statements at or below the current sequence must equal the accepted ones byte for byte; a different statement with an accepted `seq` refuses the document (`equivocation`, with a notice). A skip refuses it (`statement_gap`). A document may carry the whole chain or any tail of it that joins the current sequence.
+- **Contiguity and equivocation:** a document that carries statements carries **the whole chain, from `seq` 1, in ascending order**, because a publisher can't know any verifier's sequence (an old supervisor starts from its embedded statements alone). A list that doesn't start at 1, or skips, is refused (`statement_gap`). Statements at or below the current sequence must equal the accepted ones byte for byte; a different statement with an accepted `seq` refuses the document (`equivocation`, with a notice).
 - **Every manifest published after a rotation carries the statements** that chain its key to the recovery key, and so does every freshness statement after a freshness rotation.
 - **The floor** is the newest valid chain among the embedded statements (`keys/statements.json`, empty now), `trust.json`'s, and those inside any verified overlay. Revoked keys are derived from it.
 

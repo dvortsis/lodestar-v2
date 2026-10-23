@@ -79,7 +79,7 @@ proptest! {
                 fresh_sha256: None,
             });
         }
-        prop_assert_eq!(TrustState::load(&s.to_bytes(), &embedded()).unwrap(), s);
+        prop_assert_eq!(TrustState::load(&s.to_bytes().unwrap(), &embedded()).unwrap(), s);
     }
 
     #[test]

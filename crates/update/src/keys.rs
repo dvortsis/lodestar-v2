@@ -84,6 +84,13 @@ mod tests {
                 assert!(role != Role::Release, "{file} is missing");
                 continue;
             };
+            if role == Role::Release && chain.keys(role).len() == 1 {
+                // No rotation yet: the copy must be the same file.
+                assert_eq!(
+                    text, RELEASE,
+                    "crates/update/keys/lodestar-release.pub differs"
+                );
+            }
             let published = PublicKey::from_file(&text).unwrap();
             assert_eq!(
                 chain.current(role),

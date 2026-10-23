@@ -268,7 +268,8 @@ fn parse_version(s: &str) -> Option<Version> {
     if s.len() > MAX_VERSION {
         return None;
     }
-    Version::parse(s).ok()
+    // Build metadata doesn't order, so it can't tell releases apart.
+    Version::parse(s).ok().filter(|v| v.build.is_empty())
 }
 
 fn de_version<'de, D: Deserializer<'de>>(d: D) -> Result<Version, D::Error> {
@@ -363,13 +364,7 @@ impl ManifestBody {
         }
         let mut versions = HashSet::new();
         for r in &self.releases {
-            // Build metadata doesn't order, so it can't tell two releases apart.
-            if !versions.insert((
-                r.version.major,
-                r.version.minor,
-                r.version.patch,
-                r.version.pre.clone(),
-            )) {
+            if !versions.insert(&r.version) {
                 return Err(Error::BadDocument);
             }
             if r.notes.len() > MAX_NOTES || r.artifacts.len() > MAX_ARTIFACTS {
