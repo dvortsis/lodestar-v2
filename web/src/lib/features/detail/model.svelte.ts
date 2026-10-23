@@ -27,6 +27,9 @@ export class DetailModel {
 
 	/** (Re)load `hash`. Cheap to call again: the previous request is cancelled. */
 	load(hash: string) {
+		// A swap must drop the earlier torrent's in-flight requests even when this one is cached.
+		this.slot.cancel();
+		this.hitSlot.cancel();
 		this.hash = hash;
 		this.error = null;
 		// Plain locals: reading this.hit here would make a calling $effect depend on it.

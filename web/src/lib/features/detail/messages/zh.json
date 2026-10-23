@@ -52,7 +52,7 @@
 	"detail_junk_tiny_video": "视频文件太小，与声称的画质不符",
 	"detail_composition_empty": "没有可显示的文件类型。该种子除填充文件外没有其他文件。",
 	"detail_composition_unknown": "尚未分类。",
-	"detail_group_files": "{group}，{files} 个文件",
+	"detail_group_files": "{group} · {files}",
 	"detail_tree_label": "此种子中的文件",
 	"detail_tree_filter": "筛选文件",
 	"detail_tree_filter_placeholder": "文件名或路径的一部分",

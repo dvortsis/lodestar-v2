@@ -112,7 +112,7 @@
 		{width}
 		minWidth={mode === 'full' ? 0 : undefined}
 		maxWidth={mode === 'full' ? 100_000 : undefined}
-		onWidthChange={saveWidth}
+		onWidthChange={mode === 'inline' ? saveWidth : undefined}
 		onClose={closeDetail}
 		returnFocus={returnFocusTarget}
 	>

@@ -142,6 +142,30 @@ describe('DetailView states', () => {
 	});
 });
 
+describe('DetailModel swaps', () => {
+	it('drops the earlier torrent slow response when the next one is cached', async () => {
+		const A = 'a'.repeat(40);
+		const B = 'b'.repeat(40);
+		const { cacheDetail } = await import('./cache');
+		let finishA!: () => void;
+		get.mockImplementation((path: string) =>
+			path === '/torrents/{hash}'
+				? new Promise((resolve) => {
+						finishA = () => resolve(torrentDetail({ hash: A, name: 'A' }));
+					})
+				: Promise.resolve({ hits: [] })
+		);
+		const m = new DetailModel();
+		m.load(A);
+		cacheDetail(B, torrentDetail({ hash: B, name: 'B' }));
+		m.load(B);
+		finishA();
+		await flush();
+		expect(m.detail?.name).toBe('B');
+		m.destroy();
+	});
+});
+
 describe('DetailModel', () => {
 	it('uses the cached hit and loads detail; a hash lookup fills the hit on a direct load', async () => {
 		get.mockImplementation(async (path: string) =>

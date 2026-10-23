@@ -79,6 +79,9 @@
 				{m.never_scraped()}
 			{:else}
 				{seen[0]}<RelativeTime seconds={detail.last_scrape_at} />{seen[1]}
+				<span class="text-muted-text" data-testid="detail-scrape-at"
+					>· {formatDateTime(detail.last_scrape_at, locale)}</span
+				>
 			{/if}
 		</dd>
 

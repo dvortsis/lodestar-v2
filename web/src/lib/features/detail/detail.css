@@ -99,7 +99,7 @@
 	z-index: 40;
 	background: var(--color-base-100);
 }
-.ls-detail-host[data-mode='full'] [role='separator'] {
+.ls-detail-host:not([data-mode='inline']) [role='separator'] {
 	display: none;
 }
 .ls-detail-raw {

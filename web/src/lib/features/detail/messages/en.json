@@ -52,7 +52,7 @@
 	"detail_junk_tiny_video": "The video files are too small for the quality claimed",
 	"detail_composition_empty": "No file types to show. This torrent has no files other than padding.",
 	"detail_composition_unknown": "Not classified yet.",
-	"detail_group_files": "{group}, {files} files",
+	"detail_group_files": "{group} · {files}",
 	"detail_tree_label": "Files in this torrent",
 	"detail_tree_filter": "Filter files",
 	"detail_tree_filter_placeholder": "Part of a file name or path",
