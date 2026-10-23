@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lodestar_store::{Store, StoreConfig};
 use tantivy::directory::{Directory, DirectoryLock, Lock, MmapDirectory};
 
+use crate::cache::{CacheConfig, ResultCache};
 use crate::index::{Compat, Error, Indexer, Result, SearchIndex};
 use crate::lease::{LeaseConfig, Leases};
 use crate::live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
@@ -140,6 +141,12 @@ const RENAME_ATTEMPTS: u32 = 10;
 /// failure there is usually transient. Retrying keeps such a moment from
 /// failing a whole rebuild (§11).
 fn rename(from: &Path, to: &Path) -> Result<()> {
+    rename_with(from, to, std::thread::sleep)
+}
+
+/// [`rename`], waiting between attempts with `sleep`, which tests pass
+/// to act between attempts.
+fn rename_with(from: &Path, to: &Path, mut sleep: impl FnMut(Duration)) -> Result<()> {
     let mut wait = Duration::from_millis(25);
     let mut attempt = 1;
     loop {
@@ -150,7 +157,7 @@ fn rename(from: &Path, to: &Path) -> Result<()> {
                     "index: renaming {} (attempt {attempt}): {e}",
                     from.display()
                 );
-                std::thread::sleep(wait);
+                sleep(wait);
                 wait = (wait * 2).min(Duration::from_secs(4));
                 attempt += 1;
             }
@@ -358,10 +365,16 @@ pub struct ServingConfig {
     pub version: IndexVersion,
     /// The searcher leases cursors read through ([`Serving::leases`]).
     pub leases: LeaseConfig,
+    /// The result cache's bounds ([`Serving::cache`]).
+    pub cache: CacheConfig,
     /// Tests only: while set, a rebuild that has caught up waits before
     /// finishing, so a test can act at that point.
     #[doc(hidden)]
     pub hold_before_finish: Option<Arc<AtomicBool>>,
+    /// Tests only: while set, a rebuild waits before its first step, so
+    /// a test can read the progress it resumed from.
+    #[doc(hidden)]
+    pub hold_before_start: Option<Arc<AtomicBool>>,
     /// Tests only: the new index's live indexer fails to start at the
     /// swap.
     #[cfg(test)]
@@ -381,7 +394,9 @@ impl Default for ServingConfig {
             rebuild_commit_docs: 50_000,
             version: IndexVersion::CURRENT,
             leases: LeaseConfig::default(),
+            cache: CacheConfig::default(),
             hold_before_finish: None,
+            hold_before_start: None,
             #[cfg(test)]
             fail_live_at_swap: false,
             #[cfg(test)]
@@ -402,6 +417,7 @@ struct Shared {
     /// Every live indexer reports its commits here, across swaps (B4).
     hook: Arc<CommitHook>,
     leases: Arc<Leases>,
+    cache: Arc<ResultCache>,
     stop: AtomicBool,
 }
 
@@ -570,6 +586,7 @@ impl Serving {
             stats,
             hook,
             leases: Arc::new(Leases::new(config.leases.clone())),
+            cache: Arc::new(ResultCache::new(config.cache.clone())),
             stop: AtomicBool::new(false),
         });
 
@@ -604,10 +621,17 @@ impl Serving {
             None => thread.spawn(move || clean(&sh, &root_buf, want)),
         }
         .map_err(Error::Io)?;
-        let sweeper = spawn_sweeper(&shared, every).inspect_err(|_| {
-            // No `Serving` to stop the rebuild thread: it stops itself.
-            shared.stop.store(true, Ordering::Relaxed);
-        })?;
+        let sweeper = match spawn_sweeper(&shared, every) {
+            Ok(t) => t,
+            Err(e) => {
+                // No `Serving` to stop the rebuild thread: it stops
+                // itself, and is joined before the error returns, so it
+                // never outlives the start that failed.
+                shared.stop.store(true, Ordering::Relaxed);
+                let _ = background.join();
+                return Err(e);
+            }
+        };
         Ok(Serving {
             shared,
             background: Mutex::new(Some(background)),
@@ -647,6 +671,11 @@ impl Serving {
     /// The searcher leases taken on the indexes this handle serves.
     pub fn leases(&self) -> &Arc<Leases> {
         &self.shared.leases
+    }
+
+    /// The result cache over the indexes this handle serves.
+    pub fn cache(&self) -> &Arc<ResultCache> {
+        &self.shared.cache
     }
 
     /// Stops the rebuild (which commits what it has, to resume next
@@ -708,6 +737,8 @@ fn spawn_sweeper(shared: &Arc<Shared>, every: Duration) -> Result<JoinHandle<()>
                 std::thread::park_timeout(every);
                 if !sh.stopping() {
                     sh.leases.sweep();
+                    let serving = lock(&sh.current).clone();
+                    sh.cache.sweep(&serving);
                 }
             }
         })
@@ -774,6 +805,9 @@ fn rebuild_and_swap(
     store_path: &Path,
     config: &ServingConfig,
 ) -> Result<Option<Weak<()>>> {
+    if let Some(hold) = &config.hold_before_start {
+        while hold.load(Ordering::Relaxed) && shared.pause(Duration::from_millis(5)) {}
+    }
     let mut wait = config.live.poll;
     while !builder.reached(max_id, reindex_head) {
         if shared.stopping() {
@@ -878,6 +912,8 @@ fn rebuild_and_swap(
     };
     *lock(&shared.live) = Some(live);
     let old = std::mem::replace(&mut *lock(&shared.current), Arc::new(new));
+    // Nothing cached reads the new index.
+    shared.cache.clear();
     *lock(&shared.progress) = None;
     if let Some(((docs_added, adult_added), max_torrent_id)) = fresh.filter(|f| f.0.0 > 0) {
         shared.hook.publish(Committed {
@@ -892,7 +928,7 @@ fn rebuild_and_swap(
 }
 
 /// Torrents stored with ids in `(after, upto]`.
-fn stored_between(store: &Store, mut after: i64, upto: i64) -> Result<u64> {
+pub(crate) fn stored_between(store: &Store, mut after: i64, upto: i64) -> Result<u64> {
     let mut n = 0;
     while after < upto {
         let ids = store.ids_after(after, 10_000)?;
@@ -1028,26 +1064,40 @@ mod tests {
     #[test]
     fn a_rename_blocked_for_a_moment_is_retried() {
         // Stands in for a file held open by a scanner on Windows: the
-        // target is in the way (a non-empty directory) until a moment
-        // later, which fails the rename on every platform.
+        // target is in the way (a non-empty directory) until the first
+        // retry's wait, which fails the rename on every platform. It's
+        // cleared there, on this thread: cleared from another thread, a
+        // retry could land between `remove_dir_all` emptying the target
+        // and removing it, rename onto the empty directory (POSIX allows
+        // that), and leave the removal facing a full one.
         let tmp = tempfile::tempdir().unwrap();
         let (from, to) = (tmp.path().join("v2-t1.building"), tmp.path().join("v2-t1"));
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("meta.json"), b"{}").unwrap();
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(to.join("busy"), b"").unwrap();
-        let blocker = to.clone();
-        let unblock = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(100));
-            std::fs::remove_dir_all(blocker).unwrap();
-        });
-        rename(&from, &to).unwrap();
-        unblock.join().unwrap();
+        let mut waits = Vec::new();
+        rename_with(&from, &to, |d| {
+            if waits.is_empty() {
+                std::fs::remove_dir_all(&to).unwrap();
+            }
+            waits.push(d);
+        })
+        .unwrap();
+        assert_eq!(waits, [Duration::from_millis(25)], "one retry");
         assert!(to.join("meta.json").exists() && !from.exists());
         // A missing source isn't transient: it fails at once.
-        let start = std::time::Instant::now();
-        assert!(rename(&from, &tmp.path().join("x")).is_err());
-        assert!(start.elapsed() < Duration::from_secs(1));
+        let mut waited = false;
+        assert!(rename_with(&from, &tmp.path().join("x"), |_| waited = true).is_err());
+        assert!(!waited);
+        // Something that stays in the way fails after every attempt,
+        // backing off up to 4 s.
+        std::fs::create_dir_all(from.join("d")).unwrap();
+        let mut waits = Vec::new();
+        assert!(rename_with(&from, &to, |d| waits.push(d)).is_err());
+        assert_eq!(waits.len() as u32, RENAME_ATTEMPTS - 1);
+        assert_eq!(waits[..3], [25, 50, 100].map(Duration::from_millis));
+        assert_eq!(waits.last(), Some(&Duration::from_secs(4)));
     }
 
     #[test]
@@ -1340,9 +1390,10 @@ mod tests {
         let held = Arc::downgrade(&lease);
         handle.leases().insert(lease, 1);
         // Nothing takes or reads a lease again; the sweeper drops it, and
-        // with it the searcher it pinned.
-        wait_for("the sweep", || handle.leases().is_empty());
-        assert!(held.upgrade().is_none());
+        // with it the searcher it pinned. It leaves the map first and is
+        // dropped after the lock, so wait for the drop itself.
+        wait_for("the sweep", || held.upgrade().is_none());
+        assert!(handle.leases().is_empty());
         drop(handle);
         Arc::try_unwrap(serving).unwrap().shutdown().unwrap();
     }
