@@ -12,8 +12,8 @@ name: CI
 # head without main merged in, so if the PR run is red, push or merge main
 # instead: a passing manual run would replace the failed checks.
 # Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded name
-# (`test (${{ matrix.os }})`), so if branch protection is ever added, require an
-# aggregate job rather than individual matrix entries.
+# (`test (${{ matrix.os }})`), so branch protection requires the aggregate
+# `ci-ok` job (at the end) rather than individual matrix entries.
 
 on:
   push:
@@ -50,6 +50,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # The merge-guard hook runs before every Bash call in every session; a
+      # syntax error there would exit 2 and block them all.
+      - run: bash -n .claude/hooks/merge-guard.sh
       - id: c
         env:
           EVENT: ${{ github.event_name }}
@@ -219,3 +222,21 @@ jobs:
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
+
+  # The one check branch protection requires. It covers the correctness jobs;
+  # a skipped job counts as passing. The performance budgets (size, search
+  # latency, filter) stay out of it: they can be red on main for hardware
+  # reasons, and the runner judges those under owner-decisions §2.18.
+  ci-ok:
+    name: ci-ok
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then
+            echo "A required job failed or was cancelled."; exit 1
+          fi
