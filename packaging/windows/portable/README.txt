@@ -9,7 +9,9 @@ at http://localhost:8090/. The first-run setup token is printed in the black
 window; paste it into the page to create your password. Close the window to
 stop Lodestar.
 
-Your data is in the "data" folder next to lodestar.exe. Keep this folder on
+Unpack the zip inside your own user folder (for example Documents), not at the top of a drive
+or on a shared drive: other people on this PC could otherwise read your data. Your data is in the
+"data" folder next to lodestar.exe. Keep this folder on
 a fast local drive (SSD if you can), not on a network share or a synced
 folder such as OneDrive.
 

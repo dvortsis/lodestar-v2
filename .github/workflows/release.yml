@@ -326,6 +326,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Gate
         id: gate
@@ -356,6 +357,10 @@ jobs:
             refs/tags/v*)
               version=${GITHUB_REF_NAME#v}
               tag=$GITHUB_REF_NAME
+              if [ "${version%%-*}" != "$base" ]; then
+                echo "::error::$tag does not match the version in Cargo.toml ($base): bump it before tagging"
+                exit 1
+              fi
               if ! echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
                 echo "::error::$tag is not vMAJOR.MINOR.PATCH[-prerelease]"
                 exit 1
@@ -381,6 +386,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -428,17 +435,21 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package-web-build
           path: web/build
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      # No shared build cache on tag builds: a release is built from scratch.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           key: package-${{ matrix.target }}
 
@@ -456,7 +467,7 @@ jobs:
           sudo ln -s /opt/ziglang/zig /usr/local/bin/zig
           zig version
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@899b013517f9e7774591216672bf75a46bb9a481 # v2.9.4
         with:
           tool: cargo-zigbuild@0.24.0
 
@@ -497,17 +508,21 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package-web-build
           path: web/build
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - uses: Swatinem/rust-cache@v2
+      # No shared build cache on tag builds: a release is built from scratch.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           key: package-windows
 
@@ -533,20 +548,16 @@ jobs:
         shell: pwsh
         run: packaging/windows/build-portable.ps1 -Version $env:VERSION -OutDir dist
 
-      # WiX Toolset 3 comes with the runner image; install it if a newer image drops it.
-      - name: WiX Toolset 3
+      # WiX Toolset 3 comes with the runner image. If a newer image drops it, fail here rather
+      # than install it from the network at release time.
+      - name: WiX Toolset 3 is installed
         shell: pwsh
         run: |
-          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
-            $wix = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3*\bin' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $wix) {
-              choco install wixtoolset --version 3.14.1 -y --no-progress
-              $wix = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3*\bin' | Select-Object -First 1
-            }
-            $wix.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
+          $wix = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3*\bin' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $wix) { throw 'WiX Toolset 3 is not on this runner image' }
+          $wix.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@899b013517f9e7774591216672bf75a46bb9a481 # v2.9.4
         with:
           tool: cargo-wix@0.3.9
 
@@ -571,6 +582,13 @@ jobs:
           $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
           "$hash  $($msi.Name)" | Set-Content -Path "$($msi.FullName).sha256" -Encoding ascii
 
+      # A second MSI at a higher version, only to check that an upgrade keeps the service and data.
+      - name: MSI for the upgrade check
+        shell: pwsh
+        run: |
+          $next = [version]$env:MSI_VERSION
+          packaging/windows/build-msi.ps1 -Version "$($next.Major).$($next.Minor).$($next.Build + 1)" -OutDir "$env:RUNNER_TEMP/upgrade"
+
       - name: Inspect the MSI (service tables)
         shell: pwsh
         continue-on-error: true
@@ -584,6 +602,7 @@ jobs:
         run: |
           packaging/windows/smoke.ps1 `
             -Msi "$PWD/dist/lodestar-$($env:MSI_VERSION)-x86_64.msi" `
+            -UpgradeMsi (Get-ChildItem "$env:RUNNER_TEMP/upgrade" -Filter *.msi | Select-Object -First 1).FullName `
             -Zip "$PWD/dist/lodestar-$($env:VERSION)-x86_64-windows-portable.zip"
 
       - name: MSI logs
@@ -624,6 +643,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: packaging/keys
+          persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

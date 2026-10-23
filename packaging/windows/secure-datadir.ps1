@@ -109,6 +109,12 @@ function New-DataFolder {
   if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
     Stop-Install "$dir is a link or junction. Remove it and install again."
   }
+  # Create also succeeds when the folder already existed. A folder this call made is a few
+  # seconds old; anything older was there before and is not ours to trust.
+  $age = (Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $dir -Force).CreationTimeUtc
+  if ($age.TotalSeconds -gt 60) {
+    Stop-Install "$dir already existed when it was to be created (made $([int]$age.TotalSeconds) s ago). Check it, move it away, then install again."
+  }
   $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
   $why = Get-NotPrivateReason $dir
   if ($trusted -notcontains $owner -or $why) {

@@ -23,6 +23,8 @@ Check the download against `SHA256SUMS` on the release page first
   unprivileged account, `NT SERVICE\Lodestar`. It starts by itself a little after
   Windows boots (delayed start) and is restarted if it fails, up to two times a day.
   The MSI starts nothing during install: start it from Services, or restart the PC.
+  The first-run setup token is in `C:\ProgramData\Lodestar\logs\lodestar.log`
+  (only Administrators can read it).
 - Locks `C:\ProgramData\Lodestar` so only SYSTEM, Administrators and the
   Lodestar service account can use it. Other users on the PC can't read your data.
 - Opens `6881/udp` (the DHT) for `lodestar.exe`, on **private networks only**.
