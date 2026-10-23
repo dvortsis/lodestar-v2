@@ -146,7 +146,7 @@ impl RTorrent {
     /// Sends one XML-RPC document; the parsed answer.
     async fn send(
         &self,
-        name: &str,
+        name: &'static str,
         body: String,
         limit: usize,
         timeout: Duration,
@@ -165,7 +165,12 @@ impl RTorrent {
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
-        tracing::debug!(method = name, status, "rTorrent request");
+        lodestar_log::log_event!(
+            crate::log_events::CLIENT_REQUEST,
+            client = "rtorrent",
+            method = name,
+            status = lodestar_log::Count(status.into())
+        );
         match status {
             401 => return Err(ClientError::Auth(AuthFailure::BadCredentials)),
             403 => return Err(ClientError::Auth(AuthFailure::AddressRefused)),
@@ -181,7 +186,7 @@ impl RTorrent {
     /// One method call; a fault is a rejection.
     async fn call(
         &self,
-        method: &str,
+        method: &'static str,
         params: &[Param<'_>],
         limit: usize,
     ) -> Result<Value, ClientError> {
@@ -193,7 +198,7 @@ impl RTorrent {
 
     async fn call_raw(
         &self,
-        method: &str,
+        method: &'static str,
         params: &[Param<'_>],
         limit: usize,
     ) -> Result<Response, ClientError> {
@@ -203,7 +208,7 @@ impl RTorrent {
     /// [`call_raw`](Self::call_raw) with its own timeout (uploads get more).
     async fn call_timeout(
         &self,
-        method: &str,
+        method: &'static str,
         params: &[Param<'_>],
         limit: usize,
         timeout: Duration,
@@ -212,7 +217,7 @@ impl RTorrent {
         self.send(method, body, limit, timeout).await
     }
 
-    async fn int(&self, method: &str, hash: &str) -> Result<i64, ClientError> {
+    async fn int(&self, method: &'static str, hash: &str) -> Result<i64, ClientError> {
         self.call(method, &[Param::Str(hash)], MAX_RESPONSE)
             .await?
             .as_int()
@@ -230,7 +235,7 @@ impl RTorrent {
         }
     }
 
-    async fn text(&self, method: &str) -> Result<String, ClientError> {
+    async fn text(&self, method: &'static str) -> Result<String, ClientError> {
         let v = self.call(method, &[], MAX_RESPONSE).await?;
         v.as_str()
             .map(str::trim)
@@ -309,7 +314,7 @@ impl RTorrent {
         })
         .await?
         else {
-            tracing::debug!("rTorrent metadata didn't arrive; left stopped");
+            lodestar_log::log_event!(crate::log_events::CLIENT_LEFT_PAUSED, client = "rtorrent");
             return Ok(Selection::Pending);
         };
         let skipped = skipped_files(selected, count)?;

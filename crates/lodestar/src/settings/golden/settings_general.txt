@@ -1,2 +1,2 @@
 200
-{"fields":{"data_dir":{"env":null,"read_only":true,"restart_required":true,"source":"default","value":"data"},"log_level":{"env":null,"read_only":false,"restart_required":false,"source":"default","value":"info"}},"restart_required":[],"revision":0,"section":"general"}
+{"fields":{"data_dir":{"env":null,"read_only":true,"restart_required":true,"source":"default","value":"data"}},"restart_required":[],"revision":0,"section":"general"}

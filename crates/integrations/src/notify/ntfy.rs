@@ -246,7 +246,12 @@ impl Notifier for Ntfy {
             // Always drain a little, so the connection can be reused; only a
             // success looks at the content, and never logs it.
             let body = read_limited(resp, MAX_ANSWER_BYTES).await;
-            tracing::debug!(status = status.as_u16(), url = %redact(&self.url), "ntfy attempt");
+            lodestar_log::log_event!(
+                crate::log_events::NOTIFY_ATTEMPT,
+                channel = "ntfy",
+                status = lodestar_log::Count(status.as_u16().into()),
+                url = lodestar_log::Url::new(&redact(&self.url))
+            );
             checked?;
             let looks_like_ntfy = serde_json::from_slice::<serde_json::Value>(&body?)
                 .ok()

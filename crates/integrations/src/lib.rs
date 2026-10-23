@@ -17,6 +17,7 @@
 //! `crates/integrations/README.md` describes the pattern a new adapter follows.
 
 pub mod clients;
+pub mod log_events;
 pub mod metrics;
 pub mod net;
 pub mod notify;

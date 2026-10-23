@@ -154,7 +154,7 @@ impl QBittorrent {
         self
     }
 
-    fn url(&self, endpoint: &str) -> Result<Url, ClientError> {
+    fn url(&self, endpoint: &'static str) -> Result<Url, ClientError> {
         self.base
             .join(&format!("api/v2/{endpoint}"))
             .map_err(|_| ClientError::InvalidRequest("the URL can't take an API path"))
@@ -163,7 +163,7 @@ impl QBittorrent {
     fn request(
         &self,
         method: Method,
-        endpoint: &str,
+        endpoint: &'static str,
     ) -> Result<reqwest::RequestBuilder, ClientError> {
         Ok(self
             .http
@@ -191,7 +191,12 @@ impl QBittorrent {
                 .filter_map(|v| v.to_str().ok()),
         );
         let body = read_limited(resp, MAX_RESPONSE).await?;
-        tracing::debug!(status, "qBittorrent login");
+        lodestar_log::log_event!(
+            crate::log_events::CLIENT_REQUEST,
+            client = "qbittorrent",
+            method = "auth/login",
+            status = lodestar_log::Count(status.into())
+        );
         if body.trim_ascii() == b"Fails." {
             return Err(ClientError::Auth(AuthFailure::BadCredentials));
         }
@@ -236,7 +241,7 @@ impl QBittorrent {
     async fn once(
         &self,
         method: &Method,
-        endpoint: &str,
+        endpoint: &'static str,
         query: &[(&str, &str)],
         body: &Body,
         cookie: &Secret,
@@ -279,7 +284,12 @@ impl QBittorrent {
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
         let bytes = read_limited(resp, limit).await?;
-        tracing::debug!(endpoint, status, "qBittorrent request");
+        lodestar_log::log_event!(
+            crate::log_events::CLIENT_REQUEST,
+            client = "qbittorrent",
+            method = endpoint,
+            status = lodestar_log::Count(status.into())
+        );
         Ok((status, bytes))
     }
 
@@ -287,7 +297,7 @@ impl QBittorrent {
     async fn api(
         &self,
         method: Method,
-        endpoint: &str,
+        endpoint: &'static str,
         query: &[(&str, &str)],
         body: Body,
         limit: usize,
@@ -311,7 +321,7 @@ impl QBittorrent {
         Ok(answer)
     }
 
-    async fn text(&self, endpoint: &str) -> Result<Option<String>, ClientError> {
+    async fn text(&self, endpoint: &'static str) -> Result<Option<String>, ClientError> {
         let (status, body) = self
             .api(Method::GET, endpoint, &[], Body::Empty, MAX_RESPONSE)
             .await?;
@@ -385,7 +395,10 @@ impl QBittorrent {
                 _ => return Err(rejected(status, &body)),
             }
             if Instant::now() + self.poll_interval > deadline {
-                tracing::debug!("qBittorrent metadata didn't arrive; left paused");
+                lodestar_log::log_event!(
+                    crate::log_events::CLIENT_LEFT_PAUSED,
+                    client = "qbittorrent"
+                );
                 return Ok(Selection::Pending);
             }
             tokio::time::sleep(self.poll_interval).await;

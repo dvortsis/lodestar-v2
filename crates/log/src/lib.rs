@@ -35,8 +35,8 @@ pub use dispatch::{
 };
 pub use event::{Catalogue, Component, Event, FieldKind, Kind, Level, Mask};
 pub use value::{
-    Client, Count, Detail, Error, HIDDEN, IntoValue, Location, Name, Path, Peer, PlainError, Query,
-    Reference, Rendered, Torrent, Url, Value, kind, pairs_torrent,
+    Client, Count, Detail, Error, HIDDEN, IntoValue, Listen, Location, Name, Path, Peer,
+    PlainError, Query, Reference, Rendered, SetupToken, Torrent, Url, Value, kind, pairs_torrent,
 };
 
 /// Declares a crate's events and its `CATALOGUE`.

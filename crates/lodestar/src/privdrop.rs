@@ -43,28 +43,164 @@ pub enum Scope {
 /// log filter, is read only after the drop).
 #[derive(Debug, Default)]
 pub struct Report {
-    info: Vec<String>,
-    warn: Vec<String>,
+    lines: Vec<Line>,
     /// The directory whose ownership was checked, if any.
     data_dir: Option<PathBuf>,
 }
 
+/// One thing the drop did. Its `Display` is the text the tests read; the
+/// log gets the catalogued event, the path as a typed field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Line {
+    /// Not root: `PUID`/`PGID` asked for other ids than these.
+    IdsIgnored {
+        uid: u32,
+        gid: u32,
+    },
+    /// The data directory was the target account's already.
+    Owned {
+        dir: PathBuf,
+        ids: Ids,
+    },
+    /// The data directory was handed to the target account.
+    Chowned {
+        dir: PathBuf,
+        from: (u32, u32),
+        ids: Ids,
+        changed: u64,
+        hard_links: u64,
+        special: u64,
+        too_deep: u64,
+    },
+    /// Root, allowed by `LODESTAR_ALLOW_ROOT=1`.
+    Root {
+        gid: Option<u32>,
+    },
+    Dropped {
+        ids: Ids,
+    },
+}
+
+impl std::fmt::Display for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Line::IdsIgnored { uid, gid } => write!(
+                f,
+                "PUID/PGID are ignored: running as {uid}:{gid}, not root, so the ids can't \
+                 change (with docker --user, the data directory must already be writable \
+                 by that account)"
+            ),
+            Line::Owned { dir, ids } => write!(
+                f,
+                "data directory {} is owned by {}:{}",
+                dir.display(),
+                ids.uid,
+                ids.gid
+            ),
+            Line::Chowned {
+                dir,
+                from,
+                ids,
+                changed,
+                hard_links,
+                special,
+                too_deep,
+            } => {
+                write!(
+                    f,
+                    "data directory {} was owned by {}:{}; changed {changed} entries to {}:{}",
+                    dir.display(),
+                    from.0,
+                    from.1,
+                    ids.uid,
+                    ids.gid
+                )?;
+                for (n, what) in [
+                    (hard_links, "hard-linked files"),
+                    (special, "device, fifo or socket entries"),
+                    (too_deep, "directories nested too deep"),
+                ] {
+                    if *n > 0 {
+                        write!(f, "; left {n} {what} unchanged")?;
+                    }
+                }
+                Ok(())
+            }
+            Line::Root { gid: Some(gid) } => write!(
+                f,
+                "running as root (PUID=0 with LODESTAR_ALLOW_ROOT=1, PGID={gid}): privileges \
+                 were not dropped"
+            ),
+            Line::Root { gid: None } => {
+                f.write_str("running as root (LODESTAR_ALLOW_ROOT=1): privileges were not dropped")
+            }
+            Line::Dropped { ids } => write!(
+                f,
+                "dropped root: running as {}:{} with no supplementary groups",
+                ids.uid, ids.gid
+            ),
+        }
+    }
+}
+
+impl Line {
+    fn log(&self) {
+        use crate::logging::events;
+        use lodestar_log::{Count, Path as LogPath, log_event};
+        let id = |n: u32| Count(u64::from(n));
+        match self {
+            Line::IdsIgnored { uid, gid } => {
+                log_event!(events::SYSTEM_IDS_IGNORED, uid = id(*uid), gid = id(*gid))
+            }
+            Line::Owned { dir, ids } => log_event!(
+                events::SYSTEM_DATA_DIR_OWNED,
+                path = LogPath::new(dir),
+                uid = id(ids.uid),
+                gid = id(ids.gid)
+            ),
+            Line::Chowned {
+                dir,
+                from,
+                ids,
+                changed,
+                hard_links,
+                special,
+                too_deep,
+            } => log_event!(
+                events::SYSTEM_DATA_DIR_CHOWNED,
+                path = LogPath::new(dir),
+                from_uid = id(from.0),
+                from_gid = id(from.1),
+                uid = id(ids.uid),
+                gid = id(ids.gid),
+                changed = *changed,
+                hard_links_left = *hard_links,
+                special_left = *special,
+                too_deep_left = *too_deep
+            ),
+            Line::Root { gid: Some(gid) } => log_event!(events::SYSTEM_ROOT, gid = id(*gid)),
+            Line::Root { gid: None } => log_event!(events::SYSTEM_ROOT),
+            Line::Dropped { ids } => log_event!(
+                events::SYSTEM_DROPPED_ROOT,
+                uid = id(ids.uid),
+                gid = id(ids.gid)
+            ),
+        }
+    }
+}
+
 impl Report {
     pub fn log(&self, data_dir: &Path) {
-        for line in &self.info {
-            tracing::info!("{line}");
-        }
-        for line in &self.warn {
-            tracing::warn!("{line}");
+        for line in &self.lines {
+            line.log();
         }
         if let Some(checked) = &self.data_dir
             && checked != data_dir
         {
-            tracing::warn!(
-                "the data directory is {} (from the config file), but PUID/PGID ownership \
-                 was checked on {}; set LODESTAR_DATA_DIR so both agree",
-                data_dir.display(),
-                checked.display()
+            lodestar_log::log_event!(
+                crate::logging::events::SYSTEM_DATA_DIR_MISMATCH,
+                path = lodestar_log::Path::new(data_dir),
+                checked = lodestar_log::Path::new(checked)
             );
         }
     }
@@ -77,11 +213,7 @@ impl Report {
         };
         let mut report = Report::default();
         if differs(puid, uid) || differs(pgid, gid) {
-            report.info.push(format!(
-                "PUID/PGID are ignored: running as {uid}:{gid}, not root, so the ids can't \
-                 change (with docker --user, the data directory must already be writable \
-                 by that account)"
-            ));
+            report.lines.push(Line::IdsIgnored { uid, gid });
         }
         report
     }
@@ -151,7 +283,7 @@ mod imp {
         set_thread_gid, set_thread_groups, set_thread_res_gid, set_thread_res_uid, set_thread_uid,
     };
 
-    use super::{Ids, Report, Scope, env_data_dir, parse_ids, status_field};
+    use super::{Ids, Line, Report, Scope, env_data_dir, parse_ids, status_field};
 
     /// Deeper than anything Lodestar writes; past it, nothing is changed.
     const MAX_DEPTH: usize = 32;
@@ -180,24 +312,17 @@ mod imp {
         let mut report = Report::default();
         if scope == Scope::DataDir {
             let dir = env_data_dir(env);
-            report.info.push(chown_data_dir(&dir, ids)?);
+            report.lines.push(chown_data_dir(&dir, ids)?);
             report.data_dir = Some(dir);
         }
         if ids.uid == 0 {
-            report.warn.push(format!(
-                "running as root (PUID=0 with LODESTAR_ALLOW_ROOT=1, PGID={}): privileges \
-                 were not dropped",
-                ids.gid
-            ));
+            report.lines.push(Line::Root { gid: Some(ids.gid) });
             return Ok(report);
         }
         drop_to(ids)?;
         if let Some(dir) = &report.data_dir {
             reachable(dir, ids)?;
-            report.info.push(format!(
-                "dropped root: running as {}:{} with no supplementary groups",
-                ids.uid, ids.gid
-            ));
+            report.lines.push(Line::Dropped { ids });
         }
         Ok(report)
     }
@@ -324,7 +449,7 @@ mod imp {
     /// Makes `dir` (created if missing) the target account's. The tree is
     /// walked only if the directory itself has another owner, so a large
     /// index isn't rescanned on every start.
-    pub(super) fn chown_data_dir(dir: &Path, ids: Ids) -> Result<String, String> {
+    pub(super) fn chown_data_dir(dir: &Path, ids: Ids) -> Result<Line, String> {
         let shown = dir.display();
         match std::fs::symlink_metadata(dir) {
             Ok(m) if m.file_type().is_symlink() => {
@@ -349,10 +474,10 @@ mod imp {
         .map_err(|e| format!("opening {shown}: {e}"))?;
         let st = rustix::fs::fstat(&fd).map_err(|e| format!("{shown}: {e}"))?;
         if (st.st_uid, st.st_gid) == (ids.uid, ids.gid) {
-            return Ok(format!(
-                "data directory {shown} is owned by {}:{}",
-                ids.uid, ids.gid
-            ));
+            return Ok(Line::Owned {
+                dir: dir.to_path_buf(),
+                ids,
+            });
         }
         let root = rustix::fs::stat("/").map_err(|e| format!("stat /: {e}"))?;
         if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
@@ -372,20 +497,15 @@ mod imp {
         )
         .map_err(|e| format!("chown {shown}: {e}"))?;
         walk.changed += 1;
-        let mut line = format!(
-            "data directory {shown} was owned by {}:{}; changed {} entries to {}:{}",
-            st.st_uid, st.st_gid, walk.changed, ids.uid, ids.gid
-        );
-        for (n, what) in [
-            (walk.hard_links, "hard-linked files"),
-            (walk.special, "device, fifo or socket entries"),
-            (walk.too_deep, "directories nested too deep"),
-        ] {
-            if n > 0 {
-                line.push_str(&format!("; left {n} {what} unchanged"));
-            }
-        }
-        Ok(line)
+        Ok(Line::Chowned {
+            dir: dir.to_path_buf(),
+            from: (st.st_uid, st.st_gid),
+            ids,
+            changed: walk.changed,
+            hard_links: walk.hard_links,
+            special: walk.special,
+            too_deep: walk.too_deep,
+        })
     }
 
     /// What Lodestar leaves in a data directory; one is enough.
@@ -493,7 +613,7 @@ mod imp {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 mod imp {
-    use super::{Report, Scope};
+    use super::{Line, Report, Scope};
 
     /// No per-thread set*id syscalls without `unsafe` here: root is refused
     /// rather than kept quietly.
@@ -513,9 +633,7 @@ mod imp {
         }
         if env("LODESTAR_ALLOW_ROOT").as_deref() == Some("1") {
             let mut report = Report::default();
-            report.warn.push(
-                "running as root (LODESTAR_ALLOW_ROOT=1): privileges were not dropped".into(),
-            );
+            report.lines.push(Line::Root { gid: None });
             return Ok(report);
         }
         Err(
@@ -613,7 +731,7 @@ mod tests {
 
     #[test]
     fn unprivileged_logs_only_when_ids_differ() {
-        let lines = |u, g| Report::unprivileged(u, g, 1000, 1000).info.len();
+        let lines = |u, g| Report::unprivileged(u, g, 1000, 1000).lines.len();
         assert_eq!(lines(None, None), 0);
         assert_eq!(lines(Some(""), Some("")), 0);
         assert_eq!(lines(Some("1000"), Some("1000")), 0);
@@ -728,7 +846,7 @@ mod tests {
                 uid: 4242,
                 gid: 4343,
             };
-            let line = chown_data_dir(&data, ids).unwrap();
+            let line = chown_data_dir(&data, ids).unwrap().to_string();
             assert!(line.contains("was owned by 0:0"), "{line}");
             // data, index, index/seg, index/seg/a, lodestar.db, link, dirlink
             assert!(line.contains("changed 7 entries"), "{line}");
@@ -750,7 +868,7 @@ mod tests {
 
             // Owned already: nothing is walked, even a stray root file.
             std::fs::write(data.join("stray"), b"").unwrap();
-            let line = chown_data_dir(&data, ids).unwrap();
+            let line = chown_data_dir(&data, ids).unwrap().to_string();
             assert!(line.contains("is owned by 4242:4343"), "{line}");
             assert_eq!(owner(&data.join("stray")), (0, 0));
 
@@ -803,7 +921,9 @@ mod tests {
             }
             std::fs::create_dir_all(&deep).unwrap();
             std::fs::write(data.join("lodestar.db"), b"").unwrap();
-            let line = chown_data_dir(&data, Ids { uid: 7, gid: 7 }).unwrap();
+            let line = chown_data_dir(&data, Ids { uid: 7, gid: 7 })
+                .unwrap()
+                .to_string();
             assert!(
                 line.contains("left 1 directories nested too deep"),
                 "{line}"

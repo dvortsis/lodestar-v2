@@ -13,10 +13,12 @@ use std::time::Duration;
 
 use lodestar_filter::lists::{self, Format, IpSet, SharedIps};
 use lodestar_filter::{Action, Handle};
+use lodestar_log::{Count, Error, Url, log_event};
 use lodestar_store::{NewSubscription, Refresh, Store, Subscription};
 use tokio::sync::watch;
 
 use crate::config::{ListAction, ListKind, Subscriptions};
+use crate::logging::events;
 
 /// `subscriptions.kind`.
 const CONTENT: u8 = 0;
@@ -91,10 +93,9 @@ pub fn sync_config(store: &mut Store, c: &Subscriptions) -> Result<(), String> {
         if l.floor {
             let existing = store.subscriptions().map_err(|e| e.to_string())?;
             if existing.iter().any(|s| s.url == l.url && !s.floor) {
-                tracing::warn!(
-                    "subscriptions: {} is already subscribed outside the floor; \
-                     `floor = true` in the config is ignored (mark it in the app)",
-                    l.url
+                lodestar_log::log_event!(
+                    events::FILTERS_SUBSCRIPTION_FLOOR_IGNORED,
+                    url = Url::new(&l.url)
                 );
             }
         }
@@ -289,7 +290,12 @@ fn record(store: &mut Store, sub: &Subscription, fetched: Fetched, now: i64) -> 
     let (refresh, changed) = match &fetched {
         Fetched::Unchanged => (Refresh::Unchanged, false),
         Fetched::Failed(why) => {
-            tracing::warn!(list = %sub.name, "refresh failed: {why}");
+            // `why` can quote the URL; the list's status in the app has it.
+            log_event!(
+                events::FILTERS_SUBSCRIPTION_REFRESH_FAILED,
+                list = Count(sub.id as u64),
+                url = Url::new(&sub.url)
+            );
             (Refresh::Failed(why), false)
         }
         Fetched::New {
@@ -301,7 +307,11 @@ fn record(store: &mut Store, sub: &Subscription, fetched: Fetched, now: i64) -> 
             held_why = gate(sub.entries, parsed.entries);
             match &held_why {
                 Some(why) => {
-                    tracing::warn!(list = %sub.name, "held a new version back: {why}");
+                    log_event!(
+                        events::FILTERS_SUBSCRIPTION_HELD,
+                        list = Count(sub.id as u64),
+                        url = Url::new(&sub.url)
+                    );
                     let r = Refresh::Held {
                         data: &parsed.data,
                         entries: parsed.entries,
@@ -328,11 +338,15 @@ fn record(store: &mut Store, sub: &Subscription, fetched: Fetched, now: i64) -> 
         Ok(kept) => {
             // A floor-marked list only adds (§2.7).
             let source = lodestar_store::FloorSource::List(sub.id);
-            tracing::warn!("{}", crate::floor::message(store, &source, kept));
+            crate::floor::log_pending(&source, kept);
             crate::floor::KEPT.fetch_add(kept as u64, std::sync::atomic::Ordering::Relaxed);
         }
         Err(e) => {
-            tracing::warn!(list = %sub.name, "recording a refresh failed: {e}");
+            log_event!(
+                events::FILTERS_SUBSCRIPTION_RECORD_FAILED,
+                list = Count(sub.id as u64),
+                error = Error::new(&e)
+            );
             return false;
         }
     }
@@ -362,7 +376,10 @@ pub async fn refresh_due(
     let subs = match tokio::task::spawn_blocking(move || lock(&st).subscriptions()).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            tracing::warn!("reading subscriptions failed: {e}");
+            log_event!(
+                events::FILTERS_SUBSCRIPTIONS_READ_FAILED,
+                error = Error::new(&e)
+            );
             return 0;
         }
         Err(_) => return 0,
@@ -386,7 +403,10 @@ pub async fn refresh_due(
         let (st, filter, ips) = (store.clone(), filter.clone(), ips.clone());
         let applied = tokio::task::spawn_blocking(move || apply(&lock(&st), &filter, &ips)).await;
         if let Ok(Err(e)) = applied {
-            tracing::warn!("applying subscriptions failed: {e}");
+            log_event!(
+                events::FILTERS_SUBSCRIPTIONS_APPLY_FAILED,
+                error = Error::new(&e)
+            );
         }
     }
     due.len()
