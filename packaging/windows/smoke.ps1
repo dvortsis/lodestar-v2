@@ -85,6 +85,11 @@ if ($Msi) {
   Assert (Test-Path "$installDir\lodestar.exe") 'lodestar.exe not in Program Files'
   Assert (Test-Path $dataDir) 'data folder not created in ProgramData'
   $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
+  if ($null -eq $svc) {
+    Write-Host '--- sc query Lodestar'; sc.exe query Lodestar
+    Write-Host '--- sc qc Lodestar'; sc.exe qc Lodestar
+    Write-Host '--- services named like Lodestar'; Get-CimInstance Win32_Service | Where-Object { $_.Name -like '*odestar*' -or $_.PathName -like '*odestar*' } | Format-List Name, PathName, StartName
+  }
   Assert ($null -ne $svc) 'service Lodestar is not registered'
   Assert ($svc.PathName -match 'lodestar\.exe') "service points at $($svc.PathName)"
   Assert ($svc.StartName -eq 'NT SERVICE\Lodestar') "service runs as $($svc.StartName)"

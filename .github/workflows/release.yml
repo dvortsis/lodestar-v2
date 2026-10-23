@@ -577,7 +577,10 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          Get-ChildItem $env:RUNNER_TEMP -Filter 'msi-*.log' | ForEach-Object { "::group::$($_.Name)"; Get-Content $_.FullName -Tail 200; "::endgroup::" }
+          Get-ChildItem $env:RUNNER_TEMP -Filter 'msi-*.log' | ForEach-Object {
+            "::group::$($_.Name) (tail)"; Get-Content $_.FullName -Tail 120; "::endgroup::"
+            "::group::$($_.Name) (service lines)"; Select-String -Path $_.FullName -Pattern 'ervice' | Select-Object -First 60 | ForEach-Object { $_.Line }; "::endgroup::"
+          }
           $sd = Join-Path $env:SystemRoot 'Temp\lodestar-secure-datadir.log'
           if (Test-Path $sd) { "::group::secure-datadir.log"; Get-Content $sd; "::endgroup::" }
 
