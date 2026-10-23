@@ -23,12 +23,13 @@ The runner's own fresh review still runs. The self-review is there so that revie
 
 ## 2. Watch your PR
 - Right after opening the PR, call `subscribe_pr_activity` for it. CI results, reviews and conflicts then wake you; don't poll.
-- **Tell the runner.** Send `send_message` to `@parent` with `<id>: PR #<n> ready for review, head <sha>`. If you weren't launched by the runner, use the runner session id from `state.json` (`runner_session`) on the `runner-state` branch.
+- **Tell the runner.** Send `send_message` to the runner with `<id>: PR #<n> ready for review, head <sha>`. The runner is the session named in `runner_session` in `state.json` on the `runner-state` branch (`git fetch origin runner-state && git show origin/runner-state:state.json`); a watchdog can replace the runner, so read it each time. Use `@parent` only if you can't read it. "Message the runner" below means the same.
 
 ## 3. On each event
-- **CI red:** reproduce the failure locally, fix it and push. Before blaming the PR, check whether the same check is red on `main`, or whether a fix PR for a known flake is already open. If either is true, it isn't your PR's failure (`docs/owner-decisions.md` §2.18): say so once on the PR, naming the check, the evidence and the fix PR, and tell the runner. "Flake" is never a root cause on its own.
+- **CI red:** reproduce the failure locally, fix it and push. Before blaming the PR, check whether the same check is red on `main`, or whether a fix PR for a known flake is already open. If either is true, it isn't your PR's failure (`docs/owner-decisions.md` §2.18): say so once on the PR, naming the check, the evidence and the fix PR, and tell the runner. A job inside the required `ci-ok` check still has to pass (§2.22): the runner re-runs it or fixes `main`. "Flake" is never a root cause on its own.
+- **The runner brought `main` in for you** (`update_pull_request_branch`): `git pull --no-rebase` before your next push.
 - **Merge conflict, or the runner asks you to bring `main` in:** `git fetch origin main && git merge origin/main`. Never rebase, amend or force-push. Resolve the conflict, regenerate generated files with the repo's tooling, re-run the checks and push.
-- **Review findings from the runner:** fix every blocking item. Reply on each thread, saying what changed or why not. Push once everything is fixed and the checks pass, then message `@parent` with the new head.
+- **Review findings from the runner:** fix every blocking item. Reply on each thread, saying what changed or why not. Push once everything is fixed and the checks pass, then message the runner with the new head.
 - **Your PR merged or closed:** unsubscribe and stop.
 
 ## 4. Never
@@ -37,4 +38,4 @@ The runner's own fresh review still runs. The self-review is there so that revie
 - Never skip, disable or quarantine a test to get green, and never push an empty commit to re-run CI.
 
 ## 5. When you're blocked
-Open the PR as a draft if you haven't opened one, or comment on it, saying exactly what's missing. Then message `@parent` with `<id>: blocked on <what>` and stop. A question for the owner goes to the runner, never to the owner directly.
+Open the PR as a draft if you haven't opened one, or comment on it, saying exactly what's missing. Then message the runner with `<id>: blocked on <what>` and stop. A question for the owner goes to the runner, never to the owner directly.
