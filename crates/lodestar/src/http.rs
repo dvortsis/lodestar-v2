@@ -98,13 +98,16 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     if let Some(search) = &s.search {
         metrics::render_search(&mut body, search.index.index().num_docs(), &search.stats);
     }
-    if let (Some(health), Some(hot)) = (s.monitor.health(), s.monitor.hot()) {
+    if let Some(health) = s.monitor.health() {
         let stored = s
             .monitor
             .writer_stats()
             .swarm_updates
             .load(Ordering::Relaxed);
-        metrics::render_scrape(&mut body, health, hot, stored);
+        metrics::render_scrape(&mut body, health, stored);
+    }
+    if let Some(hot) = s.monitor.hot() {
+        metrics::render_hot(&mut body, hot);
     }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }

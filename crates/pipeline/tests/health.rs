@@ -380,6 +380,38 @@ async fn a_banning_tracker_is_left_alone() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tracker_sitting_rounds_out_counts_them_as_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let names = names("skip", 12);
+    let t = seed(&db, &names.iter().map(String::as_str).collect::<Vec<_>>());
+    let banning = udp_tracker().await;
+    *banning.state.refuse.lock().unwrap() = Some("banned".into());
+    let working = udp_tracker().await;
+    for &(_, hash) in &t {
+        working.state.set(hash, SWARM);
+    }
+    let mut setup = health(&db, vec![banning.url(true), working.url(true)]);
+    setup.config.round_size = 2;
+    let hot = Arc::new(HotColumns::new());
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(&hot, setup), store, Vec::new())
+        .await
+        .unwrap();
+    let h = pipeline.monitor().health().unwrap().clone();
+    let skipped = |h: &lodestar_pipeline::health::HealthHandle| {
+        h.trackers()
+            .into_iter()
+            .find(|s| s.health == Health::Banned)
+            .map_or(0, |s| s.rounds[Outcome::Skipped as usize])
+    };
+    // The working tracker keeps rounds going; the banned one sits them out,
+    // and the status page says so.
+    until("rounds skipped by the banned tracker", || skipped(&h) >= 2).await;
+    pipeline.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_drops_rounds_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");

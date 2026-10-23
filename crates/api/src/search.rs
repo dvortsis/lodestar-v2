@@ -387,6 +387,14 @@ async fn run_search(
     let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
+        // A search that fails while running counts in the Serve rollups as
+        // failed. A bad or expired cursor isn't a failed search.
+        let failed = |e: lodestar_search::Error| {
+            if let Some(ev) = &events {
+                ev.searched(started.elapsed(), None);
+            }
+            search_error(e)
+        };
         // A first page comes from the result cache (§8) unless it's
         // explained, which bypasses it.
         let mut cached = None;
@@ -415,7 +423,7 @@ async fn run_search(
                 let (got, _) = search
                     .cache()
                     .search(&search.index(), &spec, &cancel)
-                    .map_err(search_error)?;
+                    .map_err(failed)?;
                 let lease = got.lease.clone();
                 cached = Some(got);
                 (lease, Start::Offset(0), 0, None)
@@ -425,12 +433,12 @@ async fn run_search(
                 // keeps it for the pages after.
                 let lease =
                     Lease::new_at(search.index(), &shown, unix_now(), tz * 60, sort, &cancel)
-                        .map_err(search_error)?;
+                        .map_err(failed)?;
                 (Arc::new(lease), Start::Offset(offset), offset as u64, None)
             }
         };
         let total = if exact {
-            lease.exact_total(&cancel).map_err(search_error)?
+            lease.exact_total(&cancel).map_err(failed)?
         } else {
             lease.total()
         };
@@ -441,12 +449,7 @@ async fn run_search(
             }
             None => lease.page(start, limit, &cancel).map(|p| (p, None)),
         };
-        let (page, explained) = paged.map_err(|e| {
-            if let Some(ev) = &events {
-                ev.searched(started.elapsed(), None);
-            }
-            search_error(e)
-        })?;
+        let (page, explained) = paged.map_err(failed)?;
         if let Some(ev) = &events {
             ev.searched(started.elapsed(), Some(total.value));
         }
