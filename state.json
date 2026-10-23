@@ -813,7 +813,7 @@
    "pr": 88,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending. | 01:22 f0560e4 delta verified by runner (bare_res non-empty + must-fail cases, idle backoff reset). Approved; live.rs conflict with main (#104) -> asked main merge. Merge on green."
   },
   "B2b": {
    "status": "review",
@@ -978,7 +978,7 @@
    "pr": 91,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:20 review FIX sent: PUID/PGID stale since D-puid, compose user: key, backup/restore stale since M6-cli (wal/shm, reindex, auth.json), setup-token line; important: Get-FileHash case, no :latest yet, backup share private, glossary, SECURE_COOKIES, setup.facts regen."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:20 review FIX sent: PUID/PGID stale since D-puid, compose user: key, backup/restore stale since M6-cli (wal/shm, reindex, auth.json), setup-token line; important: Get-FileHash case, no :latest yet, backup share private, glossary, SECURE_COOKIES, setup.facts regen. | 01:22 0404375 all review items done; sent P-release checksum details (SHA256SUMS, .minisig, minisign verify) to fold in; delta review after next push."
   },
   "F-budget": {
    "status": "review",
@@ -1001,10 +1001,11 @@
    "merge": "55d90af"
   },
   "C-adult-other": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
-   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative)",
-   "session": "session_01KNC8PugVKjddvhH6vT8qXN"
+   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative) | 01:22 PR #105 ad0d24a ready; reviewer started (content safety). filter budget red = runner speed (\u00a72.18 candidate). \u00a72.19 refinement: Other->Scene, Ebook->Comics at threshold; flag to owner.",
+   "session": "session_01KNC8PugVKjddvhH6vT8qXN",
+   "pr": 105
   },
   "B4b-r2": {
    "status": "merged",
@@ -1266,6 +1267,7 @@
   "2026-10-23 01:07 owner (verified): approved runner process change (#106) and deferred code-signing cert ('not selling this commercially'). Told P-release, M6-win, DOC-install."
  ],
  "runner_notes": {
-  "106": "01:20 review FIX; runner pushed fe21767 (hook matcher, ci-ok vs 2.18, takeover, steward runner_session, renumber 2.22/2.23, CLAUDE.md). After #107: merge main, replace No-branch-protection bullet with pointer to 2.22, arch.md:1477 unsigned, B-update spec note (Authenticode only when present, 2.23), state carry B-update_signing repoint; re-review delta; echo marker; merge."
+  "106": "01:20 review FIX; runner pushed fe21767 (hook matcher, ci-ok vs 2.18, takeover, steward runner_session, renumber 2.22/2.23, CLAUDE.md). After #107: merge main, replace No-branch-protection bullet with pointer to 2.22, arch.md:1477 unsigned, B-update spec note (Authenticode only when present, 2.23), state carry B-update_signing repoint; re-review delta; echo marker; merge.",
+  "106-broadcast": "After #106 merges: message every in-flight session (running/in-review slices + M4 #48, \"Modern DHT crawler architecture\", settings session): \"#106 is merged. Run `git fetch origin main && git merge origin/main` on your branch now and push. This brings in the merge-guard hook and .claude/skills/steward/SKILL.md. Read the steward skill and follow it from now on. Only the runner merges: don't merge, enable auto-merge or push to main. When your PR is ready, message the runner session (session_01EYhgh4JX3AmHzKXPjYCoUg).\" Next heartbeat: verify each branch contains #106 merge commit; chase; tell owner if filter session merges anything after."
  }
 }
