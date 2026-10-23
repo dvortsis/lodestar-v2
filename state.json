@@ -1023,6 +1023,11 @@
    "model": "opus",
    "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards",
    "session": "session_01LvbsfQSKGCGby7T8r4xoNw"
+  },
+  "F-perf": {
+   "status": "launching",
+   "model": "opus",
+   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1233,5 +1238,8 @@
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference."
+ ],
+ "decisions_log": [
+  "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it."
  ]
 }
