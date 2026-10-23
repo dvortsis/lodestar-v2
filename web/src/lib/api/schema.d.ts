@@ -1070,6 +1070,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/logs/archive.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every listed log file in one zip, each converted as a single download
+         *     is. `redact` defaults to true when any file contains details.
+         */
+        get: operations["getLogArchive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/logs/catalog": {
         parameters: {
             query?: never;
@@ -1084,6 +1104,54 @@ export interface paths {
          *     session only.
          */
         get: operations["getLogCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The log files, newest first, with whether each contains torrent
+         *     details. An unreadable details index marks every file as having them.
+         */
+        get: operations["getLogFiles"];
+        put?: never;
+        post?: never;
+        /**
+         * Deletes log files: all of them, or only those containing torrent
+         *     details (or written under an opt-in). The file being written is
+         *     rotated first, so no new line is lost. A file that isn't a regular file
+         *     is skipped and reported. Needs no password (Destructive, §10.10.7).
+         */
+        delete: operations["deleteLogFiles"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One log file, always decompressed. `redact` defaults to true when the
+         *     file contains details: fields of the kinds that identify torrents or
+         *     people, client addresses and the opt-ins read `[hidden]`, and lines of
+         *     an opt-in event are left out. `redact=false` serves the file as it is.
+         */
+        get: operations["getLogFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2912,6 +2980,10 @@ export interface components {
             /** @description Decided in shadow mode: recorded, not acted on. */
             shadow: boolean;
         };
+        /** @description `DELETE /logs/files`. */
+        DeleteLogFiles: {
+            which: components["schemas"]["LogFilesWhich"];
+        };
         Deployment: {
             /** @description The image's digest, when the image sets it. */
             image_digest: string | null;
@@ -4316,6 +4388,75 @@ export interface components {
          * @enum {string}
          */
         LogFieldKind: "hash" | "name" | "path" | "url" | "query" | "client" | "peer" | "size" | "peer_activity" | "filter_changes" | "error" | "label" | "untyped";
+        /** @description One log file. */
+        LogFileInfo: {
+            compressed: boolean;
+            /** @description The file being written now. */
+            current: boolean;
+            /**
+             * @description Written while a data kind that identifies torrents or people, or
+             *     an opt-in, was on: "Contains torrent details".
+             */
+            details: boolean;
+            /** @description The first readable line's time. */
+            from: string | null;
+            name: string;
+            /** @description Written while an opt-in was on. */
+            opt_in: boolean;
+            /**
+             * Format: int64
+             * @description Bytes on disk.
+             */
+            size: number;
+            /** @description Its rotation time, or for the current file its last line. */
+            to: string | null;
+        };
+        /** @description A file `DELETE /logs/files` left. */
+        LogFileSkipped: {
+            name: string;
+            /** @description `not_a_regular_file` or `failed`. */
+            reason: string;
+        };
+        /**
+         * @description Whether file logging is writing now.
+         * @enum {string}
+         */
+        LogFileState: "on" | "off" | "stopped" | "unavailable";
+        /** @description `GET /logs/files`. */
+        LogFiles: {
+            files: components["schemas"]["LogFileInfo"][];
+            /** @description The logs folder; null when there's none to read. */
+            folder: string | null;
+            /**
+             * @description `false`: the folder's details index couldn't be read, so every file
+             *     counts as having details.
+             */
+            index_readable: boolean;
+            /**
+             * @description Why nothing is listed (`unavailable`): `not_opened`, `not_a_folder`,
+             *     `not_private` or `unreadable`.
+             */
+            reason: string | null;
+            state: components["schemas"]["LogFileState"];
+        };
+        /** @description What `DELETE /logs/files` did. */
+        LogFilesDeleted: {
+            /** Format: int64 */
+            bytes: number;
+            /** Format: int64 */
+            deleted: number;
+            skipped: components["schemas"]["LogFileSkipped"][];
+        };
+        /**
+         * @description Which files `DELETE /logs/files` deletes.
+         * @enum {string}
+         */
+        LogFilesWhich: "all" | "details";
+        /**
+         * @description A download's format.
+         * @enum {string}
+         */
+        LogFormat: "jsonl" | "text";
         /**
          * @description One frame of `GET /logs/stream`: `event:` names the variant, `data:`
          *     holds its payload.
@@ -8941,6 +9082,68 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getLogArchive: {
+        parameters: {
+            query?: {
+                /** @description `jsonl` (default) or `text`. */
+                format?: components["schemas"]["LogFormat"];
+                /** @description Remove torrent details; the default is true when any file has them. */
+                redact?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A zip of the log files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description A bad parameter (`bad_parameter`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Log files are being read already (`logs_busy`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getLogCatalog: {
         parameters: {
             query?: never;
@@ -8956,6 +9159,192 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogCatalog"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLogFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogFiles"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteLogFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteLogFiles"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogFilesDeleted"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A cross-site request (`cross_origin`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not JSON (`unsupported_media_type`). */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A bad body (`bad_body`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLogFile: {
+        parameters: {
+            query?: {
+                /** @description `jsonl` (default) or `text`. */
+                format?: components["schemas"]["LogFormat"];
+                /** @description Remove torrent details; the default is true when the file has them. */
+                redact?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description `lodestar.jsonl` or a rotated file's name, as `GET /logs/files` lists it. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as an attachment: JSON lines, or text with `format=text`. */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment; filename="<stem>[-redacted].<jsonl|txt>"`. */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
+                    "text/plain; charset=utf-8": string;
+                };
+            };
+            /** @description A bad parameter (`bad_parameter`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No such file (`log_file_not_found`, `field: "name"`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Log files are being read already (`logs_busy`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
