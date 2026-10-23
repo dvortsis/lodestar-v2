@@ -112,7 +112,13 @@ mod tests {
         let link_dir = dir.path().join("links");
         std::fs::create_dir(&link_dir).unwrap();
         let link = link_dir.join(NAME);
-        if std::os::windows::fs::symlink_file(&target, &link).is_ok() {
+        let symlinked = std::os::windows::fs::symlink_file(&target, &link).is_ok();
+        // CI runs elevated, so the case can't quietly drop out there.
+        assert!(
+            symlinked || std::env::var_os("CI").is_none(),
+            "symlink_file failed on CI"
+        );
+        if symlinked {
             assert!(append_to(&link, "logging", "planted").is_err());
             assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
             std::fs::remove_file(&link).unwrap();

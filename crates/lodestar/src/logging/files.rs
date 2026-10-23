@@ -70,12 +70,14 @@ fn windows_private(dir: &Path) -> bool {
     use std::collections::HashMap as Map;
     use std::sync::Mutex;
     static CHECKED: Mutex<Option<Map<PathBuf, bool>>> = Mutex::new(None);
-    let mut checked = CHECKED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(&private) = checked.as_ref().and_then(|m| m.get(dir)) {
+    let lock = || CHECKED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&private) = lock().as_ref().and_then(|m| m.get(dir)) {
         return private;
     }
+    // Checked outside the lock: a slow `Get-Acl` (a network share) holds
+    // up only its own request.
     let private = crate::windows::acl::log_folder(dir).is_ok();
-    checked
+    lock()
         .get_or_insert_with(Map::new)
         .insert(dir.to_path_buf(), private);
     private
