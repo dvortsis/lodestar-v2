@@ -1042,6 +1042,12 @@
    "model": "opus",
    "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots",
    "session": "session_01KNQRrRWSAMYLC5vJRhERho"
+  },
+  "runner-delegated": {
+   "status": "approved",
+   "pr": 107,
+   "branch": "runner/delegated-decisions",
+   "notes": "3 review rounds -> MERGE; nits applied; merge on green"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
