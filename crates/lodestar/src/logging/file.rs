@@ -706,6 +706,8 @@ impl FileSink {
         let to = self.cfg.dir.join(&name);
         // Its badge goes first, so it's never under a name without one.
         let _ = lock(&self.index).copy(CURRENT, &name);
+        #[cfg(test)]
+        before_rename(&self.cfg.dir, &name);
         if let Err(e) = fs::rename(&self.path, &to) {
             let _ = lock(&self.index).remove(&name);
             return Err(e);
@@ -714,9 +716,11 @@ impl FileSink {
             Ok(f) => self.file = f,
             Err(e) => {
                 // Put it back, so lines go on in the current file and a
-                // prune never takes them.
-                let _ = fs::rename(&to, &self.path);
-                let _ = lock(&self.index).remove(&name);
+                // prune never takes them. Its badge stays under the
+                // rotated name too unless it's back.
+                if fs::rename(&to, &self.path).is_ok() {
+                    let _ = lock(&self.index).remove(&name);
+                }
                 return Err(e);
             }
         }
@@ -773,6 +777,8 @@ pub(super) fn set_aside(dir: &Path, index: &Mutex<Index>) -> Result<Option<Strin
     let name = rotated_name(dir);
     // Its badge moves with it, first.
     let _ = lock(index).copy(CURRENT, &name);
+    #[cfg(test)]
+    before_rename(dir, &name);
     match fs::rename(&path, dir.join(&name)) {
         Ok(()) => {
             let _ = lock(index).remove(CURRENT);
@@ -786,6 +792,26 @@ pub(super) fn set_aside(dir: &Path, index: &Mutex<Index>) -> Result<Option<Strin
             }
         }
     }
+}
+
+#[cfg(test)]
+type RenameHook = Box<dyn Fn(&Path, &str)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs on this thread just before the current file is renamed to a
+    /// rotated name (`dir`, the name), to check what a reader sees then.
+    pub(super) static BEFORE_RENAME: std::cell::RefCell<Option<RenameHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn before_rename(dir: &Path, name: &str) {
+    BEFORE_RENAME.with(|h| {
+        if let Some(h) = &*h.borrow() {
+            h(dir, name);
+        }
+    });
 }
 
 pub(super) fn lock(index: &Mutex<Index>) -> std::sync::MutexGuard<'_, Index> {
@@ -907,6 +933,53 @@ mod tests {
         // A missing one is an empty one.
         fs::remove_file(d.join(INDEX)).unwrap();
         assert!(Index::load(d).files.is_empty());
+    }
+
+    /// Sets a hook asserting that, on disk, the rotated name already has
+    /// details when the current file is about to take it; returns how many
+    /// times it ran.
+    fn badge_first() -> std::rc::Rc<std::cell::Cell<u32>> {
+        let ran = std::rc::Rc::new(std::cell::Cell::new(0));
+        let r = ran.clone();
+        BEFORE_RENAME.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |dir: &Path, name: &str| {
+                let seen = super::super::files::read_index(dir);
+                let f = seen.flags(&LogName::parse(name).unwrap());
+                assert!(f.details, "{name} has no badge on disk before the rename");
+                r.set(r.get() + 1);
+            }));
+        });
+        ran
+    }
+
+    #[test]
+    fn a_rotation_and_a_set_aside_write_the_badge_before_the_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let details = Flags {
+            details: true,
+            opt_in: false,
+        };
+        let ran = badge_first();
+        // Set aside, with no writer.
+        let index = Mutex::new(Index::load(d));
+        fs::write(d.join(CURRENT), "line\n").unwrap();
+        lock(&index).set(CURRENT, details).unwrap();
+        set_aside(d, &index).unwrap().unwrap();
+        assert_eq!(ran.get(), 1);
+        // A writer's rotation.
+        let mut sink = FileSink::open(cfg(d, 1 << 20)).unwrap();
+        sink.write("{\"msg\":\"x\"}", details).unwrap();
+        assert!(
+            lock(&sink.index)
+                .files
+                .get(CURRENT)
+                .is_some_and(|f| f.details)
+        );
+        sink.rotate().unwrap();
+        sink.settle();
+        assert_eq!(ran.get(), 2);
+        BEFORE_RENAME.with(|h| *h.borrow_mut() = None);
     }
 
     #[test]
