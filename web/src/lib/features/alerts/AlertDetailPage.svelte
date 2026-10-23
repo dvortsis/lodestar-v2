@@ -45,15 +45,18 @@
 		void d.load();
 		return () => d.cancel();
 	});
-	$effect(() =>
-		events.on(
+	// Subscribe once there is data (see the list page: the shell's 401 hand-off comes first).
+	const loaded = $derived(d.search !== undefined);
+	$effect(() => {
+		if (!loaded) return;
+		return events.on(
 			'alerts',
 			(event) => {
 				if (event.saved_search === id) d.refreshSoon();
 			},
 			{ onResync: () => d.refreshSoon() }
-		)
-	);
+		);
+	});
 
 	// --- the list: alerts and, once, the mark ---------------------------------------------
 	type Item =

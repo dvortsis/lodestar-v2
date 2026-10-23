@@ -41,9 +41,13 @@
 		void list.load();
 		return () => list.cancel();
 	});
-	$effect(() =>
-		events.on('alerts', () => list.refreshSoon(), { onResync: () => void list.load() })
-	);
+	// Subscribe once there is data: a page that opens the stream before the shell has installed its
+	// 401 hand-off would leave the stream stopped on a sign-in redirect nobody performs.
+	const loaded = $derived(list.items !== undefined);
+	$effect(() => {
+		if (!loaded) return;
+		return events.on('alerts', () => list.refreshSoon(), { onResync: () => void list.load() });
+	});
 
 	// --- dialogs, loaded on first use -------------------------------------------------------
 	let SaveDialog = $state<typeof import('./SaveSearchDialog.svelte').default>();
