@@ -10,7 +10,7 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { tick, type Snippet } from 'svelte';
+	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import IconRestart from '~icons/ph/arrows-clockwise';
 	import IconCheck from '~icons/ph/check-circle';
 	import { ask } from './dialogs';
@@ -60,29 +60,41 @@
 
 	// --- saving ------------------------------------------------------------------------------
 
-	/** Every save path goes here: the bar, ⌘/Ctrl+S, the leave dialog. */
-	async function save() {
-		const r = await form.save();
-		if (!r.ok && form.errors.length) {
-			summaryShown = true;
-			await tick();
-			summary?.focus();
-		} else if (r.ok) summaryShown = false;
-		return r;
-	}
+	const save = () => form.save();
+
+	// The summary follows every save, whoever started it (the bar, ⌘/Ctrl+S, the leave dialog,
+	// the wizard's Next calling `form.save()`): a failure with errors shows it and focuses it.
+	$effect(() => {
+		const last = form.lastSave;
+		if (!last) return;
+		untrack(() => {
+			if (last.result.ok) summaryShown = false;
+			else if (form.errors.length) {
+				summaryShown = true;
+				void tick().then(() => summary?.focus());
+			}
+		});
+	});
+
+	// Questions this form asked close with it (a navigation away, a step change).
+	const asking = new AbortController();
+	onDestroy(() => asking.abort());
 
 	async function discard() {
 		// One change is cheap to redo; more than one asks first.
 		if (form.dirtyCount > 1) {
-			const answer = await ask({
-				title: m.settings_form_discard_title({ count }),
-				body: [m.settings_form_discard_body()],
-				actions: [
-					{ id: 'keep', label: m.settings_form_keep_editing() },
-					{ id: 'discard', label: m.settings_form_discard(), variant: 'danger' }
-				],
-				initial: 'keep'
-			});
+			const answer = await ask(
+				{
+					title: m.settings_form_discard_title({ count }),
+					body: [m.settings_form_discard_body()],
+					actions: [
+						{ id: 'keep', label: m.settings_form_keep_editing() },
+						{ id: 'discard', label: m.settings_form_discard(), variant: 'danger' }
+					],
+					initial: 'keep'
+				},
+				asking.signal
+			);
 			if (answer !== 'discard') return;
 		}
 		form.discard();
@@ -136,18 +148,21 @@
 				.filter((s) => s !== undefined)
 				.map((s) => fieldLabel(s));
 			const effects = effectLines(c);
-			const answer = await ask({
-				title: m.settings_form_disruptive_title(),
-				body: [
-					m.settings_form_disruptive_fields({ fields: labels.join(', ') }),
-					...(effects.length ? effects : [m.settings_form_disruptive_generic()])
-				],
-				actions: [
-					{ id: 'cancel', label: m.settings_form_cancel() },
-					{ id: 'save', label: m.settings_form_save(), variant: 'primary' }
-				],
-				initial: 'cancel'
-			});
+			const answer = await ask(
+				{
+					title: m.settings_form_disruptive_title(),
+					body: [
+						m.settings_form_disruptive_fields({ fields: labels.join(', ') }),
+						...(effects.length ? effects : [m.settings_form_disruptive_generic()])
+					],
+					actions: [
+						{ id: 'cancel', label: m.settings_form_cancel() },
+						{ id: 'save', label: m.settings_form_save(), variant: 'primary' }
+					],
+					initial: 'cancel'
+				},
+				asking.signal
+			);
 			return answer === 'save';
 		})
 	);
@@ -238,16 +253,19 @@
 
 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
 	async function confirmLeave(to: URL, unload: boolean) {
-		const answer = await ask({
-			title: m.settings_form_leave_title(),
-			body: [m.settings_form_leave_body({ count })],
-			actions: [
-				{ id: 'keep', label: m.settings_form_keep_editing() },
-				{ id: 'discard', label: m.settings_form_discard() },
-				{ id: 'save', label: m.settings_form_save(), variant: 'primary' }
-			],
-			initial: 'save'
-		});
+		const answer = await ask(
+			{
+				title: m.settings_form_leave_title(),
+				body: [m.settings_form_leave_body({ count })],
+				actions: [
+					{ id: 'keep', label: m.settings_form_keep_editing() },
+					{ id: 'discard', label: m.settings_form_discard() },
+					{ id: 'save', label: m.settings_form_save(), variant: 'primary' }
+				],
+				initial: 'save'
+			},
+			asking.signal
+		);
 		if (answer === 'save') {
 			// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
 			const r = await save();

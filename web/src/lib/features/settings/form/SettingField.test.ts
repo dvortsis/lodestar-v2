@@ -480,4 +480,16 @@ describe('SettingField', () => {
 		await waitFor(() => expect(server.requests('PATCH', '/settings')).toHaveLength(2));
 		inst.destroy();
 	});
+
+	it('labels a locked chip list without pointing at a missing input', async () => {
+		server.sections.get('logging')!.fields.tags = sv(['x'], 'env', {
+			env: 'LODESTAR_TAGS',
+			read_only: true
+		});
+		await form.resync();
+		show('logging.tags');
+		const r = root('logging.tags');
+		expect(r.querySelector('input')).toBeNull();
+		expect(r.querySelector('label[for]')).toBeNull();
+	});
 });

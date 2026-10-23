@@ -15,8 +15,11 @@ const UNMOUNT_MS = 400;
 
 const open = new Set<{ app: object; resolve: (id: string | null) => void }>();
 
-export async function ask(q: Question): Promise<string | null> {
+/** `signal` closes the question unanswered (null), e.g. when the form that asked unmounts. */
+export async function ask(q: Question, signal?: AbortSignal): Promise<string | null> {
+	if (signal?.aborted) return null;
 	const { default: ConfirmDialog } = await import('./ConfirmDialog.svelte');
+	if (signal?.aborted) return null;
 	return new Promise((resolve) => {
 		const entry = { app: {}, resolve };
 		entry.app = mount(ConfirmDialog, {
@@ -32,6 +35,15 @@ export async function ask(q: Question): Promise<string | null> {
 			}
 		});
 		open.add(entry);
+		signal?.addEventListener(
+			'abort',
+			() => {
+				if (!open.delete(entry)) return;
+				resolve(null);
+				void unmount(entry.app);
+			},
+			{ once: true }
+		);
 	});
 }
 

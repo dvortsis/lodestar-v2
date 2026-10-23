@@ -68,6 +68,8 @@ The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.
 - **The leave dialog's Save continues when nothing is left to save** (a merge or ⌘S settled it meanwhile).
 - **A held ⌘/Ctrl+S saves once** and never opens the browser's own Save dialog on the repeats.
 - **JSON that doesn't parse is staged as an invalid draft value,** so the field is dirty (leaving asks), Save refuses with the error in the summary, and the last value that did parse is never sent. It's never stored in a draft or previewed.
+- **The error summary follows every save, whoever starts it** (the store's `lastSave`, added to the API): the wizard's Next calling `form.save()` gets the same summary and focus as the bar.
+- **A question a form asked closes, unanswered, when the form unmounts.**
 - **"Saving…" shows only once the confirmations are answered;** while a dialog asks, nothing is being saved yet.
 - **Component styles use token variables in plain `<style>` blocks** without `@reference`: they use no `@apply`, and svelte-check warns on the at-rule.
 - **The showcase is `/dev/settings-form`** (`?sections=`, `?mode=instant`, `?id=`), laid out the way S-settings-1 lays out a screen, with an Advanced disclosure that `onReveal` opens.

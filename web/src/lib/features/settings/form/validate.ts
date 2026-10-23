@@ -6,15 +6,9 @@ import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
 import { unitText } from './messages';
 import type { FieldSpec } from './types';
-import { RESET, type Staged } from './values';
+import { JsonDraft, RESET, type Staged } from './values';
 
-/**
- * What the JSON fallback stages while its text doesn't parse: dirty (so leaving asks, and Save
- * can't send the last value that did parse), and always invalid. Never sent or stored.
- */
-export class JsonDraft {
-	constructor(readonly text: string) {}
-}
+export { JsonDraft };
 
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const HOST_LABEL = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/;
