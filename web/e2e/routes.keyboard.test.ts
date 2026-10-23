@@ -16,6 +16,9 @@ for (const route of ROUTES) {
 		await go(route.path);
 		// The app mounts after load; the skip link is the first thing it renders.
 		await page.getByRole('link', { name: 'Skip to main content' }).waitFor();
+		// A page may move focus into its form once it has loaded (the setup and sign-in screens do):
+		// start from the top of the document, as a person arriving fresh does.
+		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 		await kbd.press('Tab');
 		const focus = await page.evaluate(() => {
 			const el = document.activeElement;
