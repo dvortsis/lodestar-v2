@@ -397,8 +397,8 @@
    "session": "session_012Zx7Sqy3qDZQ8VUnW41wvd",
    "pr": 111,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots.",
+   "review_rounds": 1,
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots. | 03:25 review FIX (description size reason only); code + content safety OK. Asks: size line, stale decisions bullet, reorder early stale, B9 unread_total note, polish.",
    "self_review": {
     "raised": 12,
     "fixed": 7,
@@ -1269,7 +1269,9 @@
   "backup_unused_mut_windows": "crates/lodestar/src/cli/backup.rs:132 unused mut shows only on Windows clippy (M6-win note).",
   "slices_yaml_B12_owns": "runner/slices.yaml B12 owns should add crates/api/src/auth/**, ClientIp in extract.rs, services.rs wiring (brief grants them). Fix in next runner PR.",
   "apistate_user_data": "B12 and B10a both add identical ApiState.user_data field + None in test literals; second to merge drops duplicates.",
-  "crawler_settings_sse": "ops.rs /crawler pause/resume/intensity save straight to the registry, no settings SSE event; route through settings::save_and_announce (B2c or later)."
+  "crawler_settings_sse": "ops.rs /crawler pause/resume/intensity save straight to the registry, no settings SSE event; route through settings::save_and_announce (B2c or later).",
+  "user_data_reader_lock": "B10a: GET /collections, /collections/{id}, /user-items/labels and withheld-heavy /user-items scan every entry on the shared reader lock; bound or move off the search reader (next brief touching user data).",
+  "b9_unread_shown_only": "B9 must count unread alerts shown-only (B10a lists do); store unread_total counts Adult alerts."
  },
  "blocked_on_owner": [],
  "launches_today": 13,
