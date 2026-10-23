@@ -83,8 +83,8 @@ mod imp {
     enum Found {
         /// Absent or empty: build there.
         Empty,
-        /// A fixture of this build: serve it as it is.
-        Fixture,
+        /// A fixture of this build, built at `anchor`: serve it as it is.
+        Fixture { anchor: i64 },
         /// Anything else, with why.
         Foreign(String),
     }
@@ -106,20 +106,57 @@ mod imp {
                 data::MANIFEST
             ));
         };
-        let format = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("format")?.as_u64());
-        match format {
-            Some(f) if f == u64::from(data::FORMAT) && dir.join(data::DB).is_file() => {
-                Found::Fixture
+        let manifest = serde_json::from_str::<serde_json::Value>(&text).ok();
+        let field = |k: &str| manifest.as_ref().and_then(|v| v.get(k)?.as_i64());
+        match (field("format"), field("anchor")) {
+            (Some(f), Some(anchor)) if f == i64::from(data::FORMAT) => {
+                if marked(&dir.join(data::DB)) {
+                    Found::Fixture { anchor }
+                } else {
+                    Found::Foreign(format!(
+                        "it has a {} but its database isn't a fixture's",
+                        data::MANIFEST
+                    ))
+                }
             }
-            Some(f) => Found::Foreign(format!(
+            (Some(f), _) if f != i64::from(data::FORMAT) => Found::Foreign(format!(
                 "its {} is format {f}; this build makes format {}: delete the folder to rebuild it",
                 data::MANIFEST,
                 data::FORMAT
             )),
-            None => Found::Foreign(format!("its {} isn't a fixture manifest", data::MANIFEST)),
+            _ => Found::Foreign(format!("its {} isn't a fixture manifest", data::MANIFEST)),
         }
+    }
+
+    /// Whether `db` is a fixture's store of this format. Opened immutable:
+    /// nothing is written beside it (no `-shm`, no lock), whatever it is.
+    fn marked(db: &Path) -> bool {
+        use lodestar_store::rusqlite::{Connection, OpenFlags, OptionalExtension};
+        if !db.is_file() {
+            return false;
+        }
+        let path: String = db
+            .to_string_lossy()
+            .chars()
+            .map(|c| match c {
+                '?' | '#' | '%' => format!("%{:02X}", c as u32),
+                c => c.to_string(),
+            })
+            .collect();
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+        let Ok(conn) = Connection::open_with_flags(format!("file:{path}?immutable=1"), flags)
+        else {
+            return false;
+        };
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [data::FORMAT_SETTING],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+            == Some(i64::from(data::FORMAT))
     }
 
     /// The config `serve --fixture` runs with: `--config` (if given) and the
@@ -235,7 +272,7 @@ mod imp {
         };
         crate::init_logging(&config.log);
         dropped.log(&config.data_dir);
-        let outcome = run(&config, found == Found::Empty);
+        let outcome = run(&config, &found);
         if temporary {
             // The whole fixture lives here; nothing else was put in it.
             if let Err(e) = std::fs::remove_dir_all(&dir) {
@@ -251,9 +288,25 @@ mod imp {
         }
     }
 
-    fn run(config: &Config, build: bool) -> Result<(), String> {
+    /// Built windows ("24 h", "7 d", cohort finality) hold this long.
+    const STABLE_SECS: i64 = 6 * 3600;
+
+    fn run(config: &Config, found: &Found) -> Result<(), String> {
         let dir = &config.data_dir;
-        if build {
+        tracing::warn!(
+            "fixture mode: test data in {}, not a real install",
+            dir.display()
+        );
+        if let Found::Fixture { anchor } = *found {
+            if crate::unix_now() > anchor + STABLE_SECS {
+                tracing::warn!(
+                    "this fixture was built more than six hours ago: its 24 h and 7 d numbers \
+                     and cohort finality no longer match fixture.json; delete the folder to \
+                     rebuild it"
+                );
+            }
+        }
+        if *found == Found::Empty {
             let anchor = data::anchor(crate::unix_now());
             tracing::info!(
                 "building the fixture in {} (anchor {anchor})",
@@ -269,10 +322,15 @@ mod imp {
         } else {
             tracing::info!("serving the fixture in {}", dir.display());
         }
-        if let Some(password) = std::env::var(PASSWORD_VAR).ok().filter(|p| !p.is_empty())
-            && claim(config, &password)?
-        {
-            tracing::info!("claimed with {PASSWORD_VAR}");
+        if let Some(password) = std::env::var(PASSWORD_VAR).ok().filter(|p| !p.is_empty()) {
+            if claim(config, &password)? {
+                tracing::info!("claimed with {PASSWORD_VAR}");
+            } else {
+                tracing::info!(
+                    "{PASSWORD_VAR} ignored: this fixture is claimed already; sign in with its \
+                     password"
+                );
+            }
         }
         let bind = config.http.bind;
         if !bind.ip().is_loopback() {
@@ -364,14 +422,26 @@ mod imp {
             std::fs::write(dir.path().join("lodestar.db"), "").unwrap();
             assert!(matches!(inspect(dir.path()), Found::Foreign(_)));
             let manifest = dir.path().join(data::MANIFEST);
-            std::fs::write(&manifest, format!("{{\"format\": {}}}", data::FORMAT)).unwrap();
-            assert_eq!(inspect(dir.path()), Found::Fixture);
+            let good = format!("{{\"format\": {}, \"anchor\": 7200}}", data::FORMAT);
+            std::fs::write(&manifest, &good).unwrap();
+            // A stray manifest beside a store that isn't a fixture's.
+            assert!(matches!(inspect(dir.path()), Found::Foreign(_)));
+            std::fs::remove_file(dir.path().join("lodestar.db")).unwrap();
+            let db = dir.path().join("lodestar.db");
+            let mut store =
+                lodestar_store::Store::open(&db, lodestar_store::StoreConfig::default()).unwrap();
+            assert!(matches!(inspect(dir.path()), Found::Foreign(_)), "unmarked");
+            store
+                .set_setting_i64(data::FORMAT_SETTING, i64::from(data::FORMAT))
+                .unwrap();
+            drop(store);
+            assert_eq!(inspect(dir.path()), Found::Fixture { anchor: 7200 });
             std::fs::write(&manifest, format!("{{\"format\": {}}}", data::FORMAT + 1)).unwrap();
             assert!(matches!(inspect(dir.path()), Found::Foreign(_)));
             std::fs::write(&manifest, "not json").unwrap();
             assert!(matches!(inspect(dir.path()), Found::Foreign(_)));
             // A manifest without its database isn't a fixture.
-            std::fs::write(&manifest, format!("{{\"format\": {}}}", data::FORMAT)).unwrap();
+            std::fs::write(&manifest, &good).unwrap();
             std::fs::remove_file(dir.path().join("lodestar.db")).unwrap();
             assert!(matches!(inspect(dir.path()), Found::Foreign(_)));
         }

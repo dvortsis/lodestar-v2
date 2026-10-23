@@ -275,6 +275,10 @@ fn serves_what_the_manifest_says() {
     let log = server.stop();
     assert!(log.contains("fixture built"), "{log}");
     assert!(
+        log.contains("WARN") && log.contains("fixture mode: test data in"),
+        "{log}"
+    );
+    assert!(
         log.contains("claimed with LODESTAR_FIXTURE_PASSWORD"),
         "{log}"
     );
@@ -283,7 +287,13 @@ fn serves_what_the_manifest_says() {
 
     // The same folder again, with Adult shown: reused as it is.
     let before = std::fs::read_to_string(dir.join(data::MANIFEST)).unwrap();
-    let mut server = spawn(&["--fixture", &shown], &[("LODESTAR_SHOW_ADULT", "true")]);
+    let mut server = spawn(
+        &["--fixture", &shown],
+        &[
+            ("LODESTAR_SHOW_ADULT", "true"),
+            ("LODESTAR_FIXTURE_PASSWORD", "another password entirely"),
+        ],
+    );
     server.ready();
     let cookie = server.login();
     check_queries(server.port, &cookie, &m, true);
@@ -297,6 +307,8 @@ fn serves_what_the_manifest_says() {
     assert_eq!(adult["total"], counts["adult"]);
     let log = server.stop();
     assert!(log.contains("serving the fixture"), "{log}");
+    assert!(log.contains("LODESTAR_FIXTURE_PASSWORD ignored"), "{log}");
+    assert!(!log.contains("built more than six hours ago"), "{log}");
     assert!(!log.contains("fixture built"), "{log}");
     assert_eq!(
         std::fs::read_to_string(dir.join(data::MANIFEST)).unwrap(),
