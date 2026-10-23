@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:15:43Z",
+ "updated_at": "2026-10-23T06:16:19Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -868,7 +868,7 @@
    "pr": 117,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched",
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns",
    "self_review": {
     "raised": 6,
     "fixed": 6,
@@ -1359,6 +1359,6 @@
   "106-adoption": "03:20 check: every in-flight slice branch contains d243361 except #48 (M4). M4 session is blocked in plan mode waiting on owner ExitPlanMode approval (owner notified). No PR merged by any session since 02:55; filter session merged nothing.",
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description.",
   "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading). | 03:48 9ae4c0a hardening verified by runner. APPROVED; merge on green, then tell W9. | 04:16 MERGED 6d14f0e. W9 told.",
-  "fix-check-ids": "2026-10-23T06:14:33Z #118 review FIX (1 blocking: failed read treated as exited) fixed at 9013901; delta review running"
+  "fix-check-ids": "2026-10-23T06:16:19Z #118 9013901 delta review APPROVE; merge on green smoke"
  }
 }
