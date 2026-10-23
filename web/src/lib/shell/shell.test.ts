@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, sessionOk } from '$lib/api/client';
 import { isBareRoute } from './chrome';
-import { loginTarget, safeNext } from './handoff';
 import { DESTINATIONS, isActive, withDensity } from './nav';
 import { connectionKind, pillState, type CrawlerSnapshot, type RebuildSnapshot } from './status';
 import { createShellStatus } from './status.svelte';
@@ -223,32 +222,5 @@ describe('chrome', () => {
 		for (const p of ['/login', '/setup', '/setup/token', '/welcome'])
 			expect(isBareRoute(p)).toBe(true);
 		for (const p of ['/search', '/loginx', '/settings/general']) expect(isBareRoute(p)).toBe(false);
-	});
-});
-
-describe('login hand-off', () => {
-	it('sends a first run to /setup and everyone else to /login with the way back', () => {
-		expect(loginTarget('/search?q=a', { setupRequired: true })).toBe('/setup');
-		expect(loginTarget('/search?q=a b', { setupRequired: false })).toBe(
-			'/login?next=%2Fsearch%3Fq%3Da%20b'
-		);
-		expect(loginTarget('/', { setupRequired: false })).toBe('/login');
-	});
-
-	it('never carries a next that could leave the site', () => {
-		for (const bad of [
-			'//evil.example',
-			'https://evil.example',
-			'/\\evil',
-			'javascript:alert(1)',
-			'/\t/evil.example',
-			'/\n/evil.example',
-			'/\r/evil.example',
-			'/\u0000/x',
-			'/\u007f'
-		]) {
-			expect(safeNext(bad)).toBe('/');
-		}
-		expect(safeNext('/alerts/3')).toBe('/alerts/3');
 	});
 });

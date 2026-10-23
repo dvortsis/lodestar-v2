@@ -9,11 +9,11 @@ App chrome (§10.3, §10.13, §10.19). `routes/+layout.svelte` renders `Shell.sv
 | `StatusPill.svelte`, `status*.ts`         | Crawler and rebuild state from `/events`; numbers through `$lib/format`; "—" when unknown.            |
 | `CommandPalette.svelte`, `commands.ts`    | ⌘K / Ctrl+K palette over the key registry; the shell's own "Go to …" commands.                        |
 | `StateScreen.svelte`, `StateScene.svelte` | Full-page states with the §10.19 illustration (lazy, decorative). `ConnectionView.svelte` picks them. |
-| `handoff.ts`, `chrome.ts`                 | Where a 401 goes; which routes render without chrome.                                                 |
+| `chrome.ts`                               | Which routes render without chrome (`/login`, `/setup`, `/welcome`).                                  |
 
 ## Hand-off points
 
-- **M-auth:** `handoff.ts` is a stub (`TODO(M-auth)`). Replace `handleLoginRequired` with M-auth's exported handler in `Shell.svelte`. `chrome.ts` lists the screens that render bare (`/login`, `/setup`, `/welcome`).
+- **M-auth:** merged. `Chrome.svelte` calls `installAuthHandlers()` from `features/auth/session.svelte` (it owns W5's single `onLoginRequired` slot: a 401 goes to `/login?next=…` or `/setup`) and uninstalls it with the chrome. `chrome.ts` lists the screens that render bare.
 - **S-keys:** the shortcut sheet reads `keys.list()` and registers `shortcuts.open` (`?`). See `lib/keys/README.md`.
 - **Appearance:** the shell has no theme or density switch. Density is carried in nav links; the scene variant follows `color-scheme` (`theme-mode.ts`).
 
