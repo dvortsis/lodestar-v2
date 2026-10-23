@@ -241,7 +241,7 @@
    "pr": 93,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:33. | 01:50 PR #93 7f49b18 (web only); reviewer started (security). filter budget red: \u00a72.18 (no Rust). | 02:03 review FIX: safeNext returns normalised //evil.com for /.//evil.com etc -> post-resolve check + tests + toNext catch; polish. Merge before W9; W9 told to adopt installAuthHandlers/next.ts."
+   "notes": "Launched 21:33. | 01:50 PR #93 7f49b18 (web only); reviewer started (security). filter budget red: \u00a72.18 (no Rust). | 02:03 review FIX: safeNext returns normalised //evil.com for /.//evil.com etc -> post-resolve check + tests + toNext catch; polish. Merge before W9; W9 told to adopt installAuthHandlers/next.ts. | 02:10 4ae343d delta verified by runner (post-resolve // check, 729-combo test, toNext fallback, polish). APPROVED; merge on green before W9."
   },
   "S-search-1": {
    "status": "pending",
