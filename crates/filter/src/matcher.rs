@@ -146,8 +146,8 @@ pub(crate) fn near_operand(word: &str) -> (Vec<String>, Vec<String>) {
 /// edit distance: its length and the characters it has.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Spelled {
-    chars: Vec<char>,
-    has: u64,
+    pub(crate) chars: Vec<char>,
+    pub(crate) has: u64,
 }
 
 impl Spelled {
@@ -1585,6 +1585,10 @@ mod tests {
             ("x a b c d e f g WEB-DL", "x NEAR/7 webdl"),
             ("x a h.264", "x NEAR/1 h264"),
             ("x DD+", "x NEAR/1 \"dd+\""),
+            // The joined word splits, so its compound comes two late.
+            ("q m xYz-dl", "q NEAR/1 xyzdl"),
+            ("q m aBcD-dl", "q NEAR/1 abcddl"),
+            ("q m eAC-3", "q NEAR/1 eac3"),
         ] {
             let compiled = compile(&parse(q).unwrap());
             let terms =
@@ -1641,12 +1645,50 @@ mod tests {
         );
     }
 
+    /// Prefixes, fuzzy words and negations of words whose parts are all
+    /// there read the torrent's distinct texts or its positions, so they
+    /// too cost in proportion to a hostile name, repeating or not (§6).
+    #[test]
+    fn hostile_names_cost_in_proportion_for_every_shape() {
+        // A word per position, all different, and one repeated.
+        let distinct = |n: usize| (0..n).map(|i| format!("w{i}x ")).collect::<String>();
+        let repeated = |n: usize| "web dl x264 ".repeat(n);
+        for q in [
+            "w9z*",
+            "web*",
+            "~w9zx",
+            "~webdx",
+            "x264 -web-dl",
+            "-(web-dl)",
+        ] {
+            let compiled = compile(&parse(q).unwrap());
+            for text in [&distinct as &dyn Fn(usize) -> String, &repeated] {
+                let steps = |n: usize| {
+                    let name = text(n);
+                    let item = Item {
+                        hashes: &[[1; 20]],
+                        name: &name,
+                        files: &[],
+                        content_type: ContentType::Video,
+                    };
+                    crate::work::counted(|| Doc::new(&item, None).eval(&compiled, None, &[])).1
+                };
+                let (small, big) = (steps(500), steps(2_000));
+                assert!(
+                    big <= 5 * small.max(1),
+                    "{q}: {small} steps, then {big} on four times the name"
+                );
+            }
+        }
+    }
+
     /// Words a phrase or NEAR test text repeats: single tokens, words of
     /// several, and their compound forms.
     fn near_word() -> impl Strategy<Value = &'static str> {
         prop::sample::select(vec![
             "a", "b", "x", "1080p", "1080", "p", "x264", "264", "web-dl", "webdl", "web", "dl",
-            "dd+", "dd", "h.264", "5.1",
+            "dd+", "dd", "h.264", "5.1", "xYz-dl", "xyzdl", "yz", "aBcD-dl", "abcddl", "eAC-3",
+            "eac3", "ac", "AAa-a", "aaa",
         ])
     }
 

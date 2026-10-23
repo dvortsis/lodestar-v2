@@ -331,10 +331,10 @@ impl Shape {
 }
 
 /// The held mixed set: of every 100 rules, 10 on common words (the 10%
-/// case), 1 NEAR, 2 negations, 2 fuzzy words and 3 prefixes, all on the
-/// set's words, and the rest as in [`ten_thousand_rules`]. Most rules
-/// people write are words, phrases and groups; the expensive shapes are
-/// a few of them each (§2.21).
+/// case), 1 NEAR, 2 negations, 2 fuzzy words, 3 prefixes and 1 `title:`
+/// word, all on the set's words, and the rest as in
+/// [`ten_thousand_rules`]. Most rules people write are words, phrases
+/// and groups; the expensive shapes are a few of them each (§2.21).
 fn mixed_rules() -> Vec<lodestar_filter::UserRule> {
     rules(|i| match i % 100 {
         0..10 => Some(on_common(i)),
@@ -342,6 +342,7 @@ fn mixed_rules() -> Vec<lodestar_filter::UserRule> {
         11..13 => Some(Shape::Negation.rule(i)),
         13..15 => Some(Shape::Fuzzy.rule(i)),
         15..18 => Some(Shape::Prefix.rule(i)),
+        18 => Some(Shape::Title.rule(i)),
         _ => None,
     })
 }
@@ -550,7 +551,7 @@ fn budget() {
             })
             .collect();
     sets.push((
-        "engine, packs on, 10,000 rules, mixed (10% common, 1% NEAR, 2% negation, 2% fuzzy, 3% prefix)".into(),
+        "engine, packs on, 10,000 rules, mixed (10% common, 1% NEAR, 2% negation, 2% fuzzy, 3% prefix, 1% title)".into(),
         mixed_rules(),
         true,
     ));
