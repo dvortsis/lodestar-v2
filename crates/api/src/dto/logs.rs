@@ -162,3 +162,150 @@ pub struct LogCatalog {
     pub outputs: Vec<LogOutput>,
     pub presets: LogPresets,
 }
+
+/// What a field of a log line carries: a data kind, an error (its kind,
+/// and its message only for plain error types), a label the code wrote, or
+/// a field of a line the code didn't type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFieldKind {
+    Hash,
+    Name,
+    Path,
+    Url,
+    Query,
+    Client,
+    Peer,
+    Size,
+    PeerActivity,
+    FilterChanges,
+    Error,
+    Label,
+    Untyped,
+}
+
+/// A field's value as shown: text (`[hidden]`, `ref:…` or the value), a
+/// number or a flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum LogValue {
+    Flag(bool),
+    Number(u64),
+    Signed(i64),
+    Text(String),
+}
+
+/// One field of a log line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogField {
+    pub kind: LogFieldKind,
+    pub name: String,
+    pub value: LogValue,
+}
+
+/// A fold summary: identical lines that came within the window after the
+/// first one, counted rather than written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogRepeated {
+    pub count: u64,
+    /// The id of the first line, when the output gave it one.
+    #[schema(required = true)]
+    pub first: Option<String>,
+    /// The window, in seconds.
+    pub seconds: u64,
+}
+
+/// One log line, as the live log, the history and the stream show it:
+/// through the data kinds in force now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogLine {
+    pub component: LogComponent,
+    /// The catalogued event's id; null for a line the code didn't type.
+    #[schema(required = true)]
+    pub event: Option<String>,
+    /// In the order written.
+    pub fields: Vec<LogField>,
+    /// `<epoch>-<seq>`; null for a line an older build wrote.
+    #[schema(required = true)]
+    pub id: Option<String>,
+    pub level: LogLevel,
+    pub msg: String,
+    /// The opt-in the line belongs to: when it turns off, the line goes.
+    #[schema(required = true)]
+    pub opt_in: Option<LogDataKind>,
+    /// A summary of folded lines.
+    #[schema(required = true)]
+    pub repeated: Option<LogRepeated>,
+    /// The `tracing` target of a line the code didn't type.
+    #[schema(required = true)]
+    pub target: Option<String>,
+    /// A value was cut to fit the ring's per-line limit (16 KiB); the
+    /// file has it whole.
+    pub truncated: bool,
+    /// RFC 3339, UTC, with milliseconds.
+    pub ts: String,
+}
+
+/// `GET /logs`: a page of history, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogHistory {
+    pub lines: Vec<LogLine>,
+    /// More may be older than this page (a page cut short by the read cap
+    /// says so too).
+    pub more: bool,
+    /// Pass back as `cursor` for the next page; null at the end.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
+    /// Lines skipped because they were over 1 MiB or not the file's JSON
+    /// shape.
+    pub unreadable: u64,
+}
+
+/// Why the live log asks the client to catch up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogResyncReason {
+    /// The cursor is from before a restart.
+    Restarted,
+    /// The cursor's line has left the ring buffer.
+    Expired,
+    /// The cursor isn't one of ours, or is from the future.
+    Malformed,
+    /// The client fell behind: more than 256 matching lines waited.
+    Lagged,
+}
+
+/// `event: resync`: continue from the newest lines; reload `GET /logs`
+/// for what was skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogResync {
+    /// Lines that left the ring unseen (whether they matched is unknown);
+    /// `lagged` only.
+    #[schema(required = true)]
+    pub evicted: Option<u64>,
+    pub reason: LogResyncReason,
+    /// Matching lines skipped, still readable through `GET /logs`;
+    /// `lagged` only.
+    #[schema(required = true)]
+    pub skipped: Option<u64>,
+}
+
+/// `event: purge`: data kinds turned off. In lines up to `through`, set
+/// those kinds' values to `[hidden]`, and drop lines whose `opt_in` is
+/// listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogPurge {
+    pub kinds: Vec<LogDataKind>,
+    /// The id of the newest line it applies to.
+    pub through: String,
+}
+
+/// One frame of `GET /logs/stream`: `event:` names the variant, `data:`
+/// holds its payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "event", content = "data", rename_all = "snake_case")]
+pub enum LogFrame {
+    Line(LogLine),
+    Resync(LogResync),
+    Purge(LogPurge),
+}

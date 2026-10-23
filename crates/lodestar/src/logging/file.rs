@@ -51,7 +51,8 @@ impl Flags {
     }
 }
 
-/// `index.json`: the files with a flag set, by name.
+/// `index.json`: the files with a flag set, by name. The API reads it
+/// apart from this, as untrusted input (`files.rs`).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Index {
     pub files: BTreeMap<String, Flags>,
@@ -67,7 +68,7 @@ pub struct Index {
 }
 
 impl Index {
-    fn load(dir: &Path) -> Index {
+    pub(super) fn load(dir: &Path) -> Index {
         let path = dir.join(INDEX);
         let mut index: Index = fs::read(&path)
             .ok()
@@ -105,7 +106,7 @@ impl Index {
         }
     }
 
-    fn remove(&mut self, name: &str) -> io::Result<()> {
+    pub(super) fn remove(&mut self, name: &str) -> io::Result<()> {
         match self.files.remove(name) {
             Some(_) => self.save(),
             None => Ok(()),
@@ -140,7 +141,7 @@ pub fn disk_full(e: &io::Error) -> bool {
     e.raw_os_error().is_some_and(|c| codes.contains(&c))
 }
 
-enum Job {
+pub(super) enum Job {
     Compress(String, FileConfig),
     Prune(FileConfig),
     #[cfg(test)]
@@ -226,7 +227,7 @@ pub struct FileSink {
 
 /// Log files are the owner's only (0600 on Unix): with an identifying
 /// kind or an opt-in on, they hold torrent details.
-fn private(o: &mut OpenOptions) -> &mut OpenOptions {
+pub(super) fn private(o: &mut OpenOptions) -> &mut OpenOptions {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -508,8 +509,9 @@ impl FileSink {
     }
 
     /// Renames the current file to `lodestar-<time>.jsonl`, starts a new
-    /// one, and hands the old one to the background thread.
-    pub fn rotate(&mut self) -> io::Result<()> {
+    /// one, and hands the old one to the background thread. Returns the
+    /// rotated name.
+    pub fn rotate(&mut self) -> io::Result<String> {
         #[cfg(test)]
         if self.fail_rotation {
             return Err(io::Error::other("rotation refused by the test"));
@@ -531,8 +533,9 @@ impl FileSink {
         self.flags = Flags::default();
         let _ = lock(&self.index).rename(CURRENT, &name);
         self.retry_at = None;
-        self.worker.send(Job::Compress(name, self.cfg.clone()));
-        Ok(())
+        self.worker
+            .send(Job::Compress(name.clone(), self.cfg.clone()));
+        Ok(name)
     }
 
     fn rotated_name(&self) -> String {
@@ -560,7 +563,7 @@ impl FileSink {
     }
 }
 
-fn lock(index: &Mutex<Index>) -> std::sync::MutexGuard<'_, Index> {
+pub(super) fn lock(index: &Mutex<Index>) -> std::sync::MutexGuard<'_, Index> {
     index.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -577,25 +580,17 @@ fn rotated(dir: &Path) -> io::Result<Vec<String>> {
 }
 
 fn compress(dir: &Path, name: &str, index: &Mutex<Index>) -> io::Result<()> {
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
     let from = dir.join(name);
     let gz = format!("{name}.gz");
     let part = dir.join(format!("{gz}.part"));
-    let mut input = File::open(&from)?;
-    let mut out = GzEncoder::new(
+    let input = File::open(&from)?;
+    let mut out = io::BufWriter::new(
         private(OpenOptions::new().write(true).create(true).truncate(true)).open(&part)?,
-        Compression::default(),
     );
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = input.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        out.write_all(&buf[..n])?;
-    }
-    out.finish()?.sync_all()?;
+    // Members of about 1 MiB and their index, so history can start at the
+    // member it needs (`read::write_gz`).
+    super::read::write_gz(&mut io::BufReader::with_capacity(64 << 10, input), &mut out)?;
+    out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
     fs::rename(&part, dir.join(&gz))?;
     fs::remove_file(&from)?;
     let _ = lock(index).rename(name, &gz);
