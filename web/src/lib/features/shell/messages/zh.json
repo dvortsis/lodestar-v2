@@ -48,5 +48,10 @@
 	"shell_cmd_go": "前往{destination}",
 	"shell_cmd_section_navigate": "导航",
 	"shell_cmd_section_general": "常规",
-	"shell_cmd_palette": "打开命令面板"
+	"shell_cmd_palette": "打开命令面板",
+	"shell_fallback_error_title": "出了点问题",
+	"shell_fallback_not_found_title": "找不到页面",
+	"shell_fallback_error_code": "错误 {status}",
+	"shell_fallback_home": "前往搜索",
+	"shell_fallback_retry": "重试"
 }
