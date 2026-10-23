@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:53:24Z",
+ "updated_at": "2026-10-23T06:56:15Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -868,7 +868,7 @@
    "pr": 117,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main",
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started",
    "self_review": {
     "raised": 6,
     "fixed": 6,
@@ -909,7 +909,7 @@
    "pr": 119,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:38:50Z heartbeat: fixing self-review items, PR not yet open | 2026-10-23T06:44:57Z PR #119 head 7aa1fe6 ready (~9.4k lines); fresh + security reviewers launched. Asks: add B-log1b to slices.yaml, rule on shared test-assertion edits, flag \u00a72.19 refinements"
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:38:50Z heartbeat: fixing self-review items, PR not yet open | 2026-10-23T06:44:57Z PR #119 head 7aa1fe6 ready (~9.4k lines); fresh + security reviewers launched. Asks: add B-log1b to slices.yaml, rule on shared test-assertion edits, flag \u00a72.19 refinements | 2026-10-23T06:56:15Z security review FIX: canary key needle split on '_' (random false leak ~5%); important: ANSI/control in console quote, canary flows vacuous, Windows log ACL (setup token in file), pre-existing dir/file perms + O_NOFOLLOW, passkey w/ extension, lint default-pass, setup_token event unused. Waiting fresh review"
   },
   "B-log2": {
    "status": "pending",
