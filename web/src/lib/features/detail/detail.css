@@ -1,0 +1,133 @@
+/* The detail view's own layout. Plain CSS on tokens (ramp spacing only), so it ships in the
+   drawer's chunk and adds nothing to the global stylesheet (§10.1 budgets). */
+.ls-detail {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 6);
+	min-width: 0;
+}
+.ls-detail-section {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	/* Offscreen sections skip layout until scrolled near (§10.1). */
+	content-visibility: auto;
+	contain-intrinsic-size: auto calc(var(--spacing) * 40);
+}
+.ls-detail-section > h3 {
+	font-size: var(--text-body-lg);
+	line-height: var(--text-body-lg--line-height);
+	font-weight: var(--font-weight-semibold);
+}
+.ls-detail-facts {
+	display: grid;
+	grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+	column-gap: calc(var(--spacing) * 4);
+	row-gap: calc(var(--spacing) * 2);
+	font-size: var(--text-body);
+}
+.ls-detail-facts dt {
+	color: var(--color-muted-text);
+}
+.ls-detail-facts dd {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.ls-detail-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+.ls-detail-stack {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+.ls-detail-tree {
+	height: calc(var(--row-height-compact) * 10);
+	border: var(--border) solid var(--color-base-300);
+	border-radius: var(--radius-field);
+}
+.ls-detail-magnet {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	padding: calc(var(--spacing) * 3);
+	border: var(--border) solid var(--color-base-300);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+}
+.ls-detail-page {
+	max-width: var(--manuscript-width);
+	margin-inline: auto;
+	padding: calc(var(--spacing) * 4);
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 4);
+}
+.ls-detail-page > header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: calc(var(--spacing) * 3);
+}
+.ls-detail-page h1 {
+	font-size: var(--text-title);
+	line-height: var(--text-title--line-height);
+	font-weight: var(--font-weight-semibold);
+	overflow-wrap: anywhere;
+}
+/* DetailHost placement (§10.15). The host's parent must be positioned for the overlay modes. */
+.ls-detail-host {
+	display: contents;
+}
+.ls-detail-host[data-mode='overlay'],
+.ls-detail-host[data-mode='narrow'] {
+	display: block;
+	position: absolute;
+	inset-block: 0;
+	inset-inline-end: 0;
+	z-index: 20;
+	max-width: 100%;
+}
+.ls-detail-host[data-mode='full'] {
+	display: block;
+	position: fixed;
+	inset: 0;
+	z-index: 40;
+	background: var(--color-base-100);
+}
+.ls-detail-host[data-mode='full'] [role='separator'] {
+	display: none;
+}
+.ls-detail-raw {
+	font-family: var(--font-mono);
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+}
+.ls-detail-raw ul {
+	margin-inline-start: calc(var(--spacing) * 4);
+}
+.ls-detail-raw li {
+	overflow-wrap: anywhere;
+}
+.ls-detail-manual {
+	position: fixed;
+	inset-inline: calc(var(--spacing) * 4);
+	inset-block-end: calc(var(--spacing) * 4);
+	z-index: 50;
+	max-width: var(--toast-width);
+	margin-inline-start: auto;
+}
+.ls-detail-grow {
+	flex: 1 1 calc(var(--spacing) * 40);
+	min-width: 0;
+}
+.ls-detail-raw button {
+	min-height: calc(var(--spacing) * 6);
+}
+.ls-detail-link {
+	text-decoration-line: underline;
+}
