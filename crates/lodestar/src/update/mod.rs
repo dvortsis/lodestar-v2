@@ -138,7 +138,7 @@ pub fn start(
         let engine = engine::Engine::new(
             ctx,
             settings.subscribe(),
-            Some(events.clone()),
+            events.clone(),
             std::sync::Arc::new(fetch),
         );
         let (stop, stopped) = tokio::sync::watch::channel(false);
