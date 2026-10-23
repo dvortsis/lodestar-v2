@@ -657,9 +657,9 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         &[("console", &console), ("file", &file)],
         &[
             key.clone(),
-            key.split('_').next_back().unwrap().to_string(),
+            key[key.len() - 43..].to_string(),
             token.clone(),
-            token.split('_').next_back().unwrap().to_string(),
+            token[token.len() - 43..].to_string(),
             PROXY_USER.to_string(),
             PASSWORD.to_string(),
             PASSKEY.to_string(),

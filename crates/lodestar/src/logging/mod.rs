@@ -135,6 +135,8 @@ enum Note {
     FileError(std::io::Error),
     Unavailable(std::path::PathBuf, std::io::Error),
     StartupDropped(u64),
+    OverCap,
+    Shared(std::path::PathBuf),
 }
 
 thread_local! {
@@ -267,6 +269,7 @@ impl Runtime {
     /// Applies a new state: the event switches, the masks, the levels and
     /// the file's limits. Returns the kinds that turned on or off.
     pub fn apply(&self, applied: Applied) -> Vec<Switched> {
+        let _inside = Inside::enter();
         let before = std::mem::replace(
             &mut *self.applied.write().unwrap_or_else(|e| e.into_inner()),
             applied.clone(),
@@ -289,6 +292,7 @@ impl Runtime {
     /// Opens the file in the applied folder (once; the folder applies at a
     /// restart), and writes the start-up lines kept so far.
     pub fn open_file(&self) {
+        let _inside = Inside::enter();
         let applied = self.applied();
         let mut notes = Vec::new();
         let mut file = lock(&self.file);
@@ -305,8 +309,12 @@ impl Runtime {
             } else {
                 let mut cfg = applied.file.clone();
                 cfg.dir = self.folder.get_or_init(|| cfg.dir.clone()).clone();
+                let sink_dir = cfg.dir.clone();
                 match FileSink::open(cfg) {
                     Ok(mut sink) => {
+                        if sink.shared {
+                            notes.push(Note::Shared(sink_dir.clone()));
+                        }
                         self.last_alive
                             .store(sink.last_alive(), std::sync::atomic::Ordering::Relaxed);
                         let mut stopped = false;
@@ -318,8 +326,8 @@ impl Runtime {
                                 }
                                 Err(e) => {
                                     let note = write_note(e);
-                                    stopped = matches!(note, Note::DiskFull);
-                                    notes.push(note);
+                                    stopped = matches!(note, Some(Note::DiskFull));
+                                    notes.extend(note);
                                     if stopped {
                                         break;
                                     }
@@ -392,10 +400,10 @@ impl Runtime {
                 }
                 Err(e) => {
                     let note = write_note(e);
-                    if matches!(note, Note::DiskFull) {
+                    if matches!(note, Some(Note::DiskFull)) {
                         *file = FileState::Stopped;
                     }
-                    notes.push(note);
+                    notes.extend(note);
                 }
             },
             FileState::Off | FileState::Stopped => {}
@@ -437,6 +445,11 @@ impl Runtime {
                     events::LOGGING_STARTUP_DROPPED,
                     count = lodestar_log::Count(n)
                 ),
+                Note::OverCap => lodestar_log::log_event!(events::LOGGING_OVER_CAP),
+                Note::Shared(dir) => lodestar_log::log_event!(
+                    events::LOGGING_FOLDER_SHARED,
+                    path = lodestar_log::Path::new(&dir)
+                ),
             }
         }
         NOTING.with(|n| n.set(false));
@@ -476,10 +489,11 @@ fn flags_of(a: &Applied) -> Flags {
     }
 }
 
-fn write_note(e: WriteError) -> Note {
+fn write_note(e: WriteError) -> Option<Note> {
     match e {
-        WriteError::DiskFull => Note::DiskFull,
-        WriteError::Other(e) => Note::FileError(e),
+        WriteError::DiskFull => Some(Note::DiskFull),
+        WriteError::OverCap { first } => first.then_some(Note::OverCap),
+        WriteError::Other(e) => Some(Note::FileError(e)),
     }
 }
 

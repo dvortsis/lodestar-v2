@@ -130,6 +130,23 @@ lodestar_log::catalogue! {
         message: "Start-up lines not kept in the log file",
         fields: { count: Label },
     }
+    /// The current file reached the folder's total cap because rotation
+    /// keeps failing: lines stop until a rotation succeeds.
+    LOGGING_OVER_CAP {
+        id: "logging.over_cap",
+        component: System,
+        level: Warn,
+        message: "The log file reached the folder's total cap; file logging pauses until it rotates",
+        fields: {},
+    }
+    /// The logs folder belongs to another account and others can read it.
+    LOGGING_FOLDER_SHARED {
+        id: "logging.folder_shared",
+        component: System,
+        level: Warn,
+        message: "The logs folder belongs to another account and isn't private; other users may read the log files",
+        fields: { path: Path },
+    }
     /// A rotated file couldn't be compressed or an old one deleted.
     LOGGING_CLEANUP_FAILED {
         id: "logging.cleanup_failed",

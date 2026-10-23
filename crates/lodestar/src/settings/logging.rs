@@ -227,6 +227,20 @@ pub struct Alias {
     pub unknown: Vec<String>,
 }
 
+/// `filter` with a default level for Libraries: `warn` first when it has
+/// no bare level of its own, so `hyper=debug` alone never turns every other
+/// third-party crate's warnings and errors off (§12.1: capped at warnings).
+pub fn with_default_level(filter: &str) -> String {
+    let has_level = filter
+        .split(',')
+        .any(|d| !d.contains('=') && Level::parse(d).is_some());
+    match (filter.trim().is_empty(), has_level) {
+        (true, _) => LIBRARIES.to_string(),
+        (false, true) => filter.to_string(),
+        (false, false) => format!("{LIBRARIES},{filter}"),
+    }
+}
+
 /// Maps a `log` value onto the section (§12.1, B-log1):
 /// - a bare level (`error`…`trace`) is the verbosity;
 /// - in a filter string, the default level is the verbosity, `lodestar_*`
@@ -254,6 +268,16 @@ pub fn alias(log: &str) -> Option<Alias> {
         };
         match (target, Level::parse(level)) {
             (None, Some(l)) => out.verbosity = Verbosity::of(l),
+            // `lodestar=debug` always covered every `lodestar_*` target.
+            (Some("lodestar"), Some(l)) => {
+                for c in Component::ALL
+                    .into_iter()
+                    .filter(|c| *c != Component::Libraries)
+                {
+                    out.components
+                        .insert(c.name().to_string(), l.name().to_string());
+                }
+            }
             (Some(t), Some(l)) if logging::first_party(t) => match logging::component_of(t) {
                 Some(c) => {
                     out.components
@@ -264,10 +288,7 @@ pub fn alias(log: &str) -> Option<Alias> {
             _ => libraries.push(directive),
         }
     }
-    out.libraries = match libraries.is_empty() {
-        true => LIBRARIES.to_string(),
-        false => libraries.join(","),
-    };
+    out.libraries = with_default_level(&libraries.join(","));
     Some(out)
 }
 
@@ -436,7 +457,11 @@ impl Section for Logging {
             console_detail: ConsoleDetail::Private,
             console_level: OutputLevel::Trace,
             file_enabled: true,
-            file_folder: config.data_dir.join("logs").display().to_string(),
+            // Absolute, as `check` asks of a folder set in the app.
+            file_folder: std::path::absolute(config.data_dir.join("logs"))
+                .unwrap_or_else(|_| config.data_dir.join("logs"))
+                .display()
+                .to_string(),
             file_level: OutputLevel::Trace,
             file_size_mib: 16,
             file_count: 7,
@@ -542,6 +567,9 @@ impl Section for Logging {
                 true => Err("Must be a folder.".into()),
                 false if self.file_folder.len() > 4096 => {
                     Err("Must be at most 4096 characters.".into())
+                }
+                false if !std::path::Path::new(&self.file_folder).is_absolute() => {
+                    Err("Must be a full path (/data/logs, D:\\Lodestar\\logs).".into())
                 }
                 false => Ok(()),
             },

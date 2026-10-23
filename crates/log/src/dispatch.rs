@@ -11,7 +11,8 @@ use std::time::Instant;
 use crate::event::{Catalogue, Event, Kind, Level, Mask};
 use crate::value::{Reference, Value, pairs_torrent};
 
-/// One event occurrence on its way to the outputs.
+/// One event occurrence on its way to the outputs. Its `Debug` names the
+/// event and the fields' kinds, never their values.
 #[derive(Debug, Clone, Copy)]
 pub struct Record<'a> {
     pub event: &'static Event,

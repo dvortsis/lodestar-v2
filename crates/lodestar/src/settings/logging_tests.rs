@@ -97,10 +97,18 @@ fn stable(f: &Fixture, body: &str) -> String {
         }
     }
     walk(&mut v);
-    let dir = f.dir.path().display().to_string();
+    let escaped = |p: &Path| {
+        let s = serde_json::to_string(&p.display().to_string()).unwrap();
+        s[1..s.len() - 1].to_string()
+    };
+    let dir = escaped(f.dir.path());
+    let cwd = escaped(&std::env::current_dir().unwrap());
     // One path separator on every platform (`data\\logs` on Windows is
     // JSON's escaped backslash).
-    v.to_string().replace(&dir, "<data>").replace("\\\\", "/")
+    v.to_string()
+        .replace(&dir, "<data>")
+        .replace(&cwd, "<cwd>")
+        .replace("\\\\", "/")
 }
 
 async fn golden(f: &Fixture, name: &str, req: Request<Body>) -> Value {
@@ -411,6 +419,19 @@ fn ids_are_unique_across_the_catalogues() {
 
 #[test]
 fn the_aliases_map_onto_the_section() {
+    assert_eq!(
+        super::logging::with_default_level("info,hyper=debug"),
+        "info,hyper=debug"
+    );
+    assert_eq!(
+        super::logging::with_default_level("hyper=debug"),
+        "warn,hyper=debug"
+    );
+    assert_eq!(super::logging::with_default_level(""), "warn");
+    assert_eq!(
+        alias("info,hyper=debug").unwrap().libraries,
+        "warn,hyper=debug"
+    );
     let a = alias("debug").unwrap();
     assert_eq!(a.verbosity, Verbosity::Detailed);
     assert!(a.components.is_empty());
@@ -420,10 +441,16 @@ fn the_aliases_map_onto_the_section() {
     assert_eq!(a.verbosity, Verbosity::Warnings);
     assert_eq!(a.components["dht"], "trace");
     assert_eq!(a.components["auth"], "debug");
-    assert_eq!(a.libraries, "hyper=info,tantivy=error");
+    assert_eq!(
+        a.libraries, "warn,hyper=info,tantivy=error",
+        "Libraries keep a default level"
+    );
     let a = alias("lodestar=debug").unwrap();
     assert_eq!(a.verbosity, Verbosity::Normal, "no default level: Normal");
-    assert_eq!(a.components["system"], "debug");
+    // As before: every first-party target.
+    assert_eq!(a.components.len(), 12);
+    assert!(a.components.values().all(|l| l == "debug"));
+    assert!(!a.components.contains_key("libraries"));
     assert_eq!(
         alias("lodestar_nope=debug").unwrap().unknown,
         ["lodestar_nope"]
@@ -434,7 +461,7 @@ fn the_aliases_map_onto_the_section() {
         a.components["search"], "trace",
         "a bare target is all its levels"
     );
-    assert_eq!(a.libraries, "hyper");
+    assert_eq!(a.libraries, "warn,hyper");
 }
 
 #[test]
@@ -495,7 +522,7 @@ fn lodestar_log_and_the_file_key_set_the_three_fields() {
     );
     assert_eq!(
         field(&r, "libraries"),
-        (json!("h2=warn"), SettingSource::File, false)
+        (json!("warn,h2=warn"), SettingSource::File, false)
     );
     assert_eq!(
         field(&r, "data"),
@@ -527,7 +554,7 @@ fn a_saved_log_level_moves_to_the_logging_section_once() {
     let l = r.get::<Logging>();
     assert_eq!(l.verbosity, Verbosity::Detailed);
     assert_eq!(l.components["dht"], "trace");
-    assert_eq!(l.libraries, "hyper=info");
+    assert_eq!(l.libraries, "warn,hyper=info");
     let v = r.section("logging").unwrap();
     assert_eq!(v.fields["verbosity"].source, SettingSource::Db);
     drop(r);
@@ -590,6 +617,8 @@ fn deadlines_are_checked_against_the_clock() {
         (json!({ "components": { "libraries": "debug" } }), false),
         (json!({ "components": { "dht": "loud" } }), false),
         (json!({ "file_folder": " " }), false),
+        (json!({ "file_folder": "logs" }), false),
+        (json!({ "file_folder": "../logs" }), false),
         (json!({ "libraries": "warn,lodestar_api::filters" }), false),
         (json!({ "libraries": "warn,hyper,h2=info" }), true),
         (json!({ "file_total_mib": 16, "file_size_mib": 32 }), false),

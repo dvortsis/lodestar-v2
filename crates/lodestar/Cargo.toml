@@ -23,6 +23,8 @@ lodestar-api.workspace = true
 lodestar-bench = { path = "../../bench", optional = true }
 lodestar-dht.workspace = true
 lodestar-filter.workspace = true
+# The log folder's Windows ACL (`secret::restrict_dir_acl`).
+lodestar-integrations.workspace = true
 lodestar-log.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-pipeline.workspace = true

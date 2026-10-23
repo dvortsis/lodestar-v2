@@ -3,21 +3,24 @@
 
 First-party code logs only through `log_event!`, whose fields are typed
 and declared (the macro refuses undeclared fields and wrong kinds at
-compile time). In the paths listed in ENFORCED, outside tests, this
-refuses:
+compile time). Every `crates/*/src/**/*.rs` file is checked, outside
+tests. It refuses:
 
-- plain `tracing` macros (`trace!` … `error!`, `event!`) and span macros
-  used as log lines;
-- `#[instrument]` without `skip_all` (a `skip(..)` list, or `fields(x)`
-  alone, still records every argument a later change adds);
-- any `%` / `?` error field (`%e`, `?err`, `error = %e`), by syntax,
-  whatever the type: errors reach a line only through `lodestar_log::Error`.
+- plain `tracing` macros (`trace!` … `error!`, `event!`, span macros used
+  as log lines, `warn !(` included) and the imports and renames that get
+  around that rule (`use tracing::{warn, …}`, `use tracing as t`,
+  `extern crate tracing as t`, a dependency renamed from `tracing`);
+- `#[instrument]`, however it's spelled (`::tracing::instrument`, inside
+  `cfg_attr`, imported under another name), without `skip_all`, or with
+  `err` or `ret`, which record the error or the return value;
+- any `%` / `?` error field (`%e`, `?err`, `error = %e`, `reason = %e`), by
+  syntax, whatever the type: errors reach a line only through
+  `lodestar_log::Error`.
 
-ENFORCED is explicit: the fully swept crates and the swept files of the
-partly swept ones, so a PR that merges later, or a file the follow-up sweep
-(B-log1b) converts, doesn't go red. B-log1b widens it to every first-party
-crate. A listed path that doesn't exist fails the check, so the list can't
-silently rot.
+NOT_YET_SWEPT names the files whose plain macros the follow-up sweep
+(B-log1b) converts; the other rules apply to them already. It may only
+shrink: a listed file that no longer has a plain macro, or no longer
+exists, fails the check, so converting a file means taking it off.
 
 Usage: python3 .github/scripts/log_lint.py [repo root]
 """
@@ -28,25 +31,25 @@ import re
 import sys
 from pathlib import Path
 
-# Directories hold every `.rs` file below them.
-ENFORCED = [
-    "crates/log/src/",
-    "crates/integrations/src/",
-    "crates/lodestar/src/logging/",
-    "crates/lodestar/src/floor.rs",
-    "crates/lodestar/src/fsdetect.rs",
-    "crates/lodestar/src/privdrop.rs",
-    "crates/lodestar/src/subscriptions.rs",
-    "crates/lodestar/src/settings/mod.rs",
-    "crates/lodestar/src/settings/crawler.rs",
-    "crates/lodestar/src/settings/general.rs",
-    "crates/lodestar/src/settings/log.rs",
-    "crates/lodestar/src/settings/logging.rs",
-    "crates/api/src/error.rs",
-    "crates/api/src/filters.rs",
-    "crates/api/src/log_events.rs",
-    "crates/api/src/logs.rs",
-    "crates/api/src/dto/logs.rs",
+# Files whose plain `tracing` lines B-log1b converts (open PRs touched them
+# when B-log1 ran). Remove a file when it's converted; never add one.
+NOT_YET_SWEPT = [
+    "crates/api/src/auth.rs",
+    "crates/api/src/auth/guard.rs",
+    "crates/api/src/auth/http.rs",
+    "crates/filter/src/lists.rs",
+    "crates/lodestar/src/fixture.rs",
+    "crates/lodestar/src/insights.rs",
+    "crates/lodestar/src/main.rs",
+    "crates/lodestar/src/services.rs",
+    "crates/pipeline/src/control.rs",
+    "crates/pipeline/src/dht.rs",
+    "crates/pipeline/src/lib.rs",
+    "crates/pipeline/src/worker.rs",
+    "crates/pipeline/src/writer.rs",
+    "crates/search/src/index.rs",
+    "crates/search/src/live.rs",
+    "crates/search/src/rebuild.rs",
 ]
 
 # Narrow, named exemptions: (path, rule) and why.
@@ -54,19 +57,25 @@ EXEMPT = {
     ("crates/log/src/dispatch.rs", "tracing"): "the fallback without a sink forwards to tracing",
 }
 
+MACRO_NAMES = r"trace|debug|info|warn|error|event|span|trace_span|debug_span|info_span|warn_span|error_span"
 LOG_MACROS = re.compile(
-    r"(?:(?<![\w:.])(?:::)?tracing::|(?<![\w:.]))"
-    r"(trace|debug|info|warn|error|event|span|trace_span|debug_span|info_span|warn_span|error_span)"
-    r"!\s*[(\[{]"
+    r"(?:(?<![\w:.])(?:::)?tracing\s*::\s*|(?<![\w:.]))"
+    rf"({MACRO_NAMES})"
+    r"\s*!\s*[(\[{]"
 )
 # `use tracing::{warn, …}`, `use tracing::warn`, `use tracing as t`,
-# `use ::tracing::…`, `extern crate tracing as t`: ways around LOG_MACROS.
+# `use ::tracing::…`, `use tracing::*`, `extern crate tracing as t`.
 TRACING_IMPORT = re.compile(
-    r"\buse\s+(?:::)?tracing\s*(?:\bas\b|::\s*\{[^}]*\b(?:trace|debug|info|warn|error|event|span|\w+_span)\b"
-    r"|::\s*(?:trace|debug|info|warn|error|event|span|\w+_span)\b|::\s*\*)"
+    r"\buse\s+(?:::)?tracing\s*(?:\bas\b"
+    rf"|::\s*\{{[^}}]*\b(?:{MACRO_NAMES}|instrument)\b"
+    rf"|::\s*(?:{MACRO_NAMES}|instrument)\b"
+    r"|::\s*\*)"
     r"|\bextern\s+crate\s+tracing\s+as\b"
 )
-INSTRUMENT = re.compile(r"#\[\s*(?:tracing::)?instrument\b")
+# `#[instrument]`, `#[tracing::instrument]`, `#[::tracing::instrument]`,
+# `#[cfg_attr(…, instrument(…))]`.
+INSTRUMENT = re.compile(r"(?:^|[\[(,\s:])(?:::)?(?:tracing\s*::\s*)?instrument\b")
+INSTRUMENT_RECORDS = re.compile(r"(?:^|[(,\s])(?:err|ret)\b")
 ERROR_FIELD = re.compile(
     r"(?:"
     # `error = %x`, `err = ?x`, `cause = %e`
@@ -79,6 +88,7 @@ ERROR_FIELD = re.compile(
     r"(?:^|[(,{])\s*[%?]\s*&?(?:e|err|error|\w+_err|\w+_error|err_\w+|error_\w+)\b"
     r")"
 )
+RENAMED_DEP = re.compile(r"""\bpackage\s*=\s*["']tracing["']""")
 
 
 def strip(code: str) -> str:
@@ -133,8 +143,6 @@ def without_tests(code: str) -> str:
     out = list(code)
     for m in re.finditer(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]", code):
         j = m.end()
-        # The item ends at its first `;` before any `{`, or at the brace
-        # that closes its first `{`.
         depth = 0
         while j < len(code):
             ch = code[j]
@@ -155,64 +163,85 @@ def without_tests(code: str) -> str:
     return "".join(out)
 
 
+def attributes(code: str):
+    """Every `#[…]` / `#![…]` attribute: (start, text)."""
+    for m in re.finditer(r"#!?\s*\[", code):
+        depth, j = 0, m.end() - 1
+        while j < len(code):
+            if code[j] == "[":
+                depth += 1
+            elif code[j] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        yield m.start(), code[m.start() : j + 1]
+
+
 def is_test_file(path: Path) -> bool:
     return path.name == "tests.rs" or path.name.endswith("_tests.rs") or "tests" in path.parts
 
 
-def check_source(rel: str, code: str) -> list[str]:
-    """Every finding in one file's source, as `path:line: message`."""
+def plain_macros(rel: str, clean: str) -> list[str]:
+    line_of = lambda pos: clean.count("\n", 0, pos) + 1
+    found = []
+    for m in LOG_MACROS.finditer(clean):
+        found.append(f"{rel}:{line_of(m.start())}: plain `{m.group(1)}!`: use `log_event!` with a catalogued event")
+    for m in TRACING_IMPORT.finditer(clean):
+        found.append(f"{rel}:{line_of(m.start())}: a `tracing` macro import: use `log_event!`")
+    return found
+
+
+def check_source(rel: str, code: str, swept: bool = True) -> list[str]:
+    """Every finding in one file's source, as `path:line: message`.
+    `swept`: the plain-macro rules apply (the file isn't in NOT_YET_SWEPT)."""
     findings = []
     clean = without_tests(strip(code))
     line_of = lambda pos: clean.count("\n", 0, pos) + 1
-    if (rel, "tracing") not in EXEMPT:
-        for m in LOG_MACROS.finditer(clean):
-            # `log_event!` and other `*_event!` / `*_span!` names aren't
-            # tracing's: the lookbehind keeps word characters out.
-            findings.append(f"{rel}:{line_of(m.start())}: plain `{m.group(1)}!`: use `log_event!` with a catalogued event")
-        for m in TRACING_IMPORT.finditer(clean):
-            findings.append(f"{rel}:{line_of(m.start())}: a `tracing` macro import: use `log_event!`")
-    for m in INSTRUMENT.finditer(clean):
-        end = clean.find("]", m.end())
-        depth, j = 0, m.end()
-        while j < len(clean):
-            if clean[j] == "(":
-                depth += 1
-            elif clean[j] == ")":
-                depth -= 1
-            elif clean[j] == "]" and depth <= 0:
-                end = j
-                break
-            j += 1
-        attr = clean[m.start() : end + 1]
+    if swept and (rel, "tracing") not in EXEMPT:
+        findings.extend(plain_macros(rel, clean))
+    for start, attr in attributes(clean):
+        if not INSTRUMENT.search(attr[attr.index("[") + 1 :]):
+            continue
         if "skip_all" not in attr:
-            findings.append(f"{rel}:{line_of(m.start())}: `#[instrument]` without `skip_all` records every argument")
+            findings.append(f"{rel}:{line_of(start)}: `#[instrument]` without `skip_all` records every argument")
+        if INSTRUMENT_RECORDS.search(attr[attr.index("[") + 1 :]):
+            findings.append(f"{rel}:{line_of(start)}: `#[instrument(err)]` / `ret` records an error or a return value")
     for m in ERROR_FIELD.finditer(clean):
         findings.append(f"{rel}:{line_of(m.start())}: an untyped error field: use `lodestar_log::Error`")
     return findings
 
 
-def files(root: Path, listed: list[str]) -> tuple[list[Path], list[str]]:
-    found, missing = [], []
-    for entry in listed:
+def manifests(root: Path) -> list[str]:
+    """A dependency renamed from `tracing` in any crate's manifest."""
+    out = []
+    for p in sorted(root.glob("crates/*/Cargo.toml")):
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if RENAMED_DEP.search(line.split("#", 1)[0]):
+                out.append(f"{p.relative_to(root).as_posix()}:{i}: `tracing` renamed: use `log_event!`")
+    return out
+
+
+def sources(root: Path) -> list[Path]:
+    return sorted(
+        p
+        for p in root.glob("crates/*/src/**/*.rs")
+        if not is_test_file(p.relative_to(root))
+    )
+
+
+def run(root: Path, not_yet: list[str] = NOT_YET_SWEPT) -> list[str]:
+    problems = manifests(root)
+    listed = set(not_yet)
+    for entry in not_yet:
         p = root / entry
-        if entry.endswith("/"):
-            if not p.is_dir():
-                missing.append(entry)
-                continue
-            found.extend(sorted(x for x in p.rglob("*.rs") if not is_test_file(x.relative_to(root))))
-        elif p.is_file():
-            found.append(p)
-        else:
-            missing.append(entry)
-    return found, missing
-
-
-def run(root: Path, listed: list[str] = ENFORCED) -> list[str]:
-    paths, missing = files(root, listed)
-    problems = [f"{m}: listed in log_lint.py's ENFORCED but missing" for m in missing]
-    for p in paths:
+        if not p.is_file():
+            problems.append(f"{entry}: in NOT_YET_SWEPT but missing: take it off the list")
+        elif not plain_macros(entry, without_tests(strip(p.read_text(encoding="utf-8")))):
+            problems.append(f"{entry}: in NOT_YET_SWEPT but has no plain macro left: take it off the list")
+    for p in sources(root):
         rel = p.relative_to(root).as_posix()
-        problems.extend(check_source(rel, p.read_text(encoding="utf-8")))
+        problems.extend(check_source(rel, p.read_text(encoding="utf-8"), swept=rel not in listed))
     return problems
 
 
@@ -224,7 +253,8 @@ def main() -> int:
     if problems:
         print(f"log_lint: {len(problems)} problem(s)")
         return 1
-    print(f"log_lint: ok ({len(files(root, ENFORCED)[0])} files)")
+    n = len(sources(root))
+    print(f"log_lint: ok ({n} files, {len(NOT_YET_SWEPT)} not yet swept)")
     return 0
 
 

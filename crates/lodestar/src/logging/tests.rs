@@ -236,12 +236,14 @@ fn the_buffer_is_bounded() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_full_disk_stops_the_file_not_lodestar() {
     let dir = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink("/dev/full", dir.path().join(file::CURRENT)).unwrap();
     let (rt, console) = runtime(dir.path(), &Logging::default());
+    match &mut *lock(&rt.file) {
+        FileState::Open(sink) => sink.full = true,
+        _ => panic!("open"),
+    }
     record_all(&rt);
     assert!(matches!(*lock(&rt.file), FileState::Stopped));
     // Still logging to the console, and nothing panics.
