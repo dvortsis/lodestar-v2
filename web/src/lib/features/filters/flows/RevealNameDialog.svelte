@@ -28,6 +28,16 @@
 			flow.start(revealName(hash));
 		} else if (!open) started = null;
 	});
+
+	// The flow can end by itself (a job cancelled elsewhere, a sign-out): with no form step to
+	// fall back to, that closes the dialog too.
+	$effect(() => {
+		if (open && started !== null && flow.state.kind === 'closed') {
+			started = null;
+			open = false;
+			onclose?.();
+		}
+	});
 </script>
 
 <ChangeDialog
