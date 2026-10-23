@@ -1,8 +1,10 @@
 //! What the API and the status page hold to search: the index serving
-//! now (taken once per request) and the leases cursors read through.
+//! now (taken once per request), the leases cursors read through and the
+//! result cache.
 
 use std::sync::Arc;
 
+use crate::cache::ResultCache;
 use crate::index::SearchIndex;
 use crate::lease::Leases;
 use crate::live::IndexStats;
@@ -14,6 +16,7 @@ use crate::rebuild::{RebuildProgress, Serving};
 pub struct SearchHandle {
     source: Source,
     leases: Arc<Leases>,
+    cache: Arc<ResultCache>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,15 +29,22 @@ impl SearchHandle {
     pub fn serving(serving: Arc<Serving>) -> SearchHandle {
         SearchHandle {
             leases: serving.leases().clone(),
+            cache: serving.cache().clone(),
             source: Source::Serving(serving),
         }
     }
 
-    /// A fixed index with its own leases.
+    /// A fixed index with its own leases and a default cache.
     pub fn fixed(index: SearchIndex, leases: Leases) -> SearchHandle {
+        SearchHandle::fixed_with(index, leases, ResultCache::default())
+    }
+
+    /// A fixed index with its own leases and `cache` (tests: bounds).
+    pub fn fixed_with(index: SearchIndex, leases: Leases, cache: ResultCache) -> SearchHandle {
         SearchHandle {
             source: Source::Fixed(Arc::new(index)),
             leases: Arc::new(leases),
+            cache: Arc::new(cache),
         }
     }
 
@@ -49,6 +59,11 @@ impl SearchHandle {
 
     pub fn leases(&self) -> &Leases {
         &self.leases
+    }
+
+    /// First pages and facet responses of the snapshot serving now.
+    pub fn cache(&self) -> &ResultCache {
+        &self.cache
     }
 
     /// The rebuild under way, if any.

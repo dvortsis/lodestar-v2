@@ -10,6 +10,8 @@
 //! one buffer per text, each with its [`term_hash`], so a comparison is a
 //! hash check before the bytes.
 
+use std::cell::OnceCell;
+
 use lodestar_search::tokenizer::{MAX_TOKEN_BYTES, TokKind, tokenize};
 
 use crate::hash::term_hash;
@@ -33,9 +35,57 @@ pub(crate) struct Tok {
 pub(crate) struct Text {
     buf: String,
     pub toks: Vec<Tok>,
+    /// The tokens by position, made on first use.
+    positions: OnceCell<Positions>,
+}
+
+/// A text's tokens by position: those at `p` are
+/// `order[starts[p]..starts[p + 1]]`, in the text's order. Names are
+/// untrusted and can repeat a word thousands of times, so a phrase or
+/// NEAR looks a position up rather than scanning the text for it.
+#[derive(Debug, Clone, Default)]
+struct Positions {
+    starts: Vec<u32>,
+    order: Vec<u32>,
 }
 
 impl Text {
+    /// The tokens at `pos`.
+    pub fn at(&self, pos: u32) -> impl Iterator<Item = &Tok> {
+        let p = self.positions();
+        let pos = pos as usize;
+        let run = match (p.starts.get(pos), p.starts.get(pos + 1)) {
+            (Some(&from), Some(&to)) => from as usize..to as usize,
+            _ => 0..0,
+        };
+        crate::work::tick(run.len() + 1);
+        p.order[run].iter().map(|&i| &self.toks[i as usize])
+    }
+
+    /// A counting sort by position. A position steps on at most once per
+    /// word of the text, so the table grows with the text.
+    fn positions(&self) -> &Positions {
+        self.positions.get_or_init(|| {
+            crate::work::tick(self.toks.len());
+            let end = self.toks.iter().map(|t| t.position as usize + 1).max();
+            let mut starts = vec![0u32; end.unwrap_or(0) + 1];
+            for t in &self.toks {
+                starts[t.position as usize + 1] += 1;
+            }
+            for p in 1..starts.len() {
+                starts[p] += starts[p - 1];
+            }
+            let mut next = starts.clone();
+            let mut order = vec![0u32; self.toks.len()];
+            for (i, t) in self.toks.iter().enumerate() {
+                let at = &mut next[t.position as usize];
+                order[*at as usize] = i as u32;
+                *at += 1;
+            }
+            Positions { starts, order }
+        })
+    }
+
     pub fn text(&self, t: &Tok) -> &str {
         &self.buf[t.start as usize..(t.start + t.len) as usize]
     }

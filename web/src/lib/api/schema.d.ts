@@ -126,6 +126,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every collection, most recently changed first, with the number of
+         *     entries search would show.
+         */
+        get: operations["listCollections"];
+        put?: never;
+        /** Makes a collection. */
+        post: operations["createCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A collection and a page of its entries in order. Entries search
+         *     wouldn't show are skipped (a page is full unless the collection ends)
+         *     and `items` counts the ones it would.
+         */
+        get: operations["getCollection"];
+        put?: never;
+        post?: never;
+        /** Deletes a collection (not the torrents in it). */
+        delete: operations["deleteCollection"];
+        options?: never;
+        head?: never;
+        /**
+         * Renames a collection or changes its note; absent leaves a field as it
+         *     is, and `note: null` removes the note.
+         */
+        patch: operations["patchCollection"];
+        trace?: never;
+    };
+    "/collections/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adds torrents to the end of a collection; ones already in it stay
+         *     where they are. All or nothing: a hash that is unknown, or that search
+         *     wouldn't show, is the one `404 torrent_not_found` (`field: "hashes"`)
+         *     and nothing is added.
+         */
+        post: operations["addToCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}/items/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Takes torrents out of a collection. A hash that isn't in it, is
+         *     unknown or isn't shown is skipped, so nothing about a withheld
+         *     torrent is revealed.
+         */
+        post: operations["removeFromCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Puts a collection's entries in the order given. The list must name
+         *     every entry shown by default once (it may also name ones a filter rule
+         *     hid), with no cap, and may be empty only when none is shown;
+         *     `409 stale_order` otherwise, so a reorder from an old page can't
+         *     drop or duplicate entries. Entries not shown to the client (Adult while
+         *     hidden, and filter-hidden ones it did not name) keep their slots.
+         */
+        put: operations["reorderCollection"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compare": {
         parameters: {
             query?: never;
@@ -679,6 +793,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/saved-searches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every saved search, oldest first, with its alert counts. */
+        get: operations["listSavedSearches"];
+        put?: never;
+        /** Saves a search. It alerts only on torrents indexed from now on. */
+        post: operations["createSavedSearch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/saved-searches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One saved search. */
+        get: operations["getSavedSearch"];
+        put?: never;
+        post?: never;
+        /** Deletes a saved search with its alerts and feed tokens. */
+        delete: operations["deleteSavedSearch"];
+        options?: never;
+        head?: never;
+        /**
+         * Changes a saved search. Any subset: a field not sent keeps its value,
+         *     the notifier's channels included. Resuming a paused search skips what
+         *     was indexed while it was paused; editing the query does not move
+         *     where it left off.
+         */
+        patch: operations["patchSavedSearch"];
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -689,7 +845,10 @@ export interface paths {
         /** Searches with query text. To search with an AST, POST it. */
         get: operations["searchGet"];
         put?: never;
-        /** Searches with query text or a query AST. */
+        /**
+         * Searches with query text or a query AST. The body also takes
+         *     `"explain": true` (as `GET`'s `explain`).
+         */
         post: operations["searchPost"];
         delete?: never;
         options?: never;
@@ -728,10 +887,121 @@ export interface paths {
         /**
          * Every settings section, with the fields and JSON schema its form is
          *     generated from.
+         * @description Each property of a section's schema carries hints for the form (the
+         *     server checks everything regardless): `x-group` (the group's id; its
+         *     heading is the message `settings.group.<id>`), `x-order`, `x-advanced`,
+         *     `x-preview` (`POST /settings/preview` has estimates or warnings for
+         *     it) and, where they apply, `x-unit` (`seconds`, `mebibytes`,
+         *     `connections`), `x-widget` (`radio`, `slider`, `theme`, `shortcuts`,
+         *     `language`, `time-zone`), `x-auto` (the value that means "automatic"),
+         *     `x-keywords` (a message key of search synonyms), `x-danger`
+         *     (`disruptive`, `privacy`, `destructive`, `security`, §10.10.7),
+         *     `x-config` (the `config.toml` key), `x-env` (the `LODESTAR_*`
+         *     variable), `format` (`socket-addr`, `log-filter`) and `writeOnly`
+         *     (a secret, never sent back).
          */
         get: operations["listSettings"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Changes several sections at once (`{section: {field: value}}`), as a
+         *     screen showing fields from several sections saves them: every
+         *     section's patch is checked as `PATCH /settings/{section}` checks it,
+         *     then all are saved in one transaction. One refused field saves
+         *     nothing; the error names its `section` and `field`.
+         */
+        patch: operations["patchSettingsBatch"];
+        trace?: never;
+    };
+    "/settings/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved settings as a TOML file to keep or move to another install,
+         *     laid out by section (`[crawler]`), each key with its `config.toml`
+         *     key and environment variable in a comment. It holds only values saved
+         *     in the app: never a secret, a value an environment variable sets, or
+         *     filter, floor, pack or subscription state (§20 has its own export).
+         *     `preferences` is included only when asked.
+         */
+        get: operations["exportSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reads a file from `GET /settings/export` and reports what it would
+         *     change. Keys that aren't settings, read-only ones, secrets and ones an
+         *     environment variable sets are listed in `skipped` and left alone.
+         *     Unless `dry_run=true`, the changes are then saved as one batch with
+         *     `PATCH /settings`' checks: all or nothing.
+         */
+        post: operations["importSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What `PATCH /settings` with the same body would do, without saving:
+         *     the same checks and refusals, then for each patched field whether it
+         *     applies now or after a restart, warnings, and estimates where the
+         *     section can make them (fetch sockets, the new address, memory).
+         */
+        post: operations["previewSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tests a download client with the values on screen, before they're
+         *     saved: logs in and asks its version. It goes through the integrations
+         *     SSRF guard (download clients may be on this machine or the LAN, never
+         *     on link-local, metadata or reserved addresses). Nothing is saved, and
+         *     the result never repeats the URL or a credential.
+         */
+        post: operations["testSettings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -746,8 +1016,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One section's effective values, where each comes from, and which
-         *     can't be changed here or wait for a restart.
+         * One section's effective values, where each comes from, which can't be
+         *     changed here or wait for a restart, and its revision.
          */
         get: operations["getSettings"];
         put?: never;
@@ -759,7 +1029,8 @@ export interface paths {
          * Changes some of a section's settings. Every field is checked first,
          *     then all are saved together; live ones apply at once, and the rest
          *     are listed in `restart_required`. A field an environment variable
-         *     sets is refused, naming the variable.
+         *     sets is refused, naming the variable. With `if_revision`, a section
+         *     changed since is refused with its current values.
          */
         patch: operations["patchSettings"];
         trace?: never;
@@ -901,6 +1172,72 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/user-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your marked torrents, newest change first. Only torrents search would
+         *     show: those a filter rule hid appear with `hidden=true`, and Adult
+         *     only while "Show adult content" is on. A page is full unless the list
+         *     ends: withheld rows are skipped, never counted.
+         */
+        get: operations["listUserItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user-items/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every label in use with the number of visible torrents carrying it. */
+        get: operations["listLabels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user-items/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A torrent's marks, and the collections it is in. A torrent without
+         *     marks answers with all-false, empty marks; an unknown torrent, or one
+         *     withheld (Adult while hidden), is `404 torrent_not_found`.
+         */
+        get: operations["getUserItem"];
+        put?: never;
+        post?: never;
+        /** Clears every mark on a torrent. */
+        delete: operations["clearUserItem"];
+        options?: never;
+        head?: never;
+        /**
+         * Changes some marks: absent leaves one as it is, `note: null` removes
+         *     the note. Labels and the note are trimmed first (and CRLF becomes LF).
+         *     Returns the marks after, all-false when none are left.
+         */
+        patch: operations["patchUserItem"];
         trace?: never;
     };
 }
@@ -1303,6 +1640,124 @@ export interface components {
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
         };
+        /** @description `POST /collections`. */
+        CollectionCreate: {
+            /** @description 1–200 characters. */
+            name: string;
+            /** @description 1–4,000 characters. */
+            note?: string | null;
+        };
+        /**
+         * @description One torrent in a collection.
+         * @example {
+         *       "added_at": 1700000150,
+         *       "position": 1,
+         *       "torrent": {
+         *         "adult_kind": null,
+         *         "completed": null,
+         *         "composition": [],
+         *         "content_type": "movie",
+         *         "discovered_at": 1700000000,
+         *         "files": 1,
+         *         "flags": [
+         *           "single_file"
+         *         ],
+         *         "hash": "0123456789abcdef0123456789abcdef01234567",
+         *         "hash_v2": null,
+         *         "id": 1,
+         *         "junk_reasons": [],
+         *         "junk_score": 0,
+         *         "last_scrape_at": null,
+         *         "leechers": null,
+         *         "metadata_at": 1700000001,
+         *         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+         *         "piece_len": 65536,
+         *         "resolved_via": null,
+         *         "score": 0,
+         *         "seeders": null,
+         *         "size": 8589934592,
+         *         "title": "The Dark Knight",
+         *         "trackers_checked": null,
+         *         "trackers_reporting": null
+         *       }
+         *     }
+         */
+        CollectionEntry: {
+            /** Format: int64 */
+            added_at: number;
+            /**
+             * Format: int64
+             * @description 1-based place among the entries shown, so it never reveals how
+             *     many were left out.
+             */
+            position: number;
+            torrent: components["schemas"]["SearchHit"];
+        };
+        /**
+         * @description `GET /collections/{id}`: the collection and a page of its entries.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "entries": [],
+         *       "id": 1,
+         *       "items": 0,
+         *       "name": "Weekend watchlist",
+         *       "next_after": null,
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        CollectionPage: {
+            /** Format: int64 */
+            created_at: number;
+            /** @description In order, only torrents search would show. */
+            entries: components["schemas"]["CollectionEntry"][];
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            items: number;
+            name: string;
+            /**
+             * Format: int64
+             * @description Send as `after` for the next page; null on the last.
+             */
+            next_after: number | null;
+            note: string | null;
+            /** Format: int64 */
+            updated_at: number;
+        };
+        /** @description `PATCH /collections/{id}`: absent leaves a field as it is. */
+        CollectionPatch: {
+            /** @default null */
+            name: string | null;
+            /**
+             * @description `null` removes the note.
+             * @default null
+             */
+            note: string | null;
+        };
+        /**
+         * @description A collection. `items` counts the torrents search would show.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "id": 1,
+         *       "items": 2,
+         *       "name": "Weekend watchlist",
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        CollectionSummary: {
+            /** Format: int64 */
+            created_at: number;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            items: number;
+            name: string;
+            note: string | null;
+            /** Format: int64 */
+            updated_at: number;
+        };
         /** @description `POST /compare`'s body. */
         CompareRequest: {
             /** @description 2–5 distinct 40-character hex info hashes, in column order. */
@@ -1660,6 +2115,30 @@ export interface components {
             /** @description The top torrents by swarm trend. */
             rising: components["schemas"]["HitGroup"];
         };
+        /** @description A download client's settings as the form has them, unsaved. */
+        DownloadClientDraft: {
+            client: components["schemas"]["DownloadClientKind"];
+            /**
+             * @description The password (qBittorrent, Deluge, Transmission and rTorrent with
+             *     authentication) or the RPC secret (Aria2).
+             */
+            password?: string;
+            /**
+             * @description The client's address, as the form has it.
+             * @example http://192.168.1.5:8080/
+             */
+            url: string;
+            /**
+             * @description The user name (qBittorrent; Transmission and rTorrent with
+             *     authentication).
+             */
+            username?: string;
+        };
+        /**
+         * @description A download client a connection test can reach.
+         * @enum {string}
+         */
+        DownloadClientKind: "qbittorrent" | "transmission" | "deluge" | "rtorrent" | "aria2";
         ErrorBody: {
             /**
              * @description A stable snake_case identifier to branch on.
@@ -1718,6 +2197,10 @@ export interface components {
             /** @enum {string} */
             event: "insights";
         } | {
+            data: components["schemas"]["SettingsEvent"];
+            /** @enum {string} */
+            event: "settings";
+        } | {
             data: components["schemas"]["ResyncEvent"];
             /** @enum {string} */
             event: "resync";
@@ -1731,6 +2214,96 @@ export interface components {
             query?: string;
             /** @description The rule it releases from. */
             rule: string;
+        };
+        /** @description One hit's score in parts. */
+        ExplainHit: {
+            /** Format: int64 */
+            id: number;
+            /**
+             * Format: double
+             * @description BM25 over the name and paths (`text`), fielded words and
+             *     filters; null under a field sort.
+             */
+            phase1: number | null;
+            phase2: null | components["schemas"]["ExplainPhase2"];
+            priors: components["schemas"]["ExplainPriors"];
+            /**
+             * Format: double
+             * @description The score the hit was ranked by, as in `hits[].score`.
+             */
+            score: number;
+        };
+        /** @description Phase 2's features (§8). */
+        ExplainPhase2: {
+            /**
+             * Format: double
+             * @description Exact-name bonus: not ranked yet, always null.
+             */
+            exact_name: number | null;
+            /**
+             * Format: double
+             * @description The cap on file-only matches' contribution: not ranked yet,
+             *     always null.
+             */
+            file_cap: number | null;
+            /**
+             * Format: double
+             * @description The unfielded words' name boosts, summed (0 without phase 2).
+             */
+            name: number;
+            /**
+             * Format: double
+             * @description Phrase and proximity bonus: not ranked yet, always null.
+             */
+            phrase: number | null;
+            /**
+             * Format: double
+             * @description The unfielded words' parsed-title boosts, summed.
+             */
+            title: number;
+        };
+        /**
+         * @description The quality priors (§8), multiplied onto relevance once ranking has
+         *     them (with swarm health, M4); until then each is null.
+         */
+        ExplainPriors: {
+            /** Format: double */
+            freshness: number | null;
+            /** Format: double */
+            junk: number | null;
+            /** Format: double */
+            seeders: number | null;
+            /** Format: double */
+            swarm_consistency: number | null;
+            /** Format: double */
+            trackers: number | null;
+        };
+        /** @description The ranking's weights, as this server runs them. */
+        ExplainWeights: {
+            /**
+             * Format: double
+             * @description Boost of a word found in the name, in phase 1 (on the combined
+             *     field) and phase 2.
+             */
+            name: number;
+            /**
+             * Format: double
+             * @description Boost of a word found in a file or folder name, in phase 1.
+             */
+            path: number;
+            /** @description Phase-1 candidates re-ranked together. */
+            rerank_window: number;
+            /**
+             * Format: double
+             * @description Phase-1 score of a word matched only by its stem in the title
+             *     (the plurals fallback, when `stemmed`).
+             */
+            stem_score: number;
+            /**
+             * Format: double
+             * @description Phase-2 boost of a word found in the parsed title.
+             */
+            title: number;
         };
         /**
          * @description Our address as other DHT nodes see it: the BEP 42 `ip` key of their
@@ -1879,6 +2452,15 @@ export interface components {
              */
             queued: number;
         };
+        /** @description One patched field, as it would be saved. */
+        FieldPreview: {
+            estimates: components["schemas"]["PreviewEstimate"][];
+            /** @description It would apply at the next restart; otherwise at once. */
+            restart_required: boolean;
+            /** @description The value it would have (null for a secret). */
+            value: unknown;
+            warnings: components["schemas"]["PreviewWarning"][];
+        };
         /**
          * @description The file lists compared: files match when their path (inside the
          *     torrent, `/`-separated, decoded) and size are equal. Padding files
@@ -1938,6 +2520,14 @@ export interface components {
         };
         /** @enum {string} */
         GroupStatus: "available" | "unavailable";
+        /**
+         * @description A list of torrents by info hash: `POST /collections/{id}/items`,
+         *     `…/items/remove` and `PUT …/order`.
+         */
+        HashList: {
+            /** @description 1–500 40-character hex info hashes. */
+            hashes: string[];
+        };
         /** @description A histogram with explicit bins; empty bins are present with count 0. */
         Histogram: {
             approx: boolean;
@@ -1989,6 +2579,78 @@ export interface components {
         IdBody: {
             /** Format: int64 */
             id: number;
+        };
+        /** @description One setting an import changes. */
+        ImportChange: {
+            field: string;
+            /** @description The value now. */
+            from: unknown;
+            /**
+             * @description Where the value now comes from: to undo, send it back, or `null`
+             *     when this isn't `db`.
+             */
+            from_source: components["schemas"]["SettingSource"];
+            /** @description It applies at the next restart. */
+            restart_required: boolean;
+            section: string;
+            to: unknown;
+        };
+        /**
+         * @description `POST /settings/import`: the diff, and whether it was applied.
+         * @example {
+         *       "applied": false,
+         *       "changes": [
+         *         {
+         *           "field": "intensity",
+         *           "from": "balanced",
+         *           "from_source": "default",
+         *           "restart_required": false,
+         *           "section": "crawler",
+         *           "to": "low"
+         *         }
+         *       ],
+         *       "revisions": {
+         *         "crawler": 3
+         *       },
+         *       "skipped": [
+         *         {
+         *           "env": "LODESTAR_DHT_PORT",
+         *           "key": "network.dht_port",
+         *           "reason": "set_by_environment"
+         *         }
+         *       ],
+         *       "unchanged": 2
+         *     }
+         */
+        ImportReport: {
+            /** @description Saved (false on a dry run, or when nothing changes). */
+            applied: boolean;
+            changes: components["schemas"]["ImportChange"][];
+            /**
+             * @description Every section's revision after the import: pass them back with
+             *     the real import to refuse it if anything changed after a dry run.
+             */
+            revisions: {
+                [key: string]: number;
+            };
+            skipped: components["schemas"]["ImportSkip"][];
+            /**
+             * Format: int32
+             * @description Settings in the file that already have its value.
+             */
+            unchanged: number;
+        };
+        /** @description A key in the file that an import leaves alone. */
+        ImportSkip: {
+            /** @description The variable that sets it, for `set_by_environment`; null otherwise. */
+            env: string | null;
+            /** @description `section.field`, or the key as the file has it. */
+            key: string;
+            /**
+             * @description `unknown` (no such setting), `read_only`, `secret` (never imported)
+             *     or `set_by_environment`.
+             */
+            reason: string;
         };
         /**
          * @description `event: insights` (reserved: B11a publishes it every 30 s): the stage
@@ -2123,6 +2785,21 @@ export interface components {
         KeyScope: "search" | "torznab" | "feeds";
         /** @enum {string} */
         KeyStatus: "active" | "expired" | "revoked";
+        /**
+         * @description One label in use.
+         * @example {
+         *       "count": 3,
+         *       "label": "4K"
+         *     }
+         */
+        LabelCount: {
+            /**
+             * Format: int64
+             * @description Visible torrents carrying it.
+             */
+            count: number;
+            label: string;
+        };
         /**
          * @description `POST /login`.
          *     `Debug` redacts the secrets.
@@ -2370,6 +3047,34 @@ export interface components {
             tombstones: number;
         };
         /**
+         * @description A consequence the preview can put a number on, for the UI to format.
+         * @example {
+         *       "name": "sockets",
+         *       "value": 400
+         *     }
+         */
+        PreviewEstimate: {
+            /**
+             * @description What it measures: `sockets` (concurrent metadata fetches), `url`
+             *     (where the UI will be after a restart), `memory_mib`.
+             */
+            name: string;
+            value: unknown;
+        };
+        /**
+         * @description Something worth knowing before saving; it doesn't stop the save.
+         * @example {
+         *       "code": "search_stops",
+         *       "message": "Search stops after the restart, until you turn it back on."
+         *     }
+         */
+        PreviewWarning: {
+            /** @description A stable snake_case identifier. */
+            code: string;
+            /** @description A sentence for people. */
+            message: string;
+        };
+        /**
          * @description `GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.
          * @example {
          *       "allowed_users": [],
@@ -2508,6 +3213,129 @@ export interface components {
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        /** @description `POST /saved-searches`. */
+        SavedSearchCreate: {
+            /** @description Alert in the app about new hits. */
+            alert: boolean;
+            ast?: null | components["schemas"]["AstNode"];
+            /** @description 1–200 characters. */
+            name: string;
+            /** @description Start paused; false by default. */
+            paused?: boolean | null;
+            /**
+             * @description The query text. Send `q` or `ast`, not both; with neither it
+             *     matches everything.
+             */
+            q?: string | null;
+            /** @description Serve the hits as an RSS feed. */
+            rss: boolean;
+            /** @description As search's `sort`. */
+            sort?: string | null;
+        };
+        /**
+         * @description `PATCH /saved-searches/{id}`: any subset; absent leaves a field as it
+         *     is (the notifier's channels too).
+         */
+        SavedSearchPatch: {
+            /** @default null */
+            alert: boolean | null;
+            /** @default null */
+            ast: null | components["schemas"]["AstNode"];
+            /** @default null */
+            name: string | null;
+            /**
+             * @description Pausing and resuming is a toggle; resuming skips what was
+             *     indexed meanwhile.
+             * @default null
+             */
+            paused: boolean | null;
+            /**
+             * @description Send `q` or `ast`, not both.
+             * @default null
+             */
+            q: string | null;
+            /** @default null */
+            rss: boolean | null;
+            /**
+             * @description `null` opens with relevance.
+             * @default null
+             */
+            sort: string | null;
+        };
+        /**
+         * @description A saved search with what the list view shows beside it. The
+         *     notifier's channels and the watermark are not part of it.
+         * @example {
+         *       "alert": true,
+         *       "alerts": 4,
+         *       "ast": {
+         *         "op": "all"
+         *       },
+         *       "created_at": 1700000100,
+         *       "id": 1,
+         *       "last_alert_at": 1700000300,
+         *       "name": "New 4K releases",
+         *       "paused": false,
+         *       "q": "",
+         *       "rss": false,
+         *       "sort": "-discovered",
+         *       "unread": 2,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        SavedSearchView: {
+            /** @description Alert in the app about new hits. */
+            alert: boolean;
+            /**
+             * Format: int64
+             * @description Alerts recorded in all.
+             */
+            alerts: number;
+            ast: components["schemas"]["AstNode"];
+            /** Format: int64 */
+            created_at: number;
+            /** Format: int64 */
+            id: number;
+            /**
+             * Format: int64
+             * @description When the newest alert was recorded; null before the first.
+             */
+            last_alert_at: number | null;
+            name: string;
+            /** @description Skipped by the notifier; its channels are kept. */
+            paused: boolean;
+            /** @description The query text. */
+            q: string;
+            /** @description Serve the hits as an RSS feed. */
+            rss: boolean;
+            /** @description The sort the results open with; null = relevance. */
+            sort: string | null;
+            /** Format: int64 */
+            unread: number;
+            /** Format: int64 */
+            updated_at: number;
+        };
+        /**
+         * @description How a first page was ranked (`?explain=1`, architecture §8). Field
+         *     names are stable. Relevance is `phase1 + phase2.name + phase2.title`
+         *     (to float rounding); the other features and the priors aren't part of
+         *     ranking yet and are null.
+         */
+        SearchExplain: {
+            /** @description One per hit, in the hits' order. */
+            hits: components["schemas"]["ExplainHit"][];
+            /**
+             * @description `relevance`, or the field the hits are sorted by (`discovered`,
+             *     `size`, `files`), when no hit has relevance parts.
+             */
+            ranked_by: string;
+            /**
+             * @description Whether phase 2 re-ranked the phase-1 candidates: the query has
+             *     unfielded words.
+             */
+            two_phase: boolean;
+            weights: components["schemas"]["ExplainWeights"];
         };
         /**
          * @description One search result: the torrent summary (`docs/metrics.md` §7.1), its
@@ -2674,6 +3502,8 @@ export interface components {
         SearchResponse: {
             /** @description The query as the server understood it. */
             canonical: string;
+            /** @description Present only when asked for with `explain`. */
+            explain?: components["schemas"]["SearchExplain"];
             hits: components["schemas"]["SearchHit"][];
             limit: number;
             /**
@@ -2706,6 +3536,17 @@ export interface components {
              */
             total_approx: boolean;
         };
+        /** @description One section's patched fields. */
+        SectionPreview: {
+            fields: {
+                [key: string]: components["schemas"]["FieldPreview"];
+            };
+            /**
+             * Format: int64
+             * @description The section's revision now.
+             */
+            revision: number;
+        };
         /**
          * @description `GET /settings/{section}` and `PATCH /settings/{section}`: the
          *     section's effective values.
@@ -2729,6 +3570,7 @@ export interface components {
          *       "restart_required": [
          *         "timeout_secs"
          *       ],
+         *       "revision": 4,
          *       "section": "crawler"
          *     }
          */
@@ -2741,6 +3583,12 @@ export interface components {
              *     effect at the next restart.
              */
             restart_required: string[];
+            /**
+             * Format: int64
+             * @description Goes up by one with every save that changes the section. Send it
+             *     back as `if_revision` to refuse a save over someone else's.
+             */
+            revision: number;
             section: string;
         };
         /** @description One field of a section, for its form. */
@@ -2778,6 +3626,85 @@ export interface components {
             source: components["schemas"]["SettingSource"];
             /** @description Any JSON value, of the type the section's schema gives the field. */
             value: unknown;
+        };
+        /**
+         * @description `PATCH /settings` and `POST /settings/preview`: patches for several
+         *     sections, `{section: {field: value}}`, each as `PATCH
+         *     /settings/{section}` takes it. Saved all together or not at all.
+         */
+        SettingsBatch: Record<string, never>;
+        /** @description `PATCH /settings`: every patched section's new values. */
+        SettingsBatchValues: {
+            sections: {
+                [key: string]: components["schemas"]["SectionValues"];
+            };
+        };
+        SettingsErrorBody: {
+            /**
+             * @description A stable snake_case identifier to branch on.
+             * @example invalid_setting
+             */
+            code: string;
+            /** @description The field at fault. */
+            field?: string;
+            /** @description A sentence for people. It never repeats a secret's value. */
+            message: string;
+            /** @description The section at fault. */
+            section?: string;
+        };
+        /**
+         * @description A refused settings change: the API's error envelope, plus the
+         *     `section` at fault and, for `409 stale_revision`, the current values
+         *     of every section that changed meanwhile.
+         * @example {
+         *       "error": {
+         *         "code": "invalid_setting",
+         *         "field": "timeout_secs",
+         *         "message": "Must be from 1 to 120.",
+         *         "section": "crawler"
+         *       }
+         *     }
+         */
+        SettingsErrorEnvelope: {
+            /**
+             * @description On `409 stale_revision`: each stale section's values now, to merge
+             *     the edit with.
+             */
+            current?: {
+                [key: string]: components["schemas"]["SectionValues"];
+            };
+            error: components["schemas"]["SettingsErrorBody"];
+        };
+        /**
+         * @description `event: settings`: a section was saved (by any tab, device or API
+         *     client) and is now at `revision`. It carries no values: fetch them
+         *     with `GET /settings/{section}`.
+         * @example {
+         *       "revision": 4,
+         *       "section": "crawler"
+         *     }
+         */
+        SettingsEvent: {
+            /** Format: int64 */
+            revision: number;
+            section: string;
+        };
+        /** @description `POST /settings/import`: a file from `GET /settings/export`. */
+        SettingsImport: {
+            /**
+             * @description The 18+ confirmation, needed when the file turns on an adult
+             *     setting (as `PATCH /settings/content` needs it).
+             */
+            confirm_adult?: boolean;
+            /**
+             * @description The sections' revisions the dry run reported: the import is refused
+             *     with `409 stale_revision` if any changed since.
+             */
+            revisions?: {
+                [key: string]: number;
+            };
+            /** @description The file's text (TOML), at most 64 KiB. */
+            toml: string;
         };
         /**
          * @description `GET /settings`: every section, in display order.
@@ -2824,8 +3751,42 @@ export interface components {
          *     out keep their values; an unknown field is refused. `null` resets a
          *     field: its saved value is removed, and the `config.toml` value or the
          *     default applies again.
+         *
+         *     Two keys aren't fields and are never saved: `if_revision` (the
+         *     section's `revision` the edit started from; a save over a newer one is
+         *     refused with `409 stale_revision`) and a section's confirmations
+         *     (`content`'s `confirm_adult`).
          */
         SettingsPatch: Record<string, never>;
+        /**
+         * @description `POST /settings/preview`: what a `PATCH /settings` with the same body
+         *     would do, without saving it.
+         * @example {
+         *       "sections": {
+         *         "crawler": {
+         *           "fields": {
+         *             "intensity": {
+         *               "estimates": [
+         *                 {
+         *                   "name": "sockets",
+         *                   "value": 100
+         *                 }
+         *               ],
+         *               "restart_required": false,
+         *               "value": "low",
+         *               "warnings": []
+         *             }
+         *           },
+         *           "revision": 3
+         *         }
+         *       }
+         *     }
+         */
+        SettingsPreview: {
+            sections: {
+                [key: string]: components["schemas"]["SectionPreview"];
+            };
+        };
         /** @description One section: its fields and the JSON schema of its values. */
         SettingsSection: {
             fields: components["schemas"]["SettingField"][];
@@ -2837,6 +3798,46 @@ export interface components {
              */
             schema: Record<string, never>;
             section: string;
+        };
+        /** @description `POST /settings/test`: what to test, with the values on screen. */
+        SettingsTest: components["schemas"]["DownloadClientDraft"] & {
+            /** @enum {string} */
+            kind: "download_client";
+        };
+        /**
+         * @description Why a connection test failed.
+         * @example {
+         *       "code": "bad_credentials",
+         *       "message": "The client refused the user name or password."
+         *     }
+         */
+        SettingsTestFailure: {
+            /**
+             * @description `bad_credentials`, `banned`, `origin_refused`, `session_refused`,
+             *     `address_refused`, `unreachable`, `rejected`, `timeout`, `blocked`,
+             *     `invalid`, `protocol` or `unsupported`.
+             */
+            code: string;
+            /** @description A sentence for people; never the URL or a credential. */
+            message: string;
+        };
+        /**
+         * @description `POST /settings/test`: the result, shown beside the button. Nothing is
+         *     saved either way.
+         * @example {
+         *       "api_version": "2.9.3",
+         *       "error": null,
+         *       "ok": true,
+         *       "version": "v4.6.3"
+         *     }
+         */
+        SettingsTestResult: {
+            /** @description The client's API version, when it has one apart from its version. */
+            api_version: string | null;
+            error: null | components["schemas"]["SettingsTestFailure"];
+            ok: boolean;
+            /** @description The client's version, as it reports it; null unless `ok`. */
+            version: string | null;
         };
         /**
          * @description `POST /setup`: claims the instance.
@@ -3283,7 +4284,7 @@ export interface components {
          * @description What a client subscribes to with `?topics=`.
          * @enum {string}
          */
-        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights";
+        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings";
         /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
@@ -3396,6 +4397,165 @@ export interface components {
          * @enum {string}
          */
         Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
+        /**
+         * @description `GET /user-items/{hash}`: the marks and the collections it is in.
+         * @example {
+         *       "collections": [
+         *         1
+         *       ],
+         *       "created_at": 1700000100,
+         *       "favourite": true,
+         *       "hash": "0123456789abcdef0123456789abcdef01234567",
+         *       "hidden": false,
+         *       "labels": [
+         *         "4K"
+         *       ],
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        UserItemDetail: {
+            /** @description Ids of the collections the torrent is in ("In collections"). */
+            collections: number[];
+            /** Format: int64 */
+            created_at: number | null;
+            favourite: boolean;
+            hash: string;
+            hidden: boolean;
+            labels: string[];
+            note: string | null;
+            /** Format: int64 */
+            updated_at: number | null;
+        };
+        /**
+         * @description `PATCH /user-items/{hash}`: what to change. Absent leaves a mark as
+         *     it is.
+         */
+        UserItemPatch: {
+            /** @default null */
+            favourite: boolean | null;
+            /**
+             * @description Your own Hide mark.
+             * @default null
+             */
+            hidden: boolean | null;
+            /**
+             * @description Replaces the labels (at most 32, 1–64 characters each); an empty
+             *     list removes them.
+             * @default null
+             */
+            labels: string[] | null;
+            /**
+             * @description 1–4,000 characters; `null` removes the note.
+             * @default null
+             */
+            note: string | null;
+        };
+        /**
+         * @description One marked torrent: your marks and the torrent beside them.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "favourite": true,
+         *       "hash": "0123456789abcdef0123456789abcdef01234567",
+         *       "hidden": false,
+         *       "labels": [
+         *         "4K"
+         *       ],
+         *       "note": "Watch with subs",
+         *       "torrent": {
+         *         "adult_kind": null,
+         *         "completed": null,
+         *         "composition": [],
+         *         "content_type": "movie",
+         *         "discovered_at": 1700000000,
+         *         "files": 1,
+         *         "flags": [
+         *           "single_file"
+         *         ],
+         *         "hash": "0123456789abcdef0123456789abcdef01234567",
+         *         "hash_v2": null,
+         *         "id": 1,
+         *         "junk_reasons": [],
+         *         "junk_score": 0,
+         *         "last_scrape_at": null,
+         *         "leechers": null,
+         *         "metadata_at": 1700000001,
+         *         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+         *         "piece_len": 65536,
+         *         "resolved_via": null,
+         *         "score": 0,
+         *         "seeders": null,
+         *         "size": 8589934592,
+         *         "title": "The Dark Knight",
+         *         "trackers_checked": null,
+         *         "trackers_reporting": null
+         *       },
+         *       "updated_at": 1700000200
+         *     }
+         */
+        UserItemRow: {
+            /** Format: int64 */
+            created_at: number;
+            favourite: boolean;
+            /** @description 40 hex digits. */
+            hash: string;
+            /** @description Your own Hide mark. */
+            hidden: boolean;
+            /** @description Sorted, unique, case-sensitive. */
+            labels: string[];
+            note: string | null;
+            torrent: components["schemas"]["SearchHit"];
+            /** Format: int64 */
+            updated_at: number;
+        };
+        /**
+         * @description `GET /user-items`: marked torrents, newest change first.
+         * @example {
+         *       "items": [],
+         *       "limit": 50,
+         *       "next_cursor": null
+         *     }
+         */
+        UserItemsResponse: {
+            /** @description Only torrents search would show (§20.3, §20.9). */
+            items: components["schemas"]["UserItemRow"][];
+            limit: number;
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description A torrent's marks. Without any, `favourite` and `hidden` are false,
+         *     `labels` is empty and the rest is null.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "favourite": true,
+         *       "hash": "0123456789abcdef0123456789abcdef01234567",
+         *       "hidden": false,
+         *       "labels": [
+         *         "4K"
+         *       ],
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        UserMarks: {
+            /**
+             * Format: int64
+             * @description Null when there are no marks.
+             */
+            created_at: number | null;
+            favourite: boolean;
+            /** @description 40 hex digits. */
+            hash: string;
+            hidden: boolean;
+            labels: string[];
+            note: string | null;
+            /**
+             * Format: int64
+             * @description Null when there are no marks.
+             */
+            updated_at: number | null;
+        };
     };
     responses: {
         /** @description Any failure: the error envelope. `error.code` is stable; branch on it. */
@@ -3566,6 +4726,325 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClassRuleRemoved"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCollections: {
+        parameters: {
+            query?: {
+                /** @description Count torrents a filter rule hid too (§20.3). */
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionCreate"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `invalid_value`: the name or note isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCollection: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The previous response's `next_after`: how many shown entries to
+                 *     skip.
+                 */
+                after?: number;
+                /** @description Include torrents a filter rule hid (§20.3). */
+                hidden?: boolean;
+                /** @description Entries per page: 1–200, 50 by default. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionPage"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: the name or note isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addToCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HashList"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`, or `torrent_not_found` with `field: "hashes"`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: not 1–500 hashes. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeFromCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HashList"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: not 1–500 hashes. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    reorderCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HashList"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_order`: the list isn't exactly the entries. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: not 1–500 hashes. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4400,6 +5879,186 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listSavedSearches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedSearchCreate"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"];
+                };
+            };
+            /** @description `query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: the name or query isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedSearchPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"];
+                };
+            };
+            /** @description `query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: the name or query isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     searchGet: {
         parameters: {
             query?: {
@@ -4417,6 +6076,8 @@ export interface operations {
                 cursor?: string;
                 /** @description `1` or `true`: count every match exactly, within a time budget. */
                 exact?: boolean;
+                /** @description `1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits. */
+                explain?: boolean;
             };
             header?: never;
             path?: never;
@@ -4506,6 +6167,265 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    patchSettingsBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsBatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBatchValues"];
+                };
+            };
+            /** @description `unknown_field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_section`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `read_only`, `set_by_environment`, or `stale_revision` with each stale section's `current` values. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_setting`, `adult_confirmation_required`. Nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportSettings: {
+        parameters: {
+            query?: {
+                /** @description Include the `preferences` section (off by default). */
+                preferences?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as an attachment (`lodestar-settings.toml`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/toml": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    importSettings: {
+        parameters: {
+            query?: {
+                /** @description Only report what the import would change (the diff); save nothing. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsImport"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReport"];
+                };
+            };
+            /** @description `stale_revision`: a section changed since the dry run's `revisions`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `import_too_large`: over 64 KiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_import` (not an export file), or a value `PATCH /settings` refuses (`invalid_setting`, `adult_confirmation_required`). Nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsBatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsPreview"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description As `PATCH /settings`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    testSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsTest"];
+            };
+        };
+        responses: {
+            /** @description The test ran; `ok` says whether it passed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsTestResult"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not `application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `bad_body`: not a test this endpoint runs. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `tests_busy`: four tests are running already; try again shortly. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -4524,6 +6444,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SectionValues"];
+                };
+            };
+            /** @description `unknown_section`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4553,13 +6482,40 @@ export interface operations {
                     "application/json": components["schemas"]["SectionValues"];
                 };
             };
-            /** @description `adult_confirmation_required`: a patch turning on an adult setting without `"confirm_adult": true`; nothing is saved. */
+            /** @description `unknown_field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `unknown_section`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `read_only`, `set_by_environment`, or `stale_revision` with the section's `current` values. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_setting`; `adult_confirmation_required`: turning on an adult setting without `"confirm_adult": true`. Nothing is saved. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4746,6 +6702,183 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SiblingsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserItems: {
+        parameters: {
+            query?: {
+                /** @description Only torrents you marked as a favourite. */
+                favourite?: boolean;
+                /**
+                 * @description Only torrents you marked Hide (your own mark, not a filter
+                 *     rule's).
+                 */
+                hidden_mark?: boolean;
+                /** @description Only torrents carrying this label. */
+                label?: string;
+                /** @description Include torrents a filter rule hid (§20.3), as in search. */
+                hidden?: boolean;
+                /** @description Rows per page: 1–200, 50 by default. */
+                limit?: number;
+                /** @description The previous response's `next_cursor`. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserItemsResponse"];
+                };
+            };
+            /** @description `bad_cursor`: a cursor this server didn't give out. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listLabels: {
+        parameters: {
+            query?: {
+                /** @description Count torrents a filter rule hid too (§20.3). */
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelCount"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getUserItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserItemDetail"];
+                };
+            };
+            /** @description `torrent_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    clearUserItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `torrent_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchUserItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserItemPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserMarks"];
+                };
+            };
+            /** @description `torrent_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: a label or the note isn't allowed (`field` names which). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
