@@ -1041,10 +1041,11 @@
    "notes": "01:15 owner approved process change (verified \"Yes, I approve this change\"); PR now ~190 lines (merge-guard hook, steward skill, ci-ok, README rules, \u00a72.20/2.21 + code-signing deferral). Fresh reviewer started. Numbering conflict with #107 \u00a72.20/21. Before merge: create ~/.lodestar-runner in runner container."
   },
   "S-snapshots": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
-   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots",
-   "session": "session_01KNQRrRWSAMYLC5vJRhERho"
+   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots | 01:31 PR #109 f596b13 ready; reviewer started (security pass).",
+   "session": "session_01KNQRrRWSAMYLC5vJRhERho",
+   "pr": 109
   },
   "runner-delegated": {
    "status": "approved",
