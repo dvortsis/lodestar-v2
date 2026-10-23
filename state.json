@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:40:44Z",
+ "updated_at": "2026-10-23T06:44:57Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -903,13 +903,13 @@
    "notes": "from #86"
   },
   "B-log1": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01XozmKRGVgpR4VBVHX678yW",
-   "pr": null,
+   "pr": 119,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:38:50Z heartbeat: fixing self-review items, PR not yet open"
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:38:50Z heartbeat: fixing self-review items, PR not yet open | 2026-10-23T06:44:57Z PR #119 head 7aa1fe6 ready (~9.4k lines); fresh + security reviewers launched. Asks: add B-log1b to slices.yaml, rule on shared test-assertion edits, flag \u00a72.19 refinements"
   },
   "B-log2": {
    "status": "pending",
