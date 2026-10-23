@@ -49,6 +49,7 @@ const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"
         (name = "crawler", description = "Stats, the crawler's controls, sources and the network check (§9, §10.9, §18.8)."),
         (name = "events", description = "The live server-sent event stream (§9)."),
         (name = "library", description = "Your marks, collections and saved searches (§7, §10.5, §10.8)."),
+        (name = "logs", description = "What gets logged: events, data kinds and outputs (§12.1)."),
         (name = "meta", description = "This document."),
     ),
     modifiers(&Envelope)
@@ -80,6 +81,7 @@ pub fn document() -> Doc {
     doc.merge(crate::jobs::ApiDoc::openapi());
     doc.merge(crate::system::ApiDoc::openapi());
     doc.merge(crate::alerts::ApiDoc::openapi());
+    doc.merge(crate::logs::ApiDoc::openapi());
     finish(&mut doc);
     doc
 }
