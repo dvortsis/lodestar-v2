@@ -945,6 +945,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * History, newest first: the ring buffer, then the log files (the
+         *     current one read backwards, then the rotated ones by their time).
+         *     Lines are shown through the data kinds in force now: a field whose kind
+         *     is off reads `[hidden]`, and lines of an opt-in that's off are left out.
+         *     A page cut short by the read cap says `more` with a cursor.
+         */
+        get: operations["getLogHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/logs/catalog": {
         parameters: {
             query?: never;
@@ -959,6 +982,31 @@ export interface paths {
          *     session only.
          */
         get: operations["getLogCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live log.
+         * @description Each frame is `id: <epoch>-<seq>` (none on `resync` and `purge`),
+         *     `event: line | resync | purge` and `data:` its payload (`LogFrame`).
+         *     Send the last id back as `Last-Event-ID` (`EventSource` does) or
+         *     `after` to resume without a gap while it's still in the ring. A comment
+         *     every 15 s keeps the connection open, and the session is checked again
+         *     each time; `retry:` is 5 s.
+         */
+        get: operations["getLogStream"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3849,6 +3897,53 @@ export interface components {
             /** @description Can't be turned off. */
             required: boolean;
         };
+        /** @description One field of a log line. */
+        LogField: {
+            kind: components["schemas"]["LogFieldKind"];
+            name: string;
+            value: components["schemas"]["LogValue"];
+        };
+        /**
+         * @description What a field of a log line carries: a data kind, an error (its kind,
+         *     and its message only for plain error types), a label the code wrote, or
+         *     a field of a line the code didn't type.
+         * @enum {string}
+         */
+        LogFieldKind: "hash" | "name" | "path" | "url" | "query" | "client" | "peer" | "size" | "peer_activity" | "filter_changes" | "error" | "label" | "untyped";
+        /**
+         * @description One frame of `GET /logs/stream`: `event:` names the variant, `data:`
+         *     holds its payload.
+         */
+        LogFrame: {
+            data: components["schemas"]["LogLine"];
+            /** @enum {string} */
+            event: "line";
+        } | {
+            data: components["schemas"]["LogResync"];
+            /** @enum {string} */
+            event: "resync";
+        } | {
+            data: components["schemas"]["LogPurge"];
+            /** @enum {string} */
+            event: "purge";
+        };
+        /** @description `GET /logs`: a page of history, newest first. */
+        LogHistory: {
+            lines: components["schemas"]["LogLine"][];
+            /**
+             * @description More may be older than this page (a page cut short by the read cap
+             *     says so too).
+             */
+            more: boolean;
+            /** @description Pass back as `cursor` for the next page; null at the end. */
+            next_cursor: string | null;
+            /**
+             * Format: int64
+             * @description Lines skipped because they were over 1 MiB or not the file's JSON
+             *     shape.
+             */
+            unreadable: number;
+        };
         /** @description One data kind and its switch. */
         LogKind: {
             /** @description On in the Private preset. */
@@ -3880,6 +3975,32 @@ export interface components {
          * @enum {string}
          */
         LogLevel: "error" | "warn" | "info" | "debug" | "trace";
+        /**
+         * @description One log line, as the live log, the history and the stream show it:
+         *     through the data kinds in force now.
+         */
+        LogLine: {
+            component: components["schemas"]["LogComponent"];
+            /** @description The catalogued event's id; null for a line the code didn't type. */
+            event: string | null;
+            /** @description In the order written. */
+            fields: components["schemas"]["LogField"][];
+            /** @description `<epoch>-<seq>`; null for a line an older build wrote. */
+            id: string | null;
+            level: components["schemas"]["LogLevel"];
+            msg: string;
+            opt_in: null | components["schemas"]["LogDataKind"];
+            repeated: null | components["schemas"]["LogRepeated"];
+            /** @description The `tracing` target of a line the code didn't type. */
+            target: string | null;
+            /**
+             * @description A value was cut to fit the ring's per-line limit (16 KiB); the
+             *     file has it whole.
+             */
+            truncated: boolean;
+            /** @description RFC 3339, UTC, with milliseconds. */
+            ts: string;
+        };
         /** @description One output's state. */
         LogOutput: {
             /** @description `private` or `file` (the console's data kinds). */
@@ -3907,6 +4028,55 @@ export interface components {
              */
             verbosity: string;
         };
+        /**
+         * @description `event: purge`: data kinds turned off. In lines up to `through`, set
+         *     those kinds' values to `[hidden]`, and drop lines whose `opt_in` is
+         *     listed.
+         */
+        LogPurge: {
+            kinds: components["schemas"]["LogDataKind"][];
+            /** @description The id of the newest line it applies to. */
+            through: string;
+        };
+        /**
+         * @description A fold summary: identical lines that came within the window after the
+         *     first one, counted rather than written.
+         */
+        LogRepeated: {
+            /** Format: int64 */
+            count: number;
+            /** @description The id of the first line, when the output gave it one. */
+            first: string | null;
+            /**
+             * Format: int64
+             * @description The window, in seconds.
+             */
+            seconds: number;
+        };
+        /**
+         * @description `event: resync`: continue from the newest lines; reload `GET /logs`
+         *     for what was skipped.
+         */
+        LogResync: {
+            /**
+             * Format: int64
+             * @description Lines that left the ring unseen (whether they matched is unknown);
+             *     `lagged` only.
+             */
+            evicted: number | null;
+            reason: components["schemas"]["LogResyncReason"];
+            /**
+             * Format: int64
+             * @description Matching lines skipped, still readable through `GET /logs`;
+             *     `lagged` only.
+             */
+            skipped: number | null;
+        };
+        /**
+         * @description Why the live log asks the client to catch up.
+         * @enum {string}
+         */
+        LogResyncReason: "restarted" | "expired" | "malformed" | "lagged";
         /** @description A timed verbosity ("Detailed for 30 minutes"). */
         LogTemporary: {
             /**
@@ -3917,6 +4087,11 @@ export interface components {
             /** @description `detailed` or `everything`… */
             verbosity: string;
         };
+        /**
+         * @description A field's value as shown: text (`[hidden]`, `ref:…` or the value), a
+         *     number or a flag.
+         */
+        LogValue: boolean | number | string;
         /**
          * @description `POST /login`.
          *     `Debug` redacts the secrets.
@@ -7953,6 +8128,79 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getLogHistory: {
+        parameters: {
+            query?: {
+                /** @description The least severe level shown (default trace). */
+                level?: string;
+                /** @description A comma-separated list of components; all when absent. */
+                components?: string;
+                /** @description A case-insensitive substring of the line as shown, at most 200 characters. */
+                text?: string;
+                /** @description RFC 3339 UTC: lines at or after it. */
+                since?: string;
+                /** @description RFC 3339 UTC: lines at or before it. */
+                until?: string;
+                /** @description Lines per page: 1 to 1,000, default 200. */
+                limit?: number;
+                /** @description The previous page's `next_cursor`, with the same filters. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogHistory"];
+                };
+            };
+            /** @description A bad parameter (`bad_parameter`, `unknown_component`) or a cursor from other filters (`bad_cursor`), with `field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Log files are being read already (`logs_busy`). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getLogCatalog: {
         parameters: {
             query?: never;
@@ -7968,6 +8216,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogCatalog"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLogStream: {
+        parameters: {
+            query?: {
+                /** @description The least severe level shown: error, warn, info, debug or trace (default). */
+                level?: string;
+                /** @description A comma-separated list of components (`LogComponent`); all when absent. */
+                components?: string;
+                /** @description A case-insensitive substring of the line as shown, at most 200 characters. */
+                text?: string;
+                /** @description The id to resume after, when there's no `Last-Event-ID`. */
+                after?: string;
+            };
+            header?: {
+                /** @description The last `id:` received; wins over `after`. */
+                "Last-Event-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stream: one `LogFrame` per frame (`event:` names the variant, `data:` holds its payload). */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `no`, so a proxy doesn't buffer it. */
+                    "X-Accel-Buffering"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["LogFrame"];
+                };
+            };
+            /** @description A bad filter (`bad_parameter`, `unknown_component`), with `field`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`); keys and feed tokens can't read logs. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many log streams, in all or for this session (`too_many_streams`). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here, or shutting down (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
