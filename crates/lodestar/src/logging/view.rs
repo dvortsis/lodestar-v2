@@ -1,7 +1,6 @@
 //! What the API shows of a line (architecture §12.1): one function masks
-//! a file line for history (and, in B-log2's second part, a redacted
-//! download), taking the mask; another shows a ring entry through the mask
-//! in force now.
+//! a file line for history and for a redacted download alike, taking the
+//! mask; another shows a ring entry through the mask in force now.
 //!
 //! **Masking a file line** ([`file_line`]):
 //! - a field whose kind isn't in the mask reads `[hidden]` (a hash too; a
@@ -21,13 +20,22 @@ use lodestar_api::logs::{
 };
 use lodestar_log::url::scrub_text;
 use lodestar_log::{Component, Kind, Level, Mask};
-use serde_json::Value as Json;
+use serde_json::{Map, Value as Json};
 
 use super::entry::{
     self, ENTRY_OVERHEAD, Entry, FIELD_OVERHEAD, FieldType, HIDDEN, MAX_ENTRY, REDACTED, Shown,
     Source, redact_setup_token,
 };
-use super::format::Stamp;
+use super::format::{Stamp, json_line, one_line, quote, upper};
+
+/// What a redacted download may show: sizes. Stricter than Private:
+/// client addresses go too, since a shared log mustn't carry the admin's
+/// own addresses (runner's decision, §2.19).
+pub const REDACT: Mask = Mask(Kind::Size.bit());
+
+/// What a line in a file that doesn't parse becomes in a redacted
+/// download.
+pub const UNREADABLE: &str = "[unreadable line]";
 
 pub fn level(l: Level) -> LogLevel {
     match l {
@@ -374,12 +382,113 @@ pub fn file_line(bytes: &[u8], mask: Option<Mask>) -> Result<Option<LogLine>, ()
     }))
 }
 
+fn json_value(v: &LogValue) -> Json {
+    match v {
+        LogValue::Text(t) => Json::from(t.as_str()),
+        LogValue::Number(n) => Json::from(*n),
+        LogValue::Signed(n) => Json::from(*n),
+        LogValue::Flag(b) => Json::from(*b),
+    }
+}
+
+fn kind_name(k: LogFieldKind) -> &'static str {
+    match k {
+        LogFieldKind::Hash => "hash",
+        LogFieldKind::Name => "name",
+        LogFieldKind::Path => "path",
+        LogFieldKind::Url => "url",
+        LogFieldKind::Query => "query",
+        LogFieldKind::Client => "client",
+        LogFieldKind::Peer => "peer",
+        LogFieldKind::Size => "size",
+        LogFieldKind::PeerActivity => "peer_activity",
+        LogFieldKind::FilterChanges => "filter_changes",
+        LogFieldKind::Error => "error",
+        LogFieldKind::Label => "label",
+        LogFieldKind::Untyped => "untyped",
+    }
+}
+
+fn level_name(l: LogLevel) -> &'static str {
+    level_of(l).name()
+}
+
+/// A line in the file's JSON shape (a redacted download's).
+pub fn to_json(l: &LogLine) -> String {
+    let mut fields = Map::new();
+    for f in &l.fields {
+        let mut v = Map::new();
+        v.insert("kind".into(), kind_name(f.kind).into());
+        v.insert("value".into(), json_value(&f.value));
+        fields.insert(f.name.clone(), Json::Object(v));
+    }
+    let mut m = Map::new();
+    if let Some(id) = &l.id {
+        m.insert("id".into(), id.as_str().into());
+    }
+    m.insert("ts".into(), l.ts.as_str().into());
+    m.insert("level".into(), level_name(l.level).into());
+    m.insert("component".into(), component_of(l.component).name().into());
+    if let Some(e) = &l.event {
+        m.insert("event".into(), e.as_str().into());
+    }
+    if let Some(t) = &l.target {
+        m.insert("target".into(), t.as_str().into());
+    }
+    m.insert("msg".into(), l.msg.as_str().into());
+    m.insert("fields".into(), Json::Object(fields));
+    if let Some(r) = &l.repeated {
+        let mut rep = Map::new();
+        rep.insert("count".into(), r.count.into());
+        rep.insert("seconds".into(), r.seconds.into());
+        if let Some(f) = &r.first {
+            rep.insert("first".into(), f.as_str().into());
+        }
+        m.insert("repeated".into(), Json::Object(rep));
+    }
+    json_line(&Json::Object(m))
+}
+
+/// A line as the console's text format shows it, `repeated` as its
+/// suffix; control and bidirectional characters escaped.
+pub fn to_text(l: &LogLine) -> String {
+    use std::fmt::Write as _;
+    let source = l.event.as_deref().or(l.target.as_deref()).unwrap_or("");
+    let mut line = format!(
+        "{} {} {}: {}",
+        one_line(&l.ts),
+        upper(level_of(l.level)),
+        one_line(source),
+        one_line(&l.msg)
+    );
+    for f in &l.fields {
+        let v = match &f.value {
+            LogValue::Text(t) => t.clone(),
+            LogValue::Number(n) => n.to_string(),
+            LogValue::Signed(n) => n.to_string(),
+            LogValue::Flag(b) => b.to_string(),
+        };
+        let _ = write!(line, " {}={}", one_line(&f.name), quote(&v));
+    }
+    if let Some(r) = &l.repeated {
+        let _ = write!(
+            line,
+            " {}",
+            super::entry::repeated_suffix(r.count, r.seconds)
+        );
+    }
+    line
+}
+
+/// A line that didn't parse, in text: escaped, never acted on by a
+/// terminal.
+pub fn raw_text(bytes: &[u8]) -> String {
+    one_line(&String::from_utf8_lossy(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// What part 2's redacted downloads show: sizes only.
-    const REDACT: Mask = Mask(Kind::Size.bit());
 
     fn line(fields: &str, event: &str) -> Vec<u8> {
         format!(
@@ -475,7 +584,7 @@ mod tests {
         let l = file_line(untyped.as_bytes(), Some(REDACT))
             .unwrap()
             .unwrap();
-        let text = serde_json::to_string(&l).unwrap();
+        let text = to_text(&l);
         assert!(
             !text.contains("pw") && !text.contains("passkey=abc"),
             "{text}"
@@ -524,5 +633,21 @@ mod tests {
         ] {
             assert_eq!(file_line(bad, Some(REDACT)), Err(()), "{}", String::from_utf8_lossy(bad));
         }
+    }
+
+    #[test]
+    fn text_escapes_controls_and_bidi() {
+        let raw = line(
+            "\"what\":{\"kind\":\"label\",\"value\":\"a\\u001b[31mred\u{202e}gpj.exe\"}",
+            r#""event":"test.x""#,
+        );
+        let l = file_line(&raw, None).unwrap().unwrap();
+        let t = to_text(&l);
+        assert!(!t.contains('\u{1b}') && !t.contains('\u{202e}'), "{t}");
+        assert!(t.contains("\\u{1b}") && t.contains("\\u{202e}"), "{t}");
+        assert!(!raw_text(b"x\x1b[2Jy\nz").contains('\u{1b}'));
+        // The JSON shape round-trips.
+        let back = file_line(to_json(&l).as_bytes(), None).unwrap().unwrap();
+        assert_eq!(back, l);
     }
 }
