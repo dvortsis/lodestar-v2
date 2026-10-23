@@ -29,10 +29,12 @@ mod discover;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod extract;
 mod facets;
 pub mod filters;
 pub mod insights;
+pub mod jobs;
 pub mod keys;
 pub mod log_events;
 pub mod logs;
@@ -100,6 +102,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(user_items::routes())
         .merge(collections::routes())
         .merge(saved::routes())
+        .merge(jobs::routes())
         .merge(logs::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
