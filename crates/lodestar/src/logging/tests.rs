@@ -275,3 +275,153 @@ fn turning_the_file_off_and_on() {
     record_all(&rt);
     assert!(file_text(dir.path()).contains("test.everything"));
 }
+
+/// The workspace's root.
+fn workspace_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
+}
+
+/// Every workspace member's crate name (`package.name`, `-` as `_`):
+/// `crates/*` and the bench.
+fn workspace_crates(root: &std::path::Path) -> Vec<String> {
+    let mut manifests: Vec<_> = std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .map(|e| e.unwrap().path().join("Cargo.toml"))
+        .filter(|p| p.is_file())
+        .collect();
+    manifests.push(root.join("bench/Cargo.toml"));
+    let mut names: Vec<String> = manifests
+        .iter()
+        .map(|p| {
+            let text = std::fs::read_to_string(p).unwrap();
+            let package = text
+                .split("\n[")
+                .find(|s| s.starts_with("package]") || s.starts_with("[package]"))
+                .unwrap_or_else(|| panic!("{}: no [package]", p.display()));
+            let name = package
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once('=')?;
+                    (k.trim() == "name").then(|| v.trim().trim_matches('"').to_string())
+                })
+                .unwrap_or_else(|| panic!("{}: no package name", p.display()));
+            name.replace('-', "_")
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// What `TARGETS` misses or names wrongly against the workspace's crates.
+fn targets_against(crates: &[String], targets: &[(&str, Component)]) -> Vec<String> {
+    let krate = |t: &str| t.split("::").next().unwrap_or(t).to_string();
+    let mut problems: Vec<String> = crates
+        .iter()
+        .filter(|c| !targets.iter().any(|(t, _)| *t == c.as_str()))
+        .map(|c| format!("{c}: no TARGETS entry"))
+        .collect();
+    problems.extend(
+        targets
+            .iter()
+            .filter(|(t, _)| !crates.contains(&krate(t)))
+            .map(|(t, _)| format!("{t}: in TARGETS, but no crate has that name")),
+    );
+    problems
+}
+
+#[test]
+fn targets_cover_every_crate() {
+    let crates = workspace_crates(&workspace_root());
+    assert!(crates.iter().any(|c| c == "lodestar_update"), "{crates:?}");
+    assert!(crates.iter().any(|c| c == "lodestar_bench"), "{crates:?}");
+    assert_eq!(targets_against(&crates, TARGETS), Vec::<String>::new());
+    // A deliberately missing entry, and one naming no crate, both fail.
+    let short: Vec<_> = TARGETS
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t != "lodestar_update")
+        .chain([("lodestar_gone::x", Component::System)])
+        .collect();
+    let got = targets_against(&crates, &short);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(got[0].starts_with("lodestar_update"), "{got:?}");
+}
+
+/// The catalogue names declared in `src` at the top level of a module
+/// (`catalogue! {` unindented: a test's own catalogue sits inside its
+/// test module, indented).
+fn declared_catalogues(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut lines = src.lines();
+    while let Some(line) = lines.next() {
+        let top = line.starts_with("catalogue!") || line.starts_with("lodestar_log::catalogue!");
+        if !top {
+            continue;
+        }
+        if let Some(name) = lines.by_ref().map(str::trim).find(|l| !l.is_empty()) {
+            out.push(name.trim_end_matches(';').trim_matches('"').to_string());
+        }
+    }
+    out
+}
+
+fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            rust_files(&p, out);
+        } else if p.extension().is_some_and(|x| x == "rs") {
+            out.push(p);
+        }
+    }
+}
+
+/// Catalogues declared in `declared` that `registered` doesn't list.
+fn unregistered(declared: &[(String, String)], registered: &[&Catalogue]) -> Vec<String> {
+    declared
+        .iter()
+        .filter(|(name, _)| !registered.iter().any(|c| c.name == name))
+        .map(|(name, file)| format!("{file}: catalogue {name:?} isn't in logging::CATALOGUES"))
+        .collect()
+}
+
+#[test]
+fn every_declared_catalogue_is_registered() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for e in std::fs::read_dir(root.join("crates")).unwrap().flatten() {
+        rust_files(&e.path().join("src"), &mut files);
+    }
+    rust_files(&root.join("bench/src"), &mut files);
+    let mut declared = Vec::new();
+    for f in files {
+        let rel = f.strip_prefix(&root).unwrap().display().to_string();
+        // `lodestar-log`'s own docs and tests declare examples.
+        if rel.starts_with("crates/log/") {
+            continue;
+        }
+        for name in declared_catalogues(&std::fs::read_to_string(&f).unwrap()) {
+            declared.push((name, rel.clone()));
+        }
+    }
+    assert!(
+        declared.iter().any(|(n, _)| n == "lodestar-pipeline"),
+        "{declared:?}"
+    );
+    assert_eq!(unregistered(&declared, CATALOGUES), Vec::<String>::new());
+    // A catalogue left out of the list fails.
+    let short: Vec<&Catalogue> = CATALOGUES
+        .iter()
+        .copied()
+        .filter(|c| c.name != "lodestar-search")
+        .collect();
+    let got = unregistered(&declared, &short);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].contains("lodestar-search"), "{got:?}");
+}

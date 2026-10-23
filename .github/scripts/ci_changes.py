@@ -11,7 +11,8 @@ request gets:
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
-  crate that job builds, following the workspace's path dependencies.
+  crate that job builds, following the workspace's path dependencies (the
+  logging bench: `lodestar-log` or the binary's `logging/` runtime).
 
 Prints `key=value` lines for $GITHUB_OUTPUT. Usage:
     ci_changes.py <event> <base-sha> <head-sha> [<labels as JSON>]
@@ -115,7 +116,7 @@ def main() -> None:
     out: dict[str, str] = {}
 
     if event != "pull_request" or "full-ci" in labels:
-        out.update(rust="true", bench="true", filter="true", importer="true")
+        out.update(rust="true", bench="true", filter="true", importer="true", log_bench="true")
         out["fuzz"] = json.dumps(FUZZ)
         out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest", "macos-latest"])
         emit(out)
@@ -148,6 +149,10 @@ def main() -> None:
     out["bench"] = str(needs({"lodestar-bench"})).lower()
     out["filter"] = str(needs({"lodestar-filter"}, tested=True)).lower()
     out["importer"] = str(needs({"lodestar-sources-importers"}, tested=True)).lower()
+    # The logging hot-path bench: the log crate, or the binary's runtime.
+    out["log_bench"] = str(
+        needs({"lodestar-log"}) or any(f.startswith("crates/lodestar/src/logging/") for f in changed)
+    ).lower()
     # A change under fuzz/ (a target, the harness, its lockfile) runs them all.
     fuzz_all = "lodestar-fuzz" in touched
     out["fuzz"] = json.dumps([t for t in FUZZ if fuzz_all or needs(fuzz_roots(t))])
