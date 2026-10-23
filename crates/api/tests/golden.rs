@@ -226,6 +226,7 @@ fn fixture() -> Fixture {
             filters: Some(api.clone()),
             settings: None,
             ops: None,
+            user_data: None,
             adult: Default::default(),
         }),
     );
@@ -1162,6 +1163,7 @@ async fn filters_without_an_index_or_filters() {
                 filters,
                 settings: None,
                 ops: None,
+                user_data: None,
                 adult: Default::default(),
             }),
         )
