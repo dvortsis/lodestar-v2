@@ -477,7 +477,7 @@
       "pr": 137,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched | 2026-10-23T17:55:35Z review FIX: own() ignores dynamic imports (reports 591 B; real ~22.7 KB). Rule: entries = measured+10% (<=45 KB \u00a710.1), 15 KB target w/ reason; refinements accepted; polish; merge main"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched | 2026-10-23T17:55:35Z review FIX: own() ignores dynamic imports (reports 591 B; real ~22.7 KB). Rule: entries = measured+10% (<=45 KB \u00a710.1), 15 KB target w/ reason; refinements accepted; polish; merge main | 2026-10-23T18:04:25Z fixes committed locally (own() dynamic closure, Compare 22.74/25 KB); lhci 102,421 with main merged -> waits for #132 then push"
     },
     "S-discover": {
       "status": "review",
@@ -504,7 +504,7 @@
       "pr": 135,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:14:18Z blocked draft #135: chunk 56.75 KB vs 45 (incl uPlot). Runner: not raising (\u00a710.1); breakdown, cut dup/heavy imports, lazy below-fold; if first view+uPlot<=45 but total over -> owner question. Assigned mock edits in 4 specs; DOM order = narrow order. Fixture 7d new_searchable 172 vs 409: Opus investigation launched | 2026-10-23T17:34:45Z OWNER decision: \u00a710.1 Insights 45 KB counts first view (JS+CSS before charts; 27.1 KB); uPlot + below-fold lazy; runner total cap 65 KB. Blocking: Insights runtime hoisted into /search shared chunks (Lighthouse 102,716 > 102,400) - must restore search to main's numbers"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:14:18Z blocked draft #135: chunk 56.75 KB vs 45 (incl uPlot). Runner: not raising (\u00a710.1); breakdown, cut dup/heavy imports, lazy below-fold; if first view+uPlot<=45 but total over -> owner question. Assigned mock edits in 4 specs; DOM order = narrow order. Fixture 7d new_searchable 172 vs 409: Opus investigation launched | 2026-10-23T17:34:45Z OWNER decision: \u00a710.1 Insights 45 KB counts first view (JS+CSS before charts; 27.1 KB); uPlot + below-fold lazy; runner total cap 65 KB. Blocking: Insights runtime hoisted into /search shared chunks (Lighthouse 102,716 > 102,400) - must restore search to main's numbers | 2026-10-23T18:04:25Z #135 out of draft, CI green at 848223d; fresh review launched"
     },
     "S-insights-2": {
       "status": "pending",
@@ -1141,7 +1141,7 @@
     },
     "fix-fixture-rollups": {
       "status": "running",
-      "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests)"
+      "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests) | 2026-10-23T18:04:25Z committed locally 1943fde on fix/fixture-searchable-rollups (worktree fx3); tests 7+4 pass; push after #48"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1540,6 +1540,7 @@
     "review_policy": "2026-10-23T17:27:56Z owner: tighter review rule. New PRs: one fresh reviewer (combined fresh+security where security is required). Small deltas/fix rounds: resume the existing reviewer or runner checks the diff directly; no new reviewer agents.",
     "owner_decision_insights_budget": "2026-10-23T17:34:45Z owner: Insights budget = first view <=45 KB (uPlot and below-fold lazy); runner total cap 65 KB. Needs a docs/decisions entry (S-insights-1 records it).",
     "route_budget_rule": "2026-10-23T17:45:34Z runner: per-route hard limit = \u00a710.1 45 KB route JS (beyond shell, gz); 15 KB own JS+CSS is a target needing a one-line reason if exceeded",
-    "merge_freeze": "2026-10-23T17:56:15Z merge freeze until #48 (M4 2/2) merges: relayed from owner's session_01DDEhacHac1WPa8byNBPXKY ('M4 completion strategy'), adopted by runner. No merges to main (slices, polish, runner PRs incl #141, fixture fix). Slices keep working, hold pushes. After #48: delta review since da63255 (already reviewed ac3bb9f) + post verdict on PR, merge, lift freeze, mark ext:m4-* satisfied, create follow-up slices for #48's list."
+    "merge_freeze": "2026-10-23T17:56:15Z merge freeze until #48 (M4 2/2) merges: relayed from owner's session_01DDEhacHac1WPa8byNBPXKY ('M4 completion strategy'), adopted by runner. No merges to main (slices, polish, runner PRs incl #141, fixture fix). Slices keep working, hold pushes. After #48: delta review since da63255 (already reviewed ac3bb9f) + post verdict on PR, merge, lift freeze, mark ext:m4-* satisfied, create follow-up slices for #48's list.",
+    "merge_order_after_m4": "#48 -> #132 (S-search-1 chunk fix) -> #136 -> #135 -> fixture fix -> S-compare/S-alerts/S-detail/S-discover re-measure -> #128 B-update"
   }
 }
