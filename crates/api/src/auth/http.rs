@@ -371,10 +371,15 @@ pub(crate) async fn put_proxy(
     // A bad value is reported before the password is asked for.
     Proxy::compile(config.clone()).map_err(bad_proxy)?;
     confirm_fresh_password(&s.auth, ip, password).await?;
-    s.auth.set_proxy(config).map_err(|e| match e {
-        SetProxyError::Invalid(e) => bad_proxy(e),
-        SetProxyError::Storage(e) => internal(e),
-    })?;
+    // Saving writes auth.json under the auth lock: off the async workers.
+    let auth = s.auth.clone();
+    tokio::task::spawn_blocking(move || auth.set_proxy(config))
+        .await
+        .map_err(internal)?
+        .map_err(|e| match e {
+            SetProxyError::Invalid(e) => bad_proxy(e),
+            SetProxyError::Storage(e) => internal(e),
+        })?;
     Ok(axum::Json(proxy_settings(&s.auth)))
 }
 
@@ -406,9 +411,10 @@ pub(crate) async fn revoke_other_sessions(
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     confirm_fresh_password(&s.auth, ip, body.password).await?;
-    let cookie = s
-        .auth
-        .rotate_sessions()
+    let auth = s.auth.clone();
+    let cookie = tokio::task::spawn_blocking(move || auth.rotate_sessions())
+        .await
+        .map_err(internal)?
         .map_err(|e| auth_error(e, "password"))?;
     Ok(with_cookie(cookie))
 }

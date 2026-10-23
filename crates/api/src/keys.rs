@@ -493,6 +493,8 @@ pub(crate) async fn regenerate_key(
     with_store(&s, move |st| replaceable(st, id).map(drop)).await?;
     confirm_fresh_password(&s.auth, ip, body.password).await?;
     let out = with_store(&s, move |st| {
+        // Checked again under this lock: the key may have been revoked,
+        // deleted or regenerated while the password was checked.
         let old = replaceable(st, id)?;
         let spec = Spec {
             kind: old.kind,

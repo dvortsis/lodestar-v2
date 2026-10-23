@@ -96,3 +96,4 @@ These primitives live in `src/auth.rs`, `src/auth/` and `src/keys.rs`. Later sli
   - Key requests are GET or HEAD only, and any `Set-Cookie` they'd get is dropped.
 - **Scopes** are `keys::scope::{SEARCH, TORZNAB, FEEDS}`: bits stored with the key, never reused. A new scope takes a new bit and a `dto::keys::KeyScope` variant.
 - **Client addresses.** `ClientIp` is the forwarded client behind a trusted proxy and the TCP peer otherwise. Use it for anything rate-limited per client. A test router mounted outside `router()` gets the guards' state from `auth::mount(routes, state)`.
+- **Trusted proxies** are believed for the user header and for `X-Forwarded-For`. Anything that explains the setting recommends the proxy's own address (`/32`), never a whole-LAN range: every host in a trusted range could sign itself in.
