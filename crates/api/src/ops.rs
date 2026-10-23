@@ -5,8 +5,9 @@
 //!
 //! - **One source of truth.** The crawler's pause and intensity are the
 //!   settings registry's `crawler.paused` and `crawler.intensity`: these
-//!   routes change them through [`crate::settings::SettingsApi::patch`],
-//!   exactly as `PATCH /settings/crawler` does, then have the running
+//!   routes change them through the registry exactly as
+//!   `PATCH /settings/crawler` does (publishing `settings` on the
+//!   `/events` hub when a save changes the section), then have the running
 //!   pipeline apply and record them at once (the binary also follows the
 //!   registry, so a change made either way takes effect and is recorded
 //!   once).
@@ -17,12 +18,13 @@
 //!   same-origin JSON. Pause and resume need no password: they're an
 //!   operational control, not a filter change.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -37,8 +39,12 @@ pub use crate::dto::ops::{
     SourceHealth, SourceKind, SourceList, SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
+use crate::events::EventHub;
 use crate::extract::{Json as JsonBody, Path, same_origin_json};
-use crate::settings::{SettingsApi, SettingsPatch};
+use crate::settings::{SettingsApi, SettingsBatch, SettingsPatch, save_and_announce};
+
+/// The `/events` hub, when the server layers one.
+type Hub = Option<Extension<Arc<EventHub>>>;
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
@@ -209,15 +215,24 @@ async fn status(s: &ApiState) -> ApiResult<CrawlerStatus> {
 }
 
 /// Saves one `crawler` field through the registry, as
-/// `PATCH /settings/crawler` would.
-async fn save(s: &ApiState, field: &str, value: Value) -> ApiResult<()> {
+/// `PATCH /settings/crawler` would, and publishes `settings` on the
+/// `/events` hub when it changed something (a no-op pause changes
+/// nothing, so it publishes nothing).
+async fn save(s: &ApiState, hub: Hub, field: &str, value: Value) -> ApiResult<()> {
     let settings = registry(s)?;
     let mut patch = Map::new();
     patch.insert(field.to_string(), value);
-    tokio::task::spawn_blocking(move || settings.patch("crawler", SettingsPatch(patch)))
-        .await
-        .map_err(internal)?
-        .map_err(ApiError::from)?;
+    let batch = SettingsBatch(BTreeMap::from([(
+        "crawler".to_string(),
+        SettingsPatch(patch),
+    )]));
+    let hub = hub.map(|Extension(h)| h);
+    tokio::task::spawn_blocking(move || {
+        save_and_announce(settings.as_ref(), hub.as_deref(), batch)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|f| ApiError::from(f.error))?;
     Ok(())
 }
 
@@ -261,25 +276,27 @@ pub(crate) async fn crawler(State(s): State<ApiState>) -> ApiResult<Json<Crawler
 )]
 pub(crate) async fn patch_crawler(
     State(s): State<ApiState>,
+    hub: Hub,
     headers: HeaderMap,
     JsonBody(body): JsonBody<CrawlerPatch>,
 ) -> ApiResult<Json<CrawlerStatus>> {
     same_origin_json(&headers)?;
     let ops = ops(&s)?;
     let value = serde_json::to_value(body.intensity).map_err(internal)?;
-    save(&s, "intensity", value).await?;
+    save(&s, hub, "intensity", value).await?;
     ops.sync_crawler().await;
     status(&s).await.map(Json)
 }
 
 async fn set_paused(
     s: ApiState,
+    hub: Hub,
     headers: HeaderMap,
     paused: bool,
 ) -> ApiResult<Json<CrawlerStatus>> {
     same_origin_json(&headers)?;
     let ops = ops(&s)?;
-    save(&s, "paused", Value::Bool(paused)).await?;
+    save(&s, hub, "paused", Value::Bool(paused)).await?;
     ops.sync_crawler().await;
     status(&s).await.map(Json)
 }
@@ -296,9 +313,10 @@ async fn set_paused(
 )]
 pub(crate) async fn pause(
     State(s): State<ApiState>,
+    hub: Hub,
     headers: HeaderMap,
 ) -> ApiResult<Json<CrawlerStatus>> {
-    set_paused(s, headers, true).await
+    set_paused(s, hub, headers, true).await
 }
 
 /// Resumes harvesting and fetching where they stopped.
@@ -311,9 +329,10 @@ pub(crate) async fn pause(
 )]
 pub(crate) async fn resume(
     State(s): State<ApiState>,
+    hub: Hub,
     headers: HeaderMap,
 ) -> ApiResult<Json<CrawlerStatus>> {
-    set_paused(s, headers, false).await
+    set_paused(s, hub, headers, false).await
 }
 
 /// Every source plugin of this build: kind, consent class, stored state,

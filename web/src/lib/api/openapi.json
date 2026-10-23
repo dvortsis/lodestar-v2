@@ -4063,6 +4063,152 @@
         ]
       }
     },
+    "/system": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "The build, this installation, the restart and any pending address\nchange: everything About, the Overview and General show. A value this\nplatform can't measure is null, never 0.",
+        "operationId": "getSystem",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system/address/keep": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Keeps the new HTTP address: this process is serving on it, so the\nrequest itself shows it's reachable (whatever `Host` says: a reverse\nproxy may rewrite it). `409 no_address_change` unless one is awaiting\nconfirmation.",
+        "operationId": "keepAddress",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressOutcome"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_address_change`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system/address/revert": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Goes back to the previous HTTP address now. Awaiting confirmation,\nthe previous value is saved again and the server restarts onto it\n(`restarting`); awaiting the restart, the saved change is undone and\nnothing restarts. `409 no_address_change` when there's no change.",
+        "operationId": "revertAddress",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressOutcome"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_address_change`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/system/restart": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Restarts Lodestar: a graceful shutdown (the queue, DHT state and last\ncommit are saved), then the same program again. It answers first;\npoll `/healthz` until it's back. `409 restart_unavailable` where it\ncan't restart itself, with how to restart instead.",
+        "operationId": "restartSystem",
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartAccepted"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`restart_unavailable`: restart it the way it was started (the message says how).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/torrents/{hash}": {
       "get": {
         "tags": [
@@ -4531,6 +4677,85 @@
   },
   "components": {
     "schemas": {
+      "AddressChange": {
+        "type": "object",
+        "description": "A pending HTTP-address change (§10.10.6's lockout protection).",
+        "required": [
+          "deadline",
+          "kind",
+          "previous_url",
+          "state",
+          "stored",
+          "url"
+        ],
+        "properties": {
+          "deadline": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds when it reverts, while awaiting confirmation.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "What a keep-or-revert timer guards.",
+            "enum": [
+              "http_bind"
+            ]
+          },
+          "previous_url": {
+            "type": "string",
+            "description": "Where the UI was before the change."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_restart",
+              "awaiting_confirmation",
+              "reverted"
+            ]
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "False when the pending change couldn't be stored: the protection\nlasts only until the process ends, and the log has the error."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where the UI is after it."
+          }
+        }
+      },
+      "AddressOutcome": {
+        "type": "object",
+        "description": "`POST /system/address/keep` and `/revert`: the change as it is now.",
+        "required": [
+          "address_change",
+          "restarting"
+        ],
+        "properties": {
+          "address_change": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AddressChange",
+                "description": "Null once kept (or a revert before the restart undid it)."
+              }
+            ]
+          },
+          "restarting": {
+            "type": "boolean",
+            "description": "The server restarts on the previous address once this answer has\ngone out."
+          }
+        },
+        "example": {
+          "address_change": null,
+          "restarting": false
+        }
+      },
       "AlertsEvent": {
         "type": "object",
         "description": "`event: alerts` (reserved: B9 publishes it): a saved search matched\nnew torrents. The matches themselves come from the API.",
@@ -5367,6 +5592,53 @@
           "day"
         ]
       },
+      "BuildInfo": {
+        "type": "object",
+        "description": "How the build was made.",
+        "required": [
+          "commit",
+          "date",
+          "rustc",
+          "target",
+          "ui_build_id"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full commit hash; null when the build didn't know it."
+          },
+          "date": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds: `SOURCE_DATE_EPOCH`, else the commit's date; null\nwhen neither was known (never the time of the build, so builds\nstay reproducible).",
+            "minimum": 0
+          },
+          "rustc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`rustc -V` of the compiler that built it."
+          },
+          "target": {
+            "type": "string",
+            "description": "The target triple, e.g. `x86_64-unknown-linux-musl`."
+          },
+          "ui_build_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The embedded UI's build id (SvelteKit's `_app/version.json`); null\nwhen the binary embeds the stub page."
+          }
+        }
+      },
       "Change": {
         "oneOf": [
           {
@@ -5986,6 +6258,30 @@
           }
         }
       },
+      "ChangedSetting": {
+        "type": "object",
+        "description": "One setting changed from its default, by name only.",
+        "required": [
+          "name",
+          "source"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "`section.field`."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where a setting's effective value comes from, lowest to highest:\nthe built-in default, `config.toml`, a change saved in the app, or a\n`LODESTAR_*` environment variable.",
+            "enum": [
+              "default",
+              "file",
+              "db",
+              "env"
+            ]
+          }
+        }
+      },
       "CharRange": {
         "type": "object",
         "description": "A range of characters (Unicode scalar values) in the query, end\nexclusive.",
@@ -6543,6 +6839,69 @@
           }
         }
       },
+      "Connection": {
+        "type": "object",
+        "required": [
+          "count",
+          "kind",
+          "last_checked_at",
+          "settings",
+          "state"
+        ],
+        "properties": {
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many are enabled (sources, lists, integrations); null for the\nDHT, and for what this build doesn't have yet.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "Something Lodestar connects to (§10.10.13 \"No telemetry, ever\").",
+            "enum": [
+              "dht",
+              "sources",
+              "blocklist_subscriptions",
+              "integrations",
+              "updates",
+              "companions",
+              "workers"
+            ]
+          },
+          "last_checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds of the last contact, where it's recorded (a list's\nlast refresh).",
+            "minimum": 0
+          },
+          "settings": {
+            "type": "string",
+            "description": "The Settings screen that changes it (`/settings/<screen>`)."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "on",
+                  "paused",
+                  "off"
+                ]
+              }
+            ],
+            "description": "Null for what this build doesn't have yet (updates until the\nupdate engine, companions and workers until v0.6)."
+          }
+        }
+      },
       "Conversion": {
         "type": "object",
         "description": "Each stage ÷ the one before, 0–1; null when the one before is 0.",
@@ -6901,6 +7260,111 @@
           }
         }
       },
+      "DataFormats": {
+        "type": "object",
+        "description": "The data formats a bug report needs, and why an upgrade might reindex.",
+        "required": [
+          "index",
+          "rebuild",
+          "store_schema"
+        ],
+        "properties": {
+          "index": {
+            "type": "string",
+            "description": "The search index's version, `v{schema}-t{tokenizer}`."
+          },
+          "rebuild": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RebuildEvent",
+                "description": "A background index rebuild's progress; null when none runs."
+              }
+            ]
+          },
+          "store_schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The store's schema version (the last migration applied); null if\nthe store couldn't be read."
+          }
+        }
+      },
+      "DataInfo": {
+        "type": "object",
+        "description": "The data directory and what it holds.",
+        "required": [
+          "cold_bytes",
+          "database_bytes",
+          "dir",
+          "filesystem_warning",
+          "free_bytes",
+          "index_bytes",
+          "logs_bytes"
+        ],
+        "properties": {
+          "cold_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the cold store; null when there is none.",
+            "minimum": 0
+          },
+          "database_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the database, its WAL and shared memory.",
+            "minimum": 0
+          },
+          "dir": {
+            "type": "string",
+            "description": "The data directory, as configured."
+          },
+          "filesystem_warning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What's wrong with its filesystem and the safe alternative (FUSE,\na network share, Unraid's user share); null when nothing is."
+          },
+          "free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes free on its volume.",
+            "minimum": 0
+          },
+          "index_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the search index, every version included.",
+            "minimum": 0
+          },
+          "logs_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the log files; null when nothing is logged to files.",
+            "minimum": 0
+          }
+        }
+      },
       "Decision": {
         "type": "object",
         "required": [
@@ -6941,6 +7405,43 @@
           "shadow": {
             "type": "boolean",
             "description": "Decided in shadow mode: recorded, not acted on."
+          }
+        }
+      },
+      "Deployment": {
+        "type": "object",
+        "required": [
+          "image_digest",
+          "image_tag",
+          "kind"
+        ],
+        "properties": {
+          "image_digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image's digest, when the image sets it."
+          },
+          "image_tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image's tag, when the image sets it."
+          },
+          "kind": {
+            "type": "string",
+            "description": "How Lodestar is installed.",
+            "enum": [
+              "docker",
+              "unraid",
+              "windows_service",
+              "windows_portable",
+              "systemd",
+              "tarball",
+              "unknown"
+            ]
           }
         }
       },
@@ -7010,6 +7511,40 @@
             "type": "integer",
             "format": "int64",
             "description": "Nodes across its routing tables.",
+            "minimum": 0
+          }
+        }
+      },
+      "Diagnostics": {
+        "type": "object",
+        "description": "The copyable diagnostics block's server half: never a value.",
+        "required": [
+          "changed",
+          "logging",
+          "recent_errors"
+        ],
+        "properties": {
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedSetting"
+            },
+            "description": "Settings that aren't at their default, and where each comes from."
+          },
+          "logging": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The logging preset; null until file logging lands."
+          },
+          "recent_errors": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Errors logged recently; null until file logging lands.",
             "minimum": 0
           }
         }
@@ -8369,6 +8904,52 @@
           "truncated": {
             "type": "boolean",
             "description": "More matched than the group lists."
+          }
+        }
+      },
+      "HostInfo": {
+        "type": "object",
+        "description": "The machine Lodestar runs on.",
+        "required": [
+          "arch",
+          "cpus",
+          "memory_bytes",
+          "os",
+          "time_zone"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string",
+            "description": "`x86_64`, `aarch64`, …"
+          },
+          "cpus": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "CPU cores this process may use.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Memory this process may use: the machine's, or a container's\nlimit when lower.",
+            "minimum": 0
+          },
+          "os": {
+            "type": "string",
+            "description": "`linux`, `macos`, `windows`, …"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA time zone, e.g. `Europe/Berlin`."
           }
         }
       },
@@ -10088,6 +10669,65 @@
           "failed",
           "done"
         ]
+      },
+      "RestartAccepted": {
+        "type": "object",
+        "description": "`POST /system/restart`: accepted; the server restarts once this\nanswer has gone out.",
+        "required": [
+          "estimated_seconds",
+          "restarting"
+        ],
+        "properties": {
+          "estimated_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "About how long until it answers again.",
+            "minimum": 0
+          },
+          "restarting": {
+            "type": "boolean"
+          }
+        },
+        "example": {
+          "estimated_seconds": 4,
+          "restarting": true
+        }
+      },
+      "RestartInfo": {
+        "type": "object",
+        "description": "Whether Restart now is offered (§10.10.6).",
+        "required": [
+          "available",
+          "estimated_seconds",
+          "hint",
+          "method"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "estimated_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds this run took from start to listening: about how long a\nrestart pauses crawling.",
+            "minimum": 0
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it isn't available, how to restart instead."
+          },
+          "method": {
+            "type": "string",
+            "description": "How this process restarts itself.",
+            "enum": [
+              "reexec",
+              "manual"
+            ]
+          }
+        }
       },
       "ResyncEvent": {
         "type": "object",
@@ -12393,6 +13033,178 @@
             "format": "int32",
             "minimum": 0
           }
+        }
+      },
+      "SystemInfo": {
+        "type": "object",
+        "description": "`GET /system`.",
+        "required": [
+          "address_change",
+          "build",
+          "channel",
+          "connections",
+          "data",
+          "data_formats",
+          "deployment",
+          "diagnostics",
+          "fixture",
+          "host",
+          "repository",
+          "restart",
+          "restart_required",
+          "started_at",
+          "uptime_s",
+          "version"
+        ],
+        "properties": {
+          "address_change": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AddressChange",
+                "description": "A pending HTTP-address change; null when there is none."
+              }
+            ]
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildInfo"
+          },
+          "channel": {
+            "type": "string",
+            "description": "The release channel this build came from. `dev` is a local build.",
+            "enum": [
+              "stable",
+              "beta",
+              "nightly",
+              "dev"
+            ]
+          },
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Connection"
+            },
+            "description": "Everything Lodestar connects to, each with its state."
+          },
+          "data": {
+            "$ref": "#/components/schemas/DataInfo"
+          },
+          "data_formats": {
+            "$ref": "#/components/schemas/DataFormats"
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/Deployment"
+          },
+          "diagnostics": {
+            "$ref": "#/components/schemas/Diagnostics"
+          },
+          "fixture": {
+            "type": "boolean",
+            "description": "Serving a fixture's test data (`lodestar serve --fixture`), not a\nreal install."
+          },
+          "host": {
+            "$ref": "#/components/schemas/HostInfo"
+          },
+          "repository": {
+            "type": "string",
+            "description": "The source repository (`Cargo.toml`'s `repository`), so a fork\nlinks to itself."
+          },
+          "restart": {
+            "$ref": "#/components/schemas/RestartInfo"
+          },
+          "restart_required": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Saved settings that apply at the next restart, as `section.field`."
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds this run started.",
+            "minimum": 0
+          },
+          "uptime_s": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "address_change": null,
+          "build": {
+            "commit": "2e64daaddf4df35b41908529eed3de8102b64e30",
+            "date": 1792677600,
+            "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+            "target": "x86_64-unknown-linux-musl",
+            "ui_build_id": "1792677600123"
+          },
+          "channel": "stable",
+          "connections": [
+            {
+              "count": null,
+              "kind": "dht",
+              "last_checked_at": null,
+              "settings": "network",
+              "state": "on"
+            }
+          ],
+          "data": {
+            "cold_bytes": null,
+            "database_bytes": 6442450944,
+            "dir": "/data",
+            "filesystem_warning": null,
+            "free_bytes": 107374182400,
+            "index_bytes": 2684354560,
+            "logs_bytes": null
+          },
+          "data_formats": {
+            "index": "v3-t1",
+            "rebuild": null,
+            "store_schema": 14
+          },
+          "deployment": {
+            "image_digest": null,
+            "image_tag": "0.5.2",
+            "kind": "docker"
+          },
+          "diagnostics": {
+            "changed": [
+              {
+                "name": "crawler.intensity",
+                "source": "db"
+              }
+            ],
+            "logging": null,
+            "recent_errors": null
+          },
+          "fixture": false,
+          "host": {
+            "arch": "x86_64",
+            "cpus": 4,
+            "memory_bytes": 8589934592,
+            "os": "linux",
+            "time_zone": "Europe/Berlin"
+          },
+          "repository": "https://github.com/dvortsis/lodestar-v2",
+          "restart": {
+            "available": true,
+            "estimated_seconds": 4,
+            "hint": null,
+            "method": "reexec"
+          },
+          "restart_required": [
+            "network.dht_port"
+          ],
+          "started_at": 1792677600,
+          "uptime_s": 86400,
+          "version": "0.5.2"
         }
       },
       "TermFacet": {
