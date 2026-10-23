@@ -5,8 +5,7 @@ import { ApiError, isAbort, latest } from '$lib/api/client';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { planRestore, readDraft } from './draft';
-import { clearDraft } from './draft-store';
+import { clearDraft, planRestore, readDraft } from './draft';
 import { UNDO_MS, type Engine, type Sections } from './form.svelte';
 import { merge, resolve as resolveField, sectionValues } from './merge';
 import { getSection, patchBatch, previewBatch, type Batch } from './requests';
@@ -414,7 +413,8 @@ export async function save(e: Engine): Promise<SaveResult> {
 }
 
 async function saveNow(e: Engine): Promise<SaveResult> {
-	if (e.inFlight) return { ok: false, reason: 'busy' };
+	// An instant change waiting for instant mode to load is as good as in flight.
+	if (e.inFlight || e.instantPending) return { ok: false, reason: 'busy' };
 	if (e.mode === 'instant') {
 		// The explicit commit: the staged secrets, each as its own change.
 		const secrets = e.specs.some((spec) => {
@@ -425,6 +425,13 @@ async function saveNow(e: Engine): Promise<SaveResult> {
 		try {
 			return await (e.instant ?? (await e.instantMode())).saveSecrets();
 		} catch {
+			// Instant mode didn't load: the secrets aren't kept once tried (§10.10.4), and say so.
+			for (const spec of e.specs) {
+				const s = e.sec(spec.section);
+				if (!spec.writeOnly || s?.fields[spec.name]?.mine === undefined) continue;
+				e.setSection(stage(s, spec.name, undefined, spec));
+				e.setFieldError(spec.key, m.settings_form_chunk_failed());
+			}
 			return { ok: false, reason: 'network' };
 		}
 	}

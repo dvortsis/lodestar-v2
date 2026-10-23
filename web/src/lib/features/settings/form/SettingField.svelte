@@ -16,6 +16,7 @@
 	import IconWarning from '~icons/ph/warning';
 	import Control from './Control.svelte';
 	import LazyControl from './LazyControl.svelte';
+	import { controlOf, lazyOf } from './controls.svelte';
 	import { lazyPart } from './lazy.svelte';
 	import FieldConflict from './FieldConflict.svelte';
 	import FieldSaved from './FieldSaved.svelte';
@@ -50,9 +51,15 @@
 	const automatic = $derived(hasAuto && !manual && f.value === spec.auto);
 	// A `<label for>` only where one control takes the id: radio groups, segmented controls, a
 	// secret and registered widgets are labelled by the label's id instead.
+	// A control that loads on demand takes the id only once it's in: until then nothing does.
+	const loaded = $derived.by(() => {
+		const file = 'builtin' in choice ? lazyOf(choice.builtin) : undefined;
+		return !file || controlOf(file) !== undefined;
+	});
 	const singleControl = $derived(
 		automatic ||
-			('builtin' in choice &&
+			(loaded &&
+				'builtin' in choice &&
 				(['number', 'slider', 'text', 'select', 'json'].includes(choice.builtin) ||
 					// A locked chip list has no input to label.
 					(choice.builtin === 'chips' && !f.locked)))

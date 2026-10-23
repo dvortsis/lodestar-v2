@@ -14,7 +14,8 @@
 
 	const file = $derived(lazyOf(props.builtin) ?? 'json');
 	const Loaded = $derived(controlOf(file));
-	const options = $derived(props.form.field(props.key).spec.enum?.length ?? 0);
+	const field = $derived(props.form.field(props.key));
+	const options = $derived(field.spec.enum?.length ?? 0);
 	$effect(() => {
 		void loadControl(file);
 	});
@@ -33,6 +34,9 @@
 		aria-hidden="true"
 		tabindex="-1"
 		data-placeholder></textarea>
+{:else if props.builtin === 'secret' && field.locked}
+	<!-- A locked secret is only its status line. -->
+	<span class="ls-placeholder ls-row text-body" aria-hidden="true" data-placeholder>&nbsp;</span>
 {:else if props.builtin === 'radio'}
 	<!-- One row per option, as the radio group lays them out. -->
 	<div class="ls-placeholder flex flex-col gap-1" aria-hidden="true" data-placeholder>
