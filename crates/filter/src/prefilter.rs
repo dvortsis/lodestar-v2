@@ -87,15 +87,6 @@ pub(crate) fn tag_key(tag: &str) -> u64 {
     fmix64(h)
 }
 
-/// Every token text of a query word, joined (the matcher's `folded`).
-fn folded(word: &str) -> String {
-    tokenize(word)
-        .into_iter()
-        .map(|t| t.text)
-        .collect::<Vec<_>>()
-        .join("")
-}
-
 /// The need of a query. Inside `file:(…)`, every text field reads that
 /// file's name or path, so titles narrow there too.
 pub(crate) fn need(node: &Node) -> Need {
@@ -104,6 +95,12 @@ pub(crate) fn need(node: &Node) -> Need {
         Ok(None) => Need::Always,
         Err(()) => Need::Never,
     }
+}
+
+/// Of keys that are all needed, whether `k` narrows better than `b`:
+/// rarer, then fewer.
+fn better(k: &Keyed, b: &Keyed) -> bool {
+    (k.1, std::cmp::Reverse(k.0.len())) > (b.1, std::cmp::Reverse(b.0.len()))
 }
 
 /// `Ok(None)` for nothing narrowing it, `Err` for never matching.
@@ -123,10 +120,7 @@ fn need_in(node: &Node, in_file: bool) -> Result<Option<Keyed>, ()> {
             let mut best: Option<Keyed> = None;
             for n in of {
                 if let Some(k) = need_in(n, in_file)? {
-                    let better = best.as_ref().is_none_or(|b| {
-                        (k.1, std::cmp::Reverse(k.0.len())) > (b.1, std::cmp::Reverse(b.0.len()))
-                    });
-                    if better {
+                    if best.as_ref().is_none_or(|b| better(&k, b)) {
                         best = Some(k);
                     }
                 }
@@ -177,15 +171,20 @@ fn need_in(node: &Node, in_file: bool) -> Result<Option<Keyed>, ()> {
                 .map(|t| t.text)
                 .collect(),
         ),
+        // Every word is needed, each as a word is: a covering form, or
+        // its parts (the rarest standing for them). The rarest word's
+        // keys stand for the NEAR, as in an AND.
         Node::Near { field, words, .. } if text(field) => {
-            if words.is_empty() {
-                return Ok(None);
+            let mut best: Option<Keyed> = None;
+            for w in words {
+                let (parts, mut texts) = crate::matcher::near_operand(w);
+                texts.extend(parts.into_iter().max_by_key(|t| rarity(t)));
+                let Some(k) = any(texts)? else { continue };
+                if best.as_ref().is_none_or(|b| better(&k, b)) {
+                    best = Some(k);
+                }
             }
-            let f: Vec<String> = words.iter().map(|w| folded(w)).collect();
-            if f.iter().any(String::is_empty) {
-                return Err(());
-            }
-            rarest(f)
+            Ok(best)
         }
         Node::File { of } => need_in(of, true),
         Node::Tag { key, any } => {
@@ -1058,6 +1057,11 @@ mod tests {
         assert_eq!(n("1080p cam"), Need::Any(vec![k("cam")]));
         assert_eq!(n("cam 1080p"), Need::Any(vec![k("cam")]));
         assert_eq!(n("mkv NEAR/2 matrix"), Need::Any(vec![k("matrix")]));
+        // A NEAR word of several tokens is needed as a word is.
+        assert_eq!(n("1080p NEAR/2 matrix"), Need::Any(vec![k("matrix")]));
+        assert_eq!(n("bluray NEAR/2 web-dl"), Need::Any(vec![k("bluray")]));
+        assert_eq!(n("1080p NEAR/2 x264"), Need::Any(vec![k("1080p"), k("p")]));
+        assert_eq!(n("1080p NEAR/2 \"++\""), Need::Never);
         assert_eq!(n("matrix size:>1GB"), Need::Any(vec![k("matrix")]));
         assert_eq!(n("cam | ts"), Need::Any(vec![k("cam"), k("ts")]));
         assert_eq!(n("cam | size:>1GB"), Need::Always);
