@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{Field, Section};
+use super::{Danger, Field, Preview, Section};
 use crate::config::Config;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -24,17 +24,37 @@ impl Default for Search {
 impl Section for Search {
     const SECTION: &'static str = "search";
     const FIELDS: &'static [Field] = &[
-        Field::new("enabled").file("search.enabled").restart(),
+        Field::new("enabled")
+            .file("search.enabled")
+            .restart()
+            .group("search")
+            .preview()
+            .danger(Danger::Disruptive),
         Field::new("heap_mib")
             .file("search.heap_mib")
             .restart()
-            .range(16, 8192),
+            .range(16, 8192)
+            .group("index")
+            .advanced()
+            .unit("mebibytes")
+            .preview(),
     ];
 
     fn from_config(config: &Config) -> Self {
         Search {
             enabled: config.search.enabled,
             heap_mib: u32::try_from(config.search.heap_mib).unwrap_or(u32::MAX),
+        }
+    }
+
+    fn preview(&self, field: &str) -> Preview {
+        match field {
+            "enabled" if !self.enabled => Preview::default().warn(
+                "search_stops",
+                "Search stops after the restart, until you turn it back on.",
+            ),
+            "heap_mib" => Preview::default().estimate("memory_mib", self.heap_mib),
+            _ => Preview::default(),
         }
     }
 
