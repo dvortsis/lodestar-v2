@@ -17,7 +17,7 @@ external:
     check: "PR #32 merged (seeders/leechers/trackers hot columns and swarm tables on main)"
   m4-done:
     check: "docs/architecture.md §14 or §16 records M4 as complete, or the M4 session (title 'M4 continuation') reports it done; and no filters API exists on main that B15 would duplicate"
-  owner-signing-cert:  # deferred by the owner (owner-decisions §2.21); no slice may depend on it
+  owner-signing-cert:  # deferred by the owner (owner-decisions §2.23); no slice may depend on it
     check: "The owner has provided a code-signing certificate as a repository secret"
 
 slices:

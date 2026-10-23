@@ -13,12 +13,12 @@ The owner approved this on 2026-10-22. Merging green, reviewed PRs and creating 
 If the runner session is lost, start a new Opus session (Auto mode) with the prompt *"Act as the Lodestar build runner: follow runner/README.md."*. Everything it needs is in this directory and on the `runner-state` branch. The watchdog (below) does this on its own when the runner goes quiet.
 
 ## Who merges
-**Only the runner merges, enables auto-merge or writes to `main`** (owner, 2026-10-23, `docs/owner-decisions.md` §2.20).
+**Only the runner merges, enables auto-merge or writes to `main`** (owner, 2026-10-23, `docs/owner-decisions.md` §2.22).
 - **The hook enforces this.** `.claude/hooks/merge-guard.sh` refuses those calls in any session without the marker file `~/.lodestar-runner`.
 - **Creating the marker is the runner's first step** in every session that acts as the runner: `echo "<this session id>" > ~/.lodestar-runner`. No other session creates it.
 - **Every session shares one GitHub account,** so GitHub can't tell the runner from a slice. The hook is a guard against a session merging on its own initiative (as the filter session did with #33, #42, #47 and #52), not against one that sets out to bypass it.
-- **Branch protection on `main`** requires a PR and the `ci-ok` check, with no bypass. `ci-ok` covers the correctness jobs. The performance-budget jobs stay outside it and are judged under §2.18, as before.
-- **Only one runner at a time.** On every wake, read `runner_session` in `state.json`. If it names another session, this one has been replaced: delete the marker and stop.
+- **Branch protection on `main`** requires a PR and the `ci-ok` check, with no bypass. `ci-ok` covers the correctness jobs in `ci.yml`. The performance-budget jobs, `web.yml` and `e2e.yml` (separate, path-filtered workflows that can't be required without stalling PRs that don't trigger them) stay outside it and are judged by the green rule below, as before.
+- **Only one runner at a time.** On every wake, and again right before every merge and every launch, re-read `runner_session` from `origin/runner-state`. If it names another session, this one has been replaced: delete the marker, unsubscribe from every PR, delete its own scheduled tasks and stop. Never force-push `state.json`; on a non-fast-forward push, refetch and re-check `runner_session` first.
 
 ## Files
 | File | Holds | Changes how |
@@ -30,7 +30,7 @@ If the runner session is lost, start a new Opus session (Auto mode) with the pro
 Slice status moves through `pending → ready → running → in_review → merged`. The two exits are `parked`, which needs the owner, and `blocked`, which is waiting on something outside the runner.
 
 ## Other sessions the runner watches
-**Every session that writes code on this repository is either a runner slice or registered with the runner** (§2.20). That includes sessions the owner starts. When the runner finds one, it adds a slice entry to `state.json` for it: its owned paths, its place in `migration_order`, and the tag `lodestar-runner`. It also points the session to `.claude/skills/steward/SKILL.md`. The hook stops such a session merging, so its PRs reach `main` through the runner's review like any slice's.
+**Every session that writes code on this repository is either a runner slice or registered with the runner** (§2.22). That includes sessions the owner starts. When the runner finds one, it adds a slice entry to `state.json` for it: its owned paths, its place in `migration_order`, and the tag `lodestar-runner`. It also points the session to `.claude/skills/steward/SKILL.md`. The hook stops such a session merging, so its PRs reach `main` through the runner's review like any slice's.
 
 The owner asked the runner to keep an eye on the M4 sessions ("M4 continuation" and the content-filter session titled "Modern DHT crawler architecture"). On every heartbeat the runner:
 - checks their status;
@@ -64,7 +64,7 @@ The list lives in `state.json` under `watched_sessions`.
    - **Anything touching auth, credentials, filters, the cluster or companions** also gets `/security-review`.
    - **Blocking findings:** send them to the slice session, with the exact items, to fix and push. Then review again.
    - **No blocking findings:** check freshness, then merge with a merge commit.
-     - **Fresh enough:** the PR's head already contains `main`, or nothing merged since its merge base touches the same area. The areas are the classes `.github/scripts/ci_changes.py` uses: Rust (`crates/**`, `Cargo.*`, `bench/**`, `fuzz/**`), `web/**`, and workflows. Docs-only changes never overlap.
+     - **Fresh enough:** the PR's head already contains `main`, or nothing merged since its merge base touches the same area. The areas are: Rust, as `.github/scripts/ci_changes.py` defines it (`crates/**`, `Cargo.*`, `bench/**`, `fuzz/**`, `rust-toolchain*`, `.cargo/**`, `web/src/lib/api/openapi.json`); the rest of `web/**`; and `.github/**`. Docs-only changes never overlap.
      - **Not fresh enough:** bring `main` in first, with `update_pull_request_branch` (a merge commit), and merge once CI is green on the new head. This is the substitute for a merge queue, which GitHub offers only on repositories owned by an organization.
    - **After merging:** set the slice to `merged`, unsubscribe from its PR, and archive its session (`archive_session`). Pass important and polish findings to the next slice that touches those files.
 5. **Retry limits:**
@@ -104,9 +104,9 @@ Use `create_session` with these settings:
 > - Before pushing, run every check in the brief's "Done when" line, plus CLAUDE.md's checks. Don't push red.
 > - Before opening the PR, run the fresh-reviewer self-review (steward §1) and fix what it finds.
 > - When done, open a PR to `main` titled `<id>: <title>`. Its description should cover what changed, the checks you ran with their results, the self-review, the shared-file edits needed, any missing contract fields, and any deviations from the spec and why.
-> - Watch your own PR, and fix red CI and merge conflicts yourself (steward §2–§3). Message the runner (`send_message` to `@parent`) when the PR is ready, after each round of fixes, and when you're blocked.
+> - Watch your own PR, and fix red CI and merge conflicts yourself (steward §2–§3). Message the runner (`send_message` to the session in `runner_session` on the `runner-state` branch, or `@parent` if you can't read it) when the PR is ready, after each round of fixes, and when you're blocked.
 > - **Do not merge.** The runner reviews and merges, and the merge-guard hook refuses merges from your session.
-> - If you're blocked, comment on the PR (or open a draft PR) saying exactly what's missing, message `@parent`, then stop.
+> - If you're blocked, comment on the PR (or open a draft PR) saying exactly what's missing, message the runner, then stop.
 > - No model identifiers in commits, PRs or code.
 
 ## Conflicts in `docs/architecture.md` §16
@@ -115,7 +115,7 @@ When a PR conflicts with `main` only in `docs/architecture.md` §16, the runner 
 ## Notifying the owner
 Send a push notification only for:
 - a parked slice;
-- an external blocker that needs the owner (signing certificate, Unraid submission, a policy question);
+- an external blocker that needs the owner (the Unraid submission, a policy question);
 - a milestone exit gate (v0.5, M5, …) being met.
 
 There's a **daily summary** on the first wake after 07:00 in the owner's time zone. It covers what merged, what's running, what's parked and why, the next ready slices, and every refinement of an owner decision decided since the last summary (`docs/owner-decisions.md` §2.19), which the owner can veto.
@@ -124,13 +124,15 @@ There's a **daily summary** on the first wake after 07:00 in the owner's time zo
 A scheduled task, **"Lodestar runner watchdog"** (`trig_0172BngAUoA4NRaRWBYiRWVf`), starts a fresh session every 4 hours. It only reads, and it decides from the age of the newest commit on `runner-state`:
 - **Quiet:** that commit is 2 to 4 hours old and the runner session isn't `working`. The watchdog nudges the runner once with `send_message`.
 - **Gone:** that commit is more than 4 hours old, so the last nudge didn't help, or the runner session is archived, failed or missing. The watchdog starts a new runner session with the prompt above, tells the old session to stop, and sends the owner one line.
-- **The new runner takes over** by creating the marker and setting `runner_session` to its own id. An old runner that wakes later sees this and stops ("Who merges").
+- **The new runner takes over** by creating the marker and setting `runner_session` to its own id. It then recreates the hourly scheduled task for itself, re-subscribes to every open slice PR, and messages running slices with its session id. An old runner sees the change before its next merge or launch and stops ("Who merges").
 - **Otherwise the watchdog does nothing and ends.** It never pushes, merges, launches slices or edits `state.json`.
 
 ## Stopping
 - **Disable the hourly scheduled task and the watchdog, or tell the runner to stop.** Running slices finish their current turn, and nothing new launches.
 - **`max_launches_per_day`** is a backstop against runaway loops. Hitting it stops launches and notifies the owner.
 
-**Green means every check run on the head finished `success`, `skipped` or `neutral`.** Since #90, CI skips the jobs a PR's files don't need, so a docs-only PR shows skipped Rust jobs; those count as passing. So does a red check that isn't the PR's (next paragraph).
+**Green means every check run on the head finished `success`, `skipped` or `neutral`.** Since #90, CI skips the jobs a PR's files don't need, so a docs-only PR shows skipped Rust jobs; those count as passing. So does a red check that isn't the PR's (next paragraph), outside `ci-ok`.
 
 **A red check that isn't the PR's doesn't block** (owner, 2026-10-22, `docs/owner-decisions.md` §2.18). That means a check that's also red on `main`, or a known flake with a fix PR open, failing in code the PR doesn't touch. The runner counts it as passing and says so on the PR, naming the check, the evidence (the same check red on `main`, or the fix PR) and the fix PR if there is one. Anything else red is the PR's to fix.
+
+**`ci-ok` is required, so §2.18 can't wave its jobs through** (§2.22). For a job inside `ci-ok` that is red for a reason outside the PR: if it's red on `main` too, fix `main` first (step 2 above), then bring `main` into the PR; if it's a flake, re-run the failed jobs once (`actions_run_trigger`, `rerun_failed_jobs`), and treat a second failure as real. §2.18 applies unchanged to checks outside `ci-ok`.

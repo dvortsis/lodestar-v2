@@ -50,6 +50,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # The merge-guard hook runs before every Bash call in every session; a
+      # syntax error there would exit 2 and block them all.
+      - run: bash -n .claude/hooks/merge-guard.sh
       - id: c
         env:
           EVENT: ${{ github.event_name }}
