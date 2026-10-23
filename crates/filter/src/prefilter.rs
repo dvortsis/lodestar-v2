@@ -25,8 +25,11 @@ use lodestar_search::{DocEnrichment, Node};
 /// A torrent's tag keys, built on first use.
 pub(crate) type Tags<'a, 't> = &'a dyn Fn() -> &'t IdSet;
 
+/// Whether a torrent passes a [`Gate`].
+pub(crate) type Gates<'a> = &'a dyn Fn(Gate) -> bool;
+
 use crate::hash::{IdMap, IdSet, fmix64, fnv_byte, fnv_start, term_hash};
-use crate::matcher::{Compiled, compile};
+use crate::matcher::{Compiled, compile, gate};
 use crate::rules::UserRule;
 
 /// What a query can't match without.
@@ -38,6 +41,49 @@ pub(crate) enum Need {
     Never,
     /// One of these keys must be in the torrent.
     Any(Vec<u64>),
+}
+
+/// A second condition a rule can't match without, checked while its
+/// rules are marked, so the commonest shapes on common words (`"mkv
+/// 1080p"`, `1080p size:>3TB`, `x264 type:software`) are turned away
+/// without reading the rule. Each is one of the cheap check's own
+/// answers ([`crate::matcher`]) on a clause every match needs, so it
+/// says *no* only where the cheap check, and so the full match, must.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Gate {
+    None,
+    /// The torrent's size (`size:`) within these, inclusive.
+    Size(u64, u64),
+    /// A file's size within these (`file:(… size:…)`).
+    FileSize(u64, u64),
+    /// This tag.
+    Tag(u64),
+    /// A token text that could start with this ([`start_key`]).
+    Start(u64),
+    /// These two token texts in a row (a phrase's first two words).
+    Pair(u64, u64),
+}
+
+impl Gate {
+    /// Of two gates a rule has, whether this one is the better: cheaper
+    /// to check, and turning more away.
+    fn rank(self) -> u8 {
+        match self {
+            Gate::None => 0,
+            Gate::Pair(..) => 1,
+            Gate::Start(_) => 2,
+            Gate::Tag(_) => 3,
+            Gate::Size(..) | Gate::FileSize(..) => 4,
+        }
+    }
+
+    pub(crate) fn better(self, other: Gate) -> Gate {
+        if other.rank() > self.rank() {
+            other
+        } else {
+            self
+        }
+    }
 }
 
 /// How rare a need looks: the shortest of its texts, or 0 for words
@@ -902,9 +948,9 @@ pub struct RuleList {
 
 #[derive(Debug, Default)]
 struct RuleIndex {
-    /// Rules nothing narrows, by position.
-    always: Vec<u32>,
-    by_key: IdMap<Vec<u32>>,
+    /// Rules nothing narrows, by position, with their gates.
+    always: Vec<(u32, Gate)>,
+    by_key: IdMap<Vec<(u32, Gate)>>,
     /// Each rule's query and `unless`, compiled.
     compiled: Vec<(Compiled, Option<Compiled>)>,
     /// Each rule's switch, read without touching the rule.
@@ -916,17 +962,19 @@ impl RuleList {
         self.index.get_or_init(|| {
             let mut ix = RuleIndex::default();
             for (i, r) in self.rules.iter().enumerate() {
-                ix.compiled
-                    .push((compile(&r.query), r.unless.as_ref().map(compile)));
+                let query = compile(&r.query);
+                let g = gate(&query);
+                ix.compiled.push((query, r.unless.as_ref().map(compile)));
                 ix.enabled.push(r.enabled);
+                let i = i as u32;
                 match need(&r.query) {
-                    Need::Always => ix.always.push(i as u32),
+                    Need::Always => ix.always.push((i, g)),
                     Need::Never => {}
                     Need::Any(keys) => {
                         for k in keys {
                             let v = ix.by_key.entry(k).or_default();
-                            if v.last() != Some(&(i as u32)) {
-                                v.push(i as u32);
+                            if v.last().is_none_or(|l| l.0 != i) {
+                                v.push((i, g));
                             }
                         }
                     }
@@ -943,21 +991,26 @@ impl RuleList {
     }
 
     /// The positions of the switched-on rules that could match a torrent
-    /// with these keys, in order.
-    pub(crate) fn candidates(&self, keys: &DocKeys, tags: Tags<'_, '_>) -> Vec<u32> {
+    /// with these keys and passing `gates`, in order.
+    pub(crate) fn candidates(
+        &self,
+        keys: &DocKeys,
+        tags: Tags<'_, '_>,
+        gates: Gates<'_>,
+    ) -> Vec<u32> {
         let ix = self.index();
         // Marked by position, then read in order.
         let mut marks = vec![0u64; self.rules.len().div_ceil(64)];
-        let mut mark = |i: u32| {
-            if ix.enabled[i as usize] {
+        let mut mark = |&(i, g): &(u32, Gate)| {
+            if ix.enabled[i as usize] && (g == Gate::None || gates(g)) {
                 marks[i as usize / 64] |= 1 << (i % 64);
             }
         };
-        ix.always.iter().for_each(|&i| mark(i));
+        ix.always.iter().for_each(&mut mark);
         if !ix.by_key.is_empty() {
             for k in keys.text.keys().chain(tags()) {
                 if let Some(rules) = ix.by_key.get(k) {
-                    rules.iter().for_each(|&i| mark(i));
+                    rules.iter().for_each(&mut mark);
                 }
             }
         }
@@ -1186,6 +1239,73 @@ mod tests {
     }
 
     #[test]
+    fn gates() {
+        let g = |q: &str| crate::matcher::gate(&compile(&parse(q).unwrap()));
+        let k = |t: &str| term_hash(t);
+        const GB: u64 = 1 << 30;
+        assert_eq!(g("x264 size:>3GB"), Gate::Size(3 * GB + 1, u64::MAX));
+        assert_eq!(g("file:(x264 size:<1GB)"), Gate::FileSize(0, GB - 1));
+        assert_eq!(g("x264 type:software"), Gate::Tag(tag_key("type:software")));
+        assert_eq!(g("\"mkv sample\""), Gate::Pair(k("mkv"), k("sample")));
+        // A phrase's first two tokens: `1080p` is `1080` and `p`.
+        assert_eq!(g("\"1080p mkv\""), Gate::Pair(k("1080"), k("p")));
+        assert_eq!(
+            g("mkv \"1080p x264\" size:>1GB"),
+            Gate::Size(GB + 1, u64::MAX)
+        );
+        assert_eq!(
+            g("webdz*"),
+            Gate::Start(starts_hash(b"webd".iter().copied()))
+        );
+        // Nothing every match needs, or nothing the gate can read.
+        assert_eq!(g("x264 | size:>3GB"), Gate::None);
+        assert_eq!(g("-(size:>3GB)"), Gate::None);
+        assert_eq!(g("title:\"mkv 1080p\""), Gate::None);
+        assert_eq!(g("x264 (type:software | type:movie)"), Gate::None);
+        assert_eq!(g("x264"), Gate::None);
+    }
+
+    /// Rules are turned away by their gates as the cheap check would.
+    #[test]
+    fn gated_rules_are_met_only_when_they_pass() {
+        let rule = |id: u32, q: &str| UserRule {
+            id,
+            query: parse(q).unwrap(),
+            action: crate::Action::Hide,
+            enabled: true,
+            shadow_until: None,
+            unless: None,
+        };
+        let list = RuleList::from(vec![
+            rule(1, "x264 size:>3GB"),
+            rule(2, "\"1080p x264\""),
+            rule(3, "\"x264 1080p\""),
+            rule(4, "file:(x264 size:<1MB)"),
+            rule(5, "size:<1GB"),
+            rule(6, "sho*"),
+            rule(7, "shx*"),
+        ]);
+        let ids = |size: u64| {
+            let files = [FileInfo::new(vec!["Show.1080p.x264.mkv".into()], size)];
+            let item = crate::core::Item {
+                hashes: &[[0; 20]],
+                name: "Show.1080p.x264",
+                files: &files,
+                content_type: lodestar_classify::ContentType::Video,
+            };
+            let doc = crate::matcher::Doc::new(&item, None);
+            doc.candidates(&list)
+                .iter()
+                .map(|&i| list[i as usize].id)
+                .collect::<Vec<_>>()
+        };
+        // `"x264 1080p"` passes its gate (`x` then `264`), and the cheap
+        // check turns it away.
+        assert_eq!(ids(4 << 30), [1, 2, 3, 6]);
+        assert_eq!(ids(1 << 19), [2, 3, 4, 5, 6]);
+    }
+
+    #[test]
     fn the_index_follows_changes() {
         static NO_TAGS: std::sync::LazyLock<IdSet> = std::sync::LazyLock::new(IdSet::default);
         let rule = |id: u32, q: &str| UserRule {
@@ -1203,7 +1323,7 @@ mod tests {
         ]);
         let keys = DocKeys::new("Alpha.Gamma", &[]);
         let ids = |l: &RuleList| {
-            l.candidates(&keys, &|| &NO_TAGS)
+            l.candidates(&keys, &|| &NO_TAGS, &|_| true)
                 .iter()
                 .map(|&i| l[i as usize].id)
                 .collect::<Vec<_>>()
