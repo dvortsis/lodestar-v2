@@ -271,7 +271,8 @@ enum Shape {
     /// A common word, without a word every torrent has (`mkv`, the only
     /// one, so these share their negated word, as `-sample` rules do).
     Negation,
-    /// A made-up word within one or two edits of nothing.
+    /// A made-up word of common letters within one or two edits of
+    /// nothing, which the character bounds can't rule out.
     Fuzzy,
     /// A prefix whose first four letters the set's words have.
     Prefix,
@@ -315,9 +316,21 @@ impl Shape {
                 format!("{a} NEAR/{} {b}", 1 + i / 11 % 2)
             }
             Shape::Negation => format!("{} -mkv", common(i)),
-            // Half short (one edit), half long (two).
-            Shape::Fuzzy if i % 2 == 0 => format!("~qz{}", i % 997),
-            Shape::Fuzzy => format!("~{}", unique(i, "f")),
+            // Words of common letters, so the character bounds can't turn
+            // them away: half five letters (one edit), half eight (two).
+            Shape::Fuzzy => {
+                let letters = b"rstnlhdcm";
+                let n = if i % 2 == 0 { 5 } else { 8 };
+                let mut x = i as u64 * 0x9e37_79b9_7f4a_7c15 + 1;
+                let word: String = (0..n)
+                    .map(|_| {
+                        x ^= x >> 29;
+                        x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        char::from(letters[(x >> 32) as usize % letters.len()])
+                    })
+                    .collect();
+                format!("~{word}")
+            }
             // Hundreds of different prefixes, each starting like a word
             // the set has, then with letters none has there.
             Shape::Prefix => {
