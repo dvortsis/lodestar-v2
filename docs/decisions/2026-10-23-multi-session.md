@@ -1,9 +1,10 @@
-# Multi-session rules: thresholds (owner decision §2.24)
+# Multi-session rules: thresholds (#145)
 
 The owner made multi-session best practices standing rules (`docs/owner-decisions.md` §2.24) but didn't set numbers. These thresholds refine that decision under §2.19, so the owner can veto any of them.
 
-- **The landing lane starts after two catch-up merges, or at ~1,500 changed lines.** One catch-up is normal. A second means the PR is losing the race with `main`. 1,500 is CLAUDE.md's size guideline, and PRs past it take a full CI cycle to catch up, long enough for more merges to land (#48 needed three in one afternoon).
-- **One PR in the lane at a time; docs-only PRs still merge.** A docs-only merge never makes a code PR stale under the freshness rule (`runner/README.md` step 4), so it costs the lane nothing.
+- **A reviewed PR that isn't fresh enough enters the landing lane after two catch-up merges, or at ~1,500 changed lines.** One catch-up is normal. A second means the PR is losing the race with `main`. 1,500 is CLAUDE.md's size guideline, and PRs past it take a full CI cycle to catch up, long enough for more merges to land (#48 needed three in one afternoon). The runner counts catch-ups per slice in `state.json`.
+- **One PR in the lane at a time. Docs-only PRs and fixes for a red `main` still merge.** A docs-only merge never makes a code PR stale under the freshness rule (`runner/README.md` step 4), so it costs the lane nothing. A red `main` would keep the lane PR from going green, so step 2's revert or fix always goes first; otherwise the two would deadlock.
+- **Flakes from another slice go through the runner.** The fix lands once, in its own small PR or in the PR that hit it, as the runner decides. That keeps two PRs from carrying the same fix (#141 and #48 did today) and keeps slices inside their owned paths.
 - **A lane held for 2 hours goes to the owner.** That's about four CI cycles. Past that, something other than freshness is wrong, and a silent freeze would stall everything else.
 - **A failure that's the lane PR's own takes it out of the lane.** The others resume while it's fixed, so one broken PR can't hold `main`.
 - **Slices are split before launch above ~3,000 estimated changed lines,** about twice the guideline. Slices between 1,500 and 3,000 lines stay whole when splitting would cut through a fixed interface. A slice that grows past 3,000 while being built stops and tells the runner.
