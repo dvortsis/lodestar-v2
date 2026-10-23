@@ -4,6 +4,7 @@ import Icons from 'unplugin-icons/vite';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import { defineConfig } from 'vitest/config';
 import { mergeMessages } from './scripts/messages.ts';
+import { licenses } from './scripts/licenses.ts';
 
 // Dev, build and test all need messages/*.json; the merge is idempotent and cheap.
 const merged = mergeMessages(import.meta.dirname);
@@ -19,6 +20,7 @@ export default defineConfig({
 		}),
 		tailwindcss(),
 		sveltekit(),
+		licenses(),
 		Icons({ compiler: 'svelte' })
 	],
 	resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
