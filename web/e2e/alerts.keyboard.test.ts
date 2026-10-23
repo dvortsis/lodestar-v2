@@ -1,5 +1,6 @@
 // §10.17's "save alert" flow, keyboard only, and deleting by keyboard with focus restored.
 import type { components } from '../src/lib/api/schema';
+import { dialogSettled } from './support/dialog';
 import { expect, test } from './support/test';
 
 type Saved = components['schemas']['SavedSearchView'];
@@ -41,8 +42,8 @@ test('save alert: New alert, name, query, channels, Enter saves and opens it', a
 	await kbd.tabTo(page.getByTestId('alerts-new'));
 	await kbd.press('Enter');
 	const dialog = page.getByRole('dialog', { name: 'Save search' });
-	await expect(dialog).toBeVisible();
-	await expect(dialog.getByLabel('Name')).toBeFocused();
+	await dialogSettled(page, 'Save search');
+	await expect(dialog.getByLabel('Name')).toBeFocused({ timeout: 10_000 });
 	await page.keyboard.type('Nature docs');
 	await kbd.press('Tab');
 	await expect(dialog.getByLabel('Query')).toBeFocused();
@@ -77,10 +78,10 @@ test('Escape closes the save dialog and returns focus to New alert', async ({
 	await expect(page.getByTestId('alerts-name-1')).toBeVisible();
 	await kbd.tabTo(page.getByTestId('alerts-new'));
 	await kbd.press('Enter');
-	await expect(page.getByRole('dialog', { name: 'Save search' })).toBeVisible();
+	await dialogSettled(page, 'Save search');
 	await kbd.press('Escape');
 	await expect(page.getByRole('dialog')).toHaveCount(0);
-	await expect(page.getByTestId('alerts-new')).toBeFocused();
+	await expect(page.getByTestId('alerts-new')).toBeFocused({ timeout: 10_000 });
 });
 
 test('delete: Cancel has focus, Escape restores it, Enter on Delete removes the row', async ({
@@ -100,14 +101,16 @@ test('delete: Cancel has focus, Escape restores it, Enter on Delete removes the 
 	await kbd.tabTo(del);
 	await kbd.press('Enter');
 	const dialog = page.getByRole('dialog', { name: "Delete 'Second' and its history?" });
-	await expect(dialog).toBeVisible();
-	await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+	await dialogSettled(page, "Delete 'Second' and its history?");
+	await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused({ timeout: 10_000 });
 	await kbd.press('Escape');
 	await expect(page.getByRole('dialog')).toHaveCount(0);
-	await expect(del).toBeFocused();
+	await expect(del).toBeFocused({ timeout: 10_000 });
 
 	await kbd.press('Enter');
-	await expect(dialog).toBeVisible();
+	await dialogSettled(page, "Delete 'Second' and its history?");
+	// Tab only once focus has settled on Cancel, so it moves on to Delete.
+	await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused({ timeout: 10_000 });
 	mock.on('listSavedSearches', [saved({ id: 1, name: 'First' }), saved({ id: 3, name: 'Third' })]);
 	await kbd.press('Tab');
 	await expect(dialog.getByRole('button', { name: 'Delete' })).toBeFocused();

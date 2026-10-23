@@ -15,6 +15,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { alertPath, createSavedSearch, type SavedSearch } from './api';
 	import { saveFailure, type SaveFailure } from './errors';
+	import { focusAfterOpen } from './focus';
 
 	interface Props {
 		open?: boolean;
@@ -47,10 +48,8 @@
 			failure = {};
 			submitting = false;
 		});
-		// The dialog opens on its first field, so the name can be typed at once. Bits focuses the
-		// first control when it mounts, so wait for that.
-		const t = setTimeout(() => form?.querySelector<HTMLElement>('[name="name"]')?.focus(), 0);
-		return () => clearTimeout(t);
+		// The dialog opens on its first field, so the name can be typed at once.
+		return focusAfterOpen(() => form?.querySelector<HTMLElement>('[name="name"]'));
 	});
 
 	const nameError = $derived(failure.field === 'name' ? failure.message : undefined);

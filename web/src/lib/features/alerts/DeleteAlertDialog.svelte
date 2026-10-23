@@ -7,6 +7,7 @@
 	import { ApiError } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import { deleteSavedSearch, type SavedSearch } from './api';
+	import { focusAfterOpen } from './focus';
 
 	interface Props {
 		open?: boolean;
@@ -28,8 +29,7 @@
 	const cancelId = $props.id();
 	$effect(() => {
 		if (!open) return;
-		const t = setTimeout(() => document.getElementById(cancelId)?.focus(), 0);
-		return () => clearTimeout(t);
+		return focusAfterOpen(() => document.getElementById(cancelId));
 	});
 
 	async function confirm() {
