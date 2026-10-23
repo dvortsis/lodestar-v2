@@ -43,6 +43,6 @@ pub fn trust_root() -> Result<Embedded, lodestar_update::Error> {
         release: key(&t.release)?,
         nightly: key(&t.nightly)?,
         freshness: key(&t.freshness)?,
-        statements: Vec::new(),
+        statements: t.statements.clone(),
     })
 }

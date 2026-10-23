@@ -75,6 +75,10 @@ pub fn run(
             return ExitCode::FAILURE;
         }
     };
+    // Orphans are ours to reap even when we aren't PID 1 (systemd, a
+    // shell): Linux reparents them to the nearest subreaper.
+    #[cfg(target_os = "linux")]
+    let _ = rustix::process::set_child_subreaper(Some(rustix::process::getpid()));
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -188,19 +192,46 @@ impl Supervisor {
                 return code;
             }
             let plan = self.plan(std::mem::take(&mut notices));
+            // Out of attempts but not yet rolled back (a hard kill landed
+            // in between): roll back now rather than start it a 4th time.
+            if let Some(next) = self.out_of_attempts(&plan.version) {
+                match next {
+                    Next::Exit(code) => return code,
+                    Next::Again => continue,
+                }
+            }
             let pending = self.charge(&plan.version);
             let run_id = control::new_run_id();
-            let pid = match self.spawn(&plan, &run_id) {
-                Ok(pid) => pid,
+            let ended = match self.spawn(&plan, &run_id) {
+                Ok(pid) => {
+                    drop(plan._file);
+                    self.watch(pid, &run_id, pending.as_ref(), &mut signals)
+                        .await
+                }
+                // A start that fails is a failed attempt, like a crash.
                 Err(e) => {
                     say!("starting {}: {e}", plan.program.display());
-                    return ExitCode::FAILURE;
+                    if pending.is_none() {
+                        return ExitCode::FAILURE;
+                    }
+                    Ended {
+                        status: 127,
+                        forwarded: false,
+                        failed: Some("it couldn't be started"),
+                        passed: false,
+                    }
                 }
             };
-            drop(plan._file);
-            let ended = self
-                .watch(pid, &run_id, pending.as_ref(), &mut signals)
-                .await;
+            // It passed if it cleared `pending`, whether or not a tick saw it.
+            let mut ended = ended;
+            if pending.is_some() && !self.bin.exists("pending") {
+                ended.passed = true;
+                self.passed();
+            }
+            if self.stopping && !ended.forwarded {
+                say!("stopping as asked");
+                return exit_code(ended.status);
+            }
             let request = control::take(&self.bin, &run_id, Some(ended.status));
             match self.after(&plan.version, pending, ended, request, &mut notices) {
                 Next::Exit(code) => return code,
@@ -368,9 +399,21 @@ impl Supervisor {
         }
         p.attempts += 1;
         if let Err(e) = self.bin.write("pending", &p) {
-            say!("updating pending: {e}");
+            // The attempt still counts in memory for this run; a restart
+            // of the supervisor would see one fewer.
+            say!("can't record the attempt in pending: {e}");
         }
         Some(p)
+    }
+
+    /// `pending` for `version` has used every attempt: begin its rollback
+    /// (or halt a restored version).
+    fn out_of_attempts(&self, version: &Version) -> Option<Next> {
+        let p: Pending = self.bin.read("pending").ok().flatten()?;
+        if p.version != version.to_string() || p.attempts < ATTEMPTS {
+            return None;
+        }
+        Some(self.give_up(&p))
     }
 
     fn spawn(&self, plan: &Plan, run_id: &str) -> std::io::Result<Pid> {
@@ -457,12 +500,12 @@ impl Supervisor {
                 Verdict::Wait => {}
                 Verdict::Passed => {
                     ended.passed = true;
-                    self.passed();
+                    say!("the new version passed its self-test");
                 }
                 Verdict::Fail(why) => {
                     say!("the new version failed its probation: {why}");
                     ended.failed = Some(why);
-                    ended.status = self.stop_child(pid).await;
+                    ended.status = self.stop_child(pid, signals).await;
                     return self.settle_time(ended, pending, starting_ms);
                 }
             }
@@ -483,10 +526,10 @@ impl Supervisor {
         ended
     }
 
-    /// Probation passed: keep `active` and its previous overlay; the
-    /// older overlays go.
+    /// Probation passed (applied once the child has exited, since the
+    /// supervisor writes only while no child runs): keep `active` and its
+    /// previous overlay; the older overlays go.
     fn passed(&self) {
-        say!("the new version passed its self-test");
         let active: Option<Active> = self.bin.read("active").ok().flatten();
         let keep: Vec<String> = active
             .map(|a| vec![a.version, a.previous])
@@ -500,14 +543,21 @@ impl Supervisor {
     }
 
     /// SIGTERM, the grace period, then SIGKILL; the child's status.
-    async fn stop_child(&self, pid: Pid) -> i32 {
+    /// A stop signal meanwhile is remembered: the supervisor then exits
+    /// instead of restarting or rolling back.
+    async fn stop_child(&mut self, pid: Pid, signals: &mut Signals) -> i32 {
         let _ = rustix::process::kill_process(pid, Signal::TERM);
         let until = Instant::now() + self.limits.grace;
         while Instant::now() < until {
             if let Some(s) = reap(pid) {
                 return s;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::select! {
+                _ = signals.term.recv() => self.stopping = true,
+                _ = signals.int.recv() => self.stopping = true,
+                _ = signals.quit.recv() => self.stopping = true,
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
         }
         let _ = rustix::process::kill_process(pid, Signal::KILL);
         loop {
@@ -543,7 +593,8 @@ impl Supervisor {
             }
             Some(Action::Rollback) => {
                 let lost = request.and_then(|r| r.lost_torrents);
-                return self.rollback(running, "manual", lost);
+                let before = pending.filter(|_| in_probation).map(|p| p.index_before);
+                return self.rollback(running, "manual", lost, before);
             }
             Some(Action::Switch) if !in_probation => {
                 let v = request
@@ -569,6 +620,11 @@ impl Supervisor {
         if p.attempts < ATTEMPTS {
             return Next::Again;
         }
+        self.give_up(&p)
+    }
+
+    /// Every attempt failed: roll an install back, halt a restored version.
+    fn give_up(&self, p: &Pending) -> Next {
         match p.kind {
             Kind::Install => {
                 say!(
@@ -611,6 +667,15 @@ impl Supervisor {
     /// `EXIT_SWITCH`: verify the staged overlay, write `pending`, then
     /// `active`. If `pending` can't be written, nothing switches.
     fn switch(&self, running: &Version, to: &Version, notices: &mut Vec<String>) {
+        let skipped: Vec<pending::Skip> =
+            self.bin.read("skipped").ok().flatten().unwrap_or_default();
+        if skipped
+            .iter()
+            .any(|s| s.version == to.to_string() && s.reason == "failed")
+        {
+            say!("{to} failed before and is never installed again; staying on {running}");
+            return;
+        }
         if overlay::verify(&self.bin, to).is_err() {
             say!("{to} failed verification; staying on {running}");
             notices.push("bad_overlay".into());
@@ -649,7 +714,13 @@ impl Supervisor {
     }
 
     /// `EXIT_ROLLBACK`: the running overlay back to its previous version.
-    fn rollback(&mut self, running: &Version, reason: &str, lost: Option<u64>) -> Next {
+    fn rollback(
+        &mut self,
+        running: &Version,
+        reason: &str,
+        lost: Option<u64>,
+        index_before: Option<Vec<String>>,
+    ) -> Next {
         let Some(active) = self.bin.read::<Active>("active").ok().flatten() else {
             say!("nothing to roll back to: {running} is this image's own version");
             return Next::Again;
@@ -658,7 +729,13 @@ impl Supervisor {
             return Next::Again;
         }
         let _ = self.bin.remove("pending");
-        self.begin_rollback(&active.version, &active.previous, reason, None, lost)
+        self.begin_rollback(
+            &active.version,
+            &active.previous,
+            reason,
+            index_before.as_deref(),
+            lost,
+        )
     }
 
     fn begin_rollback(
@@ -685,7 +762,10 @@ impl Supervisor {
 /// finishes a journal in progress or rolls the active overlay back to its
 /// previous version (reason `manual`, lost torrents unknown). It starts
 /// nothing.
-pub fn rollback_offline(config: &crate::config::Config) -> crate::cli::util::Outcome {
+pub fn rollback_offline(
+    config: &crate::config::Config,
+    confirm: impl FnOnce(&str) -> crate::cli::util::Outcome<bool>,
+) -> crate::cli::util::Outcome {
     use crate::cli::util::Failure;
     let bin = Bin::existing(&config.data_dir)
         .map_err(|e| Failure::Failed(e.to_string()))?
@@ -710,6 +790,22 @@ pub fn rollback_offline(config: &crate::config::Config) -> crate::cli::util::Out
                 .ok_or_else(|| {
                     Failure::Failed("there's no self-installed update to roll back".into())
                 })?;
+            let restores = match journal::preview(&ctx, &active.version) {
+                Some(snap) => format!(
+                    "the store is restored from {snap}: torrents stored since {} was installed \
+                     are lost",
+                    active.version
+                ),
+                None => "the store is kept as it is".to_string(),
+            };
+            let summary = format!(
+                "Roll {} back to {}: {restores}. {} is never installed again.",
+                active.version, active.previous, active.version
+            );
+            if !confirm(&summary)? {
+                println!("Nothing was changed.");
+                return Ok(());
+            }
             let _ = bin.remove("pending");
             let now = crate::unix_now().max(0) as u64;
             journal::begin(

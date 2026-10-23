@@ -64,6 +64,10 @@ pub enum Phase {
 #[serde(deny_unknown_fields)]
 pub struct Probation {
     pub run_id: String,
+    /// The version reporting (a baseline carries over between its
+    /// attempts only).
+    #[serde(default)]
+    pub version: String,
     pub phase: Phase,
     /// The last beat (Unix seconds).
     pub at: u64,
@@ -86,6 +90,11 @@ pub struct Migration {
     pub from: i64,
     pub to: i64,
     pub started_at: u64,
+    /// The `pre-v` snapshots that existed before this migration: a
+    /// rollback never restores one of these (an earlier upgrade's, or a
+    /// copy `lodestar rollback` kept), only the one this migration took.
+    #[serde(default)]
+    pub before: Vec<String>,
 }
 
 /// One `skipped` entry.
@@ -184,6 +193,7 @@ mod tests {
     fn p(phase: Phase, at: u64, since: u64) -> Probation {
         Probation {
             run_id: "r".into(),
+            version: String::new(),
             phase,
             at,
             since,

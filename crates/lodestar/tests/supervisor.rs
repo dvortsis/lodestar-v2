@@ -438,10 +438,15 @@ fn an_expired_overlay_starts_then_a_newer_image_wins() {
     let exe = std::fs::read_link(format!("/proc/{}/exe", kids[0])).unwrap();
     assert!(exe.starts_with(env.bin(NEW)), "{}", exe.display());
     assert!(env.bin("active").exists() && env.bin(NEW).exists());
-    wait_until("older overlays go once probation passes", LONG, || {
-        !env.bin("0.4.0").exists()
-    });
+    assert!(
+        env.bin("0.4.0").exists(),
+        "nothing is deleted while the child runs"
+    );
     assert_eq!(r.stop(), 0);
+    assert!(
+        !env.bin("0.4.0").exists(),
+        "older overlays go once probation passed"
+    );
 
     let r = env.start(&env.overrides(json!({"version": "1.0.0"})));
     wait_until("the newer image didn't start", LONG, || env.healthy());
@@ -523,13 +528,216 @@ fn rollback_update_runs_offline_only() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(r.stop(), 0);
+    // No terminal and no --yes: refused, nothing changed.
     let out = env
         .command(&o, &["rollback", "--update"])
         .stdout(Stdio::piped())
         .output()
         .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(env.bin("active").exists());
+    let out = env
+        .command(&o, &["rollback", "--update", "--yes"])
+        .stdout(Stdio::piped())
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("the store is kept as it is"));
     assert!(String::from_utf8_lossy(&out.stdout).contains("back to image"));
     assert!(!env.bin("active").exists() && !env.bin(NEW).exists());
     assert_eq!(env.json("skipped").unwrap()[0]["version"], NEW);
+}
+
+fn attempts(env: &Env) -> u64 {
+    env.json("pending")
+        .and_then(|p| p["attempts"].as_u64())
+        .unwrap_or(99)
+}
+
+/// A stop the supervisor forwards during probation uses no attempt, and
+/// neither does a supervised restart (`EXIT_RESTART`).
+#[test]
+fn stops_and_restarts_in_probation_use_no_attempt() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, true);
+    let r = env.start(
+        &env.overrides(json!({"fault": format!("child:hang@{NEW}"), "probation_ms": 60_000})),
+    );
+    wait_until("no attempt charged", LONG, || attempts(&env) == 1);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(r.stop(), 128 + 15, "the child's status passes through");
+    assert_eq!(attempts(&env), 0, "the forwarded stop was refunded");
+
+    let r = env.start(
+        &env.overrides(json!({"fault": format!("child:restart@{NEW}"), "probation_ms": 60_000})),
+    );
+    std::thread::sleep(Duration::from_secs(10));
+    assert!(env.json("skipped").is_none(), "restarts aren't failures");
+    assert_eq!(
+        attempts(&env),
+        1,
+        "only the current run's attempt is charged"
+    );
+    assert_eq!(r.stop(), 0);
+}
+
+/// A migration that stops beating fails; so does one past the cap; one
+/// longer than the probation deadline that keeps beating passes.
+#[test]
+fn migrations_are_judged_by_their_heartbeat_and_cap() {
+    for (fault, extra) in [
+        ("stall", json!({"stall_ms": 2000})),
+        (
+            "migrate=60",
+            json!({"beat_ms": 300, "stall_ms": 10_000, "migration_cap_ms": 2000}),
+        ),
+    ] {
+        let env = Env::new();
+        env.stage(NEW, None, now() + 86_400);
+        env.activate(NEW, true);
+        let mut o: Value = extra;
+        o["fault"] = json!(format!("child:{fault}@{NEW}"));
+        let r = env.start(&env.overrides(o));
+        wait_until(&format!("{fault}: no rollback"), LONG, || {
+            env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
+        });
+        assert!(!env.bin(NEW).exists(), "{fault}");
+        assert_eq!(
+            marker(&env.db()),
+            "first",
+            "{fault}: no snapshot of its own, nothing restored"
+        );
+        let history = env.json("history.json").unwrap();
+        assert_eq!(history["entries"][0]["lost_torrents"], 0, "{fault}");
+        assert_eq!(r.stop(), 0);
+    }
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, true);
+    let o = json!({"fault": format!("child:migrate=8@{NEW}"), "beat_ms": 300,
+                   "stall_ms": 3000, "probation_ms": 5000});
+    let r = env.start(&env.overrides(o));
+    wait_until("the long migration didn't pass", LONG, || {
+        !env.bin("pending").exists() && env.healthy()
+    });
+    assert!(env.bin("active").exists() && env.json("skipped").is_none());
+    assert_eq!(r.stop(), 0);
+}
+
+/// A stop signal during a rollback finishes the current step only, leaves
+/// the journal, starts nothing and exits non-zero; the next start ends it.
+#[test]
+fn a_stop_during_a_rollback_leaves_the_journal() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.migrated_by(NEW);
+    env.activate(NEW, true);
+    let mut r =
+        env.start(&env.overrides(json!({"fault": format!("child:crash@{NEW},journal:slow")})));
+    wait_until("no journal", LONG, || env.bin("rollback.json").exists());
+    let pid = r.child.id();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let status = r.child.wait().unwrap();
+    assert_eq!(status.code(), Some(1), "{}", r.log());
+    assert!(env.bin("rollback.json").exists());
+    assert!(children(pid).is_empty());
+    let r = env.start(&env.overrides(json!({})));
+    wait_until("not finished", LONG, || {
+        !env.bin("pending").exists() && env.healthy()
+    });
+    env.assert_rolled_back();
+    assert_eq!(r.stop(), 0);
+}
+
+/// `EXIT_SWITCH` verifies and switches; with `pending` unwritable (a full
+/// disk) nothing switches and the current version keeps running.
+#[test]
+fn a_switch_needs_pending_written_first() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    std::fs::create_dir_all(env.bin(".pending.tmp")).unwrap();
+    std::fs::write(env.bin(".pending.tmp").join("x"), b"x").unwrap();
+    let o = env.overrides(json!({"fault": format!("child:switch={NEW}@{IMAGE}")}));
+    let mut r = env.start(&o);
+    let mut log = String::new();
+    wait_until("no refusal", LONG, || {
+        log.push_str(&r.log());
+        log.contains("can't write pending")
+    });
+    assert!(!env.bin("active").exists() && !env.bin("pending").exists());
+    r.stop();
+
+    std::fs::remove_dir_all(env.bin(".pending.tmp")).unwrap();
+    let r = env.start(&o);
+    wait_until("no switch", LONG, || {
+        env.json("active").is_some_and(|a| a["version"] == NEW)
+            && !env.bin("pending").exists()
+            && env.healthy()
+    });
+    assert_eq!(env.json("active").unwrap()["previous"], "image");
+    assert_eq!(r.stop(), 0);
+}
+
+/// An overlay signed by a key this build's embedded statements revoke is
+/// refused; an overlay no newer than the image is removed.
+#[test]
+fn revoked_and_not_newer_overlays_dont_run() {
+    use lodestar_update::Role;
+    use lodestar_update::testing::{TestKey, statement};
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, false);
+    let t = &env.trust;
+    let key = |k: &TestKey| k.public().to_base64();
+    let rotation = statement(
+        &t.recovery,
+        1,
+        Role::Release,
+        &TestKey::new(5).public(),
+        now() - 60,
+    );
+    let o = env.overrides(json!({"trust_root": {
+        "recovery": key(&t.recovery), "release": key(&t.release),
+        "nightly": key(&t.nightly), "freshness": key(&t.freshness),
+        "statements": [rotation],
+    }}));
+    let mut r = env.start(&o);
+    wait_until("the image didn't start", LONG, || env.healthy());
+    let log = r.log();
+    assert!(log.contains("signed by a key this build revokes"), "{log}");
+    assert_eq!(r.stop(), 0);
+
+    let env = Env::new();
+    env.stage(IMAGE, None, now() + 86_400);
+    env.activate(IMAGE, false);
+    let r = env.start(&env.overrides(json!({})));
+    wait_until("it didn't start", LONG, || env.healthy());
+    assert!(!env.bin("active").exists() && !env.bin(IMAGE).exists());
+    assert_eq!(r.stop(), 0);
+}
+
+/// A grandchild left behind is reparented to the supervisor and reaped.
+#[test]
+fn orphans_are_reaped() {
+    let env = Env::new();
+    let r = env.start(&env.overrides(json!({"fault": format!("child:orphan@{IMAGE}")})));
+    let pid = r.child.id();
+    wait_until("the orphan never came to the supervisor", LONG, || {
+        children(pid).len() == 2
+    });
+    wait_until("the orphan wasn't reaped", LONG, || {
+        children(pid).len() == 1
+    });
+    for kid in children(pid) {
+        let stat = std::fs::read_to_string(format!("/proc/{kid}/stat")).unwrap();
+        assert!(!stat.contains(") Z "), "a zombie: {stat}");
+    }
+    assert_eq!(r.stop(), 0);
 }

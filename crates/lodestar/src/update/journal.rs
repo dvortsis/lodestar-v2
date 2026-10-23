@@ -105,7 +105,13 @@ pub fn begin(
 ) -> io::Result<Journal> {
     let migration = layout::parse_version(failed)
         .and_then(|v| read::<Migration>(&ctx.bin.overlay(&v).join("migration.json")));
-    let snapshot = migration.and_then(|m| choose_snapshot(&ctx.db, m.from));
+    let snapshot = migration.and_then(|m| choose_snapshot(&ctx.db, m.from, &m.before));
+    // Nothing is restored without a snapshot, so nothing stored is lost.
+    let lost_torrents = if snapshot.is_some() {
+        lost_torrents
+    } else {
+        Some(0)
+    };
     let remove_index = match index_before {
         Some(before) => list_index(&ctx.index_root)
             .into_iter()
@@ -130,6 +136,14 @@ pub fn begin(
     Ok(journal)
 }
 
+/// The snapshot a rollback of `failed` would restore, if any (its name),
+/// without writing anything.
+pub fn preview(ctx: &Ctx, failed: &str) -> Option<String> {
+    let m: Migration = layout::parse_version(failed)
+        .and_then(|v| read(&ctx.bin.overlay(&v).join("migration.json")))?;
+    choose_snapshot(&ctx.db, m.from, &m.before).map(|s| s.name)
+}
+
 /// The journal in place, if any.
 pub fn current(bin: &Bin) -> io::Result<Option<Journal>> {
     bin.read(FILE)
@@ -151,6 +165,7 @@ pub fn finish(ctx: &Ctx, mut journal: Journal) -> Result<(), Unfinished> {
 fn step(ctx: &Ctx, journal: &mut Journal) -> Result<(), Unfinished> {
     let failed = |what: &str, e: &dyn std::fmt::Display| Unfinished::Failed(format!("{what}: {e}"));
     let step = journal.steps_done + 1;
+    super::testing::slow("journal");
     match step {
         3 => history::append(
             &ctx.bin,
@@ -196,12 +211,13 @@ fn step(ctx: &Ctx, journal: &mut Journal) -> Result<(), Unfinished> {
     Ok(())
 }
 
-/// The newest `pre-v<from+1>` snapshot, if it verifies as the store at
-/// `from`: its name and SHA-256.
-fn choose_snapshot(db: &Path, from: i64) -> Option<SnapshotRef> {
+/// The newest `pre-v<from+1>` snapshot this migration took (none named in
+/// `before`), if it verifies as the store at `from`: its name and SHA-256.
+fn choose_snapshot(db: &Path, from: i64, before: &[String]) -> Option<SnapshotRef> {
     let all = snapshots::list(db).ok()?;
     let snap = all
         .into_iter()
+        .filter(|s| !before.contains(&s.name))
         .filter(|s| matches!(s.kind, SnapKind::PreMigration { version, .. } if version == from + 1))
         .max_by_key(|s| s.kind)?;
     snapshots::settle(&snap.path).ok()?;
@@ -224,7 +240,11 @@ fn restore(db: &Path, snapshot: Option<&SnapshotRef>) -> Result<(), String> {
         return Ok(());
     };
     let dir = db.parent().unwrap_or(Path::new("."));
-    if snap.name.contains('/') || snap.name.starts_with('.') {
+    let stem = db.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if !matches!(
+        snapshots::parse_name(stem, &snap.name),
+        Some(SnapKind::PreMigration { .. })
+    ) {
         return Err(format!(
             "the journal names an invalid snapshot ({})",
             snap.name
@@ -274,6 +294,8 @@ fn repoint(ctx: &Ctx, j: &Journal) -> io::Result<()> {
         )?;
         j.previous.clone()
     };
+    // The failed version's heartbeat and baseline don't carry over.
+    ctx.bin.remove("probation.json")?;
     let mut skipped: Vec<Skip> = ctx.bin.read("skipped").ok().flatten().unwrap_or_default();
     if !skipped.iter().any(|s| s.version == j.failed) {
         skipped.push(Skip {
@@ -398,6 +420,7 @@ mod tests {
             from: latest,
             to: latest + 1,
             started_at: 1,
+            before: vec![],
         };
         fs::write(
             bin.overlay(&v).join("migration.json"),
@@ -514,6 +537,32 @@ mod tests {
         assert!(s.ctx.bin.exists("active"));
     }
 
+    /// A `pre-v` snapshot that existed before the migration began (an
+    /// earlier upgrade's) is never restored, even if it verifies: an
+    /// attempt that failed before taking its own leaves the store alone.
+    #[test]
+    fn a_stale_snapshot_from_before_the_migration_is_never_restored() {
+        let s = setup();
+        let v = Version::parse("0.9.0").unwrap();
+        let latest = lodestar_store::latest_schema_version();
+        let m = Migration {
+            from: latest,
+            to: latest + 1,
+            started_at: 1,
+            before: vec![format!("lodestar.pre-v{}.db", latest + 1)],
+        };
+        fs::write(
+            s.ctx.bin.overlay(&v).join("migration.json"),
+            serde_json::to_vec(&m).unwrap(),
+        )
+        .unwrap();
+        let j = begin_it(&s);
+        assert!(j.snapshot.is_none());
+        assert_eq!(j.lost_torrents, Some(0), "nothing restored, nothing lost");
+        finish(&s.ctx, j).unwrap();
+        assert_eq!(marker(&s.ctx.db), "second", "the store is left alone");
+    }
+
     #[test]
     fn no_snapshot_without_a_migration_marker_or_a_matching_schema() {
         let s = setup();
@@ -525,6 +574,7 @@ mod tests {
             from: 1,
             to: 2,
             started_at: 1,
+            before: vec![],
         };
         fs::write(
             s.ctx.bin.overlay(&v).join("migration.json"),

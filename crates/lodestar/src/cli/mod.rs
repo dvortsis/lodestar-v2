@@ -133,7 +133,8 @@ pub struct RollbackArgs {
     #[arg(long)]
     pub yes: bool,
     /// Roll a self-installed update back to the version before it
-    /// (server stopped), through the same journal the supervisor uses
+    /// (server stopped), through the same journal the supervisor uses;
+    /// asks first unless --yes
     #[arg(long, conflicts_with = "snapshot")]
     pub update: bool,
 }
