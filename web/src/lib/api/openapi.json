@@ -1436,6 +1436,15 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "explain",
+            "in": "query",
+            "description": "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -1463,7 +1472,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Searches with query text or a query AST.",
+        "summary": "Searches with query text or a query AST. The body also takes\n`\"explain\": true` (as `GET`'s `explain`).",
         "operationId": "searchPost",
         "requestBody": {
           "content": {
@@ -4256,6 +4265,183 @@
           }
         }
       },
+      "ExplainHit": {
+        "type": "object",
+        "description": "One hit's score in parts.",
+        "required": [
+          "id",
+          "phase1",
+          "phase2",
+          "priors",
+          "score"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "phase1": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "BM25 over the name and paths (`text`), fielded words and\nfilters; null under a field sort."
+          },
+          "phase2": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExplainPhase2",
+                "description": "Null under a field sort."
+              }
+            ]
+          },
+          "priors": {
+            "$ref": "#/components/schemas/ExplainPriors"
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "The score the hit was ranked by, as in `hits[].score`."
+          }
+        }
+      },
+      "ExplainPhase2": {
+        "type": "object",
+        "description": "Phase 2's features (§8).",
+        "required": [
+          "exact_name",
+          "file_cap",
+          "name",
+          "phrase",
+          "title"
+        ],
+        "properties": {
+          "exact_name": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Exact-name bonus: not ranked yet, always null."
+          },
+          "file_cap": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The cap on file-only matches' contribution: not ranked yet,\nalways null."
+          },
+          "name": {
+            "type": "number",
+            "format": "double",
+            "description": "The unfielded words' name boosts, summed (0 without phase 2)."
+          },
+          "phrase": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Phrase and proximity bonus: not ranked yet, always null."
+          },
+          "title": {
+            "type": "number",
+            "format": "double",
+            "description": "The unfielded words' parsed-title boosts, summed."
+          }
+        }
+      },
+      "ExplainPriors": {
+        "type": "object",
+        "description": "The quality priors (§8), multiplied onto relevance once ranking has\nthem (with swarm health, M4); until then each is null.",
+        "required": [
+          "freshness",
+          "junk",
+          "seeders",
+          "swarm_consistency",
+          "trackers"
+        ],
+        "properties": {
+          "freshness": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "junk": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "seeders": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "swarm_consistency": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "trackers": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "ExplainWeights": {
+        "type": "object",
+        "description": "The ranking's weights, as this server runs them.",
+        "required": [
+          "name",
+          "path",
+          "rerank_window",
+          "stem_score",
+          "title"
+        ],
+        "properties": {
+          "name": {
+            "type": "number",
+            "format": "double",
+            "description": "Boost of a word found in the name, in phase 1 (on the combined\nfield) and phase 2."
+          },
+          "path": {
+            "type": "number",
+            "format": "double",
+            "description": "Boost of a word found in a file or folder name, in phase 1."
+          },
+          "rerank_window": {
+            "type": "integer",
+            "description": "Phase-1 candidates re-ranked together.",
+            "minimum": 0
+          },
+          "stem_score": {
+            "type": "number",
+            "format": "double",
+            "description": "Phase-1 score of a word matched only by its stem in the title\n(the plurals fallback, when `stemmed`)."
+          },
+          "title": {
+            "type": "number",
+            "format": "double",
+            "description": "Phase-2 boost of a word found in the parsed title."
+          }
+        }
+      },
       "ExternalAddress": {
         "type": "object",
         "description": "Our address as other DHT nodes see it: the BEP 42 `ip` key of their\nreplies, one vote per network (/24 or /64), the last 32 networks,\nIPv4 and IPv6 tallied apart (the IPv4 consensus wins when both have\none).",
@@ -5799,6 +5985,36 @@
         ],
         "description": "A sample's file: a path, or a path and its size."
       },
+      "SearchExplain": {
+        "type": "object",
+        "description": "How a first page was ranked (`?explain=1`, architecture §8). Field\nnames are stable. Relevance is `phase1 + phase2.name + phase2.title`\n(to float rounding); the other features and the priors aren't part of\nranking yet and are null.",
+        "required": [
+          "hits",
+          "ranked_by",
+          "two_phase",
+          "weights"
+        ],
+        "properties": {
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExplainHit"
+            },
+            "description": "One per hit, in the hits' order."
+          },
+          "ranked_by": {
+            "type": "string",
+            "description": "`relevance`, or the field the hits are sorted by (`discovered`,\n`size`, `files`), when no hit has relevance parts."
+          },
+          "two_phase": {
+            "type": "boolean",
+            "description": "Whether phase 2 re-ranked the phase-1 candidates: the query has\nunfielded words."
+          },
+          "weights": {
+            "$ref": "#/components/schemas/ExplainWeights"
+          }
+        }
+      },
       "SearchHit": {
         "type": "object",
         "description": "One search result: the torrent summary (`docs/metrics.md` §7.1), its\nrelevance and, for a query with a file clause, the files that matched.",
@@ -6105,6 +6321,10 @@
           "canonical": {
             "type": "string",
             "description": "The query as the server understood it."
+          },
+          "explain": {
+            "$ref": "#/components/schemas/SearchExplain",
+            "description": "Present only when asked for with `explain`."
           },
           "hits": {
             "type": "array",

@@ -13,7 +13,8 @@ use lodestar_classify::{Category, Composition, Record};
 use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
 use lodestar_search::{
-    CancelToken, Cursor, Error as SearchError, Lease, Node, ParseError, Sort, Start, parse,
+    CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
+    SearchSpec, Sort, Start, WEIGHTS, parse,
 };
 use lodestar_store::Enriched;
 use rand::RngExt;
@@ -21,8 +22,9 @@ use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
 use crate::dto::search::{
-    CompositionShare, NaturalChip, NaturalProposal, ParseQuery, ParseResponse, SearchHit,
-    SearchNotice, SearchRequest, SearchResponse,
+    CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights, NaturalChip,
+    NaturalProposal, ParseQuery, ParseResponse, SearchExplain, SearchHit, SearchNotice,
+    SearchRequest, SearchResponse,
 };
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
@@ -274,6 +276,7 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`."),
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
+        ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
     ),
     responses((status = 200, body = SearchResponse))
 )]
@@ -288,7 +291,8 @@ pub(crate) async fn search_get(
     run_search(s, &headers, p).await
 }
 
-/// Searches with query text or a query AST.
+/// Searches with query text or a query AST. The body also takes
+/// `"explain": true` (as `GET`'s `explain`).
 #[utoipa::path(
     operation_id = "searchPost",
     post,
@@ -320,7 +324,18 @@ async fn run_search(
     };
     let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
-    let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
+    let explain = p.explain.unwrap_or(false);
+    let mut limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
+    if explain {
+        if p.cursor.is_some() || p.offset.is_some_and(|o| o > 0) {
+            return Err(ApiError::bad_request(
+                "explain_first_page",
+                "Explain covers the first page only: send it without offset or cursor.",
+            )
+            .field("explain"));
+        }
+        limit = limit.min(EXPLAIN_MAX);
+    }
     if p.cursor.is_some() && p.offset.is_some() {
         return Err(
             ApiError::bad_request("cursor_and_offset", "Send cursor or offset, not both.")
@@ -358,6 +373,9 @@ async fn run_search(
     let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
+        // A first page comes from the result cache (§8) unless it's
+        // explained, which bypasses it.
+        let mut cached = None;
         let (lease, start, served, id) = match cursor {
             Some(c) => {
                 let lease = search
@@ -368,6 +386,24 @@ async fn run_search(
                     return Err(bad_cursor());
                 }
                 (lease, Start::After(c.position), c.served, Some(c.lease))
+            }
+            None if offset == 0 && !explain => {
+                // The index serving now, once for this request; the
+                // cached lease reads the snapshot the page came from.
+                let spec = SearchSpec {
+                    node: &shown,
+                    scope: &scope_of(visibility),
+                    sort,
+                    limit,
+                    now: unix_now(),
+                };
+                let (got, _) = search
+                    .cache()
+                    .search(&search.index(), &spec, &cancel)
+                    .map_err(search_error)?;
+                let lease = got.lease.clone();
+                cached = Some(got);
+                (lease, Start::Offset(0), 0, None)
             }
             None => {
                 // The index serving now, once for this request; the lease
@@ -382,7 +418,17 @@ async fn run_search(
         } else {
             lease.total()
         };
-        let page = lease.page(start, limit, &cancel).map_err(search_error)?;
+        let (page, explained) = match &cached {
+            Some(c) => (c.page.clone(), None),
+            None if explain => {
+                let e = lodestar_search::explain(&lease, limit, &cancel).map_err(search_error)?;
+                (e.page.clone(), Some(e))
+            }
+            None => (
+                lease.page(start, limit, &cancel).map_err(search_error)?,
+                None,
+            ),
+        };
         // A lease is kept only when there's a next page to read from it.
         let next_cursor = page.next.map(|position| {
             let lease_id = id.unwrap_or_else(|| search.leases().insert(lease.clone(), client));
@@ -422,8 +468,11 @@ async fn run_search(
                 hits.push(hit);
             }
         }
+        // Only the hits served: nothing the page left out is explained.
+        let explain = explained.map(|e| explanation(&e, &hits));
         Ok(axum::Json(SearchResponse {
             canonical: ast.to_query(),
+            explain,
             hits,
             limit,
             next_cursor,
@@ -437,6 +486,59 @@ async fn run_search(
     })
     .await
     .map_err(internal)?
+}
+
+/// What a search may see besides its query, for the result cache's key:
+/// requests that may see different torrents never share an entry.
+pub(crate) fn scope_of(v: Visibility) -> String {
+    format!("hidden={},adult={}", v.hidden, v.adult)
+}
+
+/// The `explain` block for the hits served, in their order.
+fn explanation(e: &Explanation, served: &[SearchHit]) -> SearchExplain {
+    let by_id: std::collections::HashMap<u64, &lodestar_search::Explained> =
+        e.hits.iter().map(|h| (h.id, h)).collect();
+    let hits = served
+        .iter()
+        .filter_map(|h| by_id.get(&(h.id as u64)))
+        .map(|x| ExplainHit {
+            id: x.id as i64,
+            phase1: x.parts.map(|p| f64::from(p.phase1)),
+            phase2: x.parts.map(|p| ExplainPhase2 {
+                exact_name: None,
+                file_cap: None,
+                name: f64::from(p.name),
+                phrase: None,
+                title: f64::from(p.title),
+            }),
+            priors: ExplainPriors {
+                freshness: None,
+                junk: None,
+                seeders: None,
+                swarm_consistency: None,
+                trackers: None,
+            },
+            score: f64::from(x.score),
+        })
+        .collect();
+    let ranked_by = match e.sort {
+        Sort::Relevance => "relevance",
+        Sort::Discovered { .. } => "discovered",
+        Sort::Size { .. } => "size",
+        Sort::Files { .. } => "files",
+    };
+    SearchExplain {
+        hits,
+        ranked_by: ranked_by.into(),
+        two_phase: e.two_phase,
+        weights: ExplainWeights {
+            name: f64::from(WEIGHTS.name),
+            path: f64::from(WEIGHTS.path),
+            rerank_window: WEIGHTS.rerank_window,
+            stem_score: f64::from(WEIGHTS.stem_score),
+            title: f64::from(WEIGHTS.title),
+        },
+    }
 }
 
 /// A request's query: from `q`, or an `ast` the parser could have
