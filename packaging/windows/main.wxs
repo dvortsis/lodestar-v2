@@ -55,7 +55,6 @@
 
     <Feature Id="Main" Title="Lodestar" Level="1" Absent="disallow">
       <ComponentRef Id="ProgramFiles" />
-      <ComponentRef Id="ServiceComponent" />
       <ComponentRef Id="DataFolder" />
       <ComponentRef Id="FirewallRules" />
       <ComponentRef Id="FirewallWeb" />
@@ -81,21 +80,34 @@
         <File Id="LodestarExe" Name="lodestar.exe" Source="$(var.CargoTargetBinDir)\lodestar.exe" KeyPath="yes" />
         <File Id="SecureDataDir" Name="secure-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\secure-datadir.ps1" />
         <File Id="ServiceSid" Name="service-sid.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\service-sid.ps1" />
-      </Component>
+        <File Id="RemoveDataDir" Name="remove-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\remove-datadir.ps1" />
 
-      <!-- The service is created by the CreateService custom action below (sc.exe), not by
-           ServiceInstall: Windows Installer silently skipped the ServiceInstall row in CI.
-           ServiceControl still stops and deletes it on uninstall.
-           Started by hand (start= demand) until the service
-           entrypoint (slice M6-win) lands: `lodestar serve` is a console
-           program and does not yet speak the service protocol, so Windows
-           would stop it as unresponsive. It runs as its own virtual account,
-           NT SERVICE\Lodestar (no password; not LocalSystem, and not the shared
-           LocalService). The service picks its default data folder itself. -->
-      <Component Id="ServiceComponent" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A02" Win64="yes">
-        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="ServiceInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <!-- The service runs as its own virtual account, NT SERVICE\Lodestar (no password; not
+             LocalSystem and not the shared LocalService). It lives in this component, whose
+             key path is the program file: Windows Installer skipped it in a component keyed by a
+             registry value. Delayed automatic start; restarted after a failure, also when it exits
+             with an error code (exit 1 and 3), twice, then not again until the counter resets after
+             a day; 60 s for the final commit at shutdown; its own service SID. -->
+        <ServiceInstall Id="LodestarService"
+                        Name="Lodestar"
+                        DisplayName="Lodestar"
+                        Description="Lodestar DHT crawler and torrent search"
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="NT SERVICE\Lodestar"
+                        Arguments="serve"
+                        Vital="yes">
+          <ServiceConfig DelayedAutoStart="yes" PreShutdownDelay="60000"
+                         FailureActionsWhen="failedToStopOrReturnedError"
+                         ServiceSid="unrestricted" OnInstall="yes" OnReinstall="yes" />
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="none" RestartServiceDelayInSeconds="60"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
         <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
+
     </DirectoryRef>
 
     <!-- Data folder: created by SecureDataFolder below, with its final permissions
@@ -138,7 +150,7 @@
         <util:InternetShortcut Id="WebUiShortcut" Name="Lodestar" Target="http://localhost:8090/"
                                IconFile="[INSTALLFOLDER]lodestar.exe" IconIndex="0" />
         <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\Lodestar" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
@@ -151,31 +163,11 @@
     <CustomAction Id="SecureDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
                   ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
 
-    <!-- Pre-shutdown: give the final commit up to 60 s before Windows stops the
-         service at shutdown (WiX 3 has no attribute for it, so this is the
-         service's PreshutdownTimeout value, in ms). It matters once the entrypoint
-         accepts the pre-shutdown control (M6-win). -->
-    <CustomAction Id="SetPreshutdownTimeout" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]reg.exe&quot; add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v PreshutdownTimeout /t REG_DWORD /d 60000 /f" />
-
-    <!-- Creates the service as its own virtual account (no password; not LocalSystem and not
-         the shared LocalService), started by hand, and gives it its per-service SID.
-         Rolled back with a delete if a later step fails. -->
-    <CustomAction Id="CreateServiceRollback" Directory="TARGETDIR" Execute="rollback" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; delete Lodestar" />
-    <CustomAction Id="CreateService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; create Lodestar binPath= &quot;\&quot;[INSTALLFOLDER]lodestar.exe\&quot; serve&quot; start= delayed-auto obj= &quot;NT SERVICE\Lodestar&quot; DisplayName= Lodestar" />
-    <!-- Restart after a failure, also when the program exits with an error code rather than
-         crashing (exit 1 and 3 are errors), but not forever: two restarts, then nothing until the
-         counter resets after a day. -->
-    <CustomAction Id="ServiceFailureActions" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; failure Lodestar reset= 86400 actions= restart/60000/restart/300000//" />
-    <CustomAction Id="ServiceFailureFlag" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; failureflag Lodestar 1" />
-    <CustomAction Id="DescribeService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; description Lodestar &quot;Lodestar DHT crawler and torrent search&quot;" />
-    <CustomAction Id="ServiceSidType" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; sidtype Lodestar unrestricted" />
+    <!-- Take privileges away from the service: with the defaults it also holds SeImpersonate
+         and SeCreateGlobal, which turn a bug in the code that reads untrusted network data into
+         a short step to SYSTEM. It needs only the right to traverse folders. -->
+    <CustomAction Id="ServicePrivileges" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="&quot;[System64Folder]sc.exe&quot; privs Lodestar SeChangeNotifyPrivilege/SeIncreaseWorkingSetPrivilege" />
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
@@ -188,7 +180,7 @@
 
     <!-- Only when asked: REMOVE_DATA=1 on the uninstall command line. -->
     <CustomAction Id="RemoveDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c rmdir /s /q &quot;[DataFolderDir].&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]remove-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
 
     <!-- SYSTEM runs scripts from, and the service runs the program from, the install folder, and a
          folder outside Program Files can be writable by other users. Only the default is allowed. -->
@@ -196,18 +188,12 @@
 
     <InstallExecuteSequence>
       <Custom Action="WrongInstallFolder" After="CostFinalize">NOT Installed AND NOT (INSTALLFOLDER = "[ProgramFiles64Folder]Lodestar\")</Custom>
-      <Custom Action="CreateServiceRollback" After="InstallFiles">NOT Installed</Custom>
-      <Custom Action="CreateService" After="CreateServiceRollback">NOT Installed</Custom>
-      <Custom Action="DescribeService" After="CreateService">NOT Installed</Custom>
-      <Custom Action="ServiceSidType" After="DescribeService">NOT Installed</Custom>
-      <Custom Action="ServiceFailureActions" After="ServiceSidType">NOT Installed</Custom>
-      <Custom Action="ServiceFailureFlag" After="ServiceFailureActions">NOT Installed</Custom>
+      <Custom Action="ServicePrivileges" After="InstallServices">NOT Installed</Custom>
       <!-- Also on Repair, which is how an administrator fixes a refused data folder. -->
-      <Custom Action="SecureDataFolder" After="ServiceFailureFlag">NOT (REMOVE="ALL")</Custom>
-      <Custom Action="SetPreshutdownTimeout" After="SecureDataFolder">NOT Installed</Custom>
+      <Custom Action="SecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>
       <!-- The exclusion goes in last, after the folder is known to be ours, and comes out again
            if a later step rolls the install back. -->
-      <Custom Action="RemoveDefenderExclusionRollback" After="SetPreshutdownTimeout">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="RemoveDefenderExclusionRollback" After="SecureDataFolder">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="AddDefenderExclusion" After="RemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="RemoveDefenderExclusion" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveDataFolder" Before="RemoveFiles">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
@@ -242,7 +228,7 @@
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
-          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
         </Control>
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
           <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
@@ -252,8 +238,9 @@
         </Control>
       </Dialog>
 
-      <!-- InstallDirDlg -> OptionsDlg -> VerifyReadyDlg (and back the same way). -->
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="OptionsDlg" Order="5">WIXUI_INSTALLDIR_VALID="1"</Publish>
+      <!-- Licence -> Options -> Ready (and back the same way): no install-folder page, because the
+           program and the scripts SYSTEM runs must stay in Program Files. -->
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="OptionsDlg" Order="3">LicenseAccepted = "1"</Publish>
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="OptionsDlg" Order="3">NOT Installed</Publish>
     </UI>
   </Product>

@@ -12,6 +12,7 @@
 #>
 param(
   [string]$Msi,
+  [string]$UpgradeMsi,   # the same product at a higher version, for the upgrade check
   [string]$Zip,
   [int]$Port = 18090
 )
@@ -19,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $Msi -and -not $Zip) { throw 'pass -Msi <file> and/or -Zip <file>' }
 # msiexec rejects paths that mix / and \ (error 1619), so use full Windows paths.
 if ($Msi) { $Msi = (Resolve-Path $Msi).ProviderPath }
+if ($UpgradeMsi) { $UpgradeMsi = (Resolve-Path $UpgradeMsi).ProviderPath }
 if ($Zip) { $Zip = (Resolve-Path $Zip).ProviderPath }
 
 function Assert($ok, $msg) { if (-not $ok) { throw "SMOKE FAILED: $msg" } }
@@ -124,6 +126,11 @@ if ($Msi) {
   Assert ($svcKey.PreshutdownTimeout -eq 60000) "pre-shutdown timeout is $($svcKey.PreshutdownTimeout), expected 60000"
   $failureFlag = (sc.exe qfailure Lodestar | Out-String)
   Assert ($failureFlag -match 'RESTART') 'recovery actions are not restart'
+  $privs = (sc.exe qprivs Lodestar | Out-String)
+  Assert ($privs -match 'SeChangeNotifyPrivilege') 'service lost SeChangeNotifyPrivilege'
+  Assert ($privs -notmatch 'SeImpersonatePrivilege|SeCreateGlobalPrivilege') 'service still holds SeImpersonate or SeCreateGlobal'
+  # DHT off so the runner's network is left alone; the service reads this at start.
+  Set-Content -LiteralPath "$dataDir\config.toml" -Value "[dht]`nenabled = false`n" -Encoding ascii
   Start-Service Lodestar
   $up = $false
   for ($i = 0; $i -lt 90 -and -not $up; $i++) {
@@ -139,10 +146,40 @@ if ($Msi) {
   Write-Host "service healthz: $((Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8090/healthz').Content)"
   $index = (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8090/').Content
   Assert ($index -notmatch 'UI not built') '/ served the stub page: the web UI was not embedded'
+  Assert (Test-Path "$dataDir\.lodestar-secured") 'the service did not write its .lodestar-secured marker'
+  Assert (Test-Path "$dataDir\logs\lodestar.log") 'the service did not write logs\lodestar.log'
   Stop-Service Lodestar
   $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
   Assert ($svc.State -eq 'Stopped') "service is $($svc.State) after Stop-Service"
   Assert ($svc.ExitCode -eq 0) "service stopped with exit code $($svc.ExitCode)"
+
+  # --- upgrade: the next version installed over this one keeps the service, data and ACL ---
+  if ($UpgradeMsi) {
+    Set-Content -Path "$dataDir\upgrade-check.txt" -Value 'kept across the upgrade'
+    Invoke-Msiexec @('/i', "`"$UpgradeMsi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-upgrade.log`"") 'upgrade'
+    $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
+    Assert ($null -ne $svc) 'the upgrade left no Lodestar service'
+    Assert ($svc.StartName -eq 'NT SERVICE\Lodestar') "after the upgrade the service runs as $($svc.StartName)"
+    Assert (Test-Path "$installDir\lodestar.exe") 'the upgrade left no lodestar.exe'
+    Assert (Test-Path "$dataDir\upgrade-check.txt") 'the upgrade lost data'
+    $acl = Get-Acl $dataDir
+    Assert $acl.AreAccessRulesProtected 'after the upgrade the data folder inherits permissions'
+    $broad = @($acl.Access | Where-Object { $_.IdentityReference.Value -match '(Users|Everyone|Authenticated Users)$' })
+    Assert ($broad.Count -eq 0) "after the upgrade the data folder grants access to $($broad.IdentityReference -join ', ')"
+    Assert ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Lodestar').DelayedAutostart -eq 1) 'after the upgrade the service is not delayed-start'
+    Start-Service Lodestar
+    $up = $false
+    for ($i = 0; $i -lt 90 -and -not $up; $i++) {
+      try { $up = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8090/healthz').StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
+    }
+    Assert $up 'after the upgrade the service never answered /healthz'
+    Stop-Service Lodestar
+    Remove-Item "$dataDir\upgrade-check.txt"
+    # Back to the first version for the rest of the checks.
+    Invoke-Msiexec @('/x', "`"$UpgradeMsi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-upgrade-uninstall.log`"") 'uninstall of the upgraded product'
+    Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-install-again.log`"") 'install again after the upgrade check'
+    Write-Host 'upgrade ok'
+  }
 
   # --- uninstall keeps data ---
   # What the service leaves behind once it has run: its marker plus data.
