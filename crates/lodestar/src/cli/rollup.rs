@@ -5,19 +5,19 @@
 //! It's offline, like `vacuum`: a recount racing the live writer's
 //! pending increments would count them twice, so it takes the store lock
 //! ([`StoreLock`]) and refuses (exit 3) while anything has the store open.
-//! The server runs the same repair by itself, over the last 72 hours,
-//! when it starts after an unclean stop.
+//! The server runs the same repair by itself, over the 72 hours before
+//! the store's last activity, when it starts after an unclean stop.
 //!
 //! **What it rebuilds,** from `torrents` and `index_watermark_hour`, for
 //! the discovery cohorts and hours in its window: Stored per cohort and
 //! source, newly stored per hour, and everything the searchable-time
 //! recorder writes (newly searchable per hour, Searchable per cohort, the
-//! time-to-searchable histogram); and the imported total. **It only
-//! raises counts:** deletions since lower a recount, and final cohorts
+//! time-to-searchable histogram); and the imported total. **It never
+//! lowers a total:** deletions since lower a recount, and final cohorts
 //! never change.
 //!
 //! **What no repair can rebuild:** counts from before storage (harvested,
-//! peer found, fetched, losses, keys reported, drops), coverage, gauges
+//! peer found, fetched, losses, keys reported and rediscovered, drops), coverage, gauges
 //! (the searchable count's hourly snapshots), and torrents indexed before
 //! searchable time was tracked. After compaction, hourly detail older
 //! than 30 days is gone: those days are repaired at daily grain.

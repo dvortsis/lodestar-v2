@@ -106,7 +106,10 @@ impl Store {
     /// an hour before the latest recorded (a clock set back) is counted in
     /// the latest instead. Returns whether it wrote. The same upsert as
     /// [`Store::record_searchable`]'s, which also counts what the range
-    /// made searchable; this one moves only the watermark.
+    /// made searchable; this one moves only the watermark. **It doesn't add
+    /// the range's imports to `insights_state.imported`**, so ids it covers
+    /// leave that total short (until `rollup --repair` recounts it): the
+    /// recorder uses `record_searchable`.
     pub fn record_index_watermark(&mut self, hour: i64, last_id: i64) -> Result<bool> {
         if hour < 1 || last_id < 0 {
             return Err(Error::Invalid(
