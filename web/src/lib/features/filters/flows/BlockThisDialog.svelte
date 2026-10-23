@@ -48,6 +48,15 @@
 		tier === 'phrase' ? phrase : (suggestions.find((s) => s.tier === tier)?.query ?? null)
 	);
 
+	// Another torrent's words: a picked run no longer applies.
+	let wordsOf = '';
+	$effect.pre(() => {
+		if (torrent.name !== wordsOf) {
+			wordsOf = torrent.name;
+			range = null;
+		}
+	});
+
 	function pick(i: number) {
 		if (!range) range = [i, i];
 		else if (i === range[0] - 1) range = [i, range[1]];

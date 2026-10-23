@@ -389,3 +389,88 @@ describe('RevealNameDialog: edges', () => {
 		expect(JSON.parse(last.body!).change).toEqual({ op: 'reveal_name', hash: 'cd'.repeat(20) });
 	});
 });
+
+describe('runner review of part 2', () => {
+	it('a strength switch made mid-preview waits, then re-previews the strength on screen', async () => {
+		// Each job answers by its own change; job polls stay pending until released.
+		const jobs: Change[] = [];
+		const gates: (() => void)[] = [];
+		net.on('POST /filters/preview/jobs', (req) => {
+			jobs.push(JSON.parse(req.body!).change);
+			return { status: 202, body: { job: jobs.length } };
+		});
+		net.on('GET /filters/preview/jobs/{id}', async (req) => {
+			const id = Number(req.path.split('/').pop());
+			const c = jobs[id - 1]!;
+			if (id === 2) await new Promise<void>((r) => gates.push(r));
+			return {
+				body: finished(
+					c.op === 'add_override' && c.neutralize
+						? weakening({
+								warning: 'Neutralizing "jailbait"…',
+								preview: preview({ quarantine: 205 })
+							})
+						: weakening({
+								warning: 'Overriding "jailbait"…',
+								neutralize: preview({ quarantine: 205 })
+							})
+				)
+			};
+		});
+		net.on('POST /filters/apply', { body: applied(weakening(), { id: 3 }) });
+		render(OverrideDialog, { props: { open: true } });
+		await screen.findByRole('dialog');
+		await fireEvent.input(screen.getByTestId('override-value'), { target: { value: 'jailbait' } });
+		await fireEvent.click(screen.getByTestId('override-preview'));
+		await settledIn('confirm');
+		await fireEvent.click(screen.getByRole('radio', { name: 'Neutralize term' }));
+		await settledIn('previewing');
+		await fireEvent.click(screen.getByRole('radio', { name: 'Override' }));
+		// The Neutralize preview now finishes; the strength on screen is Override again.
+		await waitFor(() => expect(gates.length).toBe(1));
+		gates[0]!();
+		await waitFor(() => expect(jobs).toHaveLength(3));
+		await settledIn('confirm');
+		expect(screen.getByTestId('effect-warning-text').textContent).toContain('Overriding');
+		expect(jobs[2]).toEqual({ op: 'add_override', keyword: 'jailbait' });
+		await fireEvent.input(document.querySelector('input[name="password"]')!, {
+			target: { value: PW }
+		});
+		await fireEvent.submit(
+			document.querySelector<HTMLInputElement>('input[name="password"]')!.form!
+		);
+		await screen.findByText('What changed');
+		const sent = JSON.parse(net.to('/filters/apply')[0]!.body!);
+		expect(sent.change).toEqual({ op: 'add_override', keyword: 'jailbait' });
+	});
+
+	it('reveal closes when its flow ends by itself', async () => {
+		net.on('POST /filters/preview/jobs', { status: 202, body: { job: 1 } });
+		net.on('GET /filters/preview/jobs/{id}', {
+			body: { state: 'cancelled', progress: { phase: 'reading', done: 0, total: 0 } }
+		});
+		const onclose = vi.fn();
+		render(RevealNameDialog, { props: { hash: HASH, open: true, onclose } });
+		await screen.findByRole('dialog');
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(onclose).toHaveBeenCalledTimes(1);
+	});
+
+	it('Block this drops the picked words when the torrent changes', async () => {
+		net.on('GET /search', { body: { total: 1, total_approx: false, hits: [] } });
+		const r = render(BlockThisDialog, {
+			props: { torrent: { hash: HASH, hash_v2: null, name: 'A B C' }, open: true }
+		});
+		await screen.findByRole('dialog');
+		await fireEvent.click(screen.getByRole('radio', { name: 'A phrase from the name' }));
+		await fireEvent.click(screen.getAllByTestId('block-word')[1]!);
+		expect(screen.getByTestId('block-query').textContent).toBe('name:"B"');
+		await r.rerender({ torrent: { hash: HASH, hash_v2: null, name: 'X Y Z' }, open: true });
+		await waitFor(() => expect(screen.queryByTestId('block-query')).toBeNull());
+		expect(screen.getAllByTestId('block-word').map((w) => w.getAttribute('aria-pressed'))).toEqual([
+			'false',
+			'false',
+			'false'
+		]);
+	});
+});
