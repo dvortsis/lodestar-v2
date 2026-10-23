@@ -575,3 +575,48 @@ Every 30 s while anyone subscribes: `{stages, updated_at}`, the default
 nullable as in §7.5. A client showing another range refetches its own on
 each event. The overview is built only while a stream with the topic (or
 with no `topics`, which means all) is open.
+
+### 7.8 Digest preview (B11c)
+
+`GET /digest/preview?period=daily|weekly` (default `weekly`), **main**
+(B11c). Behind a session. One `overview` read with `range=24h` (daily) or
+`7d` (weekly) and `compare=1` under the request's "Show adult content",
+rendered in English as plain text and simple HTML (§10.9.7). A bad `period`
+is a `400 bad_parameter` with `field: "period"`; `503 insights_unavailable`
+without Insights. JSON only: the client shows `html` only in an
+`<iframe sandbox srcdoc>` (no `allow-scripts`, no `allow-same-origin`) and
+`text` in a `<pre>`.
+
+| Field | Type | Nullable | Notes |
+|---|---|---|---|
+| `generated_at` | integer | no | The overview's `updated_at` |
+| `html` | string | no | A complete document, ≤ 96 KiB: no script, style, image, external URL, event handler or colour; `style="text-align:right"` on number cells is the only style |
+| `period` | `"daily"\|"weekly"` | no | |
+| `range` | as `overview.range` | no | The range the digest read |
+| `subject` | string | no | ≤ 120 characters: `Lodestar daily digest: Oct 22, 2026` or `Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026` (`formatDate`, UTC) |
+| `text` | string | no | Plain UTF-8, `\n` line ends, ≤ 4,000 bytes |
+
+What the digest prints, from the overview and nothing else (no sums, rates,
+Δs or store reads here):
+
+| Line | Field | Formatter | Null |
+|---|---|---|---|
+| Searchable torrents | `kpi.searchable`, Δ `kpi.searchable_delta` | `formatCount`, `formatDelta` | `—` |
+| New searchable | `kpi.new_searchable`, Δ `kpi.new_searchable_delta` | `formatCount`, `formatDelta` | (never null) |
+| Yield | `kpi.yield`, Δ `kpi.yield_delta` | `formatPercent` f = 1, `formatDelta` percent | `— (No completed cohorts yet)` |
+| Time to searchable | `kpi.time_to_searchable_p50_s` and `_p95_s`, Δs `…_delta_s` | `≈` + `formatSpan`, `formatDelta` in `formatSpan`'s unit | `— (No completed cohorts yet)` |
+| Health | `kpi.health.{state, reason}` | text | no reason: the state alone |
+| Funnel | `funnel_total.{cohorts, final_cohorts, stages, conversion}` | `formatCount` (Harvested `≈`), `formatPercent` f = 1 | a null conversion prints `—` |
+| Biggest losses | the three largest non-zero `funnel_total.loss_share` | `formatPercent` f = 0 | none: "No losses." |
+| Top movers | `insights::segment_movers(segments, previous.segments, 3)` | `formatDelta` | no `previous`, or none moved: the section is left out |
+| Needs attention | `exceptions[]` | a fixed phrase per known `kind`; its `value` in the `unit`'s formatter (`s` → `formatSpan`, `torrents` → `formatCount`, `ratio` → `formatPercent`) | an unknown kind: "Needs attention: <kind>." |
+
+A Δ that is null prints nothing, and with no Δ at all the "vs previous …"
+header is left off. A Δ shows its sign (U+2212 for minus) and `▲`/`▼`, never
+colour (`<span aria-hidden="true">` in the HTML). Any string from the
+response that isn't a constant (segment keys, exception kinds, a health
+reason) is cleaned first: controls, bidi formatting characters and line
+separators removed, cut to 64 characters with `…`. Links are root-relative:
+`/insights?range=<24h|7d>&compare=1`, and an exception's `fix` as
+`/insights/<target>` (`stage`) or `/settings/<target>` (`settings`) only
+when `target` matches `^[a-z_]{1,32}$`.
