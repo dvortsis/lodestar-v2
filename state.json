@@ -494,7 +494,7 @@
       "pr": 138,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch)"
     },
     "S-insights-1": {
       "status": "running",
@@ -569,13 +569,14 @@
       "notes": ""
     },
     "S-keys": {
-      "status": "review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_016cp8XLoMXn6BdcZs7uwRnr",
       "pr": 134,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:11:13Z PR #134 head 913bcdb (~2.1k, half tests; boot 1.79 KB vs 1.5 target; CSS unchanged); fresh reviewer launched (incl. interplay with S-search-1's deferred Chrome) | 2026-10-23T17:26:28Z review FIX: boot.ts imports shell/chrome (search first load +0.09 KB); onResync; conflict text; focus after Turn on; Save disabled; aria-describedby; polish"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:11:13Z PR #134 head 913bcdb (~2.1k, half tests; boot 1.79 KB vs 1.5 target; CSS unchanged); fresh reviewer launched (incl. interplay with S-search-1's deferred Chrome) | 2026-10-23T17:26:28Z review FIX: boot.ts imports shell/chrome (search first load +0.09 KB); onResync; conflict text; focus after Turn on; Save disabled; aria-describedby; polish | 2026-10-23T17:46:20Z a372eed fixes verified by runner (boot import dropped, size back to main, onResync, focus, aria); CI green; merged #134 as 5a4ec5a",
+      "merged_sha": "5a4ec5a"
     },
     "S-e2e": {
       "status": "pending",
@@ -1451,6 +1452,11 @@
       "from": "B11c",
       "what": "S-insights-3 brief: show digest preview in <iframe sandbox srcdoc> without allow-scripts/allow-same-origin; keep root-relative links inert or rewrite",
       "to": "S-insights-3 brief"
+    },
+    "subscriptions-client-expect": {
+      "from": "S-alerts fixture run",
+      "what": "crates/lodestar/src/subscriptions.rs:135 .expect() on reqwest Client build panics the subscription task at start-up (app.crash seen in fixture mode, likely proxy-from-env/cert setup); return an error, log a catalogue event and mark subscriptions unavailable instead of panicking",
+      "to": "next subscriptions/filters touch (or B-log1b sweep)"
     }
   },
   "blocked_on_owner": [],
