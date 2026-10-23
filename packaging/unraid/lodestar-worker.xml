@@ -29,5 +29,4 @@
   <Config Name="PGID" Target="PGID" Default="100" Mode="rw" Description="Group ID the container runs as (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="rw" Description="Time zone for log timestamps, for example Europe/Berlin." Type="Variable" Display="advanced" Required="false" Mask="false">Etc/UTC</Config>
   <Config Name="Intensity" Target="LODESTAR_INTENSITY" Default="balanced" Mode="rw" Description="How hard the crawler works: low, balanced or aggressive. Balanced opens about 400 metadata connections at once. Aggressive opens about 1000, and some home routers cannot track that many." Type="Variable" Display="advanced" Required="false" Mask="false">balanced</Config>
-  <Config Name="Log level" Target="LODESTAR_LOG" Default="info" Mode="rw" Description="error, warn, info or debug." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
 </Container>

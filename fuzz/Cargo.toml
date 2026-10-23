@@ -12,6 +12,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 lodestar-bencode = { path = "../crates/bencode" }
 lodestar-classify = { path = "../crates/classify" }
+lodestar-cluster = { path = "../crates/cluster" }
 lodestar-dht = { path = "../crates/dht" }
 lodestar-filter = { path = "../crates/filter" }
 lodestar-metainfo = { path = "../crates/metainfo" }
@@ -19,6 +20,10 @@ lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
 lodestar-store = { path = "../crates/store" }
 lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
+lodestar-update = { path = "../crates/update", features = ["testing"] }
+base64 = "=0.22.1"
+semver = "=1.0.28"
+serde_json = "1.0.154"
 lodestar-utp = { path = "../crates/utp" }
 
 # Each target is a separate binary; see README.md for running them.
@@ -88,6 +93,20 @@ bench = false
 [[bin]]
 name = "utp"
 path = "fuzz_targets/utp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cluster_frame"
+path = "fuzz_targets/cluster_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "update"
+path = "fuzz_targets/update.rs"
 test = false
 doc = false
 bench = false

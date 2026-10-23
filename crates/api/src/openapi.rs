@@ -46,7 +46,10 @@ const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"
         (name = "classify", description = "Classification rules and corrections (§20.9)."),
         (name = "discover", description = "Newest, Rising and Recently resolved (§10.7)."),
         (name = "settings", description = "The runtime settings registry (§10.10, §11)."),
+        (name = "crawler", description = "Stats, the crawler's controls, sources and the network check (§9, §10.9, §18.8)."),
         (name = "events", description = "The live server-sent event stream (§9)."),
+        (name = "library", description = "Your marks, collections and saved searches (§7, §10.5, §10.8)."),
+        (name = "logs", description = "What gets logged: events, data kinds and outputs (§12.1)."),
         (name = "meta", description = "This document."),
     ),
     modifiers(&Envelope)
@@ -61,12 +64,24 @@ pub fn document() -> Doc {
     doc.merge(crate::auth::ApiDoc::openapi());
     doc.merge(crate::search::ApiDoc::openapi());
     doc.merge(crate::facets::ApiDoc::openapi());
+    doc.merge(crate::suggest::ApiDoc::openapi());
     doc.merge(crate::torrents::ApiDoc::openapi());
     doc.merge(crate::filters::ApiDoc::openapi());
     doc.merge(crate::settings::ApiDoc::openapi());
+    doc.merge(crate::ops::ApiDoc::openapi());
     doc.merge(crate::compare::ApiDoc::openapi());
     doc.merge(crate::discover::ApiDoc::openapi());
+    doc.merge(crate::insights::ApiDoc::openapi());
     doc.merge(crate::events::ApiDoc::openapi());
+    doc.merge(crate::keys::ApiDoc::openapi());
+    doc.merge(crate::user_items::ApiDoc::openapi());
+    doc.merge(crate::collections::ApiDoc::openapi());
+    doc.merge(crate::saved::ApiDoc::openapi());
+    doc.merge(crate::export::ApiDoc::openapi());
+    doc.merge(crate::jobs::ApiDoc::openapi());
+    doc.merge(crate::system::ApiDoc::openapi());
+    doc.merge(crate::alerts::ApiDoc::openapi());
+    doc.merge(crate::logs::ApiDoc::openapi());
     finish(&mut doc);
     doc
 }

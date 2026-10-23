@@ -1130,7 +1130,7 @@ impl FiltersApi {
         let set = store.rule_set().map_err(internal)?;
         let class_rules = store.class_rules().map_err(internal)?;
         let state = store.filter_state().map_err(internal)?;
-        for note in self.engine.update_engine(|e| {
+        for _note in self.engine.update_engine(|e| {
             for (rule, on) in &state.switches {
                 if let Some(r) = CoreRule::from_id(rule) {
                     let _ = e.core.switches.set(r, *on);
@@ -1140,7 +1140,9 @@ impl FiltersApi {
             notes.extend(e.load_class_rules(&class_rules));
             notes
         }) {
-            tracing::warn!("filters: {note}");
+            // The note names the rule's terms: filter details stay out of
+            // the log (§1.8.8) unless their opt-in is on.
+            lodestar_log::log_event!(crate::log_events::FILTERS_RULE_SKIPPED);
         }
         Ok(())
     }
@@ -1727,6 +1729,16 @@ impl FiltersApi {
         }
         self.reload(store)?;
         out.version = self.engine.current().version;
+        let version = lodestar_log::Count(out.version);
+        lodestar_log::log_event!(
+            crate::log_events::FILTERS_RULE_SET_UPDATED,
+            version = version
+        );
+        lodestar_log::log_event!(
+            crate::log_events::FILTERS_CHANGE_DETAIL,
+            change = lodestar_log::Detail(&crate::log_events::change_detail(change)),
+            version = version
+        );
         Ok(out)
     }
 
@@ -2138,7 +2150,10 @@ impl FiltersApi {
             let (mut must, mut must_not, mut failing) = (0, 0, 0);
             for (_, must_match, tokens) in store.fixtures(r.id()).map_err(internal)? {
                 let Some(f) = Fixture::decode(&tokens) else {
-                    tracing::warn!(rule = r.id(), "unreadable fixture skipped");
+                    lodestar_log::log_event!(
+                        crate::log_events::FILTERS_FIXTURE_UNREADABLE,
+                        rule = r.id()
+                    );
                     continue;
                 };
                 let caught = engine.core.fixture_hits(&f).iter().any(|h| h.rule == r);

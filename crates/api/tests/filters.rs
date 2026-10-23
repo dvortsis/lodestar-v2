@@ -65,7 +65,10 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
             hot: None,
             events: None,
             settings: None,
+            ops: None,
+            user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     Fixture {

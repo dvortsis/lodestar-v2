@@ -186,7 +186,10 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
     let client = match http::client(s.cfg.udp.bind.map(|a| a.ip()), s.cfg.deny.as_ref()) {
         Ok(c) => Some(c),
         Err(e) => {
-            tracing::error!("HTTP trackers disabled: {e}");
+            lodestar_log::log_event!(
+                crate::log_events::HTTP_TRACKERS_DISABLED,
+                error = lodestar_log::Error::new(&e)
+            );
             None
         }
     };
@@ -212,8 +215,11 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             None => None,
         };
         let Some(tracker) = tracker else {
-            // The host only: an HTTP tracker URL may carry a passkey.
-            tracing::warn!(tracker = url.host(), "tracker can't be scraped; skipped");
+            // Its id only: an HTTP tracker URL may carry a passkey.
+            lodestar_log::log_event!(
+                crate::log_events::TRACKER_SKIPPED,
+                tracker = lodestar_log::Count(u64::from(*id))
+            );
             continue;
         };
         let interval = if udp {
@@ -544,7 +550,10 @@ impl Scheduler {
                     self.lanes.push(Lane::Due, id);
                 }
             }
-            Err(e) => tracing::warn!("scrape scheduler can't read the store: {e}"),
+            Err(e) => lodestar_log::log_event!(
+                crate::log_events::SCHEDULER_STORE_FAILED,
+                error = lodestar_log::Error::new(&e)
+            ),
         }
     }
 

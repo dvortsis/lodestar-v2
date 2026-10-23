@@ -437,7 +437,7 @@ What this means for you:
 - Within a group of 200, the order is exact. Between groups, it is approximate: a torrent that would score higher on the second step stays in its own group. Scrolling down never repeats or skips a row.
 - Text comes first: the factors only reorder results that match about equally well.
 - An administrator can change the factors in `config.toml` (`[ranking]`).
-- To see how a result's score was made, add `explain=1` to an API search. Each result then carries its text score and every factor.
+- To see how a result's score was made, add `explain=1` to an API search (first page only). The response then has an `explain` block: for each result, its text score and every factor it was multiplied by.
 
 ## Plurals fallback
 

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 27c3397ea52a14884f1722baa7a29c96d097181b7cb8282394bb31c89a1a2f94 # shrinks to a = TrustState { format: 1, seq: 0, statements: [], revoked: [], channels: {Stable: Marks { hwm_ts: 0, hwm_sha256: None, fresh_ts: 0, fresh_sha256: None }, Beta: Marks { hwm_ts: 0, hwm_sha256: None, fresh_ts: 0, fresh_sha256: None }, Nightly: Marks { hwm_ts: 0, hwm_sha256: None, fresh_ts: 4, fresh_sha256: None }} }, b = TrustState { format: 1, seq: 1, statements: [], revoked: [], channels: {Stable: Marks { hwm_ts: 0, hwm_sha256: None, fresh_ts: 0, fresh_sha256: None }, Beta: Marks { hwm_ts: 0, hwm_sha256: None, fresh_ts: 0, fresh_sha256: None }, Nightly: Marks { hwm_ts: 0, hwm_sha256: None, fresh_ts: 0, fresh_sha256: None }} }

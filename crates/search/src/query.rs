@@ -288,7 +288,7 @@ fn err<T>(message: impl Into<String>, start: usize, end: usize) -> Result<T, Par
 // ---- fields ----------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FieldKind {
+pub(crate) enum FieldKind {
     Text(TextField),
     Num(NumField),
     Date(DateField),
@@ -304,7 +304,7 @@ enum FieldKind {
     Later(&'static str),
 }
 
-const FIELDS: &[(&str, FieldKind)] = &[
+pub(crate) const FIELDS: &[(&str, FieldKind)] = &[
     ("name", FieldKind::Text(TextField::Name)),
     ("path", FieldKind::Text(TextField::Path)),
     ("size", FieldKind::Num(NumField::Size)),
@@ -354,11 +354,11 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("time", FieldKind::TimeOfDay),
 ];
 
-fn field(name: &str) -> Option<FieldKind> {
+pub(crate) fn field(name: &str) -> Option<FieldKind> {
     FIELDS.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
@@ -374,7 +374,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 /// A known field one typo away, for "did you mean".
-fn near_field(name: &str) -> Option<&'static str> {
+pub(crate) fn near_field(name: &str) -> Option<&'static str> {
     if name.len() < 3 {
         return None;
     }
@@ -408,7 +408,7 @@ struct Spanned {
     end: usize,
 }
 
-fn is_field_name(s: &str) -> bool {
+pub(crate) fn is_field_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 16
         && s.bytes()
@@ -897,9 +897,17 @@ fn file(of: Node, start: usize, end: usize) -> Result<Node, ParseError> {
 const MAX_TAG_BYTES: usize = 64;
 
 /// A keyword value as the index holds it, or `None` if it can't be one.
-fn tag_value(key: TagKey, v: &str) -> Option<String> {
+pub(crate) fn tag_value(key: TagKey, v: &str) -> Option<String> {
     use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
-    let lower = v.to_lowercase();
+    let mut lower = v.to_lowercase();
+    // `res:360` is read as `360p`, so both spellings land on the same
+    // stored form (the parser files 360p under 480p), and the limit
+    // applies to that form, which is what renders.
+    let bare_res =
+        key == TagKey::Res && !lower.is_empty() && lower.bytes().all(|b| b.is_ascii_digit());
+    if bare_res {
+        lower.push('p');
+    }
     if lower.is_empty() || lower.len() > MAX_TAG_BYTES {
         return None;
     }
@@ -919,20 +927,18 @@ fn tag_value(key: TagKey, v: &str) -> Option<String> {
     };
     // Read the value the way the parser reads it in a name, so aliases
     // (`x265`, `4k`, `dovi`, `french`) land on the stored form.
+    let v = if bare_res { lower.as_str() } else { v };
     let parsed = lodestar_release_parser::parse(&format!("A [{v}]"));
     if let Some((_, found)) = parsed.fields().into_iter().find(|(k, _)| *k == release_key) {
         return found.split(", ").next().map(str::to_owned);
     }
     // Otherwise take it as written, if it looks like a stored value
-    // (`fr`, `1080p`), with `res:1080` as `1080p`.
+    // (`fr`, `1080p`).
     let plain = lower
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
     if !plain {
         return None;
-    }
-    if key == TagKey::Res && lower.bytes().all(|b| b.is_ascii_digit()) {
-        return Some(format!("{lower}p"));
     }
     Some(lower)
 }
@@ -1489,7 +1495,7 @@ impl Node {
 }
 
 /// Whether `w` on its own parses back to the plain word `w`.
-fn is_plain_word(w: &str) -> bool {
+pub(crate) fn is_plain_word(w: &str) -> bool {
     matches!(
         parse(w),
         Ok(Node::Word { field: TextField::Any, word }) if word == w
@@ -1743,6 +1749,40 @@ mod tests {
         assert_eq!(parse("time:22:30").unwrap(), time(1350, 1350));
         assert_eq!(parse("time:7").unwrap(), time(420, 479));
         assert_eq!(time(1320, 179).to_query(), "time:22:00..02:59");
+    }
+
+    #[test]
+    fn a_bare_resolution_reads_as_its_p_form() {
+        // Found by fuzz (query): `res:360` took `360p` as written, which
+        // renders and re-parses as `480p`.
+        for n in ["240", "360", "480", "576", "720", "1080", "2160", "999"] {
+            let bare = parse(&format!("res:{n}")).unwrap();
+            assert_eq!(bare, parse(&format!("res:{n}p")).unwrap(), "res:{n}");
+            assert_eq!(parse(&bare.to_query()).unwrap(), bare, "res:{n}");
+        }
+        let fuzzed = parse("\n\n!!?\nres:360\n").unwrap();
+        assert_eq!(parse(&fuzzed.to_query()).unwrap(), fuzzed);
+        // Also found by fuzz (query): 64 digits passed the 64-byte limit,
+        // then rendered as 65 bytes with their `p`, which didn't parse
+        // back. The limit applies to the stored form, either spelling.
+        // An empty part of a list is no resolution: refused, as for
+        // every other key (`codec:x265,`), not read as "p".
+        for empty in ["res:720,", "res:,720", "res:,", "res:"] {
+            assert!(parse(empty).is_err(), "{empty}");
+        }
+        let digits = "4".repeat(63) + "5";
+        assert!(parse(&format!("res:{digits}")).is_err());
+        assert!(parse(&format!("res:{digits}p")).is_err());
+        let fits = &digits[1..];
+        assert_eq!(
+            parse(&format!("res:{fits}")).unwrap(),
+            parse(&format!("res:{fits}p")).unwrap()
+        );
+        let raw = "<\u{1}\u{1}\u{d} \u{0}. ! res:4444444444444444444444444444444444444444444444444444444444444445\u{a}!NR\u{5}\u{5}\u{0}3\u{0}\u{1e}\u{0}\u{0}";
+        assert!(raw.contains(&format!("res:{digits}\n")));
+        if let Ok(ast) = parse(raw) {
+            assert_eq!(parse(&ast.to_query()).unwrap(), ast, "{raw:?}");
+        }
     }
 
     #[test]

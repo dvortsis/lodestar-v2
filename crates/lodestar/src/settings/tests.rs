@@ -25,7 +25,11 @@ impl Env {
     }
 }
 
-fn config(dir: &Path, file: Option<&str>, env: &[(&'static str, &'static str)]) -> Config {
+pub(super) fn config(
+    dir: &Path,
+    file: Option<&str>,
+    env: &[(&'static str, &'static str)],
+) -> Config {
     let env = Env(env.to_vec());
     let path = file.map(|text| {
         let p = dir.join("config.toml");
@@ -35,17 +39,17 @@ fn config(dir: &Path, file: Option<&str>, env: &[(&'static str, &'static str)]) 
     Config::load(path.as_deref(), |k| env.get(k)).unwrap()
 }
 
-fn open(dir: &Path) -> Arc<Mutex<Store>> {
+pub(super) fn open(dir: &Path) -> Arc<Mutex<Store>> {
     Arc::new(Mutex::new(
         Store::open(dir.join("t.db"), StoreConfig::default()).unwrap(),
     ))
 }
 
-fn registry(dir: &Path, config: &Config) -> Registry {
+pub(super) fn registry(dir: &Path, config: &Config) -> Registry {
     Registry::load(config, open(dir)).unwrap()
 }
 
-fn patch(v: Value) -> SettingsPatch {
+pub(super) fn patch(v: Value) -> SettingsPatch {
     match v {
         Value::Object(m) => SettingsPatch(m),
         _ => panic!("a patch is an object"),
@@ -139,7 +143,9 @@ fn every_section_reports_every_field() {
             "transport",
             "storage",
             "search",
-            "content"
+            "content",
+            "preferences",
+            "logging"
         ]
     );
     for s in &index.sections {
@@ -209,9 +215,10 @@ fn the_file_and_defaults_are_told_apart() {
         &[],
     );
     let r = registry(dir.path(), &c);
+    // `log` is the logging section's alias.
     assert_eq!(
-        field(&r, "general", "log_level"),
-        (json!("debug"), SettingSource::File, false)
+        field(&r, "logging", "verbosity"),
+        (json!("detailed"), SettingSource::File, false)
     );
     assert_eq!(
         field(&r, "network", "http_bind"),
@@ -257,7 +264,7 @@ fn environment_fields_are_read_only_and_name_the_variable() {
     );
     // A refused field refuses the whole patch: nothing saved.
     let err = r
-        .patch("general", patch(json!({ "log_level": "debug" })))
+        .patch("logging", patch(json!({ "verbosity": "detailed" })))
         .unwrap_err();
     assert!(matches!(err, SettingsError::SetByEnv { ref var, .. } if var == "LODESTAR_LOG"));
     assert!(
@@ -397,11 +404,11 @@ fn patches_are_validated_per_field() {
     invalid("network", json!({ "http_bind": 8090 }), "http_bind");
     invalid("network", json!({ "http_bind": "0.0.0.0:0" }), "http_bind");
     // Log filters.
-    invalid("general", json!({ "log_level": "info,=[" }), "log_level");
+    invalid("logging", json!({ "libraries": "info,=[" }), "libraries");
     invalid(
-        "general",
-        json!({ "log_level": "x".repeat(2000) }),
-        "log_level",
+        "logging",
+        json!({ "libraries": "x".repeat(2000) }),
+        "libraries",
     );
     // The field in error is the one named, even with valid ones beside it.
     invalid(
@@ -446,8 +453,8 @@ fn patches_are_validated_per_field() {
     )
     .unwrap();
     r.patch(
-        "general",
-        patch(json!({ "log_level": "info,lodestar_dht=debug" })),
+        "logging",
+        patch(json!({ "libraries": "info,hyper=debug", "components": { "dht": "debug" } })),
     )
     .unwrap();
 }
@@ -472,7 +479,7 @@ fn a_partial_patch_leaves_other_fields_alone() {
         r.store
             .lock()
             .unwrap()
-            .settings_with_prefix(KEY_PREFIX)
+            .settings_with_prefix("settings.crawler.")
             .unwrap(),
         vec![(
             "settings.crawler.intensity".to_string(),
@@ -545,7 +552,7 @@ fn restart_only_changes_are_listed_until_restart() {
     assert!(out.restart_required.is_empty());
     assert!(!out.fields["intensity"].restart_required);
     let out = r
-        .patch("general", patch(json!({ "log_level": "debug" })))
+        .patch("logging", patch(json!({ "verbosity": "detailed" })))
         .unwrap();
     assert!(out.restart_required.is_empty());
 }
@@ -556,20 +563,23 @@ async fn changes_reach_subscribers() {
     let c = config(dir.path(), None, &[]);
     let r = registry(dir.path(), &c);
     let mut crawler = r.subscribe::<Crawler>();
-    let mut general = r.subscribe::<General>();
+    let mut logging = r.subscribe::<super::logging::Logging>();
     r.patch("crawler", patch(json!({ "intensity": "aggressive" })))
         .unwrap();
     crawler.changed().await.unwrap();
     assert_eq!(crawler.borrow_and_update().intensity, Intensity::Aggressive);
-    assert!(!general.has_changed().unwrap());
+    assert!(!logging.has_changed().unwrap());
     // Saving the same value again wakes nobody.
     r.patch("crawler", patch(json!({ "intensity": "aggressive" })))
         .unwrap();
     assert!(!crawler.has_changed().unwrap());
-    r.patch("general", patch(json!({ "log_level": "warn" })))
+    r.patch("logging", patch(json!({ "verbosity": "warnings" })))
         .unwrap();
-    general.changed().await.unwrap();
-    assert_eq!(general.borrow_and_update().log_level, "warn");
+    logging.changed().await.unwrap();
+    assert_eq!(
+        logging.borrow_and_update().verbosity,
+        super::logging::Verbosity::Warnings
+    );
 }
 
 #[tokio::test]
@@ -581,18 +591,30 @@ async fn the_log_filter_follows_live() {
     let (_layer, handle) = reload::Layer::<EnvFilter, Subscriber>::new(EnvFilter::new("error"));
     let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
     let h = handle.clone();
-    let task = log::follow_with(r.subscribe(), move |filter| {
+    let task = log::follow_with(r.subscribe(), None, move |filter| {
         let result = log::reload(&h, filter);
         let _ = seen_tx.send(filter.to_string());
         result
     });
-    // It applies the effective value at once (main started with the file's).
-    assert_eq!(seen.recv().await.unwrap(), "info");
-    r.patch("general", patch(json!({ "log_level": "lodestar=trace" })))
-        .unwrap();
-    assert_eq!(seen.recv().await.unwrap(), "lodestar=trace");
+    // It applies the effective value at once (main started with the
+    // file's): Libraries at warnings, each component at the verbosity.
+    let first = seen.recv().await.unwrap();
+    assert!(
+        first.starts_with("warn,") && first.contains("lodestar_dht=info"),
+        "{first}"
+    );
+    r.patch(
+        "logging",
+        patch(json!({ "components": { "dht": "trace" }, "libraries": "hyper=debug" })),
+    )
+    .unwrap();
+    let next = seen.recv().await.unwrap();
+    assert!(
+        next.starts_with("warn,hyper=debug,") && next.contains("lodestar_dht=trace"),
+        "{next}"
+    );
     let current = handle.with_current(|f| f.to_string()).unwrap();
-    assert_eq!(current, "lodestar=trace");
+    assert!(current.contains("lodestar_dht=trace"), "{current}");
     task.abort();
 }
 
@@ -733,7 +755,17 @@ fn filtering_state_is_out_of_reach() {
     );
     assert_eq!(store.setting_text("packs").unwrap().as_deref(), Some("{}"));
     assert_eq!(store.setting_i64("first_run_at").unwrap(), Some(1));
-    assert_eq!(store.settings_with_prefix(KEY_PREFIX).unwrap().len(), 1);
+    // The value and the section's revision.
+    assert_eq!(
+        store.settings_with_prefix(KEY_PREFIX).unwrap(),
+        [
+            ("settings.crawler#revision".to_string(), "1".to_string()),
+            (
+                "settings.crawler.intensity".to_string(),
+                "\"low\"".to_string()
+            )
+        ]
+    );
 }
 
 #[test]
@@ -873,7 +905,7 @@ async fn null_resets_a_field_to_the_file_or_default() {
         r.store
             .lock()
             .unwrap()
-            .settings_with_prefix(KEY_PREFIX)
+            .settings_with_prefix("settings.crawler.")
             .unwrap(),
         vec![
             (
@@ -901,14 +933,17 @@ async fn null_resets_a_field_to_the_file_or_default() {
         .patch("crawler", patch(json!({ "encryption": null })))
         .unwrap();
     assert!(out.restart_required.is_empty());
-    assert!(
+    // No value is saved; only the section's revision, which counted every
+    // save that changed it (and not the reset that changed nothing).
+    assert_eq!(
         r.store
             .lock()
             .unwrap()
             .settings_with_prefix(KEY_PREFIX)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [("settings.crawler#revision".to_string(), "4".to_string())]
     );
+    assert_eq!(out.revision, 4);
     // It survives a restart as reset.
     let r = registry(dir.path(), &c);
     assert_eq!(field(&r, "crawler", "timeout_secs").1, SettingSource::File);
@@ -966,7 +1001,7 @@ fn the_healthcheck_probes_the_bind_the_server_uses() {
 }
 
 /// Runs `f` with a subscriber that records what it logs, and returns that.
-fn logs(f: impl FnOnce()) -> String {
+pub(super) fn logs(f: impl FnOnce()) -> String {
     #[derive(Clone, Default)]
     struct Buf(Arc<Mutex<Vec<u8>>>);
     impl std::io::Write for Buf {
@@ -1005,10 +1040,11 @@ fn saved_values_of_now_read_only_fields_are_removed_once() {
     let c = config(dir.path(), None, &[]);
     let out = logs(|| drop(registry(dir.path(), &c)));
     assert!(
-        out.contains("removed saved network.secure_cookies"),
+        out.contains("Removed a saved setting")
+            && out.contains("section=network field=secure_cookies"),
         "{out}"
     );
-    assert!(out.contains("removed saved general.data_dir"), "{out}");
+    assert!(out.contains("section=general field=data_dir"), "{out}");
     assert!(!out.contains("/elsewhere"), "{out}");
     // Only the retired rows went; the next start has nothing to say.
     let r = registry(dir.path(), &c);
@@ -1025,7 +1061,7 @@ fn saved_values_of_now_read_only_fields_are_removed_once() {
     );
     drop(r);
     let out = logs(|| drop(registry(dir.path(), &c)));
-    assert!(!out.contains("removed saved"), "{out}");
+    assert!(!out.contains("Removed a saved setting"), "{out}");
 }
 
 #[test]
@@ -1048,9 +1084,9 @@ fn a_saved_value_over_the_file_is_noted_without_its_value() {
         ])
         .unwrap();
     let out = logs(|| drop(registry(dir.path(), &c)));
-    assert!(out.contains("crawler.timeout_secs"), "{out}");
+    assert!(out.contains("section=crawler field=timeout_secs"), "{out}");
     assert!(out.contains("set it to null in the app to reset"), "{out}");
     assert!(!out.contains("47"), "{out}");
-    assert!(!out.contains("crawler.max_metadata_mib"), "{out}");
-    assert!(!out.contains("crawler.intensity"), "{out}");
+    assert!(!out.contains("field=max_metadata_mib"), "{out}");
+    assert!(!out.contains("field=intensity"), "{out}");
 }

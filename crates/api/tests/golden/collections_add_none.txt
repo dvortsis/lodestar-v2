@@ -1,0 +1,2 @@
+422
+{"error":{"code":"invalid_value","field":"hashes","message":"Send 1 to 500 info hashes."}}

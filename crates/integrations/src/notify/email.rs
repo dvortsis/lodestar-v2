@@ -605,11 +605,12 @@ impl Notifier for Email {
             let result = tokio::time::timeout(EMAIL_TIMEOUT, session)
                 .await
                 .unwrap_or(Err(AttemptError::transient(DeliveryError::Timeout)));
-            tracing::debug!(
-                host = self.host.host_str().unwrap_or("?"),
-                port = self.port,
-                ok = result.is_ok(),
-                "email attempt"
+            lodestar_log::log_event!(
+                crate::log_events::NOTIFY_ATTEMPT,
+                channel = "email",
+                url = lodestar_log::Url::new(self.host.host_str().unwrap_or("?")),
+                port = lodestar_log::Count(self.port.into()),
+                ok = result.is_ok()
             );
             result
         })
@@ -1650,7 +1651,7 @@ mod tests {
 
         let logged = logs.contents();
         assert!(
-            logged.contains("email attempt"),
+            logged.contains("Notification attempt channel=email"),
             "the capture works: {logged}"
         );
         for s in [USER, PASS, PLAIN, USER_B64, PASS_B64] {

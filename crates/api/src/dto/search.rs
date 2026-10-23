@@ -11,6 +11,9 @@ use utoipa::{IntoParams, ToSchema};
 pub struct ParseQuery {
     /// The query text; empty matches everything.
     pub q: String,
+    /// Also read `q` as natural phrasing ("4k movies from 2020 over
+    /// 10gb") and propose the query it means, in `natural`.
+    pub natural: bool,
 }
 
 /// `GET /parse`: the AST and the canonical text it prints as.
@@ -20,6 +23,48 @@ pub struct ParseResponse {
     #[schema(value_type = AstNode)]
     pub ast: Node,
     pub canonical: String,
+    /// With `natural=true`: the query `q` means as natural phrasing, for
+    /// the UI to preview as chips. Nothing applies it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "super::sorted_some"
+    )]
+    #[schema(nullable = false)]
+    pub natural: Option<NaturalProposal>,
+}
+
+/// What natural phrasing proposes (§10.4): recognised words become
+/// clauses, and every other word stays as text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "ast": { "op": "and", "of": [] },
+    "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+    "chips": [
+        { "from": { "end": 2, "start": 0 }, "text": "res:2160p" },
+        { "from": { "end": 9, "start": 3 }, "text": "type:movie" }
+    ],
+    "text": []
+}))]
+pub struct NaturalProposal {
+    #[serde(serialize_with = "super::sorted")]
+    #[schema(value_type = AstNode)]
+    pub ast: Node,
+    /// The proposed query; it always parses back to `ast`.
+    pub canonical: String,
+    /// The recognised clauses, in the order they appear.
+    pub chips: Vec<NaturalChip>,
+    /// The words kept as text.
+    pub text: Vec<String>,
+}
+
+/// One recognised clause and the words it came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NaturalChip {
+    /// Characters of `q`, end exclusive.
+    pub from: super::suggest::CharRange,
+    /// The clause as query text (`res:2160p`).
+    pub text: String,
 }
 
 /// `POST /search`'s body, and `GET /search`'s parameters (where `ast` is
@@ -48,11 +93,6 @@ pub struct SearchRequest {
     /// The user's zone for `time:`, in minutes east of UTC (−840 to 840);
     /// 0 by default.
     pub tz: Option<i32>,
-    /// Each relevance hit's score breakdown, in `explain` (§8). `1` or
-    /// `true`.
-    #[serde(deserialize_with = "flag")]
-    #[schema(value_type = Option<bool>)]
-    pub explain: Option<bool>,
     /// The previous page's `next_cursor`, to read the next page from the
     /// same index snapshot. Send the same `q` (or `ast`), `sort` and
     /// `hidden` with it.
@@ -62,6 +102,17 @@ pub struct SearchRequest {
     #[serde(deserialize_with = "flag")]
     #[schema(value_type = Option<bool>)]
     pub exact: Option<bool>,
+    /// Explain how each hit was scored (`explain` in the response): the
+    /// first page only (no `offset` or `cursor`), and at most 100 hits,
+    /// so `limit` is capped at 100. `1` or `true`.
+    ///
+    /// Left out of the schema: every other field has a default, which
+    /// makes the generated client types require it, and an optional
+    /// debugging flag shouldn't make every caller send it. `GET` lists it
+    /// as a parameter; `POST` accepts it the same way.
+    #[serde(deserialize_with = "flag")]
+    #[schema(ignore)]
+    pub explain: Option<bool>,
 }
 
 /// A boolean that a query string may also spell `1` or `0`.
@@ -106,6 +157,10 @@ fn flag<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
 pub struct SearchResponse {
     /// The query as the server understood it.
     pub canonical: String,
+    /// Present only when asked for with `explain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub explain: Option<SearchExplain>,
     pub hits: Vec<SearchHit>,
     pub limit: usize,
     /// Pass as `cursor` for the next page, read from the same index
@@ -161,10 +216,6 @@ pub struct SearchHit {
     #[schema(required = true)]
     pub content_type: Option<String>,
     pub discovered_at: i64,
-    /// The score breakdown; present only with `explain`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub explain: Option<ScoreParts>,
     pub files: u64,
     #[schema(example = json!(["single_file"]))]
     pub flags: Vec<String>,
@@ -224,19 +275,92 @@ pub struct SearchHit {
     pub trackers_reporting: Option<u32>,
 }
 
-/// How a relevance hit's score was made (§8 phase 2): `text` times each
-/// multiplier gives `score`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct ScoreParts {
-    pub freshness: f64,
-    pub junk: f64,
-    /// The swarm-consistency penalty (1 = none).
-    pub penalty: f64,
+/// How a first page was ranked (`?explain=1`, architecture §8). Field
+/// names are stable. Relevance is `(phase1 + phase2.name + phase2.title)`
+/// times each of `priors` (to float rounding); a prior the ranking
+/// doesn't apply is null, and counts as 1. The other phase-2 features
+/// aren't part of ranking yet and are null.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SearchExplain {
+    /// One per hit, in the hits' order.
+    pub hits: Vec<ExplainHit>,
+    /// `relevance`, or the field the hits are sorted by (`discovered`,
+    /// `size`, `files`, `seeders`, `leechers`, `trackers`, `seen`), when
+    /// no hit has relevance parts.
+    pub ranked_by: String,
+    /// Whether phase 2 re-ranked the phase-1 candidates: the query has
+    /// unfielded words, or the server ranks with the swarm priors.
+    pub two_phase: bool,
+    pub weights: ExplainWeights,
+}
+
+/// The ranking's weights, as this server runs them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainWeights {
+    /// Boost of a word found in the name, in phase 1 (on the combined
+    /// field) and phase 2.
+    pub name: f64,
+    /// Boost of a word found in a file or folder name, in phase 1.
+    pub path: f64,
+    /// Phase-1 candidates re-ranked together.
+    pub rerank_window: usize,
+    /// Phase-1 score of a word matched only by its stem in the title
+    /// (the plurals fallback, when `stemmed`).
+    pub stem_score: f64,
+    /// Phase-2 boost of a word found in the parsed title.
+    pub title: f64,
+}
+
+/// One hit's score in parts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainHit {
+    pub id: i64,
+    /// BM25 over the name and paths (`text`), fielded words and
+    /// filters; null under a field sort.
+    #[schema(required = true)]
+    pub phase1: Option<f64>,
+    /// Null under a field sort.
+    #[schema(required = true)]
+    pub phase2: Option<ExplainPhase2>,
+    pub priors: ExplainPriors,
+    /// The score the hit was ranked by, as in `hits[].score`.
     pub score: f64,
-    pub seeders: f64,
-    /// Phase 1 (BM25) plus the name and title boosts.
-    pub text: f64,
-    pub trackers: f64,
+}
+
+/// Phase 2's features (§8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainPhase2 {
+    /// Exact-name bonus: not ranked yet, always null.
+    #[schema(required = true)]
+    pub exact_name: Option<f64>,
+    /// The cap on file-only matches' contribution: not ranked yet,
+    /// always null.
+    #[schema(required = true)]
+    pub file_cap: Option<f64>,
+    /// The unfielded words' name boosts, summed (0 without phase 2).
+    pub name: f64,
+    /// Phrase and proximity bonus: not ranked yet, always null.
+    #[schema(required = true)]
+    pub phrase: Option<f64>,
+    /// The unfielded words' parsed-title boosts, summed.
+    pub title: f64,
+}
+
+/// The quality priors (§8), multipliers on relevance from swarm health
+/// (M4): null when the ranking doesn't apply them (no swarm data served,
+/// or a field sort).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainPriors {
+    #[schema(required = true)]
+    pub freshness: Option<f64>,
+    #[schema(required = true)]
+    pub junk: Option<f64>,
+    #[schema(required = true)]
+    pub seeders: Option<f64>,
+    #[schema(required = true)]
+    pub swarm_consistency: Option<f64>,
+    #[schema(required = true)]
+    pub trackers: Option<f64>,
 }
 
 /// One colour group's share of a torrent (`docs/metrics.md` §4, §7.1).

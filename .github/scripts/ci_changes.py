@@ -30,8 +30,15 @@ ROOT = Path(__file__).resolve().parents[2]
 FUZZ = sorted(p.stem for p in (ROOT / "fuzz/fuzz_targets").glob("*.rs"))
 
 # Paths that change how every Rust job builds: run all of them.
-# Outside the crates but checked by a Rust job: the drift job regenerates this.
-RUST_ALSO = re.compile(r"^web/src/lib/api/openapi\.json$")
+# Outside the crates but checked by a Rust job: the drift job regenerates these.
+# The logging check runs in the lint job.
+RUST_ALSO = re.compile(
+    r"^web/src/lib/api/openapi\.json$|^web/licenses/"
+    r"|^\.github/scripts/(test_)?licenses\.py$|^\.github/scripts/fixtures/licenses/"
+    r"|^\.github/scripts/(test_)?log_lint\.py$"
+    # rust.json embeds these notices; licenses.py --check runs with the Rust job.
+    r"|^LICENSE$|^brand/LICENSE\.md$"
+)
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"

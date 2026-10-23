@@ -203,37 +203,52 @@ const REVERSED: &[(&str, &str)] = &[
 /// alternatives, and a few rules no word narrows (sizes, prefixes and
 /// fuzzy words, which get the full match), none matching the set.
 fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
-    let word = |i: usize, salt: &str| format!("{salt}{}q{i}", ["zor", "vel", "mik", "tas"][i % 4]);
-    let common = |i: usize| COMMON[i / 5 % COMMON.len()];
+    rules(|i| (i % 100 < share).then(|| on_common(i)))
+}
+
+/// A word no torrent has.
+fn unique(i: usize, salt: &str) -> String {
+    format!("{salt}{}q{i}", ["zor", "vel", "mik", "tas"][i % 4])
+}
+
+fn common(i: usize) -> &'static str {
+    COMMON[i / 5 % COMMON.len()]
+}
+
+/// One of [`ten_thousand_rules`]' shapes on common words.
+fn on_common(i: usize) -> String {
+    match i % 5 {
+        0 => format!("{} {}", common(i), unique(i, "u")),
+        1 => {
+            let (a, b) = REVERSED[i / 5 % REVERSED.len()];
+            format!("\"{a} {b}\"")
+        }
+        2 => format!("{} size:>{}TB", common(i), i % 7 + 2),
+        3 => format!("file:({} size:>{}TB)", common(i), i % 7 + 2),
+        _ => format!("{} type:software", common(i)),
+    }
+}
+
+/// 10,000 rules: rule `i` is `pick(i)`'s, or else one of the rest
+/// [`ten_thousand_rules`] describes, none matching the set.
+fn rules(pick: impl Fn(usize) -> Option<String>) -> Vec<lodestar_filter::UserRule> {
+    let word = unique;
     (0..10_000)
         .map(|i| {
-            let q = if i % 100 < share {
-                match i % 5 {
-                    0 => format!("{} {}", common(i), word(i, "u")),
-                    1 => {
-                        let (a, b) = REVERSED[i / 5 % REVERSED.len()];
-                        format!("\"{a} {b}\"")
-                    }
-                    2 => format!("{} size:>{}TB", common(i), i % 7 + 2),
-                    3 => format!("file:({} size:>{}TB)", common(i), i % 7 + 2),
-                    _ => format!("{} type:software", common(i)),
-                }
-            } else {
-                match i % 100 {
-                    0..=53 => word(i, "k"),
-                    54..=73 => format!("\"{} {}\"", word(i, "a"), word(i, "b")),
-                    74..=83 => format!("group:{}", word(i, "g")),
-                    84..=93 => format!("{} type:movie -{}", word(i, "c"), word(i, "d")),
-                    94..=98 => format!("{} | {}", word(i, "e"), word(i, "f")),
-                    // Rules no word narrows: sizes, prefixes that start
-                    // like the set's words but match none, fuzzy words.
-                    _ => match i / 100 % 3 {
-                        0 => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
-                        1 => format!("{}*", PREFIXES[i / 300 % PREFIXES.len()]),
-                        _ => format!("~{}", word(i, "z")),
-                    },
-                }
-            };
+            let q = pick(i).unwrap_or_else(|| match i % 100 {
+                0..=53 => word(i, "k"),
+                54..=73 => format!("\"{} {}\"", word(i, "a"), word(i, "b")),
+                74..=83 => format!("group:{}", word(i, "g")),
+                84..=93 => format!("{} type:movie -{}", word(i, "c"), word(i, "d")),
+                94..=98 => format!("{} | {}", word(i, "e"), word(i, "f")),
+                // Rules no word narrows: sizes, prefixes that start
+                // like the set's words but match none, fuzzy words.
+                _ => match i / 100 % 3 {
+                    0 => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
+                    1 => format!("{}*", PREFIXES[i / 300 % PREFIXES.len()]),
+                    _ => format!("~{}", word(i, "z")),
+                },
+            });
             lodestar_filter::UserRule {
                 id: i as u32 + 1,
                 query: lodestar_search::parse(&q).unwrap(),
@@ -246,6 +261,161 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
         .collect()
 }
 
+/// The rule shapes the cheap check can't decide, each built on words
+/// the set has, so the narrowing and the cheap check leave it to the
+/// full match, and matching nothing.
+#[derive(Debug, Clone, Copy)]
+enum Shape {
+    /// Two common words always further apart than two tokens.
+    Near,
+    /// A common word, without a word every torrent has (`mkv`, the only
+    /// one, so these share their negated word, as `-sample` rules do).
+    Negation,
+    /// A made-up word of common letters within one or two edits of
+    /// nothing, which the character bounds can't rule out.
+    Fuzzy,
+    /// A prefix whose first four letters the set's words have.
+    Prefix,
+    /// A common word in the title, where titles never have it.
+    Title,
+}
+
+/// Pairs of the set's words never within three tokens of each other.
+const FAR: &[(&str, &str)] = &[
+    ("mkv", "1080p"),
+    ("mkv", "720p"),
+    ("srt", "2160p"),
+    ("nfo", "web"),
+    ("sample", "x264"),
+    ("mkv", "bluray"),
+    ("srt", "1080p"),
+    ("sample", "2160p"),
+];
+
+/// Starts of the set's words, letters only (a prefix with digits splits).
+const LETTER_PREFIXES: &[&str] = &[
+    "webd", "blur", "samp", "hevc", "atmo", "subs", "true", "webr",
+];
+
+impl Shape {
+    const ALL: [Shape; 5] = [
+        Shape::Near,
+        Shape::Negation,
+        Shape::Fuzzy,
+        Shape::Prefix,
+        Shape::Title,
+    ];
+
+    fn rule(self, i: usize) -> String {
+        match self {
+            // 32 different NEARs: a pair, either way round, one or two
+            // apart.
+            Shape::Near => {
+                let (a, b) = FAR[i / 7 % FAR.len()];
+                let (a, b) = if i / 3 % 2 == 0 { (a, b) } else { (b, a) };
+                format!("{a} NEAR/{} {b}", 1 + i / 11 % 2)
+            }
+            Shape::Negation => format!("{} -mkv", common(i)),
+            // Words of common letters, so the character bounds can't turn
+            // them away: half five letters (one edit), half eight (two).
+            Shape::Fuzzy => {
+                let letters = b"rstnlhdcm";
+                let n = if i % 2 == 0 { 5 } else { 8 };
+                let mut x = i as u64 * 0x9e37_79b9_7f4a_7c15 + 1;
+                let word: String = (0..n)
+                    .map(|_| {
+                        x ^= x >> 29;
+                        x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        char::from(letters[(x >> 32) as usize % letters.len()])
+                    })
+                    .collect();
+                format!("~{word}")
+            }
+            // Hundreds of different prefixes, each starting like a word
+            // the set has, then with letters none has there.
+            Shape::Prefix => {
+                let base = LETTER_PREFIXES[i / 7 % LETTER_PREFIXES.len()];
+                let letter = |n: usize| char::from(b'a' + (n % 26) as u8);
+                format!("{base}{}{}*", ["x", "z", "q"][i % 3], letter(i / 3))
+            }
+            Shape::Title => format!("title:{}", common(i)),
+        }
+    }
+}
+
+/// The held mixed set: of every 100 rules, 10 on common words (the 10%
+/// case), 1 NEAR, 2 negations, 2 fuzzy words, 3 prefixes and 1 `title:`
+/// word, all on the set's words, and the rest as in
+/// [`ten_thousand_rules`]. Most rules people write are words, phrases
+/// and groups; the expensive shapes are a few of them each (§2.21).
+fn mixed_rules() -> Vec<lodestar_filter::UserRule> {
+    rules(|i| match i % 100 {
+        0..10 => Some(on_common(i)),
+        10 => Some(Shape::Near.rule(i)),
+        11..13 => Some(Shape::Negation.rule(i)),
+        13..15 => Some(Shape::Fuzzy.rule(i)),
+        15..18 => Some(Shape::Prefix.rule(i)),
+        18 => Some(Shape::Title.rule(i)),
+        _ => None,
+    })
+}
+
+/// 10% of the rules of one shape, 1% on common words, and the rest.
+fn shape_rules(shape: Shape) -> Vec<lodestar_filter::UserRule> {
+    rules(|i| match i % 100 {
+        0..10 => Some(shape.rule(i)),
+        10 => Some(on_common(i)),
+        _ => None,
+    })
+}
+
+/// The runner's speed, from work that runs no Lodestar code: fold the
+/// torrent's name and file names to lower case, split them into words, hash
+/// the words into a set, look up the common words, and sort the hashes.
+/// It does the kinds of things the core does (strings, hashing, small
+/// allocations) in about the core's time, so a slower or busier runner
+/// slows it alike, and no change to the filter can move it.
+fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
+    use std::hash::BuildHasher;
+    let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+    let mut words = std::collections::HashSet::with_hasher(hasher.clone());
+    let mut text = String::new();
+    let names = files
+        .iter()
+        .filter_map(|f| f.path.last().map(String::as_str));
+    for part in std::iter::once(name).chain(names) {
+        text.clear();
+        text.push_str(part);
+        text.make_ascii_lowercase();
+        for word in text.split(|c: char| !c.is_alphanumeric()) {
+            if !word.is_empty() {
+                words.insert(hasher.hash_one(word));
+            }
+        }
+    }
+    let found = common.iter().filter(|h| words.contains(*h)).count();
+    let mut sorted: Vec<u64> = words.into_iter().collect();
+    sorted.sort_unstable();
+    found + sorted.len()
+}
+
+/// [`calibrate`]'s fastest pass per torrent on the reference runner, in
+/// nanoseconds: an AMD EPYC 7763, the most common hosted runner (10.7 µs,
+/// the lowest of jobs 120136591749, 120136592052, 120136592177 and
+/// 120136592216). The budget holds on hardware like users run, not only
+/// on the fastest runners (owner, 2026-10-23: "Go with whatever makes for
+/// the best user experience"); a runner as fast as the Xeon 6973P-C
+/// (7.2 µs) reads its times about 1.5× higher.
+///
+/// To derive it for a runner type, run the budget test on a runner of
+/// that type (the log's CPU line names it) and take the `calibration:`
+/// line's µs, the fastest pass; take the lowest over a few runs. Re-derive
+/// it when the calibration's time moves: a Rust toolchain change (the
+/// toolchain isn't pinned, and the calibration is all std: SipHash, the
+/// hash set, `sort_unstable`), or a change to [`calibrate`], [`torrents`]
+/// or [`COMMON`]. The test prints `rustc --version` to tell.
+const CALIB_REF_NS: f64 = 10_700.0;
+
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
 /// `filter budget` job): `cargo test --release -p lodestar-filter --test
@@ -253,15 +423,39 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
 ///
 /// Each pass judges every torrent of a varied set once, so caches warm
 /// only as they would on ingest. The engine is measured with 1%, 10% and
-/// 25% of the rules built on words the torrents have. The budget holds
-/// the core, 1% and 10%; 25% is measured and reported, not held.
+/// 25% of the rules built on words the torrents have, with a mixed set
+/// that adds the shapes the cheap check can't decide ([`mixed_rules`]),
+/// and with 10% of each such shape ([`Shape`]). The budget holds the
+/// core, 1%, 10% and the mixed set; 25% and each shape at 10% are
+/// measured and reported, not held. Every rule shape counts (§2.21,
+/// owner-delegated, 2026-10-23).
 ///
-/// The CI runner is authoritative. A slower machine (the build VM runs
-/// about 1.4 times slower) can fail the 10% case locally.
+/// The budget is in reference-runner microseconds (owner, 2026-10-22;
+/// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
+/// by 1.5-1.9× in speed, so the test times [`calibrate`] before any
+/// filter code runs and again once the engine is gone, and divides each
+/// case's time by how much slower than [`CALIB_REF_NS`] its fastest pass
+/// ran. The calibration never runs beside filter state, so a regression
+/// can't slow it and hide itself, and noise only adds time, so the fastest
+/// pass can only make the gate stricter. Raw times and the runner's speed
+/// are printed too.
+///
+/// This is a budget gate, not a regression gate: a slowdown that keeps a
+/// case under 50 µs passes (about +40% at 10% on today's code).
+/// Catching smaller ones needs a bench against a stored baseline.
 #[test]
 #[ignore]
 fn budget() {
-    const BUDGET_US: u128 = 50;
+    const BUDGET_US: f64 = 50.0;
+    // Outside this, the measurement is wrong rather than the runner slow:
+    // the runners seen took 0.67× (Xeon 6973P-C) to 1.1× (an Intel build
+    // VM) the reference's time.
+    const SPEED: std::ops::RangeInclusive<f64> = 0.4..=2.0;
+    // The fastest calibration passes before and after must agree this
+    // closely, or the runner's speed changed under the test.
+    const DRIFT: f64 = 0.15;
+    // Attempts at a measurement the drift doesn't spoil.
+    const ATTEMPTS: usize = 3;
     let set = torrents(512);
     let classes: Vec<_> = set
         .iter()
@@ -290,69 +484,173 @@ fn budget() {
         })
         .collect();
     let files: usize = set.iter().map(|(_, f)| f.len()).sum();
+    let cpu = std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.strip_prefix("model name")
+                    .map(|m| m.trim_start_matches([' ', '\t', ':']).to_owned())
+            })
+        })
+        .unwrap_or_else(|| "unknown".into());
+    let rustc = std::process::Command::new(std::env::var("RUSTC").unwrap_or("rustc".into()))
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_else(|| "unknown".into());
     println!(
-        "{} torrents, {:.1} files each on average",
+        "{} torrents, {:.1} files each on average; CPU {cpu}; {rustc}",
         items.len(),
         files as f64 / items.len() as f64
     );
-    // A warm-up pass (the first judgment also builds the rule index),
-    // then the median of seven passes over the set, so one noisy pass on
-    // a shared runner doesn't decide. Each pass's mean is printed.
-    let time = |what: &str, f: &dyn Fn(usize)| {
-        (0..items.len()).for_each(f);
-        let mut passes: Vec<_> = (0..7)
-            .map(|_| {
-                let start = Instant::now();
-                (0..items.len()).for_each(f);
-                start.elapsed() / items.len() as u32
-            })
-            .collect();
-        println!("{what}: passes {passes:?}");
-        passes.sort();
-        let per = passes[3];
-        println!("{what}: {per:?} per torrent");
-        per
+    let common: Vec<u64> = {
+        use std::hash::BuildHasher;
+        let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+        COMMON.iter().map(|w| hasher.hash_one(w)).collect()
     };
-    let core = shipped();
-    let mut over = Vec::new();
-    let per = time("core", &|i| {
-        std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
-    });
-    if per.as_micros() >= BUDGET_US {
-        over.push(format!("core: {per:?}"));
-    }
+    let calib = |i: usize| {
+        let (name, files) = std::hint::black_box(&set[i]);
+        std::hint::black_box(calibrate(name, files, &common));
+    };
+    // Microseconds per torrent for one pass over the set.
+    let pass = |f: &dyn Fn(usize)| {
+        let start = Instant::now();
+        (0..items.len()).for_each(f);
+        start.elapsed().as_secs_f64() * 1e6 / items.len() as f64
+    };
+    let show = |v: &[f64]| {
+        v.iter()
+            .map(|x| format!("{x:.1}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    // A warm-up pass (the first judgment also builds the rule index),
+    // then seven passes over the set. The median decides, so one noisy
+    // pass on a shared runner doesn't.
+    let time = |what: &str, f: &dyn Fn(usize)| {
+        pass(f);
+        let mut passes: Vec<f64> = (0..7).map(|_| pass(f)).collect();
+        println!("{what}: passes {} µs", show(&passes));
+        passes.sort_by(f64::total_cmp);
+        passes[3]
+    };
+    // The fastest of seven calibration passes, after a warm-up.
+    let calibration = |when: &str| {
+        pass(&calib);
+        let passes: Vec<f64> = (0..7).map(|_| pass(&calib)).collect();
+        println!("calibration {when}: passes {} µs", show(&passes));
+        passes.into_iter().fold(f64::INFINITY, f64::min)
+    };
 
-    // The whole engine: the core, every pack, and 10,000 of your rules,
-    // reading the classification as ingest does.
-    let mut engine = lodestar_filter::Engine::new(core);
-    engine.packs = lodestar_filter::PackSwitches::all();
-    for (share, held) in [(1, true), (10, true), (25, false)] {
-        engine.rules = ten_thousand_rules(share).into();
-        let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
-        let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
-            let (a, b) = engine.rule_counts(&items[i], Some(&facts[i]));
-            (m + a, f + b)
-        });
-        println!(
-            "{what}: each torrent meets {:.0} rules on average; {:.0} get the full match",
-            met as f64 / items.len() as f64,
-            full as f64 / items.len() as f64
-        );
-        let per = time(&what, &|i| {
-            let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
-            assert!(
-                v.decision
-                    .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
-                "no rule of yours matches the set"
+    // A runner's speed can change under the test (a shared host's
+    // neighbours), which the calibrations before and after catch. Such a
+    // run measures again rather than failing, up to three times; only a
+    // trusted attempt decides, and only drift on every attempt fails.
+    let mut drifted = Vec::new();
+    for attempt in 1..=ATTEMPTS {
+        println!("attempt {attempt} of {ATTEMPTS}");
+        let before = calibration("before");
+        let core = shipped();
+        let mut cases = vec![(
+            "core".to_owned(),
+            time("core", &|i| {
+                std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
+            }),
+            true,
+        )];
+
+        // The whole engine: the core, every pack, and 10,000 of your rules,
+        // reading the classification as ingest does.
+        let mut engine = lodestar_filter::Engine::new(core);
+        engine.packs = lodestar_filter::PackSwitches::all();
+        let mut sets: Vec<(String, Vec<lodestar_filter::UserRule>, bool)> =
+            [(1, true), (10, true), (25, false)]
+                .into_iter()
+                .map(|(share, held)| {
+                    let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
+                    (what, ten_thousand_rules(share), held)
+                })
+                .collect();
+        sets.push((
+            "engine, packs on, 10,000 rules, mixed (10% common, 1% NEAR, 2% negation, 2% fuzzy, 3% prefix, 1% title)".into(),
+            mixed_rules(),
+            true,
+        ));
+        for shape in Shape::ALL {
+            let what = format!("engine, packs on, 10,000 rules, 10% {shape:?}");
+            sets.push((what, shape_rules(shape), false));
+        }
+        for (what, rules, held) in sets {
+            engine.rules = rules.into();
+            let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
+                let (a, b) = engine.rule_counts(&items[i], Some(&facts[i]));
+                (m + a, f + b)
+            });
+            println!(
+                "{what}: each torrent meets {:.0} rules on average; {:.0} get the full match",
+                met as f64 / items.len() as f64,
+                full as f64 / items.len() as f64
             );
-        });
-        if per.as_micros() >= BUDGET_US {
-            if held {
-                over.push(format!("{what}: {per:?}"));
-            } else {
-                println!("{what}: over {BUDGET_US} µs (reported, not held)");
+            let per = time(&what, &|i| {
+                let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
+                assert!(
+                    v.decision
+                        .as_ref()
+                        .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
+                    "no rule of yours matches the set: {what}: {:?}",
+                    v.decision
+                );
+            });
+            cases.push((what, per, held));
+        }
+        drop(engine);
+        let after = calibration("after");
+
+        let calib_us = before.min(after);
+        // How many times the reference's time this runner takes.
+        let speed = calib_us * 1e3 / CALIB_REF_NS;
+        println!(
+            "calibration: {calib_us:.2} µs per torrent, {speed:.2}× the reference's {:.2} µs",
+            CALIB_REF_NS / 1e3
+        );
+        let drift = before.max(after) / calib_us - 1.0;
+        if drift > DRIFT {
+            let note = format!(
+                "attempt {attempt}: the fastest calibration pass was {before:.2} µs before and \
+                 {after:.2} µs after, {:.0}% apart",
+                drift * 100.0
+            );
+            println!("{note}: the runner's speed changed under the test, so measuring again");
+            drifted.push(note);
+            continue;
+        }
+        assert!(
+            SPEED.contains(&speed),
+            "the runner took {speed:.2}× the reference's time to calibrate, outside \
+             {SPEED:?}: the measurement can't be trusted"
+        );
+        let mut over = Vec::new();
+        for (what, raw, held) in cases {
+            let per = raw / speed;
+            println!("{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here)");
+            if per >= BUDGET_US {
+                if held {
+                    over.push(format!("{what}: {per:.1} µs ({raw:.1} µs here)"));
+                } else {
+                    println!("{what}: over {BUDGET_US} µs (reported, not held)");
+                }
             }
         }
+        assert!(
+            over.is_empty(),
+            "over the {BUDGET_US} µs budget on the reference runner, with this runner at \
+             {speed:.2}× its time: {over:?}"
+        );
+        return;
     }
-    assert!(over.is_empty(), "over the {BUDGET_US} µs budget: {over:?}");
+    panic!(
+        "the runner's speed changed under the test on all {ATTEMPTS} attempts, so the \
+         measurement can't be trusted: {drifted:?}"
+    );
 }

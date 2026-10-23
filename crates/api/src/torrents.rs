@@ -11,7 +11,7 @@ use lodestar_store::{FileTree, TorrentRow};
 use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
-use crate::dto::search::{ScoreParts, SearchHit};
+use crate::dto::search::SearchHit;
 use crate::dto::torrents::{FileEntry, FilesPage, FilesQuery, TorrentDetail};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Path, Query};
@@ -64,7 +64,6 @@ pub(crate) fn hit(
     score: f32,
     matched_files: Option<Vec<u64>>,
     swarm: Summary,
-    explain: Option<ScoreParts>,
 ) -> SearchHit {
     SearchHit {
         adult_kind: None,
@@ -72,7 +71,6 @@ pub(crate) fn hit(
         composition: Vec::new(),
         content_type: None,
         discovered_at: row.discovered_at,
-        explain,
         files: row.file_count,
         flags: flags(row),
         hash: hex(&row.info_hash.0),
@@ -278,7 +276,7 @@ pub(crate) async fn files(
     .map_err(internal)?
 }
 
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {

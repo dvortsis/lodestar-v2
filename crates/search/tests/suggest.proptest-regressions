@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6878c9d48670bba800d5b819499ed087aaf8a4f99309d4a694ee29dc226edb26 # shrinks to parts = [("-\"cam rip\"", true)]
+cc 4cbbd35e4491b9be45e5f778b79b376af00a09e111ec86767ba8002481b742c6 # shrinks to parts = [("-x265", true), ("|", false), ("-x265", true)]
+cc 92667be3a53a315e4e631af13dc354d488a2c44379e3d92f16f08f9697cef1a4 # shrinks to words = ["movies", "movies"]
+cc b5021598d983495cd0dfc5a5b391283d1846dc7a023a72979c6f52b5206f442c # shrinks to words = ["french"]

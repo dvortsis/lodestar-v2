@@ -313,27 +313,48 @@ fn has_phrase(field: &[Tok], text: &str) -> bool {
 }
 
 /// Every word within a window of `slop` extra positions, in any order.
+/// A word is its parts in a row, or one token of a form covering all of
+/// them, and distances run between the nearest ends of two places.
 fn has_near(field: &[Tok], words: &[String], slop: u32) -> bool {
-    let positions: Vec<Vec<usize>> = words
-        .iter()
-        .map(|w| {
-            let f = folded(w);
-            field
-                .iter()
-                .filter(|t| t.text == f)
-                .map(|t| t.position)
-                .collect()
-        })
-        .collect();
-    if positions.iter().any(Vec::is_empty) {
+    let places: Vec<Vec<(usize, usize)>> = words.iter().map(|w| near_places(field, w)).collect();
+    if places.iter().any(Vec::is_empty) {
         return false;
     }
     let span = words.len() + slop as usize;
-    positions[0].iter().any(|&p0| {
-        positions
-            .iter()
-            .all(|ps| ps.iter().any(|&p| p.abs_diff(p0) < span))
-    })
+    let gap = |(a0, a1): (usize, usize), (b0, b1): (usize, usize)| {
+        b0.saturating_sub(a1).max(a0.saturating_sub(b1))
+    };
+    places[0]
+        .iter()
+        .any(|&a| places.iter().all(|ps| ps.iter().any(|&b| gap(a, b) < span)))
+}
+
+/// The first and last positions of each place of a NEAR word.
+fn near_places(field: &[Tok], word: &str) -> Vec<(usize, usize)> {
+    let q = tokenize(word);
+    let p = parts(word);
+    let (Some(first), Some(last)) = (p.first(), p.last()) else {
+        return Vec::new();
+    };
+    let forms: Vec<&str> = q
+        .iter()
+        .filter(|t| t.kind != TokKind::Part && t.from <= first.from && t.to >= last.to)
+        .map(|t| t.text.as_str())
+        .collect();
+    let mut out = Vec::new();
+    for t in field {
+        if forms.contains(&t.text.as_str()) {
+            out.push((t.position, t.position));
+        }
+        if t.text == first.text
+            && p.iter()
+                .enumerate()
+                .all(|(i, x)| at(field, t.position + i, &x.text))
+        {
+            out.push((t.position, t.position + p.len() - 1));
+        }
+    }
+    out
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {

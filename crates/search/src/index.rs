@@ -138,6 +138,8 @@ pub struct SearchIndex {
     /// Held by every clone, so [`SearchIndex::holders`] tells when the
     /// last one (a lease's included) is gone.
     holders: Arc<()>,
+    /// The title FST beside this index (B7, `suggest::titles`).
+    titles: Arc<crate::suggest::Titles>,
 }
 
 /// A per-torrent ranking multiplier in `0..=1`, by torrent id: the hook
@@ -433,7 +435,7 @@ pub struct Results {
 }
 
 /// Whether `node` has a date relative to now.
-fn relative(node: &Node) -> bool {
+pub(crate) fn relative(node: &Node) -> bool {
     match node {
         Node::And { of } | Node::Or { of } => of.iter().any(relative),
         Node::Not { of } => relative(of),
@@ -679,6 +681,7 @@ impl SearchIndex {
             read_only: false,
             missing: Arc::new([]),
             holders: Arc::default(),
+            titles: Arc::default(),
         })
     }
 
@@ -749,9 +752,20 @@ impl SearchIndex {
         Arc::downgrade(&self.holders)
     }
 
+    /// The title set typeahead completes from (B7), rebuilt as the live
+    /// indexer commits.
+    pub fn titles(&self) -> &Arc<crate::suggest::Titles> {
+        &self.titles
+    }
+
     /// The current snapshot, which a lease pins.
     pub(crate) fn searcher(&self) -> Searcher {
         self.reader.searcher()
+    }
+
+    /// The file index's current snapshot (the result cache's key).
+    pub(crate) fn files_searcher(&self) -> Searcher {
+        self.files.reader.searcher()
     }
 
     pub(crate) fn segment_cache(&self) -> &SegmentCache {
@@ -809,6 +823,8 @@ impl SearchIndex {
     /// hidden while Adult is.
     pub(crate) fn adult_between(&self, after: i64, upto: i64) -> Result<u64> {
         let f = &self.fields;
+        // Torrent ids come from SQLite's rowid sequence and start at 1;
+        // a watermark is 0 at the lowest, so `max(0)` never changes one.
         let id = |v: i64| Term::from_field_u64(f.id, v.max(0) as u64);
         let adult: Box<dyn Query> = Box::new(TermQuery::new(
             Term::from_field_text(f.tag, &adult_tag()),
@@ -1327,6 +1343,20 @@ impl Side {
     }
 }
 
+/// What one [`Indexer::catch_up_counted`] step did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CatchUp {
+    /// Torrents new to the index. A re-indexed torrent counts only as
+    /// replayed, whatever its class.
+    pub added: usize,
+    /// How many of `added` are Adult: indexed with `type:adult`, the term
+    /// the visibility clause `-type:adult` excludes, so the count and
+    /// search agree (§20.9).
+    pub adult_added: usize,
+    /// `reindex_log` entries replayed.
+    pub replayed: usize,
+}
+
 /// Adds torrents to both indexes in id order and commits each with its
 /// watermark.
 pub struct Indexer {
@@ -1361,21 +1391,13 @@ impl Indexer {
     /// re-indexes torrents changed since (upgraded partial imports, new
     /// enrichment). Returns how many torrents it added or replaced.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
-        let (added, _, replayed) = self.catch_up_counted(store, limit)?;
-        Ok(added + replayed)
+        let c = self.catch_up_counted(store, limit)?;
+        Ok(c.added + c.replayed)
     }
 
-    /// [`Indexer::catch_up`], counting apart the torrents added, how many
-    /// of those are Adult (indexed with `type:adult`, the term the
-    /// visibility clause `-type:adult` excludes, so the count and search
-    /// agree), and the `reindex_log` entries replayed:
-    /// `(added, adult_added, replayed)`. A re-indexed torrent counts only
-    /// as replayed, whatever its class.
-    pub fn catch_up_counted(
-        &mut self,
-        store: &mut Store,
-        limit: usize,
-    ) -> Result<(usize, usize, usize)> {
+    /// [`Indexer::catch_up`], counting the torrents added and the
+    /// `reindex_log` entries replayed apart (see [`CatchUp`]).
+    pub fn catch_up_counted(&mut self, store: &mut Store, limit: usize) -> Result<CatchUp> {
         for side in [&mut self.torrents, &mut self.files] {
             if side.last_id == 0 && side.reindex_seq == 0 {
                 // A new index reads every torrent's current data, so the
@@ -1383,8 +1405,7 @@ impl Indexer {
                 side.reindex_seq = store.reindex_head()?;
             }
         }
-        let (added, adult_added) = self.catch_up_new(store, limit)?;
-        let mut replayed = 0;
+        let mut counted = self.catch_up_new(store, limit)?;
         let after = self.torrents.reindex_seq.min(self.files.reindex_seq);
         for (seq, id) in store.reindex_after(after, limit)? {
             let t = load(store, id)?;
@@ -1419,9 +1440,9 @@ impl Indexer {
                 }
             }
             self.pending += 1;
-            replayed += 1;
+            counted.replayed += 1;
         }
-        Ok((added, adult_added, replayed))
+        Ok(counted)
     }
 
     /// Whether both indexes have followed the store up to torrent `id`
@@ -1432,12 +1453,11 @@ impl Indexer {
             .all(|s| s.last_id >= id && s.reindex_seq >= seq)
     }
 
-    /// Adds the torrents after the watermarks; returns how many, and how
-    /// many of those the torrent index took as Adult.
-    fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<(usize, usize)> {
+    /// Adds the torrents after the watermarks and counts them.
+    fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<CatchUp> {
         let from = self.torrents.last_id.min(self.files.last_id);
         let ids = store.ids_after(from, limit)?;
-        let (mut added, mut adult) = (0, 0);
+        let mut c = CatchUp::default();
         for id in ids {
             // Deleted between the reads: nothing to index.
             let t = load(store, id)?;
@@ -1466,16 +1486,16 @@ impl Indexer {
             }
             if t.is_some() {
                 self.pending += 1;
-                added += 1;
-                let class = match class {
-                    Some(c) => c,
+                c.added += 1;
+                let adult = match class {
+                    Some(a) => a,
                     // Only the file index was behind.
                     None => stored_adult(store, id)?,
                 };
-                adult += usize::from(class);
+                c.adult_added += usize::from(adult);
             }
         }
-        Ok((added, adult))
+        Ok(c)
     }
 
     /// Commits what's pending with the watermarks and makes it

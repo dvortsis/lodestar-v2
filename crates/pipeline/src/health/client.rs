@@ -111,6 +111,24 @@ impl Gate {
 
 /// How many requests, paced `interval_ms` apart from `ready_at`, can start
 /// by `limit`.
+/// A scrape error's kind for the log: never its message, which can carry
+/// a tracker's own text (a refusal) or a URL.
+fn error_kind(e: &Error) -> &'static str {
+    match e {
+        Error::Timeout => "timeout",
+        Error::Resolve => "resolve",
+        Error::Denied => "denied",
+        Error::Io(_) => "io",
+        Error::Refused(_) => "refused",
+        Error::Status(_) => "http_status",
+        Error::Protocol(_) => "protocol",
+        Error::TooLarge => "too_large",
+        Error::BadRequest(_) => "bad_request",
+        Error::Http(_) => "http",
+        _ => "other",
+    }
+}
+
 pub(crate) fn requests_by(ready_at: u64, interval_ms: u64, limit: u64) -> u64 {
     match limit.checked_sub(ready_at) {
         None => 0,
@@ -238,7 +256,11 @@ impl ClientTask {
                         (_, Error::Timeout) => Outcome::Timeout,
                         _ => Outcome::Error,
                     };
-                    tracing::debug!(tracker = self.id, "scrape failed: {e}");
+                    lodestar_log::log_event!(
+                        crate::log_events::SCRAPE_FAILED,
+                        tracker = lodestar_log::Count(u64::from(self.id)),
+                        error = lodestar_log::Error::kind(error_kind(&e))
+                    );
                     // Earlier requests' answers stand.
                     let asked = answers.len() + chunk.len();
                     return (answers, outcome, asked);
