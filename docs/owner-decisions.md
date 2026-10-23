@@ -310,7 +310,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Brand:** a `brand/brand.json` profile fixes the fonts the skills would otherwise misdetect.
     - **Scope:** the README, `docs/user/`, `docs/operations.md`, release notes and in-app help. Developer and contract docs are exempt.
 
-15. **Runner concurrency:** up to 16 Opus code slices and 16 helper slices at once (raised from 4 core / 8 helpers, then doubled the same day). Slices still need disjoint owned paths, and every PR still gets a fresh Opus review before merge.
+15. **Runner concurrency:** up to 16 Opus code slices and 16 helper slices at once (raised from 4 core / 8 helpers, then doubled the same day). Slices still need disjoint owned paths, and every PR still gets a fresh Opus review before merge. The daily launch cap rose by 50%, from 40 to 60 slice launches a day (owner, 2026-10-23: "raise the cap by 50%"); it stays a backstop against runaway loops, not a budget.
 16. **Adult-relabel quarantines:** when a user's Is-adult correction or class rule makes the Adult-only child-safety core quarantine a torrent, the sealed name is still purged after 30 days, but the entry then becomes a tombstone (hash and rule only), so the torrent is never fetched again. It can still be released deliberately, with the effect warning and the password.
 17. **Deleted data is overwritten:** SQLite's `secure_delete` is on, so deleted rows (sealed quarantine names, deleted torrents) are zeroed rather than left in free pages that a copy of the data folder could recover.
 18. **A red check that isn't the PR's doesn't block merge** (owner, 2026-10-22, build-runner session: "Yes, I agree to 1 and 2"). A check that's also red on `main`, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block a merge. The runner says so on the PR, naming the check, why it isn't the PR's, and the fix PR if there is one. Every other check must pass, and the fresh review still applies.
@@ -327,7 +327,19 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - The nightly and freshness keys are reachable by workflows on `main`; a leak affects Nightly installs only, or freezes updates, and is fixed by a recovery-signed rotation.
       - The owner creates the nightly and freshness key pairs and sets up the environments and secrets.
     - **Recovery key:** an accepted risk. The offline, password-protected key isn't rotated; if it's lost or compromised, the remedy is a new build installed by hand. No rotation statement is designed.
-    - **Merging stays with the runner.** Sessions don't merge their own PRs. No branch protection is added: every session uses the owner's account, so protection couldn't tell them apart and would only block the runner's merges.
+    - **Merging stays with the runner.** Sessions don't merge their own PRs. Branch protection was later added by the owner's own decision, §2.22.
+22. **Only the runner merges; sessions drive their own PRs** (owner, 2026-10-23: "Yes, I approve this change"). The owner asked for less risk, better throughput and minimal handholding.
+    - **Merging:** only the build runner merges, enables auto-merge or writes to `main`. A hook (`.claude/hooks/merge-guard.sh`) refuses those calls in every other session.
+    - **Branch protection:** `main` requires a PR and the `ci-ok` check, with no bypass. `ci-ok` covers the correctness jobs, so §2.18 no longer waves a red `ci-ok` job through: the runner re-runs it once if it's a flake, or fixes `main` first if it's red there. The performance budgets, `web.yml`, `e2e.yml` and `release.yml` stay outside `ci-ok`, under §2.18.
+    - **Registration:** every session that writes code on the repository is a runner slice or registered with the runner, including sessions the owner starts.
+    - **The `steward` skill** (`.claude/skills/steward/SKILL.md`): slice sessions self-review with a fresh Opus reviewer before opening their PR, fix their own red CI and merge conflicts, and message the runner when they are ready or blocked.
+    - **The runner's final review is unchanged.** The runner also brings `main` into a stale PR before merging it, keeps `main` green by reverting or fixing a breaking merge first, and archives merged sessions.
+    - **A watchdog** restarts a runner that has gone quiet.
+    - **No merge queue:** GitHub offers merge queues only on repositories owned by an organization, and this one belongs to a personal account. The freshness rule in `runner/README.md` stands in for it.
+23. **Code signing waits** (owner, 2026-10-23: "we're going to wait on the code-signing certificate since I'm not selling this commercially").
+    - **No certificate for now:** Windows builds (MSI, portable zip, binaries) ship without an Authenticode signature until the owner gets one. The `owner-signing-cert` dependency blocks nothing.
+    - **Update trust is unchanged:** the Ed25519-signed manifest and its SHA-256 and size pins (architecture §12.2) are what the update engine trusts, so the update path loses nothing it relies on. The engine checks Authenticode only on artifacts that carry a signature.
+    - **The user guide** explains the SmartScreen warning plainly. It also shows how to check a download against the release's signed checksums before choosing "Run anyway" (§2.14).
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
