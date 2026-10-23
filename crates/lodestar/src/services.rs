@@ -197,6 +197,7 @@ impl Services {
             quarantine_secs,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
+        let subscriptions_stopped = crate::fixture::unless_offline(subscriptions_stopped);
         let refresher = tokio::spawn(subscriptions::run(
             control.clone(),
             subscriptions::Limits::from_config(&config.subscriptions),
