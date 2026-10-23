@@ -46,7 +46,7 @@ pub enum Reason {
     TrustDamaged,
     /// No key is known for the channel (Nightly, until it exists).
     ChannelUnavailable,
-    /// Installing arrives in the next part of B-update.
+    /// Installing arrives in part 5 of B-update.
     NotBuiltYet,
 }
 
@@ -137,24 +137,43 @@ pub fn plan(i: &Inputs<'_>) -> Plan {
         .releases
         .iter()
         .filter(|r| !r.withdrawn && r.version > *i.running)
-        .filter(|r| !i.skipped.contains(&r.version.to_string()))
+        .filter(|r| !skipped(i, &r.version))
         .collect();
     candidates.sort_by(|a, b| b.version.cmp(&a.version));
-    // The newest release reachable from here, for the upgrade path.
     let reachable = |r: &Release| r.min_from.as_ref().is_none_or(|m| *i.running >= *m);
-    let via = candidates
-        .iter()
-        .find(|r| reachable(r))
-        .map(|r| r.version.to_string());
     let releases: Vec<Assessed> = candidates
         .iter()
-        .map(|r| assess(i, r, reachable(r), via.clone()))
+        .map(|r| {
+            // For the upgrade path: the newest reachable release below
+            // this one, which installs first.
+            let via = candidates
+                .iter()
+                .filter(|c| c.version < r.version && reachable(c))
+                .map(|c| c.version.to_string())
+                .next();
+            assess(i, r, reachable(r), via)
+        })
         .collect();
     let next = releases
         .iter()
         .filter_map(|a| a.installs_at.map(|at| (a.version.clone(), at)))
         .min_by(|(va, a), (vb, b)| a.cmp(b).then(vb.cmp(va)));
     Plan { releases, next }
+}
+
+/// Whether `skipped` names `version` (compared as versions, so another
+/// spelling of the same one still counts).
+fn skipped(i: &Inputs<'_>, version: &Version) -> bool {
+    i.skipped
+        .iter()
+        .any(|s| Version::parse(s).is_ok_and(|v| v == *version))
+}
+
+/// Why this installation can't install: the caller's reason, or `image`
+/// mode (the container image updates it), which the policy knows itself.
+fn incapable(i: &Inputs<'_>) -> Option<Reason> {
+    i.incapable
+        .or((i.settings.mode == Mode::Image).then_some(Reason::ImageMode))
 }
 
 fn assess(i: &Inputs<'_>, r: &Release, reachable: bool, via: Option<String>) -> Assessed {
@@ -178,7 +197,9 @@ fn assess(i: &Inputs<'_>, r: &Release, reachable: bool, via: Option<String>) -> 
     let wait_until = if security {
         i.now
     } else {
-        (r.date as i64).saturating_add(i64::from(s.wait_days) * 86_400)
+        i64::try_from(r.date)
+            .unwrap_or(i64::MAX)
+            .saturating_add(i64::from(s.wait_days) * 86_400)
     };
     if wait_until > i.now {
         blocks.push(Block::Wait { until: wait_until });
@@ -193,7 +214,7 @@ fn assess(i: &Inputs<'_>, r: &Release, reachable: bool, via: Option<String>) -> 
     if !reachable {
         blocks.push(Block::UpgradePath { via });
     }
-    if let Some(reason) = i.incapable {
+    if let Some(reason) = incapable(i) {
         blocks.push(Block::Capability { reason });
     }
     // Waiting (out the wait or a pause) still installs, later; anything
@@ -226,19 +247,21 @@ fn level_allows(setting: Level, release: ReleaseLevel) -> bool {
 /// Why Install now refuses `version`, if it does: it must be a
 /// candidate (not withdrawn, newer, not skipped), reachable from the
 /// running version, from a current manifest, on an installation that
-/// can install. The window, the wait, the level and a pause don't apply.
+/// can install (not in `image` mode). The window, the wait, the level and
+/// a pause don't apply. Confirming a release's manual steps is the
+/// route's check (`confirm_manual`), not this one's.
 #[cfg_attr(not(test), allow(dead_code))] // `POST /updates/install` (part 4).
 pub fn install_now(i: &Inputs<'_>, version: &Version) -> Result<(), Refusal> {
     let Some(r) = i.releases.iter().find(|r| r.version == *version) else {
         return Err(Refusal::UnknownVersion);
     };
-    if i.skipped.contains(&version.to_string()) {
+    if skipped(i, version) {
         return Err(Refusal::Skipped);
     }
     if r.withdrawn || r.version <= *i.running {
         return Err(Refusal::NotCandidate);
     }
-    if let Some(reason) = i.incapable {
+    if let Some(reason) = incapable(i) {
         return Err(Refusal::Incapable(reason));
     }
     if !i.current {
@@ -554,6 +577,26 @@ mod tests {
         assert_eq!(
             install_now(&c2.inputs(), &Version::new(0, 6, 0)),
             Err(Refusal::Incapable(Reason::NotSupervised))
+        );
+    }
+
+    /// `image` mode never installs, even when the caller found no reason.
+    #[test]
+    fn image_mode_installs_nothing_by_itself() {
+        let c = Case::new(
+            Mode::Image,
+            vec![release("0.6.0", NOW - 10 * DAY, ReleaseLevel::Fix)],
+        );
+        assert!(
+            c.plan().releases[0]
+                .blocked_by
+                .contains(&Block::Capability {
+                    reason: Reason::ImageMode
+                })
+        );
+        assert_eq!(
+            install_now(&c.inputs(), &Version::new(0, 6, 0)),
+            Err(Refusal::Incapable(Reason::ImageMode))
         );
     }
 
