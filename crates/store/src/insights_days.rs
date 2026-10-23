@@ -368,6 +368,10 @@ impl Store {
                 "r.day * 24, 0, r.key",
                 "GROUP BY r.day, r.key ORDER BY r.day, r.key",
             ),
+            RollupBy::All => (
+                "r.day * 24, r.dim, r.key",
+                "GROUP BY r.day, r.dim, r.key ORDER BY r.day, r.dim, r.key",
+            ),
         };
         let sql = format!(
             "WITH RECURSIVE d(x) AS (
@@ -420,6 +424,10 @@ impl Store {
             RollupBy::HourKey => (
                 "(hour / 24) * 24 AS d, 0, key",
                 "GROUP BY d, key ORDER BY d, key",
+            ),
+            RollupBy::All => (
+                "(hour / 24) * 24 AS d, dim, key",
+                "GROUP BY d, dim, key ORDER BY d, dim, key",
             ),
         };
         let sql = format!(
@@ -1692,6 +1700,21 @@ mod tests {
                  WHERE r.day = d.x AND r.metric = ?3 GROUP BY r.day, r.dim ORDER BY r.day, r.dim",
                 3,
                 "SEARCH r USING PRIMARY KEY (day=? AND metric=?)",
+            ),
+            (
+                "WITH RECURSIVE d(x) AS (SELECT ?1 WHERE ?1 < ?2 UNION ALL SELECT x + 1 FROM d WHERE x + 1 < ?2)
+                 SELECT r.day * 24, r.dim, r.key, sum(r.value) FROM d CROSS JOIN rollup_day r
+                 WHERE r.day = d.x AND r.metric = ?3 GROUP BY r.day, r.dim, r.key
+                 ORDER BY r.day, r.dim, r.key",
+                3,
+                "SEARCH r USING PRIMARY KEY (day=? AND metric=?)",
+            ),
+            (
+                "SELECT (hour / 24) * 24 AS d, dim, key, sum(value) FROM rollup_hour
+                 WHERE hour >= ?1 AND hour < ?2 AND metric = ?3 GROUP BY d, dim, key
+                 ORDER BY d, dim, key",
+                3,
+                "SEARCH rollup_hour USING PRIMARY KEY (hour>? AND hour<?)",
             ),
             (
                 "SELECT day * 24, source, stage, reason, count FROM cohort_day

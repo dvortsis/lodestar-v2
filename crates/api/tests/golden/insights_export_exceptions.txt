@@ -1,0 +1,1 @@
+period,fix.kind,fix.target,kind,severity,since,since_utc,unit,value

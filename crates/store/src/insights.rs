@@ -214,6 +214,8 @@ pub enum RollupBy {
     Key,
     HourDim,
     HourKey,
+    /// Every (hour, dim, key) the metric has.
+    All,
 }
 
 /// Log buckets with consecutive edges a factor 1.1 apart, so a value
@@ -512,6 +514,10 @@ impl Store {
             RollupBy::HourKey => (
                 "r.hour, 0, r.key",
                 "GROUP BY r.hour, r.key ORDER BY r.hour, r.key",
+            ),
+            RollupBy::All => (
+                "r.hour, r.dim, r.key",
+                "GROUP BY r.hour, r.dim, r.key ORDER BY r.hour, r.dim, r.key",
             ),
         };
         // `CROSS JOIN` keeps the hour list as the outer loop.
@@ -940,6 +946,10 @@ mod tests {
             [(H, 0, 0, 4), (H, 1, 0, 2), (H + 2, 0, 0, 5)]
         );
         assert_eq!(pick(RollupBy::HourKey), [(H, 0, 0, 6), (H + 2, 0, 1, 5)]);
+        assert_eq!(
+            pick(RollupBy::All),
+            [(H, 0, 0, 4), (H, 1, 0, 2), (H + 2, 0, 1, 5)]
+        );
         assert!(
             s.rollup_sums(4, H + 6, H + 9, RollupBy::Total)
                 .unwrap()
@@ -1093,6 +1103,11 @@ mod tests {
         let rollup = "WITH RECURSIVE h(x) AS (SELECT ?1 WHERE ?1 < ?2 UNION ALL SELECT x + 1 FROM h WHERE x + 1 < ?2)
              SELECT r.hour, r.dim, 0, sum(r.value) FROM h CROSS JOIN rollup_hour r
              WHERE r.hour = h.x AND r.metric = ?3 GROUP BY r.hour, r.dim";
+        // The stage pages' grouping (`RollupBy::All`).
+        let rollup_all = "WITH RECURSIVE h(x) AS (SELECT ?1 WHERE ?1 < ?2 UNION ALL SELECT x + 1 FROM h WHERE x + 1 < ?2)
+             SELECT r.hour, r.dim, r.key, sum(r.value) FROM h CROSS JOIN rollup_hour r
+             WHERE r.hour = h.x AND r.metric = ?3 GROUP BY r.hour, r.dim, r.key
+             ORDER BY r.hour, r.dim, r.key";
         let cohorts =
             "SELECT (cohort / ?3) * ?3 AS b, source, stage, reason, sum(count) FROM cohort_hour
              WHERE cohort >= ?1 AND cohort < ?2 GROUP BY b, source, stage, reason";
@@ -1112,6 +1127,11 @@ mod tests {
         for (sql, params, want) in [
             (
                 rollup,
+                &[1, 2, 3][..],
+                "SEARCH r USING PRIMARY KEY (hour=? AND metric=?)",
+            ),
+            (
+                rollup_all,
                 &[1, 2, 3][..],
                 "SEARCH r USING PRIMARY KEY (hour=? AND metric=?)",
             ),
