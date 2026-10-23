@@ -8,22 +8,37 @@
 //! codes and the request file in [`control`]; probation's accounting in
 //! [`pending`]; the rollback steps in [`journal`].
 
+//! Only [`log_events`] exists off Unix, so the log catalogue (and its
+//! golden) is the same everywhere.
+
+#[cfg(unix)]
 pub mod control;
+#[cfg(unix)]
 pub mod history;
+#[cfg(unix)]
 pub mod journal;
+#[cfg(unix)]
 pub mod layout;
 pub mod log_events;
+#[cfg(unix)]
 pub mod overlay;
+#[cfg(unix)]
 pub mod pending;
+#[cfg(unix)]
 pub mod probation;
+#[cfg(unix)]
 pub mod supervisor;
+#[cfg(unix)]
 pub mod testing;
 
+#[cfg(unix)]
 use lodestar_update::semver::Version;
+#[cfg(unix)]
 use lodestar_update::{Embedded, PublicKey};
 
 /// This build's version (`LODESTAR_BUILD_VERSION`), or the debug-only
 /// pretend one.
+#[cfg(unix)]
 pub fn build_version() -> Version {
     testing::version()
         .and_then(layout::parse_version)
@@ -33,6 +48,7 @@ pub fn build_version() -> Version {
 
 /// The keys overlays are verified with: the embedded ones, or the
 /// debug-only test root.
+#[cfg(unix)]
 pub fn trust_root() -> Result<Embedded, lodestar_update::Error> {
     let Some(t) = testing::trust_root() else {
         return Embedded::builtin();

@@ -5,8 +5,10 @@
 //! 1. (the supervisor) stop the child: SIGTERM, 30 s, SIGKILL, wait;
 //! 2. write the journal, with the snapshot chosen only when
 //!    `<failed>/migration.json` exists and the newest `pre-v<from+1>`
-//!    snapshot verifies (settled, `quick_check`, schema = `from`); its
-//!    SHA-256 is recorded before step 4;
+//!    snapshot it took verifies (settled, `quick_check`, schema = `from`);
+//!    its SHA-256 is recorded before step 4. With the marker but no such
+//!    snapshot, the rollback is refused unless the store is still at
+//!    `from`: the previous version couldn't read it;
 //! 3. append the outcome to `history.json` (keyed by the journal);
 //! 4. restore the store, only with a chosen snapshot: delete `-wal`,
 //!    `-shm` and `-journal`, rename the snapshot over `lodestar.db`, fsync
@@ -14,7 +16,8 @@
 //!    store counts as done;
 //! 5. remove the `index/` entries not in `pending.index_before`;
 //! 6. repoint `active` at the previous version (remove it for the image),
-//!    add the failed version to `skipped`, and write `pending` for the
+//!    add the failed version to `skipped` (`failed`, or `manual`; an
+//!    unreadable `skipped` stops here), and write `pending` for the
 //!    previous version (`kind: restored`), so its probation survives a
 //!    crash before step 8;
 //! 7. delete the failed overlay, then the journal;
@@ -37,7 +40,7 @@ use sha2::Digest as _;
 
 use super::history::{self, Entry, Outcome};
 use super::layout::{self, Bin};
-use super::pending::{self, Active, Kind, Migration, Pending, Skip};
+use super::pending::{self, Active, Kind, Migration, Pending};
 use crate::cli::util;
 
 pub const FILE: &str = "rollback.json";
@@ -93,7 +96,27 @@ pub enum Unfinished {
     Failed(String),
 }
 
+/// Why a rollback wasn't begun.
+#[derive(Debug)]
+pub enum NotBegun {
+    /// It would strand the store: nothing was written, `active` stands.
+    Refused(String),
+    /// The journal couldn't be written.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for NotBegun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotBegun::Refused(why) => f.write_str(why),
+            NotBegun::Io(e) => write!(f, "writing the rollback journal: {e}"),
+        }
+    }
+}
+
 /// Step 2: writes the journal for rolling `failed` back to `previous`.
+/// Refused when `failed` migrated the store and no snapshot from before
+/// it verifies (see [`restore_plan`]).
 pub fn begin(
     ctx: &Ctx,
     failed: &str,
@@ -102,10 +125,8 @@ pub fn begin(
     index_before: Option<&[String]>,
     lost_torrents: Option<u64>,
     now: u64,
-) -> io::Result<Journal> {
-    let migration = layout::parse_version(failed)
-        .and_then(|v| read::<Migration>(&ctx.bin.overlay(&v).join("migration.json")));
-    let snapshot = migration.and_then(|m| choose_snapshot(&ctx.db, m.from, &m.before));
+) -> Result<Journal, NotBegun> {
+    let snapshot = restore_plan(ctx, failed, previous).map_err(NotBegun::Refused)?;
     // Nothing is restored without a snapshot, so nothing stored is lost.
     let lost_torrents = if snapshot.is_some() {
         lost_torrents
@@ -131,22 +152,87 @@ pub fn begin(
         image_version: ctx.image_version.clone(),
         steps_done: 2,
     };
-    ctx.bin.write(FILE, &journal)?;
+    ctx.bin.write(FILE, &journal).map_err(NotBegun::Io)?;
     super::testing::fault("journal", 2);
     Ok(journal)
 }
 
-/// The snapshot a rollback of `failed` would restore, if any (its name),
-/// without writing anything.
-pub fn preview(ctx: &Ctx, failed: &str) -> Option<String> {
-    let m: Migration = layout::parse_version(failed)
-        .and_then(|v| read(&ctx.bin.overlay(&v).join("migration.json")))?;
-    choose_snapshot(&ctx.db, m.from, &m.before).map(|s| s.name)
+/// The snapshot a rollback of `failed` would restore (its name), or why
+/// it's refused, without writing anything.
+pub fn preview(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<String>, String> {
+    restore_plan(ctx, failed, previous).map(|s| s.map(|s| s.name))
 }
 
-/// The journal in place, if any.
+/// What a rollback of `failed` restores. Without `<failed>/migration.json`
+/// it never touched the schema: nothing. With it, the snapshot this
+/// migration took, if it verifies; else nothing only while the store is
+/// still at the schema it migrated from (no migration step committed).
+/// Otherwise the rollback is refused: `previous` couldn't read the store.
+fn restore_plan(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<SnapshotRef>, String> {
+    let Some(v) = layout::parse_version(failed) else {
+        return Ok(None);
+    };
+    let marker = ctx.bin.overlay(&v).join("migration.json");
+    let m: Migration = match layout::read_json(&marker) {
+        Ok(None) => return Ok(None),
+        Ok(Some(m)) => m,
+        Err(e) => {
+            return Err(format!(
+                "{failed} began upgrading the store, and its record of that can't be read \
+                 ({e}). Rolling back to {previous} could leave it a store it can't read, so \
+                 nothing was changed"
+            ));
+        }
+    };
+    if let Some(snap) = choose_snapshot(&ctx.db, m.from, &m.before) {
+        return Ok(Some(snap));
+    }
+    match store_schema(&ctx.db) {
+        Ok(None) => Ok(None),
+        Ok(Some(now)) if now == m.from => Ok(None),
+        Ok(Some(now)) => Err(format!(
+            "{failed} upgraded the store from schema {} to {now}, and no snapshot from \
+             before the upgrade verifies, so {previous} couldn't read it. Nothing was \
+             changed: restore a backup first (see \"If an update fails\" in \
+             docs/operations.md)",
+            m.from
+        )),
+        Err(e) => Err(format!(
+            "{failed} began upgrading the store, no snapshot from before it verifies, and \
+             the store's schema can't be read ({e}). Nothing was changed"
+        )),
+    }
+}
+
+/// The store's schema version, read-only; `None` when there's no store.
+fn store_schema(db: &Path) -> Result<Option<i64>, String> {
+    match fs::symlink_metadata(db) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(_) => {}
+    }
+    let conn = util::open_read_only(db).map_err(|e| e.to_string())?;
+    util::schema_version(&conn)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+/// The journal in place, if any. One in a format this build doesn't
+/// know, or at a step it never writes, can't be read.
 pub fn current(bin: &Bin) -> io::Result<Option<Journal>> {
-    bin.read(FILE)
+    let Some(j) = bin.read::<Journal>(FILE)? else {
+        return Ok(None);
+    };
+    if j.format != FORMAT || !(2..LAST).contains(&j.steps_done) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{FILE} has format {} at step {}, which this build can't finish",
+                j.format, j.steps_done
+            ),
+        ));
+    }
+    Ok(Some(j))
 }
 
 /// Runs the remaining steps (3 to 7). On success the journal is gone and
@@ -251,7 +337,14 @@ fn restore(db: &Path, snapshot: Option<&SnapshotRef>) -> Result<(), String> {
         ));
     }
     let path = dir.join(&snap.name);
-    if fs::symlink_metadata(&path).is_err() {
+    let meta = fs::symlink_metadata(&path);
+    if meta.as_ref().is_ok_and(|m| !m.is_file()) {
+        return Err(format!(
+            "{} isn't a regular file; restore a backup by hand",
+            path.display()
+        ));
+    }
+    if meta.is_err() {
         // A repeat: the snapshot was already renamed over the store.
         return match sha256_file(db) {
             Ok(h) if h.to_hex() == snap.sha256 => Ok(()),
@@ -296,14 +389,12 @@ fn repoint(ctx: &Ctx, j: &Journal) -> io::Result<()> {
     };
     // The failed version's heartbeat and baseline don't carry over.
     ctx.bin.remove("probation.json")?;
-    let mut skipped: Vec<Skip> = ctx.bin.read("skipped").ok().flatten().unwrap_or_default();
-    if !skipped.iter().any(|s| s.version == j.failed) {
-        skipped.push(Skip {
-            version: j.failed.clone(),
-            reason: "failed".into(),
-        });
-        ctx.bin.write("skipped", &skipped)?;
-    }
+    let reason = if j.reason == "failed" {
+        "failed"
+    } else {
+        "manual"
+    };
+    pending::skip(&ctx.bin, &j.failed, reason)?;
     ctx.bin.write(
         "pending",
         &Pending {
@@ -351,10 +442,6 @@ fn remove_index_entry(root: &Path, name: &str) -> io::Result<()> {
     })
 }
 
-fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    layout::read_json(path).ok().flatten()
-}
-
 fn sha256_file(path: &Path) -> io::Result<Sha256> {
     let mut f = layout::open_nofollow(path)?;
     let mut h = sha2::Sha256::new();
@@ -371,6 +458,7 @@ fn sha256_file(path: &Path) -> io::Result<Sha256> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update::pending::Skip;
     use lodestar_store::{Store, StoreConfig};
 
     struct Setup {
@@ -564,15 +652,21 @@ mod tests {
     }
 
     #[test]
-    fn no_snapshot_without_a_migration_marker_or_a_matching_schema() {
+    fn no_snapshot_without_a_migration_marker() {
         let s = setup();
         let v = Version::parse("0.9.0").unwrap();
         fs::remove_file(s.ctx.bin.overlay(&v).join("migration.json")).unwrap();
-        assert!(begin_it(&s).snapshot.is_none());
-        let s = setup();
+        let j = begin_it(&s);
+        assert!(j.snapshot.is_none());
+        finish(&s.ctx, j).unwrap();
+        assert_eq!(marker(&s.ctx.db), "second", "the store is left alone");
+    }
+
+    fn write_marker(s: &Setup, from: i64) {
+        let v = Version::parse("0.9.0").unwrap();
         let m = Migration {
-            from: 1,
-            to: 2,
+            from,
+            to: from + 1,
             started_at: 1,
             before: vec![],
         };
@@ -581,6 +675,85 @@ mod tests {
             serde_json::to_vec(&m).unwrap(),
         )
         .unwrap();
-        assert!(begin_it(&s).snapshot.is_none());
+    }
+
+    fn assert_refused(s: &Setup, r: Result<Journal, NotBegun>) {
+        assert!(matches!(r, Err(NotBegun::Refused(_))), "{r:?}");
+        assert!(current(&s.ctx.bin).unwrap().is_none(), "no journal");
+        assert!(s.ctx.bin.exists("active"), "active stands");
+        assert!(preview(&s.ctx, "0.9.0", "image").is_err());
+    }
+
+    /// The store moved past what the marker says it migrated from, and no
+    /// snapshot verifies: the previous version couldn't read it.
+    #[test]
+    fn a_migrated_store_without_a_verified_snapshot_is_never_rolled_back() {
+        let s = setup();
+        write_marker(&s, 1);
+        let before = vec!["v1-t1".to_string()];
+        assert_refused(
+            &s,
+            begin(&s.ctx, "0.9.0", "image", "manual", Some(&before), None, 1),
+        );
+        // A snapshot that doesn't verify (damaged) doesn't count either.
+        let s = setup();
+        let latest = lodestar_store::latest_schema_version();
+        let snap = s
+            .ctx
+            .db
+            .with_file_name(format!("lodestar.pre-v{latest}.db"));
+        fs::write(&snap, b"not a database").unwrap();
+        write_marker(&s, latest - 1);
+        assert_refused(&s, begin(&s.ctx, "0.9.0", "image", "failed", None, None, 1));
+        // An unreadable marker refuses too.
+        let s = setup();
+        let v = Version::parse("0.9.0").unwrap();
+        fs::write(s.ctx.bin.overlay(&v).join("migration.json"), b"{").unwrap();
+        assert_refused(&s, begin(&s.ctx, "0.9.0", "image", "failed", None, None, 1));
+    }
+
+    #[test]
+    fn a_journal_in_another_format_or_at_an_unknown_step_is_damage() {
+        let s = setup();
+        let mut j = begin_it(&s);
+        for (format, step) in [
+            (2, 2),
+            (FORMAT, 0),
+            (FORMAT, 1),
+            (FORMAT, LAST),
+            (FORMAT, 9),
+        ] {
+            j.format = format;
+            j.steps_done = step;
+            s.ctx.bin.write(FILE, &j).unwrap();
+            let e = current(&s.ctx.bin).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{format} {step}");
+        }
+    }
+
+    #[test]
+    fn a_snapshot_that_isnt_a_regular_file_is_never_restored() {
+        let s = setup();
+        let j = begin_it(&s);
+        let snap = s.ctx.db.with_file_name(&j.snapshot.as_ref().unwrap().name);
+        fs::remove_file(&snap).unwrap();
+        fs::create_dir(&snap).unwrap();
+        assert!(matches!(finish(&s.ctx, j), Err(Unfinished::Failed(_))));
+        assert_eq!(current(&s.ctx.bin).unwrap().unwrap().steps_done, 3);
+    }
+
+    #[test]
+    fn a_manual_rollback_skips_as_manual_and_an_unreadable_skipped_stops_it() {
+        let s = setup();
+        let j = begin(&s.ctx, "0.9.0", "image", "manual", None, None, 5).unwrap();
+        finish(&s.ctx, j).unwrap();
+        let skipped: Vec<Skip> = s.ctx.bin.read("skipped").unwrap().unwrap();
+        assert_eq!(skipped[0].reason, "manual");
+        let s = setup();
+        fs::write(s.ctx.bin.path("skipped"), b"[{").unwrap();
+        let j = begin_it(&s);
+        assert!(matches!(finish(&s.ctx, j), Err(Unfinished::Failed(_))));
+        assert_eq!(current(&s.ctx.bin).unwrap().unwrap().steps_done, 5);
+        assert_eq!(fs::read(s.ctx.bin.path("skipped")).unwrap(), b"[{");
     }
 }

@@ -19,7 +19,6 @@ mod services;
 mod settings;
 mod subscriptions;
 mod system;
-#[cfg(unix)]
 mod update;
 mod web;
 #[cfg(test)]
@@ -149,7 +148,7 @@ fn main() -> ExitCode {
             fixture: None,
             child,
         } => {
-            let config = match load(config_path) {
+            let config = match load(config_path.clone()) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("config: {e}");
@@ -164,17 +163,23 @@ fn main() -> ExitCode {
                     &config.data_dir,
                     config.db_path(),
                     config.data_dir.join("index"),
-                    std::env::args_os().skip(1).collect(),
+                    config_path.as_deref(),
                     &dropped,
                 );
             }
             #[cfg(not(unix))]
-            let _ = child;
+            if child {
+                eprintln!("lodestar serve: --child is the Unix supervisor's own");
+                return ExitCode::from(2);
+            }
             // Every store opener refuses while a rollback journal exists.
             if let Err(e) = cli::util::refuse_during_update_rollback(&config.data_dir) {
                 eprintln!("lodestar serve: {e}");
                 return ExitCode::from(3);
             }
+            // Logging first, so the child's update events are kept.
+            init_logging(&config.log);
+            dropped.log(&config.data_dir);
             #[cfg(unix)]
             let supervised =
                 match update::probation::before_start(&config.data_dir, &config.db_path()) {
@@ -191,8 +196,6 @@ fn main() -> ExitCode {
                 };
             #[cfg(not(unix))]
             let supervised = None;
-            init_logging(&config.log);
-            dropped.log(&config.data_dir);
             fsdetect::warn_at_start(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()

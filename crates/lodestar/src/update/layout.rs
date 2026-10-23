@@ -14,7 +14,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use lodestar_update::semver::Version;
@@ -66,22 +66,43 @@ impl Bin {
         }
     }
 
+    /// Checks the folder through a descriptor opened without following a
+    /// link, so the owner checked and the mode set are the folder's own.
     fn check(dir: PathBuf) -> io::Result<Bin> {
-        let meta = fs::symlink_metadata(&dir)?;
-        let refuse = |why: &str| {
-            Err(io::Error::new(
+        let refuse = |why: String| {
+            io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("{}: {why}", dir.display()),
-            ))
+            )
         };
-        if meta.file_type().is_symlink() || !meta.is_dir() {
-            return refuse("not a folder (a symlink isn't accepted)");
+        let fd = rustix::fs::open(
+            &dir,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| match e {
+            rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR => {
+                refuse("not a folder (a symlink isn't accepted)".into())
+            }
+            e => io::Error::from(e),
+        })?;
+        let st = rustix::fs::fstat(&fd)?;
+        let me = rustix::process::geteuid().as_raw();
+        if st.st_uid != me {
+            return Err(refuse(format!(
+                "owned by user {}, not this process's user {me}. On a share or a drive \
+                 without Unix owners (SMB, NTFS, exFAT), mount it with uid={me}, or set \
+                 PUID to its owner",
+                st.st_uid
+            )));
         }
-        if meta.uid() != rustix::process::geteuid().as_raw() {
-            return refuse("owned by another user");
-        }
-        if meta.permissions().mode() & 0o077 != 0 {
-            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+        if st.st_mode & 0o077 != 0 {
+            rustix::fs::fchmod(&fd, rustix::fs::Mode::from_raw_mode(0o700)).map_err(|e| {
+                refuse(format!(
+                    "can't make it private (0700): {e}. A filesystem without Unix \
+                     permissions can't hold it"
+                ))
+            })?;
         }
         Ok(Bin { dir })
     }
@@ -122,9 +143,13 @@ impl Bin {
     }
 
     /// Writes a state file durably (see [`write_atomic`]).
+    /// Refused past [`MAX_STATE`], which a read would take for damage.
     pub fn write<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
         let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
         bytes.push(b'\n');
+        if bytes.len() as u64 > MAX_STATE {
+            return Err(io::Error::other(format!("{name} would be too large")));
+        }
         write_atomic(&self.dir, name, &bytes)
     }
 
@@ -190,12 +215,21 @@ pub fn nofollow() -> i32 {
     OFlags::NOFOLLOW.bits() as i32
 }
 
-/// Opens a file for reading without following a symlink.
+/// Opens a regular file for reading without following a symlink. It's
+/// opened non-blocking, so a FIFO in its place can't hang the open, and
+/// anything but a regular file is refused.
 pub fn open_nofollow(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
-        .custom_flags(nofollow())
-        .open(path)
+        .custom_flags(nofollow() | OFlags::NONBLOCK.bits() as i32)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} isn't a regular file", path.display()),
+        ));
+    }
+    Ok(file)
 }
 
 /// Reads at most [`MAX_STATE`] bytes of JSON; `None` if the file is gone.
@@ -207,7 +241,10 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
     let mut bytes = Vec::new();
     file.take(MAX_STATE + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_STATE {
-        return Err(io::Error::other(format!("{} is too large", path.display())));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is too large", path.display()),
+        ));
     }
     serde_json::from_slice(&bytes).map(Some).map_err(|e| {
         io::Error::new(
@@ -251,6 +288,7 @@ pub fn sync_dir(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn creates_a_private_folder_and_refuses_a_symlink() {
@@ -284,6 +322,27 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert!(names.iter().all(|n| !n.to_string_lossy().ends_with(".tmp")));
+    }
+
+    #[test]
+    fn a_fifo_or_an_oversize_file_is_damage_not_a_hang() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            bin.path("pending"),
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap();
+        assert!(bin.read::<serde_json::Value>("pending").is_err());
+        fs::write(bin.path("active"), vec![b' '; MAX_STATE as usize + 1]).unwrap();
+        let e = bin.read::<serde_json::Value>("active").unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        let big = "x".repeat(MAX_STATE as usize);
+        assert!(bin.write("skipped", &big).is_err());
+        assert!(!bin.exists("skipped"));
     }
 
     #[test]

@@ -1,7 +1,6 @@
-//! The child's probation events (§12.1, component `System`). The
-//! supervisor itself writes only to the console (`supervisor:` lines).
-//! Registering this catalogue in `logging::CATALOGUES` is B-log2's hub
-//! line; until then the events still reach the outputs.
+//! The child's probation events (§12.1, component `System`), registered
+//! in `logging::CATALOGUES` on every platform. The supervisor itself writes only to the
+//! console (`supervisor:` lines).
 
 lodestar_log::catalogue! {
     "lodestar-update";
@@ -12,6 +11,16 @@ lodestar_log::catalogue! {
         level: Info,
         message: "Upgrading the store for the new version",
         fields: { from: Label, to: Label },
+    }
+    /// The upgrade couldn't be recorded (`migration.json`), so it isn't
+    /// begun: without that record a rollback couldn't tell a migrated
+    /// store from an untouched one. The version doesn't start.
+    UPDATE_MIGRATION_UNRECORDED {
+        id: "update.migration_unrecorded",
+        component: System,
+        level: Error,
+        message: "Couldn't record the store upgrade; the new version won't start",
+        fields: { error: Error },
     }
     /// The new version passed its self-test: the update is kept.
     UPDATE_PROBATION_PASSED {

@@ -434,9 +434,15 @@ fn an_expired_overlay_starts_then_a_newer_image_wins() {
     wait_until("the overlay didn't pass", LONG, || {
         !env.bin("pending").exists() && env.healthy()
     });
+    // What runs is the sealed in-memory copy that was verified, not the
+    // file in `<data>/bin`.
     let kids = children(r.child.id());
     let exe = std::fs::read_link(format!("/proc/{}/exe", kids[0])).unwrap();
-    assert!(exe.starts_with(env.bin(NEW)), "{}", exe.display());
+    assert!(
+        exe.to_string_lossy().starts_with("/memfd:lodestar"),
+        "{}",
+        exe.display()
+    );
     assert!(env.bin("active").exists() && env.bin(NEW).exists());
     assert!(
         env.bin("0.4.0").exists(),
@@ -501,6 +507,21 @@ fn one_supervisor_per_folder_and_the_status_passes_through() {
         Duration::from_secs(30),
     );
     assert_eq!(status, 1);
+    // HUP, USR1 and USR2 are forwarded; the child doesn't handle them,
+    // so its status (128 + n) is the supervisor's.
+    for (sig, n) in [("HUP", 1), ("USR1", 10), ("USR2", 12)] {
+        let mut r = env.start(&o);
+        wait_until("it didn't start", LONG, || env.healthy());
+        let pid = r.child.id().to_string();
+        assert!(
+            Command::new("kill")
+                .args([&format!("-{sig}"), &pid])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(r.child.wait().unwrap().code(), Some(128 + n), "{sig}");
+    }
     let r = env.start(&o);
     wait_until("it didn't start", LONG, || env.healthy());
     assert_eq!(r.stop(), 0, "a forwarded TERM stops the child cleanly");
@@ -740,4 +761,95 @@ fn orphans_are_reaped() {
         assert!(!stat.contains(") Z "), "a zombie: {stat}");
     }
     assert_eq!(r.stop(), 0);
+}
+
+/// As if `version` had migrated the store with no snapshot of its own
+/// left: `migration.json` says it began at an older schema than the
+/// store's now.
+fn migrated_without_a_snapshot(env: &Env, version: &str) {
+    let latest = lodestar_store::latest_schema_version();
+    assert!(latest >= 2);
+    std::fs::write(
+        env.bin(version).join("migration.json"),
+        json!({"from": latest - 1, "to": latest, "started_at": 1}).to_string(),
+    )
+    .unwrap();
+}
+
+/// A version that migrated the store, with no snapshot that verifies, is
+/// never rolled back: after its attempts it halts; a requested rollback
+/// keeps it running; `rollback --update` refuses. The store and `active`
+/// are untouched throughout.
+#[test]
+fn a_migrated_store_without_a_snapshot_is_never_rolled_back() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    migrated_without_a_snapshot(&env, NEW);
+    env.activate(NEW, true);
+    let o = env.overrides(json!({"fault": format!("child:crash@{NEW}")}));
+    let (status, log) = env.run_to_exit(&o, LONG);
+    assert_eq!(status, 1, "{log}");
+    assert!(log.contains("can't be rolled back"), "{log}");
+    assert!(!env.bin("rollback.json").exists());
+    assert_eq!(env.json("active").unwrap()["version"], NEW);
+    assert!(env.json("halted.json").unwrap()["refused"].is_string());
+    assert_eq!(marker(&env.db()), "first");
+    let (status, _) = env.run_to_exit(&env.overrides(json!({})), Duration::from_secs(20));
+    assert_eq!(status, 1, "still halted");
+
+    let out = env
+        .command(&o, &["rollback", "--update", "--yes"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no snapshot"),
+        "{out:?}"
+    );
+    assert!(!env.bin("rollback.json").exists() && env.bin(NEW).exists());
+
+    std::fs::remove_file(env.bin("halted.json")).unwrap();
+    let mut r = env.start(&env.overrides(json!({"fault": format!("child:rollback@{NEW}")})));
+    let mut log = String::new();
+    wait_until("no refusal", LONG, || {
+        log.push_str(&r.log());
+        log.contains("not rolling")
+    });
+    assert_eq!(env.json("active").unwrap()["version"], NEW);
+    assert!(env.json("skipped").is_none());
+    assert_eq!(r.stop(), 0);
+}
+
+/// A child that can't record its migration doesn't start: each attempt
+/// fails, and the rollback (nothing to restore) goes back to the image.
+#[test]
+fn a_migration_that_cant_be_recorded_never_starts() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, true);
+    let mut r = env.start(&env.overrides(json!({"fault": format!("child:unrecorded@{NEW}")})));
+    wait_until("no rollback", LONG, || {
+        env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
+    });
+    assert!(!env.bin(NEW).exists());
+    let log = r.log();
+    assert!(log.contains("recording the store upgrade"), "{log}");
+    assert_eq!(r.stop(), 0);
+}
+
+/// Versions only go up: a switch to an older version is refused.
+#[test]
+fn a_switch_to_an_older_version_is_refused() {
+    let env = Env::new();
+    env.stage("0.4.0", None, now() + 86_400);
+    let mut r = env.start(&env.overrides(json!({"fault": format!("child:switch=0.4.0@{IMAGE}")})));
+    let mut log = String::new();
+    wait_until("no refusal", LONG, || {
+        log.push_str(&r.log());
+        log.contains("versions only go up")
+    });
+    assert!(!env.bin("active").exists() && !env.bin("pending").exists());
+    r.stop();
 }
