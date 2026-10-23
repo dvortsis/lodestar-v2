@@ -29,7 +29,7 @@
 //! refuses while any connection has the store open, and keeps the server
 //! from opening it while the rollback runs.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -385,16 +385,13 @@ fn purge_one(snap: &Snapshot, live: &Live, now: i64, hits_before: i64) -> crate:
     // Look first, so a snapshot with nothing to purge isn't written (nor
     // its modification time touched).
     let since = snap.taken_at.map_or(i64::MIN, held_since);
-    let mut ids = Vec::new();
+    let mut ids = BTreeSet::new();
     if plan.torrents {
         for (h, at) in &live.held {
             if *at < since {
                 continue;
             }
-            let found = crate::find_any(&conn, std::iter::once(InfoHash(*h)))?;
-            if let Some(id) = found.filter(|id| !ids.contains(id)) {
-                ids.push(id);
-            }
+            ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*h)))?);
         }
     }
     let mut unsealed = Vec::new();
