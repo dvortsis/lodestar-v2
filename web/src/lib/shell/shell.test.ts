@@ -12,6 +12,7 @@ const crawler = (over: Partial<CrawlerSnapshot> = {}): CrawlerSnapshot => ({
 	fetch_pending: 10,
 	fetched: 5,
 	harvested: 9,
+	paused: false,
 	stored: 4,
 	torrents: 1_234_567,
 	...over
@@ -48,6 +49,12 @@ describe('pillState', () => {
 				rebuild: null
 			})
 		).toMatchObject({ kind: 'idle', torrents: 0 });
+	});
+
+	it('says "paused" when the server does, with the count, even while fetches drain', () => {
+		expect(
+			pillState({ stream: 'live', crawler: crawler({ paused: true }), rebuild: null })
+		).toMatchObject({ kind: 'paused', torrents: 1_234_567 });
 	});
 
 	it('shows the rebuild while it runs, the failure once, and ignores a finished one', () => {

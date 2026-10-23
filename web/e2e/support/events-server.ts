@@ -14,6 +14,7 @@ export const crawlerEvent = (over: Partial<Crawler> = {}): Crawler => ({
 	fetch_pending: 40,
 	fetched: 120,
 	harvested: 300,
+	paused: false,
 	stored: 90,
 	torrents: 1_234_567,
 	...over

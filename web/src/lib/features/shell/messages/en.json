@@ -29,6 +29,7 @@
 	"shell_status_busy": "Server busy",
 	"shell_status_crawling": "Crawling",
 	"shell_status_idle": "Idle",
+	"shell_status_paused": "Paused",
 	"shell_status_rebuilding": "Rebuilding index",
 	"shell_status_failed": "Index rebuild failed",
 	"shell_status_torrents": "{count} torrents",

@@ -29,6 +29,7 @@
 	"shell_status_busy": "服务器繁忙",
 	"shell_status_crawling": "正在爬取",
 	"shell_status_idle": "空闲",
+	"shell_status_paused": "已暂停",
 	"shell_status_rebuilding": "正在重建索引",
 	"shell_status_failed": "索引重建失败",
 	"shell_status_torrents": "{count} 个种子",
