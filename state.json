@@ -312,7 +312,7 @@
    "pr": 116,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups.",
    "self_review": {
     "raised": 13,
     "fixed": 7,
@@ -1308,7 +1308,8 @@
   "blog1_new_crate": "B-log1 adds crates/log (lodestar-log) for log_event!; update slices.yaml owns in next runner PR.",
   "blog1b": "B-log1b follow-up: sweep remaining call sites (pipeline, search, filter/lists.rs, api/auth/http.rs, lodestar main/services) listed in B-log1 brief; pipeline worker logs fetch key.",
   "m4_export_swarm": "#48 (M4) must fill swarm fields via torrents::hit + search::enrich so /export includes them (B10b).",
-  "filter_polish": "Next filter brief: IdHasher seeding; prefilter/Nearness/always_fuzzy doc fixes; widen early_stop proptest to 66+ chars and multibyte; mixed-set headroom only ~13% on 7763."
+  "filter_polish": "Next filter brief: IdHasher seeding; prefilter/Nearness/always_fuzzy doc fixes; widen early_stop proptest to 66+ chars and multibyte; mixed-set headroom only ~13% on 7763.",
+  "b11a_followups": "B11a follow-ups: \u00a71.6.4 dashboard-open bench gate in CI; insights SSE topic; persisted import counter (no full scan per start); \u00a76.3 annotation kinds (upgrade/import/reindex/network change)."
  },
  "blocked_on_owner": [],
  "launches_today": 15,
@@ -1333,7 +1334,8 @@
   "\u00a72.19 (B12 #112): key \"reveal\" replaced by regenerate; a bad X-Forwarded-For entry ends the walk at the peer (safer than skipping); revoke/delete need no password; at most 500 keys/tokens; login limiter map strictly bounded with overflow bucket.",
   "Process: B7 (#102) exceeded review_rounds_before_escalation (now 4 FIX rounds on natural phrasing). Runner chose not to park: fix scope narrowed each round; if another blocking round, natural phrasing is split into a follow-up slice and /suggest merges without it. Owner may prefer parking.",
   "\u00a72.19 (B10b #115): exports include Adult only per content.export_adult (\u00a720.9/B17), not the \"Show adult content\" view setting; until wired, no Adult is exported.",
-  "Licences (B2c): \u00a72.12 allowlist silent on Unicode-DFS-2016, Unlicense alone, CDLA-Permissive-2.0, LLVM exception, and whether LGPL-3.0 counts in the GPL/AGPL family. B2c may add permissive ones as flagged \u00a72.19 entries; stops on copyleft/unlicensed."
+  "Licences (B2c): \u00a72.12 allowlist silent on Unicode-DFS-2016, Unlicense alone, CDLA-Permissive-2.0, LLVM exception, and whether LGPL-3.0 counts in the GPL/AGPL family. B2c may add permissive ones as flagged \u00a72.19 entries; stops on copyleft/unlicensed.",
+  "\u00a72.19 (B11a #116) docs/metrics.md \u00a77.5 contract made nullable \"until source exists\": stages.fetch (B11b), stages.index & kpi.searchable (null with search off), stages.serve and serve.* (until #48 / B9 / integrations), kpi.imported, ingest_per_hour (unmeasured hour), previous = reduced shape. Additions: range.bucket, funnel[].conversion, funnel_total, /insights/events, segments.by_source."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
