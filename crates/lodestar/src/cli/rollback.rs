@@ -229,8 +229,9 @@ pub fn restore(
     let (snap_schema, snap_torrents) = {
         // A WAL left by an interrupted snapshot purge is folded in first,
         // so the check and the copy below see the purged file.
-        snapshots::settle(&snapshot.path)
-            .map_err(failed(format!("opening {}", snapshot.path.display())))?;
+        snapshots::settle(&snapshot.path).map_err(|e| {
+            Failure::Failed(format!("{} fails its check: {e}", snapshot.path.display()))
+        })?;
         let conn = open_read_only(&snapshot.path)?;
         quick_check(&conn).map_err(|e| {
             Failure::Failed(format!("{} fails its check: {e}", snapshot.path.display()))
