@@ -1,4 +1,5 @@
 import type { OpenApiMock } from '../mock/openapi-mock';
+import { discoverResponse, showAdultSettings } from '../../src/lib/features/discover/testing';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
 // its entry here (smoke tests then cover it in every project); `coverage.test.ts` flags gaps.
@@ -22,7 +23,15 @@ export interface RouteCase {
 
 export const ROUTES: RouteCase[] = [
 	{ name: 'search', path: '/search', heading: 'Search', key: true, densityAware: true },
-	{ name: 'discover', path: '/discover' },
+	{
+		name: 'discover',
+		path: '/discover',
+		heading: 'Discover',
+		mock: (m) => {
+			m.on('getDiscover', discoverResponse());
+			m.on('getSettings', showAdultSettings(false));
+		}
+	},
 	{ name: 'alerts', path: '/alerts' },
 	{ name: 'alert-detail', path: '/alerts/1' },
 	{ name: 'insights', path: '/insights' },
