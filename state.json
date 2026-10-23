@@ -280,13 +280,13 @@
       "notes": ""
     },
     "S-detail": {
-      "status": "running",
+      "status": "review",
       "model": "sonnet",
       "session": "session_01Vw3taNg7BTdtsCqWtZVMP3",
-      "pr": null,
+      "pr": 139,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review"
     },
     "D-docker": {
       "status": "merged",
