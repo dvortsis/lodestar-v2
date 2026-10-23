@@ -1,7 +1,7 @@
 //! The update engine (§12.2) in `serve --child`: the scheduled and manual
 //! signed checks, `updater.json`, the policy over what a check found, and
-//! everything `/updates` and `/system` report. Part 3 of B-update checks,
-//! decides and reports; installing comes in part 4, so `can_install` is
+//! everything `/updates` and `/system` report. Part 4 of B-update checks,
+//! decides and reports; installing comes in part 5, so `can_install` is
 //! `not_built_yet` wherever nothing else stops it.
 //!
 //! - **When:** with `mode` notify, auto or image, at most every 6 hours
@@ -9,9 +9,10 @@
 //!   `POST /updates/check` at any mode, at most once a minute, one at a
 //!   time.
 //! - **The check:** [`check::fetch`], then `lodestar_update::check`
-//!   against `trust.json` (rebuilt from the floor and the overlays when
-//!   missing; a damaged one blocks installs and is never written), then
-//!   the forward-only write of the next trust state.
+//!   against `trust.json`, raised to the floor (the embedded statements
+//!   and every verified overlay's statements and marks; rebuilt from it
+//!   when missing; a damaged one blocks installs and is never written),
+//!   then the forward-only write of the next trust state.
 //! - **Events:** `checking` when a check starts, `available` when it
 //!   found a candidate, `failed` with its code.
 
@@ -291,18 +292,19 @@ impl Engine {
         };
         let now = (self.inner.clock)();
         let checked = tokio::task::spawn_blocking(move || {
-            let mut loaded = trust_file::load(bin.dir(), &embedded, &[]);
-            if matches!(loaded, trust_file::Loaded::Rebuilt(_)) {
-                // The overlays' marks matter only for a rebuild.
-                let marks: Vec<_> = bin
-                    .overlays()
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|v| super::overlay::verify(&bin, v).ok())
-                    .map(|v| v.overlay.mark)
-                    .collect();
-                loaded = trust_file::load(bin.dir(), &embedded, &marks);
-            }
+            // The floor (§12.2): every installed overlay's statements and
+            // marks count whether or not trust.json exists. A mark comes
+            // only from an overlay verified against the embedded keys
+            // (signature, binary hash and size), so a planted directory
+            // can't raise a mark and freeze updates.
+            let marks: Vec<_> = bin
+                .overlays()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| super::overlay::verify(&bin, v).ok())
+                .map(|v| v.overlay.mark)
+                .collect();
+            let loaded = trust_file::load(bin.dir(), &embedded, &marks);
             let damaged = loaded.damaged();
             let checked = lodestar_update::check(
                 &body,
@@ -353,7 +355,7 @@ impl Engine {
             .collect()
     }
 
-    /// Why this installation can't install itself (part 3 installs
+    /// Why this installation can't install itself (part 4 installs
     /// nothing, so `not_built_yet` when nothing else stops it).
     fn incapable(&self, settings: &Updates, trust_damaged: bool) -> Reason {
         let ctx = &self.inner.ctx;
@@ -534,7 +536,7 @@ impl Engine {
         })
     }
 
-    /// Roll back arrives with installing (part 4); until then it's never
+    /// Roll back arrives with installing (part 5); until then it's never
     /// offered, though where it would go is shown.
     fn rollback(&self) -> RollbackInfo {
         let active: Option<pending::Active> = self
@@ -863,6 +865,106 @@ mod tests {
         assert!(e.engine.run_check().await.is_err());
         assert_eq!(e.trust_mark(), Some((NOW - 100) as u64));
         assert_eq!(e.states().last(), Some(&UpdatesState::Failed));
+    }
+
+    /// A manifest whose signature isn't over its body fails, as does one
+    /// listing only versions older than the running one (a downgrade
+    /// offers nothing); neither moves the mark.
+    #[tokio::test]
+    async fn a_bad_signature_fails_and_a_downgrade_offers_nothing() {
+        let e = env(Mode::Auto);
+        let body = bytes(&manifest(
+            Channel::Stable,
+            (NOW - 100) as u64,
+            "0.6.0",
+            b"binary",
+        ));
+        let other = bytes(&manifest(
+            Channel::Stable,
+            (NOW - 100) as u64,
+            "0.9.9",
+            b"binary",
+        ));
+        let mut forged = e.trust.release.signed(&other);
+        forged.minisig = e.trust.release.signed(&body).minisig;
+        e.fake.serve(STABLE, 200, None, &envelope(&forged, None));
+        assert_eq!(e.engine.run_check().await, Err("bad_signature"));
+        assert_eq!(e.trust_mark(), None, "nothing was written");
+        assert!(e.engine.status().releases.is_empty());
+
+        e.serve(NOW - 50, "0.4.0", None);
+        assert_eq!(e.engine.run_check().await, Ok(()));
+        let s = e.engine.status();
+        assert!(s.releases.is_empty(), "{:?}", s.releases);
+        assert!(!e.states().contains(&UpdatesState::Available));
+    }
+
+    /// A manifest past its expiry (no freshness) still shows what's out,
+    /// but nothing installs from it: `manifest_lapsed`, and each release
+    /// is blocked as `not_current`.
+    #[tokio::test]
+    async fn an_expired_manifest_installs_nothing() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 8 * 86_400, "0.6.0", None);
+        assert_eq!(e.engine.run_check().await, Ok(()));
+        let s = e.engine.status();
+        assert!(
+            s.notices.iter().any(|n| n == "manifest_lapsed"),
+            "{:?}",
+            s.notices
+        );
+        assert_eq!(s.releases.len(), 1);
+        assert!(!s.releases[0].eligible);
+        assert!(
+            s.releases[0]
+                .blocked_by
+                .iter()
+                .any(|b| b.code == "not_current"),
+            "{:?}",
+            s.releases[0].blocked_by
+        );
+    }
+
+    /// A failed check logs its code and nothing else: no URL, no host, no
+    /// version.
+    #[tokio::test]
+    async fn a_failed_check_logs_only_its_code() {
+        #[derive(Clone, Default)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                lock(&self.0).extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || writer.clone())
+            .finish();
+        // The test runs on one thread, so the scoped subscriber sees the
+        // engine's events.
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let e = env(Mode::Notify);
+        e.fake.serve(
+            STABLE,
+            302,
+            Some("https://evil.example/m.json?token=Zq7Secret"),
+            b"",
+        );
+        assert_eq!(e.engine.run_check().await, Err("redirect_refused"));
+        let text = String::from_utf8(lock(&buf.0).clone()).unwrap();
+        assert!(text.contains("update.check_failed"), "{text}");
+        assert!(text.contains("redirect_refused"), "{text}");
+        for secret in ["Zq7Secret", "evil.example", "github.com", "stable.json"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
     }
 
     #[tokio::test]

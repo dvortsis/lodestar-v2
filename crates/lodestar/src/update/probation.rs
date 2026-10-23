@@ -31,7 +31,7 @@ use crate::cli::util;
 
 const COUNT_EVERY: Duration = Duration::from_secs(60);
 
-/// What the child knows of its supervisor, for the updater (part 3).
+/// What the child knows of its supervisor, for the updater (parts 4 and 5).
 #[derive(Debug, Clone)]
 pub struct Child {
     pub bin: Bin,
@@ -51,7 +51,7 @@ static CHILD: OnceLock<Child> = OnceLock::new();
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 /// This process's child state, once `serve --child` set it up.
-#[allow(dead_code)] // The updater's (part 3).
+#[allow(dead_code)] // The updater's (part 5).
 pub fn current() -> Option<&'static Child> {
     CHILD.get()
 }
@@ -378,7 +378,7 @@ impl Child {
 
     /// What a rollback requested now would lose: torrents stored since
     /// the update, when this version migrated the store.
-    #[allow(dead_code)] // The updater's (part 3).
+    #[allow(dead_code)] // The updater's (part 5).
     pub fn lost_torrents(&self) -> Option<u64> {
         self.bin
             .read::<Probation>("probation.json")
