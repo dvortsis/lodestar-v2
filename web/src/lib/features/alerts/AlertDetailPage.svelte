@@ -93,7 +93,7 @@
 		const pop = keys.pushScope('alerts');
 		const offs = [
 			keys.register({
-				id: 'list.next',
+				id: 'results.next',
 				title: () => m.alerts_key_next(),
 				section: () => m.alerts_section(),
 				scope: 'alerts',
@@ -101,7 +101,7 @@
 				run: () => void step(1)
 			}),
 			keys.register({
-				id: 'list.previous',
+				id: 'results.previous',
 				title: () => m.alerts_key_previous(),
 				section: () => m.alerts_section(),
 				scope: 'alerts',

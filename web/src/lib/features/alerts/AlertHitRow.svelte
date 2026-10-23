@@ -87,10 +87,12 @@
 			{#if t.seeders === null && t.leechers === null}
 				<span aria-hidden="true">—</span><span class="sr-only">{m.never_scraped()}</span>
 			{:else}
-				{m.alerts_swarm({
+				{t.seeders_approx ? m.estimate() : ''}{m.alerts_swarm({
 					seeders: formatCount(t.seeders, locale),
 					leechers: formatCount(t.leechers, locale)
 				})}
+				{#if t.swarm_suspect}<span data-testid="alert-suspect-{id}">· {m.swarm_suspect()}</span
+					>{/if}
 			{/if}
 		</span>
 		<span data-testid="alert-trackers-{id}">
