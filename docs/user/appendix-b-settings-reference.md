@@ -10,8 +10,8 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | Data | Index, database and settings (`/data`) | `/mnt/cache/appdata/lodestar` | Use a pool path, not `/mnt/user`. |
 | Hot path (optional) | Planned, not used yet | empty | Needs SSD or NVMe if used later. |
 | Cold path (optional) | Planned, not used yet | empty | Keep on the cache pool if used later. |
-| PUID | User ID the template shows (`99`) | `99` | The image doesn't read it yet. Use `--user 99:100`. |
-| PGID | Group ID the template shows (`100`) | `100` | The image doesn't read it yet. Use `--user 99:100`. |
+| PUID | User ID Lodestar runs as; it makes Data this user's on start | `99` | Never `0` (root). |
+| PGID | Group ID Lodestar runs as | `100` | Never `0` (root group). |
 | TZ | Time zone | `Etc/UTC` | Log timestamps are UTC today. |
 | Intensity | Crawler effort (`LODESTAR_INTENSITY`) | `balanced` | `aggressive` can overload home routers. |
 | Log level | Log detail (`LODESTAR_LOG`) | `info` | `error`, `warn`, `info` or `debug`. |

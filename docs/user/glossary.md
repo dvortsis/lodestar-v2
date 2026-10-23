@@ -2,6 +2,14 @@
 
 Terms used in this guide, A to Z. Each chapter links a term here the first time it uses it.
 
+## Cache pool
+
+A group of SSDs or NVMe drives in Unraid, used for fast storage. A path starting `/mnt/cache` is on it.
+
+## Checksum
+
+A short fingerprint of a file. If the file changes, the fingerprint changes, so you can check a download.
+
 ## Container
 
 A packaged, running copy of an app. An update replaces it, so only mapped folders keep their files.
@@ -10,9 +18,21 @@ A packaged, running copy of an app. An update replaces it, so only mapped folder
 
 Distributed hash table: the way BitTorrent nodes find torrents and each other without a central server. It uses UDP.
 
+## DMZ
+
+A router setting that sends all unrequested internet traffic to one device. Never use it for Lodestar.
+
+## FUSE
+
+The layer behind Unraid's `/mnt/user` paths. It adds overhead that databases notice.
+
 ## Metadata
 
 The description a torrent publishes about itself: name, file list, sizes and dates. It is not the content.
+
+## Named volume and bind mount
+
+A named volume is a data folder Docker manages for you. A bind mount is a folder you pick on the host.
 
 ## Port forwarding
 
@@ -22,9 +42,25 @@ A router rule that sends traffic from the internet to one device on your network
 
 A rule that connects a port on your server to the port an app listens on inside its container.
 
+## PUID and PGID
+
+The user ID and group ID a container runs as. They decide who owns the files in the data folder.
+
 ## Setup token
 
 A one-time key printed in the log on first run. You enter it to create the admin password.
+
+## SmartScreen
+
+The Windows feature that shows "Windows protected your PC" for apps it doesn't recognise.
+
+## SQLite
+
+The database Lodestar stores its torrents in. It needs fast local storage.
+
+## TLS reverse proxy
+
+A web server in front of an app that adds HTTPS. Lodestar needs `LODESTAR_SECURE_COOKIES=true` behind one.
 
 ## UDP
 

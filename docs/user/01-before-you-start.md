@@ -13,7 +13,7 @@ Lodestar finds torrents on the BitTorrent network and makes their details search
 
 Lodestar is a crawler and search engine for torrent **metadata**. It listens to the [DHT](glossary.md#dht) and finds torrents other people share. It asks peers for each torrent's description and stores it in a local index. You search that index in a web page on your own server.
 
-The description it stores is names, file lists, sizes, dates and swarm counts. Nothing leaves your server unless you download it.
+The description it stores is names, file lists, sizes, dates and swarm counts. Your index never leaves your server.
 
 ```mermaid
 flowchart LR
@@ -48,7 +48,7 @@ To find torrents, the crawler talks to other DHT nodes and to peers, as every Bi
 You need:
 
 - A server that runs Unraid or Docker. The image supports `amd64` and `arm64`.
-- Fast local storage for the data folder. On Unraid, use the cache pool or another SSD or NVMe pool. The index does random reads and writes, so spinning disks and network shares are slow.
+- Fast local storage for the data folder. On Unraid, use the [cache pool](glossary.md#cache-pool) or another SSD or NVMe pool. The index does random reads and writes, so spinning disks and network shares are slow.
 - A way to read the [container](glossary.md#container) log. You need it once, to copy the [setup token](glossary.md#setup-token).
 - A home router that copes with many connections. At the default intensity the crawler opens about 400 at once.
 
@@ -73,7 +73,7 @@ You don't need an account, a licence key or an open port on your router.
 > [!TIP]
 > **Key takeaways**
 > - Lodestar stores torrent descriptions only and never downloads content.
-> - It is offline by default and sends no telemetry.
+> - It is offline by default, apart from the DHT crawl, and sends no telemetry.
 > - Put the data folder on fast local storage.
 
 <!-- nav:start -->

@@ -5,20 +5,20 @@ Windows and Linux installs are **(planned)**: nothing is published yet. This cha
 > [!NOTE]
 > **What you will learn**
 > - Explain why Windows shows "Windows protected your PC" for Lodestar.
-> - Check a download against its checksum with PowerShell.
+> - Check a download against its [checksum](glossary.md#checksum) with PowerShell.
 > - Decide when to run the file and when to stop.
 
 ## 4.1 Understand the SmartScreen warning
 <!-- index: SmartScreen; unsigned; code signing -->
 
-Windows builds of Lodestar ship **unsigned** for now, because the project has no code-signing certificate. Windows SmartScreen shows "Windows protected your PC" for apps it doesn't recognise, and for apps without a publisher signature. The warning doesn't mean the file is harmful. It means Windows can't tell who made it.
+Windows builds of Lodestar ship **unsigned** for now, because the project has no code-signing certificate. [SmartScreen](glossary.md#smartscreen) shows "Windows protected your PC" for apps it doesn't recognise, and for apps without a publisher signature. The warning doesn't mean the file is harmful. It means Windows can't tell who made it.
 
 That is why you verify the file yourself before you run it.
 
 ## 4.2 Check the download before you run it
 <!-- index: checksum; Get-FileHash; SHA-256 -->
 
-A checksum is a short fingerprint of a file. If the file changes by one byte, the fingerprint changes. Download Lodestar only from the project's official release page: <https://github.com/dvortsis/lodestar-v2/releases>.
+A [checksum](glossary.md#checksum) is a short fingerprint of a file. If the file changes by one byte, the fingerprint changes. Download Lodestar only from the project's official release page: <https://github.com/dvortsis/lodestar-v2/releases>.
 
 > [!WARNING]
 > Don't run an installer from a mirror, forum post or re-upload. Get it from the official release page instead.
@@ -33,9 +33,9 @@ To check the file:
     Get-FileHash -Algorithm SHA256 "<path-to-installer>"
     ```
 
-   **Result:** PowerShell prints a `Hash` value of 64 letters and digits.
+   **Result:** PowerShell prints a `Hash` value of 64 letters and digits, in capitals.
 4. Open the checksum file and find the line for your installer.
-5. Compare the two values character by character.
+5. Compare the two values character by character. Capitals and lowercase letters count as the same.
    **Result:** They are identical.
 
 The checksum file is signed so you can tell it came from the project. How to verify that signature is **(planned)** and will be added with the first Windows release.

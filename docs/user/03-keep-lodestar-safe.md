@@ -13,7 +13,7 @@ This chapter sets up Lodestar so the web page, your password and your logs stay 
 ## 3.1 Keep the web UI off the internet
 <!-- index: port forwarding; web UI; remote access; VPN -->
 
-The web UI on port `8090` holds your login page and your whole index. Do not forward it on your router, and do not put it in the router's DMZ. Either one puts the login page on the internet.
+The web UI on port `8090` holds your login page and your whole index. Do not forward it on your router, and do not put it in the router's [DMZ](glossary.md#dmz). Either one puts the login page on the internet.
 
 To reach Lodestar from outside your home:
 
@@ -25,7 +25,7 @@ To reach Lodestar from outside your home:
 A [port forward](glossary.md#port-forwarding) is a router rule that sends traffic from the internet to one device. A VPN instead makes your remote device act as if it were at home.
 
 > [!WARNING]
-> Behind a TLS reverse proxy, set `http.secure_cookies = true` in `config.toml`. The proxy must still be reachable only over your VPN or your LAN.
+> Behind a [TLS reverse proxy](glossary.md#tls-reverse-proxy), set the environment variable `LODESTAR_SECURE_COOKIES=true`. The proxy must still be reachable only over your VPN or your LAN.
 
 ## 3.2 Protect the setup token and the password
 <!-- index: setup token; password manager; admin password -->
@@ -68,9 +68,9 @@ In words: Lodestar sends everything through the gluetun container to your VPN pr
 
 To use it:
 
-1. Install gluetun first and name the container `gluetun`.
+1. Install gluetun first. The template expects the container to be named `gluetun`.
 2. In the gluetun container, publish port `8090`, the web UI port. Lodestar can't publish ports itself.
-3. Install the **Lodestar-gluetun** template. If your VPN container has another name, change `--network=container:gluetun` in **Extra Parameters**.
+3. Install the **Lodestar-gluetun** template. If your VPN container has another name, replace `gluetun` in `--network=container:gluetun` in **Extra Parameters**.
    **Result:** Lodestar starts on gluetun's network.
 4. Open the web UI at your server address and the port you published on gluetun.
 5. Restart Lodestar whenever gluetun restarts. A container that shares a network stays attached to the old one.
@@ -102,13 +102,13 @@ Updates are off until you choose them, because checking contacts GitHub. In-app 
 
 | Option | What it means |
 |---|---|
-| **Off or notify (recommended)** | You decide when to update. Copy the data folder first (see [section 3.7](#37-back-up-and-restore)). |
+| **Off or notify (recommended)** | You decide when to update. Back up first (see [section 3.7](#37-back-up-and-restore)). |
 | Install automatically | **(planned)** Will install fixes only by default, then check health and roll back by itself if the new version fails. |
 
 To update by hand:
 
 1. Stop the container.
-2. Copy the data folder ([section 3.7](#37-back-up-and-restore)). That copy is your rollback.
+2. Take a backup ([section 3.7](#37-back-up-and-restore)). It is your rollback.
 3. Pull the new image and start the container.
    **Result:** The container starts, and the old data is intact.
 
@@ -122,45 +122,60 @@ The child-safety core of the content filters is always on. A change that would w
 ## 3.7 Back up and restore
 <!-- index: backup; restore; seal.key; data folder -->
 
-All Lodestar state lives in the data folder. On Unraid that is `/mnt/cache/appdata/lodestar`. In Compose it is the `lodestar-data` volume or your bind mount. A `lodestar backup` command is **(planned)**, so copy the folder while Lodestar is stopped.
+`lodestar backup` makes a consistent copy of everything that can't be rebuilt, and it is safe while Lodestar runs. It writes a new folder `lodestar-backup-<time>` under `backups/` in the data folder, with a `README.txt` that repeats the restore steps.
 
-| File | What it holds |
+| File in the backup | What it holds |
 |---|---|
 | `lodestar.db` | The database. It is the source of truth. |
-| `auth.json` | The admin password hash. |
+| `auth.json` | The admin password hash, sessions and API keys. |
 | `seal.key` | The key that unlocks stored secrets. |
 | `config.toml` | Your settings file, if you made one. |
-| `index/` | The search index. Lodestar can rebuild it, so skipping it is fine. |
 
-> [!WARNING]
-> Back up `seal.key` together with the database. Without it, stored secrets in a restored database can't be read.
+The search index isn't in the backup. Lodestar rebuilds it from the database.
 
 To back up on Unraid:
 
-1. On the Docker tab, select the **Lodestar** icon, then **Stop**.
-2. Open the Unraid terminal and paste:
+1. Open the Unraid terminal and paste:
 
     ```bash
-    cp -a /mnt/cache/appdata/lodestar /mnt/user/backups/lodestar-backup
+    docker exec Lodestar /lodestar backup
     ```
 
-   Change `/mnt/user/backups` to a share on your array that already exists.
-   **Result:** The copy finishes without an error.
-3. Select the **Lodestar** icon, then **Start**.
+   With Compose, run `docker exec lodestar /lodestar backup` on the Docker host.
+   **Result:** The command prints `Backup written to` and the folder name.
+2. Copy that folder off the [cache pool](glossary.md#cache-pool). Replace `<backup-folder>` with the name printed and `<share>` with a share you already have:
 
-To restore, stop Lodestar, copy the files back into the data folder and start it. Compare file ownership with [section 2.3](02-install-lodestar-on-unraid-and-docker.md#23-set-the-user-the-container-runs-as) if Lodestar then reports a permission error.
+    ```bash
+    cp -a /mnt/cache/appdata/lodestar/backups/<backup-folder> /mnt/user/<share>/
+    ```
+
+   **Result:** The copy finishes without an error.
+
+> [!WARNING]
+> The backup holds `seal.key` and `auth.json`. Keep the folder on a private share. Never place it on a share that is public over SMB.
+
+To restore:
+
+1. Stop Lodestar.
+2. In the data folder, delete `lodestar.db-wal` and `lodestar.db-shm` if they exist, and delete the `index` folder. The old index doesn't match the restored database and would show the wrong torrents.
+3. Copy the files from the backup folder into the data folder, replacing the ones there. Skip `README.txt`.
+4. Start Lodestar.
+   **Result:** Lodestar rebuilds the search index on start.
+5. Sign out all sessions and create new API keys. A restored `auth.json` brings back sessions and keys that you may have revoked since the backup.
+
+You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
 
 ## 3.8 Check your understanding
 
 1. A friend wants to open Lodestar from work. What do you set up, and what do you not do?
 2. What does forwarding UDP `6881` tell DHT peers?
-3. Which file must you back up with the database, and why?
+3. Why must a backup stay on a private share, and what do you do after a restore?
 
 > [!TIP]
 > **Key takeaways**
 > - Never forward port `8090`. Use a VPN for remote access.
 > - Forwarding `6881` over UDP is optional and shows your IP to DHT peers.
-> - Back up the whole data folder, `seal.key` included, with Lodestar stopped.
+> - Run `lodestar backup`, keep the result private and copy it off the cache pool.
 
 <!-- nav:start -->
 ---
