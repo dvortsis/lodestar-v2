@@ -647,6 +647,47 @@ fn facets_path(
     Ok(ok)
 }
 
+/// The process's resident set (Linux; `None` elsewhere).
+fn rss() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kb: u64 = status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmRSS:"))?
+        .trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse()
+        .ok()?;
+    Some(kb * 1024)
+}
+
+/// Runs `f`, sampling the resident set every few milliseconds: its
+/// result and the highest sample.
+fn peak_rss<T>(f: impl FnOnce() -> T) -> (T, Option<u64>) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let done = Arc::new(AtomicBool::new(false));
+    let peak = Arc::new(AtomicU64::new(rss().unwrap_or(0)));
+    let sampler = {
+        let (done, peak) = (done.clone(), peak.clone());
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                if let Some(r) = rss() {
+                    peak.fetch_max(r, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        })
+    };
+    let out = f();
+    done.store(true, Ordering::Relaxed);
+    let _ = sampler.join();
+    if let Some(r) = rss() {
+        peak.fetch_max(r, Ordering::Relaxed);
+    }
+    let p = peak.load(Ordering::Relaxed);
+    (out, (p > 0).then_some(p))
+}
+
 /// `/suggest` as the API runs it, per kind of item, after building the
 /// title FST from the store (its build time and memory are reported).
 fn suggest_path(
@@ -655,9 +696,12 @@ fn suggest_path(
     store: &Store,
     now: i64,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    let base = rss();
     let started = Instant::now();
-    index.titles().rebuild_from(store)?;
+    let (built, build_peak) = peak_rss(|| index.titles().rebuild_from(store));
+    built?;
     let built = started.elapsed();
+    let steady = rss();
     let set = index.titles().current().ok_or("no title set")?;
     println!(
         "\n  /suggest: title FST of {} titles from {} torrents, built in {:.1} s, {:.1} MB in memory",
@@ -666,6 +710,20 @@ fn suggest_path(
         built.as_secs_f64(),
         set.memory_bytes() as f64 / 1e6
     );
+    // A swap: the old set serves while the new directory's set builds.
+    let (second, swap_peak) = peak_rss(|| suggest::TitleSet::build(store));
+    let second = second?;
+    let mb = |b: Option<u64>, from: Option<u64>| match (b, from) {
+        (Some(b), Some(f)) => format!("{:+.0} MB", (b as f64 - f as f64) / 1e6),
+        _ => "—".to_string(),
+    };
+    println!(
+        "  RSS over the process before: one set {}, building it peaks at {}; a swap (old set, new set and its build) peaks at {}",
+        mb(steady, base),
+        mb(build_peak, base),
+        mb(swap_peak, base)
+    );
+    drop(second);
     let (words, names) = vocabulary(a.seed ^ 0x5eed, 20_000);
     let common = &words[..words.len().min(100)];
     // Common words of letters only, long enough to misspell.
@@ -726,6 +784,26 @@ fn suggest_path(
                     (w[i] as u8 + 1) as char
                 };
                 w.into_iter().collect()
+            }),
+        ),
+        (
+            "did you mean, 32 words",
+            make(&mut |r| {
+                // Misspellings everywhere: only those nearest the caret
+                // are looked at.
+                (0..32)
+                    .map(|_| {
+                        let mut w: Vec<char> = letters.choose(r).expect("words").chars().collect();
+                        let i = r.random_range(1..w.len());
+                        w[i] = if w[i] == 'z' {
+                            'a'
+                        } else {
+                            (w[i] as u8 + 1) as char
+                        };
+                        w.into_iter().collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
             }),
         ),
         (

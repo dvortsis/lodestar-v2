@@ -23,7 +23,7 @@
 //! Ranges are character offsets into the query, so the client never
 //! tokenises it again.
 
-mod caret;
+pub(crate) mod caret;
 mod fuzzy;
 pub mod titles;
 
@@ -61,6 +61,8 @@ const MAX_DID_YOU_MEAN: usize = 3;
 const MAX_COUNTED: usize = 48;
 /// Terms read per segment for a value prefix or a fuzzy word.
 const MAX_TERMS: usize = 4096;
+/// Words "did you mean" looks for corrections of, nearest the caret.
+const FUZZY_WORDS: usize = 4;
 /// Fuzzy candidates checked against the index per word.
 const FUZZY_CHECKED: usize = 4;
 /// Spare titles looked up beyond the limit, for those the existence
@@ -218,7 +220,7 @@ pub fn suggest(
             }
         }
     }
-    let mut dym = did_you_mean(&cx, &toks, typing_title)?;
+    let mut dym = did_you_mean(&cx, &toks, caret, typing_title)?;
     dym.append(&mut out);
     let mut out = dym;
     // One item per insertion, the first kept.
@@ -596,7 +598,12 @@ fn chips(
 
 /// "Did you mean" items; the token `typing` (a title being typed) isn't
 /// corrected.
-fn did_you_mean(cx: &Cx<'_>, toks: &[Raw], typing: Option<usize>) -> Result<Vec<Suggestion>> {
+fn did_you_mean(
+    cx: &Cx<'_>,
+    toks: &[Raw],
+    caret: usize,
+    typing: Option<usize>,
+) -> Result<Vec<Suggestion>> {
     let q = cx.req.q;
     let span = |a: usize, b: usize| (caret::chars(q, a), caret::chars(q, b));
     let mut out = Vec::new();
@@ -633,18 +640,26 @@ fn did_you_mean(cx: &Cx<'_>, toks: &[Raw], typing: Option<usize>) -> Result<Vec<
         return Ok(out);
     }
     let text = cx.index.fields().text;
-    for (_, t) in toks
+    // The words nearest the caret, at most [`FUZZY_WORDS`]: each costs a
+    // fuzzy walk of every segment's dictionary.
+    let mut words: Vec<&Raw> = toks
         .iter()
         .enumerate()
-        .filter(|(i, t)| t.kind == RawKind::Word && Some(*i) != typing)
-    {
+        .filter(|(i, t)| {
+            t.kind == RawKind::Word
+                && Some(*i) != typing
+                && caret::is_title_word(&q[t.start..t.end])
+        })
+        .map(|(_, t)| t)
+        .collect();
+    words.sort_by_key(|t| t.start.abs_diff(caret).min(t.end.abs_diff(caret)));
+    words.truncate(FUZZY_WORDS);
+    words.sort_by_key(|t| t.start);
+    for t in words {
         if out.len() >= MAX_DID_YOU_MEAN {
             break;
         }
         let w = &q[t.start..t.end];
-        if !caret::is_title_word(w) {
-            continue;
-        }
         let toks = tokenizer::tokenize(w);
         let [tok] = toks.as_slice() else {
             continue;

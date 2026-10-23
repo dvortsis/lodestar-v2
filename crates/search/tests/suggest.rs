@@ -380,6 +380,13 @@ fn did_you_mean_for_fields_and_rare_words() {
         of_kind(&got, Kind::Title),
         [("title:\"The Dark Knight\"".to_string(), Some(2))]
     );
+    // Only the words nearest the caret are looked at (a fuzzy walk of
+    // every dictionary each).
+    let far = "knigth qqqq wwww xxxx zzzz";
+    let got = suggest_at(&f.index, far, PLAIN, 8);
+    assert!(of_kind(&got, Kind::DidYouMean).is_empty(), "{got:?}");
+    let got = suggest_at(&f.index, &format!("knigth| {}", &far[7..]), PLAIN, 8);
+    assert_eq!(of_kind(&got, Kind::DidYouMean)[0].0, "knight");
     // A query with enough hits gets none.
     let got = suggest_at(&f.index, "1080p", PLAIN, 8);
     assert!(of_kind(&got, Kind::DidYouMean).is_empty());
@@ -549,6 +556,75 @@ fn the_live_indexer_rebuilds_titles_in_the_background() {
     let _ = db;
 }
 
+/// Through the real rebuild and swap (B5b): the index serving during a
+/// rebuild has its own title set, following the store, and the new
+/// directory gets a fresh one at the swap.
+#[test]
+fn a_rebuild_swap_builds_titles_for_the_new_directory() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use lodestar_search::{IndexVersion, Serving, ServingConfig};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let db = dir.path().join("s.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    add(&mut store, "First.Title.2001.1080p.mkv", false);
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+    // An index of this build's version, which a build with a newer
+    // tokenizer serves while it rebuilds.
+    let old = IndexVersion::CURRENT;
+    {
+        let index = SearchIndex::open(&root.join(old.dir_name())).unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 1000).unwrap();
+        w.commit().unwrap();
+        w.finish().unwrap();
+    }
+    let hold = Arc::new(AtomicBool::new(true));
+    let config = ServingConfig {
+        live: LiveConfig {
+            heap_bytes: 15 << 20,
+            poll: Duration::from_millis(10),
+            commit_every: Duration::from_millis(20),
+            ..LiveConfig::default()
+        },
+        rebuild_commit_docs: 5,
+        version: IndexVersion {
+            tokenizer: old.tokenizer + 1,
+            ..old
+        },
+        hold_before_finish: Some(hold.clone()),
+        ..ServingConfig::default()
+    };
+    let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+    assert!(serving.rebuilding());
+    let wait = |what: &str, ok: &dyn Fn() -> bool| {
+        let start = Instant::now();
+        while !ok() {
+            assert!(start.elapsed() < Duration::from_secs(30), "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    let titled = |index: &SearchIndex| {
+        of_kind(&suggest_at(index, "first ti", PLAIN, 8), Kind::Title)
+            == [("title:\"First Title\"".to_string(), Some(1))]
+    };
+    // The old directory serves, with titles.
+    let before = serving.index();
+    wait("titles while rebuilding", &|| titled(&before));
+    hold.store(false, Ordering::Relaxed);
+    wait("the swap", &|| !serving.rebuilding());
+    // The new directory's index has a set of its own, built once its
+    // live indexer starts.
+    let after = serving.index();
+    assert!(!Arc::ptr_eq(before.titles(), after.titles()));
+    wait("titles after the swap", &|| titled(&after));
+    drop(before);
+    serving.shutdown().unwrap();
+}
+
 #[test]
 fn a_new_index_directory_gets_its_own_title_set() {
     let f = fixture();
@@ -623,9 +699,24 @@ const NATURAL: &[(&str, &str)] = &[
     ("show me hevc films", "codec:h265 type:movie"),
     ("lord of the rings", "lord of the rings"),
     ("Re:Zero season 2", "Re:Zero s:2"),
-    ("-cam 4k", "\"-cam\" res:2160p"),
-    ("OR AND NEAR", "\"OR\" \"AND\" \"NEAR\""),
-    ("naruto (2002)", "naruto year:2002"),
+    // Explicit syntax stays as written: negations, fields, lists,
+    // phrases, operators and groups mean what they meant.
+    ("-cam 4k", "-cam res:2160p"),
+    ("-x265 movies", "-x265 type:movie"),
+    ("!cam", "-cam"),
+    ("movies -type:tv", "type:movie -type:tv"),
+    ("res:1080p movies", "res:1080p type:movie"),
+    ("ext:mkv,avi", "ext:mkv,avi"),
+    ("a OR b", "a | b"),
+    (
+        "4k movies OR 1080p tv shows",
+        "res:2160p type:movie | res:1080p type:tv",
+    ),
+    ("\"dark knight\" 4k", "\"dark knight\" res:2160p"),
+    ("dark NEAR knight 4k", "dark NEAR/5 knight res:2160p"),
+    ("(4k | 1080p) movies", "(4k | 1080p) type:movie"),
+    ("naruto (2002)", "naruto 2002"),
+    ("naruto [2002]", "naruto year:2002"),
     (
         "720p x264 tv series episodes 1 to 10",
         "res:720p codec:h264 type:tv e:1..10",
@@ -676,6 +767,44 @@ fn natural_phrasing_chips_point_at_their_words() {
         ]
     );
     assert_eq!(n.text, ["Amélie"]);
+}
+
+#[test]
+fn natural_phrasing_reads_only_what_the_parser_reads() {
+    use lodestar_search::natural::NaturalError;
+    for q in ["OR AND NEAR", "a (b", "\"open", "rez:1080p 4k"] {
+        assert_eq!(natural(q), Err(NaturalError::Syntax), "{q}");
+    }
+}
+
+/// Tokens in query syntax: what natural phrasing must keep.
+const SYNTAX: &[&str] = &[
+    "-x265",
+    "!cam",
+    "-cam",
+    "res:1080p",
+    "-type:tv",
+    "ext:mkv,avi",
+    "\"dark knight\"",
+    "(a | b)",
+    "(4k | movies)",
+    "title:x",
+    "size:>1GB",
+    "~knigth",
+    "comput*",
+    "-\"cam rip\"",
+];
+
+/// Whether `want` is `n` or one of its parts.
+fn contains(n: &Node, want: &Node) -> bool {
+    if n == want {
+        return true;
+    }
+    match n {
+        Node::And { of } | Node::Or { of } => of.iter().any(|c| contains(c, want)),
+        Node::Not { of } | Node::File { of } => contains(of, want),
+        _ => false,
+    }
 }
 
 /// Words the rules know, and others.
@@ -749,13 +878,46 @@ proptest! {
     #[test]
     fn natural_output_round_trips(words in prop::collection::vec(vocabulary(), 0..12)) {
         let phrase = words.join(" ");
-        let n = natural(&phrase).unwrap();
+        let Ok(n) = natural(&phrase) else {
+            prop_assert!(parse(&phrase).is_err(), "{}", phrase);
+            return Ok(());
+        };
         let parsed = parse(&n.canonical).unwrap();
         prop_assert_eq!(&parsed, &n.ast);
         prop_assert_eq!(parsed.to_query(), n.canonical.clone());
         for c in &n.chips {
             prop_assert!(parse(&c.text).is_ok(), "{}", c.text);
             prop_assert!(c.from.0 < c.from.1 && c.from.1 <= phrase.chars().count());
+        }
+    }
+
+    /// A token already in query syntax means the same after natural
+    /// phrasing: its parsed node is in the proposal as it was.
+    #[test]
+    fn natural_keeps_explicit_syntax(
+        parts in prop::collection::vec(
+            prop_oneof![
+                prop::sample::select(SYNTAX.to_vec()).prop_map(|s| (s.to_owned(), true)),
+                vocabulary().prop_map(|w| (w, false)),
+            ],
+            1..8,
+        ),
+    ) {
+        let phrase: Vec<&str> = parts.iter().map(|(p, _)| p.as_str()).collect();
+        let phrase = phrase.join(" ");
+        let Ok(n) = natural(&phrase) else {
+            // Not a query: `/parse` answers it with the syntax error.
+            prop_assert!(parse(&phrase).is_err(), "{}", phrase);
+            return Ok(());
+        };
+        // What the strict parse makes of each syntax token (a `NEAR`
+        // may absorb a fielded word), natural phrasing keeps.
+        let strict = parse(&phrase).unwrap();
+        for (p, _) in parts.iter().filter(|(_, syntax)| *syntax) {
+            let node = parse(p).unwrap();
+            if contains(&strict, &node) {
+                prop_assert!(contains(&n.ast, &node), "{} lost {} in {}", phrase, p, n.canonical);
+            }
         }
     }
 
