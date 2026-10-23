@@ -47,10 +47,6 @@
 			failure = {};
 			submitting = false;
 		});
-		// The dialog opens on its first field, so the name can be typed at once. Bits focuses the
-		// first control when it mounts, so wait for that.
-		const t = setTimeout(() => form?.querySelector<HTMLElement>('[name="name"]')?.focus(), 0);
-		return () => clearTimeout(t);
 	});
 
 	const nameError = $derived(failure.field === 'name' ? failure.message : undefined);
@@ -101,7 +97,13 @@
 	}
 </script>
 
-<Dialog bind:open title={m.alerts_create_title()} closeLabel={m.alerts_close()}>
+<!-- The dialog opens on its first field, so the name can be typed at once. -->
+<Dialog
+	bind:open
+	title={m.alerts_create_title()}
+	closeLabel={m.alerts_close()}
+	initialFocus={() => form?.querySelector<HTMLElement>('[name="name"]')}
+>
 	<form id={formId} bind:this={form} class="al-form" onsubmit={submit} novalidate>
 		{#if failure.form}
 			<Banner kind="error">{failure.form}</Banner>
