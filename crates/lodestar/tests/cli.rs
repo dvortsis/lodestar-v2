@@ -516,8 +516,15 @@ fn maintenance_runs_as_puid() {
 fn store_openers_refuse_during_an_update_rollback() {
     let data = Data::new();
     data.journal();
+    // The store opener is `serve --child` on Unix, plain `serve` on
+    // Windows (where `--child` is refused as a bad argument).
+    let serve: &[&str] = if cfg!(unix) {
+        &["serve", "--child"]
+    } else {
+        &["serve"]
+    };
     for args in [
-        &["serve", "--child"][..],
+        serve,
         &["import-bitmagnet", "postgres://localhost/bitmagnet"],
         &["stats"],
         &["reindex"],
@@ -536,5 +543,7 @@ fn store_openers_refuse_during_an_update_rollback() {
         status(&out, 1);
         assert!(text(&out).contains("rollback journal"), "{}", text(&out));
     }
+    #[cfg(not(unix))]
+    status(&data.run(&["serve", "--child"]), 2);
     assert_eq!(data.marker(), "first");
 }
