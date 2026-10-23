@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { coreSwitch } from './changes';
+import { addRule, coreSwitch } from './changes';
 import ChangeDialog from './ChangeDialog.svelte';
 import AdultConfirmDialog from './AdultConfirmDialog.svelte';
 import ImpactSummary from './ImpactSummary.svelte';
 import EffectWarning from './EffectWarning.svelte';
 import { createAdultConfirm, setShowAdult } from './adult.svelte';
 import { createChangeFlow } from './flow.svelte';
+import type { Assessment } from './types';
 import { mockFetch } from './testing/fetch';
 import { HOSTILE, applied, finished, preview, strengthening, weakening } from './testing/fixtures';
 
@@ -38,7 +39,7 @@ describe('ImpactSummary', () => {
 			quarantine: '3',
 			tombstones: '17',
 			stored: '120',
-			removed_from_floor: '0',
+			removed_from_floor: '5',
 			caught_30d: '214',
 			core_caught_30d: '9',
 			per_day: '7/d'
@@ -46,8 +47,8 @@ describe('ImpactSummary', () => {
 		for (const [k, v] of Object.entries(rows))
 			expect(screen.getByTestId(`impact-${k}`).textContent?.trim()).toBe(v);
 		expect(screen.getAllByRole('row')).toHaveLength(7);
-		// 3 + 17 = 20 and 214 + 9 = 223 appear nowhere.
-		expect(document.body.textContent).not.toMatch(/\b(20|223|140|137)\b/);
+		// No sum of rows appears (3 + 17, 3 + 5, 214 + 9, every row together, …).
+		expect(document.body.textContent).not.toMatch(/\b(20|8|22|223|140|137|368|375)\b/);
 		expect(document.body.textContent).not.toContain('≈');
 		expect(screen.queryByTestId('impact-estimate')).toBeNull();
 		unmount();
@@ -180,6 +181,130 @@ describe('ChangeDialog', () => {
 	});
 });
 
+describe('the typed password never outlives the confirm it was typed for', () => {
+	const rule = addRule({ query: 'name:"x"', action: 'hide' });
+
+	async function typed(props: Record<string, unknown> = {}) {
+		net.on('GET /filters/preview/jobs/7', { body: finished(weakening()) });
+		const flow = createChangeFlow();
+		const r = render(ChangeDialog, { props: { flow, title: 'Change', shadowDays: 7, ...props } });
+		flow.start(rule);
+		await waitFor(() => expect(screen.getByTestId('change-dialog').dataset.state).toBe('confirm'));
+		await fireEvent.input(password()!, { target: { value: PW } });
+		expect(password()!.value).toBe(PW);
+		return { flow, r };
+	}
+	/** A new preview, then `confirm` again. */
+	const confirmAgain = async () => {
+		const at = () => screen.getByTestId('change-dialog').dataset.state;
+		await waitFor(() => expect(at()).toBe('previewing'));
+		await waitFor(() => expect(at()).toBe('confirm'));
+	};
+	const gone = (flow: ReturnType<typeof createChangeFlow>) => {
+		expect(JSON.stringify(flow.state)).not.toContain(PW);
+		expect(document.body.innerHTML).not.toContain(PW);
+	};
+
+	it('Cancel, then reopening', async () => {
+		const { flow } = await typed();
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		flow.start(rule);
+		await confirmAgain();
+		expect(password()!.value).toBe('');
+		gone(flow);
+	});
+
+	it('Esc', async () => {
+		const { flow } = await typed();
+		await fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(password()).toBeNull();
+		gone(flow);
+	});
+
+	it('Shadow for N days (a variant)', async () => {
+		const { flow } = await typed();
+		await fireEvent.click(screen.getByTestId('change-shadow'));
+		await confirmAgain();
+		expect(password()!.value).toBe('');
+		expect(screen.getByTestId('change-shadow-note')).toBeTruthy();
+		gone(flow);
+	});
+
+	it('a variant or a new start from outside', async () => {
+		for (const next of ['variant', 'start'] as const) {
+			const { flow, r } = await typed();
+			flow[next]({ ...rule, query: 'name:"y"' });
+			await confirmAgain();
+			expect(password()!.value).toBe('');
+			gone(flow);
+			r.unmount();
+		}
+	});
+
+	it('typed during a rate-limit wait, then closed', async () => {
+		net.error('POST /filters/apply', 429, 'rate_limited', {}, { 'Retry-After': '30' });
+		const { flow } = await typed();
+		await fireEvent.submit(password()!.form!);
+		await screen.findByTestId('change-countdown');
+		await fireEvent.input(password()!, { target: { value: PW } });
+		await fireEvent.submit(password()!.form!);
+		expect(net.to('/filters/apply')).toHaveLength(1);
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		gone(flow);
+	});
+
+	it('the flow closing on its own still calls onclose', async () => {
+		const onclose = vi.fn();
+		const { flow } = await typed({ onclose });
+		flow.cancel();
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(onclose).toHaveBeenCalledTimes(1);
+		gone(flow);
+	});
+});
+
+describe('onclose', () => {
+	async function opened(assessment: Assessment) {
+		net.on('GET /filters/preview/jobs/7', { body: finished(assessment) });
+		net.on('POST /filters/apply', { body: applied(assessment) });
+		const flow = createChangeFlow();
+		const onclose = vi.fn();
+		render(ChangeDialog, { props: { flow, title: 'Change', onclose } });
+		flow.start(off);
+		await waitFor(() =>
+			expect(screen.getByTestId('change-dialog').dataset.state).toMatch(/^(review|confirm)$/)
+		);
+		return onclose;
+	}
+	const closed = () => waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+	it('fires once for Cancel in review', async () => {
+		const onclose = await opened(strengthening());
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await closed();
+		expect(onclose).toHaveBeenCalledTimes(1);
+	});
+
+	it('fires once for Cancel in confirm', async () => {
+		const onclose = await opened(weakening());
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await closed();
+		expect(onclose).toHaveBeenCalledTimes(1);
+	});
+
+	it('fires once for Close in done', async () => {
+		const onclose = await opened(strengthening());
+		await fireEvent.click(screen.getByTestId('change-apply'));
+		await screen.findByText('What changed');
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await closed();
+		expect(onclose).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe('the 18+ confirmation', () => {
 	it('off needs no dialog; on with Cancel sends nothing; on with confirm sends confirm_adult', async () => {
 		net.on('PATCH /settings/content', { body: { revision: 2, values: {} } });
@@ -205,6 +330,22 @@ describe('the 18+ confirmation', () => {
 			show_adult: true,
 			confirm_adult: true
 		});
+	});
+
+	it('422 adult_confirmation_required is an error and a dev error', async () => {
+		const dev = vi.spyOn(console, 'error').mockImplementation(() => {});
+		net.error('PATCH /settings/content', 422, 'adult_confirmation_required', {
+			field: 'show_adult'
+		});
+		const adult = createAdultConfirm();
+		const r = setShowAdult(true, adult);
+		adult.answer(true);
+		const res = await r;
+		expect(res.ok).toBe(false);
+		const { adultErrorText } = await import('./errors');
+		if (!res.ok) expect(adultErrorText(res.error!)).toContain("didn't accept");
+		expect(dev).toHaveBeenCalledTimes(import.meta.env.DEV ? 1 : 0);
+		dev.mockRestore();
 	});
 
 	it('409 set_by_environment names the variable', async () => {

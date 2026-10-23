@@ -30,6 +30,12 @@ Import from `$lib/features/filters/flows`; components by path, and lazily (`awai
 | `done`       | "What changed": previewed beside applied, plus `released`, `removed`, `deleted`, `settled`, `id`, `exception`, `version` | Close                                                                                                                                                                                                                                                       |
 | `failed`     | the server's message                                                                                                     | Retry (network, 408, 429, 5xx) → `previewing`; Close                                                                                                                                                                                                        |
 
+### Caveats for callers
+
+- **`cancel()` from outside during `applying` drops the answer.** The request is already sent, so the change may still apply on the server. `ChangeDialog` never does this: a close while applying waits for the result. Callers that cancel a flow themselves should refresh `GET /filters` afterwards.
+- **`variant()` is accepted only in `review` and `confirm`.** One sent while `previewing` is ignored, so a control that switches variants (part 2's CSX-5 strength) must hold its choice and send it once the preview settles, or be disabled while previewing.
+- **`onclose` fires once per close**, whether the user closed the dialog or the flow closed on its own (a job cancelled elsewhere, a sign-out).
+
 ## Mounting
 
 - **S-filters** (Settings → Filters & Safety): one `createChangeFlow()` per screen and one `<ChangeDialog>` bound to it; each switch, rule, exception, Always allow entry, review-queue action, floor removal and Undo calls `flow.start(builder(...))`. Name the action in `applyLabel` ("Turn off CS-4a"). Pass `shadowDays` (e.g. 7) where shadowing makes sense; it's offered only for `add_rule`, `update_rule` and `add_override`. Refresh `GET /filters` in `onapplied`. Undo is `flow.start(undoChange())` from a new "What changed" action you place; it may ask for the password.

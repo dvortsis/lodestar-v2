@@ -48,7 +48,13 @@ export type FlowState =
 			/** A 428 came back with a different warning or preview than the one shown. */
 			changed?: boolean;
 	  }
-	| { kind: 'applying'; change: Change; assessment: Assessment }
+	| {
+			kind: 'applying';
+			change: Change;
+			assessment: Assessment;
+			/** Carried from `confirm`, so a refused password keeps the "effect changed" notice. */
+			changed?: boolean;
+	  }
 	| { kind: 'done'; response: ApplyResponse; previewed: Assessment }
 	| { kind: 'failed'; error: ApiError; canRetry: boolean };
 
@@ -64,6 +70,8 @@ export interface Ctx {
 	readonly restarted: boolean;
 	/** When the current preview started (epoch ms), for the poll cadence. */
 	readonly startedAt: number;
+	/** A 429 `rate_limited` holds every confirm until then (epoch ms), across re-previews. */
+	readonly lockedUntil: number;
 }
 
 export type Effect =
@@ -107,7 +115,8 @@ export const initialCtx: Ctx = {
 	job: null,
 	seq: 0,
 	restarted: false,
-	startedAt: 0
+	startedAt: 0,
+	lockedUntil: 0
 };
 
 export const pollDelay = (startedAt: number, now: number) =>
@@ -145,10 +154,18 @@ const PREVIEW_KEYS = [
 	'estimate'
 ] as const;
 
-/** Whether what the user would read changed: the warning text or any preview number. */
+/** Whether what the user would confirm changed: the warning, any number, or the floor entries. */
 export function assessmentDiffers(a: Assessment, b: Assessment): boolean {
 	if (a.warning !== b.warning || a.confirm !== b.confirm) return true;
-	return PREVIEW_KEYS.some((k) => a.preview[k] !== b.preview[k]);
+	if (PREVIEW_KEYS.some((k) => a.preview[k] !== b.preview[k])) return true;
+	if (!!a.neutralize !== !!b.neutralize) return true;
+	if (
+		a.neutralize &&
+		b.neutralize &&
+		PREVIEW_KEYS.some((k) => a.neutralize![k] !== b.neutralize![k])
+	)
+		return true;
+	return (a.floor_entries ?? []).join() !== (b.floor_entries ?? []).join();
 }
 
 const same = (ctx: Ctx): Step => ({ ctx, effects: [] });
@@ -178,7 +195,8 @@ function preview(ctx: Ctx, change: Change, now: number, restarted = false): Step
 			job: null,
 			seq,
 			restarted,
-			startedAt: now
+			startedAt: now,
+			lockedUntil: ctx.lockedUntil
 		},
 		effects: [
 			...(stop.length ? stop : [{ type: 'abort' } as const]),
@@ -256,9 +274,18 @@ export function transition(ctx: Ctx, event: Event): Step {
 							new ApiError(500, 'bad_response', 'The preview returned no result.')
 						);
 					}
-					const state: FlowState = assessment.confirm
-						? { kind: 'confirm', change, assessment }
-						: { kind: 'review', change, assessment };
+					const locked = ctx.lockedUntil > event.now;
+					const state: FlowState = !assessment.confirm
+						? { kind: 'review', change, assessment }
+						: locked
+							? {
+									kind: 'confirm',
+									change,
+									assessment,
+									error: 'rate_limited',
+									retryAt: ctx.lockedUntil
+								}
+							: { kind: 'confirm', change, assessment };
 					return { ctx: { ...ctx, state, job: null }, effects: [] };
 				}
 				case 'failed':
@@ -292,18 +319,27 @@ export function transition(ctx: Ctx, event: Event): Step {
 
 		case 'confirm': {
 			if (s.kind !== 'confirm') return same(ctx);
-			if (s.retryAt !== undefined && event.now < s.retryAt) return same(ctx);
+			if (event.now < Math.max(s.retryAt ?? 0, ctx.lockedUntil)) return same(ctx);
 			if (event.password === '') {
 				const state: FlowState = {
 					kind: 'confirm',
 					change: s.change,
 					assessment: s.assessment,
-					error: 'empty'
+					error: 'empty',
+					...(s.changed ? { changed: true } : {})
 				};
 				return { ctx: { ...ctx, state }, effects: [] };
 			}
 			return {
-				ctx: { ...ctx, state: { kind: 'applying', change: s.change, assessment: s.assessment } },
+				ctx: {
+					...ctx,
+					state: {
+						kind: 'applying',
+						change: s.change,
+						assessment: s.assessment,
+						...(s.changed ? { changed: true } : {})
+					}
+				},
 				effects: [
 					{
 						type: 'apply',
@@ -342,7 +378,16 @@ export function transition(ctx: Ctx, event: Event): Step {
 			}
 			if (e.status === 401 && e.code === 'bad_password') {
 				return {
-					ctx: { ...ctx, state: { kind: 'confirm', change, assessment, error: 'bad_password' } },
+					ctx: {
+						...ctx,
+						state: {
+							kind: 'confirm',
+							change,
+							assessment,
+							error: 'bad_password',
+							...(s.changed ? { changed: true } : {})
+						}
+					},
 					effects: []
 				};
 			}
@@ -351,6 +396,7 @@ export function transition(ctx: Ctx, event: Event): Step {
 				return {
 					ctx: {
 						...ctx,
+						lockedUntil: retryAt,
 						state: { kind: 'confirm', change, assessment, error: 'rate_limited', retryAt }
 					},
 					effects: []

@@ -15,9 +15,10 @@
 //!    in any output. Keys and tokens can't read `/logs/catalog`.
 //!
 //! B-log2 adds the API's outputs to every run: the ring buffer and the
-//! files through `GET /logs` (paged to the end), and the live stream
-//! (opened before exercising, read over a socket, with one reconnect by
-//! `Last-Event-ID`). Its second part adds the downloads and the archive.
+//! files through `GET /logs` (paged to the end), the live stream (opened
+//! before exercising, read over a socket, with one reconnect by
+//! `Last-Event-ID`), every file downloaded as JSONL and text, redacted and
+//! not, and the archive.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
@@ -456,6 +457,31 @@ fn body(r: &str) -> &str {
     r.split("\r\n\r\n").nth(1).unwrap_or("")
 }
 
+/// A zip's members, inflated (stored or deflated), from its central
+/// directory.
+fn unzip(zip: &[u8]) -> Vec<(String, String)> {
+    let u16_at = |i: usize| u16::from_le_bytes([zip[i], zip[i + 1]]) as usize;
+    let u32_at = |i: usize| u32::from_le_bytes(zip[i..i + 4].try_into().unwrap()) as usize;
+    let end = zip.len() - 22;
+    assert_eq!(u32_at(end), 0x0605_4b50, "a zip");
+    let mut at = u32_at(end + 16);
+    let mut out = Vec::new();
+    for _ in 0..u16_at(end + 10) {
+        let csize = u32_at(at + 20);
+        let nlen = u16_at(at + 28);
+        let local = u32_at(at + 42);
+        let name = String::from_utf8_lossy(&zip[at + 46..at + 46 + nlen]).into_owned();
+        let data = local + 30 + u16_at(local + 26) + u16_at(local + 28);
+        let mut plain = String::new();
+        flate2::read::DeflateDecoder::new(&zip[data..data + csize])
+            .read_to_string(&mut plain)
+            .unwrap();
+        out.push((name, plain));
+        at += 46 + nlen + u16_at(at + 30) + u16_at(at + 32);
+    }
+    out
+}
+
 /// What the API shows, each output by name.
 struct Api {
     outputs: Vec<(String, String)>,
@@ -475,6 +501,14 @@ impl Api {
         self.outputs
             .iter()
             .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect()
+    }
+
+    /// Every output but the unredacted downloads.
+    fn redacted(&self) -> Vec<(&str, &str)> {
+        self.all()
+            .into_iter()
+            .filter(|(n, _)| !n.contains("redact=false"))
             .collect()
     }
 }
@@ -501,14 +535,56 @@ impl Server {
         panic!("history didn't end");
     }
 
-    /// Every API output: history and `stream` (as read so far).
+    fn files(&self) -> serde_json::Value {
+        let r = self.get("/api/v1/logs/files").unwrap();
+        assert!(r.starts_with("HTTP/1.0 200"), "{r}");
+        serde_json::from_str(body(&r)).unwrap()
+    }
+
+    fn raw_get(&self, path: &str) -> Vec<u8> {
+        let mut c = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        write!(
+            c,
+            "GET {path} HTTP/1.0\r\nHost: localhost\r\nCookie: {}\r\n\r\n",
+            self.cookie
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        c.read_to_end(&mut out).unwrap();
+        let at = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        assert!(
+            out.starts_with(b"HTTP/1.0 200"),
+            "{path}: {}",
+            String::from_utf8_lossy(&out)
+        );
+        out[at + 4..].to_vec()
+    }
+
+    /// Every API output: history, `stream` (as read so far), every file
+    /// in both formats redacted and not, and the archive both ways.
     fn api(&self, stream: &Stream) -> Api {
-        Api {
-            outputs: vec![
-                ("history".to_string(), self.history()),
-                ("stream".to_string(), stream.text()),
-            ],
+        let mut outputs = vec![
+            ("history".to_string(), self.history()),
+            ("stream".to_string(), stream.text()),
+        ];
+        let files = self.files();
+        for f in files["files"].as_array().unwrap() {
+            let name = f["name"].as_str().unwrap();
+            for format in ["jsonl", "text"] {
+                for redact in ["true", "false"] {
+                    let q = format!("/api/v1/logs/files/{name}?format={format}&redact={redact}");
+                    let text = String::from_utf8_lossy(&self.raw_get(&q)).into_owned();
+                    outputs.push((format!("{name} {format} redact={redact}"), text));
+                }
+            }
         }
+        for redact in ["true", "false"] {
+            let zip = self.raw_get(&format!("/api/v1/logs/archive.zip?redact={redact}"));
+            let all: String = unzip(&zip).into_iter().map(|(_, t)| t).collect();
+            outputs.push((format!("archive redact={redact}"), all));
+        }
+        Api { outputs }
     }
 }
 
@@ -637,12 +713,20 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
             .map(|(_, v)| v.clone())
             .collect();
         absent(&[("console", &console)], &mine, "the console stays Private");
-        // The API shows at most this kind while it's on.
+        // The API shows at most this kind while it's on, and redacted
+        // downloads none at all.
         let replay = Stream::open(&s, "", None);
         let api = s.api(&replay);
         let stream_now = open.text()[stream_mark..].to_string();
-        absent(&api.all(), &others, kind);
+        // (The unredacted downloads hold what earlier kinds wrote.)
+        absent(&api.redacted(), &others, kind);
         absent(&[("open stream", &stream_now)], &others, kind);
+        let redacted: Vec<(&str, &str)> = api
+            .redacted()
+            .into_iter()
+            .filter(|(n, _)| *n != "history" && *n != "stream")
+            .collect();
+        absent(&redacted, &mine, "redacted downloads");
         drop(replay);
         let before_off = open.text().len();
         let first = open.first_id();
@@ -666,7 +750,8 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         );
         std::thread::sleep(Duration::from_millis(300));
         let api = s.api(&replay);
-        absent(&api.all(), &mine, &format!("{kind} after it's off"));
+        let after_off: Vec<(&str, &str)> = api.redacted().into_iter().collect();
+        absent(&after_off, &mine, &format!("{kind} after it's off"));
     }
     s.stop();
 }
@@ -742,13 +827,29 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     std::thread::sleep(Duration::from_millis(300));
     let api = s.api(&replay);
     absent(
-        &api.all(),
+        &api.redacted(),
         &["canaryterm21".to_string(), "canaryterm22".to_string()],
         "after the opt-in's time",
     );
+    // The positive control: the file written meanwhile keeps it until
+    // it's deleted, unredacted, and it's badged.
+    let unredacted: String = api
+        .all()
+        .iter()
+        .filter(|(n, _)| n.starts_with("lodestar.jsonl jsonl redact=false"))
+        .map(|(_, t)| *t)
+        .collect();
+    assert!(unredacted.contains("canaryterm21"), "{unredacted}");
+    let files = s.files();
+    let current = files["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["current"] == true)
+        .unwrap();
+    assert_eq!(current["details"], true, "{files}");
+    assert_eq!(current["opt_in"], true, "{files}");
     let (all_console, all_file) = s.stop();
-    // The positive control: the file written meanwhile keeps it.
-    assert!(all_file.contains("canaryterm21"));
     for out in [&all_console, &all_file] {
         assert!(
             out.contains("filter_changes") && out.contains("expired"),
@@ -807,13 +908,22 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
         "Full plus both opt-ins",
     );
     // The setup token only in its start-up line, which stops working at
-    // setup; never through the API.
+    // setup; through the API, only in an unredacted download.
     for out in [&console, &file] {
         for line in out.lines().filter(|l| l.contains(&token)) {
             assert!(line.contains("setup token"), "{line}");
         }
     }
-    absent(&api.all(), std::slice::from_ref(&token), "the setup token");
+    absent(
+        &api.redacted(),
+        std::slice::from_ref(&token),
+        "the setup token",
+    );
+    for (name, out) in api.all() {
+        for line in out.lines().filter(|l| l.contains(&token)) {
+            assert!(line.contains("setup token"), "{name}: {line}");
+        }
+    }
     // Full did reach the file (the opt-in detail is there), and the
     // console never gets an opt-in.
     assert!(file.contains("canaryterm30"), "{file}");
@@ -857,6 +967,10 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         ("GET", "/api/v1/logs/catalog"),
         ("GET", "/api/v1/logs"),
         ("GET", "/api/v1/logs/stream"),
+        ("GET", "/api/v1/logs/files"),
+        ("GET", "/api/v1/logs/files/lodestar.jsonl"),
+        ("GET", "/api/v1/logs/archive.zip"),
+        ("DELETE", "/api/v1/logs/files"),
     ] {
         let json = "\r\nContent-Type: application/json";
         for head in [
