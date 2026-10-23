@@ -114,6 +114,13 @@ jobs:
           if grep -q skipping privdrop.log; then
             echo "::error::the root-only tests skipped"; exit 1
           fi
+          # The maintenance commands drop root too (tests/cli.rs).
+          cli=$(cargo test -p lodestar --test cli --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "cli") | .executable')
+          sudo "$cli" maintenance_runs_as_puid --exact --nocapture 2>&1 | tee cli-root.log
+          if grep -q skipping cli-root.log || ! grep -q "1 passed" cli-root.log; then
+            echo "::error::the root-only CLI test skipped"; exit 1
+          fi
 
   size-budget:
     name: size budget (§3)
@@ -137,6 +144,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # A regression gate at 200k; the 10M measurement is in §16.
       - run: cargo run --release -p lodestar-bench --bin search-bench -- --torrents 200000 --gate
+
+  relevance:
+    name: relevance (§8)
+    needs: changes
+    if: needs.changes.outputs.bench == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # NDCG@10 on the judgment set against bench/relevance/baseline.txt
+      # (tolerance 0.001), plus no hidden or negated torrent in any result.
+      - run: cargo run --release -p lodestar-bench --bin relevance -- --gate
 
   filter-budget:
     name: filter budget (§20.8)
