@@ -1473,31 +1473,36 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
 - **Verification. Nothing runs that isn't signed:**
   - The **manifest** is signed with the current release key (Ed25519, minisign format).
     - It names its **channel** inside the signed body, and a manifest for a different channel than the one chosen is refused.
-    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, the weekly re-signs included. A client that was offline across the rotation can still verify.
+    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, and every freshness statement after a freshness-key rotation carries them too. A client that was offline across the rotation can still verify.
   - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
-  - **Two built-in keys** (`packaging/keys/`, embedded at build):
-    - the **release key** (`02910813433E81E0`), the first key generation, signs manifests;
+  - **Built-in keys** (`packaging/keys/`, embedded at build; roles per `owner-decisions.md` §2.21):
+    - the **release key** (`02910813433E81E0`), the first key generation, signs stable and beta manifests (both built from `v*` tags);
+    - the **nightly key** signs nightly manifests and is trusted only on the Nightly channel;
+    - the **freshness key** signs only freshness statements (channel, manifest hash, timestamp, expiry) for manifests already signed by the release or nightly key, never new content;
+    - the release, nightly and freshness keys are all changed the same way, by a recovery-signed key statement;
     - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
   - **Key changes need the recovery key:**
-    - A key-change statement names the new release key and carries a **sequence number** one higher than the last one published.
-    - It's accepted only with a valid **recovery-key signature**. The current release key may co-sign, but its signature alone is never enough.
-    - Accepting a statement **revokes the previous release key** for new installs.
+    - A key-change statement names the **role** (release, nightly or freshness) and the new key, and carries a **sequence number** one higher than the last one published (one sequence for all roles).
+    - It's accepted only with a valid **recovery-key signature**. The current key of that role may co-sign, but its signature alone is never enough.
+    - Accepting a statement **revokes the previous key of that role only**, for new installs.
     - A statement whose sequence number isn't higher than the last one accepted is refused.
-    - So a leaked release key can sign manifests until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
+    - So a leaked key can do its role's job until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
   - **The recovery key itself is an accepted risk.** It's offline and password-protected, and there's no protocol to rotate it.
     - If it's ever lost or compromised, the remedy is a new build with a new embedded key, which users install **by hand** once.
-    - Whether to add a recovery-key rotation statement is the owner's call. It isn't designed here.
-  - **Time limits on manifests:**
+    - No rotation statement is designed (`owner-decisions.md` §2.21).
+  - **Time limits on manifests and freshness statements:**
     - Versions only go up.
-    - A manifest whose timestamp is more than **1 day ahead** of the local clock is refused.
-    - A manifest's expiry may be at most **30 days** after its timestamp. Expired manifests are refused for new installs.
-    - The **high-water mark** (the newest manifest timestamp accepted) belongs to the current key generation, and older manifests are refused. Accepting a key statement resets the mark to the statement's date. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
+    - A manifest and a freshness statement each get the same checks: refused if dated more than **1 day ahead** of the local clock, and an expiry at most **30 days** after its own timestamp.
+    - A manifest is **current** while it, or its newest accepted freshness statement, hasn't expired. A manifest that isn't current is refused for new installs.
+    - A **freshness statement** is accepted only if the current freshness key signed it, its channel and manifest hash match the manifest, and the manifest itself verifies under a non-revoked key allowed on that channel. It extends expiry only. The **freshness mark** is the newest freshness timestamp accepted; an older statement is refused.
+    - The **high-water mark** stays on the manifest's own signed timestamp (per channel), and older manifests are refused. A freshness statement for a manifest older than the mark is refused, so the freshness key can freeze updates but never roll them back.
+    - A release or nightly key rotation resets the high-water mark of the channels that key signs to the statement's date; a freshness-key rotation resets only the freshness mark. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
     - **If the local clock looks wrong in either direction,** the Updates screen says so instead of failing silently. That's when genuine manifests keep arriving from more than a day in the future, or when the clock is past the newest manifest's expiry while checks still succeed.
   - **Trust state lives outside the store.** `<data>/bin/trust.json` holds:
     - the accepted key statements (in full, with their signatures);
     - the current sequence number;
     - the revoked keys;
-    - the high-water mark.
+    - the per-channel high-water marks and the freshness mark.
 
     It's written by temporary file, fsync, rename, and an fsync of the directory. It's in no store snapshot or backup, so **no rollback can undo a revocation.**
     - **"Forward only"** means the pair (sequence number, high-water mark) never decreases. A new state replaces the old only if its sequence number is higher, or equal with a later high-water mark.
@@ -1509,8 +1514,8 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - **A missing `trust.json`** is rebuilt from that floor. Its high-water mark is the timestamp of the newest verified overlay manifest.
     - **A corrupt `trust.json`** blocks new installs. The running version keeps running, and a notice says so.
   - **Key statements get the same time check:** a statement dated more than 1 day ahead of the local clock is refused.
-  - **Re-signing:** the release workflow re-signs every channel's current manifest weekly, with a fresh timestamp and an expiry within 30 days. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
-  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22. Further hardening is recommended to the owner in `packaging/keys/README.md`: a required reviewer on the environment, and a separate nightly key.
+  - **Re-signing:** a scheduled workflow issues a fresh freshness statement for every channel's current manifest weekly, signed by the freshness key, with a fresh timestamp and an expiry within 30 days; the manifest itself isn't re-signed. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
+  - **Release engineering** (M6 `release.yml`) keeps each key in its own GitHub Actions environment (`owner-decisions.md` §2.21): `RELEASE_SIGNING_KEY` in `release`, which only `v*` tags may use, with the owner as required reviewer; the nightly key in `nightly` (main only); the freshness key in `freshness` (the scheduled re-sign on main only). A workflow edited on a feature branch can't read any of them, and the private keys never enter the repository. The owner created the release and recovery key pairs on 2026-10-22, and creates the nightly and freshness pairs.
 - **Before installing:**
   - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
   - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
@@ -2485,7 +2490,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
   - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
   - **What made it:** compiled queries with a three-valued cheap check (token texts, a Bloom filter of neighbouring tokens, token starts, extensions, sizes, tags); an index keyed on each rule's rarest-looking word; an exact ASCII fast path of the search tokenizer for the full match; a per-torrent vocabulary for prefixes and fuzzy words; and word plans and a flag table in the core's tokenizer and signals. On this set the engine went from 30 ms per torrent at 10% to 40.8 µs on the runner (core 8.9, 1% 32.9, 25% 48.1 reported). The build VM runs about 1.4× slower.
-  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). Whether to hold those is the owner's call.
+  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). All shapes are held (`owner-decisions.md` §2.21).
   - **Correctness:** a differential property test checks the compiled match against the previous matcher on random queries and torrents, and the cheap check against the full match. Its *no* answers rest on property tests that the scan's keys, pairs, starts and vocabulary cover the tokenizer's tokens exactly or as supersets. Injected bugs were caught.
 - **The floor from config files only adds (§2.7).** `blocklist.files` add through the store. A floor-marked list's upstream removals stay blocked. Both kinds of drop wait in *pending floor removals*, reported once per start with a counter metric, and leave the floor only through `resolve_floor_removal` with the effect warning and the password.
 - **Floor removals, as reviewed:** a confirmed removal settles the entries its warning counted (`floor_entries`), never more. An entry two config files list stays while either lists it. Accepting a held version of a floor-marked list is no longer weakening, since what it drops stays blocked in the list's pending removals (§20.7).
@@ -2827,7 +2832,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Manifest hygiene:**
   - the manifest signs its channel;
   - the highest accepted timestamp is stored, so an older signed manifest is refused;
-  - manifests are re-signed weekly before their 30-day expiry;
+  - a freshness statement is issued weekly for each channel's current manifest, before its 30-day expiry;
   - the check sends a fixed User-Agent with no version.
 - **One update check.** About uses the signed manifest; B2c no longer calls GitHub's releases API.
 - **Rollback is run by a supervisor:**
@@ -2847,7 +2852,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **A leaked key can't freeze updates:**
   - manifests more than a day ahead of the local clock are refused;
   - expiry is capped at 30 days;
-  - the high-water mark belongs to the key generation and resets with a key statement.
+  - the high-water marks are per channel, on the manifest's own timestamp, and reset only for the channels a rotated key signs; the freshness mark resets with a freshness-key rotation.
 - **Rollback is journaled and crash-safe:**
   - the child is stopped first;
   - the store is restored before `active` is repointed, with the WAL removed before the rename;
@@ -2860,7 +2865,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - forwarded stops don't count as attempts;
   - the timer starts after migrations;
   - Windows probation survives reboots.
-- **The recovery key is an accepted risk.** Its rotation is the owner's call.
+- **The recovery key is an accepted risk.** It isn't rotated (`owner-decisions.md` §2.21).
 - **Post-rotation manifests carry the key statements.**
 - **`LODESTAR_UPDATES=image`** locks Container image updates.
 - **Show adult content** is B17's server-wide `content.show_adult`, not a preference.
@@ -3678,8 +3683,18 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **As built:** `filter budget` in CI runs the ignored `budget` test in release on the runner.
     - **The set:** 512 generated video releases (films and season packs, 1 to 60 files, 15 on average, with samples, subtitles and NFOs, varied sources, codecs, groups and made-up titles). Each pass judges every torrent once, so the tokenizer's per-word caches warm only as they would on ingest. It takes the median of seven passes after one warm-up.
     - **The rules:** 10,000, with a share (1%, 10%, 25%) built on words the set has, so the narrowing can't rule them out by those words, and matching nothing. They're the review's `1080p <unique>` shape, phrases of two common words out of order, a common word with a size or a type no torrent has, and `file:(word size)`. The rest are keywords, phrases, groups, narrowed keywords and alternatives the set doesn't have, plus 1% that no word narrows: sizes, prefixes that start like the set's words (`1080z*`), and fuzzy words. The prefixes and fuzzy words get the full match on every torrent, about 40 rules per torrent.
-    - **The gate** holds the core, the 1% case and the 10% case under 50 µs, with no override. The 25% case is measured and reported, not held.
-    - **On the runner** (job 119777628892): core 8.93 µs; whole engine 32.92 µs at 1%, 40.78 µs at 10%, 48.05 µs at 25%. Fresh torrent sets cost the same as warm ones. The build VM runs about 1.4× slower and noisier (core 11–16, 1% 43–50, 10% 56–64, 25% 69–104), so the 10% case can fail there; the runner decides.
+    - **The gate** holds the core, the 1% case and the 10% case under 50 µs on the reference runner, with no override. The 25% case is measured and reported, not held.
+    - **Scaled to the reference runner** (owner, 2026-10-22; `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ by 1.5–1.9× in speed, so a fixed threshold failed at random: the same code measured 52.8 µs at 10% on one runner and 28.8 µs on another.
+      - The test times a calibration workload that runs no Lodestar code (lower-case, split, hash and sort the same torrents' names) seven times before any filter code runs and seven times after the engine is dropped. The runner's speed is the fastest of those passes over the reference's, `CALIB_REF_NS` = 7.2 µs per torrent. Noise only adds time, so the fastest pass can only make the gate stricter; a median let one noisy burst read a runner 1.4× slower than it was and scale a case a third too low.
+      - Each case's median time is divided by that speed. The calibration never runs beside filter state, so a regression can't slow it and hide itself. The measurement fails as untrusted when the fastest passes before and after differ by more than 15%, or when the speed is outside 0.4–2.0× (the slowest runner seen took 1.5×). The log gives the CPU and `rustc --version`.
+      - **The reference** is the fastest hosted runners seen: a Xeon 6973P-C (7.2 µs) and an EPYC 9V45 (7.3 µs). There the gate reads what the unscaled gate did.
+        - **This is a stopgap.** The owner asked for whatever makes the best user experience (2026-10-22), and users run Lodestar on NAS and desktop hardware, so the budget should hold on typical hardware. F-perf moves `CALIB_REF_NS` to the EPYC 7763, the most common hosted runner, once the engine meets 50 µs there. Today the 10% case runs 52 µs on it.
+        - **To derive `CALIB_REF_NS` for any runner type,** run the test on runners of that type (the log's CPU line names it), take the `calibration:` line from each (its fastest pass), and use the lowest. Re-derive it after a Rust toolchain change (the toolchain isn't pinned and the calibration is all std) or a change to `calibrate`, `torrents` or `COMMON`.
+      - **Tracking isn't exact:** the calibration stays in the CPU's small caches while the 10,000-rule engine doesn't, so CPUs differ by up to about 1.25× once scaled. So far the error leans strict: slower CPUs scale higher. On CI the 10% case scales to 31.7–35.5 µs (EPYC 9V45, EPYC 7763 ×4, Xeon 6973P-C). Intel build VMs scale to 38–39.5 µs; on the reviewer's, the calibration ran 1.48× the EPYC 9V45 while the 10% case ran 1.80×.
+      - **Measured on CI** (PR #97, 10% case, raw → scaled): EPYC 7763 ×4, 52.0–52.5 → 35.0–35.3 µs; Xeon 6973P-C, 35.5 → 35.5 µs; EPYC 9V45, 32.1 → 31.7 µs. Core scales to 6.6–7.8 µs, 1% to 24.5–28.1 µs.
+      - **Deliberate slowdowns fail it:** the full match run 24 times (101.1 µs raw at 10%, 68.7 scaled) and the cheap check turned off (136.1 raw, 111.4 scaled).
+      - **A budget gate, not a regression gate:** a slowdown that keeps a case under 50 µs passes, about +40% at 10% on today's code. Catching smaller ones would need a bench against a stored baseline (for example instruction counts), a possible follow-up.
+    - **On the runner before scaling** (job 119777628892): core 8.93 µs; whole engine 32.92 µs at 1%, 40.78 µs at 10%, 48.05 µs at 25%. Fresh torrent sets cost the same as warm ones. The build VM runs about 1.4× slower and noisier (core 11–16, 1% 43–50, 10% 56–64, 25% 69–104), so the 10% case can fail there; the runner decides.
     - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide get the full match on every torrent that has their words. The review measured them at 10% of rules on the build VM (divide by about 1.4 for the runner):
 
       | Shape at 10% of rules | Build VM, µs per torrent |
@@ -3691,7 +3706,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
       | `title:` | 83–85 |
       | mix | 171–178 |
 
-      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. Whether to hold such shapes to the budget is the owner's call.
+      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. They're held to the budget too (`owner-decisions.md` §2.21).
     - **History:** the first version of this gate judged one torrent with rules none of whose words it had. The review measured 17 ms per torrent once 10% of the rules were candidates; this set measured 30 ms at 10% before the work below.
   - **How the rules stay cheap:**
     - **Narrowing:** each rule is indexed by a token text or tag it can't match without. Where several are each needed (an AND, a phrase's words), it's keyed on the rarest-looking, so `1080p cam` is looked at only for torrents that have `cam`. Rules are marked in a bit set by position and read in order.

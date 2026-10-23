@@ -378,7 +378,13 @@ fn migrates_a_v4_database_with_data() {
         store
             .connection()
             .execute_batch(
-                "DROP TABLE filter_rules; DROP TABLE pack_switches; DROP TABLE override_list;
+                "DROP TABLE api_keys; DROP TABLE alerts; DROP TABLE saved_searches;
+                 DROP TABLE user_items; DROP TABLE collection_items; DROP TABLE collections;
+                 DROP TABLE index_watermark_hour; DROP TABLE query_log;
+                 DROP INDEX torrent_parsed_resolved; DROP INDEX quarantine_rule;
+                 DROP INDEX tombstones_rule;
+                 ALTER TABLE torrent_parsed DROP COLUMN resolved_at;
+                 DROP TABLE filter_rules; DROP TABLE pack_switches; DROP TABLE override_list;
                  DROP TABLE filter_exceptions; DROP TABLE filter_allow; DROP TABLE filter_fixtures;
                  DROP TABLE rule_set_prev; DROP TABLE class_corrections; DROP TABLE class_rules;
                  DROP TABLE subscription_data; DROP TABLE subscriptions;
