@@ -938,6 +938,37 @@ fn joins(a: &[u8], sep: u8, b: &[u8]) -> bool {
     }
 }
 
+/// A set of keys that may answer *yes* for a key it doesn't have, never
+/// *no* for one it has: one bit per key, eight bits or more per key.
+#[derive(Debug, Default)]
+struct KeyFilter {
+    bits: Vec<u64>,
+}
+
+impl KeyFilter {
+    fn of<'a>(keys: impl ExactSizeIterator<Item = &'a u64>) -> KeyFilter {
+        let n = (keys.len() * 8).next_power_of_two().clamp(1 << 10, 1 << 22);
+        let mut f = KeyFilter {
+            bits: vec![0; n / 64],
+        };
+        for k in keys {
+            let i = f.bit(*k);
+            f.bits[i / 64] |= 1 << (i % 64);
+        }
+        f
+    }
+
+    /// Keys are mixed hashes, so their high bits are as good as any.
+    fn bit(&self, key: u64) -> usize {
+        (key >> 32) as usize & (self.bits.len() * 64 - 1)
+    }
+
+    fn may_have(&self, key: u64) -> bool {
+        let i = self.bit(key);
+        self.bits[i / 64] & (1 << (i % 64)) != 0
+    }
+}
+
 /// Your rules, indexed by what they need. Rebuilt whenever the list is
 /// changed (any mutable access), so it never goes stale.
 #[derive(Debug, Clone, Default)]
@@ -951,10 +982,12 @@ struct RuleIndex {
     /// Rules nothing narrows, by position, with their gates.
     always: Vec<(u32, Gate)>,
     by_key: IdMap<Vec<(u32, Gate)>>,
+    /// One bit per key of [`RuleIndex::by_key`], so most of a torrent's
+    /// texts, which no rule names, skip the map: it fits a small cache,
+    /// and the map of 10,000 rules doesn't.
+    filter: KeyFilter,
     /// Each rule's query and `unless`, compiled.
     compiled: Vec<(Compiled, Option<Compiled>)>,
-    /// Each rule's switch, read without touching the rule.
-    enabled: Vec<bool>,
 }
 
 impl RuleList {
@@ -965,8 +998,12 @@ impl RuleList {
                 let query = compile(&r.query);
                 let g = gate(&query);
                 ix.compiled.push((query, r.unless.as_ref().map(compile)));
-                ix.enabled.push(r.enabled);
                 let i = i as u32;
+                // A switch changes the list, which builds the index again,
+                // so rules switched off are simply left out.
+                if !r.enabled {
+                    continue;
+                }
                 match need(&r.query) {
                     Need::Always => ix.always.push((i, g)),
                     Need::Never => {}
@@ -980,6 +1017,7 @@ impl RuleList {
                     }
                 }
             }
+            ix.filter = KeyFilter::of(ix.by_key.keys());
             ix
         })
     }
@@ -1002,13 +1040,16 @@ impl RuleList {
         // Marked by position, then read in order.
         let mut marks = vec![0u64; self.rules.len().div_ceil(64)];
         let mut mark = |&(i, g): &(u32, Gate)| {
-            if ix.enabled[i as usize] && (g == Gate::None || gates(g)) {
+            if g == Gate::None || gates(g) {
                 marks[i as usize / 64] |= 1 << (i % 64);
             }
         };
         ix.always.iter().for_each(&mut mark);
         if !ix.by_key.is_empty() {
             for k in keys.text.keys().chain(tags()) {
+                if !ix.filter.may_have(*k) {
+                    continue;
+                }
                 if let Some(rules) = ix.by_key.get(k) {
                     rules.iter().for_each(&mut mark);
                 }

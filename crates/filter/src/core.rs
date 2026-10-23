@@ -418,6 +418,18 @@ pub struct Item<'a> {
 /// Pairs closer than this many words are evidence.
 const WINDOW: u32 = 8;
 /// Texts whose positions fit this many get a flag table in `signals`.
+/// Folders [`Core`] keeps the tokens of while reading one torrent.
+const FOLDERS: usize = 4;
+
+/// A folder's tokens, their flags, and the position after them.
+#[derive(Default)]
+struct Folder<'a> {
+    dirs: &'a [String],
+    tokens: Vec<Token>,
+    flags: Vec<u16>,
+    end: u32,
+}
+
 const DENSE_POSITIONS: usize = 4096;
 /// Inside Adult (CS-5a/5b).
 const ADULT_WINDOW: u32 = 12;
@@ -809,11 +821,11 @@ impl Core {
         tok.text(item.name, &mut tokens);
         self.flags_of(&tokens, &mut flags);
         let mut texts = vec![(Field::Name, self.signals(&tokens, &flags, neutral, &mut at))];
-        // Files in one folder share its tokens.
-        let mut folder: &[String] = &[];
-        let mut folder_tokens: Vec<Token> = Vec::new();
-        let mut folder_flags: Vec<u16> = Vec::new();
-        let mut folder_end = 0;
+        // Files in one folder share its tokens, and a few folders are
+        // remembered: a season's episodes and subtitles alternate
+        // between two.
+        let mut folders: Vec<Folder> = Vec::new();
+        let mut next = 0;
         for (i, f) in item.files.iter().take(MAX_FILES).enumerate() {
             let Some((name, dirs)) = f.path.split_last() else {
                 continue;
@@ -821,19 +833,38 @@ impl Core {
             if f.padding {
                 continue;
             }
-            if dirs != folder || i == 0 {
-                folder = dirs;
-                folder_tokens.clear();
-                tok.path(dirs, &mut folder_tokens);
-                folder_end = tok.pos();
-                folder_flags.clear();
-                self.flags_of(&folder_tokens, &mut folder_flags);
-            }
+            let slot = match folders.iter().position(|d| d.dirs == dirs) {
+                Some(slot) => slot,
+                None => {
+                    let mut d = Folder {
+                        dirs,
+                        ..Folder::default()
+                    };
+                    tok.path(dirs, &mut d.tokens);
+                    d.end = tok.pos();
+                    self.flags_of(&d.tokens, &mut d.flags);
+                    if folders.len() < FOLDERS {
+                        folders.push(d);
+                        folders.len() - 1
+                    } else {
+                        let slot = next;
+                        folders[slot] = d;
+                        next = (next + 1) % FOLDERS;
+                        slot
+                    }
+                }
+            };
+            let Folder {
+                tokens: folder_tokens,
+                flags: folder_flags,
+                end: folder_end,
+                ..
+            } = &folders[slot];
             tokens.clear();
-            tokens.extend_from_slice(&folder_tokens);
-            tok.continue_path(&[name], &mut tokens, 0, folder_end);
+            tokens.extend_from_slice(folder_tokens);
+            tok.continue_path(&[name], &mut tokens, 0, *folder_end);
             flags.clear();
-            flags.extend_from_slice(&folder_flags);
+            flags.extend_from_slice(folder_flags);
             self.flags_of(&tokens[folder_tokens.len()..], &mut flags);
             let s = self.signals(&tokens, &flags, neutral, &mut at);
             if s.paired() {
@@ -974,6 +1005,50 @@ mod tests {
                 }
             }
             prop_assert_eq!(dense, sparse);
+        }
+
+        /// Sharing a folder's tokens between files, however the files
+        /// move between folders, finds what reading each path whole finds.
+        #[test]
+        fn shared_folders_read_as_whole_paths(
+            segs in prop::collection::vec(
+                prop::collection::vec(prop::sample::select(vec![
+                    "lexa", "rolea", "codex", "yo", "y", "o", "years", "old", "15", "12",
+                    "docu", "x", "16yo", "a", "b",
+                ]), 1..5).prop_map(|w| w.join(".")),
+                1..7,
+            ),
+            layout in prop::collection::vec((0usize..7, 0usize..7, 0usize..4), 1..14),
+        ) {
+            let c = core();
+            let files: Vec<FileInfo> = layout
+                .iter()
+                .map(|&(a, b, depth)| {
+                    let mut path: Vec<String> =
+                        (0..depth).map(|d| segs[(a + d) % segs.len()].clone()).collect();
+                    path.push(segs[b % segs.len()].clone());
+                    FileInfo::new(path, 1)
+                })
+                .collect();
+            let item = Item { hashes: &[], name: "", files: &files, content_type: ContentType::Video };
+            let none = TermSet::default();
+            let (mut flags, mut table) = (Vec::new(), Vec::new());
+            let mut texts = vec![(Field::Name, Signals::default())];
+            for (i, f) in files.iter().enumerate() {
+                let mut tokens = Vec::new();
+                Tokenizer::default().path(&f.path, &mut tokens);
+                flags.clear();
+                c.flags_of(&tokens, &mut flags);
+                let s = c.signals(&tokens, &flags, &none, &mut table);
+                if s.paired() {
+                    texts.push((Field::File(i as u32), s));
+                }
+            }
+            for adult in [false, true] {
+                let ct = if adult { ContentType::Adult } else { ContentType::Video };
+                let item = Item { content_type: ct, ..item };
+                prop_assert_eq!(c.patterns(&item, &none), c.judge(&texts, ct));
+            }
         }
     }
 }
