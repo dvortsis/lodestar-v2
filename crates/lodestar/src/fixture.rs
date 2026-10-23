@@ -277,6 +277,14 @@ mod imp {
         };
         crate::init_logging(&config.log);
         dropped.log(&config.data_dir);
+        if temporary {
+            // Restarting in place would delete this folder and build a new
+            // fixture, with a new key and setup token (B2c).
+            crate::system::Restart::global().refuse(
+                "This fixture is temporary and is deleted when Lodestar stops. Stop it and run \
+                 `lodestar serve --fixture` again, or name a folder to keep one.",
+            );
+        }
         let outcome = run(&config, &found);
         if temporary {
             // The whole fixture lives here; nothing else was put in it.

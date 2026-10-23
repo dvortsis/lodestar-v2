@@ -229,6 +229,9 @@ pub struct AddressChange {
     pub previous_url: String,
     #[schema(inline)]
     pub state: AddressState,
+    /// False when the pending change couldn't be stored: the protection
+    /// lasts only until the process ends, and the log has the error.
+    pub stored: bool,
     /// Where the UI is after it.
     pub url: String,
 }

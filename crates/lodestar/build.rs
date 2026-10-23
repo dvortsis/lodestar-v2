@@ -78,9 +78,18 @@ fn build_info(bundle: &web_build::Bundle) {
         }
     }
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
-    let commit = var("LODESTAR_COMMIT").or_else(|| {
+    // A commit hash, or nothing: it's passed to git and embedded.
+    let hash = |c: &String| (7..=40).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_hexdigit());
+    let given = var("LODESTAR_COMMIT").map(|c| c.trim().to_string());
+    if let Some(c) = given.as_ref().filter(|c| !hash(c)) {
+        println!(
+            "cargo::warning=LODESTAR_COMMIT={c:?} isn't a 7 to 40 character hex hash: ignored"
+        );
+    }
+    let commit = given.filter(hash).or_else(|| {
         git.as_ref()
             .and_then(|_| git_out(&root, &["rev-parse", "HEAD"]))
+            .filter(hash)
     });
     let date = var("SOURCE_DATE_EPOCH").or_else(|| match (&commit, &git) {
         (Some(c), Some(_)) => git_out(&root, &["log", "-1", "--format=%ct", c]),
