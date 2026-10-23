@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 use lodestar_store::Store;
 
-use super::{Field, KEY_PREFIX, Section};
+use super::{Danger, Field, KEY_PREFIX, Preview, Section};
 use crate::config::Config;
 
 /// The DHT port when no bind address is configured.
@@ -44,21 +44,34 @@ impl Section for Network {
         Field::new("http_bind")
             .file("http.bind")
             .env("LODESTAR_HTTP_BIND")
-            .restart(),
+            .restart()
+            .group("web_ui")
+            .format("socket-addr")
+            .preview()
+            .keywords()
+            .danger(Danger::Disruptive),
         Field::new("secure_cookies")
             .file("http.secure_cookies")
             .env("LODESTAR_SECURE_COOKIES")
             .read_only()
-            .restart(),
+            .restart()
+            .group("web_ui")
+            .advanced(),
         Field::new("dht_port")
             .file("dht.bind")
             .env("LODESTAR_DHT_PORT")
             .restart()
-            .range(1, 65535),
+            .range(1, 65535)
+            .group("dht")
+            .keywords()
+            .danger(Danger::Disruptive),
         Field::new("dht_enabled")
             .file("dht.enabled")
             .env("LODESTAR_DHT_ENABLED")
-            .restart(),
+            .restart()
+            .group("dht")
+            .preview()
+            .danger(Danger::Disruptive),
     ];
 
     fn from_config(config: &Config) -> Self {
@@ -86,6 +99,38 @@ impl Section for Network {
             "dht_enabled" => config.dht.enabled = self.dht_enabled,
             // `secure_cookies` is read-only here.
             _ => {}
+        }
+    }
+
+    fn preview(&self, field: &str) -> Preview {
+        match field {
+            "http_bind" => {
+                let ip = self.http_bind.ip();
+                // Where to open it after the restart: any address of this
+                // machine's when bound to all of them.
+                let host = if ip.is_unspecified() {
+                    "localhost".to_string()
+                } else if self.http_bind.is_ipv6() {
+                    format!("[{ip}]")
+                } else {
+                    ip.to_string()
+                };
+                let p = Preview::default()
+                    .estimate("url", format!("http://{host}:{}/", self.http_bind.port()));
+                if ip.is_loopback() {
+                    p.warn(
+                        "loopback_only",
+                        "Only this computer will be able to open Lodestar.",
+                    )
+                } else {
+                    p
+                }
+            }
+            "dht_enabled" if !self.dht_enabled => Preview::default().warn(
+                "crawling_stops",
+                "Lodestar stops finding new torrents on the DHT after the restart.",
+            ),
+            _ => Preview::default(),
         }
     }
 
