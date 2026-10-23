@@ -1,5 +1,10 @@
 // Typed fixtures for the unit tests and the e2e mocks. Not imported by the app.
-import type { CompareResponse, CompareTorrent, FileList } from './model';
+import type { components } from '../../api/schema';
+
+// From the schema, not './model': the e2e typecheck loads this file without generated messages.
+type CompareResponse = components['schemas']['CompareResponse'];
+type CompareTorrent = components['schemas']['CompareTorrent'];
+type FileList = components['schemas']['FileList'];
 
 export const HASHES = ['a', 'b', 'c', 'd', 'e'].map((c) => c.repeat(40));
 
