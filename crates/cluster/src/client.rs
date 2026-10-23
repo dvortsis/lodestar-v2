@@ -551,6 +551,8 @@ impl Driver {
                 self.event(WorkerEvent::Regranted(items)).await
             }
             ToWorker::Grants(GrantBatch { batch, items }) => {
+                // Only claims someone still waits for may hold a key back.
+                self.claims.retain(|_, (tx, _)| !tx.is_closed());
                 let known: Vec<bool> = items.iter().map(|i| self.holds(i)).collect();
                 self.take_grants(&items);
                 let late = match self.claims.remove(&batch) {
