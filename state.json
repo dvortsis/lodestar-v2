@@ -1492,6 +1492,7 @@
     "heartbeat-1338": "open: #127 B-log2 part 1 (round 1 fixing, 160a1bc), #103 W9 (d89aa6d, baselines), #48 M4 (da63255, merging main); running: B11b part 2, B-update PR2; nothing newly ready",
     "last_heartbeat": "2026-10-23T16:38:56Z",
     "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
-    "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae."
+    "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
+    "launch_freeze": "2026-10-23T17:22:16Z owner: <30% Max plan usage left; don't spin up more sessions. No new slice sessions until the owner lifts it. Reviews: delta checks by resuming existing reviewers or by the runner directly; no new review agents for small deltas."
   }
 }
