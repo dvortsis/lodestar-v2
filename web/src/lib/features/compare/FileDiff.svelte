@@ -43,17 +43,17 @@
 					{/each}
 				</ul>
 			{/if}
-			{#if s.list.truncated}
-				{@const href = torrentHref(openHash(s))}
-				<p class="cmp-note" data-testid="compare-diff-{s.id}-truncated">
-					{m.compare_diff_truncated()}
-					{#if href}<!-- eslint-disable-next-line svelte/no-navigation-without-resolve --><a
-							{href}
-							class="cmp-link">{m.compare_open()}</a
-						>{/if}
-				</p>
-			{/if}
 		</details>
+		{#if s.list.truncated}
+			{@const href = torrentHref(openHash(s))}
+			<p class="cmp-note" data-testid="compare-diff-{s.id}-truncated">
+				{m.compare_diff_truncated()}
+				{#if href}<!-- eslint-disable-next-line svelte/no-navigation-without-resolve --><a
+						{href}
+						class="cmp-link">{m.compare_open()}</a
+					>{/if}
+			</p>
+		{/if}
 	{/each}
 </section>
 
@@ -86,6 +86,11 @@
 		cursor: pointer;
 		padding-block: calc(var(--spacing) * 2);
 		font-weight: var(--font-weight-medium);
+	}
+	@media (pointer: coarse) {
+		summary {
+			min-height: var(--target-min);
+		}
 	}
 	summary:focus-visible {
 		outline-width: var(--focus-ring-width);
