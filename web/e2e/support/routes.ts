@@ -25,7 +25,15 @@ export interface RouteCase {
 }
 
 export const ROUTES: RouteCase[] = [
-	{ name: 'search', path: '/search', heading: 'Search', key: true, densityAware: true },
+	{
+		name: 'search',
+		path: '/search',
+		heading: 'Search',
+		key: true,
+		densityAware: true,
+		// The bare page parses nothing; an interaction with a query in the bar would.
+		mock: (m) => m.on('parseQuery', { ast: { op: 'all' }, canonical: '' })
+	},
 	{ name: 'discover', path: '/discover' },
 	{ name: 'alerts', path: '/alerts' },
 	{ name: 'alert-detail', path: '/alerts/1' },
