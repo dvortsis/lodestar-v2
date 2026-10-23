@@ -33,8 +33,8 @@ pub use facets::{
 };
 pub use handle::SearchHandle;
 pub use index::{
-    Compiled, Error, Hit, Indexer, Result, Results, STEM_FALLBACK_BELOW, SearchIndex, Sort,
-    index_dir,
+    CatchUp, Compiled, Error, Hit, Indexer, Result, Results, STEM_FALLBACK_BELOW, SearchIndex,
+    Sort, index_dir,
 };
 pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
 pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
