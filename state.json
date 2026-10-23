@@ -186,7 +186,7 @@
    "pr": 114,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:53 PR #114 5bb1546 ready; +3.3 MB binary behind default-on fixture feature (brief cap 300 KB) -> reviewer to judge. Reviewer started.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:53 PR #114 5bb1546 ready; +3.3 MB binary behind default-on fixture feature (brief cap 300 KB) -> reviewer to judge. Reviewer started. | 04:15 review MERGE; asked: stripped size figure (+692 KB), WARN fixture mode, stale-anchor warning, polish. Release opt-out -> P-release follow-up.",
    "self_review": {
     "raised": 5,
     "fixed": 5,
@@ -321,7 +321,7 @@
    "pr": 102,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green."
   },
   "B12": {
    "status": "review",
@@ -829,13 +829,14 @@
    "merge": "6347fb5"
   },
   "X-flakes": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01DU5FDv74GuCpGhpTHM6Vte",
    "pr": 88,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending. | 01:22 f0560e4 delta verified by runner (bare_res non-empty + must-fail cases, idle backoff reset). Approved; live.rs conflict with main (#104) -> asked main merge. Merge on green. | 01:28 d9700cf main merged (CatchUp read in follow(), verified by runner). Approved; merge on green."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending. | 01:22 f0560e4 delta verified by runner (bare_res non-empty + must-fail cases, idle backoff reset). Approved; live.rs conflict with main (#104) -> asked main merge. Merge on green. | 01:28 d9700cf main merged (CatchUp read in follow(), verified by runner). Approved; merge on green. | 04:15 MERGED e12ab13 (CI fully green).",
+   "merge": "e12ab13"
   },
   "B2b": {
    "status": "review",
@@ -1285,7 +1286,8 @@
   "user_data_reader_lock": "B10a: GET /collections, /collections/{id}, /user-items/labels and withheld-heavy /user-items scan every entry on the shared reader lock; bound or move off the search reader (next brief touching user data).",
   "b9_unread_shown_only": "B9 must count unread alerts shown-only (B10a lists do); store unread_total counts Adult alerts.",
   "b9_feed_access": "B9 feed handlers must call Access::reaches_feed (B12).",
-  "request_log_redaction": "When api.request / URI logging lands, redact apikey and token query values (B12)."
+  "request_log_redaction": "When api.request / URI logging lands, redact apikey and token query values (B12).",
+  "release_no_fixture": "Release builds (Docker, MSI, release.yml) should build --no-default-features --features web; Docker smoke with web,fixture (B16 review). Route to P-release or packaging follow-up."
  },
  "blocked_on_owner": [],
  "launches_today": 13,
@@ -1325,6 +1327,6 @@
   "launch_template": "From now on, launch prompts use runner/README.md standing instructions (steward skill, message runner_session).",
   "106-adoption": "03:20 check: every in-flight slice branch contains d243361 except #48 (M4). M4 session is blocked in plan mode waiting on owner ExitPlanMode approval (owner notified). No PR merged by any session since 02:55; filter session merged nothing.",
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description.",
-  "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading). | 03:48 9ae4c0a hardening verified by runner. APPROVED; merge on green, then tell W9."
+  "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading). | 03:48 9ae4c0a hardening verified by runner. APPROVED; merge on green, then tell W9. | 04:16 MERGED 6d14f0e. W9 told."
  }
 }
