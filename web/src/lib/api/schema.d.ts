@@ -588,7 +588,10 @@ export interface paths {
         /** Searches with query text. To search with an AST, POST it. */
         get: operations["searchGet"];
         put?: never;
-        /** Searches with query text or a query AST. */
+        /**
+         * Searches with query text or a query AST. The body also takes
+         *     `"explain": true` (as `GET`'s `explain`).
+         */
         post: operations["searchPost"];
         delete?: never;
         options?: never;
@@ -1592,6 +1595,96 @@ export interface components {
             /** @description The rule it releases from. */
             rule: string;
         };
+        /** @description One hit's score in parts. */
+        ExplainHit: {
+            /** Format: int64 */
+            id: number;
+            /**
+             * Format: double
+             * @description BM25 over the name and paths (`text`), fielded words and
+             *     filters; null under a field sort.
+             */
+            phase1: number | null;
+            phase2: null | components["schemas"]["ExplainPhase2"];
+            priors: components["schemas"]["ExplainPriors"];
+            /**
+             * Format: double
+             * @description The score the hit was ranked by, as in `hits[].score`.
+             */
+            score: number;
+        };
+        /** @description Phase 2's features (§8). */
+        ExplainPhase2: {
+            /**
+             * Format: double
+             * @description Exact-name bonus: not ranked yet, always null.
+             */
+            exact_name: number | null;
+            /**
+             * Format: double
+             * @description The cap on file-only matches' contribution: not ranked yet,
+             *     always null.
+             */
+            file_cap: number | null;
+            /**
+             * Format: double
+             * @description The unfielded words' name boosts, summed (0 without phase 2).
+             */
+            name: number;
+            /**
+             * Format: double
+             * @description Phrase and proximity bonus: not ranked yet, always null.
+             */
+            phrase: number | null;
+            /**
+             * Format: double
+             * @description The unfielded words' parsed-title boosts, summed.
+             */
+            title: number;
+        };
+        /**
+         * @description The quality priors (§8), multiplied onto relevance once ranking has
+         *     them (with swarm health, M4); until then each is null.
+         */
+        ExplainPriors: {
+            /** Format: double */
+            freshness: number | null;
+            /** Format: double */
+            junk: number | null;
+            /** Format: double */
+            seeders: number | null;
+            /** Format: double */
+            swarm_consistency: number | null;
+            /** Format: double */
+            trackers: number | null;
+        };
+        /** @description The ranking's weights, as this server runs them. */
+        ExplainWeights: {
+            /**
+             * Format: double
+             * @description Boost of a word found in the name, in phase 1 (on the combined
+             *     field) and phase 2.
+             */
+            name: number;
+            /**
+             * Format: double
+             * @description Boost of a word found in a file or folder name, in phase 1.
+             */
+            path: number;
+            /** @description Phase-1 candidates re-ranked together. */
+            rerank_window: number;
+            /**
+             * Format: double
+             * @description Phase-1 score of a word matched only by its stem in the title
+             *     (the plurals fallback, when `stemmed`).
+             */
+            stem_score: number;
+            /**
+             * Format: double
+             * @description Phase-2 boost of a word found in the parsed title.
+             */
+            title: number;
+        };
         /**
          * @description Our address as other DHT nodes see it: the BEP 42 `ip` key of their
          *     replies, one vote per network (/24 or /64), the last 32 networks,
@@ -2315,6 +2408,27 @@ export interface components {
             size: number;
         };
         /**
+         * @description How a first page was ranked (`?explain=1`, architecture §8). Field
+         *     names are stable. Relevance is `phase1 + phase2.name + phase2.title`
+         *     (to float rounding); the other features and the priors aren't part of
+         *     ranking yet and are null.
+         */
+        SearchExplain: {
+            /** @description One per hit, in the hits' order. */
+            hits: components["schemas"]["ExplainHit"][];
+            /**
+             * @description `relevance`, or the field the hits are sorted by (`discovered`,
+             *     `size`, `files`), when no hit has relevance parts.
+             */
+            ranked_by: string;
+            /**
+             * @description Whether phase 2 re-ranked the phase-1 candidates: the query has
+             *     unfielded words.
+             */
+            two_phase: boolean;
+            weights: components["schemas"]["ExplainWeights"];
+        };
+        /**
          * @description One search result: the torrent summary (`docs/metrics.md` §7.1), its
          *     relevance and, for a query with a file clause, the files that matched.
          */
@@ -2479,6 +2593,8 @@ export interface components {
         SearchResponse: {
             /** @description The query as the server understood it. */
             canonical: string;
+            /** @description Present only when asked for with `explain`. */
+            explain?: components["schemas"]["SearchExplain"];
             hits: components["schemas"]["SearchHit"][];
             limit: number;
             /**
@@ -4112,6 +4228,8 @@ export interface operations {
                 cursor?: string;
                 /** @description `1` or `true`: count every match exactly, within a time budget. */
                 exact?: boolean;
+                /** @description `1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits. */
+                explain?: boolean;
             };
             header?: never;
             path?: never;
