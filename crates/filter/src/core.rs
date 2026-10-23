@@ -417,7 +417,6 @@ pub struct Item<'a> {
 
 /// Pairs closer than this many words are evidence.
 const WINDOW: u32 = 8;
-/// Texts whose positions fit this many get a flag table in `signals`.
 /// Folders [`Core`] keeps the tokens of while reading one torrent.
 const FOLDERS: usize = 4;
 
@@ -439,6 +438,7 @@ struct Scratch {
     folders: Vec<Folder>,
 }
 
+/// Texts whose positions fit this many get a flag table in `signals`.
 const DENSE_POSITIONS: usize = 4096;
 /// Inside Adult (CS-5a/5b).
 const ADULT_WINDOW: u32 = 12;
