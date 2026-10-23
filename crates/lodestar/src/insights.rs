@@ -213,8 +213,11 @@ pub fn spawn(
         });
     }
     tokio::spawn(async move {
-        if let Err(e) = run(&insights, follow, rx, stop).await {
-            tracing::error!("insights: the recorder stopped: {e}");
+        if run(&insights, follow, rx, stop).await.is_err() {
+            lodestar_log::log_event!(
+                crate::logging::events::INSIGHTS_RECORDER_STOPPED,
+                error = lodestar_log::Error::kind("recorder")
+            );
         }
     })
 }
@@ -245,7 +248,11 @@ async fn run(
                 );
             }
         }
-        Err(e) => tracing::warn!("insights: reading the fetch queue failed: {e}"),
+        Err(e) => lodestar_log::log_event!(
+            crate::logging::events::INSIGHTS_STEP_FAILED,
+            step = "fetch_queue",
+            error = lodestar_log::Error::new(&e)
+        ),
     }
     // The sealed days' sums first, so the first long range is quick.
     store = warm(insights, store).await?;
@@ -298,7 +305,7 @@ async fn run(
                 .await?;
                 match r {
                     Ok(()) => insights.bump(),
-                    Err(e) => tracing::warn!("insights: coverage not recorded: {e}"),
+                    Err(e) => lodestar_log::log_event!(crate::logging::events::INSIGHTS_STEP_FAILED, step = "coverage", error = lodestar_log::Error::new(&e)),
                 }
                 if let Some(w) = watermark(&follow) {
                     store = record(insights, store, w, now).await?;
@@ -337,7 +344,11 @@ async fn warm(insights: &Arc<Insights>, store: Store) -> Result<Store, BoxError>
     })
     .await?;
     if let Err(e) = warmed {
-        tracing::warn!("insights: reading the sealed days failed: {e}");
+        lodestar_log::log_event!(
+            crate::logging::events::INSIGHTS_STEP_FAILED,
+            step = "sealed_days",
+            error = lodestar_log::Error::new(&e)
+        );
     }
     Ok(store)
 }
@@ -369,7 +380,11 @@ async fn record(
         }
         Ok(None) => {}
         // A busy or failed write: the next commit or tick covers the ids.
-        Err(e) => tracing::warn!("insights: searchable time not recorded: {e}"),
+        Err(e) => lodestar_log::log_event!(
+            crate::logging::events::INSIGHTS_STEP_FAILED,
+            step = "searchable_time",
+            error = lodestar_log::Error::new(&e)
+        ),
     }
     Ok(store)
 }
@@ -382,7 +397,11 @@ async fn mirror_state(insights: &Arc<Insights>, store: Store) -> Result<Store, B
         Ok(st) => insights
             .imported
             .store(st.imported.max(0), Ordering::Release),
-        Err(e) => tracing::warn!("insights: reading its state failed: {e}"),
+        Err(e) => lodestar_log::log_event!(
+            crate::logging::events::INSIGHTS_STEP_FAILED,
+            step = "state",
+            error = lodestar_log::Error::new(&e)
+        ),
     }
     Ok(store)
 }
@@ -415,7 +434,11 @@ async fn compact(
         match r {
             Ok(()) => c.freed -= n,
             Err(e) => {
-                tracing::warn!("insights: giving back free pages failed: {e}");
+                lodestar_log::log_event!(
+                    crate::logging::events::INSIGHTS_STEP_FAILED,
+                    step = "vacuum",
+                    error = lodestar_log::Error::new(&e)
+                );
                 c.freed = 0;
             }
         }
@@ -424,7 +447,11 @@ async fn compact(
     let due = match due {
         Ok(st) => c.running || now - st.last_compaction_at >= COMPACT_EVERY_S,
         Err(e) => {
-            tracing::warn!("insights: reading its state failed: {e}");
+            lodestar_log::log_event!(
+                crate::logging::events::INSIGHTS_STEP_FAILED,
+                step = "state",
+                error = lodestar_log::Error::new(&e)
+            );
             false
         }
     };
@@ -446,15 +473,20 @@ async fn compact(
         Ok(r) => r,
         Err(e) => {
             // The day it was on is whole either way; the next tick goes on.
-            tracing::warn!("insights: compaction stopped: {e}");
+            lodestar_log::log_event!(
+                crate::logging::events::INSIGHTS_STEP_FAILED,
+                step = "compaction",
+                error = lodestar_log::Error::new(&e)
+            );
             return Ok(store);
         }
     };
     if !r.unknown_metrics.is_empty() && !c.unknown_logged {
         c.unknown_logged = true;
-        tracing::warn!(
-            "insights: metrics {:?} have no aggregation kind; their hourly rows are kept",
-            r.unknown_metrics
+        // Their names come from the store: counted, never named.
+        lodestar_log::log_event!(
+            crate::logging::events::INSIGHTS_UNKNOWN_METRICS,
+            count = r.unknown_metrics.len()
         );
     }
     c.freed += r.freed_pages;
@@ -470,12 +502,16 @@ async fn compact(
         })
         .await?;
         match pruned {
-            Ok(_) => tracing::debug!(
-                "insights: compacted up to day {}, {} hourly rows folded",
-                r.compacted_before_day,
-                r.rows
+            Ok(_) => lodestar_log::log_event!(
+                crate::logging::events::INSIGHTS_COMPACTED,
+                day = lodestar_log::Count(r.compacted_before_day as u64),
+                rows = r.rows as u64
             ),
-            Err(e) => tracing::warn!("insights: pruning the query log failed: {e}"),
+            Err(e) => lodestar_log::log_event!(
+                crate::logging::events::INSIGHTS_STEP_FAILED,
+                step = "query_log_prune",
+                error = lodestar_log::Error::new(&e)
+            ),
         }
     }
     Ok(store)
