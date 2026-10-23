@@ -117,6 +117,27 @@ async function connected(page: Page) {
 		.toBeGreaterThan(0);
 }
 
+// axe reads colours mid-fade otherwise (the overlay and the panel animate in): wait until the
+// dialog is open, nothing is animating and the panel is fully opaque.
+async function dialogSettled(page: Page, name?: string) {
+	const dialog = page.getByRole('dialog', name ? { name } : undefined);
+	await expect(dialog).toBeVisible();
+	await expect
+		.poll(
+			() =>
+				page.evaluate(() => {
+					const el = document.querySelector('[role="dialog"]');
+					return (
+						el?.getAttribute('data-state') === 'open' &&
+						Number(getComputedStyle(el).opacity) === 1 &&
+						document.getAnimations().every((a) => a.playState !== 'running')
+					);
+				}),
+			{ timeout: 15_000, message: 'the dialog did not finish opening' }
+		)
+		.toBe(true);
+}
+
 test.describe('the list', () => {
 	test.use({ viewport: { width: 1366, height: 800 } });
 
@@ -598,12 +619,12 @@ for (const [name, themeId, colorMode] of [
 			listMocks(mock);
 			await go('/alerts');
 			await page.getByTestId('alerts-new').click();
-			await expect(page.getByRole('dialog', { name: 'Save search' })).toBeVisible();
+			await dialogSettled(page, 'Save search');
 			await expectNoA11yViolations(page);
 			await page.keyboard.press('Escape');
 			await expect(page.getByRole('dialog')).toHaveCount(0);
 			await page.getByTestId('alerts-delete-2').click();
-			await expect(page.getByRole('dialog')).toBeVisible();
+			await dialogSettled(page);
 			await expectNoA11yViolations(page);
 		});
 	});
