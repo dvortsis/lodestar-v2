@@ -3,7 +3,7 @@
  "updated_at": "2026-10-22T21:45Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 28
+  "count": 29
  },
  "tags": {},
  "slices": {
@@ -1019,9 +1019,10 @@
    "merge": "aa799fa"
   },
   "V6-cluster2": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards"
+   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards",
+   "session": "session_01LvbsfQSKGCGby7T8r4xoNw"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
