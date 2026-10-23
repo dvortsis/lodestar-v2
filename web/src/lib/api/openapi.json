@@ -1535,6 +1535,16 @@
             }
           },
           {
+            "name": "tz",
+            "in": "query",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
             "name": "lease",
             "in": "query",
             "description": "A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`.",
@@ -4587,7 +4597,7 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "`relevance` (the default), or `discovered`, `size` or `files` with an optional `+` (ascending) or `-` (descending, the default).",
+            "description": "`relevance` (the default), or `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` or `seen` with an optional `+` (ascending) or `-` (descending, the default). Never-scraped torrents sort last either way.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4620,6 +4630,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
             }
           },
           {
@@ -6463,7 +6483,8 @@
       "AstDateField": {
         "type": "string",
         "enum": [
-          "discovered"
+          "discovered",
+          "seen"
         ]
       },
       "AstNode": {
@@ -6889,6 +6910,33 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "The time of day a torrent was discovered, in minutes after\nmidnight, inclusive; `from > to` wraps past midnight. The search's\n`tz` applies.",
+            "required": [
+              "from",
+              "to",
+              "op"
+            ],
+            "properties": {
+              "from": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "time_of_day"
+                ]
+              },
+              "to": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
           }
         ],
         "description": "A parsed query (§8), tagged by `op`."
@@ -6903,7 +6951,11 @@
           "year",
           "season",
           "episode",
-          "junk"
+          "junk",
+          "seeders",
+          "leechers",
+          "trackers",
+          "dht"
         ]
       },
       "AstShareBy": {
@@ -9747,7 +9799,7 @@
       },
       "ExplainPriors": {
         "type": "object",
-        "description": "The quality priors (§8), multiplied onto relevance once ranking has\nthem (with swarm health, M4); until then each is null.",
+        "description": "The quality priors (§8), multipliers on relevance from swarm health\n(M4): null when the ranking doesn't apply them (no swarm data served,\nor a field sort).",
         "required": [
           "freshness",
           "junk",
@@ -10075,6 +10127,15 @@
               "null"
             ],
             "description": "The search's sort; it doesn't change the counts, but a `lease`\nis checked against it.",
+            "default": null
+          },
+          "tz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to\n840), as `/search`; 0 by default.",
             "default": null
           }
         },
@@ -14304,7 +14365,7 @@
       },
       "SearchExplain": {
         "type": "object",
-        "description": "How a first page was ranked (`?explain=1`, architecture §8). Field\nnames are stable. Relevance is `phase1 + phase2.name + phase2.title`\n(to float rounding); the other features and the priors aren't part of\nranking yet and are null.",
+        "description": "How a first page was ranked (`?explain=1`, architecture §8). Field\nnames are stable. Relevance is `(phase1 + phase2.name + phase2.title)`\ntimes each of `priors` (to float rounding); a prior the ranking\ndoesn't apply is null, and counts as 1. The other phase-2 features\naren't part of ranking yet and are null.",
         "required": [
           "hits",
           "ranked_by",
@@ -14321,11 +14382,11 @@
           },
           "ranked_by": {
             "type": "string",
-            "description": "`relevance`, or the field the hits are sorted by (`discovered`,\n`size`, `files`), when no hit has relevance parts."
+            "description": "`relevance`, or the field the hits are sorted by (`discovered`,\n`size`, `files`, `seeders`, `leechers`, `trackers`, `seen`), when\nno hit has relevance parts."
           },
           "two_phase": {
             "type": "boolean",
-            "description": "Whether phase 2 re-ranked the phase-1 candidates: the query has\nunfielded words."
+            "description": "Whether phase 2 re-ranked the phase-1 candidates: the query has\nunfielded words, or the server ranks with the swarm priors."
           },
           "weights": {
             "$ref": "#/components/schemas/ExplainWeights"
@@ -14349,6 +14410,7 @@
           "junk_reasons",
           "junk_score",
           "last_scrape_at",
+          "last_seen_at",
           "leechers",
           "metadata_at",
           "name",
@@ -14356,7 +14418,9 @@
           "resolved_via",
           "score",
           "seeders",
+          "seeders_approx",
           "size",
+          "swarm_suspect",
           "title",
           "trackers_checked",
           "trackers_reporting"
@@ -14452,6 +14516,11 @@
             "format": "int64",
             "description": "Null = never scraped."
           },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The latest DHT sighting."
+          },
           "leechers": {
             "type": [
               "integer",
@@ -14503,10 +14572,18 @@
             "description": "Null = never scraped.",
             "minimum": 0
           },
+          "seeders_approx": {
+            "type": "boolean",
+            "description": "No tracker reported: the counts are the DHT's estimate (show ≈)."
+          },
           "size": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "swarm_suspect": {
+            "type": "boolean",
+            "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
           },
           "title": {
             "type": [
@@ -14613,9 +14690,18 @@
               "string",
               "null"
             ],
-            "description": "`relevance` (the default), or `discovered`, `size` or `files` with\nan optional `+` (ascending) or `-` (descending, the default).",
+            "description": "`relevance` (the default), or `discovered`, `size`, `files`,\n`seeders`, `leechers`, `trackers` or `seen` with an optional `+`\n(ascending) or `-` (descending, the default). Never-scraped\ntorrents sort last either way.",
             "default": null,
             "example": "-discovered"
+          },
+          "tz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840);\n0 by default.",
+            "default": null
           }
         }
       },
@@ -16497,6 +16583,42 @@
           }
         }
       },
+      "SwarmTracker": {
+        "type": "object",
+        "description": "One tracker's report (`docs/metrics.md` §7.2).",
+        "required": [
+          "at",
+          "completed",
+          "leechers",
+          "seeders",
+          "url"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it answered."
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "leechers": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "seeders": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "SystemInfo": {
         "type": "object",
         "description": "`GET /system`.",
@@ -16892,7 +17014,7 @@
       },
       "TorrentDetail": {
         "type": "object",
-        "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nThe swarm fields are `null` until swarm health is served (M4): null is\n\"never scraped\", never 0.",
+        "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nA null swarm field is \"never scraped\" (or no estimate), never 0.",
         "required": [
           "completed",
           "dht_peers",
@@ -16906,15 +17028,19 @@
           "hash_v2",
           "id",
           "last_scrape_at",
+          "last_seen_at",
           "leechers",
           "magnet",
           "metadata_at",
           "name",
           "piece_len",
           "seeders",
+          "seeders_approx",
           "size",
+          "swarm_suspect",
           "swarm_history",
           "swarm_trend",
+          "swarm_trackers",
           "trackers_checked",
           "trackers_reporting"
         ],
@@ -16996,6 +17122,11 @@
             "format": "int64",
             "description": "Null = never scraped."
           },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The latest DHT sighting."
+          },
           "leechers": {
             "type": [
               "integer",
@@ -17029,6 +17160,10 @@
             "description": "Null = never scraped.",
             "minimum": 0
           },
+          "seeders_approx": {
+            "type": "boolean",
+            "description": "No tracker reported: the counts are the DHT's estimate (show ≈)."
+          },
           "size": {
             "type": "integer",
             "format": "int64",
@@ -17044,6 +17179,17 @@
                 "description": "14 daily and 26 weekly samples, newest first; null = no history\nkept."
               }
             ]
+          },
+          "swarm_suspect": {
+            "type": "boolean",
+            "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
+          },
+          "swarm_trackers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwarmTracker"
+            },
+            "description": "The trackers that reported this swarm in the last answered round."
           },
           "swarm_trend": {
             "type": [

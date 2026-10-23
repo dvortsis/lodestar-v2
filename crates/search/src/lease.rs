@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use lodestar_store::{Col as HotCol, HotColumns, NEVER};
 use tantivy::collector::{Collector, SegmentCollector};
 use tantivy::query::{EnableScoring, Weight};
 use tantivy::{
@@ -30,10 +31,11 @@ use crate::count::{self, Total};
 use crate::cursor::{LeaseId, Position};
 use crate::filter::{self, FastRange};
 use crate::index::{
-    self, Compiled, Error, Hit, RERANK_WINDOW, Result, STEM_FALLBACK_BELOW, SearchIndex, Sort,
+    self, Compiled, Error, Hit, RERANK_WINDOW, Result, STEM_FALLBACK_BELOW, ScoreParts,
+    SearchIndex, Sort,
 };
 use crate::query::Node;
-use crate::sorted::{self, Order};
+use crate::sorted::{self, By, Order};
 
 /// How long an exact count on demand may run before the estimate stands.
 pub const EXACT_BUDGET: Duration = Duration::from_secs(5);
@@ -50,6 +52,8 @@ pub struct Lease {
     total: Mutex<Total>,
     /// The time relative dates were resolved against.
     now: i64,
+    /// The offset `time:` clauses were resolved in (seconds east of UTC).
+    utc_offset: i32,
 }
 
 impl std::fmt::Debug for Lease {
@@ -76,6 +80,9 @@ pub enum Start {
 pub struct Page {
     pub hits: Vec<Hit>,
     pub next: Option<Position>,
+    /// Each hit's score breakdown, when the order is relevance with a
+    /// second phase (§8 `explain`); empty otherwise.
+    pub explain: Vec<ScoreParts>,
 }
 
 /// How a lease's results are ordered.
@@ -83,7 +90,8 @@ pub struct Page {
 enum Mode {
     /// Phase-1 score only (a query with nothing to re-rank).
     Plain,
-    /// Phase-1 windows re-ranked with the name boosts (§8).
+    /// Phase-1 windows re-ranked with the name boosts and, with hot
+    /// columns, the swarm and freshness priors (§8).
     TwoPhase,
     Field(Order),
 }
@@ -93,11 +101,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Lease {
-    /// Takes `index`'s current snapshot and compiles `node` for it
-    /// (`now` resolves relative dates, once for every page). The stem
-    /// fallback (§8) is decided here by the count, so every page takes
-    /// the same branch; a sort on a field the index lacks becomes
-    /// relevance.
+    /// [`Lease::new_at`] with times of day in UTC.
     pub fn new(
         index: Arc<SearchIndex>,
         node: &Node,
@@ -105,12 +109,33 @@ impl Lease {
         sort: Sort,
         cancel: &CancelToken,
     ) -> Result<Lease> {
+        Lease::new_at(index, node, now, 0, sort, cancel)
+    }
+
+    /// Takes `index`'s current snapshot and compiles `node` for it
+    /// (`now` resolves relative dates, once for every page, and
+    /// `utc_offset`, seconds east of UTC, times of day). The stem
+    /// fallback (§8) is decided here by the count, so every page takes
+    /// the same branch; a sort on a field the index lacks becomes
+    /// relevance.
+    ///
+    /// Swarm values (§7) aren't pinned: hot sorts and priors read them as
+    /// each page is served, so a torrent scraped between two pages can
+    /// move across the cursor.
+    pub fn new_at(
+        index: Arc<SearchIndex>,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        sort: Sort,
+        cancel: &CancelToken,
+    ) -> Result<Lease> {
         let searcher = index.searcher();
-        let exact = index.query(node, now);
+        let exact = index.query_at(node, now, utc_offset);
         let mut total = count::total(&searcher, &exact, cancel)?;
         let (mut compiled, mut stemmed) = (exact, false);
         if total.value < STEM_FALLBACK_BELOW
-            && let Some(wide) = index.query_stemmed(node, now)
+            && let Some(wide) = index.query_stemmed(node, now, utc_offset)
         {
             let wider = count::total(&searcher, &wide, cancel)?;
             if wider.value > total.value {
@@ -131,6 +156,7 @@ impl Lease {
             sort,
             total: Mutex::new(total),
             now,
+            utc_offset,
         })
     }
 
@@ -147,6 +173,7 @@ impl Lease {
             sort: Sort::Relevance,
             total: Mutex::new(total),
             now: 0,
+            utc_offset: 0,
         }
     }
 
@@ -159,15 +186,21 @@ impl Lease {
         &self.compiled
     }
 
-    /// The time the query's relative dates resolved against: facets
-    /// compile their variants of it at the same instant.
     /// The query this lease was taken for.
     pub fn node(&self) -> &Node {
         &self.node
     }
 
+    /// The time the query's relative dates resolved against: facets
+    /// compile their variants of it at the same instant.
     pub fn now(&self) -> i64 {
         self.now
+    }
+
+    /// The offset (seconds east of UTC) `time:` clauses resolved in:
+    /// facets compile their variants in it too.
+    pub fn utc_offset(&self) -> i32 {
+        self.utc_offset
     }
 
     /// The index the snapshot belongs to (for matched files).
@@ -226,19 +259,24 @@ impl Lease {
     }
 
     fn mode(&self) -> Mode {
-        let desc = match self.sort {
-            Sort::Relevance => false,
-            Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => desc,
+        let (by, desc) = match self.sort {
+            Sort::Relevance => {
+                return if self.compiled.boosts.is_some() || self.compiled.hot.is_some() {
+                    Mode::TwoPhase
+                } else {
+                    Mode::Plain
+                };
+            }
+            Sort::Seeders { desc } => (By::Hot(HotCol::Seeders), desc),
+            Sort::Leechers { desc } => (By::Hot(HotCol::Leechers), desc),
+            Sort::Trackers { desc } => (By::Hot(HotCol::Trackers), desc),
+            Sort::Seen { desc } => (By::Hot(HotCol::LastSeen), desc),
+            Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => {
+                let (field, signed) = index::sort_field(self.sort).expect("a field sort");
+                (By::Fast { field, signed }, desc)
+            }
         };
-        match index::sort_field(self.sort) {
-            Some((field, signed)) => Mode::Field(Order {
-                field,
-                signed,
-                desc,
-            }),
-            None if self.compiled.boosts.is_some() => Mode::TwoPhase,
-            None => Mode::Plain,
-        }
+        Mode::Field(Order { by, desc })
     }
 
     /// Whether `p` is a position in this lease's order: a cursor's
@@ -267,6 +305,7 @@ impl Lease {
         cancel.check()?;
         let limit = limit.max(1);
         let s = &self.searcher;
+        let mut explain = Vec::new();
         let (ranked, next) = match (self.mode(), start) {
             (Mode::Plain, Start::Offset(o)) => {
                 let top = score_top(s, &self.compiled, None, o + limit + 1, cancel)?;
@@ -279,11 +318,18 @@ impl Lease {
                     limit,
                 )
             }
-            (Mode::TwoPhase, Start::Offset(o)) => self.windows_from_offset(o, limit, cancel)?,
+            (Mode::TwoPhase, Start::Offset(o)) => {
+                let (ranked, parts, next) = self.windows_from_offset(o, limit, cancel)?;
+                explain = parts;
+                (ranked, next)
+            }
             (Mode::TwoPhase, Start::After(Position::Window { start, last })) => {
                 let start = start.map(|(score, addr)| Scored { score, addr });
                 let last = last.map(|(score, addr)| Scored { score, addr });
-                self.windows(Windows::Live, start, From::After(last), limit, cancel)?
+                let (ranked, parts, next) =
+                    self.windows(Windows::Live, start, From::After(last), limit, cancel)?;
+                explain = parts;
+                (ranked, next)
             }
             (Mode::Field(order), Start::Offset(o)) => {
                 let cache = self.index.segment_cache();
@@ -292,11 +338,11 @@ impl Lease {
                     cache,
                     &self.compiled,
                     order,
-                    limit + 1,
-                    o,
+                    o..o + limit + 1,
+                    self.index.sort_piece(),
                     cancel,
                 )?;
-                let ranks = field_ranks(s, order, &addrs)?;
+                let ranks = field_ranks(s, &self.compiled, order, &addrs)?;
                 cut_field(ranks, limit)
             }
             (Mode::Field(order), Start::After(Position::Field { present, key, addr })) => {
@@ -309,6 +355,7 @@ impl Lease {
         let page = Page {
             hits: hits(s, &ranked)?,
             next,
+            explain,
         };
         Ok((page, ranked.iter().map(|r| r.addr).collect()))
     }
@@ -319,7 +366,7 @@ impl Lease {
         o: usize,
         limit: usize,
         cancel: &CancelToken,
-    ) -> Result<(Vec<Scored>, Option<Position>)> {
+    ) -> Result<Windowed> {
         let w = RERANK_WINDOW;
         let first = o / w;
         let last = (o + limit - 1) / w;
@@ -348,11 +395,14 @@ impl Lease {
         mut from: From,
         limit: usize,
         cancel: &CancelToken,
-    ) -> Result<(Vec<Scored>, Option<Position>)> {
-        let Some(boosts) = &self.compiled.boosts else {
-            return Err(Error::Corrupt("a two-phase lease without boosts"));
-        };
+    ) -> Result<Windowed> {
+        let boosts = self.compiled.boosts.as_deref();
+        let priors = self.index.priors(self.compiled.now);
+        if boosts.is_none() && priors.is_none() {
+            return Err(Error::Corrupt("a two-phase lease with nothing to re-rank"));
+        }
         let mut out = Vec::with_capacity(limit);
+        let mut parts = Vec::with_capacity(limit);
         loop {
             let (cands, more) = match &mut src {
                 Windows::Fixed { cands, at } => {
@@ -375,17 +425,22 @@ impl Lease {
                 }
             };
             let Some(&bound) = cands.last() else {
-                return Ok((out, None));
+                return Ok((out, parts, None));
             };
             cancel.check()?;
-            let ranked: Vec<Scored> = index::rerank(
+            let reranked = index::rerank(
                 &self.searcher,
-                boosts.as_ref(),
+                boosts,
+                priors.as_ref(),
                 cands.iter().map(|c| (c.score, c.addr)).collect(),
-            )?
-            .into_iter()
-            .map(|(score, addr)| Scored { score, addr })
-            .collect();
+            )?;
+            let ranked: Vec<Scored> = reranked
+                .iter()
+                .map(|(addr, p)| Scored {
+                    score: p.score,
+                    addr: *addr,
+                })
+                .collect();
             let begin = match from {
                 From::Skip(n) => n.min(ranked.len()),
                 From::After(None) => 0,
@@ -396,6 +451,7 @@ impl Lease {
             };
             for (i, e) in ranked.iter().enumerate().skip(begin) {
                 out.push(*e);
+                parts.push(reranked[i].1);
                 if out.len() == limit {
                     let next = if i + 1 < ranked.len() {
                         Some(Position::Window {
@@ -410,17 +466,20 @@ impl Lease {
                     } else {
                         None
                     };
-                    return Ok((out, next));
+                    return Ok((out, parts, next));
                 }
             }
             if !more {
-                return Ok((out, None));
+                return Ok((out, parts, None));
             }
             start = Some(bound);
             from = From::After(None);
         }
     }
 }
+
+/// A page of re-ranked hits, their score parts, and where the next starts.
+type Windowed = (Vec<Scored>, Vec<ScoreParts>, Option<Position>);
 
 /// Where in a window the page starts.
 #[derive(Debug, Clone, Copy)]
@@ -505,6 +564,7 @@ fn score_top(
         k,
         after,
         ranges: &compiled.filters,
+        hot: compiled.hot.as_ref(),
         cancel,
     };
     searcher
@@ -516,6 +576,7 @@ struct ScoreTop<'a> {
     k: usize,
     after: Option<Scored>,
     ranges: &'a [FastRange],
+    hot: Option<&'a Arc<HotColumns>>,
     cancel: &'a CancelToken,
 }
 
@@ -573,7 +634,7 @@ impl Collector for ScoreTop<'_> {
             seg,
             k: self.k,
             after: self.after,
-            checks: filter::checks(self.ranges, reader)?,
+            checks: filter::checks(self.ranges, reader, self.hot)?,
             heap: BinaryHeap::with_capacity(self.k.min(4096) + 1),
         })
     }
@@ -655,15 +716,31 @@ struct Values {
 enum Col {
     I64(tantivy::columnar::Column<i64>),
     U64(tantivy::columnar::Column<u64>),
+    /// The id column, read through the hot columns (`None`: no values).
+    Hot(
+        tantivy::columnar::Column<u64>,
+        Option<Arc<HotColumns>>,
+        HotCol,
+    ),
 }
 
 impl Values {
-    fn new(reader: &SegmentReader, order: Order) -> tantivy::Result<Values> {
+    fn new(
+        reader: &SegmentReader,
+        order: Order,
+        hot: Option<&Arc<HotColumns>>,
+    ) -> tantivy::Result<Values> {
         let fast = reader.fast_fields();
-        let col = if order.signed {
-            Col::I64(fast.i64(order.field)?)
-        } else {
-            Col::U64(fast.u64(order.field)?)
+        let col = match order.by {
+            By::Fast {
+                field,
+                signed: true,
+            } => Col::I64(fast.i64(field)?),
+            By::Fast {
+                field,
+                signed: false,
+            } => Col::U64(fast.u64(field)?),
+            By::Hot(c) => Col::Hot(fast.u64("id")?, hot.cloned(), c),
         };
         Ok(Values { col, order })
     }
@@ -672,8 +749,13 @@ impl Values {
         let v = match &self.col {
             Col::I64(c) => c.first(addr.doc_id).map(|v| v as u64),
             Col::U64(c) => c.first(addr.doc_id),
+            Col::Hot(ids, hot, c) => hot.as_ref().and_then(|hot| {
+                let v = hot.get(*c, ids.first(addr.doc_id)?);
+                (v != NEVER).then_some(u64::from(v))
+            }),
         };
-        let mut key = v.map_or(0, |v| sorted::sortable(v, self.order.signed));
+        let signed = matches!(self.order.by, By::Fast { signed: true, .. });
+        let mut key = v.map_or(0, |v| sorted::sortable(v, signed));
         if !self.order.desc {
             key = !key;
         }
@@ -685,15 +767,22 @@ impl Values {
     }
 }
 
-fn field_ranks(searcher: &Searcher, order: Order, addrs: &[DocAddress]) -> Result<Vec<FieldRank>> {
+fn field_ranks(
+    searcher: &Searcher,
+    compiled: &Compiled,
+    order: Order,
+    addrs: &[DocAddress],
+) -> Result<Vec<FieldRank>> {
     let mut values: HashMap<u32, Values> = HashMap::new();
     let mut out = Vec::with_capacity(addrs.len());
     for &a in addrs {
         let v = match values.entry(a.segment_ord) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(Values::new(searcher.segment_reader(a.segment_ord), order)?)
-            }
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(Values::new(
+                searcher.segment_reader(a.segment_ord),
+                order,
+                compiled.hot.as_ref(),
+            )?),
         };
         out.push(v.rank(a));
     }
@@ -742,8 +831,8 @@ fn field_top(
             if cancel.is_stopped() {
                 return Err(cancel::interrupted());
             }
-            let values = Values::new(reader, order)?;
-            let checks = filter::checks(&compiled.filters, reader)?;
+            let values = Values::new(reader, order, compiled.hot.as_ref())?;
+            let checks = filter::checks(&compiled.filters, reader, compiled.hot.as_ref())?;
             let alive = reader.alive_bitset();
             let mut heap: BinaryHeap<Reverse<FieldRank>> = BinaryHeap::with_capacity(k + 1);
             let mut docs = weight.scorer(reader, 1.0)?;

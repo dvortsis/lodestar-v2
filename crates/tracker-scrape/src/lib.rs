@@ -26,6 +26,8 @@ pub mod testing;
 
 use std::fmt;
 use std::io;
+use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
@@ -33,6 +35,27 @@ use lodestar_metainfo::InfoHash;
 pub use crate::address::{Scheme, TrackerUrl, UrlError};
 pub use crate::http::{HttpConfig, HttpTracker};
 pub use crate::udp::{UdpConfig, UdpTracker};
+
+/// Addresses a scrape must never reach: the subscribed IP blocklists
+/// (§20.13), the same check the DHT and the fetch pool make.
+#[derive(Clone)]
+pub struct Deny(pub Arc<dyn Fn(IpAddr) -> bool + Send + Sync>);
+
+impl Deny {
+    pub fn denies(&self, ip: IpAddr) -> bool {
+        (self.0)(ip)
+    }
+}
+
+impl fmt::Debug for Deny {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Deny(..)")
+    }
+}
+
+pub(crate) fn denied(deny: Option<&Deny>, ip: IpAddr) -> bool {
+    deny.is_some_and(|d| d.denies(ip))
+}
 
 /// One hash's counts as a tracker reported them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,6 +92,8 @@ pub enum Error {
     Timeout,
     /// The host name didn't resolve.
     Resolve,
+    /// Every address of the tracker is on a blocklist.
+    Denied,
     Io(io::Error),
     /// The tracker refused with a message (UDP error action, HTTP
     /// `failure reason`). Rate limits and bans usually arrive this way.
@@ -89,6 +114,7 @@ impl fmt::Display for Error {
         match self {
             Error::Timeout => f.write_str("tracker timed out"),
             Error::Resolve => f.write_str("tracker host did not resolve"),
+            Error::Denied => f.write_str("tracker address is blocklisted"),
             Error::Io(e) => write!(f, "tracker i/o: {e}"),
             Error::Refused(m) => write!(f, "tracker refused: {m}"),
             Error::Status(s) => write!(f, "tracker returned HTTP {s}"),
