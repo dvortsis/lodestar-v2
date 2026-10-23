@@ -31,7 +31,7 @@
 	const suggestions = $derived(suggestBlocks(torrent));
 	const words = $derived(nameWords(torrent.name));
 
-	let tier = $state<BlockTier | null>(null);
+	let tier = $state<BlockTier | undefined>(undefined);
 	let action = $state('hide');
 	/** The phrase: a run of consecutive words, `[from, to]` inclusive. */
 	let range = $state<[number, number] | null>(null);
@@ -40,7 +40,7 @@
 	$effect.pre(() => {
 		if (!open) return;
 		const first = suggestions.find((s) => s.available && s.tier !== 'phrase');
-		tier ??= first?.tier ?? null;
+		tier ??= first?.tier;
 	});
 
 	const phrase = $derived(range ? phraseQuery(words.slice(range[0], range[1] + 1)) : null);
@@ -110,7 +110,7 @@
 	}
 
 	function reset() {
-		tier = null;
+		tier = undefined;
 		range = null;
 		action = 'hide';
 		matches = null;

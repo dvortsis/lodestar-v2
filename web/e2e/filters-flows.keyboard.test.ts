@@ -115,3 +115,69 @@ test('the 18+ dialog: Cancel has focus; Esc cancels; Enter on Show confirms', as
 	await kbd.press('Enter');
 	await expect(page.getByTestId('adult-status')).toHaveText('Adult content shown');
 });
+
+test('the override editor: type, preview, cancel with Esc', async ({ page, go, mock, kbd }) => {
+	answer(mock, weakening);
+	await go(PATH);
+	const invoker = page.getByTestId('open-override');
+	await kbd.tabTo(invoker);
+	await kbd.press('Enter');
+	// The dialog's chunk loads on first use: wait for it before tabbing on.
+	await expect(page.getByTestId('override-form')).toBeVisible();
+	await kbd.tabTo(page.getByTestId('override-value'), 15);
+	await page.keyboard.type('jailbait');
+	await kbd.press('Enter');
+	await expect(page.getByLabel('Password')).toBeFocused();
+	await kbd.press('Escape');
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await expect(invoker).toBeFocused();
+});
+
+test('Block this from the keyboard: hide this torrent, apply', async ({ page, go, mock, kbd }) => {
+	answer(mock, strengthening);
+	mock.on('searchGet', {
+		canonical: '',
+		hits: [],
+		limit: 1,
+		next_cursor: null,
+		notices: [],
+		offset: 0,
+		stemmed: false,
+		took_ms: 1,
+		total: 1,
+		total_approx: false
+	});
+	await go(PATH);
+	await kbd.tabTo(page.getByTestId('open-block'));
+	await kbd.press('Enter');
+	await expect(page.getByTestId('block-form')).toBeVisible();
+	await kbd.tabTo(page.getByTestId('block-preview'), 20);
+	await kbd.press('Enter');
+	await expect(page.getByTestId('change-dialog')).toHaveAttribute('data-state', 'review');
+	await kbd.tabTo(page.getByTestId('change-apply'), 10);
+	await kbd.press('Enter');
+	await expect(page.getByText('What changed')).toBeVisible();
+	await kbd.press('Escape');
+	await expect(page.getByTestId('open-block')).toBeFocused();
+});
+
+test('reveal from the keyboard, then Esc', async ({ page, go, mock, kbd }) => {
+	answer(mock, weakening);
+	mock.on('applyFilterChange', {
+		applied: true,
+		assessment: weakening,
+		version: 3,
+		name: 'A.Name'
+	});
+	await go(PATH);
+	const invoker = page.getByTestId('open-reveal');
+	await kbd.tabTo(invoker);
+	await kbd.press('Enter');
+	await expect(page.getByLabel('Password')).toBeFocused();
+	await page.keyboard.type('keyboard-password');
+	await kbd.press('Enter');
+	await expect(page.getByTestId('reveal-name')).toHaveText('A.Name');
+	await kbd.press('Escape');
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await expect(invoker).toBeFocused();
+});
