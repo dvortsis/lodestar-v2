@@ -1,0 +1,2 @@
+200
+[{"alert":true,"alerts":0,"ast":{"of":[{"field":"any","op":"word","word":"knight"},{"field":"any","op":"word","word":"1080p"}],"op":"and"},"created_at":0,"id":1,"last_alert_at":null,"name":"Knight","paused":false,"q":"knight 1080p","rss":false,"sort":"-size","unread":0,"updated_at":0},{"alert":false,"alerts":0,"ast":{"field":"any","op":"word","word":"batman"},"created_at":0,"id":2,"last_alert_at":null,"name":"AST","paused":true,"q":"batman","rss":true,"sort":null,"unread":0,"updated_at":0}]

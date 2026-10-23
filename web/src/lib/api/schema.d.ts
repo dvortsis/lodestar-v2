@@ -102,6 +102,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every collection, most recently changed first, with the number of
+         *     entries search would show.
+         */
+        get: operations["listCollections"];
+        put?: never;
+        /** Makes a collection. */
+        post: operations["createCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A collection and a page of its entries in order. Entries search
+         *     wouldn't show are skipped (a page is full unless the collection ends)
+         *     and `items` counts the ones it would.
+         */
+        get: operations["getCollection"];
+        put?: never;
+        post?: never;
+        /** Deletes a collection (not the torrents in it). */
+        delete: operations["deleteCollection"];
+        options?: never;
+        head?: never;
+        /**
+         * Renames a collection or changes its note; absent leaves a field as it
+         *     is, and `note: null` removes the note.
+         */
+        patch: operations["patchCollection"];
+        trace?: never;
+    };
+    "/collections/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adds torrents to the end of a collection; ones already in it stay
+         *     where they are. All or nothing: a hash that is unknown, or that search
+         *     wouldn't show, is the one `404 torrent_not_found` (`field: "hashes"`)
+         *     and nothing is added.
+         */
+        post: operations["addToCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}/items/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Takes torrents out of a collection. A hash that isn't in it, is
+         *     unknown or isn't shown is skipped, so nothing about a withheld
+         *     torrent is revealed.
+         */
+        post: operations["removeFromCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Puts a collection's entries in the order given. The list must name
+         *     every entry shown by default once (it may also name ones a filter rule
+         *     hid), with no cap, and may be empty only when none is shown;
+         *     `409 stale_order` otherwise, so a reorder from an old page can't
+         *     drop or duplicate entries. Entries not shown to the client (Adult while
+         *     hidden, and filter-hidden ones it did not name) keep their slots.
+         */
+        put: operations["reorderCollection"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compare": {
         parameters: {
             query?: never;
@@ -598,6 +712,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/saved-searches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every saved search, oldest first, with its alert counts. */
+        get: operations["listSavedSearches"];
+        put?: never;
+        /** Saves a search. It alerts only on torrents indexed from now on. */
+        post: operations["createSavedSearch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/saved-searches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One saved search. */
+        get: operations["getSavedSearch"];
+        put?: never;
+        post?: never;
+        /** Deletes a saved search with its alerts and feed tokens. */
+        delete: operations["deleteSavedSearch"];
+        options?: never;
+        head?: never;
+        /**
+         * Changes a saved search. Any subset: a field not sent keeps its value,
+         *     the notifier's channels included. Resuming a paused search skips what
+         *     was indexed while it was paused; editing the query does not move
+         *     where it left off.
+         */
+        patch: operations["patchSavedSearch"];
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -914,6 +1070,72 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/user-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your marked torrents, newest change first. Only torrents search would
+         *     show: those a filter rule hid appear with `hidden=true`, and Adult
+         *     only while "Show adult content" is on. A page is full unless the list
+         *     ends: withheld rows are skipped, never counted.
+         */
+        get: operations["listUserItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user-items/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every label in use with the number of visible torrents carrying it. */
+        get: operations["listLabels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user-items/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A torrent's marks, and the collections it is in. A torrent without
+         *     marks answers with all-false, empty marks; an unknown torrent, or one
+         *     withheld (Adult while hidden), is `404 torrent_not_found`.
+         */
+        get: operations["getUserItem"];
+        put?: never;
+        post?: never;
+        /** Clears every mark on a torrent. */
+        delete: operations["clearUserItem"];
+        options?: never;
+        head?: never;
+        /**
+         * Changes some marks: absent leaves one as it is, `note: null` removes
+         *     the note. Labels and the note are trimmed first (and CRLF becomes LF).
+         *     Returns the marks after, all-false when none are left.
+         */
+        patch: operations["patchUserItem"];
         trace?: never;
     };
 }
@@ -1315,6 +1537,124 @@ export interface components {
             corrections: number;
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
+        };
+        /** @description `POST /collections`. */
+        CollectionCreate: {
+            /** @description 1–200 characters. */
+            name: string;
+            /** @description 1–4,000 characters. */
+            note?: string | null;
+        };
+        /**
+         * @description One torrent in a collection.
+         * @example {
+         *       "added_at": 1700000150,
+         *       "position": 1,
+         *       "torrent": {
+         *         "adult_kind": null,
+         *         "completed": null,
+         *         "composition": [],
+         *         "content_type": "movie",
+         *         "discovered_at": 1700000000,
+         *         "files": 1,
+         *         "flags": [
+         *           "single_file"
+         *         ],
+         *         "hash": "0123456789abcdef0123456789abcdef01234567",
+         *         "hash_v2": null,
+         *         "id": 1,
+         *         "junk_reasons": [],
+         *         "junk_score": 0,
+         *         "last_scrape_at": null,
+         *         "leechers": null,
+         *         "metadata_at": 1700000001,
+         *         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+         *         "piece_len": 65536,
+         *         "resolved_via": null,
+         *         "score": 0,
+         *         "seeders": null,
+         *         "size": 8589934592,
+         *         "title": "The Dark Knight",
+         *         "trackers_checked": null,
+         *         "trackers_reporting": null
+         *       }
+         *     }
+         */
+        CollectionEntry: {
+            /** Format: int64 */
+            added_at: number;
+            /**
+             * Format: int64
+             * @description 1-based place among the entries shown, so it never reveals how
+             *     many were left out.
+             */
+            position: number;
+            torrent: components["schemas"]["SearchHit"];
+        };
+        /**
+         * @description `GET /collections/{id}`: the collection and a page of its entries.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "entries": [],
+         *       "id": 1,
+         *       "items": 0,
+         *       "name": "Weekend watchlist",
+         *       "next_after": null,
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        CollectionPage: {
+            /** Format: int64 */
+            created_at: number;
+            /** @description In order, only torrents search would show. */
+            entries: components["schemas"]["CollectionEntry"][];
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            items: number;
+            name: string;
+            /**
+             * Format: int64
+             * @description Send as `after` for the next page; null on the last.
+             */
+            next_after: number | null;
+            note: string | null;
+            /** Format: int64 */
+            updated_at: number;
+        };
+        /** @description `PATCH /collections/{id}`: absent leaves a field as it is. */
+        CollectionPatch: {
+            /** @default null */
+            name: string | null;
+            /**
+             * @description `null` removes the note.
+             * @default null
+             */
+            note: string | null;
+        };
+        /**
+         * @description A collection. `items` counts the torrents search would show.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "id": 1,
+         *       "items": 2,
+         *       "name": "Weekend watchlist",
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        CollectionSummary: {
+            /** Format: int64 */
+            created_at: number;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            items: number;
+            name: string;
+            note: string | null;
+            /** Format: int64 */
+            updated_at: number;
         };
         /** @description `POST /compare`'s body. */
         CompareRequest: {
@@ -2031,6 +2371,14 @@ export interface components {
         };
         /** @enum {string} */
         GroupStatus: "available" | "unavailable";
+        /**
+         * @description A list of torrents by info hash: `POST /collections/{id}/items`,
+         *     `…/items/remove` and `PUT …/order`.
+         */
+        HashList: {
+            /** @description 1–500 40-character hex info hashes. */
+            hashes: string[];
+        };
         /** @description A histogram with explicit bins; empty bins are present with count 0. */
         Histogram: {
             approx: boolean;
@@ -2221,6 +2569,21 @@ export interface components {
              * @description Once `failed`: the HTTP status of `error`.
              */
             status?: number;
+        };
+        /**
+         * @description One label in use.
+         * @example {
+         *       "count": 3,
+         *       "label": "4K"
+         *     }
+         */
+        LabelCount: {
+            /**
+             * Format: int64
+             * @description Visible torrents carrying it.
+             */
+            count: number;
+            label: string;
         };
         /** @description `GET /logs/catalog`. */
         LogCatalog: {
@@ -2718,6 +3081,108 @@ export interface components {
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        /** @description `POST /saved-searches`. */
+        SavedSearchCreate: {
+            /** @description Alert in the app about new hits. */
+            alert: boolean;
+            ast?: null | components["schemas"]["AstNode"];
+            /** @description 1–200 characters. */
+            name: string;
+            /** @description Start paused; false by default. */
+            paused?: boolean | null;
+            /**
+             * @description The query text. Send `q` or `ast`, not both; with neither it
+             *     matches everything.
+             */
+            q?: string | null;
+            /** @description Serve the hits as an RSS feed. */
+            rss: boolean;
+            /** @description As search's `sort`. */
+            sort?: string | null;
+        };
+        /**
+         * @description `PATCH /saved-searches/{id}`: any subset; absent leaves a field as it
+         *     is (the notifier's channels too).
+         */
+        SavedSearchPatch: {
+            /** @default null */
+            alert: boolean | null;
+            /** @default null */
+            ast: null | components["schemas"]["AstNode"];
+            /** @default null */
+            name: string | null;
+            /**
+             * @description Pausing and resuming is a toggle; resuming skips what was
+             *     indexed meanwhile.
+             * @default null
+             */
+            paused: boolean | null;
+            /**
+             * @description Send `q` or `ast`, not both.
+             * @default null
+             */
+            q: string | null;
+            /** @default null */
+            rss: boolean | null;
+            /**
+             * @description `null` opens with relevance.
+             * @default null
+             */
+            sort: string | null;
+        };
+        /**
+         * @description A saved search with what the list view shows beside it. The
+         *     notifier's channels and the watermark are not part of it.
+         * @example {
+         *       "alert": true,
+         *       "alerts": 4,
+         *       "ast": {
+         *         "op": "all"
+         *       },
+         *       "created_at": 1700000100,
+         *       "id": 1,
+         *       "last_alert_at": 1700000300,
+         *       "name": "New 4K releases",
+         *       "paused": false,
+         *       "q": "",
+         *       "rss": false,
+         *       "sort": "-discovered",
+         *       "unread": 2,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        SavedSearchView: {
+            /** @description Alert in the app about new hits. */
+            alert: boolean;
+            /**
+             * Format: int64
+             * @description Alerts recorded in all.
+             */
+            alerts: number;
+            ast: components["schemas"]["AstNode"];
+            /** Format: int64 */
+            created_at: number;
+            /** Format: int64 */
+            id: number;
+            /**
+             * Format: int64
+             * @description When the newest alert was recorded; null before the first.
+             */
+            last_alert_at: number | null;
+            name: string;
+            /** @description Skipped by the notifier; its channels are kept. */
+            paused: boolean;
+            /** @description The query text. */
+            q: string;
+            /** @description Serve the hits as an RSS feed. */
+            rss: boolean;
+            /** @description The sort the results open with; null = relevance. */
+            sort: string | null;
+            /** Format: int64 */
+            unread: number;
+            /** Format: int64 */
+            updated_at: number;
         };
         /**
          * @description How a first page was ranked (`?explain=1`, architecture §8). Field
@@ -3800,6 +4265,165 @@ export interface components {
          * @enum {string}
          */
         Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
+        /**
+         * @description `GET /user-items/{hash}`: the marks and the collections it is in.
+         * @example {
+         *       "collections": [
+         *         1
+         *       ],
+         *       "created_at": 1700000100,
+         *       "favourite": true,
+         *       "hash": "0123456789abcdef0123456789abcdef01234567",
+         *       "hidden": false,
+         *       "labels": [
+         *         "4K"
+         *       ],
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        UserItemDetail: {
+            /** @description Ids of the collections the torrent is in ("In collections"). */
+            collections: number[];
+            /** Format: int64 */
+            created_at: number | null;
+            favourite: boolean;
+            hash: string;
+            hidden: boolean;
+            labels: string[];
+            note: string | null;
+            /** Format: int64 */
+            updated_at: number | null;
+        };
+        /**
+         * @description `PATCH /user-items/{hash}`: what to change. Absent leaves a mark as
+         *     it is.
+         */
+        UserItemPatch: {
+            /** @default null */
+            favourite: boolean | null;
+            /**
+             * @description Your own Hide mark.
+             * @default null
+             */
+            hidden: boolean | null;
+            /**
+             * @description Replaces the labels (at most 32, 1–64 characters each); an empty
+             *     list removes them.
+             * @default null
+             */
+            labels: string[] | null;
+            /**
+             * @description 1–4,000 characters; `null` removes the note.
+             * @default null
+             */
+            note: string | null;
+        };
+        /**
+         * @description One marked torrent: your marks and the torrent beside them.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "favourite": true,
+         *       "hash": "0123456789abcdef0123456789abcdef01234567",
+         *       "hidden": false,
+         *       "labels": [
+         *         "4K"
+         *       ],
+         *       "note": "Watch with subs",
+         *       "torrent": {
+         *         "adult_kind": null,
+         *         "completed": null,
+         *         "composition": [],
+         *         "content_type": "movie",
+         *         "discovered_at": 1700000000,
+         *         "files": 1,
+         *         "flags": [
+         *           "single_file"
+         *         ],
+         *         "hash": "0123456789abcdef0123456789abcdef01234567",
+         *         "hash_v2": null,
+         *         "id": 1,
+         *         "junk_reasons": [],
+         *         "junk_score": 0,
+         *         "last_scrape_at": null,
+         *         "leechers": null,
+         *         "metadata_at": 1700000001,
+         *         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+         *         "piece_len": 65536,
+         *         "resolved_via": null,
+         *         "score": 0,
+         *         "seeders": null,
+         *         "size": 8589934592,
+         *         "title": "The Dark Knight",
+         *         "trackers_checked": null,
+         *         "trackers_reporting": null
+         *       },
+         *       "updated_at": 1700000200
+         *     }
+         */
+        UserItemRow: {
+            /** Format: int64 */
+            created_at: number;
+            favourite: boolean;
+            /** @description 40 hex digits. */
+            hash: string;
+            /** @description Your own Hide mark. */
+            hidden: boolean;
+            /** @description Sorted, unique, case-sensitive. */
+            labels: string[];
+            note: string | null;
+            torrent: components["schemas"]["SearchHit"];
+            /** Format: int64 */
+            updated_at: number;
+        };
+        /**
+         * @description `GET /user-items`: marked torrents, newest change first.
+         * @example {
+         *       "items": [],
+         *       "limit": 50,
+         *       "next_cursor": null
+         *     }
+         */
+        UserItemsResponse: {
+            /** @description Only torrents search would show (§20.3, §20.9). */
+            items: components["schemas"]["UserItemRow"][];
+            limit: number;
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description A torrent's marks. Without any, `favourite` and `hidden` are false,
+         *     `labels` is empty and the rest is null.
+         * @example {
+         *       "created_at": 1700000100,
+         *       "favourite": true,
+         *       "hash": "0123456789abcdef0123456789abcdef01234567",
+         *       "hidden": false,
+         *       "labels": [
+         *         "4K"
+         *       ],
+         *       "note": null,
+         *       "updated_at": 1700000200
+         *     }
+         */
+        UserMarks: {
+            /**
+             * Format: int64
+             * @description Null when there are no marks.
+             */
+            created_at: number | null;
+            favourite: boolean;
+            /** @description 40 hex digits. */
+            hash: string;
+            hidden: boolean;
+            labels: string[];
+            note: string | null;
+            /**
+             * Format: int64
+             * @description Null when there are no marks.
+             */
+            updated_at: number | null;
+        };
     };
     responses: {
         /** @description Any failure: the error envelope. `error.code` is stable; branch on it. */
@@ -3926,6 +4550,325 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClassRuleRemoved"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCollections: {
+        parameters: {
+            query?: {
+                /** @description Count torrents a filter rule hid too (§20.3). */
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionCreate"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `invalid_value`: the name or note isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCollection: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The previous response's `next_after`: how many shown entries to
+                 *     skip.
+                 */
+                after?: number;
+                /** @description Include torrents a filter rule hid (§20.3). */
+                hidden?: boolean;
+                /** @description Entries per page: 1–200, 50 by default. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionPage"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: the name or note isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addToCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HashList"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`, or `torrent_not_found` with `field: "hashes"`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: not 1–500 hashes. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeFromCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HashList"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: not 1–500 hashes. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    reorderCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The collection's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HashList"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionSummary"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `stale_order`: the list isn't exactly the entries. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: not 1–500 hashes. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4651,6 +5594,186 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listSavedSearches: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedSearchCreate"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"];
+                };
+            };
+            /** @description `query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: the name or query isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchSavedSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedSearchPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedSearchView"];
+                };
+            };
+            /** @description `query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: the name or query isn't allowed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     searchGet: {
         parameters: {
             query?: {
@@ -5267,6 +6390,183 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SiblingsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserItems: {
+        parameters: {
+            query?: {
+                /** @description Only torrents you marked as a favourite. */
+                favourite?: boolean;
+                /**
+                 * @description Only torrents you marked Hide (your own mark, not a filter
+                 *     rule's).
+                 */
+                hidden_mark?: boolean;
+                /** @description Only torrents carrying this label. */
+                label?: string;
+                /** @description Include torrents a filter rule hid (§20.3), as in search. */
+                hidden?: boolean;
+                /** @description Rows per page: 1–200, 50 by default. */
+                limit?: number;
+                /** @description The previous response's `next_cursor`. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserItemsResponse"];
+                };
+            };
+            /** @description `bad_cursor`: a cursor this server didn't give out. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listLabels: {
+        parameters: {
+            query?: {
+                /** @description Count torrents a filter rule hid too (§20.3). */
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelCount"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getUserItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserItemDetail"];
+                };
+            };
+            /** @description `torrent_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    clearUserItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `torrent_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchUserItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserItemPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserMarks"];
+                };
+            };
+            /** @description `torrent_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value`: a label or the note isn't allowed (`field` names which). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
