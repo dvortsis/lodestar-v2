@@ -153,7 +153,7 @@ fn runs_as_a_service() {
     let acl = String::from_utf8_lossy(&out.stdout);
     assert!(acl.contains("NT AUTHORITY\\SYSTEM"), "{acl}");
     assert!(acl.contains("BUILTIN\\Administrators"), "{acl}");
-    assert!(acl.contains(&format!("NT SERVICE\\{}", service.0)), "{acl}");
+    assert!(acl.contains("NT AUTHORITY\\LOCAL SERVICE"), "{acl}");
     assert!(!acl.contains("BUILTIN\\Users"), "{acl}");
     assert!(!acl.contains("(I)"), "{acl}");
 
