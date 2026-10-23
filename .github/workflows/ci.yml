@@ -77,6 +77,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # First-party lines only through log_event! (architecture §12.1).
+      - name: logging check
+        run: python3 .github/scripts/test_log_lint.py && python3 .github/scripts/log_lint.py
 
   openapi:
     name: openapi.json drift
