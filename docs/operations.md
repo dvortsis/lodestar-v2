@@ -185,8 +185,20 @@ doesn't write those snapshots yet **(planned)**. `cold.db` and the
 - **Upgrade today:** stop Lodestar, replace the binary (or pull the new image
   tag once images exist), start it. Before upgrading, copy the whole data
   directory while the service is stopped. That is your rollback.
-- **Automatic snapshot before schema migrations and `lodestar rollback`
-  (planned).**
+- **Snapshots before store upgrades.** When a new version has to change the
+  database's layout (a schema migration), it first saves a copy beside it:
+  `lodestar.pre-v<N>.db`. To go back, stop Lodestar and run
+  `lodestar rollback`. It lists the snapshots, with each one's age and the
+  date it will be deleted. Then run `lodestar rollback <name>` to restore one.
+  - **Snapshots are deleted 90 days after they are taken.** That is the
+    window to roll back an upgrade. For a longer-term copy, make a backup
+    (below) and keep it somewhere safe.
+  - **Snapshots get the same clean-up as the database.** Every hour while
+    it runs, Lodestar also removes from the snapshots the expired
+    quarantine entries (with their hidden names) and the torrents an abuse
+    report or a filter deleted, so a snapshot can't bring them back.
+  - `lodestar stats` shows how many snapshots there are and their total
+    size.
 - **`lodestar backup`, using SQLite's online backup (planned).** Until then,
   back up with the service stopped: copy `lodestar.db` (including `-wal`),
   `seal.key`, `auth.json` and `config.toml`. The index can be rebuilt, so it
