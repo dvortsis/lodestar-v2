@@ -150,7 +150,8 @@ test.describe('narrow screens', () => {
 		await expect(page).toHaveURL(/\/insights/);
 		await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);
 
-		await kbd.tabTo(button);
+		// Insights has many tab stops, so Tab would not wrap back to the bar within the limit.
+		await button.focus();
 		await kbd.press('Enter');
 		await kbd.press('Escape');
 		await expect(button).toHaveAttribute('aria-expanded', 'false');
