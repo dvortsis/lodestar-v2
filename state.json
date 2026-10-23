@@ -498,13 +498,13 @@
       "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch)"
     },
     "S-insights-1": {
-      "status": "review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01BUTPSv1ncvHgVTLY5JMVAY",
       "pr": 135,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:14:18Z blocked draft #135: chunk 56.75 KB vs 45 (incl uPlot). Runner: not raising (\u00a710.1); breakdown, cut dup/heavy imports, lazy below-fold; if first view+uPlot<=45 but total over -> owner question. Assigned mock edits in 4 specs; DOM order = narrow order. Fixture 7d new_searchable 172 vs 409: Opus investigation launched | 2026-10-23T17:34:45Z OWNER decision: \u00a710.1 Insights 45 KB counts first view (JS+CSS before charts; 27.1 KB); uPlot + below-fold lazy; runner total cap 65 KB. Blocking: Insights runtime hoisted into /search shared chunks (Lighthouse 102,716 > 102,400) - must restore search to main's numbers | 2026-10-23T18:04:25Z #135 out of draft, CI green at 848223d; fresh review launched | 2026-10-23T18:12:48Z review FIX: focus lost on intensity ({#key crawler}); decisions file stale; size reason; chunk-load catch; CLS 0.007; resync test; polish. Sizes verified 26.0 first / ~60-63 typical / 67 worst (accepted)"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:14:18Z blocked draft #135: chunk 56.75 KB vs 45 (incl uPlot). Runner: not raising (\u00a710.1); breakdown, cut dup/heavy imports, lazy below-fold; if first view+uPlot<=45 but total over -> owner question. Assigned mock edits in 4 specs; DOM order = narrow order. Fixture 7d new_searchable 172 vs 409: Opus investigation launched | 2026-10-23T17:34:45Z OWNER decision: \u00a710.1 Insights 45 KB counts first view (JS+CSS before charts; 27.1 KB); uPlot + below-fold lazy; runner total cap 65 KB. Blocking: Insights runtime hoisted into /search shared chunks (Lighthouse 102,716 > 102,400) - must restore search to main's numbers | 2026-10-23T18:04:25Z #135 out of draft, CI green at 848223d; fresh review launched | 2026-10-23T18:12:48Z review FIX: focus lost on intensity ({#key crawler}); decisions file stale; size reason; chunk-load catch; CLS 0.007; resync test; polish. Sizes verified 26.0 first / ~60-63 typical / 67 worst (accepted) | 2026-10-23T18:58:23Z f3ae22f delta checked by runner (focus fix, CLS reservations, Compare state), CI+lhci green, no overlap with #136; merged #135. Slice done"
     },
     "S-insights-2": {
       "status": "pending",
