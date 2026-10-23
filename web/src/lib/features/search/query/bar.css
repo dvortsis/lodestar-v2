@@ -1,0 +1,63 @@
+/* The query bar's lazy stylesheet: loaded by Live.svelte after it mounts, so neither the bare
+   page nor the route's eager CSS pays for it (kit loads a lazily imported component's own <style>
+   with the route). Plain token variables where the utility isn't already in the global sheet:
+   writing a utility's name anywhere in src/ adds it to that sheet (the 20 KB CSS budget). */
+@reference "../../../../app.css";
+
+/* Below `large` the bar stays at the top while the results scroll (§10.15). No geometry here:
+   this sheet loads after first paint, so it must not move anything. */
+search[data-search-bar] {
+	@apply sticky top-0 z-10 bg-base-200;
+	@variant large {
+		position: static;
+	}
+}
+
+/* The page grid (routes/search): one column below x-large; rail + results at x-large; rail +
+   results + drawer from xx-large (§10.15; tracks from §10.2). It is here, in the sheet that loads
+   with the first interaction, because the regions are empty before then: the first slice that
+   paints into them on first load moves this rule into the route's own stylesheet. */
+.search-grid {
+	@apply grid gap-6;
+	@variant x-large {
+		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr);
+	}
+	@variant xx-large {
+		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr) auto;
+	}
+}
+
+/* Token classes (§10.4: weight + mono + colour; the gap filled by typography-ui). */
+.qt-field {
+	@apply font-mono font-semibold;
+	color: var(--color-primary);
+}
+.qt-value {
+	@apply font-mono;
+}
+.qt-range {
+	@apply font-mono font-medium;
+	color: var(--color-accent-ink);
+}
+.qt-operator {
+	@apply font-semibold;
+	color: var(--color-accent-ink);
+}
+.qt-phrase {
+	@apply font-medium;
+}
+.qt-quote {
+	@apply text-muted-text;
+}
+.qt-error {
+	text-decoration: wavy underline var(--color-error);
+}
+/* An error at the end of the text marks the end: the empty span after the last token. */
+.qt-error-end::after {
+	content: '\a0\a0';
+	text-decoration: wavy underline var(--color-error);
+}
+.qt-icon {
+	display: inline;
+	vertical-align: text-bottom;
+}
