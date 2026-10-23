@@ -1020,7 +1020,14 @@ pub fn open_hot(store: &mut Store, dir: &Path) -> Result<(HotColumns, bool), Err
     let stamp = store.setting_i64(HOT_STAMP)?.unwrap_or(0);
     let snapshot = match stamp {
         0 => None,
-        s => HotColumns::load(dir, s as u64).map_err(Error::Io)?,
+        // Unreadable is treated like corrupt: rebuilt, never fatal.
+        s => HotColumns::load(dir, s as u64).unwrap_or_else(|e| {
+            lodestar_log::log_event!(
+                crate::log_events::HOT_SNAPSHOT_UNREADABLE,
+                error = lodestar_log::Error::io(&e)
+            );
+            None
+        }),
     };
     store.set_setting_i64(HOT_STAMP, 0)?;
     match snapshot {

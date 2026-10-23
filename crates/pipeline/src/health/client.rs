@@ -109,8 +109,6 @@ impl Gate {
     }
 }
 
-/// How many requests, paced `interval_ms` apart from `ready_at`, can start
-/// by `limit`.
 /// A scrape error's kind for the log: never its message, which can carry
 /// a tracker's own text (a refusal) or a URL.
 fn error_kind(e: &Error) -> &'static str {
@@ -129,6 +127,8 @@ fn error_kind(e: &Error) -> &'static str {
     }
 }
 
+/// How many requests, paced `interval_ms` apart from `ready_at`, can start
+/// by `limit`.
 pub(crate) fn requests_by(ready_at: u64, interval_ms: u64, limit: u64) -> u64 {
     match limit.checked_sub(ready_at) {
         None => 0,

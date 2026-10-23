@@ -319,6 +319,26 @@ impl Default for Ranking {
 }
 
 impl Ranking {
+    /// Refuses a weight that isn't a finite number: TOML takes `nan` and
+    /// `inf`, and clamping passes NaN through, which would make every
+    /// relevance score NaN.
+    fn check(&self) -> Result<(), ConfigError> {
+        let fields = [
+            ("seeders", self.seeders),
+            ("freshness_floor", self.freshness_floor),
+            ("freshness_half_life_days", self.freshness_half_life_days),
+            ("trackers", self.trackers),
+            ("junk", self.junk),
+            ("suspect", self.suspect),
+        ];
+        match fields.iter().find(|(_, v)| !v.is_finite()) {
+            Some((name, _)) => Err(ConfigError(format!(
+                "ranking.{name} must be a finite number"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     pub fn weights(&self) -> RankWeights {
         RankWeights {
             seeders: self.seeders.max(0.0),
@@ -500,6 +520,7 @@ impl Config {
         if let Some(v) = env("LODESTAR_SHOW_ADULT") {
             config.content.show_adult = v.parse().map_err(|_| parse("LODESTAR_SHOW_ADULT", &v))?;
         }
+        config.ranking.check()?;
         Ok(config)
     }
 
@@ -845,5 +866,11 @@ mod tests {
         assert_eq!(w.freshness_floor, 1.0, "clamped");
         std::fs::write(&path, "[ranking]\nseeder = 0.5\n").unwrap();
         assert!(Config::load(Some(&path), no_env).is_err());
+        for bad in ["seeders = nan", "junk = inf", "suspect = -inf"] {
+            std::fs::write(&path, format!("[ranking]\n{bad}\n")).unwrap();
+            let e = Config::load(Some(&path), no_env).unwrap_err();
+            let field = bad.split(' ').next().unwrap();
+            assert!(e.0.contains(&format!("ranking.{field}")), "{bad}: {e}");
+        }
     }
 }

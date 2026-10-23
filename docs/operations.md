@@ -264,14 +264,15 @@ Swarm health is how Lodestar learns whether a torrent is alive: how many seeders
 
 ### Reading the numbers
 
-- **Seeders and leechers** come from the trackers that answered, and from the DHT estimate where there is one. The fake-seeding check below can discount a source.
+- **Seeders and leechers** are the highest counts any tracker reported in the last round that got an answer. The fake-seeding check below can set one tracker aside.
+- **The DHT estimate stands in only when no tracker reports.** It's never mixed with tracker counts. When it's used, the numbers are marked "≈".
 - **"—" means never scraped.** It isn't zero. A real `0` means a tracker or the DHT answered and said there is nobody.
 - **"Trackers reporting" and "checked":**
-  - The detail view shows "n of m trackers", where m is how many trackers were asked about this hash and n is how many knew it.
+  - The detail view shows "n of m trackers". m is how many trackers answered in the last round that got an answer, and n is how many of those knew the torrent. A tracker that didn't answer is in neither number.
   - Only a tracker that answers with seeders + leechers + completed > 0 counts as reporting.
   - The reason is that opentracker-style trackers answer with zeros for hashes they've never seen. Counting those would make every torrent look known.
   - So "reporting" is a sampled signal that ages. The detail view shows when it was last refreshed.
-- **"≈"** marks a DHT estimate (see BEP 33 below).
+- **"≈"** marks counts from the DHT estimate (see BEP 33 below).
 
 ### The `[scrape]` config section
 
@@ -375,7 +376,7 @@ Some trackers inflate their counts. Lodestar checks swarms against each other:
 - It's an estimate, so it's shown as "≈". It is accurate for small swarms and saturates near 7,800.
 - Zero responders means no node near the hash stores it. That reads as "unknown", not "dead".
 - Only the two counts are kept. The filters, and any peers learned along the way, are dropped when the lookup ends.
-- DHT scrapes are limited to about 10% of the query budget, so they serve new, viewed and rediscovered torrents but not the decay schedule. They don't feed the metadata fetcher.
+- DHT scrapes are limited to about 10% of the query budget, so they serve new, viewed and rediscovered torrents. The decay schedule uses them only for a swarm that the DHT alone showed alive, since the trackers would call it dead. They don't feed the metadata fetcher.
 
 ### Hot columns
 

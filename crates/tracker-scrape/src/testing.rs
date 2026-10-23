@@ -49,6 +49,8 @@ pub struct FakeState {
     pub last_path: Mutex<String>,
     /// Counts for hashes not [`FakeState::set`]; zeros without it.
     pub answer: Mutex<Option<Answer>>,
+    /// Wait this long before each HTTP reply (a slow tracker).
+    pub delay: Mutex<Option<std::time::Duration>>,
 }
 
 impl FakeState {
@@ -217,6 +219,10 @@ pub async fn http_tracker() -> Fake {
                 }
                 if s.take_drop() {
                     return;
+                }
+                let delay = *s.delay.lock().expect("fake lock");
+                if let Some(d) = delay {
+                    tokio::time::sleep(d).await;
                 }
                 let line = String::from_utf8_lossy(&req);
                 let target = line.split_whitespace().nth(1).unwrap_or("/");

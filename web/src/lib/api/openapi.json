@@ -3775,15 +3775,6 @@
             }
           },
           {
-            "name": "explain",
-            "in": "query",
-            "description": "Each relevance hit's score breakdown, in `explain` (§8). Runs the exact query, without the plural fallback.",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
             "name": "cursor",
             "in": "query",
             "description": "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`.",
