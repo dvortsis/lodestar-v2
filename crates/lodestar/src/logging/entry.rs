@@ -303,15 +303,14 @@ impl Entry {
     }
 
     /// The copy the ring keeps, when it differs: the setup token
-    /// `[redacted]` and values cut to [`MAX_ENTRY`]. `None`: keep `self`.
+    /// (`auth.setup_token`'s field) `[redacted]` and values cut to
+    /// [`MAX_ENTRY`]. `None`: keep `self`. Since B-log1b nothing writes the
+    /// token in a plain line, so untyped lines get no special case;
+    /// history still redacts one in older files (`view.rs`).
     pub fn ring_copy(&self) -> Option<Entry> {
         let token = self.fields.iter().any(|f| f.kind == FieldType::Secret);
-        let untyped_token = match &self.source {
-            Source::Target(_) => redact_setup_token(&self.msg),
-            Source::Event(_) => None,
-        };
         let over = self.accounted() > MAX_ENTRY;
-        if !token && untyped_token.is_none() && !over {
+        if !token && !over {
             return None;
         }
         let mut e = self.clone();
@@ -319,9 +318,6 @@ impl Entry {
             if f.kind == FieldType::Secret {
                 f.value = Shown::Text(REDACTED.into());
             }
-        }
-        if let Some(msg) = untyped_token {
-            e.msg = Cow::Owned(msg);
         }
         if e.accounted() > MAX_ENTRY {
             e.truncate();
@@ -479,9 +475,9 @@ pub(super) fn cut(s: &mut String, max: usize) {
     s.push('…');
 }
 
-/// The plain start-up line's token, until B-log1b logs it as
-/// `auth.setup_token`: the word after `setup token ` becomes
-/// `[redacted]`. `None` when there's none.
+/// The token in the plain start-up line older files hold (before
+/// B-log1b logged it as `auth.setup_token`): the word after `setup token `
+/// becomes `[redacted]`. `None` when there's none.
 pub fn redact_setup_token(msg: &str) -> Option<String> {
     const MARK: &str = "setup token ";
     let at = msg.find(MARK)? + MARK.len();
@@ -616,17 +612,14 @@ mod tests {
         let ring = e.ring_copy().unwrap();
         assert!(!format!("{ring:?}").contains("ABCD"));
         assert_eq!(ring.fields[0].value, Shown::Text(REDACTED.into()));
-        let u = Untyped {
-            level: Level::Warn,
-            target: "lodestar::services".into(),
-            component: "system",
-            message: "first run: open http://x and enter setup token ABCD-EFGH to create".into(),
-            fields: vec![],
-        };
-        let ring = Entry::untyped(Stamp { millis: 0 }, &u).ring_copy().unwrap();
+        // An older file's plain line still reads `[redacted]` wherever it's
+        // read back (history and redacted downloads use this).
         assert_eq!(
-            ring.msg,
-            "first run: open http://x and enter setup token [redacted] to create"
+            redact_setup_token(
+                "first run: open http://x and enter setup token ABCD-EFGH to create"
+            )
+            .as_deref(),
+            Some("first run: open http://x and enter setup token [redacted] to create")
         );
         assert_eq!(redact_setup_token("no token here"), None);
     }

@@ -611,6 +611,26 @@ fn identifiers(hash: &[u8; 20]) -> Vec<(&'static str, String)> {
     ]
 }
 
+/// Each event's line is in the console and the file (`"event":"<id>"` in
+/// the file, the id in the console's text): the canary's positive
+/// controls, so a run that logged nothing can't pass.
+#[track_caller]
+fn logged(console: &str, file: &str, ids: &[&str]) {
+    for id in ids {
+        assert!(
+            file.contains(&format!(r#""event":"{id}""#)),
+            "{id} isn't in the file"
+        );
+        assert!(console.contains(id), "{id} isn't on the console");
+    }
+}
+
+/// The file's lines of event `id`.
+fn lines_of<'a>(file: &'a str, id: &str) -> Vec<&'a str> {
+    let needle = format!(r#""event":"{id}""#);
+    file.lines().filter(|l| l.contains(&needle)).collect()
+}
+
 #[track_caller]
 fn absent(outputs: &[(&str, &str)], needles: &[String], why: &str) {
     for (output, text) in outputs {
@@ -889,6 +909,7 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
     s.exercise(31, false);
     std::thread::sleep(Duration::from_millis(300));
     let token = s.token.clone();
+    let h = hex(&s.hash);
     let api = s.api(&open);
     let (console, file) = s.stop();
     let value = |c: &str| c.split_once('=').map(|(_, v)| v.to_string()).unwrap();
@@ -928,6 +949,40 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
     // console never gets an opt-in.
     assert!(file.contains("canaryterm30"), "{file}");
     assert!(!console.contains("canaryterm30"), "{console}");
+    // The flows' lines are there (B-log1b), in the same outputs that hold
+    // no secret: the setup token before setup and its end after it,
+    // sign-ins good and bad, the password change, and API requests.
+    logged(
+        &console,
+        &file,
+        &[
+            "auth.setup_token",
+            "auth.setup_complete",
+            "auth.sign_in",
+            "auth.sign_in_failed",
+            "auth.password_changed",
+            "api.request",
+        ],
+    );
+    let failed = lines_of(&file, "auth.sign_in_failed");
+    assert!(
+        failed
+            .iter()
+            .any(|l| l.contains("bad_password") && l.contains("127.0.0.1")),
+        "{failed:?}"
+    );
+    // Requests are logged by their route's template: never a hash or a
+    // query.
+    let requests = lines_of(&file, "api.request");
+    assert!(
+        requests
+            .iter()
+            .any(|l| l.contains("/api/v1/torrents/{hash}")),
+        "{requests:?}"
+    );
+    for l in &requests {
+        assert!(!l.contains(&h) && !l.contains("Canary"), "{l}");
+    }
 }
 
 const PROXY_USER: &str = "canary-proxy-user-delta";
@@ -988,10 +1043,32 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         format!("GET /api/v1/search?q=x HTTP/1.0\r\nAuthorization: Bearer {key}"),
         format!("GET /api/v1/search?q=x&apikey={key} HTTP/1.0"),
         format!("GET /api/v1/search?q=x&token={token} HTTP/1.0"),
-        "GET /api/v1/search?q=x HTTP/1.0\r\nX-Api-Key: lsk_AAAAAAAA_notarealsecretnotarealsecretnotarealsec".to_string(),
+        format!("GET /api/v1/feeds/1?token={token} HTTP/1.0"),
     ] {
         s.request(&head, "").unwrap();
     }
+    // A bad key in each of its three forms, and a bad feed token, on the
+    // feed route (the one keys reach): each is refused, and logged without
+    // the secret.
+    // Well-formed (56 characters), so each is looked up and is unknown.
+    let bad_key = "lsk_AAAAAAAA_notarealsecretnotarealsecretnotarealsecretX";
+    let bad_token = "lsf_BBBBBBBB_notarealtokennotarealtokennotarealtokenXXXX";
+    assert_eq!((bad_key.len(), bad_token.len()), (56, 56));
+    for head in [
+        format!("GET /api/v1/feeds/1 HTTP/1.0\r\nAuthorization: Bearer {bad_key}"),
+        format!("GET /api/v1/feeds/1 HTTP/1.0\r\nX-Api-Key: {bad_key}"),
+        format!("GET /api/v1/feeds/1?apikey={bad_key} HTTP/1.0"),
+        format!("GET /api/v1/feeds/1?token={bad_token} HTTP/1.0"),
+    ] {
+        let r = s.request(&head, "").unwrap();
+        assert!(r.starts_with("HTTP/1.0 401"), "{head}: {r}");
+        assert!(r.contains("bad_api_key"), "{r}");
+    }
+    // A request no route matches.
+    let r = s
+        .request("GET /api/v1/no-such-route?q=canaryquery HTTP/1.0", "")
+        .unwrap();
+    assert!(r.starts_with("HTTP/1.0 404"), "{r}");
     // The trusted-proxy user, from a trusted peer.
     let r = s.send(
         "PUT",
@@ -1031,4 +1108,40 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         ],
         "keys, tokens and the proxy user",
     );
+    for bad in ["notarealsecret", "notarealtoken"] {
+        absent(&outputs, &[bad.to_string()], "a refused key's secret");
+    }
+    // The lines are there: refusals of both kinds, the proxy turned on,
+    // and requests carrying `?apikey=` and `?token=` by their template.
+    logged(
+        &console,
+        &file,
+        &["auth.key_refused", "auth.proxy_changed", "api.request"],
+    );
+    let refused = lines_of(&file, "auth.key_refused");
+    for kind in ["api_key", "feed_token"] {
+        assert!(
+            refused
+                .iter()
+                .any(|l| l.contains(kind) && l.contains("unknown")),
+            "{kind}: {refused:?}"
+        );
+    }
+    let proxy = lines_of(&file, "auth.proxy_changed");
+    assert!(proxy.iter().any(|l| l.contains("true")), "{proxy:?}");
+    let requests = lines_of(&file, "api.request");
+    for route in ["/api/v1/search", "/api/v1/feeds/{id}"] {
+        assert!(
+            requests
+                .iter()
+                .any(|l| l.contains(&format!(r#""{route}""#))),
+            "{route}: {requests:?}"
+        );
+    }
+    for l in &requests {
+        assert!(
+            !l.contains("apikey") && !l.contains("token=") && !l.contains("q=x"),
+            "{l}"
+        );
+    }
 }
