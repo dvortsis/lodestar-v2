@@ -22,6 +22,7 @@
 //! can't send without a CORS preflight we never grant), and a present
 //! `Origin` must match `Host`.
 
+pub mod alerts;
 pub mod auth;
 mod collections;
 mod compare;
@@ -105,6 +106,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(saved::routes())
         .merge(jobs::routes())
         .merge(system::routes())
+        .merge(alerts::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth::of(&state)))
