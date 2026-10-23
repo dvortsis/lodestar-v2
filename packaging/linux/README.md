@@ -12,7 +12,7 @@ tarball script copies it rather than keeping a second version.
 ## Build and test
 
 ```sh
-cargo build --release --locked -p lodestar --target x86_64-unknown-linux-musl
+cargo build --release --locked -p lodestar --no-default-features --features web --target x86_64-unknown-linux-musl
 packaging/linux/build-tarball.sh x86_64-unknown-linux-musl 0.5.0 \
   target/x86_64-unknown-linux-musl/release/lodestar dist
 packaging/linux/smoke.sh dist/lodestar-0.5.0-x86_64-linux-musl.tar.gz
