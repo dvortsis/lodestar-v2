@@ -5,6 +5,7 @@
 // Name ends in `routes.test.ts` so the `core` project runs it.
 import type { Locator, Page } from '@playwright/test';
 import { liveEvents } from './support/events-server';
+import { interact } from './support/interact';
 import { expect, test } from './support/test';
 
 // Only the scripts: the stylesheet is what paints the static shell.
@@ -17,7 +18,8 @@ interface Box {
 	height: number;
 }
 
-/** The boxes that must not move: the header, the brand, each destination, the page heading. */
+/** The boxes that must not move: the header, the brand, each destination, the page heading and
+ *  the query bar. */
 async function boxes(page: Page): Promise<Record<string, Box | null>> {
 	const grab = async (loc: Locator) =>
 		(await loc.count()) ? await loc.first().boundingBox() : null;
@@ -25,7 +27,9 @@ async function boxes(page: Page): Promise<Record<string, Box | null>> {
 		header: await grab(page.locator('header').first()),
 		brand: await grab(page.getByRole('link', { name: 'Lodestar, home' })),
 		menu: await grab(page.locator('header .x-large\\:hidden').first()),
-		h1: await grab(page.locator('main h1').first())
+		h1: await grab(page.locator('main h1').first()),
+		// The search page's query bar is painted statically too (S-search-1).
+		bar: await grab(page.locator('main [data-testid="query-editor"]').first())
 	};
 	for (const name of ['Search', 'Discover', 'Alerts', 'Insights', 'Settings']) {
 		out[`nav ${name}`] = await grab(page.locator(`header nav a:has-text("${name}")`));
@@ -52,7 +56,8 @@ for (const [label, viewport] of [
 			// Landmarks for a screen-reader user who never presses a key and before any script has run.
 			await expect(page.getByRole('banner')).toBeVisible();
 			await expect(page.getByRole('main')).toBeVisible();
-			await expect(page.locator('#boot-h1')).toHaveText('Search');
+			await expect(page.locator('#boot-h1 h1')).toHaveText('Search');
+			await expect(page.locator('#boot-h1 [data-testid="query-editor"]')).toBeVisible();
 			await expect(page.locator('#boot-h1')).toBeVisible();
 			if (label === 'desktop') {
 				await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
@@ -320,6 +325,7 @@ test.describe('the error screen when its chunk cannot load', () => {
 	});
 	test('a failed navigation shows the error, the code and both actions', async ({ page, go }) => {
 		await go('/search');
+		await interact(page); // the full bar loads on the first interaction
 		await expect(page.getByTestId('more-button')).toBeAttached();
 		await abortErrorView(page);
 		// The destination's own chunk fails too, as it does when the server has gone.

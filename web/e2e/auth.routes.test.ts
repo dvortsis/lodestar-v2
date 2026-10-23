@@ -122,6 +122,8 @@ test('sign in returns to next', async ({ page, go, mock }) => {
 			? { status: 401, body: envelope('bad_password') }
 			: { status: 200, body: { ok: true } }
 	);
+	// The search page parses the query it lands on (S-search-1).
+	mock.on('parseQuery', { ast: { op: 'word', field: 'any', word: 'ubuntu' }, canonical: 'ubuntu' });
 	await go(`/login?next=${encodeURIComponent('/search?q=ubuntu&sort=size')}`);
 	await page.getByLabel('Password').fill('not it at all');
 	await page.getByRole('button', { name: 'Sign in' }).click();
