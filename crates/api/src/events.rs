@@ -28,6 +28,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -52,8 +53,9 @@ use crate::dto::events::{
     ResyncReason, SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::extract::Peer;
 use crate::search::AdultVisibility;
-use crate::{ApiState, auth};
+use crate::{ApiState, Auth, auth};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
@@ -863,14 +865,18 @@ fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
 }
 
 /// The session, for the per-session cap. The guard has already checked
-/// it, so a request here always has one.
-fn session_of(headers: &HeaderMap) -> u64 {
-    let session = headers
+/// it, so a request here always has one: a cookie, or else a trusted
+/// proxy's user, who is counted per client address.
+fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
+    let cookie = headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find_map(|c| auth::cookie_value(c, auth::COOKIE))
-        .unwrap_or("");
+        .find_map(|c| auth::cookie_value(c, auth::COOKIE));
+    let session = match cookie {
+        Some(c) => format!("cookie:{c}"),
+        None => format!("proxy:{}", auth.client_ip(peer, headers)),
+    };
     let d = Sha256::digest(session.as_bytes());
     u64::from_le_bytes(d[..8].try_into().expect("8 bytes"))
 }
@@ -918,6 +924,7 @@ fn session_of(headers: &HeaderMap) -> u64 {
 pub(crate) async fn events(
     State(s): State<ApiState>,
     hub: Option<Extension<Arc<EventHub>>>,
+    Peer(peer): Peer,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
@@ -932,7 +939,7 @@ pub(crate) async fn events(
     let Some(Extension(hub)) = hub else {
         return Err(unavailable());
     };
-    let slot = match hub.acquire(session_of(&headers)) {
+    let slot = match hub.acquire(session_of(&s.auth, &headers, peer)) {
         Ok(slot) => slot,
         Err(Refused::Closed) => return Err(unavailable()),
         Err(Refused::Full | Refused::SessionFull) => {
@@ -949,15 +956,13 @@ pub(crate) async fn events(
         }
     };
     let last = headers.get("last-event-id").and_then(|v| v.to_str().ok());
-    // The guard's check, repeated at each heartbeat on the cookie it let
-    // in.
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+    // The guard's check, repeated at each heartbeat on what it let in:
+    // the cookie, or a trusted proxy's user header from the same peer.
     let auth = s.auth.clone();
-    let body = hub.stream(slot, topics, last, move || auth.verify(&cookie));
+    let seen = headers.clone();
+    let body = hub.stream(slot, topics, last, move || {
+        auth::logged_in(&auth, &seen, peer)
+    });
     Ok((
         [
             (header::CONTENT_TYPE, "text/event-stream"),

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::{Extension, Router};
+use lodestar_api::auth::ProxyConfig;
 use lodestar_api::dto::events::{CrawlerEvent, Event, TorrentsEvent};
 use lodestar_api::events::{EventHub, EventSources, EventsConfig};
 use lodestar_api::{ApiState, Auth, router};
@@ -442,6 +443,29 @@ async fn a_stream_ends_with_its_session() {
         assert!(start.elapsed() < SOON);
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+#[tokio::test]
+async fn a_proxy_signed_stream_lives_past_heartbeats_and_ends_with_the_proxy() {
+    let f = fixture(config());
+    // A password must exist before the proxy can sign anyone in.
+    let _ = session(&f.auth);
+    f.auth
+        .set_proxy(ProxyConfig {
+            enabled: true,
+            trusted: vec!["127.0.0.1/32".into()],
+            ..ProxyConfig::default()
+        })
+        .unwrap();
+    let addr = serve(f.app.clone()).await;
+    // No cookie: the trusted peer's user header is the session.
+    let mut c = Conn::open(addr, "/api/v1/events", &[("Remote-User", "alice")]).await;
+    c.until("retry:", SOON).await;
+    // Several heartbeats re-check it (100 ms apart) and keep it open.
+    c.until_more(": keep-alive", 3).await;
+    // Turning proxy sign-in off ends it at the next heartbeat.
+    f.auth.set_proxy(ProxyConfig::default()).unwrap();
+    c.until_closed(SOON).await;
 }
 
 #[tokio::test]
