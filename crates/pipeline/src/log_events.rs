@@ -30,6 +30,15 @@ lodestar_log::catalogue! {
         message: "Tracker can't be scraped; skipped",
         fields: { tracker: Label },
     }
+    /// The hot columns' snapshot couldn't be read; they're rebuilt from
+    /// SQLite instead, as after a crash.
+    HOT_SNAPSHOT_UNREADABLE {
+        id: "pipeline.hot_snapshot_unreadable",
+        component: Pipeline,
+        level: Warn,
+        message: "Swarm stats snapshot unreadable; rebuilding from the database",
+        fields: { error: Error },
+    }
     /// The scrape scheduler couldn't read its lanes from the store; it
     /// tries again at the next refill.
     SCHEDULER_STORE_FAILED {

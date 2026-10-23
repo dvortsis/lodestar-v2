@@ -500,6 +500,89 @@ async fn an_unreachable_tracker_leaves_counts_unknown() {
     assert_eq!(hot.get(Col::Seeders, t[0].0 as u64), NEVER);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_after_its_round_closed_is_late_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let t = seed(&db, &["tardy"]);
+    let tracker = http_tracker().await;
+    tracker.state.set(t[0].1, SWARM);
+    // The answer comes a second after a round that closes at 300 ms.
+    *tracker.state.delay.lock().unwrap() = Some(Duration::from_secs(1));
+    let mut setup = health(&db, vec![tracker.url(false)]);
+    setup.config.round_deadline = Duration::from_millis(300);
+    setup.config.http = HttpConfig {
+        timeout: Duration::from_secs(5),
+        ..HttpConfig::default()
+    };
+    let hot = Arc::new(HotColumns::new());
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(&hot, setup), store, Vec::new())
+        .await
+        .unwrap();
+    let h = pipeline.monitor().health().unwrap().clone();
+    within("the late answer", 10, || {
+        h.stats().late.load(std::sync::atomic::Ordering::Relaxed) == 1
+    })
+    .await;
+    let rounds = h.trackers()[0].rounds;
+    assert_eq!(rounds[Outcome::Late as usize], 1, "{rounds:?}");
+    assert_eq!(
+        rounds[Outcome::Ok as usize],
+        0,
+        "a late answer isn't ok: {rounds:?}"
+    );
+    let store = pipeline.shutdown().await.unwrap();
+    // The round closed before the tracker answered: the late counts went
+    // nowhere (no row, or one that reads as never scraped).
+    if let Some(row) = store.swarm(t[0].0).unwrap() {
+        assert_eq!(
+            (row.trackers_checked, row.seeders, row.leechers),
+            (0, 0, 0),
+            "nothing from the late answer"
+        );
+    }
+    assert_eq!(hot.get(Col::Seeders, t[0].0 as u64), NEVER);
+}
+
+#[test]
+fn an_unreadable_snapshot_is_rebuilt_from_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let hot_dir = dir.path().join("hot");
+    let t = seed(&db, &["a"]);
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    store
+        .write(&WriteBatch {
+            swarm: &[SwarmUpdate {
+                torrent_id: t[0].0,
+                at: 10,
+                seeders: 7,
+                leechers: 1,
+                completed: 0,
+                trackers_reporting: 1,
+                trackers_checked: 1,
+                dht: None,
+                per_tracker: Vec::new(),
+                next_scrape_at: 20,
+                flags: 0,
+                interest: false,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    let hot = HotColumns::new();
+    store.load_hot(&hot).unwrap();
+    save_hot(&mut store, &hot, &hot_dir).unwrap();
+    // The snapshot's directory is now a file: opening a column fails with
+    // an I/O error (not "missing"), which mustn't stop startup.
+    std::fs::remove_dir_all(&hot_dir).unwrap();
+    std::fs::write(&hot_dir, b"not a directory").unwrap();
+    let (rebuilt, from_snapshot) = open_hot(&mut store, &hot_dir).unwrap();
+    assert!(!from_snapshot);
+    assert_eq!(rebuilt.get(Col::Seeders, t[0].0 as u64), 7);
+}
+
 #[test]
 fn hot_columns_survive_a_clean_restart_and_rebuild_after_a_crash() {
     let dir = tempfile::tempdir().unwrap();

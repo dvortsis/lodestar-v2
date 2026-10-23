@@ -8662,12 +8662,12 @@ export interface operations {
                 hidden?: boolean;
                 /** @description The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default. */
                 tz?: number;
-                /** @description `1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits. */
-                explain?: boolean;
                 /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
                 cursor?: string;
                 /** @description `1` or `true`: count every match exactly, within a time budget. */
                 exact?: boolean;
+                /** @description `1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits. */
+                explain?: boolean;
             };
             header?: never;
             path?: never;

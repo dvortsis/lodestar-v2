@@ -286,7 +286,6 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         ("offset" = Option<usize>, Query, description = "`offset + limit` may not pass 10,000. Not with `cursor`."),
         ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
         ("tz" = Option<i32>, Query, description = "The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default."),
-        ("explain" = Option<bool>, Query, description = "Each relevance hit's score breakdown, in `explain` (§8). Runs the exact query, without the plural fallback."),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`."),
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
         ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
