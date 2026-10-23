@@ -115,7 +115,7 @@
 	});
 
 	// The countdown of a rate-limited confirm is text that moves once a second.
-	$effect(() => {
+	$effect.pre(() => {
 		if (s.kind !== 'confirm' || s.retryAt === undefined) return;
 		clock = Date.now();
 		const t = setInterval(() => (clock = Date.now()), 1000);
@@ -131,10 +131,13 @@
 		tombstones: m.filters_flows_phase_tombstones,
 		done: m.filters_flows_phase_done
 	};
+	/** A phase this build doesn't know (a newer server) reads as plain progress. */
+	const phaseText = (p: string) =>
+		(phases as Record<string, (() => string) | undefined>)[p]?.() ?? m.filters_flows_previewing();
 	const progressText = $derived(
 		s.kind === 'previewing' && s.progress
 			? m.filters_flows_progress_announce({
-					phase: phases[s.progress.phase](),
+					phase: phaseText(s.progress.phase),
 					done: formatCount(s.progress.done, currentLocale()),
 					total: formatCount(s.progress.total, currentLocale())
 				})
@@ -209,8 +212,19 @@
 		close();
 	});
 
+	// The flow can close on its own (a job cancelled elsewhere, a sign-out): that's a close too.
+	let wasActive = false;
+	$effect(() => {
+		const now = active;
+		if (wasActive && !now && s.kind === 'closed' && !open) close();
+		wasActive = now;
+	});
+
 	function close() {
+		// Our own cancel() below must not read as the flow closing on its own (a second close).
+		wasActive = false;
 		password = '';
+		reported = null;
 		open = false;
 		flow.cancel();
 		onclose?.();
@@ -275,6 +289,12 @@
 	);
 	const busy = $derived(s.kind === 'applying');
 	const locked = $derived(waitFor > 0);
+	let lockedFor = $state(0);
+	let wasLocked = false;
+	$effect.pre(() => {
+		if (locked && !wasLocked) lockedFor = waitFor;
+		wasLocked = locked;
+	});
 </script>
 
 <Dialog
@@ -314,7 +334,7 @@
 					<p>{m.filters_flows_previewing()}</p>
 					{#if s.progress}
 						<p class="text-small text-muted-text">
-							{phases[s.progress.phase]()} ·
+							{phaseText(s.progress.phase)} ·
 							<span data-testid="change-progress"
 								>{m.filters_flows_progress({
 									done: formatCount(s.progress.done, currentLocale()),
@@ -387,6 +407,12 @@
 							<span aria-hidden="true" data-testid="change-countdown"
 								>{m.filters_flows_countdown({
 									seconds: formatCount(waitFor, currentLocale())
+								})}</span
+							>
+							<!-- The moving digits are hidden; the wait is read once, as it started. -->
+							<span class="sr-only"
+								>{m.filters_flows_countdown({
+									seconds: formatCount(lockedFor, currentLocale())
 								})}</span
 							>
 						</Banner>
