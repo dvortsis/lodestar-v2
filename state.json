@@ -342,7 +342,7 @@
    "pr": 100,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape. | 02:50 67f6649 delta verified by runner (Seen ordering, facets_on serving check, file-clause searches uncached, explain per-segment, polish). APPROVED; merge on green."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape. | 02:50 67f6649 delta verified by runner (Seen ordering, facets_on serving check, file-clause searches uncached, explain per-segment, polish). APPROVED; merge on green. | 02:50 0d4a833 (+#106). Approved; merge on green."
   },
   "B13": {
    "status": "merged",
@@ -1036,9 +1036,9 @@
    "pr": 108
   },
   "F-perf": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
-   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready.",
+   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready. | 02:52 #110 ready 0f4610e (7763-scaled: 10% 33.6us, mixed 43.8, shapes 32-42). Reviewer started (exactness vs reference = content safety).",
    "session": "session_01JuPFjxS6u9KwGugz27C7KL",
    "pr": 110
   },
