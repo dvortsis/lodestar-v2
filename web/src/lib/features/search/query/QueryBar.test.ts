@@ -1,0 +1,294 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createSearchState, type Ast } from '$lib/state/search.svelte';
+
+vi.mock('$app/state', async () => ({ page: (await import('./testing.svelte')).testPage }));
+const replaceState = vi.hoisted(() => vi.fn());
+vi.mock('$app/navigation', () => ({ goto: vi.fn(), replaceState }));
+
+import QueryBar from './QueryBar.svelte';
+import { navCalls, testNav, visit } from './testing.svelte';
+
+const json = (body: unknown, status = 200) =>
+	new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+const word = (w: string): Ast => ({ op: 'word', field: 'any', word: w });
+const res = (v: string): Ast => ({ op: 'tag', key: 'res', any: [v] });
+
+/** The fake server: `(` is a syntax error at its byte; "down" fails the network; `res:` parses. */
+let fetchMock: ReturnType<typeof vi.fn>;
+let searchBodies: unknown[];
+function server() {
+	searchBodies = [];
+	fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+		const u = new URL(input, 'http://x');
+		if (u.pathname.endsWith('/search')) {
+			const body = JSON.parse(String(init?.body));
+			searchBodies.push(body);
+			const tops: Ast[] = body.ast.op === 'and' ? body.ast.of : [body.ast];
+			const canonical = tops
+				.map((n) => (n.op === 'word' ? n.word : n.op === 'tag' ? `res:${n.any[0]}` : ''))
+				.join(' ');
+			return json({ canonical, hits: [], total: 0 });
+		}
+		const q = u.searchParams.get('q') ?? '';
+		if (q.includes('down')) throw new TypeError('Failed to fetch');
+		const at = new TextEncoder().encode(q).indexOf(40); // "("
+		if (at >= 0)
+			return json(
+				{
+					error: {
+						code: 'query_syntax',
+						message: "missing ')'",
+						field: 'q',
+						start: at,
+						end: at + 1
+					}
+				},
+				400
+			);
+		const of = q
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((w) => (w.startsWith('res:') ? res(w.slice(4)) : word(w)));
+		const ast: Ast = of.length === 0 ? { op: 'all' } : of.length === 1 ? of[0]! : { op: 'and', of };
+		return json({ ast, canonical: q.trim() });
+	});
+	vi.stubGlobal('fetch', fetchMock);
+}
+
+beforeEach(() => {
+	visit('/search');
+	server();
+	replaceState.mockReset();
+});
+afterEach(() => vi.unstubAllGlobals());
+
+function setup() {
+	const state = createSearchState(testNav);
+	render(QueryBar, { searchState: state });
+	const editor = screen.getByRole('combobox', { name: 'Search torrents' });
+	return { state, editor };
+}
+
+/** Loads the lazy part the way a user does: focus. */
+async function engage(editor: HTMLElement) {
+	await fireEvent.focusIn(editor);
+	editor.focus();
+	await waitFor(() => expect(document.querySelector('[aria-live="polite"]')).not.toBeNull());
+}
+
+async function typeText(editor: HTMLElement, text: string) {
+	editor.textContent = text;
+	await fireEvent(
+		editor,
+		new InputEvent('input', { inputType: 'insertText', data: text.slice(-1) })
+	);
+}
+
+const message = () => document.getElementById('search-query-message')!;
+
+describe('the query bar', () => {
+	it('is a labelled combobox with the attributes typing needs', () => {
+		const { editor } = setup();
+		expect(editor.getAttribute('contenteditable')).toBe('plaintext-only');
+		expect(editor).toHaveProperty('tabIndex', 0);
+		for (const [name, value] of [
+			['aria-expanded', 'false'],
+			['aria-autocomplete', 'list'],
+			['aria-haspopup', 'listbox'],
+			['aria-describedby', 'search-query-message'],
+			['spellcheck', 'false'],
+			['autocapitalize', 'off'],
+			['autocorrect', 'off'],
+			['enterkeyhint', 'search'],
+			['inputmode', 'search']
+		])
+			expect(editor.getAttribute(name!), name).toBe(value);
+		expect(editor.hasAttribute('aria-invalid')).toBe(false);
+		// The placeholder is never the accessible name.
+		const placeholder = screen.getByText('Search by name, or add a filter such as res:1080p');
+		expect(placeholder.getAttribute('aria-hidden')).toBe('true');
+		// The search landmark (jsdom has no implicit role for <search>; the e2e spec checks the role).
+		const landmark = editor.closest('search')!;
+		expect(document.getElementById(landmark.getAttribute('aria-labelledby')!)?.textContent).toBe(
+			'Search torrents'
+		);
+	});
+
+	it('fetches nothing for the bare page', async () => {
+		const { editor } = setup();
+		await engage(editor);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('parses a URL query once and shows it in the bar', async () => {
+		visit('/search?q=bunny');
+		const { editor } = setup();
+		await waitFor(() => expect(editor.textContent).toBe('bunny'));
+		expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/parse?q=bunny']);
+	});
+
+	it('typing calls setText and Enter submits', async () => {
+		const { state, editor } = setup();
+		await engage(editor);
+		const setText = vi.spyOn(state, 'setText');
+		const submit = vi.spyOn(state, 'submit');
+		await typeText(editor, 'big buck');
+		expect(setText).toHaveBeenLastCalledWith('big buck');
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		expect(submit).toHaveBeenCalledOnce();
+		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=big+buck', push: true }));
+	});
+
+	it('keeps what was typed and the Enter pressed before the editor loaded', async () => {
+		const { editor } = setup();
+		editor.textContent = 'res:4k';
+		await fireEvent.keyDown(editor, { key: 'Enter' }); // no listener yet but the static one
+		await engage(editor);
+		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=res%3A4k', push: true }));
+		expect(editor.querySelector('.qt-field')?.textContent).toBe('res:');
+	});
+
+	it('shows a syntax error under the bar and marks it, then clears it on the next edit', async () => {
+		const { editor } = setup();
+		await engage(editor);
+		await typeText(editor, 'a ( b');
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		await waitFor(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
+		expect(message().textContent).toContain("Can't read this query:");
+		expect(message().textContent).toContain("missing ')'");
+		expect(editor.querySelector('.qt-error')?.textContent).toBe('(');
+		await typeText(editor, 'a ( bc');
+		expect(editor.hasAttribute('aria-invalid')).toBe(false);
+		expect(editor.querySelector('.qt-error')).toBeNull();
+	});
+
+	it('shows a banner, not the message line, when the check itself fails', async () => {
+		const { state, editor } = setup();
+		await engage(editor);
+		await typeText(editor, 'down');
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		const banner = await screen.findByRole('alert');
+		expect(banner.textContent).toContain("Couldn't check the query");
+		expect(editor.hasAttribute('aria-invalid')).toBe(false);
+		const submit = vi.spyOn(state, 'submit');
+		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(submit).toHaveBeenCalledOnce();
+	});
+
+	it('never shows an error for an empty query', async () => {
+		const { editor } = setup();
+		await engage(editor);
+		fetchMock.mockImplementation(async () => {
+			throw new TypeError('Failed to fetch');
+		});
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		await new Promise((r) => setTimeout(r, 20));
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(message().textContent?.trim()).toBe('');
+	});
+
+	it('keeps the message line one text-small line whatever it shows', async () => {
+		const { editor } = setup();
+		const before = message();
+		expect(before.className).toContain('text-small');
+		expect(before.textContent).toBe(' '); // holds the line before anything loads
+		await engage(editor);
+		expect(message().className).toContain('text-small');
+		expect(message().className).toContain('truncate'); // never wraps to a second line
+		await typeText(editor, '(');
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		await waitFor(() => expect(message().textContent).toContain("missing ')'"));
+		expect(document.querySelectorAll('#search-query-message')).toHaveLength(1);
+		expect(message().className).toContain('truncate');
+	});
+
+	it('puts the URL back on /search before writing (the drawer is open on /t/…)', async () => {
+		visit('/t/abc?q=a', { detail: {} });
+		const { editor } = setup();
+		await engage(editor);
+		await typeText(editor, 'a b');
+		expect(replaceState).toHaveBeenCalledWith('/search?q=a', {});
+	});
+
+	it('shows the URL query in the bar (a pasted link, back)', async () => {
+		visit('/search?q=res%3A1080p');
+		const { editor } = setup();
+		await waitFor(() => expect(editor.textContent).toBe('res:1080p'));
+		expect(editor.querySelector('.qt-value')?.textContent).toBe('1080p');
+	});
+});
+
+describe('the active-filter strip', () => {
+	it('renders chips from the AST and removes one through the server', async () => {
+		visit('/search?q=lantern+res%3A1080p');
+		const { editor } = setup();
+		const chip = await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' });
+		expect(screen.getByRole('group', { name: 'Active filters' }).textContent).toContain(
+			'Resolution: 1080p'
+		);
+		// Free text stays in the bar: no chip for "lantern".
+		expect(screen.queryByRole('button', { name: /lantern/ })).toBeNull();
+		await fireEvent.click(chip);
+		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
+		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern'), limit: 1 });
+		await waitFor(() =>
+			expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
+				'Removed filter: Resolution: 1080p'
+			)
+		);
+		await waitFor(() => expect(document.activeElement).toBe(editor));
+		await waitFor(() => expect(screen.queryByRole('group', { name: 'Active filters' })).toBeNull());
+	});
+
+	it('keeps the chip and offers Retry when the removal fails', async () => {
+		visit('/search?q=res%3A1080p+res%3A2160p');
+		setup();
+		const chip = await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' });
+		fetchMock.mockImplementationOnce(async () => {
+			throw new TypeError('Failed to fetch');
+		});
+		await fireEvent.click(chip);
+		const banner = await screen.findByRole('alert');
+		expect(banner.textContent).toContain("Couldn't change the filters");
+		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() =>
+			expect(navCalls.at(-1)).toEqual({ url: '/search?q=res%3A2160p', push: true })
+		);
+	});
+
+	it('keeps the last good chips while a syntax error shows', async () => {
+		visit('/search?q=res%3A1080p');
+		const { editor } = setup();
+		await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' });
+		await typeText(editor, 'res:1080p (');
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		await waitFor(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
+		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
+	});
+
+	it('shows the hidden=1 chip and removes it with setHidden', async () => {
+		visit('/search?hidden=1');
+		const { state } = setup();
+		const setHidden = vi.spyOn(state, 'setHidden');
+		const chip = await screen.findByRole('button', {
+			name: 'Remove filter: Including: Hidden by filters'
+		});
+		await fireEvent.click(chip);
+		expect(setHidden).toHaveBeenCalledWith(false);
+		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search', push: true }));
+	});
+
+	it('Clear all keeps the free text and clears hidden', async () => {
+		visit('/search?q=lantern+res%3A1080p+res%3A2160p&hidden=1');
+		const { editor } = setup();
+		await screen.findByRole('button', { name: 'Remove filter: Resolution: 2160p' });
+		await fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+		await waitFor(() => expect(navCalls.at(-1)?.url).toBe('/search?q=lantern'));
+		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
+		await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull());
+		await waitFor(() => expect(document.activeElement).toBe(editor));
+	});
+});

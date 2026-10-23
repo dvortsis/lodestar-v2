@@ -43,6 +43,7 @@ test.describe('navigation', () => {
 
 	test('the overflow menu lists its five items and opens a destination', async ({ page, go }) => {
 		await go('/search');
+		await engage(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
 		await expect(menu.getByRole('menuitem')).toHaveText([
@@ -70,6 +71,7 @@ test.describe('responsive navigation', () => {
 			await page.setViewportSize({ width, height: 800 });
 			await go('/search');
 			await expect(nav(page)).toHaveCount(0);
+			await engage(page);
 			const button = page.getByTestId('menu-button');
 			await expect(button).toHaveAttribute('aria-expanded', 'false');
 			await button.click();
@@ -84,6 +86,19 @@ test.describe('responsive navigation', () => {
 			);
 		});
 	}
+
+	test('a tap on the static menu button before the bar has loaded opens the menu', async ({
+		page,
+		go
+	}) => {
+		await page.setViewportSize({ width: 390, height: 800 });
+		await go('/search');
+		// The static bar from app.html is still in place: its menu button is inert markup.
+		await expect(page.getByTestId('menu-button')).toHaveCount(0);
+		await page.locator('header .x-large\\:hidden').first().click();
+		await expect(page.getByTestId('menu-button')).toHaveAttribute('aria-expanded', 'true');
+		await expect(nav(page).getByRole('link')).toHaveCount(5);
+	});
 
 	test('the status pill keeps its words for assistive tech when only the icon shows', async ({
 		page,
@@ -181,6 +196,7 @@ test.describe('status pill', () => {
 test.describe('command palette', () => {
 	test('opens from the button, filters, runs a command and closes', async ({ page, go }) => {
 		await go('/search');
+		await engage(page);
 		await page.getByTestId('palette-button').click();
 		const dialog = page.getByRole('dialog', { name: 'Command palette' });
 		const input = dialog.getByRole('combobox', { name: 'Type a command' });
@@ -214,6 +230,7 @@ test.describe('command palette', () => {
 
 	test('says so when nothing matches', async ({ page, go }) => {
 		await go('/search');
+		await engage(page);
 		await page.getByTestId('palette-button').click();
 		await page.getByRole('combobox', { name: 'Type a command' }).fill('zzzz');
 		await expect(page.getByText('No command matches “zzzz”')).toBeVisible();
@@ -377,6 +394,7 @@ for (const [name, themeId, colorMode] of [
 		test('the open mobile menu', async ({ page, go }) => {
 			await page.setViewportSize({ width: 390, height: 800 });
 			await go('/search');
+			await engage(page);
 			await page.getByTestId('menu-button').click();
 			await expect(nav(page)).toBeVisible();
 			await expectNoA11yViolations(page);
@@ -384,6 +402,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the open palette', async ({ page, go }) => {
 			await go('/search');
+			await engage(page);
 			await page.getByTestId('palette-button').click();
 			await expect(page.getByRole('option', { name: /Go to Alerts/ })).toBeVisible();
 			await expectNoA11yViolations(page);
@@ -391,6 +410,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the open overflow menu', async ({ page, go }) => {
 			await go('/search');
+			await engage(page);
 			await page.getByTestId('more-button').click();
 			await expect(page.getByRole('menuitem', { name: 'About' })).toBeVisible();
 			await expectNoA11yViolations(page);

@@ -41,24 +41,14 @@
 		void s.submit();
 	}
 
-	onMount(() => {
-		void import('./bar.css');
-		editor = attach(el, {
-			onchange: setText,
-			onsubmit: submit,
-			onescape,
-			onrender: (text) => onempty(!text)
-		});
-		// Whatever was typed before this loaded.
-		if (editor.text && editor.text !== s.text) setText(editor.text);
-		if (takeSubmit()) submit();
-	});
-	onDestroy(() => editor?.destroy());
 
 	// The URL is the state: adopt outside changes (back/forward, a pasted link, a facet click).
+	// An empty query in an empty bar has nothing to adopt or parse: no request for the bare page.
 	$effect(() => {
-		void page.url;
-		untrack(() => s.sync());
+		const q = page.url.searchParams.get('q');
+		untrack(() => {
+			if (q || s.text) s.sync();
+		});
 	});
 
 	// The state's text (the URL's query, the canonical text after Enter or a chip) shows in the bar.
@@ -68,6 +58,22 @@
 			if (editor && text !== editor.text) editor.set(text);
 		});
 	});
+
+	onMount(() => {
+		void import('./bar.css');
+		editor = attach(el, {
+			onchange: setText,
+			onsubmit: submit,
+			onescape,
+			onrender: (text) => onempty(!text)
+		});
+		// Whatever was typed before this loaded. After the URL sync above (effects run in order), so
+		// the URL's empty query does not wipe it.
+		if (editor.text && editor.text !== s.text) setText(editor.text);
+		else if (s.text) editor.set(s.text); // the URL's query, adopted before the editor existed
+		if (takeSubmit()) submit();
+	});
+	onDestroy(() => editor?.destroy());
 
 	const blank = $derived(!s.text.trim());
 	/** Still the text that was parsed: on an error W5 keeps the raw text in the URL. */

@@ -13,7 +13,7 @@ App chrome (§10.3, §10.13, §10.19). `routes/+layout.svelte` renders `Shell.sv
 
 ## Hand-off points
 
-- **M-auth:** merged. `Chrome.svelte` calls `installAuthHandlers()` from `features/auth/session.svelte` (it owns W5's single `onLoginRequired` slot: a 401 goes to `/login?next=…` or `/setup`) and uninstalls it with the chrome. `chrome.ts` lists the screens that render bare.
+- **M-auth:** merged. `Shell.svelte` calls `installAuthHandlers()` from `features/auth/session.svelte` at mount (it owns W5's single `onLoginRequired` slot: a 401 goes to `/login?next=…` or `/setup`), so the redirect never waits for the chrome, which loads on the first interaction or after 30 s (`docs/decisions/2026-10-23-S-search-1.md`). `chrome.ts` lists the screens that render bare.
 - **S-keys:** the shortcut sheet reads `keys.list()` and registers `shortcuts.open` (`?`). See `lib/keys/README.md`.
 - **Appearance:** the shell has no theme or density switch. Density is carried in nav links; the scene variant follows `color-scheme` (`theme-mode.ts`).
 
