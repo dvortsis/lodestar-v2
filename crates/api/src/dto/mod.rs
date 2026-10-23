@@ -19,14 +19,17 @@ pub mod compare;
 pub mod discover;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod facets;
 pub mod filters;
 pub mod insights;
+pub mod jobs;
 pub mod keys;
 pub mod ops;
 pub mod saved;
 pub mod search;
 pub mod settings;
+pub mod suggest;
 pub mod torrents;
 pub mod user_items;
 

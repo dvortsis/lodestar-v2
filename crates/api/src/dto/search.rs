@@ -11,6 +11,9 @@ use utoipa::{IntoParams, ToSchema};
 pub struct ParseQuery {
     /// The query text; empty matches everything.
     pub q: String,
+    /// Also read `q` as natural phrasing ("4k movies from 2020 over
+    /// 10gb") and propose the query it means, in `natural`.
+    pub natural: bool,
 }
 
 /// `GET /parse`: the AST and the canonical text it prints as.
@@ -20,6 +23,48 @@ pub struct ParseResponse {
     #[schema(value_type = AstNode)]
     pub ast: Node,
     pub canonical: String,
+    /// With `natural=true`: the query `q` means as natural phrasing, for
+    /// the UI to preview as chips. Nothing applies it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "super::sorted_some"
+    )]
+    #[schema(nullable = false)]
+    pub natural: Option<NaturalProposal>,
+}
+
+/// What natural phrasing proposes (§10.4): recognised words become
+/// clauses, and every other word stays as text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "ast": { "op": "and", "of": [] },
+    "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+    "chips": [
+        { "from": { "end": 2, "start": 0 }, "text": "res:2160p" },
+        { "from": { "end": 9, "start": 3 }, "text": "type:movie" }
+    ],
+    "text": []
+}))]
+pub struct NaturalProposal {
+    #[serde(serialize_with = "super::sorted")]
+    #[schema(value_type = AstNode)]
+    pub ast: Node,
+    /// The proposed query; it always parses back to `ast`.
+    pub canonical: String,
+    /// The recognised clauses, in the order they appear.
+    pub chips: Vec<NaturalChip>,
+    /// The words kept as text.
+    pub text: Vec<String>,
+}
+
+/// One recognised clause and the words it came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NaturalChip {
+    /// Characters of `q`, end exclusive.
+    pub from: super::suggest::CharRange,
+    /// The clause as query text (`res:2160p`).
+    pub text: String,
 }
 
 /// `POST /search`'s body, and `GET /search`'s parameters (where `ast` is

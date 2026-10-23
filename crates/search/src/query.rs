@@ -251,7 +251,7 @@ fn err<T>(message: impl Into<String>, start: usize, end: usize) -> Result<T, Par
 // ---- fields ----------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FieldKind {
+pub(crate) enum FieldKind {
     Text(TextField),
     Num(NumField),
     Date(DateField),
@@ -266,7 +266,7 @@ enum FieldKind {
     Later(&'static str),
 }
 
-const FIELDS: &[(&str, FieldKind)] = &[
+pub(crate) const FIELDS: &[(&str, FieldKind)] = &[
     ("name", FieldKind::Text(TextField::Name)),
     ("path", FieldKind::Text(TextField::Path)),
     ("size", FieldKind::Num(NumField::Size)),
@@ -315,11 +315,11 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("time", FieldKind::Later("swarm health (M4)")),
 ];
 
-fn field(name: &str) -> Option<FieldKind> {
+pub(crate) fn field(name: &str) -> Option<FieldKind> {
     FIELDS.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
@@ -335,7 +335,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 /// A known field one typo away, for "did you mean".
-fn near_field(name: &str) -> Option<&'static str> {
+pub(crate) fn near_field(name: &str) -> Option<&'static str> {
     if name.len() < 3 {
         return None;
     }
@@ -369,7 +369,7 @@ struct Spanned {
     end: usize,
 }
 
-fn is_field_name(s: &str) -> bool {
+pub(crate) fn is_field_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 16
         && s.bytes()
@@ -850,7 +850,7 @@ fn file(of: Node, start: usize, end: usize) -> Result<Node, ParseError> {
 const MAX_TAG_BYTES: usize = 64;
 
 /// A keyword value as the index holds it, or `None` if it can't be one.
-fn tag_value(key: TagKey, v: &str) -> Option<String> {
+pub(crate) fn tag_value(key: TagKey, v: &str) -> Option<String> {
     use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
     let mut lower = v.to_lowercase();
     // `res:360` is read as `360p`, so both spellings land on the same
@@ -1406,7 +1406,7 @@ impl Node {
 }
 
 /// Whether `w` on its own parses back to the plain word `w`.
-fn is_plain_word(w: &str) -> bool {
+pub(crate) fn is_plain_word(w: &str) -> bool {
     matches!(
         parse(w),
         Ok(Node::Word { field: TextField::Any, word }) if word == w
