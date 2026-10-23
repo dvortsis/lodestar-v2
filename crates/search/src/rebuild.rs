@@ -257,8 +257,11 @@ impl Rebuild {
     /// Adds up to `batch` torrents, then replays up to `batch`
     /// `reindex_log` entries, as the live indexer does.
     pub fn step(&mut self, store: &mut Store, batch: usize) -> Result<Step> {
-        let (added, _, replayed) = self.indexer.catch_up_counted(store, batch)?;
-        Ok(Step { added, replayed })
+        let c = self.indexer.catch_up_counted(store, batch)?;
+        Ok(Step {
+            added: c.added,
+            replayed: c.replayed,
+        })
     }
 
     /// Whether it has followed the store up to torrent `id` and
@@ -363,6 +366,11 @@ pub struct ServingConfig {
     /// swap.
     #[cfg(test)]
     pub(crate) fail_live_at_swap: bool,
+    /// Tests only: at the swap, once the old live indexer has stopped,
+    /// sets the first flag and waits while the second is set, so torrents
+    /// stored then reach readers only through the swap's own report.
+    #[cfg(test)]
+    pub(crate) hold_at_swap: Option<(Arc<AtomicBool>, Arc<AtomicBool>)>,
 }
 
 impl Default for ServingConfig {
@@ -376,6 +384,8 @@ impl Default for ServingConfig {
             hold_before_finish: None,
             #[cfg(test)]
             fail_live_at_swap: false,
+            #[cfg(test)]
+            hold_at_swap: None,
         }
     }
 }
@@ -823,6 +833,11 @@ fn rebuild_and_swap(
     // What readers can find now; torrents past it are new to them at the
     // swap, and no live indexer reported them.
     let visible = lock(&shared.current).watermark();
+    #[cfg(test)]
+    if let Some((reached, hold)) = &config.hold_at_swap {
+        reached.store(true, Ordering::Relaxed);
+        while hold.load(Ordering::Relaxed) && shared.pause(Duration::from_millis(5)) {}
+    }
     let mut fresh = None;
     let started = (|| {
         let mut w = new.writer(config.live.heap_bytes)?;
