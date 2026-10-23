@@ -3,7 +3,7 @@
 	// shows up: its value as JSON, staged once it parses.
 	import Textarea from '$lib/ui/fields/Textarea.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { JsonDraft } from './validate';
+	import { JsonDraft } from './values';
 	import type { SettingsForm } from './form.svelte';
 	import type { FieldKey } from './types';
 	import type { FieldControlProps } from './widgets';
