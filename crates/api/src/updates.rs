@@ -30,7 +30,7 @@ pub use crate::dto::updates::{
     Policy, ReleaseInfo, RollbackInfo, Running, SkipRequest, UpdatesStatus,
 };
 use crate::error::{ApiError, ApiResult, internal};
-use crate::extract::same_origin_json;
+use crate::extract::{Json as JsonBody, same_origin_json};
 use crate::ops::BoxFuture;
 
 /// This module's half of `/openapi.json`.
@@ -191,7 +191,7 @@ pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Respo
 pub(crate) async fn skip(
     handle: Handle,
     headers: HeaderMap,
-    Json(req): Json<SkipRequest>,
+    JsonBody(req): JsonBody<SkipRequest>,
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     Ok(answer(api(handle)?.skip(req.version).await))
@@ -213,7 +213,7 @@ pub(crate) async fn skip(
 pub(crate) async fn pause(
     handle: Handle,
     headers: HeaderMap,
-    Json(req): Json<PauseRequest>,
+    JsonBody(req): JsonBody<PauseRequest>,
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     if ![0, 1, 7, 30].contains(&req.days) {

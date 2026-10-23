@@ -5827,6 +5827,211 @@
         ]
       }
     },
+    "/updates": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "The update engine's state: the last check, the running version, what\nthis installation can do, the policy in effect, the releases found\n(with why each does or doesn't install automatically), any version in\nprobation, Roll back, the notices and the history.",
+        "operationId": "getUpdates",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/updates/check": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Checks for updates now: the one signed request, at any mode. At most\nonce a minute.",
+        "operationId": "checkUpdates",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`updates_unavailable`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`, with `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/updates/history/clear": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Clears the update history (`history.json`).",
+        "operationId": "clearUpdateHistory",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/updates/pause": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Pauses automatic installs for 1, 7 or 30 days; 0 resumes. Checks and\nInstall now carry on.",
+        "operationId": "pauseUpdates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PauseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value` for any other number of days.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/updates/skip": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Skips a release: it's never installed automatically, and Install now\nrefuses it (`version_skipped`).",
+        "operationId": "skipUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_version`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/user-items": {
       "get": {
         "tags": [
@@ -7162,6 +7367,41 @@
           }
         }
       },
+      "Blocked": {
+        "type": "object",
+        "description": "One reason a release doesn't install automatically.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`mode`, `level`, `manual_steps`, `reindex`, `wait`, `paused`,\n`not_current`, `upgrade_path` or `capability`."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The capability reason (`capability`)."
+          },
+          "until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The time it lifts (`wait`, `paused`)."
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release to install first (`upgrade_path`)."
+          }
+        }
+      },
       "Bucket": {
         "type": "string",
         "enum": [
@@ -7213,6 +7453,26 @@
               "null"
             ],
             "description": "The embedded UI's build id (SvelteKit's `_app/version.json`); null\nwhen the binary embeds the stub page."
+          }
+        }
+      },
+      "Capability": {
+        "type": "object",
+        "description": "Whether this installation can install updates itself.",
+        "required": [
+          "can_install",
+          "reason"
+        ],
+        "properties": {
+          "can_install": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why not: `not_supervised`, `dev_build`, `windows_helper`,\n`noexec`, `not_writable`, `package_managed`, `image_mode`,\n`trust_damaged`, `channel_unavailable` or `not_built_yet`. Install\nautomatically then behaves as Check and notify."
           }
         }
       },
@@ -7874,6 +8134,50 @@
           "start": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "CheckStatus": {
+        "type": "object",
+        "required": [
+          "state",
+          "checked_at",
+          "next_check_at",
+          "error"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds of the last completed check."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last check's error code (`no_release_source`, `network`,\n`redirect_refused`, `bad_signature`, …)."
+          },
+          "next_check_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the next scheduled check runs; null when updates are off."
+          },
+          "state": {
+            "type": "string",
+            "description": "The check's state.",
+            "enum": [
+              "idle",
+              "checking",
+              "ok",
+              "failed"
+            ]
           }
         }
       },
@@ -9632,6 +9936,24 @@
             ],
             "properties": {
               "data": {
+                "$ref": "#/components/schemas/UpdatesEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "updates"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
                 "$ref": "#/components/schemas/ResyncEvent"
               },
               "event": {
@@ -10947,6 +11269,55 @@
             "type": "integer",
             "format": "int64",
             "description": "Inclusive."
+          }
+        }
+      },
+      "HistoryEntry": {
+        "type": "object",
+        "description": "One update in `history.json`, newest last.",
+        "required": [
+          "version",
+          "from",
+          "level",
+          "at",
+          "result",
+          "reason",
+          "lost_torrents"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "from": {
+            "type": "string"
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lost_torrents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "string",
+            "description": "`installed`, `rolled_back`, `failed` or `skipped`."
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -13437,6 +13808,21 @@
           }
         }
       },
+      "PauseRequest": {
+        "type": "object",
+        "description": "`POST /updates/pause`: 1, 7 or 30 days; 0 resumes.",
+        "required": [
+          "days"
+        ],
+        "properties": {
+          "days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "PausedSpan": {
         "type": "object",
         "required": [
@@ -13492,6 +13878,89 @@
           "source": {
             "type": "string",
             "description": "`file:<path>` or `list:<id>`, for `resolve_floor_removal`."
+          }
+        }
+      },
+      "PendingInstall": {
+        "type": "object",
+        "description": "A version in probation after an install or a rollback.",
+        "required": [
+          "version",
+          "kind",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "`install` or `restored`."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Policy": {
+        "type": "object",
+        "description": "The policy in effect, as the settings and the clock make it.",
+        "required": [
+          "mode",
+          "level",
+          "security_fixes",
+          "wait_days",
+          "window",
+          "window_zone",
+          "next_window_at",
+          "paused_until",
+          "allow_reindex"
+        ],
+        "properties": {
+          "allow_reindex": {
+            "type": "boolean"
+          },
+          "level": {
+            "type": "string",
+            "description": "`fixes`, `features` or `all`."
+          },
+          "mode": {
+            "type": "string",
+            "description": "`off`, `notify`, `auto` or `image`."
+          },
+          "next_window_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the window next opens (or now, while it's open)."
+          },
+          "paused_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Updates are paused until then."
+          },
+          "security_fixes": {
+            "type": "boolean",
+            "description": "Whether security fixes install automatically (the effective\n\"Always install security fixes\")."
+          },
+          "wait_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "window": {
+            "type": "string"
+          },
+          "window_zone": {
+            "type": "string",
+            "description": "The zone the window is in: an IANA name, or `UTC` when none was\nfound on the host."
           }
         }
       },
@@ -13950,6 +14419,84 @@
           "done"
         ]
       },
+      "ReleaseInfo": {
+        "type": "object",
+        "description": "A release newer than the running version.",
+        "required": [
+          "version",
+          "date",
+          "level",
+          "security",
+          "manual_steps",
+          "migrates",
+          "reindex",
+          "reindex_bytes",
+          "notes",
+          "notes_url",
+          "eligible",
+          "blocked_by",
+          "installs_at"
+        ],
+        "properties": {
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Blocked"
+            }
+          },
+          "date": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "eligible": {
+            "type": "boolean",
+            "description": "It installs automatically (at `installs_at`)."
+          },
+          "installs_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "level": {
+            "type": "string",
+            "description": "`fix`, `feature` or `major`."
+          },
+          "manual_steps": {
+            "type": "boolean"
+          },
+          "migrates": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Signed text; render as plain text or sanitised Markdown."
+          },
+          "notes_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reindex": {
+            "type": "boolean"
+          },
+          "reindex_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes a reindex needs, estimated.",
+            "minimum": 0
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "RemovedCount": {
         "type": "object",
         "required": [
@@ -14054,6 +14601,36 @@
           "visibility"
         ]
       },
+      "RollbackInfo": {
+        "type": "object",
+        "description": "Whether Roll back is offered (§10.10.7's Danger zone).",
+        "required": [
+          "available",
+          "to_version",
+          "lost_torrents"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "lost_torrents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Torrents a rollback would lose, when the store would be restored;\nnull when it can't be counted.",
+            "minimum": 0
+          },
+          "to_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`image` or a version."
+          }
+        }
+      },
       "RuleEntry": {
         "type": "object",
         "description": "One of your rules.",
@@ -14096,6 +14673,46 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "Running": {
+        "type": "object",
+        "description": "The version running now.",
+        "required": [
+          "version",
+          "channel",
+          "image_version",
+          "overlay",
+          "revoked_key",
+          "withdrawn"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "The update channel this installation follows."
+          },
+          "image_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The container image's (the supervisor's) own version, when it\ndiffers: \"Image 0.5.2 · running 0.5.3 (updated in place)\"."
+          },
+          "overlay": {
+            "type": "boolean",
+            "description": "It runs an installed update rather than the image's own code."
+          },
+          "revoked_key": {
+            "type": "boolean",
+            "description": "Its signing key was revoked after it was installed."
+          },
+          "version": {
+            "type": "string"
+          },
+          "withdrawn": {
+            "type": "boolean",
+            "description": "Its release has been withdrawn: Roll back is offered, never done\nsilently."
           }
         }
       },
@@ -15702,6 +16319,19 @@
           }
         }
       },
+      "SkipRequest": {
+        "type": "object",
+        "description": "`POST /updates/skip`.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "Source": {
         "type": "object",
         "description": "One source plugin of this build.",
@@ -17010,7 +17640,8 @@
           "rebuild",
           "alerts",
           "insights",
-          "settings"
+          "settings",
+          "updates"
         ]
       },
       "TorrentDetail": {
@@ -17514,6 +18145,146 @@
         },
         "example": {
           "unread": 3
+        }
+      },
+      "UpdatesEvent": {
+        "type": "object",
+        "description": "`event: updates`: the update engine's state changed. Progress\n(`bytes_done`) is sent at most once a second; fetch `GET /updates`\nfor the rest.",
+        "required": [
+          "state",
+          "version",
+          "bytes_done",
+          "bytes_total",
+          "error"
+        ],
+        "properties": {
+          "bytes_done": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "bytes_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A stable error code with `failed`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpdatesState"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release it concerns, when there is one."
+          }
+        },
+        "example": {
+          "bytes_done": null,
+          "bytes_total": null,
+          "error": null,
+          "state": "available",
+          "version": "0.6.0"
+        }
+      },
+      "UpdatesState": {
+        "type": "string",
+        "description": "Where the update engine is (§12.2).",
+        "enum": [
+          "checking",
+          "available",
+          "downloading",
+          "verifying",
+          "waiting_window",
+          "installing",
+          "restarting",
+          "checking_health",
+          "done",
+          "rolled_back",
+          "failed"
+        ]
+      },
+      "UpdatesStatus": {
+        "type": "object",
+        "description": "`GET /updates`.",
+        "required": [
+          "unavailable",
+          "status",
+          "running",
+          "capability",
+          "policy",
+          "releases",
+          "pending",
+          "rollback",
+          "notices",
+          "history"
+        ],
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntry"
+            }
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, …"
+          },
+          "pending": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PendingInstall"
+              }
+            ]
+          },
+          "policy": {
+            "$ref": "#/components/schemas/Policy"
+          },
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseInfo"
+            },
+            "description": "Newer releases, newest first."
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/RollbackInfo"
+          },
+          "running": {
+            "$ref": "#/components/schemas/Running"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus"
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why updates aren't available at all (`fixture`); null otherwise."
+          }
         }
       },
       "UserItemDetail": {
