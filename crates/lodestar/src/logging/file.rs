@@ -288,8 +288,8 @@ pub(super) fn delete(
     if let Ok(entries) = fs::read_dir(dir) {
         for e in entries.filter_map(Result::ok) {
             let name = e.file_name().to_string_lossy().into_owned();
-            let leftover = (name.starts_with("lodestar-") && name.ends_with(".part"))
-                || name == "index.json.part";
+            // Not `index.json.part`: the index's own save owns it.
+            let leftover = name.starts_with("lodestar-") && name.ends_with(".part");
             if leftover && e.file_type().is_ok_and(|t| t.is_file()) {
                 let _ = fs::remove_file(e.path());
             }
@@ -306,8 +306,15 @@ pub(super) struct Jobs {
 }
 
 impl Jobs {
-    /// Runs a deletion on the worker and waits for it.
-    pub fn delete(&self, names: Vec<LogName>, sweep: Option<Sweep>) -> Option<Deleted> {
+    /// Runs a deletion on the worker and waits for it, however long the
+    /// compressions queued before it take: it never runs beside them.
+    /// `Err(None)`: there's no worker, so the deletion may run elsewhere.
+    /// `Err(Some(_))`: the worker took the job and ended without an answer.
+    pub fn delete(
+        &self,
+        names: Vec<LogName>,
+        sweep: Option<Sweep>,
+    ) -> Result<Deleted, Option<io::Error>> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(Job::Delete {
@@ -316,8 +323,9 @@ impl Jobs {
                 sweep,
                 reply,
             })
-            .ok()?;
-        rx.recv_timeout(Duration::from_secs(120)).ok()
+            .map_err(|_| None)?;
+        rx.recv()
+            .map_err(|_| Some(io::Error::other("the log-rotate worker ended")))
     }
 }
 
@@ -642,11 +650,21 @@ impl FileSink {
     /// one, and hands the old one to the background thread. Returns the
     /// rotated name.
     pub fn rotate(&mut self) -> io::Result<String> {
+        self.rotate_then(true)
+    }
+
+    /// Rotates for a deletion: the rotated file isn't compressed, since
+    /// the deletion queued behind it takes it.
+    pub(super) fn rotate_to_delete(&mut self) -> io::Result<String> {
+        self.rotate_then(false)
+    }
+
+    fn rotate_then(&mut self, compress: bool) -> io::Result<String> {
         #[cfg(test)]
         if self.fail_rotation {
             return Err(io::Error::other("rotation refused by the test"));
         }
-        let name = self.rotated_name();
+        let name = rotated_name(&self.cfg.dir);
         let to = self.cfg.dir.join(&name);
         fs::rename(&self.path, &to)?;
         match open_append(&self.path) {
@@ -663,25 +681,11 @@ impl FileSink {
         self.flags = Flags::default();
         let _ = lock(&self.index).rename(CURRENT, &name);
         self.retry_at = None;
-        self.worker
-            .send(Job::Compress(name.clone(), self.cfg.clone()));
-        Ok(name)
-    }
-
-    fn rotated_name(&self) -> String {
-        let stamp = Stamp::now().compact();
-        let mut n = 1;
-        loop {
-            let name = match n {
-                1 => format!("lodestar-{stamp}.jsonl"),
-                n => format!("lodestar-{stamp}-{n}.jsonl"),
-            };
-            let gz = format!("{name}.gz");
-            if !self.cfg.dir.join(&name).exists() && !self.cfg.dir.join(gz).exists() {
-                return name;
-            }
-            n += 1;
+        if compress {
+            self.worker
+                .send(Job::Compress(name.clone(), self.cfg.clone()));
         }
+        Ok(name)
     }
 
     /// Waits for the background thread to finish what it was given.
@@ -690,6 +694,43 @@ impl FileSink {
         let (tx, rx) = mpsc::channel();
         self.worker.send(Job::Barrier(tx));
         let _ = rx.recv_timeout(Duration::from_secs(30));
+    }
+}
+
+/// A free rotated name in `dir` for a file set aside now.
+fn rotated_name(dir: &Path) -> String {
+    let stamp = Stamp::now().compact();
+    let mut n = 1;
+    loop {
+        let name = match n {
+            1 => format!("lodestar-{stamp}.jsonl"),
+            n => format!("lodestar-{stamp}-{n}.jsonl"),
+        };
+        let gz = format!("{name}.gz");
+        if !dir.join(&name).exists() && !dir.join(gz).exists() {
+            return name;
+        }
+        n += 1;
+    }
+}
+
+/// With no writer in `dir`, moves the current file aside under a rotated
+/// name for a deletion, so a writer opening after this starts a new one
+/// rather than writing to a file about to go. `Ok(None)`: there's none.
+/// A link with its name is never moved.
+pub(super) fn set_aside(dir: &Path) -> Result<Option<String>, &'static str> {
+    let path = dir.join(CURRENT);
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("failed"),
+        Ok(m) if !m.file_type().is_file() => return Err("not_a_regular_file"),
+        Ok(_) => {}
+    }
+    let name = rotated_name(dir);
+    match fs::rename(&path, dir.join(&name)) {
+        Ok(()) => Ok(Some(name)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err("failed"),
     }
 }
 
@@ -778,6 +819,26 @@ fn remove(dir: &Path, name: &str, index: &Mutex<Index>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_current_file_is_set_aside_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        assert_eq!(set_aside(d), Ok(None), "none there");
+        fs::write(d.join(CURRENT), "line\n").unwrap();
+        let name = set_aside(d).unwrap().unwrap();
+        assert!(LogName::parse(&name).is_some_and(|n| n != LogName::Current));
+        assert!(!d.join(CURRENT).exists());
+        assert_eq!(fs::read_to_string(d.join(&name)).unwrap(), "line\n");
+        #[cfg(unix)]
+        {
+            let elsewhere = d.join("elsewhere");
+            fs::write(&elsewhere, "x").unwrap();
+            std::os::unix::fs::symlink(&elsewhere, d.join(CURRENT)).unwrap();
+            assert_eq!(set_aside(d), Err("not_a_regular_file"));
+            assert!(d.join(CURRENT).is_symlink());
+        }
+    }
 
     fn cfg(dir: &Path, size: u64) -> FileConfig {
         FileConfig {

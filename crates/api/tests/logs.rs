@@ -190,6 +190,14 @@ impl LogSource for Fake {
         format: LogFormat,
         redact: Option<bool>,
     ) -> Result<Download, LogsError> {
+        // A download that never ends, for a client that stops reading.
+        if name == "lodestar-20261023T101500.123Z.jsonl" {
+            return Ok(Download {
+                file_name: "endless.jsonl".into(),
+                content_type: "application/x-ndjson",
+                chunks: Box::new(std::iter::repeat_with(|| Ok(vec![b'x'; 64 << 10]))),
+            });
+        }
         if name != "lodestar.jsonl" {
             return Err(LogsError::NotFound);
         }
@@ -739,9 +747,41 @@ async fn at_most_two_file_reads_at_once() {
     );
     assert_eq!(busy[0].1[header::RETRY_AFTER], "2");
     assert_eq!(code(&busy[0].2).0, "logs_busy");
-    // A download holds a read for its whole length too.
+}
+
+#[tokio::test]
+async fn a_download_holds_a_read_and_close_ends_it_unread() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    const ENDLESS: &str = "/api/v1/logs/files/lodestar-20261023T101500.123Z.jsonl";
+    // Two downloads whose clients never read take both reads.
+    let mut a = Conn::open(addr, ENDLESS, &[("cookie", &c)]).await;
+    let mut b = Conn::open(addr, ENDLESS, &[("cookie", &c)]).await;
+    a.until("200 OK", SOON).await;
+    b.until("200 OK", SOON).await;
+    let (status, h, body) = call(&f.app, get("/api/v1/logs", &c)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(h[header::RETRY_AFTER], "2");
+    assert_eq!(code(&body).0, "logs_busy");
     let (status, ..) = call(&f.app, get("/api/v1/logs/files/lodestar.jsonl", &c)).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "a download too");
+    // Their producers are stuck on full buffers; closing ends both and
+    // lets their reads go, with neither client reading.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fake.transport().reads_held(), 2);
+    fake.transport().close();
+    let start = Instant::now();
+    while fake.transport().reads_held() > 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "close() let a stalled download's read go"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    a.until_closed(Duration::from_secs(5)).await;
+    b.until_closed(Duration::from_secs(5)).await;
 }
 
 async fn futures_join<F: std::future::Future + Send + 'static>(fs: Vec<F>) -> Vec<F::Output>

@@ -264,6 +264,11 @@ impl Transport {
         lock(&self.slots).total
     }
 
+    /// File reads held now (history pages and downloads).
+    pub fn reads_held(&self) -> usize {
+        self.config.reads.max(1) - self.reads.available_permits()
+    }
+
     fn acquire(&self, session: u64) -> Result<Slot, Refused> {
         if self.is_closed() {
             return Err(Refused::Closed);
@@ -628,22 +633,38 @@ pub(crate) async fn files(handle: Handle) -> ApiResult<Response> {
 /// blocking pool until it ends, fails or the source closes.
 fn served(s: &Arc<dyn LogSource>, d: Download, permit: OwnedSemaphorePermit) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<io::Result<Bytes>>(4);
-    let closed = s.transport().closed();
+    let mut closed = s.transport().closed();
+    let mut ended = closed.clone();
     let mut chunks = d.chunks;
+    let rt = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         for chunk in chunks.by_ref() {
-            if *closed.borrow() {
-                let _ = tx.blocking_send(Err(io::Error::other("shutting down")));
-                return;
-            }
             let failed = chunk.is_err();
-            if tx.blocking_send(chunk.map(Bytes::from)).is_err() || failed {
+            // A client that stopped reading never holds the read past
+            // `close()`: the wait for room ends with it.
+            let sent = rt.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = closed.wait_for(|c| *c) => false,
+                    r = tx.send(chunk.map(Bytes::from)) => r.is_ok(),
+                }
+            });
+            if !sent || failed {
                 return;
             }
         }
     });
-    let mut res = Response::new(Body::from_stream(Chunks { rx }));
+    // Once the source closes the body ends with an error, never as if
+    // the file ended there.
+    let shut = Box::pin(async move {
+        let _ = ended.wait_for(|c| *c).await;
+    });
+    let mut res = Response::new(Body::from_stream(Chunks {
+        rx,
+        shut,
+        done: false,
+    }));
     let h = res.headers_mut();
     h.insert(
         header::CONTENT_TYPE,
@@ -663,6 +684,8 @@ fn served(s: &Arc<dyn LogSource>, d: Download, permit: OwnedSemaphorePermit) -> 
 
 struct Chunks {
     rx: tokio::sync::mpsc::Receiver<io::Result<Bytes>>,
+    shut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    done: bool,
 }
 
 impl futures_core::Stream for Chunks {
@@ -672,6 +695,15 @@ impl futures_core::Stream for Chunks {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if self.done {
+            return Poll::Ready(None);
+        }
+        if self.shut.as_mut().poll(cx).is_ready() {
+            self.done = true;
+            self.rx.close();
+            return Poll::Ready(Some(Err(io::Error::other("shutting down"))));
+        }
         self.rx.poll_recv(cx)
     }
 }
