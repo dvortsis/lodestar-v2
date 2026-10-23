@@ -186,6 +186,8 @@ describe('the list page', () => {
 		expect(within(screen.getByTestId('alerts-row-3')).getByText('Every new torrent')).toBeTruthy();
 		expect(within(screen.getByTestId('alerts-row-3')).getByText('None')).toBeTruthy();
 		expect(screen.getByTestId('alerts-paused-3').textContent).toBe('Paused');
+		// Status is icon + text: the badge holds an svg.
+		expect(screen.getByTestId('alerts-paused-3').parentElement?.querySelector('svg')).toBeTruthy();
 		expect(screen.queryByTestId('alerts-paused-1')).toBeNull();
 		expect(within(screen.getByTestId('alerts-row-2')).getByText('RSS')).toBeTruthy();
 		expect(screen.getByRole('link', { name: 'Lantern Keeper releases' }).getAttribute('href')).toBe(

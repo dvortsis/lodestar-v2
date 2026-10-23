@@ -5,6 +5,7 @@
 	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	import IconTrash from '~icons/ph/trash';
+	import IconPause from '~icons/ph/pause';
 	import IconSearch from '~icons/ph/magnifying-glass';
 	import { events } from '$lib/state/events.svelte';
 	import { keys } from '$lib/keys';
@@ -147,6 +148,13 @@
 	const notFound = $derived(d.error?.code === 'saved_search_not_found');
 	const feed = $derived(d.search?.rss ? feedPath(d.search.id) : undefined);
 	const loadingFirst = $derived(d.loading && d.search === undefined);
+	// A load that ends within 300 ms shows no skeleton (no flash); the space is held meanwhile.
+	let slow = $state(false);
+	$effect(() => {
+		if (!loadingFirst) return;
+		const t = setTimeout(() => (slow = true), 300);
+		return () => clearTimeout(t);
+	});
 </script>
 
 <section class="al-page" aria-busy={d.loading || undefined}>
@@ -176,7 +184,9 @@
 				</h1>
 				{#if d.search?.paused}
 					<Badge variant="warning"
-						><span data-testid="alert-paused">{m.alerts_paused()}</span></Badge
+						><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
+							data-testid="alert-paused">{m.alerts_paused()}</span
+						></Badge
 					>
 				{/if}
 			</div>
@@ -240,7 +250,7 @@
 			<Banner kind="error">
 				{m.alerts_error_refresh()}
 				{#snippet action()}
-					<Button dense onclick={() => void d.refreshSearch()}>{m.alerts_retry()}</Button>
+					<Button dense onclick={() => void d.retry()}>{m.alerts_retry()}</Button>
 				{/snippet}
 			</Banner>
 		{/if}
@@ -259,6 +269,15 @@
 			{announcement}
 		</div>
 
+		{#if loadingFirst}
+			<div class="al-skeleton" data-testid="alert-skeleton">
+				{#if slow}
+					{#each [0, 1, 2] as n (n)}
+						<Skeleton class="al-skeleton-row" />
+					{/each}
+				{/if}
+			</div>
+		{/if}
 		{#if d.search}
 			{#if items.length === 0 && !d.loading}
 				<p class="al-empty" data-testid="alert-empty">
@@ -381,6 +400,15 @@
 		flex-direction: column;
 		align-items: flex-start;
 		gap: calc(var(--spacing) * 3);
+	}
+	.al-skeleton {
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--spacing) * 2);
+		min-block-size: calc(var(--row-height-comfortable) * 3 + var(--spacing) * 4);
+	}
+	.al-page :global(.al-skeleton-row) {
+		block-size: var(--row-height-comfortable);
 	}
 	.al-empty {
 		margin: 0;
