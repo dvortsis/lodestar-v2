@@ -5,9 +5,7 @@
 import { ROUTES } from './support/routes';
 import { expect, test } from './support/test';
 
-// The routes are `<h1>` stubs with nothing focusable yet, so there is no focus behaviour to assert.
-// Drop the fixme once the shell lands (skip link / top bar): the body below is the check.
-test.fixme(true, 'no interactive UI yet (shell slice)');
+// The first Tab on every route lands on the skip link (the shell, W9), which must show a focus ring.
 
 for (const route of ROUTES) {
 	test(`keyboard: first Tab on ${route.name} lands on a visibly focused control`, async ({
@@ -16,6 +14,13 @@ for (const route of ROUTES) {
 		kbd
 	}) => {
 		await go(route.path);
+		// The app mounts after load; the skip link is the first thing it renders.
+		await page.getByRole('link', { name: 'Skip to main content' }).waitFor();
+		// A page may move focus into its form once it has loaded (the setup and sign-in screens do,
+		// after their GET /auth): wait for that to settle, then start from the top of the document, as a
+		// person arriving fresh does.
+		await page.waitForLoadState('networkidle');
+		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 		await kbd.press('Tab');
 		const focus = await page.evaluate(() => {
 			const el = document.activeElement;

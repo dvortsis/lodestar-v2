@@ -691,6 +691,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insights/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Discover (§10.9.5): keys reported, rediscovered and dropped by source and strategy, first harvests, and the DHT's snapshot. Event time, except `harvested` (discovery cohort, ≈). */
+        get: operations["getInsightsDiscover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/insights/events": {
         parameters: {
             query?: never;
@@ -704,6 +721,57 @@ export interface paths {
          *     overlapping `from..to`, so the client draws gaps.
          */
         get: operations["getInsightsEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insights/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One panel of Insights as CSV, the numbers its chart shows. */
+        get: operations["getInsightsExportCsv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insights/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch (§10.9.5): fetched and lost by event time, losses by reason, the queue now, and the cohort funnel. `reason` keeps only that loss. */
+        get: operations["getInsightsFetch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insights/index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Index (§10.9.5): searchable now and per bucket, new searchable, removals (a lifecycle event, by type), lag, size and rebuild state. */
+        get: operations["getInsightsIndex"];
         put?: never;
         post?: never;
         delete?: never;
@@ -727,6 +795,40 @@ export interface paths {
          *     cohort for the funnel, yield and time to searchable.
          */
         get: operations["getInsightsOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insights/serve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Serve (§10.9.5): searches, latency, zero-result and cancel rates, alerts, notifications and sends. Every count is null until its counter exists. */
+        get: operations["getInsightsServe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insights/understand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Understand (§10.9.5): stored, blocked (counts only) and newly searchable by content type and group. Event time. */
+        get: operations["getInsightsUnderstand"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2939,6 +3041,76 @@ export interface components {
             /** Format: int64 */
             size: number;
         };
+        DiscoverKpi: {
+            /**
+             * Format: double
+             * @description BEP 51 sample yield. Null until the DHT counts samples.
+             */
+            bep51_sample_yield: number | null;
+            /**
+             * Format: int64
+             * @description Nodes in the routing tables now; null with the DHT off. Snapshot.
+             */
+            dht_nodes: number | null;
+            /**
+             * Format: int64
+             * @description Keys dropped because the pipeline was full. Event time.
+             */
+            dropped: number;
+            /**
+             * Format: int64
+             * @description First harvests (the cohorts' harvested counts). Always ≈.
+             */
+            harvested: number;
+            /**
+             * Format: double
+             * @description Virtual-ID keyspace coverage. Null until the crawler reports it.
+             */
+            keyspace_coverage: number | null;
+            /**
+             * Format: int64
+             * @description Keys stored already, seen again. Event time.
+             */
+            rediscovered: number;
+            /**
+             * Format: double
+             * @description DHT responses per query sent since the start (the NAT-saturation
+             *     signal); null with the DHT off. Snapshot.
+             */
+            reply_ratio: number | null;
+            /**
+             * Format: int64
+             * @description Keys the sources reported. Event time.
+             */
+            reported: number;
+            /**
+             * Format: double
+             * @description The seen filter's load factor. Null until the filter reports it.
+             */
+            seen_filter_load: number | null;
+        };
+        /** @description One bucket; a count is null where nothing was measured. */
+        DiscoverPoint: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            dropped: number | null;
+            /**
+             * Format: int64
+             * @description First harvests in the bucket's cohorts.
+             */
+            harvested: number | null;
+            /** Format: int64 */
+            rediscovered: number | null;
+            /** Format: int64 */
+            reported: number | null;
+        };
+        DiscoverPrevious: {
+            /** @description Snapshot fields are null here. */
+            kpi: components["schemas"]["DiscoverKpi"];
+            range: components["schemas"]["InsightsRange"];
+            trend: components["schemas"]["DiscoverPoint"][];
+        };
         /** @description `GET /discover`: the three sections of §10.7. */
         DiscoverResponse: {
             /** @description The newest searchable torrents, newest first. */
@@ -2947,6 +3119,16 @@ export interface components {
             recently_resolved: components["schemas"]["HitGroup"];
             /** @description The top torrents by swarm trend. */
             rising: components["schemas"]["HitGroup"];
+        };
+        DiscoverSource: {
+            /** Format: int64 */
+            dropped: number;
+            /** @description The source's plugin name. */
+            key: string;
+            /** Format: int64 */
+            rediscovered: number;
+            /** Format: int64 */
+            reported: number;
         };
         /** @description A download client's settings as the form has them, unsaved. */
         DownloadClientDraft: {
@@ -3348,6 +3530,99 @@ export interface components {
              */
             unavailable: string[];
         };
+        FetchKpi: {
+            /**
+             * Format: double
+             * @description Ephemeral-port pressure (Windows). Null until counted.
+             */
+            ephemeral_port_pressure: number | null;
+            /**
+             * Format: int64
+             * @description Fetch latency percentiles. Null until a fetch latency histogram
+             *     exists.
+             */
+            fetch_latency_p50_ms: number | null;
+            /** Format: int64 */
+            fetch_latency_p95_ms: number | null;
+            /**
+             * Format: int64
+             * @description Info dicts fetched in the range, by event time; null when the range
+             *     starts before they were counted so.
+             */
+            fetched: number | null;
+            /**
+             * Format: int64
+             * @description Fetches running now. Snapshot.
+             */
+            in_flight: number | null;
+            /**
+             * Format: int64
+             * @description Per-IP limiter rejections. Null until counted.
+             */
+            limiter_rejections: number | null;
+            /**
+             * Format: int64
+             * @description Keys lost in the range (with `reason`, for that reason only), by
+             *     event time; null as `fetched`.
+             */
+            lost: number | null;
+            /**
+             * Format: double
+             * @description MSE (encrypted) share of successful fetches. Null until counted.
+             */
+            mse_share: number | null;
+            /**
+             * Format: int64
+             * @description Age of the oldest queued key. Null until the pool reports it.
+             */
+            queue_age_s: number | null;
+            /**
+             * Format: int64
+             * @description Keys queued or in flight now. Snapshot.
+             */
+            queue_depth: number | null;
+            /**
+             * Format: double
+             * @description uTP share of successful fetches. Null until counted.
+             */
+            utp_share: number | null;
+        };
+        FetchPoint: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            fetched: number | null;
+            /** Format: int64 */
+            lost: number | null;
+        };
+        FetchPrevious: {
+            kpi: components["schemas"]["FetchKpi"];
+            range: components["schemas"]["InsightsRange"];
+            trend: components["schemas"]["FetchPoint"][];
+        };
+        /** @description `GET /insights/fetch`. */
+        FetchResponse: {
+            /**
+             * @description The discovery-cohort funnel, as the overview's (with `reason`, only
+             *     that loss).
+             */
+            funnel: components["schemas"]["FunnelCohort"][];
+            funnel_total: components["schemas"]["FunnelTotal"];
+            kpi: components["schemas"]["FetchKpi"];
+            /**
+             * @description Losses by reason, by event time, most first; null when the range
+             *     starts before fetches were counted by event time.
+             */
+            losses: components["schemas"]["LossCount"][] | null;
+            previous?: components["schemas"]["FetchPrevious"];
+            range: components["schemas"]["InsightsRange"];
+            /** @description The `reason` filter, as asked; null for all. */
+            reason: string | null;
+            stale: null | components["schemas"]["Stale"];
+            trend: components["schemas"]["FetchPoint"][];
+            /** Format: int64 */
+            updated_at: number;
+        };
         /** @description The metadata-fetch pool's state. */
         FetchStatus: {
             /**
@@ -3670,9 +3945,122 @@ export interface components {
              */
             reason: string;
         };
+        IndexKpi: {
+            /**
+             * Format: int64
+             * @description Bytes in the data directory. Snapshot.
+             */
+            data_bytes: number | null;
+            /**
+             * Format: int64
+             * @description Free bytes on its volume: always null in this build.
+             */
+            disk_free_bytes: number | null;
+            /**
+             * Format: double
+             * @description File-index coverage (smart mode). Null until measured.
+             */
+            file_index_coverage: number | null;
+            /**
+             * Format: int64
+             * @description NRT commit lag (as `/stats`). Snapshot.
+             */
+            index_lag_s: number | null;
+            /**
+             * Format: int64
+             * @description Segment merges. Null until the index reports them.
+             */
+            merges: number | null;
+            /**
+             * Format: int64
+             * @description Torrents that became searchable in the range. Event time.
+             */
+            new_searchable: number;
+            /**
+             * Format: int64
+             * @description Days until the disk is full. Null while free space is unknown.
+             */
+            projection_days: number | null;
+            /**
+             * @description A background rebuild's phase (`building`, `finishing`, `swapping`,
+             *     `failed`); null when none runs. Snapshot.
+             */
+            rebuild: string | null;
+            /**
+             * Format: int64
+             * @description Searchable torrents deleted in the range. Event time.
+             */
+            removed: number;
+            /**
+             * Format: double
+             * @description Share of torrents with a swarm row. Null until rolled up.
+             */
+            scrape_coverage: number | null;
+            /**
+             * Format: int64
+             * @description Median age of scrape data. Null until rolled up.
+             */
+            scrape_freshness_s: number | null;
+            /**
+             * Format: int64
+             * @description Documents in the index now; null with search off. Snapshot.
+             */
+            searchable: number | null;
+            /**
+             * Format: int64
+             * @description Index segments now. Null until the index reports them.
+             */
+            segments: number | null;
+            sizes: null | components["schemas"]["IndexSizes"];
+        };
+        IndexPoint: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            new_searchable: number | null;
+            /** Format: int64 */
+            removed: number | null;
+            /**
+             * Format: int64
+             * @description The bucket's last searchable snapshot (a gauge: the last hour's);
+             *     null with none.
+             */
+            searchable: number | null;
+        };
+        IndexPrevious: {
+            kpi: components["schemas"]["IndexKpi"];
+            range: components["schemas"]["InsightsRange"];
+            trend: components["schemas"]["IndexPoint"][];
+        };
+        /** @description `GET /insights/index`. */
+        IndexResponse: {
+            kpi: components["schemas"]["IndexKpi"];
+            previous?: components["schemas"]["IndexPrevious"];
+            range: components["schemas"]["InsightsRange"];
+            /**
+             * @description Searchable torrents deleted in the range (a lifecycle event,
+             *     §10.9.3), by content type, Adult left out while hidden. Event time.
+             */
+            removed_by_type: components["schemas"]["RemovedCount"][];
+            stale: null | components["schemas"]["Stale"];
+            /** @description Per-tracker health. Null until it's rolled up. */
+            trackers: components["schemas"]["TrackerHealth"][] | null;
+            trend: components["schemas"]["IndexPoint"][];
+            /** Format: int64 */
+            updated_at: number;
+        };
+        IndexSizes: {
+            /** Format: int64 */
+            database_bytes: number;
+            /** Format: int64 */
+            file_index_bytes: number;
+            /** Format: int64 */
+            index_bytes: number;
+        };
         /**
-         * @description `event: insights` (reserved: B11a publishes it every 30 s): the stage
-         *     strip's headline numbers (`docs/metrics.md` §6.1, §7.5).
+         * @description `event: insights`, every 30 s while anyone subscribes: the default
+         *     `7d` overview's stage strip (`docs/metrics.md` §6.1, §7.5, §7.7). A
+         *     client showing another range refetches its own on each event.
          */
         InsightsEvent: {
             stages: components["schemas"]["InsightsStages"];
@@ -3729,12 +4117,22 @@ export interface components {
              * @description Always approximate.
              */
             discover: number;
-            /** Format: int64 */
-            fetch: number;
-            /** Format: int64 */
-            index: number;
-            /** Format: int64 */
-            serve: number;
+            /**
+             * Format: int64
+             * @description Null when the range starts before fetches were counted by event
+             *     time.
+             */
+            fetch: number | null;
+            /**
+             * Format: int64
+             * @description Null with search off.
+             */
+            index: number | null;
+            /**
+             * Format: int64
+             * @description Null until the search counters exist.
+             */
+            serve: number | null;
             /** Format: int64 */
             understand: number;
         };
@@ -3860,6 +4258,12 @@ export interface components {
             new_searchable: number;
             /**
              * Format: int64
+             * @description `new_searchable` less `previous.kpi.new_searchable`; null without
+             *     `compare=1` (and for `all`).
+             */
+            new_searchable_delta: number | null;
+            /**
+             * Format: int64
              * @description Documents in the search index now; null when search is off.
              */
             searchable: number | null;
@@ -3872,11 +4276,22 @@ export interface components {
             searchable_delta: number | null;
             /**
              * Format: int64
+             * @description `time_to_searchable_p50_s` less the previous period's, seconds;
+             *     null without `compare=1` or when either side is null.
+             */
+            time_to_searchable_p50_delta_s: number | null;
+            /**
+             * Format: int64
              * @description First harvest → searchable, p50 and p95 seconds over the final
              *     cohorts in the range. Always approximate (log buckets ≤ 10%).
              *     Null when no cohort in the range is final.
              */
             time_to_searchable_p50_s: number | null;
+            /**
+             * Format: int64
+             * @description As `time_to_searchable_p50_delta_s`, for p95.
+             */
+            time_to_searchable_p95_delta_s: number | null;
             /** Format: int64 */
             time_to_searchable_p95_s: number | null;
             /**
@@ -3885,6 +4300,12 @@ export interface components {
              *     Imports excluded. Null when no cohort in the range is final.
              */
             yield: number | null;
+            /**
+             * Format: double
+             * @description `yield` less the previous period's, in ratio points (−1 to 1); null
+             *     without `compare=1` or when either side is null.
+             */
+            yield_delta: number | null;
         };
         /**
          * @description One label in use.
@@ -4224,6 +4645,17 @@ export interface components {
          */
         LoginRequest: {
             password: string;
+        };
+        LossCount: {
+            /** Format: int64 */
+            count: number;
+            /** @description The reason's name (§6.4). */
+            key: string;
+            /**
+             * Format: double
+             * @description Of all losses in the range.
+             */
+            share: number | null;
         };
         /**
          * @description What an override, exception or allow entry matches, as sent: exactly
@@ -4624,6 +5056,11 @@ export interface components {
         PreviousPeriod: {
             kpi: components["schemas"]["PreviousKpi"];
             range: components["schemas"]["InsightsRange"];
+            /**
+             * @description The previous period's segments, in the same shape and with the
+             *     same Adult rule.
+             */
+            segments: components["schemas"]["Segments"];
             serve: components["schemas"]["Serve"];
             stages: components["schemas"]["PreviousStages"];
             trend: components["schemas"]["TrendPoint"][];
@@ -4696,6 +5133,17 @@ export interface components {
             /** @description A sealed name is kept (see `reveal_name`). */
             sealed: boolean;
         };
+        /** @description A logged query and how often it ran (Serve, when query logging is on). */
+        QueryRow: {
+            /** Format: int64 */
+            count: number;
+            query: string;
+            /**
+             * Format: int64
+             * @description Of those runs, how many found nothing.
+             */
+            zero: number;
+        };
         /**
          * @description `GET /filters/queue`: quarantine (never with names) and the replay
          *     window's decisions per rule.
@@ -4736,6 +5184,12 @@ export interface components {
          * @enum {string}
          */
         RebuildPhase: "building" | "finishing" | "swapping" | "failed" | "done";
+        RemovedCount: {
+            /** @description Content type, or `unclassified`. */
+            key: string;
+            /** Format: int64 */
+            removed: number;
+        };
         /**
          * @description `POST /system/restart`: accepted; the server restarts once this
          *     answer has gone out.
@@ -5252,6 +5706,60 @@ export interface components {
              * @description Searches that found nothing ÷ searches, 0–1; null with no searches.
              */
             zero_result_rate: number | null;
+        };
+        ServeKpi: {
+            /** Format: int64 */
+            alerts_fired: number | null;
+            /** Format: double */
+            cancel_rate: number | null;
+            /** Format: double */
+            facet_sampling_rate: number | null;
+            /** Format: double */
+            latency_p50_ms: number | null;
+            /** Format: double */
+            latency_p95_ms: number | null;
+            /** Format: int64 */
+            notification_failures: number | null;
+            /** Format: int64 */
+            notifications_delivered: number | null;
+            /** Format: int64 */
+            searches: number | null;
+            /** Format: int64 */
+            sends: number | null;
+            /** Format: double */
+            zero_result_rate: number | null;
+        };
+        ServePoint: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            searches: number | null;
+            /** Format: int64 */
+            zero_results: number | null;
+        };
+        ServePrevious: {
+            kpi: components["schemas"]["ServeKpi"];
+            range: components["schemas"]["InsightsRange"];
+            trend: components["schemas"]["ServePoint"][];
+        };
+        /**
+         * @description `GET /insights/serve`. Every count is null until the search, alert,
+         *     notification and send counters exist.
+         */
+        ServeResponse: {
+            kpi: components["schemas"]["ServeKpi"];
+            previous?: components["schemas"]["ServePrevious"];
+            range: components["schemas"]["InsightsRange"];
+            stale: null | components["schemas"]["Stale"];
+            /**
+             * @description Most frequent queries, only with query logging on (it's off by
+             *     default, and nothing logs queries yet): null.
+             */
+            top_queries: components["schemas"]["QueryRow"][] | null;
+            top_zero_result_queries: components["schemas"]["QueryRow"][] | null;
+            trend: components["schemas"]["ServePoint"][];
+            /** Format: int64 */
+            updated_at: number;
         };
         /** @description One field of a section, for its form. */
         SettingField: {
@@ -5788,6 +6296,16 @@ export interface components {
             /** Format: int64 */
             uptime_s: number;
         };
+        StrategyCount: {
+            /**
+             * @description The DHT's strategies by name (`sample`, `get_peers`, `announce`,
+             *     `lookup`, or `strategy_<n>`), `refetch` from any source, and other
+             *     sources' own codes as `<plugin>:<n>`.
+             */
+            key: string;
+            /** Format: int64 */
+            reported: number;
+        };
         /**
          * @description `POST /filters/strictness`: what the lists would block, and a warning
          *     matched to it (§2.9, §20.13).
@@ -6267,6 +6785,14 @@ export interface components {
              */
             max_id: number | null;
         };
+        TrackerHealth: {
+            /** @description `scheme://host:port` only: a URL path or query can carry a passkey. */
+            key: string;
+            /** Format: int64 */
+            reporting: number;
+            /** @description `ok`, `backoff`, `down` or `banned`. */
+            state: string;
+        };
         /**
          * @description One trend bucket. A count is null where nothing was measured (a gap:
          *     paused, or not running), and 0 where it was measured and was 0.
@@ -6293,6 +6819,68 @@ export interface components {
          * @enum {string}
          */
         Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
+        UnderstandKpi: {
+            /**
+             * Format: int64
+             * @description Dropped by a blocklist or filter rule before storage (counts only),
+             *     by event time; null as `fetch.kpi.fetched`.
+             */
+            blocked: number | null;
+            /** @description Junk score distribution. Null until scores are rolled up. */
+            junk_distribution: components["schemas"]["HistogramBin"][] | null;
+            /**
+             * Format: int64
+             * @description Torrents that became searchable in the range. Event time.
+             */
+            newly_searchable: number;
+            /** @description Parser confidence distribution. Null until rolled up. */
+            parser_confidence: components["schemas"]["HistogramBin"][] | null;
+            /**
+             * Format: int64
+             * @description Recent "Fix parse" corrections. Null until counted.
+             */
+            recent_corrections: number | null;
+            /**
+             * Format: double
+             * @description Ambiguous names resolved ÷ ambiguous. Null until a resolution
+             *     counter exists.
+             */
+            resolution_rate: number | null;
+            /**
+             * Format: int64
+             * @description Torrents newly stored in the range. Event time.
+             */
+            stored: number;
+        };
+        UnderstandPoint: {
+            /** Format: int64 */
+            at: number;
+            /** Format: int64 */
+            blocked: number | null;
+            /** Format: int64 */
+            stored: number | null;
+        };
+        UnderstandPrevious: {
+            kpi: components["schemas"]["UnderstandKpi"];
+            range: components["schemas"]["InsightsRange"];
+            trend: components["schemas"]["UnderstandPoint"][];
+        };
+        /** @description `GET /insights/understand`. */
+        UnderstandResponse: {
+            /**
+             * @description Newly searchable by content type and group, as the overview's
+             *     segments (Adult left out while hidden). Event time.
+             */
+            by_content_type: components["schemas"]["SegmentCount"][];
+            by_group: components["schemas"]["SegmentCount"][];
+            kpi: components["schemas"]["UnderstandKpi"];
+            previous?: components["schemas"]["UnderstandPrevious"];
+            range: components["schemas"]["InsightsRange"];
+            stale: null | components["schemas"]["Stale"];
+            trend: components["schemas"]["UnderstandPoint"][];
+            /** Format: int64 */
+            updated_at: number;
+        };
         /**
          * @description `GET /alerts/unread`: the nav badge.
          * @example {
@@ -7768,6 +8356,40 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getInsightsDiscover: {
+        parameters: {
+            query?: {
+                /** @description As the overview's. */
+                range?: string;
+                from?: number;
+                to?: number;
+                /** @description `1` adds `previous`. */
+                compare?: number;
+                /**
+                 * @description A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,
+                 *     `unreachable`): the Fetch page's losses and funnel show only that
+                 *     reason (the drill-through from a funnel loss, §10.9.4). Accepted
+                 *     and checked on every stage; only Fetch reads it.
+                 */
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getInsightsEvents: {
         parameters: {
             query: {
@@ -7788,6 +8410,118 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getInsightsExportCsv: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The panel: `trend`, `funnel`, `losses`, `segments.by_group`,
+                 *     `segments.by_content_type`, `segments.by_source`, `exceptions`,
+                 *     `annotations` (the overview's), or a stage's `<stage>.trend` and
+                 *     tables (`discover.by_source`, `discover.by_strategy`,
+                 *     `fetch.losses`, `fetch.funnel`, `understand.by_content_type`,
+                 *     `understand.by_group`, `index.removed_by_type`, `serve.trend`, …).
+                 */
+                panel?: string;
+                range?: string;
+                from?: number;
+                to?: number;
+                /**
+                 * @description `1` adds the previous period's rows (`period` = `previous`) where
+                 *     the panel has them.
+                 */
+                compare?: number;
+                /**
+                 * @description As the stage pages' `reason`: checked for every panel, and Fetch's
+                 *     panels keep only that loss, as the page does.
+                 */
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The panel's rows as an attachment (`lodestar-insights-<panel>-<from>-<to>.csv`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getInsightsFetch: {
+        parameters: {
+            query?: {
+                /** @description As the overview's. */
+                range?: string;
+                from?: number;
+                to?: number;
+                /** @description `1` adds `previous`. */
+                compare?: number;
+                /**
+                 * @description A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,
+                 *     `unreachable`): the Fetch page's losses and funnel show only that
+                 *     reason (the drill-through from a funnel loss, §10.9.4). Accepted
+                 *     and checked on every stage; only Fetch reads it.
+                 */
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getInsightsIndex: {
+        parameters: {
+            query?: {
+                /** @description As the overview's. */
+                range?: string;
+                from?: number;
+                to?: number;
+                /** @description `1` adds `previous`. */
+                compare?: number;
+                /**
+                 * @description A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,
+                 *     `unreachable`): the Fetch page's losses and funnel show only that
+                 *     reason (the drill-through from a funnel loss, §10.9.4). Accepted
+                 *     and checked on every stage; only Fetch reads it.
+                 */
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -7829,6 +8563,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OverviewResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getInsightsServe: {
+        parameters: {
+            query?: {
+                /** @description As the overview's. */
+                range?: string;
+                from?: number;
+                to?: number;
+                /** @description `1` adds `previous`. */
+                compare?: number;
+                /**
+                 * @description A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,
+                 *     `unreachable`): the Fetch page's losses and funnel show only that
+                 *     reason (the drill-through from a funnel loss, §10.9.4). Accepted
+                 *     and checked on every stage; only Fetch reads it.
+                 */
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServeResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getInsightsUnderstand: {
+        parameters: {
+            query?: {
+                /** @description As the overview's. */
+                range?: string;
+                from?: number;
+                to?: number;
+                /** @description `1` adds `previous`. */
+                compare?: number;
+                /**
+                 * @description A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,
+                 *     `unreachable`): the Fetch page's losses and funnel show only that
+                 *     reason (the drill-through from a funnel loss, §10.9.4). Accepted
+                 *     and checked on every stage; only Fetch reads it.
+                 */
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderstandResponse"];
                 };
             };
             default: components["responses"]["Error"];

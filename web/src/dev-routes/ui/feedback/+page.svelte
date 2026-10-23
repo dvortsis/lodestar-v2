@@ -3,7 +3,6 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
 	import EmptyState from '$lib/ui/feedback/EmptyState.svelte';
-	import Toaster from '$lib/ui/feedback/Toaster.svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 
 	const kinds = ['info', 'success', 'warning', 'error'] as const;
@@ -38,5 +37,3 @@
 		{#snippet action()}<Button variant="primary">Save search</Button>{/snippet}
 	</EmptyState>
 </div>
-
-<Toaster />
