@@ -1,9 +1,10 @@
 //! `lodestar serve` on Unix (§12.2): a minimal init and the supervisor of
 //! the child that does the work.
 //!
-//! It never opens the store, never reads `trust.json`, never starts the
-//! log file (console only, prefixed `supervisor:`) and never touches the
-//! network. It forwards `TERM`, `INT`, `HUP`, `QUIT`, `USR1` and `USR2` to
+//! It never opens the store for writing (a rollback reads its schema,
+//! read-only, and renames a snapshot over it), never reads `trust.json`,
+//! never starts the log file (console only, prefixed `supervisor:`) and
+//! never touches the network. It forwards `TERM`, `INT`, `HUP`, `QUIT`, `USR1` and `USR2` to
 //! the child and reaps every child (orphans included) on `SIGCHLD`.
 //! Children are spawned with `std::process::Command` and never waited on
 //! through `Child::wait`, which the reaper would race.
@@ -15,6 +16,7 @@
 //! (128 + n for a signal), so Docker's or systemd's restart policy decides.
 
 use std::ffi::OsString;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -205,6 +207,9 @@ impl Supervisor {
             if let Some(code) = self.honour_halt() {
                 return code;
             }
+            if let Some(code) = self.repair_pending() {
+                return code;
+            }
             let plan = self.plan(std::mem::take(&mut notices));
             // Out of attempts but not yet rolled back (a hard kill landed
             // in between): roll back now rather than start it a 4th time.
@@ -392,6 +397,44 @@ impl Supervisor {
         }
     }
 
+    /// A damaged `pending` (unreadable, or a format this build doesn't
+    /// know) starts `active`'s version on a fresh probation (attempts 0),
+    /// so its migration is recorded and its self-test runs; with no
+    /// `active` it goes. `Some` to exit: it couldn't be rewritten.
+    fn repair_pending(&self) -> Option<ExitCode> {
+        let Err(e) = pending::read(&self.bin) else {
+            return None;
+        };
+        let active: Option<Active> = self.bin.read("active").ok().flatten();
+        let Some(a) = active.filter(|a| layout::parse_version(&a.version).is_some()) else {
+            say!("{e}: removing it");
+            return match self.bin.remove("pending") {
+                Ok(()) => None,
+                Err(e) => {
+                    say!("removing pending: {e}");
+                    Some(ExitCode::FAILURE)
+                }
+            };
+        };
+        say!("{e}: {} starts a fresh probation", a.version);
+        let fresh = Pending {
+            format: pending::PENDING_FORMAT,
+            version: a.version,
+            previous: a.previous,
+            kind: Kind::Install,
+            attempts: 0,
+            used_ms: 0,
+            index_before: journal::list_index(&self.index_root),
+        };
+        match self.bin.write("pending", &fresh) {
+            Ok(()) => None,
+            Err(e) => {
+                say!("rewriting pending: {e}. Nothing will start until it can be written.");
+                Some(ExitCode::FAILURE)
+            }
+        }
+    }
+
     /// `halted.json`: stop, unless this image is newer than both versions.
     /// An unreadable one stops too.
     fn honour_halt(&self) -> Option<ExitCode> {
@@ -429,6 +472,10 @@ impl Supervisor {
                 halted.previous
             ),
         }
+        say!(
+            "Once the cause is fixed, delete {} to try again.",
+            self.bin.path("halted.json").display()
+        );
         Some(ExitCode::FAILURE)
     }
 
@@ -534,13 +581,8 @@ impl Supervisor {
 
     /// Charges an attempt in `pending` before a start in probation.
     fn charge(&self, version: &Version) -> Option<Pending> {
-        let mut p = match pending::read(&self.bin) {
-            Ok(p) => p?,
-            Err(e) => {
-                say!("{e}: {version} runs without probation");
-                return None;
-            }
-        };
+        // Damage was repaired at the top of the loop.
+        let mut p = pending::read(&self.bin).ok().flatten()?;
         if p.version != version.to_string() {
             return None;
         }
@@ -571,7 +613,9 @@ impl Supervisor {
             image_version: self.image.to_string(),
             notices: plan.notices.clone(),
         };
+        // `ps` shows `lodestar`, not `/proc/self/fd/<n>`.
         let child = std::process::Command::new(&plan.program)
+            .arg0("lodestar")
             .args(&self.args)
             .env(control::ENV, hint.encode())
             .spawn()?;
@@ -754,6 +798,11 @@ impl Supervisor {
         if ended.forwarded {
             if in_probation {
                 self.refund();
+            }
+            // It shut down cleanly on a request as the stop arrived: the
+            // stop wins, and the shutdown was a clean one.
+            if request.is_some() {
+                return Next::Exit(ExitCode::SUCCESS);
             }
             return Next::Exit(exit_code(ended.status));
         }

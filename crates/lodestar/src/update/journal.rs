@@ -168,7 +168,46 @@ pub fn preview(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<String>
 /// migration took, if it verifies; else nothing only while the store is
 /// still at the schema it migrated from (no migration step committed).
 /// Otherwise the rollback is refused: `previous` couldn't read the store.
+///
+/// Back to the image (this build), whatever the marker says, the store it
+/// starts with must be at a schema this build reads: that catches a
+/// migration nothing recorded.
 fn restore_plan(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<SnapshotRef>, String> {
+    let plan = marked_plan(ctx, failed, previous)?;
+    if previous == pending::IMAGE {
+        let latest = lodestar_store::latest_schema_version();
+        let after = match &plan {
+            Some(_) => marked_from(ctx, failed),
+            None => store_schema(&ctx.db).map_err(|e| {
+                format!(
+                    "the store's schema can't be read ({e}), so it can't be checked against \
+                     this version's. Nothing was changed"
+                )
+            })?,
+        };
+        if let Some(after) = after.filter(|a| *a > latest) {
+            return Err(format!(
+                "the store would be at schema {after}, newer than this version reads \
+                 ({latest}), so {previous} couldn't read it. Nothing was changed: restore a \
+                 backup first (see \"If an update fails\" in docs/operations.md)"
+            ));
+        }
+    }
+    Ok(plan)
+}
+
+/// The `from` in `failed`'s migration marker (the schema a restored
+/// snapshot holds).
+fn marked_from(ctx: &Ctx, failed: &str) -> Option<i64> {
+    let v = layout::parse_version(failed)?;
+    let m: Migration = layout::read_json(&ctx.bin.overlay(&v).join("migration.json"))
+        .ok()
+        .flatten()?;
+    Some(m.from)
+}
+
+/// [`restore_plan`] from `<failed>/migration.json` alone.
+fn marked_plan(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<SnapshotRef>, String> {
     let Some(v) = layout::parse_version(failed) else {
         return Ok(None);
     };
@@ -369,6 +408,14 @@ fn restore(db: &Path, snapshot: Option<&SnapshotRef>) -> Result<(), String> {
         )
     })?;
     layout::sync_dir(dir);
+    // Whatever was renamed (a swap after the check), the store must be a
+    // regular file now; the journal stays until it is.
+    if !fs::symlink_metadata(db).is_ok_and(|m| m.is_file()) {
+        return Err(format!(
+            "{} isn't a regular file after the restore; restore a backup by hand",
+            db.display()
+        ));
+    }
     Ok(())
 }
 
@@ -735,11 +782,15 @@ mod tests {
     fn a_snapshot_that_isnt_a_regular_file_is_never_restored() {
         let s = setup();
         let j = begin_it(&s);
+        // A symlink to a valid copy: a rename would happily move the link
+        // over the store.
         let snap = s.ctx.db.with_file_name(&j.snapshot.as_ref().unwrap().name);
-        fs::remove_file(&snap).unwrap();
-        fs::create_dir(&snap).unwrap();
+        let elsewhere = s.ctx.db.with_file_name("copy.db");
+        fs::rename(&snap, &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &snap).unwrap();
         assert!(matches!(finish(&s.ctx, j), Err(Unfinished::Failed(_))));
         assert_eq!(current(&s.ctx.bin).unwrap().unwrap().steps_done, 3);
+        assert!(fs::symlink_metadata(&s.ctx.db).unwrap().is_file());
     }
 
     #[test]
@@ -755,5 +806,25 @@ mod tests {
         assert!(matches!(finish(&s.ctx, j), Err(Unfinished::Failed(_))));
         assert_eq!(current(&s.ctx.bin).unwrap().unwrap().steps_done, 5);
         assert_eq!(fs::read(s.ctx.bin.path("skipped")).unwrap(), b"[{");
+    }
+
+    /// A migration nothing recorded (no marker) still can't strand the
+    /// image: a store past the schema this build reads is never rolled
+    /// back to it. Back to another overlay, it isn't this build's call.
+    #[test]
+    fn a_store_past_this_builds_schema_is_never_rolled_back_to_the_image() {
+        let s = setup();
+        let v = Version::parse("0.9.0").unwrap();
+        fs::remove_file(s.ctx.bin.overlay(&v).join("migration.json")).unwrap();
+        let latest = lodestar_store::latest_schema_version();
+        let conn = lodestar_store::rusqlite::Connection::open(&s.ctx.db).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+            [latest + 1],
+        )
+        .unwrap();
+        drop(conn);
+        assert_refused(&s, begin(&s.ctx, "0.9.0", "image", "failed", None, None, 1));
+        assert!(begin(&s.ctx, "0.9.0", "0.8.0", "failed", None, None, 1).is_ok());
     }
 }

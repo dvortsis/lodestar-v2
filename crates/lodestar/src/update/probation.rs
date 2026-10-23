@@ -101,6 +101,7 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
     match fault {
         Some("crash") => std::process::exit(1),
         Some("hang") => hang(),
+        Some("ignoreterm") => ignore_term(),
         Some("orphan") => {
             // A grandchild left behind for the supervisor to reap.
             let _ = std::process::Command::new("sh")
@@ -132,6 +133,22 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
     Ok(CHILD.get_or_init(|| child))
 }
 
+/// Catches SIGTERM and never acts on it, then hangs: the supervisor has
+/// to escalate.
+fn ignore_term() -> ! {
+    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        let caught = rt.block_on(async {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        });
+        std::mem::forget(caught);
+        std::mem::forget(rt);
+    }
+    hang()
+}
+
 fn hang() -> ! {
     loop {
         std::thread::sleep(Duration::from_secs(3600));
@@ -156,9 +173,20 @@ impl Child {
     /// the snapshots that exist before it) and beat while it runs. If the
     /// record can't be made, nothing migrates: an error.
     fn mark_migrating(&self, fault: Option<&str>) -> std::io::Result<()> {
-        let from = util::open_read_only(&self.db)
-            .ok()
-            .and_then(|c| util::schema_version(&c).ok());
+        // No store yet: it's created at the latest schema, nothing to
+        // migrate. One whose schema can't be read may need migrating, so
+        // nothing starts unrecorded.
+        let from = match std::fs::symlink_metadata(&self.db) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            _ => {
+                let conn = util::open_read_only(&self.db).map_err(|e| {
+                    std::io::Error::other(format!("reading the store's schema: {e}"))
+                })?;
+                Some(util::schema_version(&conn).map_err(|e| {
+                    std::io::Error::other(format!("reading the store's schema: {e}"))
+                })?)
+            }
+        };
         let to = lodestar_store::latest_schema_version();
         let forced =
             fault.is_some_and(|f| f == "stall" || f == "unrecorded" || f.starts_with("migrate="));
@@ -253,7 +281,7 @@ impl Child {
         let fault = super::testing::child_fault(&self.version);
         if fault == Some("restart") {
             tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
                 crate::system::Restart::global().request();
             });
         }
@@ -263,8 +291,11 @@ impl Child {
                 crate::system::Restart::global().request();
             }
             if fault == Some("rollback") {
-                control::set_intent(control::Action::Rollback, None, None);
-                crate::system::Restart::global().request();
+                tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    control::set_intent(control::Action::Rollback, None, None);
+                    crate::system::Restart::global().request();
+                });
             }
             return;
         }
