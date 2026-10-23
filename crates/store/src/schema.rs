@@ -535,6 +535,11 @@ CREATE INDEX query_log_at ON query_log (at);
 ALTER TABLE torrent_parsed ADD COLUMN resolved_at INTEGER;
 CREATE INDEX torrent_parsed_resolved ON torrent_parsed (resolved_at, torrent_id)
     WHERE resolved_at IS NOT NULL;
+
+-- Releasing a rule's holds finds them by rule (§20.7), which scanned
+-- both tables once per rule.
+CREATE INDEX quarantine_rule ON quarantine (rule);
+CREATE INDEX tombstones_rule ON tombstones (rule);
 ";
 
 /// How long a connection waits for a lock another connection holds.
@@ -890,6 +895,23 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(strict, 1, "{table} is STRICT");
+        }
+        // Releasing a rule's holds finds them by index, not a scan.
+        for (table, index) in [
+            ("quarantine", "quarantine_rule"),
+            ("tombstones", "tombstones_rule"),
+        ] {
+            let plan: Vec<String> = conn
+                .prepare(&format!(
+                    "EXPLAIN QUERY PLAN SELECT hash FROM {table} WHERE rule IN ('a', 'b') LIMIT 10"
+                ))
+                .unwrap()
+                .query_map([], |r| r.get(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            let plan = plan.join(" | ");
+            assert!(plan.contains(index), "{table}: {plan}");
         }
     }
 
