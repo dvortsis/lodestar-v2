@@ -78,8 +78,9 @@ export default [
 	// Mono loads lazily and is never preloaded (§10.1).
 	entry('Mono font (lazy)', monoFonts, '25 KB'),
 	// Route budgets (runner decision, owner's §10.1 headroom rules): each route's own JS + CSS.
-	// Measured 22.7 KB with its lazy chunks: the screen, both layouts, labels and formatters.
-	entry('Compare route (own JS + CSS)', own('/compare'), '25 KB'),
+	// Measured 25.96 KB with its lazy chunks (the screen, both layouts, labels, formatters, and the
+	// Svelte runtime only this route uses since #132 moved it out of /search's first load).
+	entry('Compare route (own JS + CSS)', own('/compare'), '28 KB'),
 	entry('Discover route (own JS + CSS)', own('/discover'), '15 KB'),
 	entry('Alerts route (own JS + CSS)', own('/alerts'), '15 KB'),
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]'), '15 KB')
