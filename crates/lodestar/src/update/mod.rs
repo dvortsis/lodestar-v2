@@ -13,15 +13,17 @@
 //! codes and the request file in [`control`]; probation's accounting in
 //! [`pending`]; the rollback steps in [`journal`].
 //!
-//! Off Unix only [`log_events`] and [`window`] (the settings section's
-//! check) compile: the log catalogue (and its golden) is the same
-//! everywhere, and Windows checks and installs with E-M6's helper.
+//! Off Unix only [`log_events`], [`window`] (the settings section's
+//! check) and [`unavailable`] compile: the log catalogue (and its golden)
+//! is the same everywhere, and Windows checks and installs with E-M6's
+//! helper, so `/updates` answers `unavailable` there.
 
 #[cfg(unix)]
-#[allow(dead_code)] // The update engine's (part 4).
 pub mod check;
 #[cfg(unix)]
 pub mod control;
+#[cfg(unix)]
+pub mod engine;
 #[cfg(unix)]
 pub mod history;
 #[cfg(unix)]
@@ -34,7 +36,6 @@ pub mod overlay;
 #[cfg(unix)]
 pub mod pending;
 #[cfg(unix)]
-#[allow(dead_code)] // The update engine's (part 4).
 pub mod policy;
 #[cfg(unix)]
 pub mod probation;
@@ -43,9 +44,8 @@ pub mod supervisor;
 #[cfg(unix)]
 pub mod testing;
 #[cfg(unix)]
-#[allow(dead_code)] // The update engine's (part 4).
 pub mod trust_file;
-#[allow(dead_code)] // The update engine's (part 4); `Window::parse` checks settings now.
+pub mod unavailable;
 pub mod window;
 
 #[cfg(unix)]
@@ -78,4 +78,77 @@ pub fn trust_root() -> Result<Embedded, lodestar_update::Error> {
         freshness: key(&t.freshness)?,
         statements: t.statements.clone(),
     })
+}
+
+/// The update engine as the server starts it: what `/updates` answers
+/// with, `/system`'s Updates row, and the scheduler to stop.
+pub struct Started {
+    pub api: std::sync::Arc<dyn lodestar_api::updates::UpdatesApi>,
+    pub row: Option<crate::system::UpdatesRow>,
+    pub task: Option<(
+        tokio::sync::watch::Sender<bool>,
+        tokio::task::JoinHandle<()>,
+    )>,
+}
+
+/// Starts the engine, except for a fixture (served offline: nothing is
+/// checked) and off Unix (Windows installs through E-M6's helper).
+pub fn start(
+    config: &crate::config::Config,
+    settings: &crate::settings::Registry,
+    events: &std::sync::Arc<lodestar_api::events::EventHub>,
+) -> Started {
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let unavailable = |why: &'static str| Started {
+        api: std::sync::Arc::new(unavailable::Unavailable {
+            why,
+            version: version.clone(),
+        }),
+        row: None,
+        task: None,
+    };
+    if crate::fixture::active() {
+        return unavailable("fixture");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (config, settings, events);
+        unavailable("windows_helper")
+    }
+    #[cfg(unix)]
+    {
+        let Ok(fetch) = check::Guarded::new() else {
+            return unavailable("network");
+        };
+        let child = probation::current();
+        let hint = child.and_then(|c| c.hint.as_ref());
+        let running = child
+            .and_then(|c| layout::parse_version(&c.version))
+            .unwrap_or_else(build_version);
+        let ctx = engine::Context {
+            data_dir: config.data_dir.clone(),
+            running,
+            image: hint
+                .and_then(|h| layout::parse_version(&h.image_version))
+                .unwrap_or_else(build_version),
+            supervised: child.is_some_and(|c| c.supervised),
+            notices: hint.map(|h| h.notices.clone()).unwrap_or_default(),
+            repository: env!("CARGO_PKG_REPOSITORY").to_string(),
+        };
+        let engine = engine::Engine::new(
+            ctx,
+            settings.subscribe(),
+            Some(events.clone()),
+            std::sync::Arc::new(fetch),
+        );
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let task = engine.spawn(stopped);
+        let row_engine = engine.clone();
+        let row: crate::system::UpdatesRow = std::sync::Arc::new(move || row_engine.summary());
+        Started {
+            api: std::sync::Arc::new(engine),
+            row: Some(row),
+            task: Some((stop, task)),
+        }
+    }
 }

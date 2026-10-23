@@ -26,16 +26,20 @@ pub enum Topic {
     Insights,
     /// A settings section was saved ([`SettingsEvent`]).
     Settings,
+    /// The update engine's state changed ([`UpdatesEvent`]). Last, so
+    /// the other topics keep their bits.
+    Updates,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 6] = [
+    pub const ALL: [Topic; 7] = [
         Topic::Torrents,
         Topic::Crawler,
         Topic::Rebuild,
         Topic::Alerts,
         Topic::Insights,
         Topic::Settings,
+        Topic::Updates,
     ];
 
     /// The name in `?topics=` and in the frame's `event:` line.
@@ -47,6 +51,7 @@ impl Topic {
             Topic::Alerts => "alerts",
             Topic::Insights => "insights",
             Topic::Settings => "settings",
+            Topic::Updates => "updates",
         }
     }
 
@@ -215,6 +220,42 @@ pub struct SettingsEvent {
     pub section: String,
 }
 
+/// Where the update engine is (§12.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdatesState {
+    Checking,
+    Available,
+    Downloading,
+    Verifying,
+    WaitingWindow,
+    Installing,
+    Restarting,
+    CheckingHealth,
+    Done,
+    RolledBack,
+    Failed,
+}
+
+/// `event: updates`: the update engine's state changed. Progress
+/// (`bytes_done`) is sent at most once a second; fetch `GET /updates`
+/// for the rest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "state": "available", "version": "0.6.0", "bytes_done": null, "bytes_total": null, "error": null }))]
+pub struct UpdatesEvent {
+    pub state: UpdatesState,
+    /// The release it concerns, when there is one.
+    #[schema(required = true)]
+    pub version: Option<String>,
+    #[schema(required = true)]
+    pub bytes_done: Option<u64>,
+    #[schema(required = true)]
+    pub bytes_total: Option<u64>,
+    /// A stable error code with `failed`.
+    #[schema(required = true)]
+    pub error: Option<String>,
+}
+
 /// Why a `resync` was sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -252,6 +293,7 @@ pub enum Event {
     Alerts(AlertsEvent),
     Insights(InsightsEvent),
     Settings(SettingsEvent),
+    Updates(UpdatesEvent),
     Resync(ResyncEvent),
 }
 
@@ -266,6 +308,7 @@ impl Event {
             Event::Alerts(_) => Topic::Alerts,
             Event::Insights(_) => Topic::Insights,
             Event::Settings(_) => Topic::Settings,
+            Event::Updates(_) => Topic::Updates,
             Event::Resync(_) => return None,
         })
     }
@@ -284,6 +327,7 @@ impl Event {
             Event::Alerts(e) => serde_json::to_string(e),
             Event::Insights(e) => serde_json::to_string(e),
             Event::Settings(e) => serde_json::to_string(e),
+            Event::Updates(e) => serde_json::to_string(e),
             Event::Resync(e) => serde_json::to_string(e),
         };
         v.expect("event payloads serialize")

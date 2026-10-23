@@ -49,6 +49,7 @@ mod suggest;
 mod swarm;
 pub mod system;
 mod torrents;
+pub mod updates;
 mod user_items;
 
 use std::sync::{Arc, Mutex};
@@ -116,6 +117,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(saved::routes())
         .merge(jobs::routes())
         .merge(system::routes())
+        .merge(updates::routes())
         .merge(alerts::routes())
         .merge(logs::routes())
         .merge(openapi::routes())

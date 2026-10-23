@@ -35,6 +35,7 @@ pub mod settings;
 pub mod suggest;
 pub mod system;
 pub mod torrents;
+pub mod updates;
 pub mod user_items;
 
 /// What a secret (a password, the setup token) shows as in `Debug`

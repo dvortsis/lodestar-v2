@@ -49,6 +49,8 @@ pub struct Services {
     listener: TcpListener,
     /// `/system` (B2c), layered beside the hub.
     system: Arc<dyn lodestar_api::system::SystemApi>,
+    /// `/updates` (B-update), beside `/system`.
+    updates: Arc<dyn lodestar_api::updates::UpdatesApi>,
 }
 
 /// What has to be stopped on the way out.
@@ -65,6 +67,8 @@ pub struct Handles {
     insights: (watch::Sender<bool>, JoinHandle<()>),
     /// Saved searches → alerts (B9), while search is on.
     percolator: Option<(watch::Sender<bool>, JoinHandle<()>)>,
+    /// The update engine's scheduled checks (B-update).
+    updates: Option<(watch::Sender<bool>, JoinHandle<()>)>,
 }
 
 impl Services {
@@ -425,7 +429,17 @@ impl Services {
         let (listener, bound) =
             system::address::bind(address, config, &control, &system::address::SystemClock).await?;
         let served = bound.serving;
-        let system = system::System::start(config, bound, &api, &settings, control, &events);
+        // The update engine (B-update): none for a fixture.
+        let updates = crate::update::start(config, &settings, &events);
+        let system = system::System::start(
+            config,
+            bound,
+            &api,
+            &settings,
+            control,
+            &events,
+            updates.row.clone(),
+        );
         tracing::info!(
             "UI on {}, status page on /status (data in {})",
             ops::ui_address(served),
@@ -444,9 +458,11 @@ impl Services {
                 hot_dir,
                 insights: (stop_insights, recorder),
                 percolator,
+                updates: updates.task,
             },
             listener,
             system,
+            updates: updates.api,
         })
     }
 
@@ -481,6 +497,7 @@ impl Services {
             handles,
             listener,
             system,
+            updates,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -492,6 +509,7 @@ impl Services {
             .layer(Extension(jobs.clone()))
             .layer(Extension(export_adult))
             .layer(Extension(system))
+            .layer(Extension(updates))
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
         // and closing the jobs ends open exports, so the graceful
@@ -517,6 +535,13 @@ impl Handles {
     /// batch), then the indexer, then the percolator.
     pub async fn shutdown(self) -> Result<(), BoxError> {
         tracing::info!("shutting down: saving the queue and DHT state");
+        // A check under way is abandoned: it writes only after it's
+        // verified, by rename, so nothing is left half-written.
+        if let Some((stop, task)) = self.updates {
+            let _ = stop.send(true);
+            task.abort();
+            let _ = task.await;
+        }
         let (stop, refresher) = self.subscriptions;
         let _ = stop.send(true);
         let _ = refresher.await;
