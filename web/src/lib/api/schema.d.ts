@@ -1930,7 +1930,7 @@ export interface components {
          * @description Why a `resync` was sent.
          * @enum {string}
          */
-        ResyncReason: "restarted" | "expired" | "malformed" | "lagged";
+        ResyncReason: "restarted" | "expired" | "malformed" | "lagged" | "visibility";
         /** @description One of your rules. */
         RuleEntry: {
             /** @description Null for an action code this server doesn't know. */
@@ -2681,10 +2681,13 @@ export interface components {
             added: number;
             /**
              * Format: int64
-             * @description The highest torrent id searchable now, of any class: searches
-             *     still apply the Adult visibility.
+             * @description The highest torrent id searchable now, while Adult is shown.
+             *     **Null while Adult is hidden:** ids are sequential, so any real id
+             *     sent beside an exact `added` would show, in its gap from the last
+             *     one, how many hidden torrents arrived. To find what's new, use the
+             *     newest id among your own results (or a cursor), not this.
              */
-            max_id: number;
+            max_id: number | null;
         };
         /**
          * @description Why a section isn't available. Stable keys; the UI words them.
