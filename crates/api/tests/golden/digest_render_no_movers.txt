@@ -1,0 +1,66 @@
+subject: Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026
+generated_at: 1792677900
+
+=== text (806 bytes) ===
+Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026
+
+Period: Oct 15, 2026, 15:00 – Oct 22, 2026, 15:00 UTC; generated Oct 22, 2026, 14:05 UTC
+
+Key numbers (changes vs previous 7 days)
+- Searchable torrents: 84,210; change ▲ +1,240
+- New searchable: 1,240; change ▼ −3
+- Yield: 37.4%; change ▼ −3.2%
+- Time to searchable: ≈ 12 min (p50), ≈ 5.2 hr (p95); change p50 ▼ −45 sec, p95 ▲ +5.2 hr
+- Health: Running
+
+Funnel (168 cohorts, 96 final)
+- Harvested: ≈ 10,234
+- Peer found: 7,982 (78.0% of harvested)
+- Metadata fetched: 4,989 (62.5% of peer found)
+- Stored: 4,889 (98.0% of metadata fetched)
+- Searchable: 4,887 (>99.9% of stored)
+Biggest losses: No peers 50%, Timed out 30%, Refused 10%
+
+Needs attention
+Nothing needs attention.
+
+Open Insights: /insights?range=7d&compare=1
+
+=== html (1733 bytes) ===
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026</title>
+</head>
+<body>
+<h1>Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026</h1>
+<p>Period: Oct 15, 2026, 15:00 – Oct 22, 2026, 15:00 UTC; generated Oct 22, 2026, 14:05 UTC</p>
+<h2>Key numbers</h2>
+<table>
+<thead>
+<tr><th scope="col">Metric</th><th scope="col">Value</th><th scope="col">Change vs previous 7 days</th></tr>
+</thead>
+<tbody>
+<tr><th scope="row">Searchable torrents</th><td style="text-align:right">84,210</td><td><span aria-hidden="true">▲</span> +1,240</td></tr>
+<tr><th scope="row">New searchable</th><td style="text-align:right">1,240</td><td><span aria-hidden="true">▼</span> −3</td></tr>
+<tr><th scope="row">Yield</th><td style="text-align:right">37.4%</td><td><span aria-hidden="true">▼</span> −3.2%</td></tr>
+<tr><th scope="row">Time to searchable</th><td style="text-align:right">≈ 12 min (p50), ≈ 5.2 hr (p95)</td><td>p50 <span aria-hidden="true">▼</span> −45 sec, p95 <span aria-hidden="true">▲</span> +5.2 hr</td></tr>
+<tr><th scope="row">Health</th><td style="text-align:right">Running</td><td></td></tr>
+</tbody>
+</table>
+<h2>Funnel</h2>
+<p>168 cohorts, 96 final</p>
+<ul>
+<li>Harvested: ≈ 10,234</li>
+<li>Peer found: 7,982 (78.0% of harvested)</li>
+<li>Metadata fetched: 4,989 (62.5% of peer found)</li>
+<li>Stored: 4,889 (98.0% of metadata fetched)</li>
+<li>Searchable: 4,887 (&gt;99.9% of stored)</li>
+</ul>
+<p>Biggest losses: No peers 50%, Timed out 30%, Refused 10%</p>
+<h2>Needs attention</h2>
+<p>Nothing needs attention.</p>
+<p>Open Insights: <a href="/insights?range=7d&amp;compare=1">/insights?range=7d&amp;compare=1</a></p>
+</body>
+</html>

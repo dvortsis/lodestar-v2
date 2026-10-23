@@ -12,6 +12,8 @@
 		trigger?: Snippet<[{ props: Record<string, unknown> }]>;
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
+		/** Where focus starts on open (e.g. Cancel, §10.10.7); default: the first focusable element. */
+		initialFocus?: () => HTMLElement | null | undefined;
 	}
 	let { open = $bindable(false), ...rest }: Props = $props();
 </script>
