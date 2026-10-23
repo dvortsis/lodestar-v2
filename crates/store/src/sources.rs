@@ -102,7 +102,7 @@ impl Store {
     /// Returns `plugin`'s id, registering it as enabled on first sight, and
     /// records the running version.
     pub fn register_source(&mut self, plugin: &str, version: &str, now: i64) -> Result<SourceId> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let existing: Option<i64> = tx
             .query_row("SELECT id FROM sources WHERE plugin = ?1", [plugin], |r| {
                 r.get(0)
