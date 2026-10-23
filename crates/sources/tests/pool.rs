@@ -460,3 +460,70 @@ async fn late_peer_replies_are_ignored() {
     assert_eq!(h.funnel.total(Stage::Harvested, None), 1);
     h.stop().await;
 }
+
+/// The crawler's pause: nothing new starts, nothing queued is lost, and
+/// resuming picks up where it stopped. A fetch already out finishes.
+#[tokio::test(start_paused = true)]
+async fn a_paused_pool_starts_nothing_and_loses_nothing() {
+    let mut h = Harness::start(config(), &[], vec![]);
+    h.script(peer(1, 1), 5_000, Ok(()));
+    h.send(found(0, 1, vec![peer(1, 1)]));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.fake.started.lock().unwrap().len(), 1);
+    h.handle.set_paused(true).await;
+    // Pausing twice is the same as once.
+    h.handle.set_paused(true).await;
+    h.send(found(0, 2, vec![peer(2, 1)]));
+    h.send(found(0, 3, vec![]));
+    // Far past every lookup wait and back-off: still queued, not lost.
+    sleep(Duration::from_secs(3_600)).await;
+    assert_eq!(h.fake.started.lock().unwrap().len(), 1, "no new fetch");
+    assert!(h.drain_lookups().is_empty(), "no new lookup");
+    let first = h.out.recv().await.unwrap();
+    assert_eq!(first.key, key(1), "the fetch in flight finished");
+    let lost: u64 = h
+        .handle
+        .stats()
+        .lost
+        .iter()
+        .map(|n| n.load(Ordering::Relaxed))
+        .sum();
+    assert_eq!(lost, 0);
+    assert_eq!(h.handle.stats().pending.load(Ordering::Relaxed), 2);
+
+    h.handle.set_paused(false).await;
+    let second = h.out.recv().await.unwrap();
+    assert_eq!(second.key, key(2));
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.drain_lookups(), vec![key(3)], "the held lookup goes out");
+    let queue = h.stop().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].attempts, 0, "waiting used no attempt");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pool_can_start_paused() {
+    let restore = vec![QueuedKey {
+        info_hash: key(9),
+        source: src(0),
+        cohort: COHORT,
+        strategy: 0,
+        priority: 0,
+        attempts: 0,
+        private_source: false,
+    }];
+    let mut h = Harness::start(
+        PoolConfig {
+            paused: true,
+            ..config()
+        },
+        &[],
+        restore,
+    );
+    sleep(Duration::from_secs(60)).await;
+    assert!(h.drain_lookups().is_empty());
+    h.handle.set_paused(false).await;
+    sleep(Duration::from_millis(10)).await;
+    assert_eq!(h.drain_lookups(), vec![key(9)]);
+    h.stop().await;
+}
