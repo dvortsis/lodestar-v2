@@ -1332,7 +1332,7 @@
   "106-broadcast": "DONE 02:55",
   "107": "01:41 MERGED 16b6a83.",
   "sweep": "02:07 sweep: nothing fully complete yet; background CI waiter running for 79,101,97,88,105,106.",
-  "heartbeat": "03:39 heartbeat: 8 approved PRs waiting on CI queue (89,108,100,88,109,111,113; 92 in progress). No new PRs. No ready slices.",
+  "heartbeat": "04:39 heartbeat: no ready slices. W9 is the critical path (unblocks S-search-1, S-detail, S-compare, S-discover, M-filters-dialogs, S-keys); blocked on owner (app.html permission or LCP budget). B2b green-pending unblocks B2c, B-log1.",
   "launch_template": "From now on, launch prompts use runner/README.md standing instructions (steward skill, message runner_session).",
   "106-adoption": "03:20 check: every in-flight slice branch contains d243361 except #48 (M4). M4 session is blocked in plan mode waiting on owner ExitPlanMode approval (owner notified). No PR merged by any session since 02:55; filter session merged nothing.",
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description.",
