@@ -3,6 +3,8 @@
 	import DataTableAlternative from '$lib/charts/DataTableAlternative.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { formatCount } from '$lib/format';
 	import Cell from './Cell.svelte';
 	import ColumnActions from './ColumnActions.svelte';
 	import Differs from './Differs.svelte';
@@ -22,7 +24,9 @@
 
 <div class="cmp-scroll">
 	<table class="cmp-grid" data-testid="compare-table">
-		<caption class="sr-only">{m.compare_caption({ count: ts.length })}</caption>
+		<caption class="sr-only"
+			>{m.compare_caption({ count: formatCount(ts.length, currentLocale()) })}</caption
+		>
 		<thead>
 			<tr>
 				<th scope="col"><span class="sr-only">{m.compare_attribute()}</span></th>
