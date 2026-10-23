@@ -11,8 +11,10 @@ for (const route of ROUTES) {
 	test(`keyboard: first Tab on ${route.name} lands on a visibly focused control`, async ({
 		page,
 		go,
-		kbd
+		kbd,
+		mock
 	}) => {
+		route.mock?.(mock);
 		await go(route.path);
 		// The app mounts after load; the skip link is the first thing it renders.
 		await page.getByRole('link', { name: 'Skip to main content' }).waitFor();
