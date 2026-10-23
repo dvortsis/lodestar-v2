@@ -35,8 +35,8 @@ describe('Composition', () => {
 			'572 MiB',
 			'2.00 KiB'
 		]);
-		expect(items[0]!.textContent).toContain('Video, 2 files');
-		expect(items[1]!.textContent).toContain('Audio, 9 files');
+		expect(items[0]!.textContent).toContain('Video · 2');
+		expect(items[1]!.textContent).toContain('Audio · 9');
 		expect(within(items[0]!).getByTestId('detail-groups-share').textContent).toBe('82%');
 		const fills = [...container.querySelectorAll<HTMLElement>('ul li [style*="width"]')];
 		expect(fills.map((f) => f.style.backgroundColor)).toEqual([
@@ -48,7 +48,7 @@ describe('Composition', () => {
 
 	it('maps an unknown group to Other rather than dropping it', () => {
 		render(Composition, { composition: [share('holograms', 10, 100)] });
-		expect(screen.getByTestId('detail-groups-item').textContent).toContain('Other, 1 files');
+		expect(screen.getByTestId('detail-groups-item').textContent).toContain('Other · 1');
 	});
 
 	it('says so in one line when there is nothing to show (padding only)', () => {
