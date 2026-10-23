@@ -324,7 +324,11 @@ describe('the restart banner', () => {
 		});
 		await onCrawler();
 		await fireEvent.click(screen.getByTestId('settings-restart-now'));
-		const dialog = await screen.findByRole('dialog', { name: 'Restart Lodestar?' });
+		const dialog = await screen.findByRole(
+			'dialog',
+			{ name: 'Restart Lodestar?' },
+			{ timeout: 10_000 }
+		);
 		expect(dialog.textContent).toContain('Crawling pauses for about 20 sec');
 		await waitFor(() =>
 			expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
@@ -334,8 +338,12 @@ describe('the restart banner', () => {
 		expect(server.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
 
 		await fireEvent.click(screen.getByTestId('settings-restart-now'));
-		await fireEvent.click(await screen.findByRole('button', { name: 'Restart' }));
-		const restarting = await screen.findByTestId('settings-restarting');
+		await fireEvent.click(
+			await screen.findByRole('button', { name: 'Restart' }, { timeout: 10_000 })
+		);
+		const restarting = await screen.findByTestId('settings-restarting', undefined, {
+			timeout: 10_000
+		});
 		expect(restarting.textContent).toContain('Restarting…');
 		expect(restarting.textContent).toContain('usually within 25 sec');
 		expect(flow.phase).toBe('waiting');

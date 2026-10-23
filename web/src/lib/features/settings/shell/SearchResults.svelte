@@ -53,6 +53,7 @@
 	<div class="search-none" data-testid="settings-search-none">
 		<p>{m.settings_ui_search_none({ query })}</p>
 		{#if guideUrl}
+			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external page, opened in a new tab -->
 			<a href={guideUrl} target="_blank" rel="noopener noreferrer">{m.settings_ui_search_guide()}</a
 			>
 		{/if}

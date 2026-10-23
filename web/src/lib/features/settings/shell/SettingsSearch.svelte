@@ -6,6 +6,7 @@
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { Component } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import type { SectionValues } from '../form/types';
 	import type { Hit, SearchIndex } from './search';
 	import { useSettings } from './state.svelte';
@@ -47,7 +48,7 @@
 	}
 
 	/** Saved values for the sections the hits are in: each fetched once while the box is open. */
-	const asked = new Set<string>();
+	const asked = new SvelteSet<string>();
 	async function fetchValues(list: Hit[]) {
 		for (const section of new Set(
 			list.flatMap((h) => (h.item.spec ? [h.item.spec.section] : []))
