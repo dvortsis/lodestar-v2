@@ -1,7 +1,9 @@
 <script lang="ts">
 	// A control that loads on demand (`controls.svelte.ts`). Until it arrives, a hidden box of
 	// the height it renders at when empty holds its place, so nothing below moves.
+	import { m } from '$lib/paraglide/messages.js';
 	import {
+		controlFailed,
 		controlOf,
 		loadControl,
 		type LazyControlProps,
@@ -22,6 +24,8 @@
 
 {#if Loaded}
 	<Loaded {...props} />
+{:else if controlFailed(widget)}
+	<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
 {:else if widget === 'json'}
 	<!-- The JSON fallback's own textarea, four rows of Mono. -->
 	<textarea

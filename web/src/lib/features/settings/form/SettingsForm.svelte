@@ -43,6 +43,7 @@
 
 	let summaryShown = $state(false);
 	let summaryFocus = $state(0);
+	let summaryFocused = $state(0);
 	let bypass = false;
 
 	const barShown = $derived(
@@ -65,6 +66,8 @@
 	$effect(() => BarPart.want(barShown));
 	$effect(() => SummaryPart.want(summaryShown));
 	$effect(() => NoticePart.want(notice));
+	// The edit chunk didn't load: nothing more can be saved from this page until a reload.
+	const partFailed = $derived(BarPart.failed || SummaryPart.failed || NoticePart.failed);
 
 	// After the first view, while the browser is idle: the edit chunk (and instant mode), so the
 	// first edit finds it in place, even if the connection drops meanwhile.
@@ -202,7 +205,15 @@
 
 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
 	async function confirmLeave(to: URL, unload: boolean) {
-		const answer = await (await edit()).askLeave(count, asking.signal);
+		let parts: Awaited<ReturnType<typeof edit>>;
+		try {
+			parts = await edit();
+		} catch {
+			// The dialog can't load: leave as a full page load, so the browser's own prompt asks.
+			hardNavigate(to.href);
+			return;
+		}
+		const answer = await parts.askLeave(count, asking.signal);
 		if (answer === 'save') {
 			// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
 			const r = await save();
@@ -233,7 +244,13 @@
 	{onfocusin}
 >
 	{#if summaryShown && form.errors.length && SummaryPart.part}
-		<SummaryPart.part {form} focusId={summaryFocus} {onReveal} />
+		<SummaryPart.part
+			{form}
+			focusId={summaryFocus}
+			focused={summaryFocused}
+			onfocused={(id: number) => (summaryFocused = id)}
+			{onReveal}
+		/>
 	{/if}
 
 	{#if form.draft}
@@ -252,6 +269,15 @@
 						>{m.settings_form_restore()}</Button
 					>
 				</div>
+			{/snippet}
+		</Banner>
+	{/if}
+
+	{#if partFailed}
+		<Banner kind="warning">
+			<span data-testid="part-failed">{m.settings_form_chunk_failed()}</span>
+			{#snippet action()}
+				<Button dense onclick={() => location.reload()}>{m.settings_form_reload()}</Button>
 			{/snippet}
 		</Banner>
 	{/if}

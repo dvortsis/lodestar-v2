@@ -12,8 +12,7 @@
 /* eslint-disable svelte/prefer-svelte-reactivity */
 import { ApiError, isAbort, latest } from '$lib/api/client';
 import { m } from '$lib/paraglide/messages.js';
-import type { Draft } from './draft';
-import { hasDraft } from './draft-store';
+import { draftOf, hasDraft, writeDraft, type Draft } from './draft-store';
 import type { Instant } from './instant';
 import { getSection, type Batch } from './requests';
 import { devWarn, loadSettingsIndex } from './schema';
@@ -345,8 +344,9 @@ export class Engine {
 		const next = stage(s, name, value, spec, this.sending.has(key));
 		if (next === s) return;
 		this.setSection(next);
-		// A server error no longer applies once the value changes; a client one is re-checked
-		// (an error came from the save pipeline, so it has loaded).
+		// A server error no longer applies once the value changes; a client one is re-checked.
+		// Errors come from the save pipeline, so it has loaded, except instant mode's "couldn't
+		// load", which stays until a change gets through.
 		if (this.fieldErrors[key] !== undefined) savingMod?.recheck(this, key);
 		if (this.previewErrors[key] !== undefined) {
 			this.previewErrors = without(this.previewErrors, key);
@@ -375,9 +375,7 @@ export class Engine {
 		this.draftTimer = undefined;
 		// An offered draft isn't overwritten before the user restores or discards it.
 		if (!this.useDrafts || this.draftOffer || this.status === 'loading') return;
-		if (savingMod) savingMod.writeDraft(this);
-		// Not loaded: nothing was edited yet, unless the load is still on its way.
-		else if (this.dirtyKeys().length) void loadSaving().then(() => this.writeNow(), ignore);
+		writeDraft(this.id, draftOf(this.sections, this.specOf, Date.now()));
 	}
 
 	scheduleDraft() {
@@ -414,7 +412,9 @@ export class Engine {
 			return;
 		}
 		this.instantMode().then(
-			(i) => i.schedule(spec),
+			(i) => {
+				if (!this.destroyed) i.schedule(spec);
+			},
 			() => {
 				// Its code didn't load: put the old value back, as a failed send does.
 				const s = this.sec(spec.section);

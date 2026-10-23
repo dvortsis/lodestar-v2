@@ -6,81 +6,26 @@
 //     revision, base: { field: value }, mine: { field: value }, reset: [field] } } }
 //
 // A reset has no value, so it's listed in `reset` (with its base) rather than in `mine`.
-import { clearDraft, DRAFT_PREFIX, storage } from './draft-store';
-import { merge } from './merge';
-import { devWarn } from './schema';
-import type { FieldSpec } from './types';
-import { JsonDraft, validate } from './validate';
+//
+// Writing one is in `draft-store.ts`, part of the first view so an edit is kept even when this
+// file can't load; reading and restoring one are here.
 import {
-	dirtyNames,
-	isLocked,
-	RESET,
-	type FieldModel,
-	type SectionState,
-	type Staged
-} from './values';
+	clearDraft,
+	draftOf,
+	DRAFT_MAX_BYTES,
+	DRAFT_PREFIX,
+	storage,
+	writeDraft,
+	type Draft,
+	type DraftSection,
+	type SpecOf
+} from './draft-store';
+import { merge } from './merge';
+import { validate } from './validate';
+import { isLocked, RESET, type FieldModel, type SectionState, type Staged } from './values';
 
-export { clearDraft, DRAFT_PREFIX };
-export const DRAFT_MAX_BYTES = 64 * 1024;
-
-export interface DraftSection {
-	revision: number;
-	base: Record<string, unknown>;
-	mine: Record<string, unknown>;
-	reset: string[];
-}
-export interface Draft {
-	v: 1;
-	at: number;
-	sections: Record<string, DraftSection>;
-}
-
-type SpecOf = (section: string, name: string) => FieldSpec | undefined;
-
-/** Only fields a draft may hold: dirty, not locked, not secret, known to the form. */
-export function draftOf(
-	sections: Record<string, SectionState>,
-	specOf: SpecOf,
-	at: number
-): Draft | null {
-	const out: Record<string, DraftSection> = {};
-	for (const [section, s] of Object.entries(sections)) {
-		for (const name of dirtyNames(s)) {
-			const f = s.fields[name]!;
-			const spec = specOf(section, name);
-			if (!spec || spec.writeOnly || spec.readOnly || isLocked(f.saved)) continue;
-			if (f.mine instanceof JsonDraft) continue; // half-typed JSON: nothing to restore
-			const d = (out[section] ??= { revision: s.revision, base: {}, mine: {}, reset: [] });
-			d.base[name] = f.base;
-			if (f.mine === RESET) d.reset.push(name);
-			else d.mine[name] = f.mine;
-		}
-	}
-	return Object.keys(out).length ? { v: 1, at, sections: out } : null;
-}
-
-/** Writes (or, with nothing to keep, removes) the draft. False when storage refused it. */
-export function writeDraft(id: string, draft: Draft | null): boolean {
-	const store = storage();
-	if (!store) return false;
-	try {
-		if (!draft) {
-			store.removeItem(DRAFT_PREFIX + id);
-			return true;
-		}
-		const text = JSON.stringify(draft);
-		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {
-			if (import.meta.env.DEV) devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
-			store.removeItem(DRAFT_PREFIX + id);
-			return false;
-		}
-		store.setItem(DRAFT_PREFIX + id, text);
-		return true;
-	} catch {
-		return false; // full (QuotaExceededError) or blocked
-	}
-}
-
+export { clearDraft, draftOf, DRAFT_MAX_BYTES, DRAFT_PREFIX, writeDraft };
+export type { Draft, DraftSection };
 const isObj = (v: unknown): v is Record<string, unknown> =>
 	typeof v === 'object' && v !== null && !Array.isArray(v);
 

@@ -1,6 +1,6 @@
 // Client validation from the schema (§10.10.5): type, integer, bounds, enum, the address
-// formats and time windows. The server has the final say; `log-filter` and `duration` are left to it and to
-// their widgets. Messages say what's wrong and what to do (§10.14).
+// formats and time windows. The server has the final say; `log-filter` and `duration` are left
+// to it and to their widgets. Messages say what's wrong and what to do (§10.14).
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';

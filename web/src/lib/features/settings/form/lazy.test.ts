@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DRAFT_PREFIX } from './draft-store';
 import type { SettingsForm } from './form.svelte';
-import { fakeServer, flush } from './testing/fake-server';
+import { fakeServer } from './testing/fake-server';
 import { spec, sv, values } from './testing/values';
 import type { FieldSpec } from './types';
 
@@ -30,7 +30,6 @@ const PREVIEWED = spec('crawler.max_sockets', { kind: 'integer', auto: 0, previe
 
 let server: ReturnType<typeof fakeServer>;
 const forms: SettingsForm[] = [];
-// Waits up to 10 s (the slowest CI runner); each test has 20.
 // Up to 10 s, for the slowest CI runner; each test gets 20.
 const until = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
 
@@ -70,7 +69,8 @@ describe('a staged section', { timeout: 20_000 }, () => {
 	it('loads none of them for its first view', async () => {
 		const form = await open();
 		form.field('crawler.intensity');
-		await flush(); // a chance to load what it shouldn't
+		// A cold import of its own takes as long as a stray load would: one started earlier is in.
+		await import('./copy');
 		expect(loaded()).toEqual([]);
 	});
 
