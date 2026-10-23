@@ -52,6 +52,7 @@ fn fixture(config: EventsConfig) -> Fixture {
                 filters: None,
                 settings: None,
                 ops: None,
+                user_data: None,
                 adult: Default::default(),
             }),
         )
@@ -492,6 +493,7 @@ async fn without_a_hub_it_is_unavailable() {
             filters: None,
             settings: None,
             ops: None,
+            user_data: None,
             adult: Default::default(),
         }),
     );
@@ -592,6 +594,7 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
                 filters: None,
                 settings: None,
                 ops: None,
+                user_data: None,
                 adult,
             }),
         )

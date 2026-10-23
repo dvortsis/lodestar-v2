@@ -23,6 +23,7 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+mod collections;
 mod compare;
 mod discover;
 pub mod dto;
@@ -33,10 +34,12 @@ mod facets;
 pub mod filters;
 pub mod openapi;
 pub mod ops;
+mod saved;
 mod search;
 pub mod settings;
 pub mod system;
 mod torrents;
+mod user_items;
 
 use std::sync::{Arc, Mutex};
 
@@ -64,6 +67,10 @@ pub struct ApiState {
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
     /// `None` when no pipeline runs (tests, tools).
     pub ops: Option<Arc<dyn ops::OpsApi>>,
+    /// A read-write connection for user data: saved searches, user
+    /// items, collections and API keys (§7, §12). `None` when not
+    /// served (tests, tools).
+    pub user_data: Option<Arc<Mutex<Store>>>,
     /// "Show adult content" (§20.9), followed live; hidden by default.
     pub adult: AdultVisibility,
 }
@@ -83,6 +90,9 @@ pub fn router(state: ApiState) -> Router {
         .merge(compare::routes())
         .merge(discover::routes())
         .merge(events::routes())
+        .merge(user_items::routes())
+        .merge(collections::routes())
+        .merge(saved::routes())
         .merge(system::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.

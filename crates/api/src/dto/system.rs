@@ -286,6 +286,7 @@ pub struct Diagnostics {
         "logging": null,
         "recent_errors": null
     },
+    "fixture": false,
     "host": { "arch": "x86_64", "cpus": 4, "memory_bytes": 8589934592u64, "os": "linux", "time_zone": "Europe/Berlin" },
     "repository": "https://github.com/dvortsis/lodestar-v2",
     "restart": { "available": true, "estimated_seconds": 4, "hint": null, "method": "reexec" },
@@ -307,6 +308,9 @@ pub struct SystemInfo {
     pub data_formats: DataFormats,
     pub deployment: Deployment,
     pub diagnostics: Diagnostics,
+    /// Serving a fixture's test data (`lodestar serve --fixture`), not a
+    /// real install.
+    pub fixture: bool,
     pub host: HostInfo,
     /// The source repository (`Cargo.toml`'s `repository`), so a fork
     /// links to itself.

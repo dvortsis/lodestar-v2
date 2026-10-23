@@ -118,6 +118,7 @@ fn info(method: RestartMethod, address: Option<AddressChange>) -> SystemInfo {
             logging: None,
             recent_errors: None,
         },
+        fixture: false,
         host: HostInfo {
             arch: "x86_64".into(),
             cpus: Some(4),
@@ -209,6 +210,7 @@ fn fixture_with(method: Option<RestartMethod>) -> Fixture {
         filters: None,
         settings: None,
         ops: None,
+        user_data: None,
         adult: Default::default(),
     });
     let system = method.map(|method| {
@@ -438,6 +440,7 @@ fn the_contract_is_in_the_document() {
         "data_formats",
         "deployment",
         "diagnostics",
+        "fixture",
         "host",
         "repository",
         "restart",

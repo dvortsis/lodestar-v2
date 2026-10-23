@@ -87,6 +87,7 @@ fn fixture() -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            user_data: None,
             adult: Default::default(),
         }),
     );
@@ -336,6 +337,22 @@ async fn errors_share_one_envelope() {
         get("/api/v1/settings", None),
         get("/api/v1/settings/crawler", None),
         get("/api/v1/settings/nope", None),
+        get("/api/v1/user-items", None),
+        get("/api/v1/user-items/labels", None),
+        get(
+            "/api/v1/user-items/abababababababababababababababababababab",
+            None,
+        ),
+        get("/api/v1/collections", None),
+        get("/api/v1/collections/1", None),
+        post("/api/v1/collections/1/items", None, json!({})),
+        post("/api/v1/collections/1/items/remove", None, json!({})),
+        Request::put("/api/v1/collections/1/order")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        get("/api/v1/saved-searches", None),
+        get("/api/v1/saved-searches/1", None),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
@@ -494,6 +511,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         filters: None,
         settings: None,
         ops: None,
+        user_data: None,
         adult: Default::default(),
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
