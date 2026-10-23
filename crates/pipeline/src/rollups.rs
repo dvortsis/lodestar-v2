@@ -21,7 +21,30 @@ pub mod metric {
     /// Torrents newly stored (dim = source that found them first), at the
     /// hour of their `metadata_at` (the fetch, seconds before the commit).
     pub const STORED: u32 = 4;
-    // 5–9 are taken by #48 (M4's scrape and search counters).
+    /// Scrape jobs sent to a tracker (dim = tracker id, key = outcome:
+    /// ok, timeout, banned, error, skipped, late).
+    pub const SCRAPE_REQUESTS: u32 = 5;
+    /// Torrents scraped (dim = lane: interest, new, rediscovered, due;
+    /// key = result: alive, dead, unreached).
+    pub const SCRAPED: u32 = 6;
+    /// DHT scrapes (key = 0 with an estimate, 1 without).
+    pub const DHT_SCRAPES: u32 = 7;
+    /// Searches served (key = 0 with results, 1 with none, 2 failed).
+    pub const SEARCHES: u32 = 8;
+    /// Search latency as a log histogram (key = [`latency_bucket`]).
+    pub const SEARCH_LATENCY: u32 = 9;
+
+    /// Bucket 0 is under 1 ms; bucket `b` is `[2^(b-1), 2^b)` ms, up to
+    /// bucket 16 (about a minute and over).
+    pub fn latency_bucket(took: std::time::Duration) -> i64 {
+        let ms = took.as_millis();
+        if ms == 0 {
+            0
+        } else {
+            i64::from(128 - ms.leading_zeros()).min(16)
+        }
+    }
+
     /// Torrents that became searchable, by event time: the hour of the
     /// `index_watermark_hour` row that first covers them (dim = content
     /// type code, or `lodestar_store::UNCLASSIFIED`; key = 1 for imports,
@@ -56,8 +79,7 @@ pub mod metric {
 
     /// How each code folds into a day (compaction, repair and day
     /// reads). **Every code has a kind;** a code with none is never
-    /// compacted, so a gauge can't be summed by accident. Codes 5–9 are
-    /// #48's (scrape and search counters, all additive).
+    /// compacted, so a gauge can't be summed by accident.
     pub fn aggregation(code: u32) -> Option<Aggregation> {
         AGGREGATION
             .iter()
@@ -73,11 +95,11 @@ pub mod metric {
         (REDISCOVERED, Aggregation::Sum),
         (DROPPED, Aggregation::Sum),
         (STORED, Aggregation::Sum),
-        (5, Aggregation::Sum),
-        (6, Aggregation::Sum),
-        (7, Aggregation::Sum),
-        (8, Aggregation::Sum),
-        (9, Aggregation::Sum),
+        (SCRAPE_REQUESTS, Aggregation::Sum),
+        (SCRAPED, Aggregation::Sum),
+        (DHT_SCRAPES, Aggregation::Sum),
+        (SEARCHES, Aggregation::Sum),
+        (SEARCH_LATENCY, Aggregation::Sum),
         (NEWLY_SEARCHABLE, Aggregation::Sum),
         (TIME_TO_SEARCHABLE, Aggregation::Sum),
         (COVERAGE, Aggregation::Sum),
@@ -104,7 +126,12 @@ pub struct Rollups {
 
 impl Rollups {
     pub fn add(&self, at: i64, metric: u32, source: SourceId, key: i64, n: i64) {
-        let k = (at.div_euclid(3600), metric, u32::from(source.get()), key);
+        self.add_dim(at, metric, u32::from(source.get()), key, n);
+    }
+
+    /// Like [`Rollups::add`], for metrics whose dimension isn't a source.
+    pub fn add_dim(&self, at: i64, metric: u32, dim: u32, key: i64, n: i64) {
+        let k = (at.div_euclid(3600), metric, dim, key);
         *self
             .counts
             .lock()

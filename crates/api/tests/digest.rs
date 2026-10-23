@@ -197,6 +197,8 @@ fn fixture_with(insights: bool) -> Fixture {
         adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
         insights: insights.then(|| source.clone() as Arc<dyn InsightsSource>),
         user_data: None,
+        hot: None,
+        events: None,
     };
     let app = Router::new().nest("/api/v1", router(state));
     Fixture {

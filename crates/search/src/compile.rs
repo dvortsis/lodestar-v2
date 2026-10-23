@@ -4,6 +4,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 use lodestar_classify::Category;
+use lodestar_store::{Col, HotColumns};
 use tantivy::Term;
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, FuzzyTermQuery, Occur,
@@ -12,8 +13,8 @@ use tantivy::query::{
 use tantivy::schema::{Field, IndexRecordOption};
 
 use crate::files::{IdSet, IdsQuery};
-use crate::filter::FastRange;
-use crate::query::{Node, NumField, ShareBy, TagKey, TextField, When};
+use crate::filter::{CheckQuery, FastRange};
+use crate::query::{DateField, Node, NumField, ShareBy, TagKey, TextField, When};
 use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, STEM_SCORE, TITLE_BOOST, share_field};
 use crate::tokenizer::{self, Tok, TokKind};
 
@@ -31,13 +32,16 @@ pub(crate) const ABSENT: Field = Field::from_field_id(u16::MAX as u32);
 pub(crate) type FileSets = std::collections::HashMap<String, Arc<IdSet>>;
 
 /// What compiling needs: the torrent index's fields (it derefs to them),
-/// the `file:(…)` results, and whether words may also match by their
-/// stem in the title (the fallback tier, §8).
+/// the `file:(…)` results, whether words may also match by their stem in
+/// the title (the fallback tier, §8), the hot columns and the user's zone.
 #[derive(Clone, Copy)]
 pub(crate) struct Cx<'a> {
     pub fields: &'a Fields,
     pub files: &'a FileSets,
     pub stems: bool,
+    pub hot: Option<&'a Arc<HotColumns>>,
+    /// Seconds east of UTC, for `time:`.
+    pub utc_offset: i32,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -106,6 +110,13 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
         Node::And { of } => of.iter().collect(),
         n => vec![n],
     };
+    // Hot-column and time-of-day clauses aren't in the index: at the top
+    // level they're always checked in the collector, negated ones too, and
+    // never drive (a filter-only query becomes everything, checked).
+    let (checked, of): (Vec<&Node>, Vec<&Node>) = of.into_iter().partition(|n| match n {
+        Node::Not { of } => always_lifted(of),
+        n => always_lifted(n),
+    });
     let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of.into_iter().partition(|n| liftable(n));
     // A clause drives when it narrows the matches by itself; a negation
     // (`-x`, `private:no`) only removes a few from everything.
@@ -117,6 +128,7 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
     rest.extend(&ranges[..keep]);
     let filters = ranges[keep..]
         .iter()
+        .chain(&checked)
         .map(|n| fast_range(n, f, now).expect("liftable"))
         .collect();
     let mut clauses = Vec::new();
@@ -235,6 +247,9 @@ fn num_field(field: NumField, f: &Fields) -> Field {
         NumField::Season => f.season,
         NumField::Episode => f.episode,
         NumField::Junk => f.junk,
+        NumField::Seeders | NumField::Leechers | NumField::Trackers | NumField::Dht => {
+            unreachable!("hot columns aren't indexed")
+        }
     }
 }
 
@@ -245,7 +260,61 @@ fn fast_name(field: NumField) -> &'static str {
         NumField::Largest => "largest",
         NumField::Piece => "piece_len",
         NumField::Junk => "junk",
-        NumField::Year | NumField::Season | NumField::Episode => unreachable!("not fast"),
+        NumField::Year
+        | NumField::Season
+        | NumField::Episode
+        | NumField::Seeders
+        | NumField::Leechers
+        | NumField::Trackers
+        | NumField::Dht => unreachable!("not fast"),
+    }
+}
+
+/// The hot column a count field reads.
+pub(crate) fn hot_col(field: NumField) -> Option<Col> {
+    Some(match field {
+        NumField::Seeders => Col::Seeders,
+        NumField::Leechers => Col::Leechers,
+        NumField::Trackers => Col::Trackers,
+        NumField::Dht => Col::Dht,
+        _ => return None,
+    })
+}
+
+/// Whether a clause reads what the index doesn't hold (hot columns, the
+/// time of day), so it's always checked rather than searched.
+fn always_lifted(n: &Node) -> bool {
+    match n {
+        Node::Range { field, .. } => field.is_hot(),
+        Node::Date { field, .. } => *field == DateField::Seen,
+        Node::TimeOfDay { .. } => true,
+        // Combinations of them are one check too: `(seeders:>=5 |
+        // trackers:>=3)` is checked on the candidates, not run as a
+        // query that reads every document of the segment.
+        Node::Or { of } | Node::And { of } => !of.is_empty() && of.iter().all(always_lifted),
+        Node::Not { of } => always_lifted(of),
+        _ => false,
+    }
+}
+
+/// Whether a query reads the hot columns anywhere.
+pub(crate) fn reads_hot(n: &Node) -> bool {
+    match n {
+        Node::And { of } | Node::Or { of } => of.iter().any(reads_hot),
+        Node::Not { of } => reads_hot(of),
+        Node::Range { field, .. } => field.is_hot(),
+        Node::Date { field, .. } => *field == DateField::Seen,
+        _ => false,
+    }
+}
+
+/// Whether a query has a time-of-day clause (which depends on the zone).
+pub(crate) fn has_time_of_day(n: &Node) -> bool {
+    match n {
+        Node::And { of } | Node::Or { of } => of.iter().any(has_time_of_day),
+        Node::Not { of } => has_time_of_day(of),
+        Node::TimeOfDay { .. } => true,
+        _ => false,
     }
 }
 
@@ -262,8 +331,8 @@ fn share_name(by: ShareBy, cat: &str) -> Option<String> {
 /// Whether a top-level clause can be checked in the collector.
 fn liftable(n: &Node) -> bool {
     match n {
-        Node::Range { field, .. } => field.is_fast(),
-        Node::Date { .. } | Node::File { .. } => true,
+        Node::Range { field, .. } => field.is_fast() || field.is_hot(),
+        Node::Date { .. } | Node::File { .. } | Node::TimeOfDay { .. } => true,
         Node::Share { by, cat, .. } => share_name(*by, cat).is_some(),
         _ => false,
     }
@@ -278,11 +347,55 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
             hi: hi.unwrap_or(u64::MAX),
             missing: None,
         },
-        Node::Date { from, to, .. } => FastRange::I64 {
+        Node::Range { field, lo, hi } => FastRange::Hot {
+            col: hot_col(*field)?,
+            lo: lo.unwrap_or(0),
+            hi: hi.unwrap_or(u64::MAX),
+        },
+        Node::Date {
+            field: DateField::Discovered,
+            from,
+            to,
+        } => FastRange::I64 {
             field: "discovered",
             lo: from.as_ref().map_or(i64::MIN, |w| resolve(w, now)),
             hi: to.as_ref().map_or(i64::MAX, |w| resolve(w, now)),
         },
+        // Last seen is unix seconds in a u32 column; a bound before 1970
+        // can't be met and one past 2106 is no bound.
+        Node::Date {
+            field: DateField::Seen,
+            from,
+            to,
+        } => {
+            let lo = from.as_ref().map_or(0, |w| resolve(w, now).max(0) as u64);
+            let hi = match to.as_ref().map(|w| resolve(w, now)) {
+                None => u64::MAX,
+                Some(t) if t < 0 => return Some(nothing()),
+                Some(t) => t as u64,
+            };
+            FastRange::Hot {
+                col: Col::LastSeen,
+                lo,
+                hi,
+            }
+        }
+        Node::TimeOfDay { from, to } => FastRange::TimeOfDay {
+            from: *from,
+            to: *to,
+            offset: cx.utc_offset,
+        },
+        Node::Not { of } if always_lifted(of) => FastRange::Not(Box::new(fast_range(of, cx, now)?)),
+        Node::Or { of } if always_lifted(node) => FastRange::Any(
+            of.iter()
+                .map(|n| fast_range(n, cx, now))
+                .collect::<Option<_>>()?,
+        ),
+        Node::And { of } if always_lifted(node) => FastRange::All(
+            of.iter()
+                .map(|n| fast_range(n, cx, now))
+                .collect::<Option<_>>()?,
+        ),
         Node::Share { by, cat, lo, hi } => {
             let c = category(cat)?;
             let fld = match by {
@@ -300,6 +413,23 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
         }
         Node::File { of } => FastRange::Ids { ids: cx.ids(of) },
         _ => return None,
+    })
+}
+
+/// A check nothing passes.
+fn nothing() -> FastRange {
+    FastRange::Hot {
+        col: Col::LastSeen,
+        lo: 1,
+        hi: 0,
+    }
+}
+
+/// A hot-column or time-of-day clause that has to select by itself.
+fn checked(node: &Node, f: &Cx<'_>, now: i64) -> Q {
+    Box::new(CheckQuery {
+        range: fast_range(node, f, now).unwrap_or_else(nothing),
+        hot: f.hot.cloned(),
     })
 }
 
@@ -419,6 +549,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 ))
             })
         }
+        n if always_lifted(n) => checked(n, f, now),
         Node::Range { field, lo, hi } => {
             let fld = num_field(*field, f);
             if fld == ABSENT {
@@ -506,6 +637,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 Box::new(IdsQuery { ids })
             }
         }
+        Node::TimeOfDay { .. } => checked(node, f, now),
         Node::Hash { hash } => match hex20(hash) {
             Some(bytes) if f.hash != ABSENT => Box::new(TermQuery::new(
                 Term::from_field_bytes(f.hash, &bytes),

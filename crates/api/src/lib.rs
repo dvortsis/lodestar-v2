@@ -46,6 +46,7 @@ mod saved;
 mod search;
 pub mod settings;
 mod suggest;
+mod swarm;
 pub mod system;
 mod torrents;
 mod user_items;
@@ -54,13 +55,14 @@ use std::sync::{Arc, Mutex};
 
 use axum::{Extension, Router};
 use lodestar_search::SearchHandle;
-use lodestar_store::Store;
+use lodestar_store::{HotColumns, Store};
 
 pub use auth::{Auth, require_session};
 pub use error::{ApiError, ApiResult};
 pub use extract::ClientIp;
 pub(crate) use search::unix_now;
 pub use search::{AdultVisibility, MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
+pub use swarm::{ApiEvents, INTEREST_TOP};
 
 #[derive(Clone, Debug)]
 pub struct ApiState {
@@ -72,6 +74,10 @@ pub struct ApiState {
     pub reader: Arc<Mutex<Store>>,
     /// `None` when the filters API isn't served (tests, tools).
     pub filters: Option<Arc<filters::FiltersApi>>,
+    /// Swarm stats for hits (§7); `None` without a scraper.
+    pub hot: Option<Arc<HotColumns>>,
+    /// Interest hints and Serve rollups; `None` in tests and tools.
+    pub events: Option<Arc<dyn ApiEvents>>,
     /// `None` when the settings registry isn't served (tests, tools).
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
     /// `None` when no pipeline runs (tests, tools).
