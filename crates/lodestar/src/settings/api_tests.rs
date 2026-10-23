@@ -58,6 +58,7 @@ fn fixture() -> Fixture {
                 filters: None,
                 settings: Some(registry.clone()),
                 ops: None,
+                user_data: None,
                 adult: Default::default(),
                 insights: None,
             }),

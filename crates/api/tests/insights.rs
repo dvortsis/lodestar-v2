@@ -205,6 +205,7 @@ fn fixture_with(insights: bool) -> Fixture {
             ops: Some(ops.clone() as Arc<dyn OpsApi>),
             adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
             insights: insights.then(|| source.clone() as Arc<dyn InsightsSource>),
+            user_data: None,
         }),
     );
     Fixture {
