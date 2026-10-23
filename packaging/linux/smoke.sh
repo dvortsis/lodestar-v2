@@ -33,7 +33,8 @@ fi
 
 # Releases are built without the `fixture` feature (`serve --fixture` test data).
 # The flag always exists; a build without the feature refuses it ("no fixture backend").
-if ! "$dir/lodestar" serve --fixture "$work/fixture" 2>&1 | grep -q "no fixture backend"; then
+fixture_out=$("$dir/lodestar" serve --fixture "$work/fixture" 2>&1 || true)
+if ! printf '%s' "$fixture_out" | grep -q "no fixture backend"; then
   echo "::error::this build has the fixture feature; release builds must not" >&2
   exit 1
 fi
