@@ -478,6 +478,10 @@ jobs:
     if: needs.package-gate.outputs.run == 'true'
     runs-on: windows-latest
     timeout-minutes: 75
+    # Signing secrets live in these environments only (owner setup:
+    # docs/decisions/2026-10-22-P-release.md). Tags use `release` (tag rule and
+    # owner approval), the nightly and manual runs use `nightly`, pull requests none.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || (github.event_name != 'pull_request' && 'nightly' || '') }}
     env:
       VERSION: ${{ needs.package-gate.outputs.version }}
       MSI_VERSION: ${{ needs.package-gate.outputs.msi_version }}
@@ -578,6 +582,8 @@ jobs:
       needs.package-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Tags only: waits for the owner's approval, then creates the draft release.
+    environment: release
     permissions:
       contents: write
     steps:
