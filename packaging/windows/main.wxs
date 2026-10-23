@@ -12,7 +12,7 @@
     - installs lodestar.exe to C:\Program Files\Lodestar
     - keeps data in C:\ProgramData\Lodestar (created on install, kept on uninstall)
     - registers the "Lodestar" Windows service, started by hand for now (see README)
-    - opens 8090/tcp (web UI) on private networks only and 6881/udp (DHT)
+    - opens 8090/tcp (web UI) and 6881/udp (DHT), program-scoped, private networks only
     - Start-menu shortcut that opens the web UI
     - optional, off by default: a Windows Defender exclusion for the data folder
     - uninstall keeps the data unless run with REMOVE_DATA=1
@@ -112,9 +112,10 @@
         <fire:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
                                 Protocol="tcp" Port="8090" Profile="private" Scope="any"
                                 Program="[#LodestarExe]" IgnoreFailure="yes" />
-        <!-- DHT: UDP, any network, so other nodes can answer. -->
-        <fire:FirewallException Id="FwDht" Name="Lodestar DHT (6881/udp)"
-                                Protocol="udp" Port="6881" Profile="all" Scope="any"
+        <!-- DHT: UDP, private networks only too. 6881/tcp (peer connections) is
+             reserved and unused today, so it has no rule. -->
+        <fire:FirewallException Id="FwDht" Name="Lodestar DHT (6881/udp, private networks)"
+                                Protocol="udp" Port="6881" Profile="private" Scope="any"
                                 Program="[#LodestarExe]" IgnoreFailure="yes" />
       </Component>
     </DirectoryRef>
@@ -130,9 +131,12 @@
     </DirectoryRef>
 
     <!-- ===== Custom actions ===== -->
-    <!-- Let the service account (LocalService, S-1-5-19) write the data folder. -->
+    <!-- Lock the data folder down: no inherited rights (ProgramData gives Users
+         read/write), full control for SYSTEM (S-1-5-18) and Administrators
+         (S-1-5-32-544), modify for the service account (LocalService, S-1-5-19,
+         until M6-win names the final account). -->
     <CustomAction Id="GrantDataAccess" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /grant *S-1-5-19:(OI)(CI)M" />
+                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-19:(OI)(CI)M" />
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->

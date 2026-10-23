@@ -89,6 +89,11 @@ if ($Msi) {
   Assert ($web.Profile -eq 'Private') "web firewall rule profile is $($web.Profile), expected Private only"
   $dht = Get-NetFirewallRule -DisplayName 'Lodestar DHT*' -ErrorAction SilentlyContinue
   Assert ($null -ne $dht) 'DHT firewall rule missing'
+  Assert ($dht.Profile -eq 'Private') "DHT firewall rule profile is $($dht.Profile), expected Private only"
+  $acl = Get-Acl $dataDir
+  Assert $acl.AreAccessRulesProtected 'data folder still inherits permissions from ProgramData'
+  $broad = @($acl.Access | Where-Object { $_.IdentityReference.Value -match '(Users|Everyone|Authenticated Users)$' })
+  Assert ($broad.Count -eq 0) "data folder grants access to $($broad.IdentityReference -join ', ')"
   $shortcut = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Lodestar\*" -Include '*.lnk', '*.url' -ErrorAction SilentlyContinue
   Assert ($null -ne $shortcut) 'Start-menu shortcut missing'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
