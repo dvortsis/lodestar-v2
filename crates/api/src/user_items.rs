@@ -212,7 +212,11 @@ pub(crate) async fn list(
     let adult = s.adult.shown();
     let hidden = p.hidden.unwrap_or(false);
     let (favourite, hidden_mark) = (p.favourite.unwrap_or(false), p.hidden_mark.unwrap_or(false));
-    let label = p.label.map(|l| l.trim().to_string());
+    // An empty `label=` is no filter.
+    let label = p
+        .label
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty());
     tokio::task::spawn_blocking(move || {
         let store = s.reader.lock().expect("reader lock");
         let mut items = Vec::new();

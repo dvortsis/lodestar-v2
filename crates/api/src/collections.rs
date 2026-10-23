@@ -62,23 +62,8 @@ fn collection_not_found() -> ApiError {
     )
 }
 
-/// Every entry's torrent id in order, past the visibility check or not.
-fn all_entries(store: &Store, id: i64) -> ApiResult<Vec<(i64, i64)>> {
-    let mut out = Vec::new();
-    let mut after = None;
-    loop {
-        let page = store.collection_items(id, after, BATCH).map_err(internal)?;
-        let end = page.len() < BATCH;
-        after = page.last().map(|i| i.position);
-        out.extend(page.iter().map(|i| (i.torrent_id, i.position)));
-        if end {
-            return Ok(out);
-        }
-    }
-}
-
-/// Every entry in order.
-fn all_entries_full(store: &Store, id: i64) -> ApiResult<Vec<lodestar_store::CollectionItem>> {
+/// Every entry in order, shown or not.
+fn all_entries(store: &Store, id: i64) -> ApiResult<Vec<lodestar_store::CollectionItem>> {
     let mut out = Vec::new();
     let mut after = None;
     loop {
@@ -96,8 +81,8 @@ fn all_entries_full(store: &Store, id: i64) -> ApiResult<Vec<lodestar_store::Col
 /// returns.
 fn visible_count(store: &Store, id: i64, hidden: bool, adult: bool) -> ApiResult<u64> {
     let mut n = 0;
-    for (torrent, _) in all_entries(store, id)? {
-        if shown_row(store, torrent, hidden, adult)?.is_some() {
+    for item in all_entries(store, id)? {
+        if shown_row(store, item.torrent_id, hidden, adult)?.is_some() {
             n += 1;
         }
     }
@@ -257,7 +242,7 @@ pub(crate) async fn get_one(
         let skip = usize::try_from(p.after.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let mut entries = Vec::new();
         let mut items = 0u64;
-        for item in all_entries_full(&store, id)? {
+        for item in all_entries(&store, id)? {
             let Some((row, e)) = shown_row(&store, item.torrent_id, hidden, adult)? else {
                 continue;
             };
@@ -513,7 +498,7 @@ pub(crate) async fn reorder(
         }
         let current: Vec<i64> = all_entries(&store, id)?
             .into_iter()
-            .map(|(t, _)| t)
+            .map(|i| i.torrent_id)
             .collect();
         let mut required = HashSet::new();
         let mut allowed = HashSet::new();
@@ -533,6 +518,10 @@ pub(crate) async fn reorder(
             )
             .field("hashes")
         };
+        // More names than entries can't be right; no lookups for it.
+        if parsed.len() > current.len() {
+            return Err(stale());
+        }
         let mut given = Vec::new();
         for h in &parsed {
             let t = store.find(h).map_err(internal)?.ok_or_else(stale)?;
