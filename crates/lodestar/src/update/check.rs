@@ -10,10 +10,11 @@
 //!   303, 307, 308) are followed here, at most 5, `https` only, to
 //!   [`DOWNLOAD_HOSTS`] only: GitHub's release downloads answer 302,
 //!   which `send_following` doesn't follow. Bodies are read through
-//!   `read_limited` (512 KiB). 10 s to connect, 60 s overall.
+//!   `read_limited` (512 KiB). 10 s to connect, 60 s for the whole fetch.
 //! - **What it sends:** `User-Agent: Lodestar-Updater` (never the
 //!   versioned client agent), no cookies, no conditional headers, no
-//!   query string. A redirect's own URL (GitHub's signed asset URLs carry
+//!   query string; the HTTP client adds only `accept: */*` and the
+//!   connection's own headers (`host`). A redirect's own URL (GitHub's signed asset URLs carry
 //!   one) is never logged.
 //! - **A 404** is "nothing published for this channel yet", not an error.
 
@@ -129,18 +130,29 @@ pub fn hop_allowed(url: &Url) -> bool {
         && url.host_str().is_some_and(|h| DOWNLOAD_HOSTS.contains(&h))
 }
 
-/// Fetches `url`, following allowed redirects: the body, or `None` for a
-/// 404 (nothing published for this channel yet).
+/// The whole fetch, every hop included.
+pub const OVERALL: Duration = Duration::from_secs(60);
+
+/// Fetches `url`, following allowed redirects, within [`OVERALL`]: the
+/// body, or `None` when the manifest URL itself is a 404 (nothing
+/// published for this channel yet). A 404 after a redirect (an expired
+/// asset link) is an error.
 pub async fn fetch(f: &dyn Fetch, url: Url) -> Result<Option<Vec<u8>>, CheckError> {
+    tokio::time::timeout(OVERALL, hops(f, url))
+        .await
+        .unwrap_or(Err(CheckError::Timeout))
+}
+
+async fn hops(f: &dyn Fetch, url: Url) -> Result<Option<Vec<u8>>, CheckError> {
     let mut at = url;
-    for _ in 0..=MAX_HOPS {
+    for hop_number in 0..=MAX_HOPS {
         if !hop_allowed(&at) {
             return Err(CheckError::Redirect);
         }
         let hop = f.get(&at).await?;
         match hop.status {
             200 => return Ok(Some(hop.body)),
-            404 => return Ok(None),
+            404 if hop_number == 0 => return Ok(None),
             301 | 302 | 303 | 307 | 308 => {
                 at = hop
                     .location
@@ -328,6 +340,17 @@ pub mod tests {
         assert_eq!(
             fetch(&f, Url::parse(STABLE).unwrap()).await,
             Err(CheckError::Redirect)
+        );
+        // Five is the limit, not four: from hop 1, five redirects reach it.
+        assert_eq!(
+            fetch(&f, Url::parse("https://github.com/hop/1").unwrap()).await,
+            Ok(Some(b"late".to_vec()))
+        );
+        // A 404 after a redirect is an error, not "nothing published".
+        f.serve(STABLE, 302, Some("https://github.com/gone"), b"");
+        assert_eq!(
+            fetch(&f, Url::parse(STABLE).unwrap()).await,
+            Err(CheckError::Status(404))
         );
         f.serve(STABLE, 500, None, b"");
         assert_eq!(

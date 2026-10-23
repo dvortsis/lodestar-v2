@@ -424,6 +424,10 @@ impl Updates {
         }
         crate::update::window::Window::parse(&self.window)
             .map_err(|e| ConfigError(format!("updates.window: {e}")))?;
+        if self.mode == UpdateMode::Image {
+            crate::settings::updates::image_ok(crate::system::info::deployment_here().kind)
+                .map_err(|e| ConfigError(format!("updates.mode: {e}")))?;
+        }
         Ok(())
     }
 }
@@ -945,6 +949,71 @@ mod tests {
         .unwrap();
         let c = Config::load(Some(&path), no_env).unwrap();
         assert_eq!(c.pipeline_config().unwrap().pool.max_sockets, 100);
+    }
+
+    #[test]
+    fn updates_come_from_the_file_and_the_environment() {
+        assert_eq!(
+            Config::load(None, no_env).unwrap().updates,
+            Updates::default()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[updates]\nmode = \"notify\"\nlevel = \"features\"\nwindow = \"23:00-01:00\"\nwait_days = 5\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert_eq!(
+            (
+                c.updates.mode,
+                c.updates.level,
+                c.updates.wait_days,
+                c.updates.window.as_str()
+            ),
+            (UpdateMode::Notify, UpdateLevel::Features, 5, "23:00-01:00")
+        );
+        let env = |k: &str| match k {
+            "LODESTAR_UPDATES" => Some("auto".to_string()),
+            "LODESTAR_UPDATES_CHANNEL" => Some("beta".to_string()),
+            "LODESTAR_UPDATES_SECURITY_FIXES" => Some("off".to_string()),
+            "LODESTAR_UPDATES_WAIT_DAYS" => Some("0".to_string()),
+            "LODESTAR_UPDATES_NOTIFY_AFTER" => Some("false".to_string()),
+            _ => None,
+        };
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(
+            (
+                c.updates.mode,
+                c.updates.channel,
+                c.updates.security_fixes,
+                c.updates.wait_days
+            ),
+            (UpdateMode::Auto, UpdateChannel::Beta, SecurityFixes::Off, 0)
+        );
+        assert!(!c.updates.notify_after);
+        assert!(c.layers.in_env("LODESTAR_UPDATES"));
+    }
+
+    #[test]
+    fn bad_update_values_are_errors() {
+        for (var, value) in [
+            ("LODESTAR_UPDATES", "sometimes"),
+            ("LODESTAR_UPDATES_LEVEL", "everything"),
+            ("LODESTAR_UPDATES_WAIT_DAYS", "15"),
+            ("LODESTAR_UPDATES_WAIT_DAYS", "-1"),
+            ("LODESTAR_UPDATES_WINDOW", "03:00-03:00"),
+            ("LODESTAR_UPDATES_WINDOW", "3am"),
+            ("LODESTAR_UPDATES_ALLOW_REINDEX", "yes"),
+        ] {
+            let env = |k: &str| (k == var).then(|| value.to_string());
+            assert!(Config::load(None, env).is_err(), "{var}={value}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[updates]\nwait_days = 30\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
     }
 
     #[test]

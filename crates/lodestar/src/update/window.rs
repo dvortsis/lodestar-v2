@@ -4,9 +4,11 @@
 //!
 //! Local time is the host's: `TZ`, else `/etc/localtime` (jiff's system
 //! zone, with the zoneinfo database for a `TZ` name). With no zone found
-//! the window is in UTC, and `/updates` says so (`window_zone`). A start
-//! that falls in a DST gap opens at the transition (the first moment the
-//! clock reads past it); one in a repeated hour opens at the first.
+//! the window is in UTC, and `/updates` says so (`window_zone`). A
+//! boundary in a DST gap is the transition itself (the first moment the
+//! clock reads past it). A repeated hour counts on both passes: the
+//! window is open whenever the local clock reads inside it, and it opens
+//! and closes at the first matching moment after now.
 
 use jiff::Timestamp;
 use jiff::civil::{Date, Time};
@@ -58,55 +60,88 @@ impl Window {
     }
 
     /// Whether the window is open at `now`, and until when; else when it
-    /// next opens. Never more than a day away.
+    /// next opens: within a day, or two when a DST gap swallows the
+    /// window on the day between.
     pub fn when(&self, now: i64, tz: &TimeZone) -> When {
-        let Ok(at) = Timestamp::from_second(now) else {
+        let Some((date, minute)) = local(now, tz) else {
             return When::Opens(now);
         };
-        let local = at.to_zoned(tz.clone());
-        let minute = (local.hour() as u16) * 60 + local.minute() as u16;
         if self.contains(minute) {
-            When::Open {
-                closes: next_at(self.end, now, local.date(), tz),
-            }
-        } else {
-            When::Opens(next_at(self.start, now, local.date(), tz))
+            return When::Open {
+                closes: next_at(self.end, now, date, tz),
+            };
         }
+        // A window wholly inside a DST gap doesn't happen that day: its
+        // start resolves to the transition, where it's already over.
+        // Look again from there.
+        let mut from = (now, date);
+        for _ in 0..3 {
+            let at = next_at(self.start, from.0, from.1, tz);
+            match local(at, tz) {
+                Some((_, m)) if self.contains(m) => return When::Opens(at),
+                Some((d, _)) => from = (at, d),
+                None => break,
+            }
+        }
+        When::Opens(next_at(self.start, now, date, tz))
     }
+}
+
+/// The local date and minute of the day at `t`.
+fn local(t: i64, tz: &TimeZone) -> Option<(Date, u16)> {
+    let z = Timestamp::from_second(t).ok()?.to_zoned(tz.clone());
+    Some((z.date(), (z.hour() as u16) * 60 + z.minute() as u16))
 }
 
 /// The first moment after `now` when the local clock reads `minute`
 /// (today, else tomorrow; the day after only around a DST change).
 fn next_at(minute: u16, now: i64, today: Date, tz: &TimeZone) -> i64 {
     let time = Time::constant((minute / 60) as i8, (minute % 60) as i8, 0, 0);
-    for days in 0..3 {
+    for days in -1..3 {
         let Ok(date) = today.checked_add(jiff::Span::new().days(days)) else {
-            break;
+            continue;
         };
-        if let Some(ts) = resolve(date.to_datetime(time), tz) {
-            if ts > now {
-                return ts;
-            }
+        if let Some(ts) = instants(date.to_datetime(time), tz)
+            .into_iter()
+            .find(|&ts| ts > now)
+        {
+            return ts;
         }
     }
     now + 86_400
 }
 
-/// The moment a local time happens: the first of a repeated hour; for
-/// a time in a DST gap, the transition itself (the first moment the
-/// clock reads past it).
-fn resolve(dt: jiff::civil::DateTime, tz: &TimeZone) -> Option<i64> {
+/// Every moment the local clock reads `dt`, earliest first: one; both
+/// passes of a repeated hour; for a time in a DST gap, the transition
+/// itself (the first moment the clock reads past it).
+fn instants(dt: jiff::civil::DateTime, tz: &TimeZone) -> Vec<i64> {
     use jiff::tz::AmbiguousOffset;
     let ambiguous = tz.to_ambiguous_timestamp(dt);
     match ambiguous.offset() {
         AmbiguousOffset::Gap { before, .. } => {
-            // Read with the offset before the gap, the time lands after
-            // the transition; the transition before that is the one.
-            let past = before.to_timestamp(dt).ok()?;
-            let t = tz.preceding(past).next()?;
-            Some(t.timestamp().as_second())
+            // Read with the offset before the gap, the time lands at or
+            // after the transition; the last transition at or before
+            // that moment is the one.
+            let Ok(past) = before.to_timestamp(dt) else {
+                return vec![];
+            };
+            let Ok(just_after) = past.checked_add(jiff::SignedDuration::from_secs(1)) else {
+                return vec![];
+            };
+            tz.preceding(just_after)
+                .next()
+                .map(|t| vec![t.timestamp().as_second()])
+                .unwrap_or_default()
         }
-        _ => ambiguous.earlier().ok().map(|t| t.as_second()),
+        AmbiguousOffset::Fold { .. } => [ambiguous.earlier(), ambiguous.later()]
+            .into_iter()
+            .filter_map(|t| t.ok().map(|t| t.as_second()))
+            .collect(),
+        AmbiguousOffset::Unambiguous { .. } => ambiguous
+            .earlier()
+            .ok()
+            .map(|t| vec![t.as_second()])
+            .unwrap_or_default(),
     }
 }
 
@@ -218,6 +253,97 @@ mod tests {
                 closes: ts("2026-10-25T04:00:00Z")
             }
         );
+    }
+
+    /// A boundary exactly at the gap's start (02:00, when the clock
+    /// jumps to 03:00): the transition, the same day.
+    #[test]
+    fn a_boundary_at_the_start_of_the_gap_is_the_transition() {
+        let w = Window::parse("02:00-04:00").unwrap();
+        assert_eq!(
+            w.when(ts("2026-03-28T23:00:00Z"), &cet()),
+            When::Opens(ts("2026-03-29T01:00:00Z"))
+        );
+        let ends = Window::parse("00:00-02:00").unwrap();
+        assert_eq!(
+            ends.when(ts("2026-03-28T23:30:00Z"), &cet()),
+            When::Open {
+                closes: ts("2026-03-29T01:00:00Z")
+            }
+        );
+    }
+
+    /// On the second pass of the repeated hour the window is open, and it
+    /// closes on that pass, not tomorrow.
+    #[test]
+    fn the_second_pass_of_a_repeated_hour_counts() {
+        // 02:30 CET happens at 00:30Z and 01:30Z on 2026-10-25.
+        let w = Window::parse("01:00-02:30").unwrap();
+        assert_eq!(
+            w.when(ts("2026-10-25T01:10:00Z"), &cet()),
+            When::Open {
+                closes: ts("2026-10-25T01:30:00Z")
+            }
+        );
+        // 02:00-02:15 is open on both passes; between them it opens at the
+        // second.
+        let short = Window::parse("02:00-02:15").unwrap();
+        assert_eq!(
+            short.when(ts("2026-10-25T00:20:00Z"), &cet()),
+            When::Opens(ts("2026-10-25T01:00:00Z"))
+        );
+        assert!(matches!(
+            short.when(ts("2026-10-25T01:05:00Z"), &cet()),
+            When::Open { .. }
+        ));
+    }
+
+    /// Across both DST changes in Europe and the US, with boundaries on
+    /// and around the changing hours: a close is after now and within a
+    /// day; an opening is open when it comes, within a day or two when a
+    /// gap swallows that day's window.
+    #[test]
+    fn answers_agree_across_dst_changes() {
+        let us = TimeZone::posix("EST5EDT,M3.2.0,M11.1.0").unwrap();
+        let zones = [cet(), us];
+        let windows = [
+            "02:00-03:00",
+            "02:30-03:30",
+            "01:00-02:00",
+            "03:00-04:00",
+            "23:30-02:30",
+            "01:59-02:01",
+        ];
+        let weeks = [
+            ("2026-03-07T00:00:00Z", "2026-03-31T00:00:00Z"),
+            ("2026-10-24T00:00:00Z", "2026-11-03T00:00:00Z"),
+        ];
+        for tz in &zones {
+            for w in windows {
+                let win = Window::parse(w).unwrap();
+                for (from, to) in weeks {
+                    let mut now = ts(from);
+                    while now < ts(to) {
+                        match win.when(now, tz) {
+                            When::Open { closes } => {
+                                assert!(
+                                    closes > now && closes - now <= 25 * 3600,
+                                    "{w} {now} closes {closes}"
+                                );
+                            }
+                            When::Opens(at) => {
+                                assert!(at > now && at - now <= 49 * 3600, "{w} {now} opens {at}");
+                                assert!(
+                                    matches!(win.when(at, tz), When::Open { .. }),
+                                    "{w}: not open when it opens at {at}"
+                                );
+                            }
+                        }
+                        now += 600;
+                    }
+                }
+            }
+        }
     }
 
     #[test]

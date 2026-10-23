@@ -242,11 +242,16 @@ impl Section for Updates {
     }
 
     fn check(&self, field: &str) -> Result<(), String> {
+        self.check_on(field, crate::system::info::deployment_here().kind)
+    }
+}
+
+impl Updates {
+    /// [`Section::check`] for an installation of `kind`.
+    fn check_on(&self, field: &str, kind: DeploymentKind) -> Result<(), String> {
         match field {
             "window" => crate::update::window::Window::parse(&self.window).map(|_| ()),
-            "mode" if self.mode == Mode::Image => {
-                image_ok(crate::system::info::deployment_here().kind)
-            }
+            "mode" if self.mode == Mode::Image => image_ok(kind),
             _ => Ok(()),
         }
     }
@@ -254,7 +259,7 @@ impl Section for Updates {
 
 /// `image` means the container image updates Lodestar, so it's only for
 /// a container.
-fn image_ok(kind: DeploymentKind) -> Result<(), String> {
+pub(crate) fn image_ok(kind: DeploymentKind) -> Result<(), String> {
     match kind {
         DeploymentKind::Docker | DeploymentKind::Unraid => Ok(()),
         _ => Err(
@@ -308,11 +313,99 @@ mod tests {
         ] {
             assert!(image_ok(k).is_err(), "{k:?}");
         }
+        let image = Updates {
+            mode: Mode::Image,
+            ..Updates::default()
+        };
+        assert!(image.check_on("mode", DeploymentKind::Systemd).is_err());
+        assert!(image.check_on("mode", DeploymentKind::Unraid).is_ok());
+        assert!(
+            Updates::default()
+                .check_on("mode", DeploymentKind::Systemd)
+                .is_ok()
+        );
         let bad = Updates {
             window: "05:00-05:00".into(),
             ..Updates::default()
         };
         assert!(bad.check("window").is_err());
         assert!(Updates::default().check("window").is_ok());
+    }
+
+    mod registry {
+        use std::path::Path;
+        use std::sync::{Arc, Mutex};
+
+        use lodestar_api::settings::{SettingSource, SettingsApi, SettingsError, SettingsPatch};
+        use lodestar_store::{Store, StoreConfig};
+        use serde_json::{Value, json};
+        use tokio::sync::watch;
+
+        use super::super::{Mode, Updates};
+        use crate::config::Config;
+        use crate::settings::Registry;
+
+        fn registry(dir: &Path, env: &'static [(&'static str, &'static str)]) -> Registry {
+            let config = Config::load(None, |k: &str| {
+                if k == "LODESTAR_DATA_DIR" {
+                    return Some(dir.display().to_string());
+                }
+                env.iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            })
+            .unwrap();
+            let store = Store::open(dir.join("t.db"), StoreConfig::default()).unwrap();
+            Registry::load(&config, Arc::new(Mutex::new(store))).unwrap()
+        }
+
+        fn patch(v: Value) -> SettingsPatch {
+            SettingsPatch(v.as_object().unwrap().clone())
+        }
+
+        #[test]
+        fn the_environment_locks_a_field_and_null_resets_one() {
+            let dir = tempfile::tempdir().unwrap();
+            let r = registry(dir.path(), &[("LODESTAR_UPDATES_CHANNEL", "beta")]);
+            let values = r.section("updates").unwrap();
+            let f = &values.fields["channel"];
+            assert_eq!(
+                (&f.value, f.source, f.read_only),
+                (&json!("beta"), SettingSource::Env, true)
+            );
+            assert!(matches!(
+                r.patch("updates", patch(json!({ "channel": "stable" }))),
+                Err(SettingsError::SetByEnv { ref var, .. }) if var == "LODESTAR_UPDATES_CHANNEL"
+            ));
+            // Saved, followed live, then reset with null.
+            let live: watch::Receiver<Updates> = r.subscribe();
+            r.patch(
+                "updates",
+                patch(json!({ "mode": "notify", "wait_days": 9 })),
+            )
+            .unwrap();
+            assert_eq!(
+                (live.borrow().mode, live.borrow().wait_days),
+                (Mode::Notify, 9)
+            );
+            r.patch("updates", patch(json!({ "mode": null, "wait_days": null })))
+                .unwrap();
+            assert_eq!(
+                (live.borrow().mode, live.borrow().wait_days),
+                (Mode::Off, 3)
+            );
+            assert_eq!(
+                r.section("updates").unwrap().fields["mode"].source,
+                SettingSource::Default
+            );
+            // Out of range and badly formed values are refused.
+            for bad in [
+                json!({ "wait_days": 15 }),
+                json!({ "window": "4-5" }),
+                json!({ "mode": "on" }),
+            ] {
+                assert!(r.patch("updates", patch(bad.clone())).is_err(), "{bad}");
+            }
+        }
     }
 }

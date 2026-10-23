@@ -42,21 +42,44 @@ impl Loaded {
     }
 }
 
-/// Reads `<dir>/trust.json`. `overlays` are the verified overlays' marks,
-/// used only to rebuild a missing file.
+/// Reads `<dir>/trust.json`, raised to the floor (§12.2): the embedded
+/// statements and those of every installed overlay count whether or not
+/// the file exists, so a stale `trust.json` (restored from a backup) can't
+/// forget a revocation an overlay carries. Each statement is checked
+/// against the recovery key as it's added, so an overlay's statements need
+/// no trust in the overlay. `overlays` also gives a missing file its
+/// high-water marks.
 pub fn load(dir: &Path, embedded: &Embedded, overlays: &[OverlayMark]) -> Loaded {
     let floor = || TrustState::rebuild(embedded, &[]).unwrap_or_default();
     match read_capped(&dir.join(FILE)) {
-        Ok(None) => {
-            Loaded::Rebuilt(TrustState::rebuild(embedded, overlays).unwrap_or_else(|_| floor()))
-        }
+        // A rebuild that fails (an overlay's statements disagree with
+        // the chain) is damage: nothing is written that could lower a
+        // mark.
+        Ok(None) => match TrustState::rebuild(embedded, overlays) {
+            Ok(state) => Loaded::Rebuilt(state),
+            Err(_) => Loaded::Damaged(floor()),
+        },
         Ok(Some(bytes)) => match TrustState::load(&bytes, embedded) {
-            Ok(state) => Loaded::Found(state),
+            Ok(state) => match raised(state, embedded, overlays) {
+                Some(state) => Loaded::Found(state),
+                None => Loaded::Damaged(floor()),
+            },
             Err(_) => Loaded::Damaged(floor()),
         },
         // Unreadable now is damaged for now: nothing is written over it.
         Err(_) => Loaded::Damaged(floor()),
     }
+}
+
+/// `state` with the embedded and overlay statements it doesn't have yet;
+/// `None` when they disagree with it.
+fn raised(state: TrustState, embedded: &Embedded, overlays: &[OverlayMark]) -> Option<TrustState> {
+    let mut chain = state.chain(embedded).ok()?;
+    chain.extend(&embedded.statements, None).ok()?;
+    for o in overlays {
+        chain.extend(&o.statements, None).ok()?;
+    }
+    Some(state.advance(&chain))
 }
 
 /// Writes `next` merged over `loaded` (never over a damaged file).
@@ -151,6 +174,48 @@ mod tests {
         assert_eq!(
             load(dir.path(), &e, &[]).state().channels[&Channel::Stable].hwm_ts,
             500
+        );
+    }
+
+    /// A stale `trust.json` (restored from a backup) still honours a
+    /// rotation an installed overlay carries.
+    #[test]
+    fn a_stale_file_is_raised_to_the_overlays() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t, e) = trust();
+        let first = load(dir.path(), &e, &[]);
+        save(dir.path(), &first, first.state().clone()).unwrap();
+        let mut stale = first.state().clone();
+        stale.channels.entry(Channel::Stable).or_default().hwm_ts = 50;
+        std::fs::write(dir.path().join(FILE), stale.to_bytes().unwrap()).unwrap();
+        let rotation = statement(&t.recovery, 1, Role::Release, &TestKey::new(9).public(), 1);
+        let overlay = OverlayMark {
+            channel: Channel::Stable,
+            timestamp: 1_000,
+            sha256: lodestar_update::Sha256::of(b"body"),
+            statements: vec![rotation],
+        };
+        let found = load(dir.path(), &e, std::slice::from_ref(&overlay));
+        assert!(matches!(found, Loaded::Found(_)));
+        assert_eq!(found.state().seq, 1, "the overlay's rotation counts");
+        // A forged statement (not the recovery key's) makes it damaged,
+        // not silently ignored.
+        let forged = statement(
+            &TestKey::new(7),
+            1,
+            Role::Release,
+            &TestKey::new(9).public(),
+            1,
+        );
+        let bad = OverlayMark {
+            statements: vec![forged],
+            ..overlay
+        };
+        assert!(load(dir.path(), &e, std::slice::from_ref(&bad)).damaged());
+        std::fs::remove_file(dir.path().join(FILE)).unwrap();
+        assert!(
+            load(dir.path(), &e, &[bad]).damaged(),
+            "a failed rebuild is damage"
         );
     }
 
