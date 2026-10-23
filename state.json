@@ -355,13 +355,14 @@
    "merge": "716f569"
   },
   "B14": {
-   "status": "running",
+   "status": "merged",
    "model": "opus",
    "session": "session_01Sd8GqCEZSAxKFSwHKrXyHt",
    "pr": null,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main. | 22:48 head c0c6334 main merged | 23:58 fuzz(query) failure = main bug res:<64 digits> (fix going into #88); \u00a72.18 applies (B14 no crates/search). | 00:24 conflicts after B13 merge (api lib.rs/openapi); asked session to merge main + regen. | 00:37 f30dc62 main+B13 merged, regen. Approved; HELD by #48 freeze (crates/api). | 00:42 freeze cancelled; merge on green."
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main. | 22:48 head c0c6334 main merged | 23:58 fuzz(query) failure = main bug res:<64 digits> (fix going into #88); \u00a72.18 applies (B14 no crates/search). | 00:24 conflicts after B13 merge (api lib.rs/openapi); asked session to merge main + regen. | 00:37 f30dc62 main+B13 merged, regen. Approved; HELD by #48 freeze (crates/api). | 00:42 freeze cancelled; merge on green. | 02:40 MERGED eb8266e (\u00a72.18 filter budget; merged tree verified locally: openapi unchanged, clippy, api+lodestar tests). B2b pinged.",
+   "merge": "eb8266e"
   },
   "B11b": {
    "status": "pending",
@@ -825,7 +826,7 @@
    "pr": 89,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1. | 00:44 openapi conflict after B13; told to wait for B14 + B4b-r2 merges, then one main merge + regen (runner must ping it)."
+   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1. | 00:44 openapi conflict after B13; told to wait for B14 + B4b-r2 merges, then one main merge + regen (runner must ping it). | 02:40 pinged to merge main + regen after B14 merge."
   },
   "B2c": {
    "status": "pending",
