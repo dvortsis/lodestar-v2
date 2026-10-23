@@ -564,7 +564,7 @@ impl<'a> Doc<'a> {
             Gate::Fuzzy(i) => match &clauses[i as usize] {
                 Compiled::Fuzzy { word, distance, .. } => {
                     self.keys()
-                        .could_be_near(word.chars.len(), word.has, usize::from(*distance))
+                        .could_be_near(&word.chars, word.has, usize::from(*distance))
                 }
                 _ => true,
             },
@@ -1194,6 +1194,12 @@ impl Places {
         };
         near(&self.parts, self.width) || near(&self.whole, 0)
     }
+}
+
+/// [`edit_distance`], for the prefilter's tests.
+#[cfg(test)]
+pub(crate) fn edit_distance_of(a: &str, b: &[char]) -> usize {
+    edit_distance(a, b)
 }
 
 fn edit_distance(a: &str, b: &[char]) -> usize {
