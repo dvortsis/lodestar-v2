@@ -1,7 +1,7 @@
 # Linux tarball
 
 `lodestar-<version>-<arch>-linux-musl.tar.gz` for `x86_64` and `aarch64`. Each
-holds one static musl `lodestar` (the same build as the Docker image, with the
+holds one static musl `lodestar` (built the same way as the Docker image, with the
 web UI embedded), `LICENSE`, `README.txt` and `lodestar.service`. A
 `.tar.gz.sha256` file sits beside each tarball.
 

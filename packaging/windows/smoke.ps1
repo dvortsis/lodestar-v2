@@ -8,8 +8,7 @@
          REMOVE_DATA=1 (data goes).
   -Zip : unpack the portable zip, run it with a temporary data folder, check /healthz.
 
-  Until the service entrypoint (slice M6-win) merges, the service is installed and
-  checked but not started: the binary is run directly instead.
+  The installed service is started for real: Start-Service, /healthz on 8090, Stop-Service.
 #>
 param(
   [string]$Msi,
@@ -102,9 +101,7 @@ if ($Msi) {
   Assert ($null -ne $svc) 'service Lodestar is not registered'
   Assert ($svc.PathName -match 'lodestar\.exe') "service points at $($svc.PathName)"
   Assert ($svc.StartName -eq 'NT SERVICE\Lodestar') "service runs as $($svc.StartName)"
-  $web = Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue
-  Assert ($null -ne $web) 'web firewall rule missing'
-  Assert ($web.Profile -eq 'Private') "web firewall rule profile is $($web.Profile), expected Private only"
+  Assert ($null -eq (Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue)) 'the web firewall rule was added without being asked'
   $dht = Get-NetFirewallRule -DisplayName 'Lodestar DHT*' -ErrorAction SilentlyContinue
   Assert ($null -ne $dht) 'DHT firewall rule missing'
   Assert ($dht.Profile -eq 'Private') "DHT firewall rule profile is $($dht.Profile), expected Private only"
@@ -119,8 +116,33 @@ if ($Msi) {
     Assert (-not ($ex -like "$dataDir*")) 'Defender exclusion was added without being asked'
   }
 
-  # --- run the installed binary directly (the service entrypoint is slice M6-win) ---
-  Test-Serve "$installDir\lodestar.exe" (Join-Path ([IO.Path]::GetTempPath()) 'lodestar-msi-data')
+  # --- the service itself: delayed automatic start, restart on failure, then really start it ---
+  $svcKey = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Lodestar'
+  Assert ($svcKey.Start -eq 2) "service start type is $($svcKey.Start), expected 2 (automatic)"
+  Assert ($svcKey.DelayedAutostart -eq 1) 'service is not set to delayed start'
+  Assert ($null -ne $svcKey.FailureActions) 'service has no failure (recovery) actions'
+  Assert ($svcKey.PreshutdownTimeout -eq 60000) "pre-shutdown timeout is $($svcKey.PreshutdownTimeout), expected 60000"
+  $failureFlag = (sc.exe qfailure Lodestar | Out-String)
+  Assert ($failureFlag -match 'RESTART') 'recovery actions are not restart'
+  Start-Service Lodestar
+  $up = $false
+  for ($i = 0; $i -lt 90 -and -not $up; $i++) {
+    try { $up = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8090/healthz').StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
+  }
+  if (-not $up) {
+    Write-Host '--- service log'
+    Get-ChildItem "$dataDir\logs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName; Get-Content $_.FullName -Tail 60 }
+    Write-Host '--- sc query'; sc.exe query Lodestar
+    Write-Host '--- event log'; Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 8 -ErrorAction SilentlyContinue | Format-List TimeCreated, Message
+  }
+  Assert $up 'the service never answered /healthz on 8090'
+  Write-Host "service healthz: $((Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8090/healthz').Content)"
+  $index = (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8090/').Content
+  Assert ($index -notmatch 'UI not built') '/ served the stub page: the web UI was not embedded'
+  Stop-Service Lodestar
+  $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
+  Assert ($svc.State -eq 'Stopped') "service is $($svc.State) after Stop-Service"
+  Assert ($svc.ExitCode -eq 0) "service stopped with exit code $($svc.ExitCode)"
 
   # --- uninstall keeps data ---
   # What the service leaves behind once it has run: its marker plus data.
@@ -159,7 +181,10 @@ if ($Msi) {
   Assert (-not (Get-Acl $dataDir).AreAccessRulesProtected) 'test setup: the folder should inherit permissions now'
 
   # --- reinstall with the Defender box ticked, uninstall with REMOVE_DATA=1 ---
-  Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'DEFENDER_EXCLUSION=1', '/l*v', "`"$logs\msi-install2.log`"") 'reinstall'
+  Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'DEFENDER_EXCLUSION=1', 'WEB_FIREWALL=1', '/l*v', "`"$logs\msi-install2.log`"") 'reinstall'
+  $web = Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue
+  Assert ($null -ne $web) 'web firewall rule missing when asked for'
+  Assert ($web.Profile -eq 'Private') "web firewall rule profile is $($web.Profile), expected Private only"
   $acl = Get-Acl $dataDir
   Assert $acl.AreAccessRulesProtected 'the empty inherited folder was not replaced by a private one'
   $broad = @($acl.Access | Where-Object { $_.IdentityReference.Value -match '(Users|Everyone|Authenticated Users)$' })

@@ -495,10 +495,6 @@ jobs:
       MSI_VERSION: ${{ needs.package-gate.outputs.msi_version }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_RELEASE_DEBUG: "false"
-      # CODE SIGNING: skipped while these are unset (owner action; see
-      # packaging/windows/README.md). packaging/windows/sign.ps1 does the work.
-      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -525,6 +521,12 @@ jobs:
 
       - name: Sign lodestar.exe (skipped without a certificate)
         shell: pwsh
+        # CODE SIGNING: the certificate is visible to this step only, and only from the `release` or
+        # `nightly` environment (never on pull requests). Skipped while unset (owner action; see
+        # packaging/windows/README.md).
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: packaging/windows/sign.ps1 target/x86_64-pc-windows-msvc/release/lodestar.exe
 
       - name: Portable zip
@@ -554,6 +556,12 @@ jobs:
 
       - name: Sign the MSI (skipped without a certificate)
         shell: pwsh
+        # CODE SIGNING: the certificate is visible to this step only, and only from the `release` or
+        # `nightly` environment (never on pull requests). Skipped while unset (owner action; see
+        # packaging/windows/README.md).
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: packaging/windows/sign.ps1 "dist/lodestar-$($env:MSI_VERSION)-x86_64.msi"
 
       - name: Checksums
@@ -627,7 +635,7 @@ jobs:
         working-directory: dist
         run: |
           sha256sum --check --quiet -- *.sha256
-          cat -- *.sha256 | sort -k2 >SHA256SUMS
+          cat -- *.sha256 | tr -d '\r' | sort -k2 >SHA256SUMS
           ls -l
           cat SHA256SUMS
 
@@ -646,11 +654,11 @@ jobs:
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
           umask 077
+          trap 'rm -f "$RUNNER_TEMP/release.key"' EXIT
           printf '%s\n' "$RELEASE_SIGNING_KEY" >"$RUNNER_TEMP/release.key"
           printf '%s\n' "$RELEASE_SIGNING_KEY_PASSWORD" |
             minisign -S -s "$RUNNER_TEMP/release.key" -t "Lodestar $TAG SHA256SUMS" \
               -m dist/SHA256SUMS -x dist/SHA256SUMS.minisig
-          rm -f "$RUNNER_TEMP/release.key"
           # Check it against the public key in the repository, as a user would.
           minisign -V -p packaging/keys/lodestar-release.pub -m dist/SHA256SUMS -x dist/SHA256SUMS.minisig
 
@@ -662,14 +670,20 @@ jobs:
         run: |
           prerelease=
           case "$TAG" in *-*) prerelease=--prerelease ;; esac
-          files=$(ls dist/*.tar.gz dist/*.msi dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.minisig 2>/dev/null)
+          # An array, not `ls`: the .minisig only exists when the signing key does, and a missing
+          # file must not stop the step (bash -e).
+          files=(dist/*.tar.gz dist/*.msi dist/*.zip dist/*.sha256 dist/SHA256SUMS)
+          [ -f dist/SHA256SUMS.minisig ] && files+=(dist/SHA256SUMS.minisig)
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            # shellcheck disable=SC2086
-            gh release upload "$TAG" --repo "$REPO" --clobber $files
+            # A re-run must never overwrite files on a release the owner has published.
+            if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)" != true ]; then
+              echo "::error::$TAG is already published; not touching its files"
+              exit 1
+            fi
+            gh release upload "$TAG" --repo "$REPO" --clobber "${files[@]}"
           else
-            # shellcheck disable=SC2086
             gh release create "$TAG" --repo "$REPO" --draft $prerelease \
               --title "Lodestar ${TAG#v}" \
               --notes "Draft. Windows files are not code-signed (SmartScreen will warn): check each download against SHA256SUMS, and SHA256SUMS against SHA256SUMS.minisig when that file is attached." \
-              $files
+              "${files[@]}"
           fi

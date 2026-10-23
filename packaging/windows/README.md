@@ -20,15 +20,17 @@ Check the download against `SHA256SUMS` on the release page first
 - Keeps your data in `C:\ProgramData\Lodestar`. **Uninstalling keeps it** unless
   you ask otherwise (below).
 - Registers a Windows service named **Lodestar**, running as its own
-  unprivileged account, `NT SERVICE\Lodestar`, set to start by hand. *Until the service entrypoint
-  ships (slice M6-win), starting it from Services will fail. To run Lodestar now,
-  use the portable zip, or run `lodestar.exe serve` from a terminal.*
+  unprivileged account, `NT SERVICE\Lodestar`. It starts by itself a little after
+  Windows boots (delayed start) and is restarted if it fails, up to two times a day.
+  The MSI starts nothing during install: start it from Services, or restart the PC.
 - Locks `C:\ProgramData\Lodestar` so only SYSTEM, Administrators and the
   Lodestar service account can use it. Other users on the PC can't read your data.
-- Opens two firewall ports for `lodestar.exe`, on **private networks only**:
-  `8090/tcp` (the web page) and `6881/udp` (the DHT).
+- Opens `6881/udp` (the DHT) for `lodestar.exe`, on **private networks only**.
+  The web page (`8090/tcp`) is **not** opened to other PCs unless you tick the
+  second box on the Options page (or install with `WEB_FIREWALL=1`). The page on
+  this PC works either way.
 - Adds a Start-menu shortcut that opens `http://localhost:8090/`.
-- Offers one optional box on the Options page: **exclude the data folder from
+- Offers two optional boxes on the Options page, both off by default. The first: **exclude the data folder from
   Windows Defender scans**. It is **off** by default.
 
 ### The Defender exclusion: should you tick it?
@@ -44,7 +46,7 @@ it off: Lodestar still works, only slower. Remove the exclusion any time in
 ## Silent install and uninstall
 
 ```powershell
-msiexec /i lodestar-0.5.0-x86_64.msi /qn DEFENDER_EXCLUSION=1   # box ticked; leave it out for off
+msiexec /i lodestar-0.5.0-x86_64.msi /qn DEFENDER_EXCLUSION=1 WEB_FIREWALL=1   # boxes ticked; leave them out for off
 msiexec /x lodestar-0.5.0-x86_64.msi /qn                        # uninstall, keep data
 msiexec /x lodestar-0.5.0-x86_64.msi /qn REMOVE_DATA=1          # uninstall and delete the data
 ```
@@ -78,8 +80,9 @@ uninstalls with `REMOVE_DATA=1`.
 ## Signing
 
 `sign.ps1` signs `lodestar.exe` and the MSI with `signtool`, but only when the
-repository secrets `WINDOWS_CERT_PFX_BASE64` (the `.pfx`, base64) and
-`WINDOWS_CERT_PASSWORD` exist. Without them the step prints a notice and skips,
+environment secrets `WINDOWS_CERT_PFX_BASE64` (the `.pfx`, base64) and
+`WINDOWS_CERT_PASSWORD` exist. Add them to the GitHub environments `release` and
+`nightly` (not as repository secrets, so pull requests can never see them). Without them the step prints a notice and skips,
 so unsigned builds keep working. **Owner action:** buy a code-signing certificate
 and add the two secrets. Nothing else needs to change. The update engine (§12.2)
 also checks Authenticode signatures once they exist.
