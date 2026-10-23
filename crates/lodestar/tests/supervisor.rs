@@ -263,6 +263,16 @@ impl Env {
     }
 }
 
+/// A failing test never leaves a supervisor (and so its child) running.
+impl Drop for Running {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 impl Running {
     fn log(&mut self) -> String {
         let mut out = String::new();
@@ -284,6 +294,18 @@ impl Running {
         );
         let status = self.child.wait().unwrap();
         status.code().unwrap_or(-1)
+    }
+
+    /// Its status once it exits, failing the test after `within`.
+    fn exit_within(&mut self, within: Duration) -> i32 {
+        let start = Instant::now();
+        loop {
+            if let Some(s) = self.child.try_wait().unwrap() {
+                return s.code().unwrap_or(-1);
+            }
+            assert!(start.elapsed() < within, "still running: {}", self.log());
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
@@ -942,10 +964,7 @@ fn a_child_that_ignores_a_stop_is_killed() {
             .unwrap()
             .success()
     );
-    let start = Instant::now();
-    let status = r.child.wait().unwrap();
-    assert_eq!(status.code(), Some(128 + 9), "{}", r.log());
-    assert!(start.elapsed() < Duration::from_secs(20));
+    assert_eq!(r.exit_within(Duration::from_secs(20)), 128 + 9);
 }
 
 /// The child stops when its supervisor dies (PR_SET_PDEATHSIG), even by
@@ -996,4 +1015,31 @@ fn an_unreadable_store_is_never_migrated_unrecorded() {
         env.json("halted.json").unwrap()["refused"].is_string(),
         "{log}"
     );
+}
+
+/// A damaged `pending` for a version something was rolled back to
+/// restarts as restored: failing halts, never a second rollback.
+#[test]
+fn a_damaged_pending_after_a_rollback_halts_instead_of_rolling_back_again() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, false);
+    std::fs::write(
+        env.bin("history.json"),
+        json!({"entries": [{"version": "0.9.5", "from": NEW, "at": 1,
+                            "result": "rolled_back", "reason": "failed"}]})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(env.bin("pending"), b"{ damaged").unwrap();
+    let o = env.overrides(json!({"fault": format!("child:crash@{NEW}")}));
+    let (status, log) = env.run_to_exit(&o, LONG);
+    assert_eq!(status, 1, "{log}");
+    let halted = env.json("halted.json").unwrap();
+    assert_eq!(
+        (halted["failed"].as_str(), halted["previous"].as_str()),
+        (Some("0.9.5"), Some(NEW))
+    );
+    assert!(env.bin(NEW).exists() && !env.bin("rollback.json").exists());
+    assert_eq!(env.json("active").unwrap()["version"], NEW);
 }

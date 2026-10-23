@@ -26,6 +26,7 @@ use rustix::process::{Pid, Signal, WaitOptions};
 use tokio::signal::unix::{SignalKind, signal};
 
 use super::control::{self, Action, Hint};
+use super::history::{self, History, Outcome};
 use super::journal::{self, Ctx, NotBegun, Unfinished};
 use super::layout::{self, Bin};
 use super::overlay::{self, Refusal};
@@ -401,6 +402,10 @@ impl Supervisor {
     /// know) starts `active`'s version on a fresh probation (attempts 0),
     /// so its migration is recorded and its self-test runs; with no
     /// `active` it goes. `Some` to exit: it couldn't be rewritten.
+    ///
+    /// A version something was rolled back to (or one whose history can't
+    /// be read) restarts as `restored`, so failing halts: never a second
+    /// level of rollback.
     fn repair_pending(&self) -> Option<ExitCode> {
         let Err(e) = pending::read(&self.bin) else {
             return None;
@@ -417,11 +422,15 @@ impl Supervisor {
             };
         };
         say!("{e}: {} starts a fresh probation", a.version);
+        let (kind, previous) = match self.rolled_back_to(&a.version) {
+            Some(failed) => (Kind::Restored, failed),
+            None => (Kind::Install, a.previous),
+        };
         let fresh = Pending {
             format: pending::PENDING_FORMAT,
             version: a.version,
-            previous: a.previous,
-            kind: Kind::Install,
+            previous,
+            kind,
             attempts: 0,
             used_ms: 0,
             index_before: journal::list_index(&self.index_root),
@@ -433,6 +442,20 @@ impl Supervisor {
                 Some(ExitCode::FAILURE)
             }
         }
+    }
+
+    /// The version rolled back to `version`, per `history.json`; also
+    /// `Some` (an unnamed one) when the history can't be read.
+    fn rolled_back_to(&self, version: &str) -> Option<String> {
+        let entries = match self.bin.read::<History>(history::FILE) {
+            Ok(h) => h.unwrap_or_default().entries,
+            Err(_) => return Some("an earlier version".into()),
+        };
+        entries
+            .into_iter()
+            .rev()
+            .find(|e| e.result == Outcome::RolledBack && e.from == version)
+            .map(|e| e.version)
     }
 
     /// `halted.json`: stop, unless this image is newer than both versions.
