@@ -465,6 +465,172 @@ const ADULT: &[AdultFixture] = &[
         &[("Inside.the.Porn.Industry.2019.720p.mp4", "1G")],
         None,
     ),
+    // A name with no known extension is typed Other, an `.epub` Ebook,
+    // and a lone `.rar` or `.zip` Other: each still gets its nearest
+    // kind when the signals are there.
+    (
+        "Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL",
+        &[("Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL", "1G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Lantern.Bay.Parody.XXX.2020.1080p.MP4-KSTRL",
+        &[("Lantern.Bay.Parody.XXX.2020.1080p.MP4-KSTRL", "1G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL.mp4",
+        &[("Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL.mp4", "1G")],
+        Some(AdultKind::Movie),
+    ),
+    (
+        "Lantern.Bay.Parody.XXX.720p",
+        &[("Lantern.Bay.Parody.XXX.720p", "1G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Lantern.Bay.Parody.XXX",
+        &[("Lantern.Bay.Parody.XXX", "1G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Lantern.Bay.Parody.XXX.VR180.LR.2160p",
+        &[("Lantern.Bay.Parody.XXX.VR180.LR.2160p", "6G")],
+        Some(AdultKind::Vr),
+    ),
+    // Several files, the largest with no extension.
+    (
+        "Lantern.Bay.Parody.XXX",
+        &[
+            ("Lantern.Bay.Parody.XXX.1080p", "1G"),
+            ("Lantern.Bay.Parody.XXX.nfo", "4K"),
+            ("cover.jpg", "200K"),
+        ],
+        Some(AdultKind::Scene),
+    ),
+    // Archives only.
+    (
+        "Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL",
+        &[("Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL.rar", "1G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Somesite Collection",
+        &[("Brazzers.Collection.Part1.zip", "4G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Lantern.Bay.Parody.XXX.1080p.MP4-KSTRL",
+        &[
+            ("lantern.bay.parody.xxx.1080p.rar", "50M"),
+            ("lantern.bay.parody.xxx.1080p.r00", "50M"),
+            ("lantern.bay.parody.xxx.1080p.r01", "50M"),
+            ("lantern.bay.parody.xxx.1080p.sfv", "1K"),
+        ],
+        Some(AdultKind::Movie),
+    ),
+    // Ebooks.
+    (
+        "Jane Doe - Lantern Bay Nights [Hentai] [EPUB]",
+        &[("Jane Doe - Lantern Bay Nights.epub", "4M")],
+        Some(AdultKind::Comics),
+    ),
+    (
+        "Lantern.Bay.Nights.XXX.Edition.epub",
+        &[("Lantern.Bay.Nights.XXX.Edition.epub", "4M")],
+        Some(AdultKind::Comics),
+    ),
+    // Mainstream Other and Ebook stay out.
+    (
+        "Irvine Welsh - Porno (2002) [EPUB]",
+        &[("Irvine Welsh - Porno.epub", "1M")],
+        None,
+    ),
+    (
+        "Alex Comfort - The Joy of Sex (2008) [EPUB]",
+        &[("Alex Comfort - The Joy of Sex.epub", "20M")],
+        None,
+    ),
+    (
+        "Human Sexuality - Porn and Uncensored Media - Lecture Notes",
+        &[("Human Sexuality - Lecture Notes.epub", "5M")],
+        None,
+    ),
+    (
+        "Hot.Girls.Wanted.Porn.Industry.NSFW.Documentary.2015",
+        &[("Hot.Girls.Wanted.Porn.Industry.NSFW.Documentary.2015", "1G")],
+        None,
+    ),
+    (
+        "Sex.Explained.S01.1080p",
+        &[("Sex.Explained.S01.1080p", "3G")],
+        None,
+    ),
+    (
+        "NSFW.Image.Detector.Model.Weights",
+        &[("nsfw_model_weights.zip", "300M")],
+        None,
+    ),
+    (
+        "Project.Backup.2019",
+        &[("project_backup_2019.zip", "2G"), ("readme.txt", "1K")],
+        None,
+    ),
+    (
+        "xXx.State.of.the.Union.2005.Soundtrack",
+        &[("xXx.State.of.the.Union.2005.Soundtrack.zip", "120M")],
+        None,
+    ),
+    // Only the name and the largest file's name are read, never its
+    // folders: a counter on a folder doesn't pull a tagged torrent out
+    // of Adult, and a tag on a folder doesn't pull a mainstream one in.
+    (
+        "Some.Title.XXX.1080p.MP4-GRP",
+        &[("Massage Therapy/scene.mp4", "1G")],
+        Some(AdultKind::Movie),
+    ),
+    (
+        "Brazzers Collection 2023",
+        &[("Doctor Adventures - Medical Exam/scene01.mp4", "1G")],
+        Some(AdultKind::Movie),
+    ),
+    (
+        "Some.Site.Pack.XXX",
+        &[
+            ("Anatomy Lesson/clip.mp4", "1G"),
+            ("Health Club Fun/clip.mp4", "900M"),
+        ],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Vin Diesel Collection",
+        &[(
+            "03. xXx Return of Xander Cage (2017)/xXx.Return.of.Xander.Cage.2017.1080p.mkv",
+            "9G",
+        )],
+        None,
+    ),
+    (
+        "Danny Brown Discography",
+        &[("2011 - XXX/02 - Radio Song.flac", "30M")],
+        None,
+    ),
+    ("My Music", &[("Artist - XXX (Album)/01.flac", "30M")], None),
+    (
+        "Photos 2020",
+        &[("2020 Trip/Day 1 xxx/IMG_001.raw", "25M")],
+        None,
+    ),
+    (
+        "Backup",
+        &[("Brazzers Contract Scans/contract.pdf", "2M")],
+        None,
+    ),
+    (
+        "Anime.Collection [hentai-free]",
+        &[("Anime.Collection.Episode.01.mkv", "1G")],
+        None,
+    ),
 ];
 
 #[test]
@@ -513,7 +679,7 @@ fn corrections_override_adult_detection_and_junk() {
     assert_eq!(c.confidence, 100);
     // Relabelling a classification gives the same.
     assert_eq!(classify(movie, &files).as_adult(), c);
-    // Ebook and Other, which detection leaves alone, get a kind too.
+    // Ebook and Other get the nearest kind.
     let book = classify_corrected("Some Book", &[file("Some Book.epub", "2M")], fix);
     assert_eq!(book.adult_kind, Some(AdultKind::Comics));
 

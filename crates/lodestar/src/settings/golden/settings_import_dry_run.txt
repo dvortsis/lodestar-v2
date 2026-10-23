@@ -1,0 +1,2 @@
+200
+{"applied":false,"changes":[{"field":"intensity","from":"low","from_source":"db","restart_required":false,"section":"crawler","to":"aggressive"}],"revisions":{"content":0,"crawler":1,"general":0,"logging":0,"network":0,"preferences":1,"search":0,"storage":0,"transport":0},"skipped":[{"env":null,"key":"crawler.intensity2","reason":"unknown"},{"env":"LODESTAR_DHT_PORT","key":"network.dht_port","reason":"set_by_environment"}],"unchanged":0}

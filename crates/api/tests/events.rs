@@ -7,8 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use axum::{Extension, Router};
+use lodestar_api::auth::ProxyConfig;
 use lodestar_api::dto::events::{CrawlerEvent, Event, TorrentsEvent};
 use lodestar_api::events::{EventHub, EventSources, EventsConfig};
 use lodestar_api::{ApiState, Auth, router};
@@ -51,9 +53,12 @@ fn fixture(config: EventsConfig) -> Fixture {
                 reader: Arc::new(Mutex::new(reader)),
                 filters: None,
                 settings: None,
+                ops: None,
+                user_data: None,
                 hot: None,
                 events: None,
                 adult: Default::default(),
+                insights: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -184,7 +189,7 @@ fn get(uri: &str, headers: &[(&str, &str)]) -> Request<Body> {
 fn torrents(added: u64) -> Event {
     Event::Torrents(TorrentsEvent {
         added,
-        max_id: added as i64,
+        max_id: Some(added as i64),
     })
 }
 
@@ -444,6 +449,86 @@ async fn a_stream_ends_with_its_session() {
 }
 
 #[tokio::test]
+async fn a_proxy_signed_stream_lives_past_heartbeats_and_ends_with_the_proxy() {
+    let f = fixture(config());
+    // A password must exist before the proxy can sign anyone in.
+    let _ = session(&f.auth);
+    f.auth
+        .set_proxy(ProxyConfig {
+            enabled: true,
+            trusted: vec!["127.0.0.1/32".into()],
+            ..ProxyConfig::default()
+        })
+        .unwrap();
+    let addr = serve(f.app.clone()).await;
+    // No cookie: the trusted peer's user header is the session.
+    let mut c = Conn::open(addr, "/api/v1/events", &[("Remote-User", "alice")]).await;
+    c.until("retry:", SOON).await;
+    // Several heartbeats re-check it (100 ms apart) and keep it open.
+    c.until_more(": keep-alive", 3).await;
+    // Turning proxy sign-in off ends it at the next heartbeat.
+    f.auth.set_proxy(ProxyConfig::default()).unwrap();
+    c.until_closed(SOON).await;
+}
+
+#[tokio::test]
+async fn a_proxy_user_loses_the_stream_when_no_longer_allowed() {
+    let f = fixture(config());
+    let _ = session(&f.auth);
+    let proxy = |users: Vec<String>| ProxyConfig {
+        enabled: true,
+        trusted: vec!["127.0.0.1/32".into()],
+        allowed_users: users,
+        ..ProxyConfig::default()
+    };
+    f.auth.set_proxy(proxy(vec!["alice".into()])).unwrap();
+    let addr = serve(f.app.clone()).await;
+    let mut c = Conn::open(addr, "/api/v1/events", &[("Remote-User", "alice")]).await;
+    c.until(": keep-alive", SOON).await;
+    f.auth.set_proxy(proxy(vec!["bob".into()])).unwrap();
+    c.until_closed(SOON).await;
+}
+
+#[tokio::test]
+async fn made_up_cookies_beside_a_proxy_user_share_one_cap() {
+    // Two streams per session here.
+    let f = fixture(config());
+    let _ = session(&f.auth);
+    f.auth
+        .set_proxy(ProxyConfig {
+            enabled: true,
+            trusted: vec!["127.0.0.1/32".into()],
+            ..ProxyConfig::default()
+        })
+        .unwrap();
+    let addr = serve(f.app.clone()).await;
+    let mut open = Vec::new();
+    for i in 0..2 {
+        let cookie = format!("lodestar=made-up-{i}");
+        let mut c = Conn::open(
+            addr,
+            "/api/v1/events",
+            &[("Remote-User", "alice"), ("Cookie", &cookie)],
+        )
+        .await;
+        c.until("retry:", SOON).await;
+        open.push(c);
+    }
+    // A third invented cookie is still alice's session: refused.
+    let mut req = get(
+        "/api/v1/events",
+        &[("remote-user", "alice"), ("cookie", "lodestar=made-up-2")],
+    );
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let (status, _, body) = call(&f.app, req).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // Another user from the same address has a bucket of their own.
+    let mut bob = Conn::open(addr, "/api/v1/events", &[("Remote-User", "bob")]).await;
+    bob.until("retry:", SOON).await;
+}
+
+#[tokio::test]
 async fn cross_origin_requests_follow_the_get_rule() {
     let f = fixture(config());
     let cookie = session(&f.auth);
@@ -492,9 +577,12 @@ async fn without_a_hub_it_is_unavailable() {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
+            user_data: None,
             hot: None,
             events: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let cookie = session(&auth);
@@ -569,7 +657,12 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
     let adult = lodestar_api::AdultVisibility::follow(move || *rx.borrow());
     let hook = Arc::new(CommitHook::default());
     let hub = EventHub::start(
-        config(),
+        // Three streams from one session: the live one and two
+        // reconnects.
+        EventsConfig {
+            max_per_session: 4,
+            ..config()
+        },
         EventSources {
             commits: Some(hook.clone()),
             adult: adult.clone(),
@@ -588,9 +681,12 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
                 )),
                 filters: None,
                 settings: None,
+                ops: None,
+                user_data: None,
                 hot: None,
                 events: None,
                 adult,
+                insights: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -636,25 +732,90 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
         "Another.Clip.XXX.720p.mp4",
         "Third.Movie.2017.2160p.mkv",
     ];
-    // Hidden (the default): 3 of 5.
+    // Hidden (the default): 3 of 5, and no id (B4b-r2).
     run(&mixed, &mut store);
-    c.until("data: {\"added\":3,\"max_id\":5}\n\n", SOON).await;
-    // Shown: the same mix counts 5.
+    c.until("data: {\"added\":3,\"max_id\":null}\n\n", SOON)
+        .await;
+    // Shown: the same mix counts 5, with the newest id.
     show.send_replace(true);
     let again: Vec<String> = mixed.iter().map(|n| n.replacen('.', ".Two.", 1)).collect();
     let again: Vec<&str> = again.iter().map(String::as_str).collect();
     run(&again, &mut store);
     c.until("data: {\"added\":5,\"max_id\":10}\n\n", SOON).await;
-    // Hidden again: an all-Adult commit sends nothing, and the next
-    // event carries the newest watermark.
+    // Hidden again: an all-Adult commit sends nothing, and later events
+    // carry no id.
     show.send_replace(false);
     run(
         &["Third.Clip.XXX.1080p.mp4", "Fourth.Clip.XXX.720p.mp4"],
         &mut store,
     );
     run(&["Fourth.Movie.2016.1080p.mkv"], &mut store);
-    c.until("data: {\"added\":1,\"max_id\":13}\n\n", SOON).await;
-    assert!(!c.text.contains("\"max_id\":12"), "{}", c.text);
-    assert_eq!(c.text.matches("event: torrents").count(), 3, "{}", c.text);
+    // Each its own event: three complete `data:` frames so far.
+    c.until_more("}\n\n", 2).await;
+    run(
+        &["Fifth.Movie.2015.1080p.mkv", "Fifth.Clip.XXX.1080p.mp4"],
+        &mut store,
+    );
+    // Four complete `data:` frames.
+    c.until_more("}\n\n", 3).await;
+    let frames = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(str::to_string)
+            .collect()
+    };
+    let hidden_then = r#"{"added":1,"max_id":null}"#;
+    let sent = [
+        r#"{"added":3,"max_id":null}"#,
+        r#"{"added":5,"max_id":10}"#,
+        hidden_then,
+        hidden_then,
+    ];
+    assert_eq!(frames(&c.text), sent, "{}", c.text);
+
+    // A tab that reconnects from before the first event after Adult was
+    // turned off: the hidden events as they were, a `resync` in place of
+    // the one made while Adult was shown, and no frame with an id.
+    let ids = c.ids();
+    assert_eq!(ids.len(), 4, "{}", c.text);
+    let epoch = ids[0].split('-').next().unwrap();
+    let from_start = format!("{epoch}-0");
+    let mut back = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie), ("Last-Event-ID", &from_start)],
+    )
+    .await;
+    back.until_more("}\n\n", 3).await;
+    // The frames after `retry:`, without the chunked encoding's sizes.
+    let replayed: String = back
+        .text
+        .split("retry: 5000\n\n")
+        .nth(1)
+        .unwrap()
+        .split("\r\n")
+        .filter(|part| !part.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect();
+    assert_eq!(
+        replayed,
+        format!(
+            "id: {}\nevent: torrents\ndata: {}\n\n\
+             event: resync\ndata: {{\"reason\":\"visibility\"}}\n\n\
+             id: {}\nevent: torrents\ndata: {hidden_then}\n\n\
+             id: {}\nevent: torrents\ndata: {hidden_then}\n\n",
+            ids[0], sent[0], ids[2], ids[3]
+        )
+    );
+    // Shown again, the same reconnect replays them as they were.
+    show.send_replace(true);
+    let mut shown = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie), ("Last-Event-ID", &from_start)],
+    )
+    .await;
+    shown.until_more("}\n\n", 3).await;
+    assert_eq!(frames(&shown.text), sent, "{}", shown.text);
+    assert!(!shown.text.contains("resync"), "{}", shown.text);
     hub.close();
 }

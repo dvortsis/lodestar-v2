@@ -187,8 +187,12 @@ fn the_watermark_survives_restarts_and_crashes() {
     assert_eq!(w.catch_up(&mut store, 10).unwrap(), 0);
 }
 
+/// That the indexer follows the store, not how fast: a busy CI runner can
+/// starve its thread for seconds. The §3 budget (new torrent → searchable
+/// in 5 s) is measured by `search-bench --gate`, on a quiet machine with
+/// the production settings.
 #[test]
-fn the_live_indexer_follows_the_store_within_seconds() {
+fn the_live_indexer_follows_the_store() {
     use lodestar_search::{LiveConfig, LiveIndexer};
     use std::time::{Duration, Instant};
     let dir = tempfile::tempdir().unwrap();
@@ -208,10 +212,11 @@ fn the_live_indexer_follows_the_store_within_seconds() {
         },
     )
     .unwrap();
+    // The deadline only stops a hang.
     let wait = |n: u64| {
         let start = Instant::now();
         while index.num_docs() < n {
-            assert!(start.elapsed() < Duration::from_secs(5), "NRT budget");
+            assert!(start.elapsed() < Duration::from_secs(60), "{n} indexed");
             std::thread::sleep(Duration::from_millis(10));
         }
     };
@@ -746,25 +751,25 @@ fn the_adult_count_matches_what_type_adult_finds() {
     assert_eq!(n, 5);
     let index = SearchIndex::in_memory().unwrap();
     let mut w = index.writer(15 << 20).unwrap();
-    let (added, adult_added, _) = w.catch_up_counted(&mut store, 100).unwrap();
+    let c = w.catch_up_counted(&mut store, 100).unwrap();
     w.commit().unwrap();
-    assert_eq!((added, adult_added), (5, 2));
-    assert_eq!(names(&index, "type:adult").len(), adult_added);
-    assert_eq!(names(&index, "-type:adult").len(), added - adult_added);
+    assert_eq!((c.added, c.adult_added), (5, 2));
+    assert_eq!(names(&index, "type:adult").len(), c.adult_added);
+    assert_eq!(names(&index, "-type:adult").len(), c.added - c.adult_added);
 
     // Not enriched yet: not Adult in the index either, so not counted.
     add(&mut store, &[adult("Fresh.Clip"), other("Fresh.Movie")]);
-    let (added, adult_added, _) = w.catch_up_counted(&mut store, 100).unwrap();
+    let c = w.catch_up_counted(&mut store, 100).unwrap();
     w.commit().unwrap();
-    assert_eq!((added, adult_added), (2, 0));
+    assert_eq!((c.added, c.adult_added), (2, 0));
     assert_eq!(names(&index, "type:adult").len(), 2);
     // Enriched later: re-indexed, so neither count moves, though search
     // now finds it as Adult.
     lodestar_pipeline::enrich::enrich_stored(&mut store, 5, 100)
         .unwrap()
         .unwrap();
-    let (added, adult_added, replayed) = w.catch_up_counted(&mut store, 100).unwrap();
+    let c = w.catch_up_counted(&mut store, 100).unwrap();
     w.commit().unwrap();
-    assert_eq!((added, adult_added, replayed), (0, 0, 2));
+    assert_eq!((c.added, c.adult_added, c.replayed), (0, 0, 2));
     assert_eq!(names(&index, "type:adult").len(), 3);
 }

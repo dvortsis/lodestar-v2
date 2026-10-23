@@ -87,7 +87,7 @@ fn record(e: Option<&Enriched>) -> Option<Record> {
 /// A search result row for `row`, its classification and swarm fields
 /// filled as search fills them.
 fn hit_row(row: &TorrentRow, score: f32, e: Option<Enriched>, swarm: Summary) -> SearchHit {
-    let mut hit = torrents::hit(row, score, None, swarm, None);
+    let mut hit = torrents::hit(row, score, None, swarm);
     search::enrich(&mut hit, e);
     hit
 }

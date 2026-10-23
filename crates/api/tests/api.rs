@@ -142,7 +142,10 @@ fn fixture() -> Fixture {
             events: Some(events.clone()),
             filters: None,
             settings: None,
+            ops: None,
+            user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let hashes = infos
@@ -417,9 +420,36 @@ async fn swarm_health_in_search_and_detail() {
     let (status, _, body) = call(&f.app, get("/api/v1/search?q=seeders:%3E%3D10", c)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["total"], 1);
+    // Explain (B5c's block) carries the swarm priors relevance ranked by.
     let (_, _, body) = call(&f.app, get("/api/v1/search?q=knight&explain=true", c)).await;
-    let parts = &body["hits"][0]["explain"];
-    assert!(parts["seeders"].as_f64().unwrap() > 1.0, "{body}");
+    let explain = &body["explain"];
+    assert_eq!(explain["two_phase"], true, "{body}");
+    let first = &explain["hits"][0];
+    assert_eq!(first["id"], body["hits"][0]["id"]);
+    let priors = &first["priors"];
+    assert!(priors["seeders"].as_f64().unwrap() > 1.0, "{body}");
+    let product: f64 = [
+        "seeders",
+        "freshness",
+        "trackers",
+        "junk",
+        "swarm_consistency",
+    ]
+    .iter()
+    .map(|k| priors[k].as_f64().unwrap())
+    .product();
+    let text = first["phase1"].as_f64().unwrap()
+        + first["phase2"]["name"].as_f64().unwrap()
+        + first["phase2"]["title"].as_f64().unwrap();
+    let score = first["score"].as_f64().unwrap();
+    assert!(
+        (text * product - score).abs() <= 1e-3 * score.abs().max(1.0),
+        "{body}"
+    );
+    assert!(
+        body["hits"][0].get("explain").is_none(),
+        "one explain shape only"
+    );
     for bad in ["sort=sideways", "tz=900"] {
         let (status, _, _) = call(&f.app, get(&format!("/api/v1/search?q=x&{bad}"), c)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
@@ -481,6 +511,32 @@ async fn errors_share_one_envelope() {
         get("/api/v1/settings", None),
         get("/api/v1/settings/crawler", None),
         get("/api/v1/settings/nope", None),
+        get("/api/v1/insights/overview", None),
+        get("/api/v1/insights/events?from=0&to=1", None),
+        get("/api/v1/user-items", None),
+        get("/api/v1/user-items/labels", None),
+        get(
+            "/api/v1/user-items/abababababababababababababababababababab",
+            None,
+        ),
+        get("/api/v1/collections", None),
+        get("/api/v1/collections/1", None),
+        post("/api/v1/collections/1/items", None, json!({})),
+        post("/api/v1/collections/1/items/remove", None, json!({})),
+        Request::put("/api/v1/collections/1/order")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        get("/api/v1/saved-searches", None),
+        get("/api/v1/saved-searches/1", None),
+        get("/api/v1/export", None),
+        get("/api/v1/jobs", None),
+        get("/api/v1/jobs/1", None),
+        get("/api/v1/saved-searches/1/alerts", None),
+        get("/api/v1/alerts/unread", None),
+        post("/api/v1/alerts/read", None, json!({ "through": 1 })),
+        get("/api/v1/feeds/1", None),
+        get("/api/v1/logs/catalog", None),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
@@ -488,6 +544,34 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/settings/crawler")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/keys", None),
+        post("/api/v1/keys", None, json!({})),
+        Request::delete("/api/v1/keys/1")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        post("/api/v1/keys/1/regenerate", None, json!({})),
+        post("/api/v1/keys/1/revoke", None, json!({})),
+        get("/api/v1/auth/proxy", None),
+        Request::put("/api/v1/auth/proxy")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"enabled":false}"#))
+            .unwrap(),
+        post("/api/v1/sessions/revoke-others", None, json!({})),
+        // A key or the proxy header alone is no session.
+        Request::get("/api/v1/search?q=x")
+            .header(
+                "x-api-key",
+                "lsk_AAAAAAAA_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        Request::get("/api/v1/search?q=x")
+            .header("remote-user", "admin")
+            .body(Body::empty())
+            .unwrap(),
+        get("/api/v1/system", None),
+        post("/api/v1/system/restart", None, json!({})),
     ] {
         let (status, _, body) = call(&f.app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -638,7 +722,10 @@ async fn protected_routes_fail_closed_outside_the_router() {
         hot: None,
         events: None,
         settings: None,
+        ops: None,
+        user_data: None,
         adult: Default::default(),
+        insights: None,
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

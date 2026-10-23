@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use proptest::prelude::*;
 
 use super::*;
-use crate::testing::{append, delete, index_with, slow, tripwire};
+use crate::testing::{append, delete, hot_index, index_with, slow, tripwire};
 
 const NOW: i64 = 1_700_000_100;
 
@@ -194,22 +194,6 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
     }
 }
 
-/// Runs `f` with a token cancelled after 30 ms; returns its result and
-/// how long it took.
-fn cancelled_after_30ms<T>(f: impl FnOnce(&CancelToken) -> T) -> (T, Duration) {
-    let cancel = CancelToken::new();
-    let c = cancel.clone();
-    let stopper = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(30));
-        c.cancel();
-    });
-    let start = Instant::now();
-    let r = f(&cancel);
-    let took = start.elapsed();
-    stopper.join().unwrap();
-    (r, took)
-}
-
 #[test]
 fn a_cancelled_search_stops_early() {
     // Cancelled on the 1,000th of 50,000 documents, a page stops within
@@ -275,13 +259,24 @@ fn the_exact_count_on_demand_is_true_and_kept_or_gives_way_to_the_budget() {
     // Out of time, the estimate stands; cancelled, it's an error.
     // 20,000 documents at 50 µs each: a second for all of them.
     let (big, _) = index_with(20_000, 1);
-    let slowly = slow_lease(&Arc::new(big), Sort::Relevance, Duration::from_micros(50));
+    let big = Arc::new(big);
+    let slowly = slow_lease(&big, Sort::Relevance, Duration::from_micros(50));
     let t = slowly
         .exact_total_within(&CancelToken::new(), Duration::from_millis(20))
         .unwrap();
     assert!(t.approx);
-    let (r, _) = cancelled_after_30ms(|c| slowly.exact_total(c));
+    // Cancelled on the 1,000th document (a tripwire, not a timer), the
+    // count stops with the error and keeps the estimate.
+    let cancel = CancelToken::new();
+    let (compiled, visits) = tripwire(1_000, &cancel);
+    let tripped = Lease {
+        compiled,
+        ..slow_lease(&big, Sort::Relevance, Duration::ZERO)
+    };
+    let r = tripped.exact_total(&cancel);
     assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+    assert!(visits.load(std::sync::atomic::Ordering::Relaxed) < 20_000);
+    assert!(tripped.total().approx);
 }
 
 fn tiny(ttl_ms: u64, max_leases: usize, per_client: usize) -> Leases {
@@ -452,25 +447,6 @@ proptest! {
 
 /// An index of `n` torrents (ids `1..=n`) with swarm stats for four in
 /// five of them; the rest were never scraped.
-fn hot_index(n: u64) -> (Arc<SearchIndex>, Arc<lodestar_store::HotColumns>) {
-    let (index, _) = index_with(n, 3);
-    let hot = Arc::new(lodestar_store::HotColumns::new());
-    for id in 1..=n {
-        if id % 5 != 0 {
-            hot.set_swarm(
-                id,
-                lodestar_store::SwarmHot {
-                    seeders: (id * 37 % 23) as u32,
-                    leechers: (id % 7) as u32,
-                    trackers: (id % 4) as u32,
-                    dht: NEVER,
-                },
-            );
-        }
-    }
-    (Arc::new(index.with_hot(hot.clone())), hot)
-}
-
 #[test]
 fn hot_sorts_page_by_cursor_like_by_offset_with_never_scraped_last() {
     let (index, hot) = hot_index(500);

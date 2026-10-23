@@ -1,6 +1,8 @@
 //! `GET /events` (§9): the server-sent event stream. New torrents (from
-//! the live indexer's commit hook), crawler stats and rebuild progress
-//! now; alerts (B9) and Insights deltas (B11a) are typed and reserved.
+//! the live indexer's commit hook), crawler stats, rebuild progress,
+//! settings saves ([`EventHub::settings_saved`]) and saved-search alerts
+//! ([`EventHub::alerts`], from the percolator); Insights deltas (B11a)
+//! are typed and reserved.
 //!
 //! **One hub per process.** [`EventHub::publish`] gives each event the id
 //! `<epoch>-<seq>` (a random per-process epoch, a monotonic sequence),
@@ -26,6 +28,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -46,12 +49,13 @@ use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::events::{
-    CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent, ResyncReason, Topic,
-    TorrentsEvent,
+    AlertsEvent, CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent,
+    ResyncReason, SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::extract::Peer;
 use crate::search::AdultVisibility;
-use crate::{ApiState, auth};
+use crate::{ApiState, Auth, auth};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
@@ -145,6 +149,10 @@ struct Stored {
     seq: u64,
     topic: Topic,
     frame: Bytes,
+    /// A `torrents` event made while Adult was shown: its count may
+    /// include Adult and it carries a real `max_id`. While Adult is
+    /// hidden it's withheld from clients, replay included.
+    adult_shown: bool,
 }
 
 #[derive(Debug, Default)]
@@ -172,13 +180,13 @@ struct CommitFeed {
 }
 
 /// What's been reported since the last [`CommitFeed::take`]. One lock
-/// keeps the counts and the watermark consistent: a take never sees a
+/// keeps the counts and the watermarks consistent: a take never sees a
 /// commit's Adult count without its total, or the reverse.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Pending {
-    /// Torrents new to the index...
+    /// Torrents new to the index.
     added: u64,
-    /// ...and how many of those are Adult.
+    /// How many of `added` are Adult.
     adult: u64,
     /// The highest torrent id searchable; never reset.
     max_id: i64,
@@ -195,24 +203,22 @@ impl CommitFeed {
         self.wake.notify_one();
     }
 
-    /// What's been reported since the last take, as one event, counted
-    /// under the visibility `adult_shown` has now: while Adult is hidden,
+    /// What's been reported since the last take, as one event, made
+    /// under the visibility `adult_shown` has now. While Adult is hidden,
     /// its torrents are left out of `added` (§20.9) and dropped, so
-    /// turning it on later doesn't announce them. When nothing visible
-    /// is new (nothing at all, or only hidden Adult), there's no event;
-    /// the watermark goes out with the next one.
+    /// turning it on later doesn't announce them, and `max_id` is null:
+    /// ids are sequential, so any real one would tell, in its gap from
+    /// the last, how many hidden torrents arrived. When nothing visible
+    /// is new (nothing at all, or only hidden Adult), there's no event.
     fn take(&self, adult_shown: bool) -> Option<TorrentsEvent> {
         let mut p = lock(&self.pending);
-        let added = if adult_shown {
-            p.added
+        let (added, max_id) = if adult_shown {
+            (p.added, Some(p.max_id))
         } else {
-            p.added.saturating_sub(p.adult)
+            (p.added.saturating_sub(p.adult), None)
         };
         (p.added, p.adult) = (0, 0);
-        (added > 0).then_some(TorrentsEvent {
-            added,
-            max_id: p.max_id,
-        })
+        (added > 0).then_some(TorrentsEvent { added, max_id })
     }
 }
 
@@ -229,6 +235,9 @@ pub struct EventHub {
     slots: Mutex<Slots>,
     closed: watch::Sender<bool>,
     commits: Option<(Arc<CommitHook>, Arc<CommitFeed>)>,
+    /// "Show adult content", for the `torrents` events and for what's
+    /// replayed or delivered of them.
+    adult: AdultVisibility,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -262,6 +271,9 @@ pub(crate) struct Subscription {
     rx: broadcast::Receiver<Arc<Stored>>,
     /// The last sequence handed out, so nothing is delivered twice.
     last: u64,
+    /// The last item was a `resync` for a withheld event, so the next
+    /// withheld one needs none.
+    withheld: bool,
 }
 
 /// What a subscription yields.
@@ -282,6 +294,7 @@ impl Drop for Subscription {
 }
 
 impl Subscription {
+    /// `s`, unless it's a duplicate or on another topic.
     fn accept(&mut self, s: Arc<Stored>) -> Option<Item> {
         if s.seq <= self.last {
             return None;
@@ -290,23 +303,41 @@ impl Subscription {
         (self.topics & s.topic.bit() != 0).then_some(Item::Event(s))
     }
 
+    /// Checks `item` as it's handed to the client, replayed or live, so
+    /// the visibility of that moment applies: while Adult is hidden, an
+    /// event made while it was shown becomes a `resync` (one for a run
+    /// of them).
+    fn screen(&mut self, item: Item) -> Option<Item> {
+        if let Item::Event(s) = &item
+            && s.adult_shown
+            && !self.hub.adult.shown()
+        {
+            let first = !std::mem::replace(&mut self.withheld, true);
+            return first.then_some(Item::Resync(ResyncReason::Visibility));
+        }
+        self.withheld = false;
+        Some(item)
+    }
+
     /// The next item if one is ready; `None` when there's nothing yet or
     /// the hub is gone.
     #[cfg(test)]
     fn try_next(&mut self) -> Option<Item> {
         use broadcast::error::TryRecvError;
-        if let Some(item) = self.pending.pop_front() {
-            return Some(item);
-        }
         loop {
-            match self.rx.try_recv() {
-                Ok(s) => {
-                    if let Some(item) = self.accept(s) {
-                        return Some(item);
-                    }
-                }
-                Err(TryRecvError::Lagged(_)) => return Some(Item::Resync(ResyncReason::Lagged)),
-                Err(TryRecvError::Empty | TryRecvError::Closed) => return None,
+            let item = match self.pending.pop_front() {
+                Some(item) => item,
+                None => match self.rx.try_recv() {
+                    Ok(s) => match self.accept(s) {
+                        Some(item) => item,
+                        None => continue,
+                    },
+                    Err(TryRecvError::Lagged(_)) => Item::Resync(ResyncReason::Lagged),
+                    Err(TryRecvError::Empty | TryRecvError::Closed) => return None,
+                },
+            };
+            if let Some(item) = self.screen(item) {
+                return Some(item);
             }
         }
     }
@@ -314,18 +345,20 @@ impl Subscription {
     /// The next item; `None` once the hub is dropped.
     async fn next(&mut self) -> Option<Item> {
         use broadcast::error::RecvError;
-        if let Some(item) = self.pending.pop_front() {
-            return Some(item);
-        }
         loop {
-            match self.rx.recv().await {
-                Ok(s) => {
-                    if let Some(item) = self.accept(s) {
-                        return Some(item);
-                    }
-                }
-                Err(RecvError::Lagged(_)) => return Some(Item::Resync(ResyncReason::Lagged)),
-                Err(RecvError::Closed) => return None,
+            let item = match self.pending.pop_front() {
+                Some(item) => item,
+                None => match self.rx.recv().await {
+                    Ok(s) => match self.accept(s) {
+                        Some(item) => item,
+                        None => continue,
+                    },
+                    Err(RecvError::Lagged(_)) => Item::Resync(ResyncReason::Lagged),
+                    Err(RecvError::Closed) => return None,
+                },
+            };
+            if let Some(item) = self.screen(item) {
+                return Some(item);
             }
         }
     }
@@ -371,7 +404,6 @@ impl EventHub {
             .commits
             .clone()
             .map(|hook| (hook, Arc::new(CommitFeed::default())));
-        let adult = sources.adult.clone();
         let hub = Arc::new(EventHub {
             config,
             epoch: format!("{epoch:016x}"),
@@ -381,6 +413,7 @@ impl EventHub {
             slots: Mutex::default(),
             closed: watch::channel(false).0,
             commits,
+            adult: sources.adult.clone(),
             tasks: Mutex::default(),
         });
         let mut tasks = Vec::new();
@@ -390,7 +423,6 @@ impl EventHub {
             tasks.push(tokio::spawn(forward_commits(
                 Arc::downgrade(&hub),
                 feed.clone(),
-                adult,
                 hub.closed.subscribe(),
             )));
         }
@@ -446,6 +478,12 @@ impl EventHub {
     /// Publishes `event` on its topic and returns its id. A `resync` is
     /// per client and isn't published.
     pub fn publish(&self, event: &Event) -> Option<String> {
+        self.publish_tagged(event, false)
+    }
+
+    /// [`EventHub::publish`], marking whether the event was made while
+    /// Adult was shown ([`Stored::adult_shown`]).
+    fn publish_tagged(&self, event: &Event, adult_shown: bool) -> Option<String> {
         let topic = event.topic()?;
         let mut ring = lock(&self.ring);
         ring.seq += 1;
@@ -455,6 +493,7 @@ impl EventHub {
             seq,
             topic,
             frame: frame(Some(&id), event),
+            adult_shown,
         });
         ring.events.push_back(stored.clone());
         while ring.events.len() > self.config.ring {
@@ -465,6 +504,24 @@ impl EventHub {
         // full buffer overwrites its oldest slot (those clients lag).
         let _ = self.tx.send(stored);
         Some(id)
+    }
+
+    /// Publishes `settings`: `section` was saved and is now at
+    /// `revision`. The settings routes call it after each save that
+    /// changed a section; it carries no values.
+    pub fn settings_saved(&self, section: &str, revision: u64) -> Option<String> {
+        self.publish(&Event::Settings(SettingsEvent {
+            revision,
+            section: section.to_string(),
+        }))
+    }
+
+    /// Publishes one saved search's `alerts` event. `adult_shown` says
+    /// whether it was counted while Adult was shown: such an event is
+    /// withheld from clients once Adult is hidden, replay included, as a
+    /// `torrents` event is.
+    pub fn alerts(&self, event: AlertsEvent, adult_shown: bool) -> Option<String> {
+        self.publish_tagged(&Event::Alerts(event), adult_shown)
     }
 
     /// Takes a stream slot for `session`.
@@ -547,6 +604,7 @@ impl EventHub {
             pending,
             rx,
             last,
+            withheld: false,
         }
     }
 
@@ -657,7 +715,6 @@ impl futures_core::Stream for Frames {
 async fn forward_commits(
     hub: std::sync::Weak<EventHub>,
     feed: Arc<CommitFeed>,
-    adult: AdultVisibility,
     mut closed: watch::Receiver<bool>,
 ) {
     loop {
@@ -668,9 +725,9 @@ async fn forward_commits(
         }
         let Some(hub) = hub.upgrade() else { return };
         // Read outside the feed's lock: it may take the settings' own.
-        let shown = adult.shown();
+        let shown = hub.adult.shown();
         if let Some(event) = feed.take(shown) {
-            hub.publish(&Event::Torrents(event));
+            hub.publish_tagged(&Event::Torrents(event), shown);
         }
     }
 }
@@ -808,14 +865,26 @@ fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
 }
 
 /// The session, for the per-session cap. The guard has already checked
-/// it, so a request here always has one.
-fn session_of(headers: &HeaderMap) -> u64 {
-    let session = headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find_map(|c| auth::cookie_value(c, auth::COOKIE))
-        .unwrap_or("");
+/// it, so a request here always has one: the session cookie, when it's
+/// valid (exactly what the guard accepts), or else the trusted proxy's
+/// user, counted per user and client address. An invalid cookie beside
+/// a proxy header is ignored, so it can't open a fresh bucket.
+fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
+    let first = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    let session = match first
+        .filter(|c| auth.verify(c))
+        .and_then(|c| auth::cookie_value(c, auth::COOKIE))
+    {
+        Some(c) => format!("cookie:{c}"),
+        None => {
+            let name = auth.proxy().header;
+            let user = headers
+                .get(name.as_str())
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            format!("proxy:{user}@{}", auth.client_ip(peer, headers))
+        }
+    };
     let d = Sha256::digest(session.as_bytes());
     u64::from_le_bytes(d[..8].try_into().expect("8 bytes"))
 }
@@ -863,6 +932,7 @@ fn session_of(headers: &HeaderMap) -> u64 {
 pub(crate) async fn events(
     State(s): State<ApiState>,
     hub: Option<Extension<Arc<EventHub>>>,
+    Peer(peer): Peer,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
@@ -877,7 +947,7 @@ pub(crate) async fn events(
     let Some(Extension(hub)) = hub else {
         return Err(unavailable());
     };
-    let slot = match hub.acquire(session_of(&headers)) {
+    let slot = match hub.acquire(session_of(&s.auth, &headers, peer)) {
         Ok(slot) => slot,
         Err(Refused::Closed) => return Err(unavailable()),
         Err(Refused::Full | Refused::SessionFull) => {
@@ -894,15 +964,13 @@ pub(crate) async fn events(
         }
     };
     let last = headers.get("last-event-id").and_then(|v| v.to_str().ok());
-    // The guard's check, repeated at each heartbeat on the cookie it let
-    // in.
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+    // The guard's check, repeated at each heartbeat on what it let in:
+    // the cookie, or a trusted proxy's user header from the same peer.
     let auth = s.auth.clone();
-    let body = hub.stream(slot, topics, last, move || auth.verify(&cookie));
+    let seen = headers.clone();
+    let body = hub.stream(slot, topics, last, move || {
+        auth::logged_in(&auth, &seen, peer)
+    });
     Ok((
         [
             (header::CONTENT_TYPE, "text/event-stream"),
@@ -922,7 +990,7 @@ mod tests {
     fn torrents(added: u64) -> Event {
         Event::Torrents(TorrentsEvent {
             added,
-            max_id: added as i64,
+            max_id: Some(added as i64),
         })
     }
 
@@ -963,6 +1031,26 @@ mod tests {
         );
         // Another process's epoch.
         assert_ne!(hub(EventsConfig::default()).epoch(), h.epoch());
+    }
+
+    #[tokio::test]
+    async fn settings_saves_reach_only_settings_subscribers() {
+        let h = hub(EventsConfig::default());
+        let mut settings = h.subscribe(Topic::Settings.bit(), None);
+        let mut torrents = h.subscribe(Topic::Torrents.bit(), None);
+        let id = h.settings_saved("crawler", 3).unwrap();
+        assert_eq!(id, format!("{}-1", h.epoch()));
+        assert_eq!(seqs(&mut settings), [Ok(1)]);
+        assert!(seqs(&mut torrents).is_empty());
+        let stored = lock(&h.ring).events[0].clone();
+        assert_eq!(
+            std::str::from_utf8(&stored.frame).unwrap(),
+            format!(
+                "id: {id}\nevent: settings\ndata: {{\"revision\":3,\"section\":\"crawler\"}}\n\n"
+            )
+        );
+        // Six topics now; the `u8` set has room for two more.
+        assert_eq!(all().count_ones(), 6);
     }
 
     #[tokio::test]
@@ -1077,17 +1165,17 @@ mod tests {
             EventsConfig::default(),
             EventSources {
                 commits: Some(hook.clone()),
+                // Shown, so each event carries the watermark.
+                adult: AdultVisibility::follow(|| true),
                 ..EventSources::default()
             },
         );
         let feed = h.commits.as_ref().unwrap().1.clone();
         // Nobody reads the hub's side meanwhile: the reports still return
-        // at once and take no memory.
-        let start = std::time::Instant::now();
+        // (none waits on a reader) and take no memory.
         for i in 1..=100_000 {
             feed.report(commit(1, 0, i));
         }
-        assert!(start.elapsed() < Duration::from_secs(2));
         let mut sub = h.subscribe(all(), None);
         let mut added = 0;
         while added < 100_000 {
@@ -1096,7 +1184,7 @@ mod tests {
                     let text = std::str::from_utf8(&s.frame).unwrap();
                     let data = text.split("data: ").nth(1).unwrap().trim();
                     let e: TorrentsEvent = serde_json::from_str(data).unwrap();
-                    assert_eq!(e.max_id, 100_000);
+                    assert_eq!(e.max_id, Some(100_000));
                     added += e.added;
                 }
                 other => panic!("{other:?}"),
@@ -1156,93 +1244,212 @@ mod tests {
         }
     }
 
+    fn take(feed: &CommitFeed, shown: bool) -> Option<(u64, Option<i64>)> {
+        feed.take(shown).map(|e| (e.added, e.max_id))
+    }
+
     /// A take counts under the visibility it's given, never the one at
-    /// the report, and drops what it leaves out.
+    /// the report, and drops what it leaves out. `max_id` goes out only
+    /// while Adult is shown.
     #[test]
     fn a_take_counts_under_the_visibility_of_its_moment() {
         let feed = CommitFeed::default();
-        assert_eq!(feed.take(false), None);
+        assert_eq!(take(&feed, false), None);
         // Reported while hidden, taken while shown: all of it.
         feed.report(commit(5, 2, 5));
-        let e = feed.take(true).unwrap();
-        assert_eq!((e.added, e.max_id), (5, 5));
+        assert_eq!(take(&feed, true), Some((5, Some(5))));
         // Taken while hidden: Adult left out, and not sent later either.
         feed.report(commit(5, 2, 10));
-        let e = feed.take(false).unwrap();
-        assert_eq!((e.added, e.max_id), (3, 10));
-        assert_eq!(feed.take(true), None);
+        assert_eq!(take(&feed, false), Some((3, None)));
+        assert_eq!(take(&feed, true), None);
         // Coalesced commits add up, each with its own Adult count.
         feed.report(commit(4, 1, 14));
         feed.report(commit(2, 2, 12));
-        let e = feed.take(false).unwrap();
-        assert_eq!((e.added, e.max_id), (3, 14));
+        assert_eq!(take(&feed, false), Some((3, None)));
+        // Shown again: the newest id, Adult included.
+        feed.report(commit(1, 0, 15));
+        assert_eq!(take(&feed, true), Some((1, Some(15))));
     }
 
-    /// Only hidden Adult is new: no event, and the watermark goes out
-    /// with the next one.
+    /// Only hidden Adult is new: no event.
     #[test]
     fn hidden_adult_alone_sends_nothing() {
         let feed = CommitFeed::default();
         feed.report(commit(1, 0, 1));
-        assert_eq!(feed.take(false).unwrap().max_id, 1);
+        assert_eq!(take(&feed, false), Some((1, None)));
         feed.report(commit(2, 2, 3));
-        assert_eq!(feed.take(false), None);
+        assert_eq!(take(&feed, false), None);
         // Dropped, not held back for a later toggle.
-        assert_eq!(feed.take(true), None);
+        assert_eq!(take(&feed, true), None);
         feed.report(commit(1, 0, 4));
-        let e = feed.take(false).unwrap();
-        assert_eq!((e.added, e.max_id), (1, 4));
+        assert_eq!(take(&feed, false), Some((1, None)));
     }
 
-    /// The next `torrents` event a subscription gets, or `None` if none
-    /// comes within `wait`.
-    async fn next_torrents(sub: &mut Subscription, wait: Duration) -> Option<TorrentsEvent> {
-        match tokio::time::timeout(wait, sub.next()).await {
-            Err(_) => None,
-            Ok(Some(Item::Event(s))) => {
+    /// The next item a subscription yields, or `None` if none comes
+    /// within `wait`.
+    async fn next_item(sub: &mut Subscription, wait: Duration) -> Option<Item> {
+        tokio::time::timeout(wait, sub.next()).await.ok().flatten()
+    }
+
+    fn torrents_of(item: Option<Item>) -> Option<TorrentsEvent> {
+        match item? {
+            Item::Event(s) => {
                 let text = std::str::from_utf8(&s.frame).unwrap();
                 let data = text.split("data: ").nth(1).unwrap().trim();
                 Some(serde_json::from_str(data).unwrap())
             }
-            Ok(other) => panic!("{other:?}"),
+            other => panic!("{other:?}"),
         }
+    }
+
+    /// A hub fed by a hook, following `show`.
+    fn adult_hub(show: &watch::Sender<bool>) -> (Arc<EventHub>, Arc<CommitFeed>) {
+        let rx = show.subscribe();
+        let h = EventHub::start(
+            EventsConfig::default(),
+            EventSources {
+                commits: Some(Arc::new(CommitHook::default())),
+                adult: AdultVisibility::follow(move || *rx.borrow()),
+                ..EventSources::default()
+            },
+        );
+        let feed = h.commits.as_ref().unwrap().1.clone();
+        (h, feed)
+    }
+
+    /// `alerts` events are screened as `torrents` ones are: one counted
+    /// while Adult was shown is withheld from a replay once it's hidden.
+    #[tokio::test]
+    async fn alerts_made_while_adult_was_shown_are_withheld_once_hidden() {
+        let (show, _) = watch::channel(true);
+        let (h, _) = adult_hub(&show);
+        let e = AlertsEvent {
+            alert: 9,
+            matched: 2,
+            max_id: 30,
+            notify: true,
+            saved_search: 4,
+        };
+        h.alerts(e, true).unwrap();
+        show.send_replace(false);
+        h.alerts(AlertsEvent { matched: 1, ..e }, false).unwrap();
+        let start = format!("{}-0", h.epoch());
+        let mut back = h.subscribe(Topic::Alerts.bit(), Some(&start));
+        let got: Vec<_> = std::iter::from_fn(|| back.try_next()).collect();
+        let [Item::Resync(ResyncReason::Visibility), Item::Event(s)] = got.as_slice() else {
+            panic!("{got:?}");
+        };
+        let frame = std::str::from_utf8(&s.frame).unwrap();
+        assert!(frame.contains("event: alerts\n"), "{frame}");
+        assert!(frame.contains(r#""matched":1"#), "{frame}");
+        // Shown again, both replay.
+        show.send_replace(true);
+        let mut again = h.subscribe(Topic::Alerts.bit(), Some(&start));
+        assert_eq!(std::iter::from_fn(|| again.try_next()).count(), 2);
+        h.close();
     }
 
     /// Through the hub's own task, the setting read live from the same
     /// kind of reader the API state holds.
     #[tokio::test]
     async fn the_hub_leaves_hidden_adult_out_of_torrents_events() {
-        let hook = Arc::new(CommitHook::default());
-        let (show, rx) = watch::channel(false);
-        let h = EventHub::start(
-            EventsConfig::default(),
-            EventSources {
-                commits: Some(hook.clone()),
-                adult: AdultVisibility::follow(move || *rx.borrow()),
-                ..EventSources::default()
-            },
-        );
-        let feed = h.commits.as_ref().unwrap().1.clone();
+        let (show, _) = watch::channel(false);
+        let (h, feed) = adult_hub(&show);
         let mut sub = h.subscribe(all(), None);
         let long = Duration::from_secs(5);
         let short = Duration::from_millis(200);
-        // Hidden (the default): 3 non-adult and 2 adult send 3.
+        // Hidden (the default): 3 non-adult and 2 adult send 3, no id.
         feed.report(commit(5, 2, 5));
-        let e = next_torrents(&mut sub, long).await.unwrap();
-        assert_eq!((e.added, e.max_id), (3, 5));
-        // Shown: the same commit sends 5.
+        let e = torrents_of(next_item(&mut sub, long).await).unwrap();
+        assert_eq!((e.added, e.max_id), (3, None));
+        let frame = match next_item(
+            &mut h.subscribe(all(), Some(&format!("{}-0", h.epoch()))),
+            long,
+        )
+        .await
+        {
+            Some(Item::Event(s)) => String::from_utf8(s.frame.to_vec()).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            frame.ends_with("data: {\"added\":3,\"max_id\":null}\n\n"),
+            "{frame}"
+        );
+        // Shown: the same commit sends 5 and the newest id.
         show.send_replace(true);
         feed.report(commit(5, 2, 10));
-        let e = next_torrents(&mut sub, long).await.unwrap();
-        assert_eq!((e.added, e.max_id), (5, 10));
+        let e = torrents_of(next_item(&mut sub, long).await).unwrap();
+        assert_eq!((e.added, e.max_id), (5, Some(10)));
         // Hidden again: an all-Adult commit sends nothing...
         show.send_replace(false);
         feed.report(commit(2, 2, 12));
-        assert_eq!(next_torrents(&mut sub, short).await, None);
-        // ...and the next visible one carries the newest watermark.
+        assert!(next_item(&mut sub, short).await.is_none());
+        // ...and the next visible one carries no id.
         feed.report(commit(1, 0, 13));
-        let e = next_torrents(&mut sub, long).await.unwrap();
-        assert_eq!((e.added, e.max_id), (1, 13));
+        let e = torrents_of(next_item(&mut sub, long).await).unwrap();
+        assert_eq!((e.added, e.max_id), (1, None));
+        h.close();
+    }
+
+    /// While Adult is hidden, no client is handed an event made while it
+    /// was shown (each carries a real `max_id`), replayed or live: a
+    /// `resync` (one per run) takes their place. Shown again, replay is
+    /// exact.
+    #[tokio::test]
+    async fn events_made_while_adult_was_shown_are_withheld_once_hidden() {
+        let (show, _) = watch::channel(true);
+        let (h, feed) = adult_hub(&show);
+        let mut live = h.subscribe(all(), None);
+        let long = Duration::from_secs(5);
+        let mut ids = Vec::new();
+        let mut publish = async |c, ids: &mut Vec<String>| {
+            feed.report(c);
+            let item = next_item(&mut live, long).await.unwrap();
+            let Item::Event(s) = &item else {
+                panic!("{item:?}")
+            };
+            ids.push(format!("{}-{}", h.epoch(), s.seq));
+        };
+        // Shown: three events, none with Adult in its count.
+        for i in 1..=3 {
+            publish(commit(1, 0, i), &mut ids).await;
+        }
+        // Hidden: one more.
+        show.send_replace(false);
+        publish(commit(2, 1, 5), &mut ids).await;
+        // A tab reconnects from the first id: one `resync` for the shown
+        // run, then the hidden event, and no frame carries an id.
+        let mut back = h.subscribe(all(), Some(&ids[0]));
+        let got: Vec<_> = std::iter::from_fn(|| back.try_next()).collect();
+        assert!(
+            matches!(
+                got.as_slice(),
+                [Item::Resync(ResyncReason::Visibility), Item::Event(_)]
+            ),
+            "{got:?}"
+        );
+        let e = torrents_of(got.into_iter().nth(1)).unwrap();
+        assert_eq!((e.added, e.max_id), (1, None));
+        // Live: a frame still buffered for a client is checked when it
+        // takes it.
+        show.send_replace(true);
+        let mut idle = h.subscribe(all(), Some(&ids[3]));
+        publish(commit(1, 0, 6), &mut ids).await;
+        show.send_replace(false);
+        assert!(matches!(
+            idle.try_next(),
+            Some(Item::Resync(ResyncReason::Visibility))
+        ));
+        assert!(idle.try_next().is_none());
+        // Shown again: replay is exact, ids included.
+        show.send_replace(true);
+        let mut again = h.subscribe(all(), Some(&ids[0]));
+        let got: Vec<_> = std::iter::from_fn(|| again.try_next()).collect();
+        let ids_sent: Vec<_> = got
+            .into_iter()
+            .map(|i| torrents_of(Some(i)).unwrap().max_id)
+            .collect();
+        assert_eq!(ids_sent, [Some(2), Some(3), None, Some(6)]);
         h.close();
     }
 

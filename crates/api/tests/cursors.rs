@@ -88,9 +88,12 @@ fn fixture(n: usize) -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
+            user_data: None,
             hot: None,
             events: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let mut f = Fixture {

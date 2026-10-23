@@ -55,7 +55,6 @@ describe('requests', () => {
 				ast: null,
 				cursor: null,
 				exact: null,
-				explain: null,
 				hidden: null,
 				limit: null,
 				offset: null,

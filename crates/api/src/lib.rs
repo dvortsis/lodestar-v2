@@ -22,20 +22,33 @@
 //! can't send without a CORS preflight we never grant), and a present
 //! `Origin` must match `Host`.
 
+pub mod alerts;
 pub mod auth;
+mod collections;
 mod compare;
 mod discover;
 pub mod dto;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod extract;
 mod facets;
 pub mod filters;
+pub mod insights;
+pub mod jobs;
+pub mod keys;
+pub mod log_events;
+pub mod logs;
 pub mod openapi;
+pub mod ops;
+mod saved;
 mod search;
 pub mod settings;
+mod suggest;
 mod swarm;
+pub mod system;
 mod torrents;
+mod user_items;
 
 use std::sync::{Arc, Mutex};
 
@@ -66,8 +79,16 @@ pub struct ApiState {
     pub events: Option<Arc<dyn ApiEvents>>,
     /// `None` when the settings registry isn't served (tests, tools).
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
+    /// `None` when no pipeline runs (tests, tools).
+    pub ops: Option<Arc<dyn ops::OpsApi>>,
+    /// A read-write connection for user data: saved searches, user
+    /// items, collections and API keys (§7, §12). `None` when not
+    /// served (tests, tools).
+    pub user_data: Option<Arc<Mutex<Store>>>,
     /// "Show adult content" (§20.9), followed live; hidden by default.
     pub adult: AdultVisibility,
+    /// `None` when Insights isn't served (tests, tools).
+    pub insights: Option<Arc<dyn insights::InsightsSource>>,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -78,15 +99,26 @@ pub fn router(state: ApiState) -> Router {
         .merge(auth::routes())
         .merge(search::routes())
         .merge(facets::routes())
+        .merge(suggest::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())
+        .merge(ops::routes())
         .merge(compare::routes())
         .merge(discover::routes())
+        .merge(insights::routes())
         .merge(events::routes())
+        .merge(keys::routes())
+        .merge(user_items::routes())
+        .merge(collections::routes())
+        .merge(saved::routes())
+        .merge(jobs::routes())
+        .merge(system::routes())
+        .merge(alerts::routes())
+        .merge(logs::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
-        .layer(Extension(auth::SessionAuth(state.auth.clone())))
+        .layer(Extension(auth::SessionAuth::of(&state)))
         // For open routes; `auth::protected` sets its own behind the
         // session guard, and this doesn't replace it.
         .method_not_allowed_fallback(error::wrong_method)

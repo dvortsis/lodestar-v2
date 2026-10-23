@@ -247,6 +247,15 @@ impl Writer {
         let mut store = self.store.take().expect("store");
         let (store, result) = tokio::task::spawn_blocking(move || {
             let r = store.purge_filter(now, hits_before);
+            let snaps = store.purge_snapshots(now, hits_before);
+            for s in &snaps.expired {
+                let days = lodestar_store::snapshots::RETAIN_DAYS;
+                let what = s.kind.describe();
+                tracing::info!("deleted {what} {}: over {days} days old", s.path.display());
+            }
+            for w in &snaps.warnings {
+                tracing::warn!("{w}");
+            }
             (store, r)
         })
         .await
@@ -295,7 +304,9 @@ impl Writer {
         let class_gen = self.store.as_ref().and_then(|s| s.class_gen().ok());
         let committing = self.judge(committing);
         let cohorts = self.funnel.drain();
-        let counters = self.rollups.drain();
+        let mut counters = self.rollups.drain();
+        // The same transitions by event time, at the flush (B11b).
+        counters.extend(crate::rollups::funnel_events(&cohorts, unix_now()));
         if committing.is_empty()
             && touches.is_empty()
             && swarm.is_empty()
@@ -347,7 +358,6 @@ impl Writer {
         self.stats
             .last_commit
             .store(unix_now() as u64, Ordering::Relaxed);
-        let now = unix_now();
         // The have-filter learns the keys before their leases end, so a
         // rediscovery in between is held, never claimed and fetched again.
         for (_, _, hashes) in &outcome.stored {
@@ -364,7 +374,10 @@ impl Writer {
                 .record(lease.cohort, lease.source, Stage::Stored, None);
             if new {
                 self.stats.stored.fetch_add(1, Ordering::Relaxed);
-                self.rollups.add(now, metric::STORED, lease.source, 0, 1);
+                // At the fetch's time, as `torrents.metadata_at` holds it,
+                // so `rollup --repair` recounts the same hours (B11b).
+                self.rollups
+                    .add(c.results.metadata_at, metric::STORED, lease.source, 0, 1);
             } else {
                 self.stats.existing.fetch_add(1, Ordering::Relaxed);
             }

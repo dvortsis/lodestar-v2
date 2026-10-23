@@ -18,6 +18,7 @@ lodestar-tracker-scrape.workspace = true
 lodestar-cluster.workspace = true
 lodestar-classify.workspace = true
 lodestar-filter.workspace = true
+lodestar-log.workspace = true
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 tracing = "0.1.44"
 

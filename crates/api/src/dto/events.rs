@@ -20,19 +20,22 @@ pub enum Topic {
     Crawler,
     /// Index rebuild progress when it changes ([`RebuildEvent`]).
     Rebuild,
-    /// Saved-search alerts (reserved for B9; [`AlertsEvent`]).
+    /// Saved-search alerts ([`AlertsEvent`]).
     Alerts,
     /// Insights deltas every 30 s (reserved for B11a; [`InsightsEvent`]).
     Insights,
+    /// A settings section was saved ([`SettingsEvent`]).
+    Settings,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 5] = [
+    pub const ALL: [Topic; 6] = [
         Topic::Torrents,
         Topic::Crawler,
         Topic::Rebuild,
         Topic::Alerts,
         Topic::Insights,
+        Topic::Settings,
     ];
 
     /// The name in `?topics=` and in the frame's `event:` line.
@@ -43,6 +46,7 @@ impl Topic {
             Topic::Rebuild => "rebuild",
             Topic::Alerts => "alerts",
             Topic::Insights => "insights",
+            Topic::Settings => "settings",
         }
     }
 
@@ -55,6 +59,9 @@ impl Topic {
         1 << self as u8
     }
 }
+
+// Topic sets are a `u8`: past 8 topics, widen it (§10.10.9).
+const _: () = assert!(Topic::ALL.len() <= u8::BITS as usize);
 
 /// `GET /events` parameters.
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
@@ -76,9 +83,13 @@ pub struct TorrentsEvent {
     /// Torrents new to the index since the previous `torrents` event,
     /// leaving out Adult while it's hidden; at least 1.
     pub added: u64,
-    /// The highest torrent id searchable now, of any class: searches
-    /// still apply the Adult visibility.
-    pub max_id: i64,
+    /// The highest torrent id searchable now, while Adult is shown.
+    /// **Null while Adult is hidden:** ids are sequential, so any real id
+    /// sent beside an exact `added` would show, in its gap from the last
+    /// one, how many hidden torrents arrived. To find what's new, use the
+    /// newest id among your own results (or a cursor), not this.
+    #[schema(required = true)]
+    pub max_id: Option<i64>,
 }
 
 /// `event: crawler`: the same counters as the status page and
@@ -86,7 +97,7 @@ pub struct TorrentsEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "at": 1_700_000_000u64, "dht_nodes": 812, "fetch_active": 40, "fetch_pending": 1200,
-    "fetched": 3400, "harvested": 91000, "stored": 3100, "torrents": 48211
+    "fetched": 3400, "harvested": 91000, "paused": false, "stored": 3100, "torrents": 48211
 }))]
 pub struct CrawlerEvent {
     /// Unix seconds.
@@ -103,6 +114,10 @@ pub struct CrawlerEvent {
     pub fetched: u64,
     /// Hashes received from sources since start.
     pub harvested: u64,
+    /// The crawler is paused (`POST /crawler/pause`): the counters stand
+    /// still because nothing is harvested or fetched, not because
+    /// something broke.
+    pub paused: bool,
     /// Torrents stored since start.
     pub stored: u64,
     /// Torrents in the store.
@@ -140,16 +155,24 @@ pub struct RebuildEvent {
     pub unavailable: Vec<String>,
 }
 
-/// `event: alerts` (reserved: B9 publishes it): a saved search matched
-/// new torrents. The matches themselves come from the API.
+/// `event: alerts`: a saved search matched torrents that just became
+/// searchable. One event per saved search per percolation run; the
+/// matches themselves come from `GET /saved-searches/{id}/alerts`. Only
+/// torrents search would show count: none a filter rule hid, and no
+/// Adult while "Show adult content" is off (§20.9). A run whose new
+/// matches are all hidden sends no event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "alert": 913, "matched": 2, "max_id": 48211, "notify": true, "saved_search": 4 }))]
 pub struct AlertsEvent {
-    /// The alert's id.
+    /// The highest new alert's id (shown ones only).
     pub alert: i64,
-    /// New matches.
+    /// New alerts on torrents you can see; at least 1.
     pub matched: u64,
-    /// The highest matching torrent id.
+    /// The highest of their torrent ids.
     pub max_id: i64,
+    /// The saved search alerts in the app (its `alert` flag): notify only
+    /// when true. Otherwise the event only refreshes counts.
+    pub notify: bool,
     /// The saved search's id.
     pub saved_search: i64,
 }
@@ -174,6 +197,16 @@ pub struct InsightsStages {
     pub understand: u64,
 }
 
+/// `event: settings`: a section was saved (by any tab, device or API
+/// client) and is now at `revision`. It carries no values: fetch them
+/// with `GET /settings/{section}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "revision": 4, "section": "crawler" }))]
+pub struct SettingsEvent {
+    pub revision: u64,
+    pub section: String,
+}
+
 /// Why a `resync` was sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -186,6 +219,9 @@ pub enum ResyncReason {
     Malformed,
     /// The client fell behind and events were skipped.
     Lagged,
+    /// "Show adult content" was turned off after events that counted
+    /// Adult were sent; they're withheld rather than replayed.
+    Visibility,
 }
 
 /// `event: resync`: events were missed; refetch what the page shows, then
@@ -207,6 +243,7 @@ pub enum Event {
     Rebuild(RebuildEvent),
     Alerts(AlertsEvent),
     Insights(InsightsEvent),
+    Settings(SettingsEvent),
     Resync(ResyncEvent),
 }
 
@@ -220,6 +257,7 @@ impl Event {
             Event::Rebuild(_) => Topic::Rebuild,
             Event::Alerts(_) => Topic::Alerts,
             Event::Insights(_) => Topic::Insights,
+            Event::Settings(_) => Topic::Settings,
             Event::Resync(_) => return None,
         })
     }
@@ -237,6 +275,7 @@ impl Event {
             Event::Rebuild(e) => serde_json::to_string(e),
             Event::Alerts(e) => serde_json::to_string(e),
             Event::Insights(e) => serde_json::to_string(e),
+            Event::Settings(e) => serde_json::to_string(e),
             Event::Resync(e) => serde_json::to_string(e),
         };
         v.expect("event payloads serialize")
@@ -261,7 +300,7 @@ mod tests {
     fn the_frame_name_and_data_match_the_tagged_schema() {
         let e = Event::Torrents(TorrentsEvent {
             added: 3,
-            max_id: 9,
+            max_id: Some(9),
         });
         let tagged = serde_json::to_value(&e).unwrap();
         assert_eq!(tagged["event"], e.name());
@@ -270,10 +309,22 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&e.data()).unwrap()
         );
         assert_eq!(e.data(), r#"{"added":3,"max_id":9}"#);
+        // Hidden Adult: the key stays, null.
+        let hidden = Event::Torrents(TorrentsEvent {
+            added: 3,
+            max_id: None,
+        });
+        assert_eq!(hidden.data(), r#"{"added":3,"max_id":null}"#);
         let r = Event::Resync(ResyncEvent {
             reason: ResyncReason::Lagged,
         });
         assert_eq!((r.name(), r.topic()), ("resync", None));
         assert_eq!(r.data(), r#"{"reason":"lagged"}"#);
+        let s = Event::Settings(SettingsEvent {
+            revision: 4,
+            section: "crawler".into(),
+        });
+        assert_eq!((s.name(), s.topic()), ("settings", Some(Topic::Settings)));
+        assert_eq!(s.data(), r#"{"revision":4,"section":"crawler"}"#);
     }
 }

@@ -1,20 +1,27 @@
-//! Crawler: the intensity (live) and the metadata fetch limits.
+//! Crawler: the pause and the intensity (both live) and the metadata
+//! fetch limits.
 //!
 //! A new intensity reaches the running DHT node at once (its query and
 //! reply rates and its cap on outstanding queries). The fetch pool's
 //! socket count, which follows the intensity when `max_sockets` is 0
 //! (or unset in `config.toml`), takes it at the next start.
+//!
+//! `paused` is the crawler's pause (`POST /crawler/pause`, B14): saved
+//! here so it survives a restart, applied to the running pipeline by
+//! [`follow_control`], and never set in `config.toml` or the
+//! environment.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_dht::node::NodeHandle;
+use lodestar_pipeline::Control;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
-use super::{Field, Section};
+use super::{Auto, Field, Preview, Section};
 use crate::config::{Config, EncryptionName, IntensityName};
 
 /// How hard the DHT crawler works (architecture §5).
@@ -24,6 +31,16 @@ pub enum Intensity {
     Low,
     Balanced,
     Aggressive,
+}
+
+impl Intensity {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Intensity::Low => "low",
+            Intensity::Balanced => "balanced",
+            Intensity::Aggressive => "aggressive",
+        }
+    }
 }
 
 /// Message stream encryption for metadata fetches.
@@ -53,6 +70,9 @@ pub struct Crawler {
     pub timeout_secs: u64,
     /// The largest info dict fetched, in MiB.
     pub max_metadata_mib: u64,
+    /// Harvesting and metadata fetching are paused; the DHT node still
+    /// answers other nodes.
+    pub paused: bool,
 }
 
 impl Default for Crawler {
@@ -66,20 +86,40 @@ impl Section for Crawler {
     const FIELDS: &'static [Field] = &[
         Field::new("intensity")
             .file("dht.intensity")
-            .env("LODESTAR_INTENSITY"),
-        Field::new("encryption").file("fetch.encryption").restart(),
+            .env("LODESTAR_INTENSITY")
+            .group("intensity")
+            .widget("radio")
+            .preview()
+            .keywords(),
+        Field::new("encryption")
+            .file("fetch.encryption")
+            .restart()
+            .group("fetching")
+            .widget("radio"),
         Field::new("max_sockets")
             .file("fetch.max_sockets")
             .restart()
-            .range(0, 4096),
+            .range(0, 4096)
+            .group("fetching")
+            .advanced()
+            .unit("connections")
+            .auto(Auto::Int(0))
+            .preview(),
         Field::new("timeout_secs")
             .file("fetch.timeout_secs")
             .restart()
-            .range(1, 120),
+            .range(1, 120)
+            .group("fetching")
+            .advanced()
+            .unit("seconds"),
         Field::new("max_metadata_mib")
             .file("fetch.max_metadata_mib")
             .restart()
-            .range(1, 64),
+            .range(1, 64)
+            .group("fetching")
+            .advanced()
+            .unit("mebibytes"),
+        Field::new("paused").group("intensity"),
     ];
 
     fn from_config(config: &Config) -> Self {
@@ -100,6 +140,18 @@ impl Section for Crawler {
                 .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
             timeout_secs: config.fetch.timeout_secs,
             max_metadata_mib: config.fetch.max_metadata_mib as u64,
+            // Only ever saved in the app.
+            paused: false,
+        }
+    }
+
+    fn preview(&self, field: &str) -> Preview {
+        match field {
+            // The fetch pool's size these values give, at the next start.
+            "intensity" | "max_sockets" => {
+                Preview::default().estimate("sockets", self.fetch_sockets())
+            }
+            _ => Preview::default(),
         }
     }
 
@@ -119,7 +171,25 @@ impl Section for Crawler {
             }
             "timeout_secs" => config.fetch.timeout_secs = self.timeout_secs,
             "max_metadata_mib" => config.fetch.max_metadata_mib = self.max_metadata_mib as usize,
+            // The services read it from the registry, not the config.
+            "paused" => {}
             _ => {}
+        }
+    }
+}
+
+impl Crawler {
+    /// Concurrent metadata fetches: `max_sockets`, or the intensity's
+    /// when it's 0, as `Config::pipeline_config` sizes the fetch pool
+    /// (a test holds them together).
+    pub fn fetch_sockets(&self) -> u32 {
+        if self.max_sockets > 0 {
+            return self.max_sockets;
+        }
+        match self.intensity {
+            Intensity::Low => 100,
+            Intensity::Balanced => 400,
+            Intensity::Aggressive => 1000,
         }
     }
 }
@@ -162,7 +232,10 @@ pub fn follow_intensity(
                 let handle = node.lock().expect("dht handle lock").clone();
                 match handle {
                     Some(h) if h.set_intensity(want.into()).await => {
-                        tracing::info!("settings: crawler intensity is now {want:?}");
+                        lodestar_log::log_event!(
+                            crate::logging::events::SETTINGS_INTENSITY,
+                            intensity = want.name()
+                        );
                         applied = want;
                     }
                     // Not started yet, or restarting.
@@ -171,4 +244,48 @@ pub fn follow_intensity(
             }
         }
     })
+}
+
+/// Hands every change of the pause to the running pipeline and records
+/// pause, resume and intensity changes as events, however they were made
+/// (`/crawler` or `PATCH /settings/crawler`). Each is applied and
+/// recorded once: [`Control`] ignores a repeat. Runs until the registry
+/// is dropped.
+pub fn follow_control(mut rx: watch::Receiver<Crawler>, control: Control) -> JoinHandle<()> {
+    rx.borrow_and_update();
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            // The value as it is when the control's lock is taken, not
+            // when the change was seen (see `Control::sync`).
+            control
+                .sync(|| {
+                    let now = rx.borrow_and_update();
+                    (now.paused, now.intensity.into())
+                })
+                .await;
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_previewed_socket_count_is_the_fetch_pools() {
+        for intensity in [Intensity::Low, Intensity::Balanced, Intensity::Aggressive] {
+            for max_sockets in [0, 1, 250] {
+                let c = Crawler {
+                    intensity,
+                    max_sockets,
+                    ..Crawler::default()
+                };
+                let mut config = Config::default();
+                c.apply("intensity", &mut config);
+                c.apply("max_sockets", &mut config);
+                let pool = config.pipeline_config().unwrap().pool.max_sockets;
+                assert_eq!(c.fetch_sockets() as usize, pool, "{c:?}");
+            }
+        }
+    }
 }

@@ -6,10 +6,14 @@
 //! blob codec with zstd dictionaries, batched writes and reads, source
 //! provenance and the shared id sequence (§18.5), Insights counters (§7),
 //! the persisted fetch queue (§5), and swarm health: scrape results,
-//! per-tracker detail, history and the tracker list (§7, M4). A single
-//! [`Store`] owns the one writer connection; the pipeline's writer task
-//! drives it.
+//! per-tracker detail, history and the tracker list (§7, M4), and M5's
+//! user data, API keys and reporting tables (saved searches and alerts,
+//! user items, collections, searchable time per hour, the opt-in query
+//! log). A single [`Store`] owns the one writer connection; the
+//! pipeline's writer task drives it.
 
+mod api_keys;
+mod collections;
 mod compress;
 pub mod filetree;
 mod filter;
@@ -17,22 +21,30 @@ mod floor;
 pub mod history;
 pub mod hot;
 mod insights;
+mod insights_days;
+mod reporting;
 mod rules;
+mod saved;
 mod schema;
 mod settings;
+pub mod snapshots;
 mod sources;
 mod subscriptions;
 mod swarm;
+mod user_data;
+mod user_items;
 
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lodestar_metainfo::{
     FileAttrs, Info, InfoHash, InfoHashV2, MetaVersion, Text, TextEncoding, info_without_pieces,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use api_keys::{ApiKey, KeyCheck, KeyKind, NewApiKey};
+pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
@@ -41,14 +53,24 @@ pub use filter::{
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
-pub use insights::{CohortCount, Counter, Event};
+pub use insights::{
+    CohortCount, Counter, Event, RollupBy, Searchable, SearchableCodes, UNCLASSIFIED, log_bucket,
+    log_bucket_bounds,
+};
+pub use insights_days::{
+    Aggregation, CompactOptions, Compacted, InsightsState, RepairCodes, RepairOptions, Repaired,
+    repair_rollups,
+};
+pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
+pub use saved::{Alert, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits};
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
     SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,
 };
+pub use user_items::{MAX_LABEL_CHARS, MAX_LABELS, UserItem, UserItemUpdate};
 
 /// Bits of the `torrents.flags` column. Values are persisted: append only.
 pub mod flags {
@@ -93,6 +115,12 @@ pub enum Error {
     Corrupt(&'static str),
     /// All 64 source ids are taken.
     TooManySources,
+    /// A value the store refuses (empty name, malformed label, out-of-range
+    /// hit); says which rule.
+    Invalid(&'static str),
+    /// A row the call names doesn't exist (say, adding an unknown torrent
+    /// to a collection).
+    NotFound(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -107,6 +135,8 @@ impl fmt::Display for Error {
             ),
             Error::Corrupt(what) => write!(f, "corrupt store: {what}"),
             Error::TooManySources => write!(f, "all {MAX_SOURCES} source ids are in use"),
+            Error::Invalid(what) => write!(f, "invalid: {what}"),
+            Error::NotFound(what) => write!(f, "not found: {what}"),
         }
     }
 }
@@ -372,6 +402,11 @@ pub struct Store {
     /// stays true until this store's next delete. That's harmless: it
     /// costs one extra checkpoint.
     scrub_pending: bool,
+    /// The database file, for its migration snapshots ([`snapshots`]);
+    /// `None` in memory and on read-only connections.
+    path: Option<PathBuf>,
+    /// How far each snapshot was checked by [`Store::purge_snapshots`].
+    snapshot_marks: snapshots::Marks,
 }
 
 impl Store {
@@ -403,7 +438,9 @@ impl Store {
     fn init(mut conn: Connection, path: Option<&Path>, config: StoreConfig) -> Result<Store> {
         schema::configure(&conn, config.mmap_size)?;
         schema::migrate(&mut conn, path)?;
-        Store::load(conn, config)
+        let mut store = Store::load(conn, config)?;
+        store.path = path.map(Path::to_path_buf);
+        Ok(store)
     }
 
     fn load(conn: Connection, config: StoreConfig) -> Result<Store> {
@@ -433,6 +470,8 @@ impl Store {
             codec,
             config,
             scrub_pending: false,
+            path: None,
+            snapshot_marks: Default::default(),
         })
     }
 
@@ -473,6 +512,8 @@ impl Store {
             codec,
             config,
             scrub_pending: _,
+            path: _,
+            snapshot_marks: _,
         } = self;
         let own: Vec<Prepared> = batch
             .torrents
@@ -621,8 +662,13 @@ impl Store {
         let mut deleted = false;
         for r in refiled {
             if r.filtered.held.is_some() {
-                deleted |= tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])? > 0;
-                tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
+                // Cached: the delete carries Insights' trigger.
+                deleted |= tx
+                    .prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                    .execute([r.id])?
+                    > 0;
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([r.id])?;
             } else if r.flags != 0 {
                 let marked = tx.execute(
                     "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1 AND flags & ?2 != ?2",

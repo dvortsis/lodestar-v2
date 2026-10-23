@@ -10,9 +10,11 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
+use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
 use lodestar_search::{
-    CancelToken, Cursor, Error as SearchError, Lease, Node, ParseError, Sort, Start, parse,
+    CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
+    SearchSpec, Sort, Start, WEIGHTS, parse,
 };
 use lodestar_store::Enriched;
 use rand::RngExt;
@@ -20,9 +22,11 @@ use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
 use crate::dto::search::{
-    CompositionShare, ParseQuery, ParseResponse, ScoreParts, SearchHit, SearchNotice,
+    CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights, NaturalChip,
+    NaturalProposal, ParseQuery, ParseResponse, SearchExplain, SearchHit, SearchNotice,
     SearchRequest, SearchResponse,
 };
+use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::{ApiState, INTEREST_TOP, auth, swarm, torrents};
@@ -188,7 +192,9 @@ fn parse_error(e: ParseError) -> ApiError {
 }
 
 /// Parses a query: the AST and its canonical text, or a `query_syntax`
-/// error whose `start`/`end` span the UI highlights.
+/// error whose `start`/`end` span the UI highlights. With
+/// `natural=true`, also the query `q` means as natural phrasing
+/// (`natural_too_long` past 512 bytes or 32 words).
 #[utoipa::path(
     operation_id = "parseQuery",
     get,
@@ -202,7 +208,40 @@ pub(crate) async fn parse_query(
 ) -> ApiResult<axum::Json<ParseResponse>> {
     let ast = parse(&p.q).map_err(parse_error)?;
     let canonical = ast.to_query();
-    Ok(axum::Json(ParseResponse { ast, canonical }))
+    let natural = p
+        .natural
+        .then(|| natural(&p.q))
+        .transpose()
+        .or_else(|e| match e {
+            // `q` parsed above, so it can't be this; nothing to propose.
+            NaturalError::Syntax => Ok(None),
+            e => Err(ApiError::bad_request(
+                "natural_too_long",
+                format!("Natural phrasing reads at most 512 bytes and 32 words and operators; this is {e}."),
+            )
+            .field("q")),
+        })?
+        .map(|n| NaturalProposal {
+            ast: n.ast,
+            canonical: n.canonical,
+            chips: n
+                .chips
+                .into_iter()
+                .map(|c| NaturalChip {
+                    from: CharRange {
+                        end: c.from.1,
+                        start: c.from.0,
+                    },
+                    text: c.text,
+                })
+                .collect(),
+            text: n.text,
+        });
+    Ok(axum::Json(ParseResponse {
+        ast,
+        canonical,
+        natural,
+    }))
 }
 
 pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
@@ -250,6 +289,7 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         ("explain" = Option<bool>, Query, description = "Each relevance hit's score breakdown, in `explain` (§8). Runs the exact query, without the plural fallback."),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`."),
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
+        ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
     ),
     responses((status = 200, body = SearchResponse))
 )]
@@ -264,7 +304,8 @@ pub(crate) async fn search_get(
     run_search(s, &headers, p).await
 }
 
-/// Searches with query text or a query AST.
+/// Searches with query text or a query AST. The body also takes
+/// `"explain": true` (as `GET`'s `explain`).
 #[utoipa::path(
     operation_id = "searchPost",
     post,
@@ -298,7 +339,17 @@ async fn run_search(
     let sort = sort_param(p.sort.as_deref())?;
     let tz = tz_param(p.tz)?;
     let explain = p.explain.unwrap_or(false);
-    let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
+    let mut limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
+    if explain {
+        if p.cursor.is_some() || p.offset.is_some_and(|o| o > 0) {
+            return Err(ApiError::bad_request(
+                "explain_first_page",
+                "Explain covers the first page only: send it without offset or cursor.",
+            )
+            .field("explain"));
+        }
+        limit = limit.min(EXPLAIN_MAX);
+    }
     if p.cursor.is_some() && p.offset.is_some() {
         return Err(
             ApiError::bad_request("cursor_and_offset", "Send cursor or offset, not both.")
@@ -337,6 +388,9 @@ async fn run_search(
     let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
+        // A first page comes from the result cache (§8) unless it's
+        // explained, which bypasses it.
+        let mut cached = None;
         let (lease, start, served, id) = match cursor {
             Some(c) => {
                 let lease = search
@@ -347,6 +401,25 @@ async fn run_search(
                     return Err(bad_cursor());
                 }
                 (lease, Start::After(c.position), c.served, Some(c.lease))
+            }
+            None if offset == 0 && !explain => {
+                // The index serving now, once for this request; the
+                // cached lease reads the snapshot the page came from.
+                let spec = SearchSpec {
+                    node: &shown,
+                    scope: &scope_of(visibility),
+                    sort,
+                    limit,
+                    now: unix_now(),
+                    utc_offset: tz * 60,
+                };
+                let (got, _) = search
+                    .cache()
+                    .search(&search.index(), &spec, &cancel)
+                    .map_err(search_error)?;
+                let lease = got.lease.clone();
+                cached = Some(got);
+                (lease, Start::Offset(0), 0, None)
             }
             None => {
                 // The index serving now, once for this request; the lease
@@ -362,7 +435,14 @@ async fn run_search(
         } else {
             lease.total()
         };
-        let page = lease.page(start, limit, &cancel).map_err(|e| {
+        let paged = match &cached {
+            Some(c) => Ok((c.page.clone(), None)),
+            None if explain => {
+                lodestar_search::explain(&lease, limit, &cancel).map(|e| (e.page.clone(), Some(e)))
+            }
+            None => lease.page(start, limit, &cancel).map(|p| (p, None)),
+        };
+        let (page, explained) = paged.map_err(|e| {
             if let Some(ev) = &events {
                 ev.searched(started.elapsed(), None);
             }
@@ -390,7 +470,7 @@ async fn run_search(
         });
         let store = reader.lock().expect("reader lock");
         let mut hits: Vec<SearchHit> = Vec::with_capacity(page.hits.len());
-        for (i, h) in page.hits.iter().enumerate() {
+        for h in page.hits.iter() {
             // A torrent deleted since indexing just drops out of the page.
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
                 let enrichment = store.enrichment(row.id).map_err(internal)?;
@@ -412,25 +492,16 @@ async fn run_search(
                     None
                 };
                 let swarm = swarm::summary(&store, hot.as_deref(), &row).map_err(internal)?;
-                let parts = explain
-                    .then(|| page.explain.get(i))
-                    .flatten()
-                    .map(|p| ScoreParts {
-                        freshness: f64::from(p.freshness),
-                        junk: f64::from(p.junk),
-                        penalty: f64::from(p.penalty),
-                        score: f64::from(p.score),
-                        seeders: f64::from(p.seeders),
-                        text: f64::from(p.text),
-                        trackers: f64::from(p.trackers),
-                    });
-                let mut hit = torrents::hit(&row, h.score, matched_files, swarm, parts);
+                let mut hit = torrents::hit(&row, h.score, matched_files, swarm);
                 enrich(&mut hit, enrichment);
                 hits.push(hit);
             }
         }
+        // Only the hits served: nothing the page left out is explained.
+        let explain = explained.map(|e| explanation(&e, &hits));
         Ok(axum::Json(SearchResponse {
             canonical: ast.to_query(),
+            explain,
             hits,
             limit,
             next_cursor,
@@ -458,6 +529,63 @@ pub(crate) fn tz_param(tz: Option<i32>) -> ApiResult<i32> {
         .field("tz"));
     }
     Ok(tz)
+}
+
+/// What a search may see besides its query, for the result cache's key:
+/// requests that may see different torrents never share an entry.
+pub(crate) fn scope_of(v: Visibility) -> String {
+    format!("hidden={},adult={}", v.hidden, v.adult)
+}
+
+/// The `explain` block for the hits served, in their order.
+fn explanation(e: &Explanation, served: &[SearchHit]) -> SearchExplain {
+    let by_id: std::collections::HashMap<u64, &lodestar_search::Explained> =
+        e.hits.iter().map(|h| (h.id, h)).collect();
+    let hits = served
+        .iter()
+        .filter_map(|h| by_id.get(&(h.id as u64)))
+        .map(|x| ExplainHit {
+            id: x.id as i64,
+            phase1: x.parts.map(|p| f64::from(p.phase1)),
+            phase2: x.parts.map(|p| ExplainPhase2 {
+                exact_name: None,
+                file_cap: None,
+                name: f64::from(p.name),
+                phrase: None,
+                title: f64::from(p.title),
+            }),
+            priors: ExplainPriors {
+                freshness: x.priors.map(|p| f64::from(p.freshness)),
+                junk: x.priors.map(|p| f64::from(p.junk)),
+                seeders: x.priors.map(|p| f64::from(p.seeders)),
+                swarm_consistency: x.priors.map(|p| f64::from(p.swarm_consistency)),
+                trackers: x.priors.map(|p| f64::from(p.trackers)),
+            },
+            score: f64::from(x.score),
+        })
+        .collect();
+    let ranked_by = match e.sort {
+        Sort::Relevance => "relevance",
+        Sort::Discovered { .. } => "discovered",
+        Sort::Size { .. } => "size",
+        Sort::Files { .. } => "files",
+        Sort::Seeders { .. } => "seeders",
+        Sort::Leechers { .. } => "leechers",
+        Sort::Trackers { .. } => "trackers",
+        Sort::Seen { .. } => "seen",
+    };
+    SearchExplain {
+        hits,
+        ranked_by: ranked_by.into(),
+        two_phase: e.two_phase,
+        weights: ExplainWeights {
+            name: f64::from(WEIGHTS.name),
+            path: f64::from(WEIGHTS.path),
+            rerank_window: WEIGHTS.rerank_window,
+            stem_score: f64::from(WEIGHTS.stem_score),
+            title: f64::from(WEIGHTS.title),
+        },
+    }
 }
 
 /// A request's query: from `q`, or an `ast` the parser could have

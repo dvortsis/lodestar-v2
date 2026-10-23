@@ -35,9 +35,8 @@ pub struct AppState {
 
 #[derive(Clone)]
 pub struct SearchState {
-    /// The index serving now. TODO(B14): show its rebuild progress
-    /// (`SearchHandle::progress`: phase, done/total, unavailable fields)
-    /// on the status surface.
+    /// The index serving now, and any rebuild's progress
+    /// (`SearchHandle::progress`), shown on the status surface.
     pub index: SearchHandle,
     pub stats: Arc<IndexStats>,
 }
@@ -110,13 +109,14 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
-/// Healthy while every source plugin is running.
+/// Healthy while every enabled source plugin is running (a disabled one
+/// isn't started, B14).
 async fn healthz(State(s): State<AppState>) -> Response {
     let down: Vec<&str> = s
         .monitor
         .sources()
         .iter()
-        .filter(|src| !src.running)
+        .filter(|src| src.enabled && !src.running)
         .map(|src| src.plugin)
         .collect();
     if down.is_empty() {
@@ -220,6 +220,7 @@ async fn status(State(s): State<AppState>) -> Response {
             "plugin": src.plugin,
             "name": src.name,
             "running": src.running,
+            "enabled": src.enabled,
             "dropped": src.dropped,
         })).collect::<Vec<_>>(),
         "intake": {
@@ -250,6 +251,7 @@ async fn status(State(s): State<AppState>) -> Response {
             "watermark": x.stats.watermark.load(Ordering::Relaxed),
             "last_commit": x.stats.last_commit.load(Ordering::Relaxed),
             "errors": x.stats.errors.load(Ordering::Relaxed),
+            "rebuild": x.index.progress().map(|p| rebuild(&p)),
         })),
         "funnel_24h": funnel,
         "latest": latest,
@@ -284,6 +286,26 @@ async fn status(State(s): State<AppState>) -> Response {
     axum::Json(body).into_response()
 }
 
+/// A rebuild's progress for the status JSON; null when none runs.
+fn rebuild(p: &lodestar_search::RebuildProgress) -> Value {
+    use lodestar_search::RebuildPhase;
+    json!({
+        "phase": match p.phase {
+            RebuildPhase::Building => "building",
+            RebuildPhase::Finishing => "finishing",
+            RebuildPhase::Swapping => "swapping",
+            RebuildPhase::Failed => "failed",
+        },
+        "done": p.done,
+        "total": p.total,
+        "replayed": p.replayed,
+        "errors": p.errors,
+        "started_at": p.started_at,
+        "unavailable": p.unavailable,
+        "error": p.error,
+    })
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -292,7 +314,32 @@ fn unix_now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::STATUS_PAGE;
+    use super::{STATUS_PAGE, rebuild};
+    use lodestar_search::{IndexVersion, RebuildPhase, RebuildProgress};
+    use serde_json::json;
+
+    #[test]
+    fn rebuild_progress_reaches_the_status_json() {
+        let p = RebuildProgress {
+            phase: RebuildPhase::Failed,
+            done: 10,
+            total: 40,
+            replayed: 2,
+            errors: 1,
+            started_at: 99,
+            from: IndexVersion::CURRENT,
+            to: IndexVersion::CURRENT,
+            unavailable: vec!["seeders".into()],
+            error: Some("disk full".into()),
+        };
+        assert_eq!(
+            rebuild(&p),
+            json!({
+                "phase": "failed", "done": 10, "total": 40, "replayed": 2, "errors": 1,
+                "started_at": 99, "unavailable": ["seeders"], "error": "disk full",
+            })
+        );
+    }
 
     /// The page reads errors through the API's envelope
     /// (`{ "error": { "message", "start", "end" } }`), not as a string.

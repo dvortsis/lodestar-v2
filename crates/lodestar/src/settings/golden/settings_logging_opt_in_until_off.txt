@@ -1,0 +1,2 @@
+422
+{"error":{"code":"invalid_setting","field":"peer_activity_until","message":"Can be on for 24 hours at most; there's no \"until I turn it off\".","section":"logging"}}

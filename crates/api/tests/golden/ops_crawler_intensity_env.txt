@@ -1,0 +1,2 @@
+409
+{"error":{"code":"set_by_environment","field":"intensity","message":"The environment variable LODESTAR_INTENSITY sets this, and it takes precedence. Change or remove LODESTAR_INTENSITY and restart."}}

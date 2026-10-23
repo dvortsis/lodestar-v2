@@ -163,8 +163,15 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
     let status = child.wait().unwrap();
     let log = log.join().unwrap();
     assert!(status.success(), "{log}");
-    assert!(log.contains("dropped root: running as 4242:4343"), "{log}");
-    assert!(log.contains("was owned by 0:0"), "{log}");
+    assert!(
+        log.contains("dropped root: running as the target account"),
+        "{log}"
+    );
+    assert!(log.contains("uid=4242 gid=4343"), "{log}");
+    assert!(
+        log.contains("was owned by another account") && log.contains("from_uid=0 from_gid=0"),
+        "{log}"
+    );
 }
 
 #[test]

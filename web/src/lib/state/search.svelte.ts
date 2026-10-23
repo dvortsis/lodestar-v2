@@ -170,8 +170,7 @@ export function createSearchState(nav: Nav = kitNav) {
 							cursor: null,
 							hidden: null,
 							exact: null,
-							tz: null,
-							explain: null
+							tz: null
 						},
 						signal
 					})
