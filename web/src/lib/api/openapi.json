@@ -2991,6 +2991,95 @@
         ]
       }
     },
+    "/logs/archive.zip": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Every listed log file in one zip, each converted as a single download\nis. `redact` defaults to true when any file contains details.",
+        "operationId": "getLogArchive",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`jsonl` (default) or `text`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LogFormat"
+            }
+          },
+          {
+            "name": "redact",
+            "in": "query",
+            "description": "Remove torrent details; the default is true when any file has them.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A zip of the log files.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad parameter (`bad_parameter`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Log files are being read already (`logs_busy`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/logs/catalog": {
       "get": {
         "tags": [
@@ -3005,6 +3094,264 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LogCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/logs/files": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "The log files, newest first, with whether each contains torrent\ndetails. An unreadable details index marks every file as having them.",
+        "operationId": "getLogFiles",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogFiles"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Deletes log files: all of them, or only those containing torrent\ndetails (or written under an opt-in). The file being written is\nrotated first, so no new line is lost. A file that isn't a regular file\nis skipped and reported. Needs no password (Destructive, §10.10.7).",
+        "operationId": "deleteLogFiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteLogFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogFilesDeleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cross-site request (`cross_origin`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not JSON (`unsupported_media_type`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A bad body (`bad_body`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/logs/files/{name}": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "One log file, always decompressed. `redact` defaults to true when the\nfile contains details: fields of the kinds that identify torrents or\npeople, client addresses and the opt-ins read `[hidden]`, and lines of\nan opt-in event are left out. `redact=false` serves the file as it is.",
+        "operationId": "getLogFile",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "`lodestar.jsonl` or a rotated file's name, as `GET /logs/files` lists it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`jsonl` (default) or `text`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LogFormat"
+            }
+          },
+          {
+            "name": "redact",
+            "in": "query",
+            "description": "Remove torrent details; the default is true when the file has them.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, as an attachment.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`."
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`attachment; filename=\"<stem>[-redacted].<jsonl|txt>\"`."
+              }
+            },
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad parameter (`bad_parameter`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file (`log_file_not_found`, `field: \"name\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Log files are being read already (`logs_busy`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -8065,6 +8412,19 @@
           }
         }
       },
+      "DeleteLogFiles": {
+        "type": "object",
+        "description": "`DELETE /logs/files`.",
+        "required": [
+          "which"
+        ],
+        "properties": {
+          "which": {
+            "$ref": "#/components/schemas/LogFilesWhich"
+          }
+        },
+        "additionalProperties": false
+      },
       "Deployment": {
         "type": "object",
         "required": [
@@ -10385,6 +10745,170 @@
           "error",
           "label",
           "untyped"
+        ]
+      },
+      "LogFileInfo": {
+        "type": "object",
+        "description": "One log file.",
+        "required": [
+          "compressed",
+          "current",
+          "details",
+          "from",
+          "name",
+          "opt_in",
+          "size",
+          "to"
+        ],
+        "properties": {
+          "compressed": {
+            "type": "boolean"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "The file being written now."
+          },
+          "details": {
+            "type": "boolean",
+            "description": "Written while a data kind that identifies torrents or people, or\nan opt-in, was on: \"Contains torrent details\"."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first readable line's time."
+          },
+          "name": {
+            "type": "string"
+          },
+          "opt_in": {
+            "type": "boolean",
+            "description": "Written while an opt-in was on."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes on disk.",
+            "minimum": 0
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its rotation time, or for the current file its last line."
+          }
+        }
+      },
+      "LogFileSkipped": {
+        "type": "object",
+        "description": "A file `DELETE /logs/files` left.",
+        "required": [
+          "name",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "`not_a_regular_file` or `failed`."
+          }
+        }
+      },
+      "LogFileState": {
+        "type": "string",
+        "description": "Whether file logging is writing now.",
+        "enum": [
+          "on",
+          "off",
+          "stopped",
+          "unavailable"
+        ]
+      },
+      "LogFiles": {
+        "type": "object",
+        "description": "`GET /logs/files`.",
+        "required": [
+          "files",
+          "folder",
+          "index_readable",
+          "reason",
+          "state"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogFileInfo"
+            }
+          },
+          "folder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The logs folder; null when there's none to read."
+          },
+          "index_readable": {
+            "type": "boolean",
+            "description": "`false`: the folder's details index couldn't be read, so every file\ncounts as having details."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why nothing is listed (`unavailable`): `not_opened`, `not_a_folder`,\n`not_private` or `unreadable`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/LogFileState"
+          }
+        }
+      },
+      "LogFilesDeleted": {
+        "type": "object",
+        "description": "What `DELETE /logs/files` did.",
+        "required": [
+          "bytes",
+          "deleted",
+          "skipped"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogFileSkipped"
+            }
+          }
+        }
+      },
+      "LogFilesWhich": {
+        "type": "string",
+        "description": "Which files `DELETE /logs/files` deletes.",
+        "enum": [
+          "all",
+          "details"
+        ]
+      },
+      "LogFormat": {
+        "type": "string",
+        "description": "A download's format.",
+        "enum": [
+          "jsonl",
+          "text"
         ]
       },
       "LogFrame": {

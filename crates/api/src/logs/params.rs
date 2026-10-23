@@ -77,6 +77,8 @@ pub(super) fn parse(query: Option<&str>) -> ApiResult<BTreeMap<String, String>> 
             "until",
             "limit",
             "cursor",
+            "format",
+            "redact",
         ];
         let Some(name) = known.iter().find(|n| **n == k) else {
             continue;
@@ -175,6 +177,30 @@ pub(super) fn limit(p: &BTreeMap<String, String>) -> ApiResult<usize> {
                 )
                 .field("limit")
             }),
+    }
+}
+
+pub(super) fn flag(p: &BTreeMap<String, String>, name: &'static str) -> ApiResult<Option<bool>> {
+    match p.get(name).map(String::as_str) {
+        None => Ok(None),
+        Some("true") => Ok(Some(true)),
+        Some("false") => Ok(Some(false)),
+        Some(_) => Err(ApiError::bad_request(
+            "bad_parameter",
+            format!("`{name}` is true or false."),
+        )
+        .field(name)),
+    }
+}
+
+pub(super) fn format(p: &BTreeMap<String, String>) -> ApiResult<crate::dto::logs::LogFormat> {
+    use crate::dto::logs::LogFormat;
+    match p.get("format").map(String::as_str) {
+        None | Some("jsonl") => Ok(LogFormat::Jsonl),
+        Some("text") => Ok(LogFormat::Text),
+        Some(_) => Err(
+            ApiError::bad_request("bad_parameter", "`format` is jsonl or text.").field("format"),
+        ),
     }
 }
 

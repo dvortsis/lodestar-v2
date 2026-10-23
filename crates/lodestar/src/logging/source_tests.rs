@@ -1,10 +1,13 @@
 //! `/logs` over a real runtime: the ring and its ids, purges, folding,
-//! and history's join with the files.
+//! history's join with the files, the files, downloads, the archive and
+//! deletion.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_api::logs::{
-    HistoryQuery, LineFilter, LogLine, LogSource, LogStreamConfig, LogValue, LogsError,
+    HistoryQuery, LineFilter, LogFilesWhich, LogFormat, LogLine, LogSource, LogStreamConfig,
+    LogValue, LogsError,
 };
 use lodestar_log::{Record, Sink, Value};
 
@@ -84,6 +87,12 @@ fn runtime(l: &Logging, ring: Option<usize>, fold: bool) -> (&'static Runtime, B
 
 fn logs(rt: &'static Runtime) -> Logs {
     Logs::new(Some(rt), LogStreamConfig::default())
+}
+
+fn settle(rt: &Runtime) {
+    if let FileState::Open(sink) = &*lock(&rt.file) {
+        sink.settle();
+    }
 }
 
 fn file_text(dir: &std::path::Path) -> String {
@@ -593,4 +602,229 @@ fn file_lines_are_cut_as_the_ring_cuts_its_own() {
     let l = &page.lines[0];
     assert!(l.truncated);
     assert!(serde_json::to_string(l).unwrap().len() < 17_000);
+}
+
+#[test]
+fn the_file_list_downloads_and_the_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = unix_now();
+    let names = section(dir.path(), |l| {
+        l.kinds.insert("name".into(), now + 600);
+    });
+    let (rt, _) = runtime(&names, None, false);
+    line(rt, 1, NAME);
+    if let FileState::Open(sink) = &mut *lock(&rt.file) {
+        sink.rotate().unwrap();
+    }
+    settle(rt);
+    rt.apply(Applied::compute(&section(dir.path(), |_| {}), now));
+    line(rt, 2, "plain");
+    let src = logs(rt);
+    let listed = src.files();
+    assert_eq!(listed.files.len(), 2, "{listed:?}");
+    assert!(listed.index_readable);
+    let (current, rotated) = (&listed.files[0], &listed.files[1]);
+    assert!(current.current && !current.details && !current.compressed);
+    assert!(!rotated.current && rotated.details && rotated.compressed);
+    assert!(rotated.from.is_some() && rotated.to.is_some());
+    assert!(current.to.is_some());
+    let read = |d: lodestar_api::logs::Download| -> String {
+        String::from_utf8(
+            d.chunks
+                .collect::<std::io::Result<Vec<_>>>()
+                .unwrap()
+                .concat(),
+        )
+        .unwrap()
+    };
+    // Redacted by default when it has details.
+    let d = src.download(&rotated.name, LogFormat::Jsonl, None).unwrap();
+    assert!(d.file_name.ends_with("-redacted.jsonl"), "{}", d.file_name);
+    assert_eq!(d.content_type, "application/x-ndjson");
+    let text = read(d);
+    assert!(
+        !text.contains(NAME) && text.contains("srctest.line"),
+        "{text}"
+    );
+    let raw = read(
+        src.download(&rotated.name, LogFormat::Jsonl, Some(false))
+            .unwrap(),
+    );
+    assert!(raw.contains(NAME));
+    let txt = src.download(&current.name, LogFormat::Text, None).unwrap();
+    assert_eq!(txt.file_name, "lodestar.txt");
+    assert!(read(txt).contains("hist-line n=2 name="));
+    for bad in [
+        "../lodestar.jsonl",
+        "index.json",
+        "lodestar-20990101T000000.000Z.jsonl",
+    ] {
+        assert!(matches!(
+            src.download(bad, LogFormat::Jsonl, None),
+            Err(LogsError::NotFound)
+        ));
+    }
+    // The archive: every file, redacted by default since one has details.
+    let a = src.archive(LogFormat::Jsonl, None).unwrap();
+    assert!(a.file_name.ends_with("-redacted.zip"));
+    let zip_bytes = a
+        .chunks
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap()
+        .concat();
+    let members = zip::read(&zip_bytes);
+    assert_eq!(members.len(), 2);
+    for (name, body) in &members {
+        let body = String::from_utf8_lossy(body);
+        assert!(!body.contains(NAME), "{name}: {body}");
+        assert!(name.ends_with("-redacted.jsonl"), "{name}");
+    }
+    // An unreadable index: every file has details.
+    std::fs::write(dir.path().join("logs").join(file::INDEX), "{oops").unwrap();
+    let listed = src.files();
+    assert!(!listed.index_readable);
+    assert!(listed.files.iter().all(|f| f.details));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_named_like_a_log_is_refused_and_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&section(dir.path(), |_| {}), None, false);
+    line(rt, 1, "x");
+    let secret = dir.path().join("secret.txt");
+    std::fs::write(&secret, "do not read").unwrap();
+    let name = "lodestar-20200101T000000.000Z.jsonl";
+    std::os::unix::fs::symlink(&secret, dir.path().join("logs").join(name)).unwrap();
+    let src = logs(rt);
+    assert!(!src.files().files.iter().any(|f| f.name == name));
+    assert!(matches!(
+        src.download(name, LogFormat::Jsonl, Some(false)),
+        Err(LogsError::NotFound)
+    ));
+    let done = src.delete(LogFilesWhich::All).unwrap();
+    assert_eq!(done.skipped.len(), 1);
+    assert_eq!(done.skipped[0].name, name);
+    assert_eq!(done.skipped[0].reason, "not_a_regular_file");
+    assert!(secret.exists(), "never followed");
+}
+
+#[test]
+fn delete_while_writers_run_and_a_compression_is_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&section(dir.path(), |_| {}), None, false);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut n = 0;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                line(rt, n, "x");
+                if n % 300 == 299 {
+                    if let FileState::Open(sink) = &mut *lock(&rt.file) {
+                        let _ = sink.rotate();
+                    }
+                }
+                n += 1;
+            }
+            n
+        })
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    let src = logs(rt);
+    let done = src.delete(LogFilesWhich::All).unwrap();
+    assert!(done.deleted >= 1, "{done:?}");
+    std::thread::sleep(Duration::from_millis(100));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let written = writer.join().unwrap();
+    settle(rt);
+    // What's left in the folder is one unbroken run up to the last line
+    // written: no line lost from the new files, none from before brought
+    // back. (The ring isn't touched by a deletion, so it's read here, not
+    // history.)
+    let mut left = folder_numbers(&dir.path().join("logs"));
+    left.sort_unstable();
+    assert!(!left.is_empty());
+    let first = left[0];
+    assert!(first > 0, "something was deleted");
+    assert_eq!(left, (first..written).collect::<Vec<u64>>());
+    // The index names only files that exist.
+    let raw: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("logs").join(file::INDEX))
+            .unwrap_or_else(|_| "{}".into()),
+    )
+    .unwrap();
+    if let Some(files) = raw["files"].as_object() {
+        for name in files.keys() {
+            assert!(dir.path().join("logs").join(name).exists(), "{name}");
+        }
+    }
+}
+
+/// Every `srctest.line` number in the folder's files.
+fn folder_numbers(dir: &std::path::Path) -> Vec<u64> {
+    let mut out = Vec::new();
+    for l in files::list(dir).unwrap() {
+        let mut r = files::open_plain(dir, &l.name).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut r, &mut text).unwrap();
+        for line in text.lines().filter(|l| l.contains("srctest.line")) {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            out.push(v["fields"]["n"]["value"].as_u64().unwrap());
+        }
+    }
+    out
+}
+
+#[test]
+fn delete_details_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = unix_now();
+    let (rt, _) = runtime(
+        &section(dir.path(), |l| {
+            l.kinds.insert("name".into(), now + 600);
+        }),
+        None,
+        false,
+    );
+    line(rt, 1, NAME);
+    if let FileState::Open(sink) = &mut *lock(&rt.file) {
+        sink.rotate().unwrap();
+    }
+    rt.apply(Applied::compute(&section(dir.path(), |_| {}), now));
+    line(rt, 2, "plain");
+    if let FileState::Open(sink) = &mut *lock(&rt.file) {
+        sink.rotate().unwrap();
+    }
+    settle(rt);
+    let src = logs(rt);
+    assert_eq!(src.files().files.len(), 3);
+    let done = src.delete(LogFilesWhich::Details).unwrap();
+    assert_eq!(done.deleted, 1, "{done:?}");
+    let left = src.files();
+    assert!(left.files.iter().all(|f| !f.details), "{left:?}");
+    let all = serde_json::to_string(&all_pages(&src, "hist-line", 100)).unwrap();
+    assert!(!all.contains(NAME));
+}
+
+#[cfg(windows)]
+#[test]
+fn delete_and_rotate_while_a_download_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&section(dir.path(), |_| {}), None, false);
+    for n in 0..1000 {
+        line(rt, n, "x");
+    }
+    let src = logs(rt);
+    let mut d = src
+        .download("lodestar.jsonl", LogFormat::Jsonl, Some(false))
+        .unwrap();
+    let first = d.chunks.next().unwrap().unwrap();
+    assert!(!first.is_empty());
+    if let FileState::Open(sink) = &mut *lock(&rt.file) {
+        sink.rotate().expect("rotation with a reader open");
+    }
+    let done = src.delete(LogFilesWhich::All).unwrap();
+    assert!(done.skipped.is_empty(), "{done:?}");
+    drop(d);
 }

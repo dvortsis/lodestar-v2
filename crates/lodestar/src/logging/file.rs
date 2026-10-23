@@ -24,6 +24,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use super::format::Stamp;
+use super::names::LogName;
 use super::state::FileConfig;
 
 /// The current file's name.
@@ -144,6 +145,15 @@ pub fn disk_full(e: &io::Error) -> bool {
 pub(super) enum Job {
     Compress(String, FileConfig),
     Prune(FileConfig),
+    /// Deletes these files (and each one's `.gz`, should a compression
+    /// have finished meanwhile), the `.part` leftovers, and their index
+    /// entries, in turn with compression and pruning.
+    Delete {
+        dir: PathBuf,
+        names: Vec<LogName>,
+        sweep: Option<Sweep>,
+        reply: mpsc::Sender<Deleted>,
+    },
     #[cfg(test)]
     Barrier(mpsc::Sender<()>),
 }
@@ -170,6 +180,15 @@ impl Worker {
                             compressed.and(pruned)
                         }
                         Job::Prune(cfg) => prune(&cfg, &index, SystemTime::now()),
+                        Job::Delete {
+                            dir,
+                            names,
+                            sweep,
+                            reply,
+                        } => {
+                            let _ = reply.send(delete(&dir, &names, sweep.as_ref(), &index));
+                            Ok(())
+                        }
                         #[cfg(test)]
                         Job::Barrier(done) => {
                             let _ = done.send(());
@@ -195,6 +214,110 @@ impl Worker {
 
     fn send(&self, job: Job) {
         let _ = self.tx.send(job);
+    }
+}
+
+/// What a deletion did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Deleted {
+    pub deleted: u64,
+    pub bytes: u64,
+    /// Name and reason: `not_a_regular_file` or `failed`.
+    pub skipped: Vec<(String, &'static str)>,
+}
+
+/// "Delete all": also every rotated file found when the job runs that
+/// isn't newer than `upto` (every one, without), so a rotation between
+/// the listing and the job leaves nothing older behind.
+#[derive(Debug, Clone)]
+pub(super) struct Sweep {
+    pub upto: Option<LogName>,
+}
+
+/// Deletes `names` in `dir` (each one's `.gz` too), and what `sweep`
+/// takes, never following a link: one is skipped and reported. Then the
+/// `.part` leftovers, and the names' index entries.
+pub(super) fn delete(
+    dir: &Path,
+    names: &[LogName],
+    sweep: Option<&Sweep>,
+    index: &Mutex<Index>,
+) -> Deleted {
+    let mut out = Deleted::default();
+    let mut names = names.to_vec();
+    if let Some(sweep) = sweep
+        && let Ok(entries) = fs::read_dir(dir)
+    {
+        for e in entries.filter_map(Result::ok) {
+            let Some(name) = e.file_name().to_str().and_then(LogName::parse) else {
+                continue;
+            };
+            let old_enough = match (&name, &sweep.upto) {
+                (LogName::Current, _) => false,
+                (_, None) => true,
+                (n, Some(upto)) => LogName::newest_first(n, upto) != std::cmp::Ordering::Less,
+            };
+            if old_enough && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    for name in &names {
+        for n in std::iter::once(name.clone()).chain(name.compressed()) {
+            let file = n.file_name();
+            let path = n.path(dir);
+            let meta = match fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if !meta.file_type().is_file() {
+                out.skipped.push((file, "not_a_regular_file"));
+                continue;
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    out.deleted += 1;
+                    out.bytes += meta.len();
+                    let _ = lock(index).remove(&file);
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => out.skipped.push((file, "failed")),
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for e in entries.filter_map(Result::ok) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let leftover = (name.starts_with("lodestar-") && name.ends_with(".part"))
+                || name == "index.json.part";
+            if leftover && e.file_type().is_ok_and(|t| t.is_file()) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+    out
+}
+
+/// The rotate worker and the index, for jobs from outside the writer.
+#[derive(Debug, Clone)]
+pub(super) struct Jobs {
+    tx: mpsc::Sender<Job>,
+    pub dir: PathBuf,
+}
+
+impl Jobs {
+    /// Runs a deletion on the worker and waits for it.
+    pub fn delete(&self, names: Vec<LogName>, sweep: Option<Sweep>) -> Option<Deleted> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(Job::Delete {
+                dir: self.dir.clone(),
+                names,
+                sweep,
+                reply,
+            })
+            .ok()?;
+        rx.recv_timeout(Duration::from_secs(120)).ok()
     }
 }
 
@@ -426,6 +549,13 @@ impl FileSink {
         }
         sink.worker.send(Job::Prune(sink.cfg.clone()));
         Ok(sink)
+    }
+
+    pub(super) fn jobs(&self) -> Jobs {
+        Jobs {
+            tx: self.worker.tx.clone(),
+            dir: self.cfg.dir.clone(),
+        }
     }
 
     /// The previous run's last heartbeat (0 unknown).
