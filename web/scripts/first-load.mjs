@@ -225,6 +225,35 @@ export const vendorGroup = () => ({
 	priority: 10
 });
 
+// ---- route preloads --------------------------------------------------------------------------
+
+/**
+ * Vite's `build.modulePreload.resolveDependencies`: kit's entry (`app.js`) imports every route's
+ * node, and by default lists each node's JS chunks to preload with it (`__vite__mapDeps`). That
+ * list is in `/search`'s first load and grows with every route. Only CSS stays (it must load with
+ * a node, or the page paints unstyled); a node's JS imports load when the node does, and kit
+ * starts that on hover or touch (`data-sveltekit-preload-data`), before the navigation.
+ * @param {string} _file
+ * @param {string[]} deps
+ * @param {{ hostId: string }} ctx
+ */
+export const routePreloads = (_file, deps, { hostId }) =>
+	/(^|\/)entry\/app\.[^/]*\.js$/.test(hostId) ? deps.filter((d) => d.endsWith('.css')) : deps;
+
+/**
+ * The JS files a built `app.js` still lists in its preload map (`__vite__mapDeps`): none, or the
+ * route table grows with every route's chunks again.
+ * @param {string} appJs the built entry's source
+ * @returns {string[]}
+ */
+export function preloadedJs(appJs) {
+	const list = appJs.match(/__vite__mapDeps=[^[]*\[([^\]]*)\]/);
+	if (!list?.[1]) return [];
+	return [...list[1].matchAll(/"([^"]+)"/g)]
+		.map((m) => m[1] ?? '')
+		.filter((f) => f.endsWith('.js'));
+}
+
 // ---- the record and the check -----------------------------------------------------------------
 
 // Which modules each client chunk holds, and every module's static imports.
