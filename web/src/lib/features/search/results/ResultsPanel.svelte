@@ -324,8 +324,11 @@
 			<ul class="rp-examples">
 				{#each EXAMPLES.slice(0, 3) as ex (ex.query)}
 					<li>
+						<!-- The query last on its line: the mono font arrives late, and growing text there moves
+						     nothing after it (a layout shift otherwise). -->
+						{ex.goal()} ·
 						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- searchHref() resolves -->
-						<a class="rp-link" href={searchHref(ex.query)}><code>{ex.query}</code></a> · {ex.goal()}
+						<a class="rp-link" href={searchHref(ex.query)}><code>{ex.query}</code></a>
 					</li>
 				{/each}
 			</ul>
