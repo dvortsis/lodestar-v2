@@ -118,12 +118,13 @@ const detailLazy = [
 ];
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
-// them: every control but the toggle and the text input (per type), instant mode, previews, the
-// field menu, the ⌘S registration, copy's toast and the confirmation dialog. S-settings-1's screen
-// route entry uses this list; "Settings controls (on demand)" gates what it leaves out.
+// them: every control but the toggle and the text input (per type), the edit chunk (the save
+// pipeline and what it shows, owner 2026-10-24), instant mode, previews, the field menu, the ⌘S
+// registration, copy's toast and the confirmation dialog. S-settings-1's screen route entry uses
+// this list; "Settings controls (on demand)" gates what it leaves out.
 const settingsOnDemand = [
 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
-	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
+	/features\/settings\/form\/(edit|instant|preview|menu|save-key|copy)\.ts$/,
 	/features\/settings\/form\/ConfirmDialog\.svelte$/
 ];
 const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
@@ -176,9 +177,10 @@ export default [
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertDialogs }), '45 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
-	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
-	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
-	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '38 KB')] : []),
+	// The engine's on-demand code on a Settings screen, still gated: 46.23 KB with S-settings-1's
+	// screen and the edit chunk (limit = measured + 10%). Until a screen uses the engine there's
+	// nothing to measure.
+	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '51 KB')] : []),
 	entry(
 		'Alert dialogs (on demand)',
 		[

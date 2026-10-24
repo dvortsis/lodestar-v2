@@ -1,6 +1,7 @@
 // The save pipeline (§10.10.5). Every save goes through it: busy → nothing → validate → gates →
 // one PATCH /settings for the whole batch (atomic across sections) → apply, or map the refusal.
 // Also Undo, the merge, drafts and validation, all on the form's `Engine` (`form.svelte.ts`).
+// Part of the edit chunk (`edit.ts`), which loads with the first edit.
 import { ApiError, isAbort, latest } from '$lib/api/client';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -8,7 +9,14 @@ import { m } from '$lib/paraglide/messages.js';
 import { clearDraft, planRestore, readDraft } from './draft';
 import { UNDO_MS, type Engine, type Sections } from './form.svelte';
 import { merge, resolve as resolveField, sectionValues } from './merge';
-import { getSection, patchBatch, previewBatch, type Batch } from './requests';
+import {
+	errorKey,
+	errorSection,
+	getSection,
+	patchBatch,
+	previewBatch,
+	type Batch
+} from './requests';
 import {
 	splitKey,
 	type Danger,
@@ -64,21 +72,6 @@ export function lockedNote(saved: SettingValue): string {
 	return saved.env
 		? m.settings_form_note_locked_env({ variable: saved.env })
 		: m.settings_form_note_locked();
-}
-
-/** The section a refusal names, or the batch's only one. */
-export function errorSection(err: ApiError, batch: Batch): string | undefined {
-	if (err.section) return err.section;
-	const names = Object.keys(batch);
-	return names.length === 1 ? names[0] : undefined;
-}
-
-/** The form's field a refusal names, if any. */
-export function errorKey(e: Engine, err: ApiError, batch: Batch): FieldKey | undefined {
-	const section = errorSection(err, batch);
-	if (!section || !err.field) return undefined;
-	const key = `${section}.${err.field}` as FieldKey;
-	return e.byKey.has(key) ? key : undefined;
 }
 
 // --- drafts --------------------------------------------------------------------------------
@@ -426,12 +419,7 @@ async function saveNow(e: Engine): Promise<SaveResult> {
 			return await (e.instant ?? (await e.instantMode())).saveSecrets();
 		} catch {
 			// Instant mode didn't load: the secrets aren't kept once tried (§10.10.4), and say so.
-			for (const spec of e.specs) {
-				const s = e.sec(spec.section);
-				if (!spec.writeOnly || s?.fields[spec.name]?.mine === undefined) continue;
-				e.setSection(stage(s, spec.name, undefined, spec));
-				e.setFieldError(spec.key, m.settings_form_chunk_failed());
-			}
+			e.dropSecrets();
 			return { ok: false, reason: 'network' };
 		}
 	}
