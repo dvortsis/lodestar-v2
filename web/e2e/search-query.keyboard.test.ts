@@ -108,6 +108,19 @@ test('/ focuses the bar again from elsewhere on the page, with the caret at the 
 	kbd
 }) => {
 	mock.on('parseQuery', { ast: { op: 'word', field: 'any', word: 'bunny' }, canonical: 'bunny' });
+	// The results panel (S-search-2) asks for the query's results.
+	mock.on('searchPost', {
+		canonical: 'bunny',
+		hits: [],
+		limit: 50,
+		next_cursor: null,
+		notices: [],
+		offset: 0,
+		stemmed: false,
+		took_ms: 1,
+		total: 0,
+		total_approx: false
+	});
 	await go('/search?q=bunny');
 	const bar = page.getByRole('combobox', { name: 'Search torrents' });
 	await expect(bar).toHaveText('bunny');

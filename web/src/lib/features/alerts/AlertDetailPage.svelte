@@ -3,12 +3,12 @@
 	// since …" mark where the server's `read` flags change. New alerts never move the list under
 	// the reader: an event only raises the "N new · Show" banner (§10.4's Live rule).
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
 	import IconTrash from '~icons/ph/trash';
 	import IconPause from '~icons/ph/pause';
 	import IconSearch from '~icons/ph/magnifying-glass';
 	import { events } from '$lib/state/events.svelte';
-	import { keys } from '$lib/keys';
 	import { formatCount, formatDateTime } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -32,7 +32,10 @@
 	} from './api';
 	import { createAlertDetail } from './detail.svelte';
 	import { throttled } from './throttle';
-	import AlertHitRow from './AlertHitRow.svelte';
+	import ResultRow from '$lib/features/search/results/ResultRow.svelte';
+	import '$lib/features/search/results/row.css';
+	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
+	import { defaultRowHeight, tokenPx } from '$lib/ui/overlays/motion';
 	import ChannelBadges from './ChannelBadges.svelte';
 	import PauseToggle from './PauseToggle.svelte';
 
@@ -41,6 +44,15 @@
 	// Moving from one alert to another starts clean: the state follows the id.
 	const d = $derived(createAlertDetail(id));
 	const locale = $derived(currentLocale());
+	// The shared result row (S-search-2) in the URL's density (§10.3), as Search and Discover.
+	const density = $derived(
+		page.url.searchParams.get('density') === 'compact' ? 'compact' : 'comfortable'
+	);
+	// The row's fixed height (§10.1). The list still measures, for the "since you last looked"
+	// divider; an alert row measures exactly this.
+	const rowHeight = $derived(
+		density === 'compact' ? defaultRowHeight() : tokenPx('--row-height-comfortable', 64)
+	);
 
 	$effect(() => {
 		void d.load();
@@ -88,30 +100,17 @@
 		listEl?.querySelector<HTMLElement>(`[data-index="${next}"]`)?.focus();
 	}
 	// onMount, not $effect: registering writes the registry's version, and an effect that reads and
-	// writes the same state loops.
+	// writes the same state loops. Loaded after mount (commands.ts): the key registry stays out of
+	// the page's first view.
 	onMount(() => {
-		const pop = keys.pushScope('alerts');
-		const offs = [
-			keys.register({
-				id: 'results.next',
-				title: () => m.alerts_key_next(),
-				section: () => m.alerts_section(),
-				scope: 'alerts',
-				palette: false,
-				run: () => void step(1)
-			}),
-			keys.register({
-				id: 'results.previous',
-				title: () => m.alerts_key_previous(),
-				section: () => m.alerts_section(),
-				scope: 'alerts',
-				palette: false,
-				run: () => void step(-1)
-			})
-		];
+		let off: (() => void) | undefined;
+		let gone = false;
+		void import('./commands').then(({ registerAlertDetailCommands }) => {
+			if (!gone) off = registerAlertDetailCommands((by) => void step(by));
+		});
 		return () => {
-			offs.forEach((off) => off());
-			pop();
+			gone = true;
+			off?.();
 		};
 	});
 
@@ -290,7 +289,7 @@
 						role="grid"
 						getKey={(it) => it.key}
 						label={m.alerts_matches_label({ name: d.search.name })}
-						estimateSize={112}
+						estimateSize={rowHeight}
 						measureRows
 						bind:activeIndex={active}
 						onActivate={open}
@@ -307,7 +306,15 @@
 									</h2>
 								</div>
 							{:else}
-								<div role="gridcell"><AlertHitRow row={it.row} /></div>
+								<div role="gridcell" style:height="{rowHeight}px">
+									<ResultRow hit={it.row.torrent} {density} testid="alert-row-{it.row.id}">
+										{#snippet extra()}
+											<span data-testid="alert-row-{it.row.id}-matched"
+												>{m.alerts_matched()} <RelativeTime seconds={it.row.created_at} /></span
+											>
+										{/snippet}
+									</ResultRow>
+								</div>
 							{/if}
 						{/snippet}
 					</VirtualList>

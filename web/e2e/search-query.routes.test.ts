@@ -196,12 +196,17 @@ test('chips render from the server AST; removing one goes through the server', a
 	await expect(page.getByRole('button', { name: /lantern/ })).toHaveCount(0); // free text
 	await removeChip(page, 'Resolution: 1080p').click();
 	await expectQuery(page, 'lantern ext:mkv');
-	const sent = mock.calls('searchPost').at(-1)!.postDataJSON() as { ast: Ast; limit: number };
+	// W5's own request (limit 1, for the canonical text); the results panel's has limit 50.
+	const sent = mock
+		.calls('searchPost')
+		.map((r) => r.postDataJSON() as { ast: Ast; limit: number })
+		.filter((b) => b.limit === 1)
+		.at(-1)!;
 	expect(sent.ast).toEqual(toAst('lantern ext:mkv'));
-	expect(sent.limit).toBe(1);
 	await expect(editor(page)).toHaveText('lantern ext:mkv');
 	await expect(removeChip(page, 'Resolution: 1080p')).toHaveCount(0);
-	await expect(page.locator('[aria-live="polite"]').last()).toHaveText(
+	// The strip's announcer, in the search landmark (the results announce their count apart).
+	await expect(page.getByRole('search').locator('[aria-live="polite"]').last()).toHaveText(
 		'Removed filter: Resolution: 1080p'
 	);
 
@@ -216,7 +221,7 @@ test('chips render from the server AST; removing one goes through the server', a
 
 test('Clear all keeps the free text, in one step Back undoes', async ({ page, go }) => {
 	await go('/search?q=lantern+res%3A1080p&hidden=1');
-	await page.getByRole('button', { name: 'Clear all' }).click();
+	await page.getByRole('button', { name: 'Clear all', exact: true }).click();
 	await expectQuery(page, 'lantern');
 	await expect(strip(page)).toHaveCount(0);
 	await expect(editor(page)).toBeFocused();

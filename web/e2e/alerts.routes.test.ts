@@ -280,10 +280,10 @@ test.describe('one alert', () => {
 		expect(mid).toBeLessThan(below);
 		await expect.poll(() => mock.calls('markAlertsRead').length).toBe(1);
 		expect(body(mock.calls('markAlertsRead')[0]!)).toEqual({ saved_search: 1, through: 5 });
-		await expect(page.getByTestId('alert-title-5')).toHaveText('Lantern Keeper S01E05');
-		await expect(page.getByTestId('alert-raw-5')).toContainText('Lantern.Keeper.S01E05');
-		await expect(page.getByTestId('alert-size-5')).toHaveText('2.00 GiB');
-		await expect(page.getByTestId('alert-trackers-5')).toContainText('4 / 20');
+		await expect(page.getByTestId('alert-row-5-title')).toHaveText('Lantern Keeper S01E05');
+		await expect(page.getByTestId('alert-row-5-raw')).toContainText('Lantern.Keeper.S01E05');
+		await expect(page.getByTestId('alert-row-5-size')).toHaveText('2.00 GiB');
+		await expect(page.getByTestId('alert-row-5-trackers')).toContainText('4 / 20');
 		await expect(page.getByTestId('alert-open-search')).toHaveAttribute(
 			'href',
 			/^\/search\?q=lantern\+keeper\+1080p/

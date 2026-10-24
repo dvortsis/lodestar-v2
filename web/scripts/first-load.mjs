@@ -233,12 +233,18 @@ export const vendorGroup = () => ({
  * list is in `/search`'s first load and grows with every route. Only CSS stays (it must load with
  * a node, or the page paints unstyled); a node's JS imports load when the node does, and kit
  * starts that on hover or touch (`data-sveltekit-preload-data`), before the navigation.
+ *
+ * A route node's own lazy parts get the same rule (S-search-2): the search node's list of the
+ * results panel's chunks was in `/search`'s first load too, and grew with every chunk the panel
+ * uses. A lazy part's JS imports now load after its own chunk, one level at a time.
  * @param {string} _file
  * @param {string[]} deps
  * @param {{ hostId: string }} ctx
  */
 export const routePreloads = (_file, deps, { hostId }) =>
-	/(^|\/)entry\/app\.[^/]*\.js$/.test(hostId) ? deps.filter((d) => d.endsWith('.css')) : deps;
+	/(^|\/)(entry\/app|nodes\/\d+)\.[^/]*\.js$/.test(hostId)
+		? deps.filter((d) => d.endsWith('.css'))
+		: deps;
 
 /**
  * The JS files a built `app.js` still lists in its preload map (`__vite__mapDeps`): none, or the

@@ -1,0 +1,450 @@
+<script lang="ts">
+	// The search page's results (§10.4): every state of the table, then the list. Loaded lazily by the
+	// page (with a query in the URL, else on the first interaction), never on the bare first load.
+	// - The rows follow W5's query: a new parsed query loads; a parse error or a parse in flight keeps
+	//   the last good rows, as the strip keeps the last good chips.
+	// - j/k move through the rows (scope `search`); `c` and `o` act on the focused row through
+	//   S-detail's `setCommandTarget`; Enter or a click opens the drawer.
+	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { api, type ApiError } from '$lib/api/client';
+	import type { components } from '$lib/api/schema';
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { m } from '$lib/paraglide/messages.js';
+	import { shellStatus } from '$lib/shell/status.svelte';
+	import { search } from '$lib/state/search.svelte';
+	import Button from '$lib/ui/controls/Button.svelte';
+	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
+	import VirtualList from '$lib/ui/lists/VirtualList.svelte';
+	import { defaultRowHeight, tokenPx } from '$lib/ui/overlays/motion';
+	import { setCommandTarget } from '$lib/features/detail/target';
+	import {
+		chipClauses,
+		rootWithout,
+		topLevel,
+		withoutFilters,
+		type Clause
+	} from '../query/clauses';
+	import { EXAMPLES } from '../query/examples';
+	import { ensureSearchPath } from '../query/path';
+	import { appearanceHref, searchHref } from './links';
+	import { results, type ResultsQuery } from './results.svelte';
+	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
+
+	interface Props {
+		/** Focus the query bar (the empty state's next step). */
+		focusBar: () => void;
+	}
+	let { focusBar }: Props = $props();
+
+	type Stats = components['schemas']['StatsResponse'];
+
+	/** §10.4 "First load": skeletons only after this long, so a quick answer never flashes them. */
+	const SKELETON_AFTER_MS = 300;
+	/** §10.4 "Cold start": below this many searchable torrents the index says it is still growing. */
+	const COLD_START_BELOW = 1_000_000;
+	/** How long the first rows wait for /stats (the cold-start line above them). */
+	const FIGURES_WAIT_MS = 1000;
+
+	const locale = $derived(currentLocale());
+	const density = $derived<Density>(
+		page.url.searchParams.get('density') === 'compact' ? 'compact' : 'comfortable'
+	);
+
+	// The query the rows follow. No query in the URL: the empty state. A query that hasn't parsed
+	// (in flight, or a syntax error): no new load, so the last good rows stay.
+	$effect(() => {
+		const q: ResultsQuery = {
+			ast: search.q ? search.ast : null,
+			sort: search.sort,
+			hidden: search.hidden,
+			exact: search.exact
+		};
+		if (search.q && !search.ast) return;
+		void results.load(q);
+	});
+
+	// A query in the URL that hasn't parsed yet (a pasted link): nothing at all, not the empty state,
+	// so the strip's line can arrive above without moving anything (§10.1). A parse error keeps this
+	// too; the bar explains it.
+	// The cold-start banner sits above the rows: they also wait for /stats (at most
+	// FIGURES_WAIT_MS), so it never arrives after them and pushes them down.
+	let figuresKnown = $state(false);
+	const waiting = $derived(
+		(!!search.q && results.status === 'empty' && search.ast?.op !== 'all') ||
+			(results.status !== 'empty' && !figuresKnown)
+	);
+
+	// "Matched in N files": the server sends `matched_files` only for a query with a file clause, so
+	// the whole list takes the taller row (one fixed height per list, §10.1).
+	const matched = $derived(results.hits.some((h) => h.matched_files !== undefined));
+	const rowHeight = $derived(
+		density === 'compact'
+			? defaultRowHeight()
+			: tokenPx('--row-height-comfortable', 64) + (matched ? tokenPx('--spacing', 4) * 5 : 0)
+	);
+
+	let slow = $state(false);
+	$effect(() => {
+		if (results.status !== 'loading') return void (slow = false);
+		const t = setTimeout(() => (slow = true), SKELETON_AFTER_MS);
+		return () => clearTimeout(t);
+	});
+
+	let figures = $state.raw<Stats | null>(null);
+	let saved = $state.raw<components['schemas']['SavedSearchView'][]>([]);
+	// The shell's stream already subscribes to `rebuild` (a second subscriber could reconnect the
+	// stream with another topic set): read its snapshot.
+	const rebuild = $derived(shellStatus.rebuild);
+	const rebuilding = $derived(
+		rebuild !== null && rebuild.phase !== 'done' && rebuild.phase !== 'failed'
+	);
+	const coldStart = $derived(
+		figures?.searchable_torrents != null && figures.searchable_torrents < COLD_START_BELOW
+	);
+
+	/** Search's row actions: one lazy chunk, fetched with the first results. */
+	let Actions = $state<typeof import('./RowActions.svelte').default>();
+	$effect(() => {
+		if (results.hits.length && !Actions)
+			void import('./RowActions.svelte').then((mod) => (Actions = mod.default));
+	});
+
+	let active = $state(0);
+	let listEl = $state<HTMLElement>();
+	type Detail = typeof import('$lib/features/detail/open');
+	let detail: Detail | undefined;
+	const detailMod = () => (detail ? Promise.resolve(detail) : import('$lib/features/detail/open'));
+
+	onMount(() => {
+		// Headline figures and the cold-start line; saved searches for the empty state. Failures leave
+		// them out: the page works without them.
+		const giveUp = setTimeout(() => (figuresKnown = true), FIGURES_WAIT_MS);
+		void api
+			.get('/stats')
+			.then(
+				(s) => (figures = s),
+				() => {}
+			)
+			.finally(() => {
+				clearTimeout(giveUp);
+				figuresKnown = true;
+			});
+		void api.get('/saved-searches').then(
+			(s) => (saved = s.slice(0, 5)),
+			() => {}
+		);
+		// `c` and `o` work with the drawer closed: S-detail's commands act on the focused row.
+		void import('$lib/features/detail/commands').then((mod) => mod.registerDetailCommands());
+		let offKeys: (() => void) | undefined;
+		let gone = false;
+		void Promise.all([import('$lib/keys'), import('./commands')]).then(([{ keys }, cmd]) => {
+			if (!gone)
+				offKeys = cmd.registerResultsCommands(keys, {
+					next: () => move(1),
+					previous: () => move(-1)
+				});
+		});
+		return () => {
+			clearTimeout(giveUp);
+			gone = true;
+			offKeys?.();
+			setCommandTarget(null);
+		};
+	});
+
+	/** j/k: the next or previous row becomes active (and takes focus unless the drawer is open). */
+	let list = $state<{ move: (delta: number) => void; moveTo: (index: number) => void }>();
+	function move(by: 1 | -1) {
+		const n = results.hits.length;
+		if (!n) return;
+		if ('detail' in page.state) {
+			// §10.5: with the drawer open, the drawer follows and focus stays in it (so Esc still
+			// closes it and goes back to the row).
+			active = Math.min(n - 1, Math.max(0, active + by));
+			const hit = results.hits[active];
+			if (hit) void open(hit);
+			return;
+		}
+		// From outside the list, j/k go to the active row first (row 1 on a fresh list).
+		if (listEl?.contains(document.activeElement)) list?.move(by);
+		else list?.moveTo(active);
+	}
+
+	/**
+	 * The row with focus, however it got it (Tab, a click, the arrows, j/k): `c`/`o` act on it, and
+	 * its details are fetched ahead (150 ms idle). Focus leaving the list clears the target.
+	 */
+	function focusIn(event: FocusEvent) {
+		const hash = (event.target as HTMLElement)
+			.closest('[role="row"]')
+			?.querySelector<HTMLElement>('[data-hash]')?.dataset.hash;
+		if (!hash) return;
+		setCommandTarget(hash); // synchronous: a `c` right after the focus moves must see it
+		void detailMod().then((mod) => {
+			detail = mod;
+			mod.prefetchDetail(hash);
+		});
+	}
+	function focusOut(event: FocusEvent) {
+		if (listEl?.contains(event.relatedTarget as Node | null)) return;
+		setCommandTarget(null);
+	}
+
+	async function open(hit: SearchHit) {
+		const mod = await detailMod();
+		detail = mod;
+		const rowEl = listEl
+			?.querySelector<HTMLElement>(`[data-hash="${hit.hash}"]`)
+			?.closest<HTMLElement>('[role="row"]');
+		mod.openDetail(hit.hash, {
+			hit,
+			returnFocus: () => rowEl ?? null,
+			replace: 'detail' in page.state
+		});
+	}
+
+	/** §10.14: what happened, then what to do. */
+	function errorText(e: ApiError): string {
+		if (e.status === 429 || e.status === 503)
+			return e.retryAfter
+				? m.search_results_error_busy({ seconds: formatCount(e.retryAfter, locale) })
+				: m.search_results_error_busy_now();
+		if (e.status >= 400 && e.status < 500) return m.search_results_error_query();
+		return m.search_results_error_body();
+	}
+
+	const skeletons = Array.from({ length: 8 }, (_, i) => i);
+
+	// §10.4 "No results": the query's filters, each removable, and Clear all (one history entry).
+	const clauses = $derived(results.status === 'ready' ? chipClauses(search.ast) : []);
+	async function removeClause(clause: Clause) {
+		const base = search.ast;
+		const index = topLevel(base).indexOf(clause.node);
+		if (!base || index < 0) return;
+		ensureSearchPath();
+		await search.setAst(rootWithout(base, index));
+	}
+	async function clearFilters() {
+		ensureSearchPath();
+		await search.setAst(withoutFilters(search.ast), search.hidden ? { hidden: false } : {});
+	}
+
+	// §10.13: the count, politely, once per answered query (W5 debounces typing). Cleared first so
+	// the same count is read again for a new query.
+	let said = $state('');
+	$effect(() => {
+		const shown = results.shown;
+		if (shown === null || results.status !== 'ready') return;
+		const n = results.hits.length === 0 ? 0 : results.total;
+		const count = formatCount(n, locale);
+		const text =
+			n === 0
+				? m.search_results_none()
+				: results.totalApprox
+					? m.search_results_announce_about({ count })
+					: n === 1
+						? m.search_results_announce_one()
+						: m.search_results_announce_other({ count });
+		said = '';
+		const raf = requestAnimationFrame(() => (said = text));
+		return () => cancelAnimationFrame(raf);
+	});
+
+	/** §10.1: details are fetched ahead on hover too (the 150 ms idle is `prefetchDetail`'s). */
+	let hovered: string | undefined;
+	function pointerOver(event: PointerEvent) {
+		const hash = (event.target as HTMLElement)
+			.closest('[role="row"]')
+			?.querySelector<HTMLElement>('[data-hash]')?.dataset.hash;
+		if (!hash || hash === hovered) return;
+		hovered = hash;
+		void detailMod().then((mod) => {
+			detail = mod;
+			mod.prefetchDetail(hash);
+		});
+	}
+
+	/** Shift+F10 or the menu key opens the focused row's More menu: its actions without a pointer. */
+	function keyDown(event: KeyboardEvent) {
+		if (!(event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) return;
+		const more = (event.target as HTMLElement)
+			.closest('[role="row"]')
+			?.querySelector<HTMLButtonElement>('[data-row-more]');
+		if (!more) return;
+		event.preventDefault();
+		more.click();
+	}
+</script>
+
+<section
+	class="rp"
+	aria-labelledby="rp-label"
+	aria-busy={results.status === 'loading' || results.refining}
+>
+	<h2 id="rp-label" class="sr-only">{m.search_results_label()}</h2>
+	{#if results.refining}<div class="rp-hairline" data-testid="results-refining"></div>{/if}
+
+	<p class="sr-only" aria-live="polite" data-testid="results-announce">{said}</p>
+
+	{#if rebuilding && rebuild}
+		<Banner kind="info" class="rp-banner">
+			<span data-testid="results-rebuilding"
+				>{m.search_results_rebuilding({
+					done: formatCount(rebuild.done, locale),
+					total: formatCount(rebuild.total, locale)
+				})}</span
+			>
+		</Banner>
+	{/if}
+	{#if coldStart && figures?.searchable_torrents != null && results.status !== 'empty'}
+		<Banner kind="info" class="rp-banner">
+			<span data-testid="results-cold-start"
+				>{m.search_results_cold_start({
+					count: formatCount(figures.searchable_torrents, locale)
+				})}</span
+			>
+		</Banner>
+	{/if}
+
+	{#if waiting}
+		<!-- the parse is out: see `waiting` -->
+	{:else if results.status === 'empty'}
+		<div class="rp-empty" data-testid="results-empty">
+			<p class="rp-empty-title" data-testid="results-empty-title">
+				{figures?.searchable_torrents != null
+					? m.search_results_empty_title({
+							count: formatCount(figures.searchable_torrents, locale)
+						})
+					: m.search_results_empty_title_unknown()}
+			</p>
+			<p>{m.search_results_empty_lead()}</p>
+			<ul class="rp-examples">
+				{#each EXAMPLES.slice(0, 3) as ex (ex.query)}
+					<li>
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- searchHref() resolves -->
+						<a class="rp-link" href={searchHref(ex.query)}><code>{ex.query}</code></a> · {ex.goal()}
+					</li>
+				{/each}
+			</ul>
+			{#if saved.length}
+				<h3 class="rp-empty-sub">{m.search_results_empty_saved()}</h3>
+				<ul class="rp-examples" data-testid="results-saved">
+					{#each saved as s (s.id)}
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- searchHref() resolves -->
+						<li><a class="rp-link" href={searchHref(s.q, s.sort)}>{s.name}</a></li>
+					{/each}
+				</ul>
+			{/if}
+			<Button onclick={focusBar}>{m.search_results_empty_focus()}</Button>
+		</div>
+	{:else if results.status === 'loading'}
+		<div class="rp-skeleton" data-testid="results-loading" role="status">
+			<span class="sr-only">{m.search_results_loading()}</span>
+			{#if slow}
+				<!-- §10.4: at the rows' final height, so nothing moves when they arrive -->
+				{#each skeletons as n (n)}<div class="rp-skeleton-cell" style:height="{rowHeight}px">
+						<Skeleton class="rp-skeleton-row" />
+					</div>{/each}
+			{/if}
+		</div>
+	{:else if results.status === 'error' && results.error}
+		<Banner kind="error" title={m.search_results_error()} class="rp-banner">
+			<span data-testid="results-error">{errorText(results.error)}</span>
+			{#snippet action()}
+				<Button dense onclick={() => void results.retry()}>{m.search_query_retry()}</Button>
+			{/snippet}
+		</Banner>
+	{:else}
+		{#if results.error}
+			<Banner kind="error" title={m.search_results_error()} class="rp-banner">
+				<span data-testid="results-error">{errorText(results.error)}</span>
+				{#snippet action()}
+					<Button dense onclick={() => void results.retry()}>{m.search_query_retry()}</Button>
+				{/snippet}
+			</Banner>
+		{/if}
+		{#if results.expired}
+			<Banner kind="info" class="rp-banner">
+				<span data-testid="results-expired">{m.search_results_cursor_expired()}</span>
+			</Banner>
+		{/if}
+		{#if results.notices.includes('adult_hidden')}
+			<Banner kind="info" title={m.search_results_adult_hidden()} class="rp-banner">
+				<span data-testid="results-adult-hidden">{m.search_results_adult_hidden_body()}</span>
+				{#snippet action()}
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- appearanceHref() resolves -->
+					<a class="rp-link" href={appearanceHref()}>{m.search_results_adult_settings()}</a>
+				{/snippet}
+			</Banner>
+		{/if}
+		{#if results.hits.length === 0}
+			<div class="rp-none" data-testid="results-none">
+				<p class="rp-empty-title">{m.search_results_none()}</p>
+				{#if clauses.length}
+					<p>{m.search_results_none_lead()}</p>
+					<ul class="rp-examples" data-testid="results-none-clauses">
+						{#each clauses as clause, i (i)}
+							<li>
+								<Button dense onclick={() => void removeClause(clause)}
+									>{m.search_results_none_remove({ label: clause.label.text })}</Button
+								>
+							</li>
+						{/each}
+					</ul>
+					<Button onclick={() => void clearFilters()}>{m.search_results_none_clear()}</Button>
+				{:else if !results.notices.includes('adult_hidden')}
+					<p>{m.search_results_none_words()}</p>
+				{/if}
+			</div>
+		{:else}
+			<!-- Delegated handlers for the grid's rows (focus, hover prefetch, Shift+F10): the rows are
+			     the interactive elements, this wrapper only listens. -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div
+				class="rp-list"
+				bind:this={listEl}
+				onfocusin={focusIn}
+				onfocusout={focusOut}
+				onpointerover={pointerOver}
+				onkeydown={keyDown}
+			>
+				<VirtualList
+					bind:this={list}
+					items={results.hits}
+					role="grid"
+					getKey={(h) => h.hash}
+					label={m.search_results_label()}
+					estimateSize={rowHeight}
+					resetKey={results.shown ?? ''}
+					bind:activeIndex={active}
+					onActivate={(_i, hit) => void open(hit)}
+					hasMore={results.hasMore}
+					loadingMore={results.loadingMore}
+					onLoadMore={() => void results.loadMore()}
+					loadMoreLabel={m.search_results_loading_more()}
+				>
+					{#snippet row(hit)}
+						<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
+							<ResultRow {hit} {density} {matched} testid="result-{hit.hash}">
+								{#snippet actions(h)}
+									{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
+								{/snippet}
+							</ResultRow>
+						</div>
+					{/snippet}
+				</VirtualList>
+			</div>
+			{#if results.moreError}
+				<Banner kind="error" class="rp-banner">
+					{m.search_results_more_error()}
+					{#snippet action()}
+						<Button dense onclick={() => void results.retry()}>{m.search_query_retry()}</Button>
+					{/snippet}
+				</Banner>
+			{/if}
+		{/if}
+	{/if}
+</section>

@@ -1,0 +1,105 @@
+/* The results panel (ResultsPanel.svelte). Loaded with the panel, never on the bare first load; token
+   variables only (utility names would land in the global 20 KB sheet). */
+@reference "../../../../app.css";
+
+/* The page grid (routes/search): one column below x-large; rail + results at x-large; rail +
+   results + drawer from xx-large (§10.15; tracks from §10.2). Here because the panel is the first
+   thing to paint into the regions, and the page awaits this sheet before it mounts the panel: in
+   the bar's sheet (loaded without waiting) the panel could paint a column before the rail's track
+   arrived, a layout shift. */
+.search-grid {
+	@apply grid gap-6;
+	@variant x-large {
+		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr);
+	}
+	@variant xx-large {
+		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr) auto;
+	}
+}
+.rp {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	min-width: 0;
+}
+/* §10.4 "Refining": a top progress hairline; the rows stay. */
+.rp-hairline {
+	position: absolute;
+	inset-inline: 0;
+	top: 0;
+	height: calc(var(--spacing) / 2);
+	background: var(--color-primary);
+}
+@media (prefers-reduced-motion: no-preference) {
+	.rp-hairline {
+		animation: rp-progress 1.2s ease-in-out infinite;
+		transform-origin: left;
+	}
+}
+@keyframes rp-progress {
+	0% {
+		transform: scaleX(0.1);
+	}
+	50% {
+		transform: scaleX(0.7);
+	}
+	100% {
+		transform: scaleX(0.1);
+	}
+}
+.rp-list {
+	height: calc(100dvh - var(--query-bar-height) * 4);
+	min-height: calc(var(--row-height-comfortable) * 6);
+}
+.rp-cell {
+	height: 100%;
+}
+.rp-skeleton {
+	display: flex;
+	flex-direction: column;
+}
+.rp-skeleton-cell {
+	box-sizing: border-box;
+	padding-block: var(--spacing);
+}
+.rp-skeleton .rp-skeleton-row {
+	height: 100%;
+}
+.rp-empty,
+.rp-none {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: calc(var(--spacing) * 3);
+	padding-block: calc(var(--spacing) * 6);
+	max-width: var(--prose-measure);
+}
+.rp-empty-title {
+	margin: 0;
+	font-size: var(--text-title);
+	line-height: var(--text-title--line-height);
+	font-weight: var(--font-weight-semibold);
+}
+.rp-empty-sub {
+	margin: 0;
+	font-size: var(--text-body);
+	font-weight: var(--font-weight-semibold);
+}
+.rp-examples {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.rp-link {
+	color: var(--color-primary);
+	text-decoration: underline;
+	text-underline-offset: calc(var(--spacing) / 2);
+}
+.rp-link:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}

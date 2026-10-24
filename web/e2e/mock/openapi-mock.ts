@@ -178,6 +178,11 @@ export class OpenApiMock {
 				body: JSON.stringify({ logged_in: false, setup_required: false })
 			});
 		}
+		// The search page's results panel (S-search-2) lists saved searches in its empty state once
+		// anything engages the page, which most specs that pass through /search do. None by default.
+		if (op.id === 'listSavedSearches' && override === undefined) {
+			return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+		}
 		let status: number, body: Json, headers: Record<string, string> | undefined;
 		const pick = (v: unknown) => {
 			if (
