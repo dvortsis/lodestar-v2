@@ -34,7 +34,7 @@ The search page's results list (S-search-2a; architecture §10.4, §10.5, §10.1
 | `shown`                  | The key of the query the rows answer; the list resets its scroll when it changes                 |
 | `moreError`              | A failed page; `retry()` asks for it again (or reloads the query after a first-page error)       |
 
-Rules: the latest query wins (an older answer is dropped); the same query is never asked for twice (in flight or settled; only `retry` reloads), so a URL change that isn't a query change keeps the rows and their pages; `load` is untracked, so calling it from an effect doesn't make the effect depend on the rows. A query that hasn't parsed yet (in flight, or a syntax error) doesn't load: the last good rows stay, as the strip does.
+Rules: the latest query wins (an older answer is dropped); the same query is never asked for twice (in flight or settled, while the panel is mounted; only `retry` reloads, and the panel's unmount calls `forget()`), so a URL change that isn't a query change keeps the rows and their pages; `load` is untracked, so calling it from an effect doesn't make the effect depend on the rows. A query that hasn't parsed yet (in flight, or a syntax error) doesn't load: the last good rows stay, as the strip does.
 
 ## Not yet (follow-ups)
 

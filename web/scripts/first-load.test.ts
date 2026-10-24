@@ -6,6 +6,7 @@ import {
 	preloadedJs,
 	routeNodes,
 	routePreloads,
+	stripPreloadsOf,
 	svelteBarrel
 } from './first-load.mjs';
 
@@ -124,10 +125,24 @@ describe('routePreloads', () => {
 			'_app/immutable/assets/a.css'
 		]);
 	});
-	it("keeps only CSS for a route node's own lazy parts", () => {
+	it("keeps only CSS for /search's node, found by stripPreloadsOf; other nodes keep theirs", () => {
+		const plugin = stripPreloadsOf(/\/routes\/search\/\+page\.svelte$/);
+		plugin.generateBundle.handler(undefined, {
+			search: {
+				type: 'chunk',
+				fileName: '_app/immutable/nodes/11.Cq2.js',
+				moduleIds: ['/w/src/routes/search/+page.svelte']
+			},
+			alerts: {
+				type: 'chunk',
+				fileName: '_app/immutable/nodes/5.Ab1.js',
+				moduleIds: ['/w/src/routes/alerts/+page.svelte']
+			}
+		});
 		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/nodes/11.Cq2.js' })).toEqual([
 			'_app/immutable/assets/a.css'
 		]);
+		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/nodes/5.Ab1.js' })).toEqual(deps);
 	});
 	it('leaves every other dynamic import as Vite has it', () => {
 		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/chunks/Live.Cq2.js' })).toEqual(

@@ -2,6 +2,9 @@ import { configure, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { components } from '$lib/api/schema';
 
+// Waits are conditions with a 10 s deadline (CLAUDE.md); the test's own limit must exceed it.
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock('$app/state', async () => ({
 	page: (await import('../query/testing.svelte')).testPage
 }));

@@ -69,6 +69,25 @@ test('one edit asks for its results once, and a parse error keeps the rows', asy
 	expect(resultsCalls(mock)).toHaveLength(2);
 });
 
+test('leaving /search and coming back asks again: an earlier answer may be stale', async ({
+	page,
+	go,
+	mock
+}) => {
+	let answer = 1;
+	server(mock, () => body(hits(1, answer === 1 ? 0 : 40)));
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	const before = resultsCalls(mock).length;
+	await page.getByTestId('nav-alerts').click(); // in the app: the store outlives the page
+	await expect(page).toHaveURL(/\/alerts/);
+	answer = 2; // e.g. "Show adult content" was turned off meanwhile
+	await page.goBack();
+	await expect(row(page, 41)).toBeVisible();
+	await expect(row(page, 1)).toHaveCount(0);
+	expect(resultsCalls(mock).length).toBeGreaterThan(before);
+});
+
 test('Enter opens the drawer on the row; Esc gives focus back to it', async ({
 	page,
 	go,
