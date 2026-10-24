@@ -4,8 +4,10 @@
 // A facet's own clauses are what the server counts disjunctively (crates/search facets.rs): the
 // top-level conjuncts built only from the facet's field, a leaf (`res:1080p`), an OR/AND of them,
 // or a negation of one. A toggle rewrites those into at most two clauses, in place of the first:
-// the selected values (`res:1080p,2160p`) and the excluded ones (`-res:480p`). Removing the last
-// value drops the clause. Ranges and dates replace the field's top-level range clause.
+// the selected values (`res:1080p,2160p`) and the excluded ones (`-res:480p`). Only the first
+// positive clause takes part (two of them are an AND: merging them would make it an OR); every
+// negation does (`-a -b` is `-(a|b)`). Removing the last value drops the clause. Ranges and dates
+// replace the field's top-level range clause.
 import type { components } from '$lib/api/schema';
 import type { Ast } from '$lib/state/search.svelte';
 
@@ -118,6 +120,34 @@ function rewritable(node: Ast, field: FacetField): boolean {
 }
 
 /**
+ * The own clauses a toggle rewrites: the first positive rewritable one, and every negated one.
+ * A second positive clause is ANDed with the first, so folding it into one any-of list would widen
+ * the query; it stays as it is, like the clauses `rewritable` refuses.
+ */
+function rewritten(ast: Ast | null | undefined, field: FacetField): Ast[] {
+	let positive = false;
+	return conjuncts(ast).filter((n) => {
+		if (!owns(n, field) || !rewritable(n, field)) return false;
+		if (n.op === 'not') return true;
+		if (positive) return false;
+		return (positive = true);
+	});
+}
+
+/**
+ * The values the query sets in own clauses a toggle leaves alone (an AND of them, a second
+ * positive clause, `-(a & b)`): their selected or excluded state can only be changed in the
+ * query text, so the rail disables them.
+ */
+export function fixedValues(ast: Ast | null | undefined, field: FacetField): Set<string> {
+	const mine = rewritten(ast, field);
+	const out: Selection = { include: [], exclude: [] };
+	for (const c of conjuncts(ast))
+		if (owns(c, field) && !mine.includes(c)) collect(c, field, false, out);
+	return new Set([...out.include, ...out.exclude]);
+}
+
+/**
  * Selects `value` (or excludes it, `how: 'exclude'`), or undoes that when it already is.
  * Selecting an excluded value moves it across, and the reverse. A flag has one value at a time:
  * `yes` or `no` (excluding one selects the other).
@@ -128,9 +158,10 @@ export function toggleValue(
 	value: string,
 	how: 'include' | 'exclude' = 'include'
 ): Ast {
-	const mine = (n: Ast) => owns(n, field) && rewritable(n, field);
+	const rewrite = rewritten(ast, field);
+	const mine = (n: Ast) => rewrite.includes(n);
 	const sel: Selection = { include: [], exclude: [] };
-	for (const c of conjuncts(ast)) if (mine(c)) collect(c, field, false, sel);
+	for (const c of rewrite) collect(c, field, false, sel);
 	if (field.kind === 'flag') {
 		const want = how === 'include' ? value : value === 'yes' ? 'no' : 'yes';
 		const on = sel.include.length === 1 && sel.include[0] === want && sel.exclude.length === 0;

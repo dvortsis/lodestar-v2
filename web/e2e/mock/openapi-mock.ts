@@ -33,7 +33,13 @@ export type ResponseBody<K extends OperationId> = operations[K]['responses'] ext
 export type Override<K extends OperationId> =
 	| ResponseBody<K>
 	| { status: number; body?: Json; headers?: Record<string, string> }
-	| ((request: Request) => ResponseBody<K> | { status: number; body?: Json });
+	// A handler may answer later (a promise): `handle` awaits it, so a spec can hold a response.
+	| ((
+			request: Request
+	  ) =>
+			| ResponseBody<K>
+			| { status: number; body?: Json }
+			| Promise<ResponseBody<K> | { status: number; body?: Json }>);
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 const specUrl = new URL('../../src/lib/api/openapi.json', import.meta.url);

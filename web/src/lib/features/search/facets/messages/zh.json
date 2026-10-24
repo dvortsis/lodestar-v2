@@ -57,5 +57,6 @@
 	"search_facets_close": "关闭筛选",
 	"search_facets_error_body": "结果正常，只是计数没有加载。",
 	"search_facets_year": "发行年份",
-	"search_facets_count_one": "1 个种子"
+	"search_facets_count_one": "1 个种子",
+	"search_facets_fixed": "由查询设定：请在搜索框中修改。"
 }

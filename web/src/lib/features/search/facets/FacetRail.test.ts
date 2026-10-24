@@ -55,6 +55,41 @@ describe('FacetRail', () => {
 		});
 	});
 
+	it('disables the values only the query text can change, and says why', () => {
+		// -(res:480p & res:1080p): un-excluding one of them by a click would change the logic.
+		const not = (of: Ast): Ast => ({ op: 'not', of });
+		const res = (v: string): Ast => ({ op: 'tag', key: 'res', any: [v] });
+		const ast: Ast = {
+			op: 'and',
+			of: [word('lantern'), not({ op: 'and', of: [res('480p'), res('1080p')] })]
+		};
+		const data = response({
+			facets: {
+				res: term([
+					['1080p', 640],
+					['480p', 33],
+					['2160p', 12]
+				])
+			}
+		});
+		const onchange = vi.fn();
+		render(FacetRail, props({ data, ast, onchange }));
+		const note = screen.getByTestId('facet-res-fixed');
+		expect(note.textContent).toContain('Set by your query: edit it in the search box.');
+		for (const v of ['480p', '1080p']) {
+			const box = screen.getByTestId(`facet-res-${v}`) as HTMLInputElement;
+			const minus = screen.getByTestId(`facet-res-${v}-exclude`) as HTMLButtonElement;
+			expect(box.disabled).toBe(true);
+			expect(minus.disabled).toBe(true);
+			expect(box.getAttribute('aria-describedby')).toBe(note.id);
+			expect(minus.getAttribute('aria-describedby')).toBe(note.id);
+		}
+		const free = screen.getByTestId('facet-res-2160p') as HTMLInputElement;
+		expect(free.disabled).toBe(false);
+		expect(free.getAttribute('aria-describedby')).toBeNull();
+		expect(screen.queryByTestId('facet-type-fixed')).toBeNull();
+	});
+
 	it('shows a selected value checked, in medium weight, with a Clear', () => {
 		const data = response({ facets: { res: term([['1080p', 640, 'selected']]) } });
 		render(FacetRail, props({ data }));

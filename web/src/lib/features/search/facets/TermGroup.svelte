@@ -23,6 +23,8 @@
 		onmore?: (on: boolean) => void;
 		/** Exclusion has no meaning for a yes/no flag (excluding one selects the other). */
 		excludable?: boolean;
+		/** Values the query sets in clauses a click can't rewrite (`fixedValues`): disabled. */
+		fixed?: ReadonlySet<string>;
 		onvalue: (value: string, how: 'include' | 'exclude') => void;
 		onclear: () => void;
 	}
@@ -34,6 +36,7 @@
 		more = false,
 		onmore,
 		excludable = true,
+		fixed = new Set(),
 		onvalue,
 		onclear
 	}: Props = $props();
@@ -52,6 +55,7 @@
 			: facet.values
 	);
 	const hasMore = $derived(!!onmore && facet.distinct > facet.values.length);
+	const anyFixed = $derived(shown.some((v) => fixed.has(v.value)));
 </script>
 
 <section class="fr-group" aria-labelledby="{id}-h" data-testid="facet-{name}">
@@ -76,14 +80,22 @@
 			data-testid="facet-{name}-find"
 		/>
 	{/if}
+	{#if anyFixed}
+		<p class="fr-muted" id="{id}-fixed" data-testid="facet-{name}-fixed">
+			{m.search_facets_fixed()}
+		</p>
+	{/if}
 	<ul class="fr-list" aria-labelledby="{id}-h">
 		{#each shown as v (v.value)}
 			{@const label = labelOf(v.value)}
+			{@const locked = fixed.has(v.value)}
 			<li class="fr-value" class:fr-selected={v.selected} class:fr-excluded={v.excluded}>
 				<span class="fr-label">
 					<Checkbox
 						label={v.excluded ? `${label} (${m.search_facets_excluded()})` : label}
 						checked={v.selected}
+						disabled={locked}
+						aria-describedby={locked ? `${id}-fixed` : undefined}
 						onchange={() => onvalue(v.value, 'include')}
 						data-testid="facet-{name}-{v.value}"
 					/>
@@ -101,6 +113,8 @@
 						class="fr-icon-button"
 						aria-label={m.search_facets_exclude({ value: label })}
 						aria-pressed={v.excluded}
+						disabled={locked}
+						aria-describedby={locked ? `${id}-fixed` : undefined}
 						data-testid="facet-{name}-{v.value}-exclude"
 						onclick={() => onvalue(v.value, 'exclude')}
 					>

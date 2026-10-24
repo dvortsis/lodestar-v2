@@ -6,7 +6,7 @@ import type { Page, Request } from '@playwright/test';
 import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
 import type { OpenApiMock } from './mock/openapi-mock';
-import { body, expect, hits, row, server, type Ast } from './search-results.fixtures';
+import { body, expect, hits, print, row, server, type Ast } from './search-results.fixtures';
 import { test } from './support/test';
 
 type Facets = components['schemas']['FacetsResponse'];
@@ -169,6 +169,49 @@ test.describe('the rail at x-large', () => {
 		await expect.poll(() => q(page)).toBe('lantern res:2160p,1080p');
 		await page.getByTestId('facet-res-clear').click();
 		await expect.poll(() => q(page)).toBe('lantern');
+	});
+
+	test('two quick clicks keep both values, however slow /search is', async ({ page, go, mock }) => {
+		serve(mock);
+		await go('/search?q=lantern');
+		await expect(page.getByTestId('facet-res-1080p')).toBeVisible();
+		// From here /search (W5's canonical text and the rows) answers only when released.
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		mock.on('searchPost', async (request: Request) => {
+			await gate;
+			const sent = request.postDataJSON() as { ast: Ast; limit: number };
+			if (sent.limit === 1) return body([], { canonical: print(sent.ast) });
+			return body(hits(3), { next_cursor: 'lease-2' });
+		});
+		await page.getByTestId('facet-res-1080p').check();
+		await page.getByTestId('facet-res-2160p').check();
+		release();
+		await expect.poll(() => q(page)).toBe('lantern res:1080p,2160p');
+	});
+
+	test('a click after a new query failed edits the typed query, not the rows’', async ({
+		page,
+		go,
+		mock
+	}) => {
+		serve(mock);
+		server(mock, (sent) =>
+			JSON.stringify(sent.ast).includes('keeper')
+				? { status: 503, body: { error: { code: 'unavailable', message: 'down' } } }
+				: body(hits(3), { next_cursor: 'lease-1' })
+		);
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		const bar = page.getByRole('combobox', { name: 'Search torrents' });
+		await bar.click();
+		await page.keyboard.press('ControlOrMeta+a');
+		await page.keyboard.type('keeper');
+		await page.keyboard.press('Enter');
+		await expect.poll(() => q(page)).toBe('keeper');
+		await expect(page.getByTestId('results-error')).toBeVisible();
+		await page.getByTestId('facet-res-1080p').check();
+		await expect.poll(() => q(page)).toBe('keeper res:1080p');
 	});
 
 	test('the size brush by keyboard, and a Discovered preset', async ({ page, go, mock }) => {
