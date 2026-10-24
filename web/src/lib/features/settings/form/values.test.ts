@@ -1,18 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { spec, sv, values } from './testing/values';
-import {
-	applySaved,
-	buildBatch,
-	dirtyNames,
-	discardAll,
-	equal,
-	fromValues,
-	differs,
-	isDirty,
-	JsonDraft,
-	RESET,
-	stage
-} from './values';
+import { applySaved, buildBatch, discardAll } from './batch';
+import { dirtyNames, equal, fromValues, differs, isDirty, JsonDraft, RESET, stage } from './values';
 
 describe('equal', () => {
 	it('is deep JSON equality', () => {

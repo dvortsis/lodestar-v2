@@ -3,7 +3,8 @@
 import { formatBytes, formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { settingText, unitText } from './messages';
+import { settingText } from './messages';
+import { unitText } from './units';
 import type { FieldSpec, FieldState, PreviewEstimate } from './types';
 
 const MIB = 1_048_576;

@@ -206,7 +206,8 @@ test.describe('keyboard focus survives the swaps', () => {
 		[3, 'nav-search'],
 		[5, 'nav-alerts']
 	] as const) {
-		test(`Tab x${tabs} before load keeps ${stop}`, async ({ page }) => {
+		test(`Tab x${tabs} before load keeps ${stop}`, async ({ page, mock }) => {
+			mock.on('listSavedSearches', []);
 			let release: () => void = () => {};
 			const gate = new Promise<void>((resolve) => (release = resolve));
 			await page.route('**/_app/immutable/**/*.js', async (route) => {

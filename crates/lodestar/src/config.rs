@@ -38,6 +38,7 @@ pub struct Config {
     pub content: Content,
     pub blocklist: Blocklist,
     pub subscriptions: Subscriptions,
+    pub updates: Updates,
 }
 
 impl Default for Config {
@@ -56,6 +57,7 @@ impl Default for Config {
             content: Content::default(),
             blocklist: Blocklist::default(),
             subscriptions: Subscriptions::default(),
+            updates: Updates::default(),
         }
     }
 }
@@ -100,6 +102,16 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_DHT_ENABLED",
     "LODESTAR_SECURE_COOKIES",
     "LODESTAR_SHOW_ADULT",
+    "LODESTAR_UPDATES",
+    "LODESTAR_UPDATES_LEVEL",
+    "LODESTAR_UPDATES_SECURITY_FIXES",
+    "LODESTAR_UPDATES_CHANNEL",
+    "LODESTAR_UPDATES_WAIT_DAYS",
+    "LODESTAR_UPDATES_WINDOW",
+    "LODESTAR_UPDATES_ALLOW_REINDEX",
+    "LODESTAR_UPDATES_NOTIFY_BEFORE",
+    "LODESTAR_UPDATES_NOTIFY_AFTER",
+    "LODESTAR_UPDATES_NOTIFY_FAILURE",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -363,6 +375,105 @@ pub struct Content {
     pub show_adult: bool,
 }
 
+/// Self-updates (§12.2, owner §2.13): off until chosen. The settings
+/// section `updates` shows and saves the same keys.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    pub mode: UpdateMode,
+    pub level: UpdateLevel,
+    pub security_fixes: SecurityFixes,
+    pub channel: UpdateChannel,
+    /// Days a release waits after its date before it installs (0–14).
+    pub wait_days: u32,
+    /// The install window, local time, `HH:MM-HH:MM` (may wrap midnight).
+    pub window: String,
+    /// Install releases that rebuild the search index.
+    pub allow_reindex: bool,
+    pub notify_before: bool,
+    pub notify_after: bool,
+    pub notify_failure: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Updates {
+            mode: UpdateMode::Off,
+            level: UpdateLevel::Fixes,
+            security_fixes: SecurityFixes::Auto,
+            channel: UpdateChannel::Stable,
+            wait_days: 3,
+            window: "03:00-05:00".into(),
+            allow_reindex: true,
+            notify_before: false,
+            notify_after: true,
+            notify_failure: true,
+        }
+    }
+}
+
+impl Updates {
+    /// The checks a value from the file or the environment must pass
+    /// (the settings section repeats them for the app's own).
+    pub fn check(&self) -> Result<(), ConfigError> {
+        if self.wait_days > 14 {
+            return Err(ConfigError(format!(
+                "updates.wait_days: {} is more than 14",
+                self.wait_days
+            )));
+        }
+        crate::update::window::Window::parse(&self.window)
+            .map_err(|e| ConfigError(format!("updates.window: {e}")))?;
+        if self.mode == UpdateMode::Image {
+            crate::settings::updates::image_ok(crate::system::info::deployment_here().kind)
+                .map_err(|e| ConfigError(format!("updates.mode: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+/// `off` (the default), `notify` (check and notify), `auto` (install
+/// automatically) or `image` (the container image updates it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateMode {
+    #[default]
+    Off,
+    Notify,
+    Auto,
+    Image,
+}
+
+/// Which releases install automatically: fixes ≤ features ≤ all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateLevel {
+    #[default]
+    Fixes,
+    Features,
+    All,
+}
+
+/// "Always install security fixes": `auto` is on under `auto`, off
+/// under `notify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecurityFixes {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+    Nightly,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Blocklist {
@@ -520,7 +631,9 @@ impl Config {
         if let Some(v) = env("LODESTAR_SHOW_ADULT") {
             config.content.show_adult = v.parse().map_err(|_| parse("LODESTAR_SHOW_ADULT", &v))?;
         }
+        config.updates_from_env(&env)?;
         config.ranking.check()?;
+        config.updates.check()?;
         Ok(config)
     }
 
@@ -590,6 +703,58 @@ impl Config {
             filter: Arc::new(filter),
             ..PipelineConfig::default()
         })
+    }
+}
+
+impl Config {
+    /// The `LODESTAR_UPDATES*` variables.
+    fn updates_from_env(
+        &mut self,
+        env: &impl Fn(&str) -> Option<String>,
+    ) -> Result<(), ConfigError> {
+        fn word<T: serde::de::DeserializeOwned>(name: &str, v: &str) -> Result<T, ConfigError> {
+            toml::Value::String(v.to_string())
+                .try_into()
+                .map_err(|_| ConfigError(format!("{name}: can't parse {v:?}")))
+        }
+        fn flag(name: &str, v: &str) -> Result<bool, ConfigError> {
+            v.parse()
+                .map_err(|_| ConfigError(format!("{name}: can't parse {v:?}")))
+        }
+        let u = &mut self.updates;
+        if let Some(v) = env("LODESTAR_UPDATES") {
+            u.mode = word("LODESTAR_UPDATES", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_LEVEL") {
+            u.level = word("LODESTAR_UPDATES_LEVEL", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_SECURITY_FIXES") {
+            u.security_fixes = word("LODESTAR_UPDATES_SECURITY_FIXES", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_CHANNEL") {
+            u.channel = word("LODESTAR_UPDATES_CHANNEL", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_WAIT_DAYS") {
+            u.wait_days = v.parse().map_err(|_| {
+                ConfigError(format!("LODESTAR_UPDATES_WAIT_DAYS: can't parse {v:?}"))
+            })?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_WINDOW") {
+            u.window = v;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_ALLOW_REINDEX") {
+            u.allow_reindex = flag("LODESTAR_UPDATES_ALLOW_REINDEX", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_BEFORE") {
+            u.notify_before = flag("LODESTAR_UPDATES_NOTIFY_BEFORE", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_AFTER") {
+            u.notify_after = flag("LODESTAR_UPDATES_NOTIFY_AFTER", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_FAILURE") {
+            u.notify_failure = flag("LODESTAR_UPDATES_NOTIFY_FAILURE", &v)?;
+        }
+        Ok(())
     }
 }
 
@@ -784,6 +949,71 @@ mod tests {
         .unwrap();
         let c = Config::load(Some(&path), no_env).unwrap();
         assert_eq!(c.pipeline_config().unwrap().pool.max_sockets, 100);
+    }
+
+    #[test]
+    fn updates_come_from_the_file_and_the_environment() {
+        assert_eq!(
+            Config::load(None, no_env).unwrap().updates,
+            Updates::default()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[updates]\nmode = \"notify\"\nlevel = \"features\"\nwindow = \"23:00-01:00\"\nwait_days = 5\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert_eq!(
+            (
+                c.updates.mode,
+                c.updates.level,
+                c.updates.wait_days,
+                c.updates.window.as_str()
+            ),
+            (UpdateMode::Notify, UpdateLevel::Features, 5, "23:00-01:00")
+        );
+        let env = |k: &str| match k {
+            "LODESTAR_UPDATES" => Some("auto".to_string()),
+            "LODESTAR_UPDATES_CHANNEL" => Some("beta".to_string()),
+            "LODESTAR_UPDATES_SECURITY_FIXES" => Some("off".to_string()),
+            "LODESTAR_UPDATES_WAIT_DAYS" => Some("0".to_string()),
+            "LODESTAR_UPDATES_NOTIFY_AFTER" => Some("false".to_string()),
+            _ => None,
+        };
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(
+            (
+                c.updates.mode,
+                c.updates.channel,
+                c.updates.security_fixes,
+                c.updates.wait_days
+            ),
+            (UpdateMode::Auto, UpdateChannel::Beta, SecurityFixes::Off, 0)
+        );
+        assert!(!c.updates.notify_after);
+        assert!(c.layers.in_env("LODESTAR_UPDATES"));
+    }
+
+    #[test]
+    fn bad_update_values_are_errors() {
+        for (var, value) in [
+            ("LODESTAR_UPDATES", "sometimes"),
+            ("LODESTAR_UPDATES_LEVEL", "everything"),
+            ("LODESTAR_UPDATES_WAIT_DAYS", "15"),
+            ("LODESTAR_UPDATES_WAIT_DAYS", "-1"),
+            ("LODESTAR_UPDATES_WINDOW", "03:00-03:00"),
+            ("LODESTAR_UPDATES_WINDOW", "3am"),
+            ("LODESTAR_UPDATES_ALLOW_REINDEX", "yes"),
+        ] {
+            let env = |k: &str| (k == var).then(|| value.to_string());
+            assert!(Config::load(None, env).is_err(), "{var}={value}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[updates]\nwait_days = 30\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
     }
 
     #[test]

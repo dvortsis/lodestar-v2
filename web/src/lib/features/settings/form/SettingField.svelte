@@ -6,22 +6,21 @@
 	import IconButton from '$lib/ui/controls/IconButton.svelte';
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
-	import Mono from '$lib/ui/labels/Mono.svelte';
-	import type { MenuItem } from '$lib/ui/overlays/Menu.svelte';
-	import { untrack, type Component } from 'svelte';
-	import { toast } from '$lib/ui/feedback/toasts.svelte';
+	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconRestart from '~icons/ph/arrows-clockwise';
-	import IconCheck from '~icons/ph/check-circle';
 	import IconMenu from '~icons/ph/dots-three';
 	import IconFile from '~icons/ph/file';
 	import IconInfo from '~icons/ph/info';
 	import IconLock from '~icons/ph/lock-simple';
 	import IconWarning from '~icons/ph/warning';
 	import Control from './Control.svelte';
-	import SecretControl from './SecretControl.svelte';
-	import { automaticNumber, automaticValue, displayValue, estimatePart } from './display';
-	import type { SettingsForm } from './form.svelte';
+	import LazyControl from './LazyControl.svelte';
+	import { controlOf, lazyOf } from './controls.svelte';
+	import { lazyPart } from './lazy.svelte';
+	import FieldConflict from './FieldConflict.svelte';
+	import FieldSaved from './FieldSaved.svelte';
+	import { loadedPreview, type SettingsForm } from './form.svelte';
 	import { fieldHelp, fieldLabel } from './messages';
 	import { fieldAnchor } from './schema';
 	import type { FieldKey } from './types';
@@ -50,12 +49,17 @@
 	const hasAuto = $derived(spec.auto !== undefined && !spec.writeOnly);
 	let manual = $state(false);
 	const automatic = $derived(hasAuto && !manual && f.value === spec.auto);
-	const effective = $derived(automaticValue(f));
 	// A `<label for>` only where one control takes the id: radio groups, segmented controls, a
 	// secret and registered widgets are labelled by the label's id instead.
+	// A control that loads on demand takes the id only once it's in: until then nothing does.
+	const loaded = $derived.by(() => {
+		const file = 'builtin' in choice ? lazyOf(choice.builtin) : undefined;
+		return !file || controlOf(file) !== undefined;
+	});
 	const singleControl = $derived(
 		automatic ||
-			('builtin' in choice &&
+			(loaded &&
+				'builtin' in choice &&
 				(['number', 'slider', 'text', 'select', 'json'].includes(choice.builtin) ||
 					// A locked chip list has no input to label.
 					(choice.builtin === 'chips' && !f.locked)))
@@ -73,62 +77,54 @@
 		manual = !on;
 		if (on) form.set(key, spec.auto);
 		else {
-			const n = automaticNumber(f);
+			const n = Preview.part?.automaticNumber(f);
 			// Pre-filled with the effective value; empty (and invalid) when there's none.
 			form.set(key, n ?? (typeof spec.auto === 'number' ? '' : f.value));
 		}
 	}
 
 	const readOnly = $derived(f.locked && f.env === null);
-	const menu = $derived<MenuItem[]>([
-		...(f.source === 'db' && !f.locked && !spec.writeOnly
-			? [{ id: 'reset', label: m.settings_form_menu_reset() }]
-			: []),
-		{ id: 'link', label: m.settings_form_menu_copy_link() },
-		...(spec.config || spec.env ? [{ id: 'keys', label: m.settings_form_menu_show_keys() }] : [])
-	]);
 	let showKeys = $state(false);
 
 	// The menu loads when it's first opened; until then a plain button stands in for its trigger.
-	type FieldMenuProps = {
-		items: MenuItem[];
-		label: string;
-		onSelect: (id: string) => void;
-		open?: boolean;
-	};
-	let FieldMenu = $state<Component<FieldMenuProps, object, 'open'>>();
+	let menuParts = $state<typeof import('./menu')>();
 	let menuOpen = $state(false);
+	let menuFailed = $state(false);
 	async function openMenu() {
-		FieldMenu ??= (await import('./FieldMenu.svelte')).default;
+		try {
+			menuParts ??= await import('./menu');
+		} catch {
+			menuFailed = true; // browsers keep a failed module: say so, once
+			return;
+		}
 		menuOpen = true;
 	}
 
-	async function copy(text: string, done: string) {
+	function copy(text: string, what: 'value' | 'link') {
+		let done: Promise<void>;
 		try {
-			await navigator.clipboard.writeText(text);
-			toast.push({ kind: 'success', text: done, timeout: 3000 });
-		} catch {
-			toast.push({ kind: 'error', text: m.settings_form_copy_failed() });
+			done = navigator.clipboard.writeText(text); // in the click: Safari allows it only there
+		} catch (e) {
+			done = Promise.reject(e); // no clipboard (an insecure origin)
 		}
+		done.catch(() => {}); // reported by the toast
+		void import('./copy').then(
+			(c) => c.toastCopy(done, what),
+			() => {}
+		); // no toast offline
 	}
 
 	function onMenu(id: string) {
 		if (id === 'reset') form.reset(key);
 		else if (id === 'link') {
 			const href = form.href(key);
-			void copy(new URL(href, location.href).href, m.settings_form_link_copied());
+			void copy(new URL(href, location.href).href, 'link');
 		} else if (id === 'keys') showKeys = !showKeys;
 	}
 
-	const estimates = $derived(
-		(f.preview?.estimates ?? []).flatMap((e) => {
-			const part = estimatePart(e);
-			return part ? [part] : [];
-		})
-	);
-	// With Automatic on, its one estimate is shown beside the switch instead.
-	const previewParts = $derived(automatic && effective ? [] : estimates);
-	const warnings = $derived(f.preview?.warnings ?? []);
+	// What a preview says loads with the preview's code, which every preview has loaded.
+	const Preview = lazyPart(() => import('./preview'), loadedPreview);
+	$effect(() => Preview.want(f.preview));
 </script>
 
 <div id={fieldAnchor(key)} class="ls-field flex flex-col gap-2" data-field={key}>
@@ -149,9 +145,9 @@
 						<span class="ls-marker" role="img" aria-label={m.setting_changed()}></span>
 					{/if}
 				</span>
-				{#if FieldMenu}
-					<FieldMenu
-						items={menu}
+				{#if menuParts}
+					<menuParts.FieldMenu
+						field={f}
 						onSelect={onMenu}
 						label={m.settings_form_menu_label({ label })}
 						bind:open={menuOpen}
@@ -179,10 +175,8 @@
 							disabled={f.locked}
 							onchange={(e) => setAutomatic(e.currentTarget.checked)}
 						/>
-						{#if automatic && effective}
-							<span class="text-small text-muted-text" data-testid="automatic-value">
-								{m.settings_form_automatic_value({ value: effective })}
-							</span>
+						{#if automatic && f.preview && Preview.part}
+							<Preview.part.FieldPreview field={f} automatic part="automatic" />
 						{/if}
 					</div>
 				{/if}
@@ -191,7 +185,7 @@
 						{@const Widget = choice.component}
 						<Widget {form} {key} {controlProps} {dense} />
 					{:else if choice.builtin === 'secret'}
-						<SecretControl {form} {key} {controlProps} {label} {dense} />
+						<LazyControl builtin="secret" {form} {key} {controlProps} {label} {dense} />
 					{:else}
 						<Control
 							{form}
@@ -208,33 +202,16 @@
 		{/snippet}
 	</Field>
 
-	{#if previewParts.length || warnings.length}
-		<p class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
-			{#each previewParts as p (p.testid)}
-				<span data-testid={p.testid}>
-					{p.text}
-					{#if p.mono}<Mono>{p.mono}</Mono>{/if}
-				</span>
-			{/each}
-			{#each warnings as w (w.code)}
-				<span class="inline-flex items-center gap-1 text-warning">
-					<IconWarning class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-					<span class="text-base-content">{w.message}</span>
-				</span>
-			{/each}
-		</p>
+	{#if f.preview && Preview.part}
+		<Preview.part.FieldPreview field={f} {automatic} part="lines" />
+	{:else if f.previewUnavailable || menuFailed}
+		<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
 	{/if}
 
 	{#if f.conflict}
 		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
 			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
-			<span data-testid="conflict-text"
-				>{m.settings_form_conflict({ value: displayValue(spec, f.conflict.theirs) })}</span
-			>
-			<Button dense onclick={() => form.resolve(key, 'mine')}>{m.settings_form_keep_mine()}</Button>
-			<Button dense onclick={() => form.resolve(key, 'theirs')}
-				>{m.settings_form_use_theirs()}</Button
-			>
+			<FieldConflict {form} {key} />
 		</div>
 	{/if}
 
@@ -248,21 +225,14 @@
 	{#if f.pendingReset}
 		<p class="flex items-center gap-1 text-small text-muted-text">
 			<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-			{m.settings_form_pending_reset()}
+			<FieldSaved {form} {key} part="reset" />
 		</p>
 	{/if}
 
 	<!-- Status line: only what applies (§10.10.4). -->
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
 		{#if f.savedRecently}
-			<span class="inline-flex items-center gap-1 text-success">
-				<IconCheck class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-				<span class="text-base-content">
-					{f.savedRecently === 'restart'
-						? m.settings_form_saved_restart()
-						: m.settings_form_saved()}
-				</span>
-			</span>
+			<FieldSaved {form} {key} part="saved" />
 		{:else if spec.restartRequired && !f.locked}
 			<span class="inline-flex items-center gap-1">
 				<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
@@ -276,7 +246,7 @@
 				<Button
 					dense
 					variant="quiet"
-					onclick={() => copy(f.env!, m.settings_form_copied())}
+					onclick={() => copy(f.env!, 'value')}
 					aria-label={m.settings_form_copy_variable({ variable: f.env })}
 					>{m.settings_form_copy()}</Button
 				>
@@ -290,7 +260,7 @@
 					<Button
 						dense
 						variant="quiet"
-						onclick={() => copy(String(f.value), m.settings_form_copied())}
+						onclick={() => copy(String(f.value), 'value')}
 						aria-label={m.settings_form_copy_value({ label })}>{m.settings_form_copy()}</Button
 					>
 				{/if}
@@ -302,27 +272,12 @@
 			</span>
 		{/if}
 		{#if f.undoUntil}
-			<span class="inline-flex items-center gap-1">
-				<IconCheck class="size-(--icon-size-row) shrink-0 text-success" aria-hidden="true" />
-				<span class="text-base-content">{m.settings_form_announce_changed()}</span>
-				<Button dense variant="quiet" onclick={() => form.undo(key)}
-					>{m.settings_form_undo()}</Button
-				>
-			</span>
+			<FieldSaved {form} {key} part="undo" />
 		{/if}
 	</div>
 
-	{#if showKeys}
-		<dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-small" data-testid="field-keys">
-			{#if spec.config}
-				<dt class="text-muted-text">{m.settings_form_config_key()}</dt>
-				<dd><Mono>{spec.config}</Mono></dd>
-			{/if}
-			{#if spec.env}
-				<dt class="text-muted-text">{m.settings_form_env_var()}</dt>
-				<dd><Mono>{spec.env}</Mono></dd>
-			{/if}
-		</dl>
+	{#if showKeys && menuParts}
+		<menuParts.FieldKeys {spec} />
 	{/if}
 </div>
 

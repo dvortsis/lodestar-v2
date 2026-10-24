@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spec } from './testing/values';
-import { isHost, isHttpUrl, isIPv6, isSocketAddr, validate } from './validate';
+import { isHost, isHttpUrl, isIPv6, isSocketAddr, timeRange, validate } from './validate';
 import { RESET } from './values';
 
 describe('validate', () => {
@@ -63,6 +63,43 @@ describe('validate', () => {
 		expect(validate(spec('s.f', { format: 'host' }), 'bad host')).toMatch(/host name/);
 		expect(validate(spec('s.f', { format: 'log-filter' }), '!!!')).toBeUndefined();
 		expect(validate(spec('s.f', { auto: '' }), '')).toBeUndefined();
+	});
+});
+
+describe('time-range', () => {
+	it.each(['03:00-05:00', '00:00-23:59', '22:00-02:00', '23:59-00:00', '09:30-09:31'])(
+		'accepts %s',
+		(v) => expect(timeRange(v)).toBe('ok')
+	);
+
+	it.each([
+		'',
+		'3:00-05:00',
+		'03:00-5:00',
+		'24:00-05:00',
+		'03:60-05:00',
+		'03:00-24:00',
+		'03:00 - 05:00',
+		'03:00–05:00', // an en dash
+		'03:00',
+		'03:00-05:00-07:00',
+		'0300-0500',
+		'+3:00-05:00',
+		'03:00-05:00 ',
+		'٠٣:٠٠-٠٥:٠٠' // non-ASCII digits
+	])('refuses %j', (v) => expect(timeRange(v)).toBe('bad'));
+
+	it('refuses a window that starts and ends at the same minute', () => {
+		expect(timeRange('04:00-04:00')).toBe('same');
+		expect(timeRange('04:00-04:01')).toBe('ok');
+	});
+
+	it('says what to enter, and a wrapped window is fine', () => {
+		const window = spec('updates.window', { format: 'time-range' });
+		expect(validate(window, '22:00-02:00')).toBeUndefined();
+		expect(validate(window, '10pm-2am')).toMatch(/24-hour time, like 03:00-05:00/);
+		expect(validate(window, '04:00-04:00')).toMatch(/starts and ends at the same time/);
+		expect(validate(window, 3)).toMatch(/right kind/);
 	});
 });
 
