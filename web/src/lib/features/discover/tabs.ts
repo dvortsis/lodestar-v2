@@ -21,21 +21,20 @@ export type ContentType = (typeof TYPES)[number];
 /** A tab is a content type, or null for All. */
 export type Tab = ContentType | null;
 
-// TODO(S-detail): the content-type labels become shared messages when S-detail adds them.
 const LABELS: Record<ContentType | 'all', () => string> = {
 	all: () => m.discover_type_all(),
-	movie: () => m.discover_type_movie(),
-	tv: () => m.discover_type_tv(),
-	music: () => m.discover_type_music(),
-	audiobook: () => m.discover_type_audiobook(),
-	ebook: () => m.discover_type_ebook(),
-	comic: () => m.discover_type_comic(),
-	software: () => m.discover_type_software(),
-	game: () => m.discover_type_game(),
-	images: () => m.discover_type_images(),
-	video: () => m.discover_type_video(),
-	other: () => m.discover_type_other(),
-	adult: () => m.discover_type_adult()
+	movie: () => m.content_type_movie(),
+	tv: () => m.content_type_tv(),
+	music: () => m.content_type_music(),
+	audiobook: () => m.content_type_audiobook(),
+	ebook: () => m.content_type_ebook(),
+	comic: () => m.content_type_comic(),
+	software: () => m.content_type_software(),
+	game: () => m.content_type_game(),
+	images: () => m.content_type_images(),
+	video: () => m.content_type_video(),
+	other: () => m.content_type_other(),
+	adult: () => m.content_type_adult()
 };
 
 export const tabLabel = (tab: Tab): string => LABELS[tab ?? 'all']();

@@ -123,6 +123,7 @@ export class Discover {
 		const type = this.type;
 		clearTimeout(this.#timer);
 		this.#pager.cancel();
+		this.failure = null;
 		this.loading = true;
 		this.loadingMore = false;
 		this.moreFailed = false;
@@ -151,9 +152,9 @@ export class Discover {
 		} catch (e) {
 			if (isAbort(e) || mine !== this.#seq) return;
 			this.failure = failureOf(e);
-			// Network and server errors keep the last rows (stale, with a Retry); a type the server
-			// rejects, or search being off, has none to keep.
-			if (this.failure !== 'other') this.#clear();
+			// A failed refresh of the same tab keeps its rows (stale, with a Retry); another tab's rows
+			// are never left under this tab, and a rejected type or search being off has none to keep.
+			if (changed || this.failure !== 'other') this.#clear();
 		} finally {
 			if (mine === this.#seq) {
 				clearTimeout(this.#timer);

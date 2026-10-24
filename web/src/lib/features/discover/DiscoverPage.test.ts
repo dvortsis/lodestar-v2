@@ -142,7 +142,7 @@ describe('Newest', () => {
 		handler = () => response({ newest: newest({ total: 2_400_000, total_approx: true }) });
 		mount();
 		await waitFor(() =>
-			expect(screen.getByTestId('discover-newest-total').textContent).toBe('≈ 2.4M')
+			expect(screen.getByTestId('discover-newest-total').textContent).toBe('≈\u00A02.4M')
 		);
 	});
 
@@ -227,7 +227,7 @@ describe('Newest', () => {
 		await waitFor(() => expect(screen.queryByText(/Couldn't load more torrents/)).toBeNull());
 	});
 
-	it('keeps the last rows and offers Retry when a refresh fails', async () => {
+	it("clears another tab's rows when a tab change fails, and Retry loads it", async () => {
 		const view = mount();
 		await screen.findByTestId(`discover-row-${hash(1)}`);
 		handler = () => {
@@ -235,7 +235,7 @@ describe('Newest', () => {
 		};
 		await view.rerender({ search: new URLSearchParams('type=movie') });
 		await screen.findByText(/Couldn't load Discover/);
-		expect(screen.getByTestId(`discover-row-${hash(1)}`)).toBeTruthy(); // stale rows stay
+		expect(screen.queryByTestId(`discover-row-${hash(1)}`)).toBeNull(); // never under the new tab
 		handler = () => response({ newest: newest({ hits: [hit(7)] }) });
 		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 		await screen.findByTestId(`discover-row-${hash(7)}`);
@@ -365,7 +365,7 @@ describe('rows', () => {
 			within(screen.getByTestId(`discover-row-${hash(1)}`)).getByText('Not classified yet')
 		).toBeTruthy();
 		expect(
-			within(screen.getByTestId(`discover-row-${hash(2)}`)).getByText('82% video')
+			within(screen.getByTestId(`discover-row-${hash(2)}`)).getByText('82% Video')
 		).toBeTruthy();
 	});
 
@@ -386,7 +386,9 @@ describe('rows', () => {
 				newest: newest({ hits: [hit(1, { seeders_approx: true, swarm_suspect: true })] })
 			});
 		mount();
-		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe('≈12');
+		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe(
+			'≈\u00A012'
+		);
 		expect(screen.getByTestId(`discover-row-${hash(1)}-suspect`).textContent).toBe(
 			'Suspect seeders'
 		);

@@ -61,7 +61,7 @@
 				<span role="img" aria-label={m.never_scraped()} data-testid="{id}-never-scraped">—</span>
 			{:else}
 				<span data-testid="{id}-seeders"
-					>{hit.seeders_approx ? m.estimate() : ''}{formatCount(hit.seeders, locale)}</span
+					>{formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)}</span
 				>
 			{/if}
 			<span class="sr-only">{m.leechers()}: </span><ArrowDown class="dsc-icon" aria-hidden="true" />
@@ -71,18 +71,23 @@
 				>
 			{:else}
 				<span data-testid="{id}-leechers"
-					>{hit.seeders_approx ? m.estimate() : ''}{formatCount(hit.leechers, locale)}</span
+					>{formatCount({ value: hit.leechers, approx: hit.seeders_approx }, locale)}</span
 				>
 			{/if}
 			{#if hit.swarm_suspect}
-				<Warning class="dsc-icon" aria-hidden="true" />
-				{#if density === 'comfortable'}<span data-testid="{id}-suspect">{m.swarm_suspect()}</span>
-				{:else}<span class="sr-only" data-testid="{id}-suspect">{m.swarm_suspect()}</span>{/if}
+				<span class="dsc-fact" title={m.swarm_suspect()}>
+					<Warning class="dsc-icon" aria-hidden="true" />
+					<span class={density === 'comfortable' ? '' : 'sr-only'} data-testid="{id}-suspect"
+						>{m.swarm_suspect()}</span
+					>
+				</span>
 			{/if}
 		</span>
 		{#if density === 'comfortable'}
 			<span class="dsc-fact" data-testid="{id}-files"
-				>{m.discover_files({ count: formatCount(hit.files, locale) })}</span
+				>{(hit.files === 1 ? m.discover_files_one : m.discover_files_other)({
+					count: formatCount(hit.files, locale)
+				})}</span
 			>
 			<span class="dsc-fact" data-testid="{id}-trackers">
 				<span class="sr-only">{m.trackers_reporting()}: </span>
@@ -121,9 +126,10 @@
 			<span class="sr-only">{m.discovered()}: </span>
 			<span data-testid="{id}-discovered"><RelativeTime seconds={hit.discovered_at} /></span>
 			{#if backfill}
-				<History class="dsc-icon" aria-hidden="true" />
-				{#if density === 'comfortable'}<span class="dsc-muted">{m.backfill()}</span>
-				{:else}<span class="sr-only">{m.backfill()}</span>{/if}
+				<span class="dsc-fact" title={m.backfill()}>
+					<History class="dsc-icon" aria-hidden="true" />
+					<span class={density === 'comfortable' ? 'dsc-muted' : 'sr-only'}>{m.backfill()}</span>
+				</span>
 			{/if}
 		</span>
 	</div>
