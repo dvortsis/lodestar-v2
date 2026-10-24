@@ -22,6 +22,31 @@ pub fn path(data_dir: &Path) -> PathBuf {
     data_dir.join("logs").join("lodestar.log")
 }
 
+/// Creates the logs folder if it's missing. A folder made here holds the
+/// setup token, and is made before the runtime's file sink would make it
+/// (and lock it down), so it's locked down here the same way: only its
+/// owner, SYSTEM and Administrators, whatever an admin-chosen data folder
+/// lets Users read. Failing that, it's removed again and nothing is
+/// written. An existing folder keeps its ACL; the file sink checks it.
+fn create_private(dir: &Path) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    if let Err(e) = lodestar_integrations::secret::restrict_dir_acl(dir) {
+        let _ = fs::remove_dir(dir);
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// An append-only log file that rotates once at `max` bytes.
 #[derive(Debug)]
 pub struct LogFile {
@@ -41,7 +66,7 @@ impl LogFile {
     /// Opens (or creates) `path` for appending, creating its folder.
     pub fn open(path: PathBuf, max: u64) -> io::Result<LogFile> {
         if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
+            create_private(dir)?;
         }
         let file = append(&path)?;
         let size = file.metadata()?.len();
@@ -228,6 +253,35 @@ mod tests {
         assert_eq!(fs::read_to_string(&p).unwrap(), "cccc\n");
     }
 
+    /// A logs folder made here is private even inside a data folder that
+    /// lets Users read; an existing one keeps its ACL.
+    #[cfg(windows)]
+    #[test]
+    fn a_new_logs_folder_is_locked_down_first() {
+        let dir = tempfile::tempdir().unwrap();
+        // A data folder anyone in Users may read, as an admin might pick.
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let icacls = Path::new(&root).join("System32").join("icacls.exe");
+        let shared = |p: &Path| {
+            let ok = std::process::Command::new(&icacls)
+                .arg(p)
+                .args(["/grant", "*S-1-5-32-545:(OI)(CI)R"])
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        };
+        shared(dir.path());
+        let _log = LogFile::open(path(dir.path()), MAX_BYTES).unwrap();
+        crate::windows::acl::log_folder(&dir.path().join("logs")).unwrap();
+        // A folder that was already there isn't touched.
+        let kept = dir.path().join("kept");
+        fs::create_dir(&kept).unwrap();
+        let _log = LogFile::open(kept.join("lodestar.log"), MAX_BYTES).unwrap();
+        assert!(crate::windows::acl::log_folder(&kept).is_err());
+    }
+
     #[test]
     fn the_console_writes_each_line_whole() {
         let dir = tempfile::tempdir().unwrap();
@@ -277,7 +331,9 @@ mod tests {
         });
         let log = fs::read_to_string(path(dir.path())).unwrap();
         assert!(
-            log.contains("enter setup token ABCD-1234-EFGH-5678 address=0.0.0.0:8191\n"),
+            log.contains(
+                "enter setup token ABCD-1234-EFGH-5678 address=\"http://<this host's address>:8191/\"\n"
+            ),
             "{log}"
         );
         let jsonl = fs::read_to_string(dir.path().join("logs").join("lodestar.jsonl")).unwrap();

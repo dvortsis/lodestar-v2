@@ -194,18 +194,22 @@ fn at(file: &str, id: &str) -> Option<usize> {
     file.find(&format!(r#""event":"{id}""#))
 }
 
-/// How many bytes wait unread in the receive queue of this machine's TCP
-/// socket on local port `port` (Linux's `/proc/net/tcp`).
+/// The send and receive queues (bytes) of this machine's TCP socket from
+/// local port `local` to remote port `remote` (Linux's `/proc/net/tcp`).
 #[cfg(target_os = "linux")]
-fn rx_queue(port: u16) -> Option<u64> {
+fn queues(local: u16, remote: u16) -> Option<(u64, u64)> {
     let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
-    let local = format!(":{port:04X}");
+    let (local, remote) = (format!(":{local:04X}"), format!(":{remote:04X}"));
     table.lines().skip(1).find_map(|l| {
         let f: Vec<&str> = l.split_whitespace().collect();
-        (f.get(1)?.ends_with(&local)).then(|| {
-            let (_, rx) = f.get(4)?.split_once(':')?;
-            u64::from_str_radix(rx, 16).ok()
-        })?
+        if !(f.get(1)?.ends_with(&local) && f.get(2)?.ends_with(&remote)) {
+            return None;
+        }
+        let (tx, rx) = f.get(4)?.split_once(':')?;
+        Some((
+            u64::from_str_radix(tx, 16).ok()?,
+            u64::from_str_radix(rx, 16).ok()?,
+        ))
     })
 }
 
@@ -243,19 +247,21 @@ fn a_stalled_download_cannot_hold_the_shutdown() {
     let n = stalled.read(&mut first).unwrap();
     let head = String::from_utf8_lossy(&first[..n]);
     assert!(head.starts_with("HTTP/1.0 200"), "{head}");
-    // Full buffers: the client's queue holds data and has stopped growing
-    // for half a second (the kernel doesn't grow a window nobody reads),
-    // so the server is blocked writing.
+    // Full buffers: the client's receive queue holds data and has stopped
+    // growing for half a second (the kernel doesn't grow a window nobody
+    // reads), and the server's send queue holds what it couldn't send, so
+    // the server is blocked writing.
     let port = stalled.local_addr().unwrap().port();
     let mut last = 0;
     let mut since = Instant::now();
     wait_for(30, &format!("the download to stall (port {port})"), || {
-        let now = rx_queue(port).unwrap_or(0);
+        let now = queues(port, s.port).map_or(0, |(_, rx)| rx);
         if now != last {
             last = now;
             since = Instant::now();
         }
-        now > 0 && since.elapsed() > Duration::from_millis(500)
+        let sending = queues(s.port, port).map_or(0, |(tx, _)| tx);
+        now > 0 && sending > 0 && since.elapsed() > Duration::from_millis(500)
     });
 
     let (status, took) = s.terminate();
