@@ -5,7 +5,7 @@
 	//   the last good rows, as the strip keeps the last good chips.
 	// - j/k move through the rows (scope `search`); `c` and `o` act on the focused row through
 	//   S-detail's `setCommandTarget`; Enter or a click opens the drawer.
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { api, type ApiError } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
@@ -149,6 +149,7 @@
 		});
 		return () => {
 			clearTimeout(giveUp);
+			results.forget(); // answers from before this mount may be stale when it comes back
 			gone = true;
 			offKeys?.();
 			setCommandTarget(null);
@@ -197,7 +198,7 @@
 		const mod = await detailMod();
 		detail = mod;
 		const rowEl = listEl
-			?.querySelector<HTMLElement>(`[data-hash="${hit.hash}"]`)
+			?.querySelector<HTMLElement>(`[data-hash="${CSS.escape(hit.hash)}"]`)
 			?.closest<HTMLElement>('[role="row"]');
 		mod.openDetail(hit.hash, {
 			hit,
@@ -232,26 +233,31 @@
 		await search.setAst(withoutFilters(search.ast), search.hidden ? { hidden: false } : {});
 	}
 
-	// §10.13: the count, politely, once per answered query (W5 debounces typing). Cleared first so
-	// the same count is read again for a new query.
+	// §10.13: the count, politely, once per answered query (W5 debounces typing): the effect
+	// follows only the query the rows answer, not the rows (a new page isn't a new count). Cleared
+	// first so the same count is read again for a new query.
 	let said = $state('');
 	$effect(() => {
 		const shown = results.shown;
-		if (shown === null || results.status !== 'ready') return;
-		const n = results.hits.length === 0 ? 0 : results.total;
-		const count = formatCount(n, locale);
-		const text =
-			n === 0
-				? m.search_results_none()
-				: results.totalApprox
-					? m.search_results_announce_about({ count })
-					: n === 1
-						? m.search_results_announce_one()
-						: m.search_results_announce_other({ count });
+		if (shown === null) return;
+		const text = untrack(announcement);
+		if (text === null) return;
 		said = '';
 		const raf = requestAnimationFrame(() => (said = text));
 		return () => cancelAnimationFrame(raf);
 	});
+	function announcement(): string | null {
+		if (results.status !== 'ready') return null;
+		const n = results.hits.length === 0 ? 0 : results.total;
+		const count = formatCount(n, locale);
+		return n === 0
+			? m.search_results_none()
+			: results.totalApprox
+				? m.search_results_announce_about({ count })
+				: n === 1
+					? m.search_results_announce_one()
+					: m.search_results_announce_other({ count });
+	}
 
 	/** §10.1: details are fetched ahead on hover too (the 150 ms idle is `prefetchDetail`'s). */
 	let hovered: string | undefined;
@@ -332,6 +338,9 @@
 					</li>
 				{/each}
 			</ul>
+			<Button onclick={focusBar}>{m.search_results_empty_focus()}</Button>
+			<!-- Last: the list arrives with its request, after the rest has painted, and must not push
+			     anything down (a layout shift). -->
 			{#if saved.length}
 				<h3 class="rp-empty-sub">{m.search_results_empty_saved()}</h3>
 				<ul class="rp-examples" data-testid="results-saved">
@@ -341,7 +350,6 @@
 					{/each}
 				</ul>
 			{/if}
-			<Button onclick={focusBar}>{m.search_results_empty_focus()}</Button>
 		</div>
 	{:else if results.status === 'loading'}
 		<div class="rp-skeleton" data-testid="results-loading" role="status">

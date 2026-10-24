@@ -35,7 +35,7 @@
 		matched?: boolean;
 		/** Search's row actions (copy, more), loaded lazily by the list; Discover and Alerts have none. */
 		actions?: Snippet<[SearchHit]>;
-		/** A feature's own fact at the end of the facts line (Alerts: "Matched 3 h ago"). */
+		/** A feature's own fact, first on the facts line so it never clips (Alerts: "Matched 3 h ago"). */
 		extra?: Snippet;
 	}
 	let { hit, density, testid: id, root = true, matched = false, actions, extra }: Props = $props();
@@ -120,6 +120,8 @@
 			</div>
 		{/if}
 		<div class="rr-facts">
+			<!-- A feature's own fact first: the line clips at its end on a narrow screen. -->
+			{#if extra}<span class="rr-fact">{@render extra()}</span>{/if}
 			{#if comfortable && badges.length}
 				<span class="rr-badges" data-testid="{id}-badges">
 					{#each badges as b (b.key)}<span class="rr-badge" data-testid="{id}-badge-{b.key}"
@@ -220,7 +222,6 @@
 					</span>
 				{/if}
 			</span>
-			{#if extra}<span class="rr-fact">{@render extra()}</span>{/if}
 		</div>
 		{#if comfortable && matched}
 			<div class="rr-matched" data-testid="{id}-matched">

@@ -553,11 +553,13 @@ describe('the detail page', () => {
 		await screen.findByTestId('alert-row-5');
 		const ids = () =>
 			keys.list().filter((c) => c.scope === 'alerts' && c.id.startsWith('results.'));
-		await waitFor(() =>
-			expect(ids().map((c) => [c.id, c.keys])).toEqual([
-				['results.next', ['j']],
-				['results.previous', ['k']]
-			])
+		await waitFor(
+			() =>
+				expect(ids().map((c) => [c.id, c.keys])).toEqual([
+					['results.next', ['j']],
+					['results.previous', ['k']]
+				]),
+			{ timeout: 10_000 } // the commands load after mount
 		);
 		unmount();
 		expect(ids()).toEqual([]);

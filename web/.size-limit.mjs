@@ -165,19 +165,16 @@ const RESULTS = [
 	)
 ];
 const resultsOnDemand = [/features\/detail\//, /^chunk:magnet$/, /^chunk:Menu$/];
-// What the view has loaded by the time the panel does (runner, 2026-10-24): the first load, the
-// bar's lazy part (a URL with a query, or the first interaction, engages it) and the shell's
-// engagement set (Chrome and what it loads at mount; its palette, error view and menus on demand).
+// What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
+// bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
+// link it loads only with the first interaction, so the panel really does fetch what they share.
 const viewOf = (...parts) => [
 	...new Set(parts.flatMap(([key, onDemand]) => ownChunk(key, onDemand)))
 ];
-const engagedSearch = viewOf(
-	['src/lib/features/search/query/Live.svelte', [/query\/(FilterStrip|SyntaxPopover)\.svelte$/]],
-	[
-		'src/lib/shell/Chrome.svelte',
-		[/shell\/(CommandPalette|ErrorView|OverflowMenu|StateScene)\.svelte$/, /^chunk:Menu$/]
-	]
-);
+const engagedSearch = viewOf([
+	'src/lib/features/search/query/Live.svelte',
+	[/query\/(FilterStrip|SyntaxPopover)\.svelte$/]
+]);
 const resultsLazy = [
 	...new Set(RESULTS.flatMap((k) => ownChunk(k, resultsOnDemand, false, engagedSearch)))
 ];
@@ -241,10 +238,10 @@ export default [
 	// Detail (S-detail): the first view is the header and the summary. Contents (composition and the
 	// file tree with its virtual list), Parsed and the error state are separate chunks that load as
 	// their section scrolls near or an error shows, each gated by the on-demand entry.
-	// Beyond the engaged search view (runner, 2026-10-24: measured + 10%, under the 45 KB per-view
-	// cap): 31.32 KB, so 34.5 KB. VirtualList and its virtualiser are 12 KB of it, the panel 5.2 KB,
-	// the row 3.9 KB, the row actions 1.9 KB.
-	entry('Search results (lazy)', resultsLazy, '34.5 KB'),
+	// Beyond Live's mount set (runner, 2026-10-24: 41.5 KB, under the 45 KB per-view cap). VirtualList
+	// and its virtualiser are 12 KB of it, the panel 5.2 KB, the row 3.9 KB, the row actions 1.9 KB;
+	// the rest is what the shell's Chrome would bring too (the key registry, the event client).
+	entry('Search results (lazy)', resultsLazy, '41.5 KB'),
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '28.5 KB'),
 	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.4 KB'),
 	entry(

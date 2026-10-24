@@ -9,6 +9,7 @@ import {
 	chunkGraph,
 	firstLoadGraph,
 	routePreloads,
+	stripPreloadsOf,
 	svelteBarrel,
 	vendorGroup
 } from './scripts/first-load.mjs';
@@ -37,6 +38,7 @@ export default defineConfig({
 		chunkGraph(),
 		svelteBarrel(),
 		firstLoadGraph(),
+		stripPreloadsOf(/\/src\/routes\/(search\/\+page|\+layout)\.svelte$/),
 		Icons({ compiler: 'svelte' })
 	],
 	resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,

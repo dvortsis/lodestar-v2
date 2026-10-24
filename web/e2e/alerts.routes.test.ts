@@ -290,6 +290,24 @@ test.describe('one alert', () => {
 		);
 	});
 
+	test('on a phone the row still shows when it matched (its own fact comes first)', async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width: 390, height: 800 });
+		detailMocks(mock, { ...LANTERN, unread: 0 }, [row(3, true), row(2, true)]);
+		await go('/alerts/1');
+		const matched = page.getByTestId('alert-row-3-matched');
+		await expect(matched).toBeVisible();
+		const box = (await matched.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(390);
+		// Inside the row, which clips its facts line at its own edge.
+		const rowBox = (await page.getByTestId('alert-row-3').boundingBox())!;
+		expect(box.x + box.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+	});
+
 	test('with nothing unread there is no mark and nothing is marked', async ({ page, go, mock }) => {
 		detailMocks(mock, { ...LANTERN, unread: 0 }, [row(3, true), row(2, true)]);
 		await go('/alerts/1');

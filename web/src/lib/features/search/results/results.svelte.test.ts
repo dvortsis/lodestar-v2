@@ -4,6 +4,9 @@ import { expect, it, vi } from 'vitest';
 import type { Ast } from '$lib/state/search.svelte';
 import { page } from './fixtures';
 
+// Waits are conditions with a 10 s deadline (CLAUDE.md); the test's own limit must exceed it.
+vi.setConfig({ testTimeout: 20_000 });
+
 const post = vi.hoisted(() => vi.fn());
 vi.mock('$lib/api/client', async (original) => ({
 	...(await original<typeof import('$lib/api/client')>()),

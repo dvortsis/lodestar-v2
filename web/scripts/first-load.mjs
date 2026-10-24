@@ -234,17 +234,45 @@ export const vendorGroup = () => ({
  * a node, or the page paints unstyled); a node's JS imports load when the node does, and kit
  * starts that on hover or touch (`data-sveltekit-preload-data`), before the navigation.
  *
- * A route node's own lazy parts get the same rule (S-search-2): the search node's list of the
- * results panel's chunks was in `/search`'s first load too, and grew with every chunk the panel
- * uses. A lazy part's JS imports now load after its own chunk, one level at a time.
+ * `/search`'s own node gets the same rule (S-search-2): its list of the results panel's chunks
+ * was in the first load too, and grew with every chunk the panel uses. Only that node: another
+ * route's lazy parts keep their preloads, since only `/search` has the first-load budget. The
+ * node is found by `stripPreloadsOf` (its file name is hashed).
  * @param {string} _file
  * @param {string[]} deps
  * @param {{ hostId: string }} ctx
  */
 export const routePreloads = (_file, deps, { hostId }) =>
-	/(^|\/)(entry\/app|nodes\/\d+)\.[^/]*\.js$/.test(hostId)
+	/(^|\/)entry\/app\.[^/]*\.js$/.test(hostId) || stripNodes.has(hostId)
 		? deps.filter((d) => d.endsWith('.css'))
 		: deps;
+
+/** Route nodes whose lazy parts lose their JS preload lists (`stripPreloadsOf`), by file name. */
+export const stripNodes = new Set();
+
+/**
+ * Marks the route node chunks that contain one of `pages` for `routePreloads`. It runs before Vite
+ * writes the preload maps.
+ * @param {RegExp} pages
+ */
+export function stripPreloadsOf(pages) {
+	return {
+		name: 'lodestar:strip-preloads',
+		generateBundle: {
+			order: /** @type {const} */ ('pre'),
+			/** @param {unknown} _ @param {Record<string, { type: string; fileName: string; moduleIds?: string[] }>} bundle */
+			handler(_, bundle) {
+				for (const chunk of Object.values(bundle))
+					if (
+						chunk.type === 'chunk' &&
+						/(^|\/)nodes\/\d+\./.test(chunk.fileName) &&
+						chunk.moduleIds?.some((id) => pages.test(id))
+					)
+						stripNodes.add(chunk.fileName);
+			}
+		}
+	};
+}
 
 /**
  * The JS files a built `app.js` still lists in its preload map (`__vite__mapDeps`): none, or the
