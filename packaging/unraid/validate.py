@@ -38,8 +38,13 @@ def check(path: Path, rules: dict) -> list[str]:
         errors.append("WebUI must target 8090")
     if rules.get("ports") and "[PORT:8090]" not in webui:
         errors.append("WebUI must use [PORT:8090]")
-    if "extra" in rules and rules["extra"] not in (root.findtext("ExtraParams") or ""):
+    extra = root.findtext("ExtraParams") or ""
+    if "extra" in rules and rules["extra"] not in extra:
         errors.append(f"ExtraParams must contain {rules['extra']}")
+    # Shutdown saves the index and database and is bounded at 10 s after a stalled client;
+    # Docker's default stop timeout (10 s) would kill it first.
+    if "--stop-timeout=60" not in extra.split():
+        errors.append("ExtraParams must contain --stop-timeout=60")
     if "requires" in rules and rules["requires"] not in (root.findtext("Overview") or ""):
         errors.append(f"Overview must say it requires Lodestar {rules['requires']}+")
     configs = root.findall("Config")
