@@ -103,3 +103,16 @@
 	outline: var(--focus-ring-width) solid var(--color-primary);
 	outline-offset: var(--focus-ring-offset);
 }
+/* Below the list: "Load more" (the sentinel's fallback), or the end line. One control's height
+   either way, so the swap moves nothing. */
+.rp-foot {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	min-height: var(--control-height-dense);
+}
+.rp-end {
+	margin: 0;
+	color: var(--color-muted-text);
+	font-size: var(--text-small);
+}

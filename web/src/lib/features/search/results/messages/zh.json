@@ -50,5 +50,7 @@
 	"search_results_error_query": "Lodestar 无法执行此搜索。请修改查询后重试。",
 	"search_results_announce_one": "1 个种子",
 	"search_results_announce_other": "{count} 个种子",
-	"search_results_announce_about": "约 {count} 个种子"
+	"search_results_announce_about": "约 {count} 个种子",
+	"search_results_load_more": "加载更多种子",
+	"search_results_end": "已到结果末尾"
 }

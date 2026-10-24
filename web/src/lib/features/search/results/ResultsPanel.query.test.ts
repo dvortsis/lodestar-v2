@@ -75,6 +75,51 @@ describe('ResultsPanel with a query', () => {
 		unmount();
 	});
 
+	it('Load more asks for the next page once, keeps focus, and hands it to the end line', async () => {
+		let answer!: (r: unknown) => void;
+		api.post
+			.mockResolvedValueOnce(page([1, 2], { total: 3, next_cursor: 'c1' }))
+			.mockImplementationOnce(() => new Promise((r) => (answer = r)));
+		render(ResultsPanel, { focusBar: () => {} });
+		const more = await screen.findByRole('button', { name: 'Load more torrents' }, WAIT);
+		more.focus();
+		more.click(); // the sentinel may have asked already: either way, one request
+		more.click();
+		await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2), WAIT);
+		expect(more.getAttribute('aria-busy')).toBe('true');
+		expect(document.activeElement).toBe(more);
+		answer(page([3]));
+		const end = await screen.findByTestId('results-end', {}, WAIT);
+		await waitFor(() => expect(document.activeElement).toBe(end), WAIT);
+		expect(screen.queryByRole('button', { name: 'Load more torrents' })).toBeNull();
+		expect(api.post).toHaveBeenCalledTimes(2);
+	});
+
+	it('a failed page moves focus to Retry, and Retry back to Load more', async () => {
+		const { ApiError } = await import('$lib/api/client');
+		let answer!: (r: unknown) => void;
+		api.post
+			.mockResolvedValueOnce(page([1, 2], { total: 9, next_cursor: 'c1' }))
+			.mockRejectedValueOnce(new ApiError(503, 'unavailable', 'down'))
+			.mockImplementationOnce(() => new Promise((r) => (answer = r)));
+		render(ResultsPanel, { focusBar: () => {} });
+		const more = await screen.findByRole('button', { name: 'Load more torrents' }, WAIT);
+		more.focus();
+		more.click();
+		const retry = await screen.findByRole('button', { name: 'Retry' }, WAIT);
+		await waitFor(() => expect(document.activeElement).toBe(retry), WAIT);
+		retry.click();
+		await waitFor(
+			() =>
+				expect(document.activeElement).toBe(
+					screen.getByRole('button', { name: 'Load more torrents' })
+				),
+			WAIT
+		);
+		answer(page([3], { next_cursor: 'c2' }));
+		await waitFor(() => expect(results.hits).toHaveLength(3), WAIT);
+	});
+
 	it('drops the old rows on unmount: a failed request after a remount shows none of them', async () => {
 		api.post.mockResolvedValue(page([1, 2]));
 		const first = render(ResultsPanel, { focusBar: () => {} });
