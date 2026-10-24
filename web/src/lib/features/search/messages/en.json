@@ -1,6 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"search_page_title": "Search",
+	"search_page_skip_results": "Skip to results",
 	"search_query_label": "Search torrents",
 	"search_query_placeholder": "Search by name, or add a filter such as res:1080p",
 	"search_query_placeholder_short": "Search, or filter: res:1080p",

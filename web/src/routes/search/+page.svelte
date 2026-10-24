@@ -66,6 +66,19 @@
 	});
 	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
 
+	// "Skip to results" (WCAG 2.4.1): at x-large the facet rail comes before the results, a tab stop
+	// per value. The link is the first focusable in the page and goes to the list's active row, or to
+	// the region itself while there is no list (the empty state, a skeleton, an error).
+	function skipToResults(event: MouseEvent) {
+		event.preventDefault();
+		const region = document.getElementById('results');
+		if (!region) return;
+		const row = region.querySelector<HTMLElement>('[role="grid"] [role="row"][tabindex="0"]');
+		if (row) return row.focus();
+		region.setAttribute('tabindex', '-1');
+		region.focus();
+	}
+
 	// S-detail's drawer: opened with a shallow pushState carrying `detail` in page.state. The glob
 	// is empty until `DetailHost.svelte` exists, so neither slice edits the other's files, and the
 	// drawer never joins this route's first load.
@@ -81,6 +94,13 @@
 </script>
 
 <div class="flex flex-col gap-2 pb-4">
+	<!-- The shell's skip link's classes: visible on focus, and no new utilities in the global sheet. -->
+	<a
+		href="#results"
+		class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid"
+		data-testid="skip-to-results"
+		onclick={skipToResults}>{m.search_page_skip_results()}</a
+	>
 	<h1 class="mt-4 px-4 text-display font-semibold">{m.search_page_title()}</h1>
 	<QueryBar bind:this={bar} />
 	<div class="search-grid px-4">

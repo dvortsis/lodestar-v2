@@ -3,7 +3,7 @@
 // it. Local only until S-e2e wires a fixture job: it skips unless E2E_FIXTURE_URL is set, and
 // imports @playwright/test directly so no mock is installed. Run it as search-query.fixture.test.ts
 // says. Nothing here clicks: every step is a key.
-import { expect as base, test, type Locator, type Page } from '@playwright/test';
+import { expect as base, test, type Page } from '@playwright/test';
 
 const expect = base.configure({ timeout: 10_000 });
 const BASE = process.env.E2E_FIXTURE_URL;
@@ -34,19 +34,7 @@ test.afterAll(() => page?.context().close());
 const copied = () =>
 	page.evaluate(() => (window as unknown as { __copied: string[] }).__copied.at(-1) ?? null);
 
-/**
- * Tab until `target` has focus, failing after a bounded number of presses. The facet rail comes
- * before the results at this width, a stop per value and its exclude button, hence the bound.
- */
-async function tabTo(target: Locator) {
-	for (let i = 0; i < 300; i++) {
-		if (await target.evaluate((el) => el === document.activeElement)) return;
-		await page.keyboard.press('Tab');
-	}
-	await expect(target).toBeFocused();
-}
-
-test('/ lantern, Enter; Tab to the first row, Enter opens the drawer, c copies its magnet', async () => {
+test('/ lantern, Enter; Skip to results, Enter opens the drawer, c copies its magnet', async () => {
 	await page.goto('/search');
 	await expect(page.locator('#boot')).toHaveCount(0);
 	await page.keyboard.press('/');
@@ -60,7 +48,12 @@ test('/ lantern, Enter; Tab to the first row, Enter opens the drawer, c copies i
 	const first = grid.getByRole('row').first();
 	await expect(first).toBeVisible();
 	await expect(page.getByTestId('results-count')).toHaveText(/^\d[\d,]* results?$/);
-	await tabTo(first);
+	// The facet rail comes before the results at this width: Skip to results, one Shift+Tab back
+	// from the bar, goes past it.
+	await page.keyboard.press('Shift+Tab');
+	await expect(page.getByRole('link', { name: 'Skip to results' })).toBeFocused();
+	await page.keyboard.press('Enter');
+	await expect(first).toBeFocused();
 	await page.keyboard.press('Enter');
 	await expect(page.getByTestId('drawer')).toBeVisible();
 	await expect(page).toHaveURL(/\/t\/[0-9a-f]{40}/);

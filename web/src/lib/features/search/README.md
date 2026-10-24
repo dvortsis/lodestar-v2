@@ -18,6 +18,8 @@ The search screen (architecture §10.4). The page shell is `routes/search/+page.
 
 ## Page regions
 
+The page's first focusable item is **Skip to results** (S-search-3), visible on focus: it moves focus to the list's active row, or to `#results` while there is no list, past the bar and the facet rail.
+
 Under the heading, the `<search>` landmark holds the bar, its message line and the active-filter strip. Below it, a grid with three regions (§10.15 tracks: one column below `x-large`, rail + results at `x-large`, rail + results + drawer from `xx-large`):
 
 | id              | Filled by                   | Notes                                                                                           |
