@@ -510,17 +510,26 @@ impl Services {
         // Past the bound its connections are dropped: the tasks axum
         // spawned for them run on, detached, until the runtime ends, and
         // hold only the router's state, nothing `shutdown` waits on.
-        tokio::select! {
-            served = serve => served?,
-            () = forced_after(stopping, SHUTDOWN_GRACE) => lodestar_log::log_event!(
-                crate::logging::events::APP_SHUTDOWN_FORCED,
-                waited_s = SHUTDOWN_GRACE.as_secs()
-            ),
-        }
+        let served = tokio::select! {
+            served = serve => served,
+            () = forced_after(stopping, SHUTDOWN_GRACE) => {
+                lodestar_log::log_event!(
+                    crate::logging::events::APP_SHUTDOWN_FORCED,
+                    waited_s = SHUTDOWN_GRACE.as_secs()
+                );
+                Ok(())
+            }
+        };
+        // Saved and logged whatever `serve` returned: no error skips the
+        // save or the required `app.stop`.
         events.close();
         let stopped = handles.shutdown().await;
         // Required, and last: pending fold summaries are written first.
-        lodestar_log::log_event!(crate::logging::events::APP_STOP, clean = stopped.is_ok());
+        lodestar_log::log_event!(
+            crate::logging::events::APP_STOP,
+            clean = stopped.is_ok() && served.is_ok()
+        );
+        served?;
         stopped
     }
 }
