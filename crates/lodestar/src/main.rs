@@ -137,10 +137,7 @@ fn main() -> ExitCode {
             };
             match runtime.block_on(import_bitmagnet(config, &url, limit)) {
                 Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    tracing::error!("{e}");
-                    ExitCode::FAILURE
-                }
+                Err(e) => command_failed("import-bitmagnet", &*e),
             }
         }
         Command::Serve {
@@ -209,13 +206,14 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match runtime.block_on(serve_as(config, supervised)) {
+            let served = runtime.block_on(serve_as(config, supervised));
+            // A blocking task still running (a stuck read, a download's
+            // reader) can't hold the exit.
+            runtime.shutdown_timeout(services::RUNTIME_GRACE);
+            match served {
                 Ok(Some(code)) => ExitCode::from(code),
                 Ok(None) => ExitCode::SUCCESS,
-                Err(e) => {
-                    tracing::error!("{e}");
-                    ExitCode::FAILURE
-                }
+                Err(e) => command_failed("serve", &*e),
             }
         }
         other => cli::run(other, config_path.as_deref(), &dropped),
@@ -303,11 +301,11 @@ async fn import_bitmagnet(config: Config, url: &str, limit: Option<u64>) -> Resu
     let started = std::time::Instant::now();
     let report = bitmagnet::import(url, &mut store, source, &opts, |r| {
         if r.read % 100_000 < opts.batch as u64 {
-            tracing::info!(
+            lodestar_log::log_event!(
+                logging::events::APP_IMPORT_PROGRESS,
                 read = r.read,
                 new = r.new,
-                "importing ({:.0}/s)",
-                r.read as f64 / started.elapsed().as_secs_f64()
+                per_second = (r.read as f64 / started.elapsed().as_secs_f64()) as u64
             );
         }
     })
@@ -380,6 +378,21 @@ fn healthcheck(bind: SocketAddr) -> Result<(), String> {
     } else {
         Err(text.lines().last().unwrap_or(status).to_string())
     }
+}
+
+/// A command's error: logged by its kind, and its text, scrubbed of URL
+/// credentials (an import's database URL can hold a password), to stderr.
+fn command_failed(command: &'static str, e: &(dyn std::error::Error + 'static)) -> ExitCode {
+    lodestar_log::log_event!(
+        logging::events::APP_COMMAND_FAILED,
+        command = command,
+        error = lodestar_log::Error::kind("failed")
+    );
+    eprintln!(
+        "{command}: {}",
+        lodestar_log::url::scrub_text(&e.to_string())
+    );
+    ExitCode::FAILURE
 }
 
 #[cfg(test)]

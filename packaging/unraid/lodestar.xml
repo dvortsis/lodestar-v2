@@ -13,7 +13,7 @@
   <Overview>Lodestar crawls the BitTorrent DHT, fetches torrent metadata from peers and makes it searchable. It keeps names, file lists, sizes, dates and swarm counts in one local index. Open the web UI after the first start. The setup token appears in the container log. Enter it to create the admin password.</Overview>
   <Category>Network:Web Downloaders:Other</Category>
   <WebUI>http://[IP]:[PORT:8090]</WebUI>
-  <ExtraParams></ExtraParams>
+  <ExtraParams>--stop-timeout=60</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>

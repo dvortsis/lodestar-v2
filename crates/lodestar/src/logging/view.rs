@@ -112,7 +112,7 @@ fn field_kind(k: FieldType) -> LogFieldKind {
             Kind::FilterChange => LogFieldKind::FilterChanges,
         },
         FieldType::Error => LogFieldKind::Error,
-        FieldType::Label | FieldType::Secret => LogFieldKind::Label,
+        FieldType::Label | FieldType::Listen | FieldType::Secret => LogFieldKind::Label,
         FieldType::Untyped => LogFieldKind::Untyped,
     }
 }
