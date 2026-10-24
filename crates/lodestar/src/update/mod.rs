@@ -101,10 +101,12 @@ pub struct Started {
 
 /// Starts the engine, except for a fixture (served offline: nothing is
 /// checked) and off Unix (Windows installs through E-M6's helper).
+/// `busy` names what keeps an install waiting (a rebuild under way).
 pub fn start(
     config: &crate::config::Config,
     settings: &crate::settings::Registry,
     events: &std::sync::Arc<lodestar_api::events::EventHub>,
+    busy: Box<dyn Fn() -> Option<&'static str> + Send + Sync>,
 ) -> Started {
     // The build's own version: a nightly keeps its suffix.
     let version = env!("LODESTAR_BUILD_VERSION").to_string();
@@ -121,12 +123,12 @@ pub fn start(
     }
     #[cfg(not(unix))]
     {
-        let _ = (config, settings, events);
+        let _ = (config, settings, events, busy);
         unavailable(lodestar_api::updates::UpdatesUnavailable::WindowsHelper)
     }
     #[cfg(unix)]
     {
-        let Ok(fetch) = check::Guarded::new() else {
+        let (Ok(fetch), Ok(source)) = (check::Guarded::new(), download::Guarded::new()) else {
             return unavailable(lodestar_api::updates::UpdatesUnavailable::Network);
         };
         let child = probation::current();
@@ -143,12 +145,15 @@ pub fn start(
             supervised: child.is_some_and(|c| c.supervised),
             notices: hint.map(|h| h.notices.clone()).unwrap_or_default(),
             repository: env!("CARGO_PKG_REPOSITORY").to_string(),
+            db: config.db_path(),
+            dev: crate::system::info::channel() == lodestar_api::system::Channel::Dev,
         };
         let engine = engine::Engine::new(
             ctx,
             settings.subscribe(),
             events.clone(),
             std::sync::Arc::new(fetch),
+            engine::Installer::new(std::sync::Arc::new(source), busy),
         );
         let (stop, stopped) = tokio::sync::watch::channel(false);
         let task = engine.spawn(stopped);

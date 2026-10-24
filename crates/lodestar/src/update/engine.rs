@@ -1,8 +1,6 @@
 //! The update engine (§12.2) in `serve --child`: the scheduled and manual
 //! signed checks, `updater.json`, the policy over what a check found, and
-//! everything `/updates` and `/system` report. Part 4 of B-update checks,
-//! decides and reports; installing comes in part 5, so `can_install` is
-//! `not_built_yet` wherever nothing else stops it.
+//! everything `/updates` and `/system` report, and installs.
 //!
 //! - **When:** with `mode` notify, auto or image, at most every 6 hours
 //!   at a random minute (`updater.json` keeps the last and next check);
@@ -13,8 +11,22 @@
 //!   and every verified overlay's statements and marks; rebuilt from it
 //!   when missing; a damaged one blocks installs and is never written),
 //!   then the forward-only write of the next trust state.
-//! - **Events:** `checking` when a check starts, `available` when it
-//!   found a candidate, `failed` with its code.
+//! - **Installing** (`POST /updates/install`, a version queued for the
+//!   window, or the policy's next automatic install), holding the
+//!   one-check lock throughout: the policy's Install now rules and the
+//!   manual-steps confirmation; nothing else in the way (a rebuild) and
+//!   room on the disk; the envelope verified again against the trust
+//!   state and the clock now; [`download`]; [`install::stage`]; the staged
+//!   folder verified as the supervisor will (`overlay::verify`); the
+//!   envelope verified once more (§12.2 "At install time"); then the
+//!   switch intent and the graceful shutdown. A failed install isn't
+//!   retried until the next check.
+//! - **Events:** `checking` when a check starts; `checked`, `available` or
+//!   `failed` when it ends; `waiting_window`, `downloading` (progress at
+//!   most once a second), `verifying`, `installing`, `restarting` or
+//!   `failed` for an install. After a switch the new version publishes
+//!   `checking_health`, then `done` when its self-test passes; a restored
+//!   version publishes `rolled_back` once, from the history.
 //! - **A failed check** keeps the last good check's releases: `/updates`
 //!   shows them with `state: failed` and the error, so the screen says
 //!   what's known and that the newest check failed. Nothing installs from
@@ -28,8 +40,9 @@ use lodestar_api::dto::events::{Event, UpdatesEvent, UpdatesState};
 use lodestar_api::events::EventHub;
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::updates::{
-    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, PendingInstall, Policy,
-    ReleaseInfo, RollbackInfo, Running, UpdatesApi, UpdatesError, UpdatesStatus,
+    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, InstallWhen, Installing,
+    PendingInstall, Policy, ReleaseInfo, RollbackInfo, Running, UpdatesApi, UpdatesError,
+    UpdatesStatus,
 };
 use lodestar_log::log_event;
 use lodestar_update::semver::Version;
@@ -39,10 +52,12 @@ use tokio::sync::watch;
 
 use super::check::{self, CheckError, Fetch};
 use super::layout::Bin;
-use super::log_events::{UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_OVERLAY_UNREADABLE};
-use super::policy::{self, Block, Reason};
+use super::log_events::{
+    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_INSTALL_FAILED, UPDATE_OVERLAY_UNREADABLE,
+};
+use super::policy::{self, Block, Reason, Refusal};
 use super::window::{When, Window};
-use super::{history, pending, trust_file};
+use super::{download, history, install, layout, pending, trust_file};
 use crate::settings::updates::{Mode, Updates};
 
 /// Between scheduled checks, before the random minute.
@@ -53,6 +68,10 @@ const MANUAL_EVERY: Duration = Duration::from_secs(60);
 /// so a clock that's corrected while it sleeps is noticed.
 const MAX_SLEEP: Duration = Duration::from_secs(15 * 60);
 pub const UPDATER_FILE: &str = "updater.json";
+/// Between two `downloading` events.
+const PROGRESS_EVERY: Duration = Duration::from_secs(1);
+/// Kept free on `<data>/bin`'s disk beyond what an install needs.
+const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 
 /// `updater.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +86,13 @@ pub struct Updater {
     pub paused_until: Option<i64>,
     #[serde(default)]
     pub error: Option<String>,
+    /// A version asked for at the next window (`POST /updates/install`
+    /// with `when: window`).
+    #[serde(default)]
+    pub queued: Option<String>,
+    /// The newest history entry a `rolled_back` event was published for.
+    #[serde(default)]
+    pub rolled_back_seen: Option<u64>,
 }
 
 /// What the engine knows about the running process.
@@ -82,6 +108,51 @@ pub struct Context {
     pub notices: Vec<String>,
     /// `CARGO_PKG_REPOSITORY`.
     pub repository: String,
+    /// The store, whose size a release that migrates needs free again
+    /// (its snapshot).
+    pub db: PathBuf,
+    /// A development build: it has no release version to update from.
+    pub dev: bool,
+}
+
+/// What an install needs from outside the engine.
+pub struct Installer {
+    /// Where downloads come from.
+    pub source: Arc<dyn download::Source>,
+    /// What keeps an install waiting (`rebuild_running`), if anything.
+    pub busy: Box<dyn Fn() -> Option<&'static str> + Send + Sync>,
+    /// Asks for the switch to a staged version: the intent, then the
+    /// graceful shutdown.
+    pub switch: Box<dyn Fn(&Version) + Send + Sync>,
+    /// This build's target; `None` where nothing is shipped for it.
+    pub target: Option<lodestar_update::Target>,
+    /// Verifies a staged version as the supervisor will before running it.
+    pub verify: Box<dyn Fn(&Bin, &Version) -> bool + Send + Sync>,
+}
+
+impl Installer {
+    /// The real one: GitHub through the guarded client, and the switch
+    /// through `request.json` and `EXIT_SWITCH`.
+    pub fn new(
+        source: Arc<dyn download::Source>,
+        busy: Box<dyn Fn() -> Option<&'static str> + Send + Sync>,
+    ) -> Installer {
+        Installer {
+            source,
+            busy,
+            switch: Box::new(|v| {
+                super::control::set_intent(
+                    super::control::Action::Switch,
+                    Some(v.to_string()),
+                    None,
+                );
+                crate::system::Restart::global().request();
+            }),
+            target: super::testing::target()
+                .or_else(|| lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET"))),
+            verify: Box::new(|bin, v| super::overlay::verify(bin, v).is_ok()),
+        }
+    }
 }
 
 /// The engine: cheap to clone.
@@ -109,13 +180,25 @@ struct Inner {
     /// `<data>/bin` that can't be written would leave no next check, and
     /// the schedule would check back to back.
     updater: Mutex<Updater>,
-    /// One check at a time.
-    checking: tokio::sync::Mutex<()>,
+    /// One check or install at a time: an install holds it throughout.
+    checking: Arc<tokio::sync::Mutex<()>>,
     last_manual: Mutex<Option<Instant>>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
+    installer: Installer,
+    /// The version an install under way is for.
+    installing: Mutex<Option<Version>>,
+    /// The version an automatic install last failed for: not tried again
+    /// until the next check.
+    failed: Mutex<Option<Version>>,
+    last_progress: Mutex<Option<Instant>>,
+    /// Wakes the schedule (a version queued for the window).
+    wake: tokio::sync::Notify,
     /// The keys checks verify with (the embedded ones, or tests').
     keys: Box<dyn Fn() -> Result<lodestar_update::Embedded, lodestar_update::Error> + Send + Sync>,
 }
+
+/// The one-check-or-install lock, held.
+type OneAtATime = tokio::sync::OwnedMutexGuard<()>;
 
 /// Where `updates` events go: the event hub, or a test's list.
 pub type Publish = Arc<dyn Fn(UpdatesEvent) + Send + Sync>;
@@ -125,6 +208,9 @@ pub type Publish = Arc<dyn Fn(UpdatesEvent) + Send + Sync>;
 struct Found {
     state: Option<CheckState>,
     checked: Option<Checked>,
+    /// The envelope `checked` came from, verified again before an
+    /// install (against the trust state and the clock then).
+    envelope: Option<Arc<Vec<u8>>>,
     notices: Vec<String>,
     trust_damaged: bool,
 }
@@ -135,6 +221,7 @@ impl Engine {
         settings: watch::Receiver<Updates>,
         hub: Arc<EventHub>,
         fetch: Arc<dyn Fetch>,
+        installer: Installer,
     ) -> Engine {
         let (tz, name, _) = super::window::local_zone();
         let publish: Publish = Arc::new(move |e| {
@@ -148,6 +235,7 @@ impl Engine {
             (tz, name),
             Box::new(unix_now),
             Box::new(super::trust_root),
+            installer,
         )
     }
 
@@ -161,6 +249,7 @@ impl Engine {
         keys: Box<
             dyn Fn() -> Result<lodestar_update::Embedded, lodestar_update::Error> + Send + Sync,
         >,
+        installer: Installer,
     ) -> Engine {
         let bin = Bin::open(&ctx.data_dir).ok();
         let updater = bin
@@ -177,39 +266,130 @@ impl Engine {
                 zone,
                 found: Mutex::new(Found::default()),
                 updater: Mutex::new(updater),
-                checking: tokio::sync::Mutex::new(()),
+                checking: Arc::new(tokio::sync::Mutex::new(())),
                 last_manual: Mutex::new(None),
                 clock,
+                installer,
+                installing: Mutex::new(None),
+                failed: Mutex::new(None),
+                last_progress: Mutex::new(None),
+                wake: tokio::sync::Notify::new(),
                 keys,
             }),
         }
     }
 
-    /// The scheduled checks, until `stop` is set.
+    /// The scheduled checks and installs, until `stop` is set.
     pub fn spawn(&self, mut stop: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
         let engine = self.clone();
         let mut settings = self.inner.settings.clone();
         tokio::spawn(async move {
+            engine.announce_start();
             loop {
-                let wait = engine.until_scheduled();
+                let wait = match (engine.until_scheduled(), engine.until_install()) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
                 tokio::select! {
                     _ = stop.changed() => return,
                     r = settings.changed() => {
                         if r.is_err() { return; }
                         continue;
                     }
+                    () = engine.inner.wake.notified() => continue,
                     () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
                 }
                 if engine.due() {
                     // Still due once the lock is ours: a manual check may
                     // have run while this one waited for it.
-                    let one = engine.inner.checking.lock().await;
+                    let one = engine.inner.checking.clone().lock_owned().await;
                     if engine.due() {
                         let _ = engine.run_check_holding(one).await;
                     }
                 }
+                if engine.until_install().is_some_and(|d| d.is_zero()) {
+                    let one = engine.inner.checking.clone().lock_owned().await;
+                    if let Some((v, true)) = engine.next_install() {
+                        let _ = engine.run_install(one, v).await;
+                    }
+                }
             }
         })
+    }
+
+    /// The install the schedule makes next and whether it's due now: a
+    /// version queued for the window, else the policy's next automatic
+    /// install (not one that failed since the last check).
+    fn next_install(&self) -> Option<(Version, bool)> {
+        self.install_at()
+            .map(|(v, at)| (v, at <= (self.inner.clock)()))
+    }
+
+    fn install_at(&self) -> Option<(Version, i64)> {
+        let settings = self.inner.settings.borrow().clone();
+        let now = (self.inner.clock)();
+        if let Some(q) = self
+            .updater()
+            .queued
+            .as_deref()
+            .and_then(layout::parse_version)
+        {
+            let at = Window::parse(&settings.window).ok().map_or(now, |w| {
+                match w.when(now, &self.inner.zone.0) {
+                    When::Open { .. } => now,
+                    When::Opens(at) => at,
+                }
+            });
+            return Some((q, at));
+        }
+        let (v, at) = self.plan(&settings, now).next?;
+        let failed = lock(&self.inner.failed).as_ref() == Some(&v);
+        (!failed).then_some((v, at))
+    }
+
+    /// How long until the next install; `None` when there's none.
+    fn until_install(&self) -> Option<Duration> {
+        let (_, at) = self.install_at()?;
+        let now = (self.inner.clock)();
+        Some(Duration::from_secs(at.saturating_sub(now).max(0) as u64))
+    }
+
+    /// At start: `checking_health` while this version is in probation (then
+    /// `done` once its self-test passes), and `rolled_back` once for a
+    /// rollback the history records that wasn't announced yet.
+    fn announce_start(&self) {
+        let running = self.inner.ctx.running.to_string();
+        let probation = self
+            .inner
+            .bin
+            .as_ref()
+            .and_then(|b| pending::read(b).ok().flatten())
+            .is_some_and(|p| p.version == running && p.kind == pending::Kind::Install);
+        if probation {
+            self.publish(UpdatesState::CheckingHealth, Some(running.clone()), None);
+            let e = self.clone();
+            tokio::spawn(async move {
+                super::probation::passed().await;
+                e.publish(UpdatesState::Done, Some(running), None);
+            });
+        }
+        let h: history::History = self
+            .inner
+            .bin
+            .as_ref()
+            .and_then(|b| b.read(history::FILE).ok().flatten())
+            .unwrap_or_default();
+        if let Some(last) = h.entries.last()
+            && last.result == history::Outcome::RolledBack
+            && self
+                .updater()
+                .rolled_back_seen
+                .is_none_or(|seen| last.at > seen)
+        {
+            self.publish(UpdatesState::RolledBack, Some(last.version.clone()), None);
+            let at = last.at;
+            self.save_updater(|u| u.rolled_back_seen = Some(at));
+        }
     }
 
     fn scheduled_on(&self) -> bool {
@@ -269,20 +449,19 @@ impl Engine {
     /// One check: fetch, verify, advance `trust.json`, keep the result.
     #[cfg(test)]
     async fn run_check(&self) -> Result<(), &'static str> {
-        let one = self.inner.checking.lock().await;
+        let one = self.inner.checking.clone().lock_owned().await;
         self.run_check_holding(one).await
     }
 
     /// [`Engine::run_check`] with the one-at-a-time lock already held.
-    async fn run_check_holding(
-        &self,
-        _one: tokio::sync::MutexGuard<'_, ()>,
-    ) -> Result<(), &'static str> {
+    async fn run_check_holding(&self, _one: OneAtATime) -> Result<(), &'static str> {
         let settings = self.inner.settings.borrow().clone();
         let channel = settings.channel.update();
         self.set_state(CheckState::Checking);
         self.publish(UpdatesState::Checking, None, None);
         let result = self.check_once(channel).await;
+        // A new check gives an automatic install that failed another try.
+        *lock(&self.inner.failed) = None;
         let now = (self.inner.clock)();
         let next = now + EVERY.as_secs() as i64 + jitter();
         let error = result.err().map(str::to_string);
@@ -336,13 +515,47 @@ impl Engine {
             // Nothing published for this channel yet.
             let mut f = lock(&self.inner.found);
             f.checked = None;
+            f.envelope = None;
             f.notices.clear();
             f.trust_damaged = false;
             return Ok(());
         };
+        let body = Arc::new(body);
+        let (checked, damaged) = self.verify(&bin, channel, body.clone(), true).await?;
+        let mut f = lock(&self.inner.found);
+        f.trust_damaged = damaged;
+        match checked {
+            Ok(c) => {
+                f.notices = c.notices.iter().map(|n| n.code().to_string()).collect();
+                f.checked = Some(c);
+                f.envelope = Some(body);
+                Ok(())
+            }
+            Err(e) => {
+                f.notices = e
+                    .notice()
+                    .map(|n| n.code().to_string())
+                    .into_iter()
+                    .collect();
+                Err(e.code())
+            }
+        }
+    }
+
+    /// Verifies `body` against `trust.json` as it is now, raised to the
+    /// floor; `save` writes the next trust state (forward-only). Also the
+    /// damaged flag.
+    async fn verify(
+        &self,
+        bin: &Bin,
+        channel: lodestar_update::Channel,
+        body: Arc<Vec<u8>>,
+        save: bool,
+    ) -> Result<(Result<Checked, lodestar_update::Error>, bool), &'static str> {
         let embedded = (self.inner.keys)().map_err(lodestar_update::Error::code)?;
         let now = (self.inner.clock)();
-        let checked = tokio::task::spawn_blocking(move || {
+        let bin = bin.clone();
+        tokio::task::spawn_blocking(move || {
             // The floor (§12.2): every installed overlay's statements and
             // marks count whether or not trust.json exists. A mark comes
             // only from an overlay verified against the embedded keys
@@ -373,31 +586,13 @@ impl Engine {
                 &embedded,
                 loaded.state(),
             );
-            if let Ok(c) = &checked {
+            if save && let Ok(c) = &checked {
                 let _ = trust_file::save(bin.dir(), &loaded, c.next.clone());
             }
             (checked, damaged)
         })
         .await
-        .map_err(|_| "internal")?;
-        let (checked, damaged) = checked;
-        let mut f = lock(&self.inner.found);
-        f.trust_damaged = damaged;
-        match checked {
-            Ok(c) => {
-                f.notices = c.notices.iter().map(|n| n.code().to_string()).collect();
-                f.checked = Some(c);
-                Ok(())
-            }
-            Err(e) => {
-                f.notices = e
-                    .notice()
-                    .map(|n| n.code().to_string())
-                    .into_iter()
-                    .collect();
-                Err(e.code())
-            }
-        }
+        .map_err(|_| "internal")
     }
 
     /// The skipped versions; `None` when `skipped` can't be read, which
@@ -414,41 +609,55 @@ impl Engine {
         Some(list.into_iter().map(|s| s.version).collect())
     }
 
-    /// Why this installation can't install itself (part 4 installs
-    /// nothing, so `not_built_yet` when nothing else stops it).
-    fn incapable(&self, settings: &Updates, trust_damaged: bool, skipped_ok: bool) -> Reason {
+    /// Why this installation can't install itself; `None` when it can.
+    fn incapable(
+        &self,
+        settings: &Updates,
+        trust_damaged: bool,
+        skipped_ok: bool,
+    ) -> Option<Reason> {
+        self.incapable_reason(settings, trust_damaged, skipped_ok)
+            .err()
+    }
+
+    fn incapable_reason(
+        &self,
+        settings: &Updates,
+        trust_damaged: bool,
+        skipped_ok: bool,
+    ) -> Result<(), Reason> {
         let ctx = &self.inner.ctx;
         if !ctx.supervised {
-            return Reason::NotSupervised;
+            return Err(Reason::NotSupervised);
         }
         // Named before the rest: a broken file is a fault to fix, and it
         // blocks automatic installs rather than forgetting a skip.
         if !skipped_ok {
-            return Reason::SkippedUnreadable;
+            return Err(Reason::SkippedUnreadable);
         }
-        if crate::system::info::channel() == lodestar_api::system::Channel::Dev {
-            return Reason::DevBuild;
+        if ctx.dev {
+            return Err(Reason::DevBuild);
         }
         if std::env::var("LODESTAR_DEPLOYMENT").is_ok_and(|d| d.trim() == "package") {
-            return Reason::PackageManaged;
+            return Err(Reason::PackageManaged);
         }
         if settings.mode == Mode::Image {
-            return Reason::ImageMode;
+            return Err(Reason::ImageMode);
         }
         let Some(bin) = &self.inner.bin else {
-            return Reason::NotWritable;
+            return Err(Reason::NotWritable);
         };
         match noexec(bin.dir()) {
-            Some(true) => return Reason::Noexec,
+            Some(true) => return Err(Reason::Noexec),
             // Not known isn't "not noexec".
-            None => return Reason::NoexecUnknown,
+            None => return Err(Reason::NoexecUnknown),
             Some(false) => {}
         }
         if rustix::fs::access(bin.dir(), rustix::fs::Access::WRITE_OK).is_err() {
-            return Reason::NotWritable;
+            return Err(Reason::NotWritable);
         }
         if trust_damaged {
-            return Reason::TrustDamaged;
+            return Err(Reason::TrustDamaged);
         }
         let keys = (self.inner.keys)().ok();
         let role = settings.channel.update().role();
@@ -458,16 +667,26 @@ impl Engine {
             _ => false,
         });
         if !has_key {
-            return Reason::ChannelUnavailable;
+            return Err(Reason::ChannelUnavailable);
         }
-        Reason::NotBuiltYet
+        Ok(())
     }
 
     fn plan(&self, settings: &Updates, now: i64) -> policy::Plan {
+        self.with_inputs(settings, now, policy::plan)
+            .unwrap_or_default()
+    }
+
+    /// `f` over the policy's inputs as they are now; `None` before a check
+    /// found a manifest.
+    fn with_inputs<T>(
+        &self,
+        settings: &Updates,
+        now: i64,
+        f: impl FnOnce(&policy::Inputs<'_>) -> T,
+    ) -> Option<T> {
         let found = lock(&self.inner.found);
-        let Some(c) = &found.checked else {
-            return policy::Plan::default();
-        };
+        let c = found.checked.as_ref()?;
         let window = Window::parse(&settings.window).ok();
         let tz = self.inner.zone.0.clone();
         let window_from = move |t: i64| match window.map(|w| w.when(t, &tz)) {
@@ -475,9 +694,9 @@ impl Engine {
             Some(When::Opens(at)) => at,
         };
         let skipped = self.skipped();
-        let incapable = Some(self.incapable(settings, found.trust_damaged, skipped.is_some()));
+        let incapable = self.incapable(settings, found.trust_damaged, skipped.is_some());
         let skipped = skipped.unwrap_or_default();
-        policy::plan(&policy::Inputs {
+        Some(f(&policy::Inputs {
             settings,
             releases: &c.manifest.releases,
             current: current(c, now),
@@ -487,7 +706,7 @@ impl Engine {
             now,
             window_from: &window_from,
             incapable,
-        })
+        }))
     }
 
     /// Everything `GET /updates` reports.
@@ -546,8 +765,8 @@ impl Engine {
                 withdrawn: running_release.is_some_and(|r| r.withdrawn),
             },
             capability: Capability {
-                can_install: false,
-                reason: Some(reason.code().to_string()),
+                can_install: reason.is_none(),
+                reason: reason.map(|r| r.code().to_string()),
             },
             policy: Policy {
                 mode: mode_name(settings.mode).into(),
@@ -562,6 +781,7 @@ impl Engine {
             },
             releases,
             pending: self.pending(),
+            installing: self.installing(),
             rollback: self.rollback(),
             notices,
             history,
@@ -632,7 +852,7 @@ impl Engine {
             }
             // Held through the check, so a scheduled one can't slip in
             // between and make this a second check right after it.
-            let Ok(one) = self.inner.checking.try_lock() else {
+            let Ok(one) = self.inner.checking.clone().try_lock_owned() else {
                 return Err(UpdatesError::RateLimited { retry_after: 5 });
             };
             *last = Some(Instant::now());
@@ -641,6 +861,237 @@ impl Engine {
         let _ = self.run_check_holding(one).await;
         let e = self.clone();
         Ok(blocking(move || e.status()).await)
+    }
+
+    /// `POST /updates/install`: checks it may install, then starts it (or
+    /// queues it for the window) and answers at once.
+    pub async fn install_request(
+        &self,
+        version: &str,
+        when: InstallWhen,
+        confirm_manual: bool,
+    ) -> Result<UpdatesStatus, UpdatesError> {
+        let v = layout::parse_version(version).ok_or(UpdatesError::UnknownVersion)?;
+        self.may_install(&v, confirm_manual)?;
+        match when {
+            InstallWhen::Window => {
+                self.save_updater(|u| u.queued = Some(v.to_string()));
+                self.publish(UpdatesState::WaitingWindow, Some(v.to_string()), None);
+                self.inner.wake.notify_one();
+            }
+            InstallWhen::Now => {
+                let Ok(one) = self.inner.checking.clone().try_lock_owned() else {
+                    return Err(UpdatesError::InstallUnavailable("busy"));
+                };
+                let e = self.clone();
+                tokio::spawn(async move {
+                    let _ = e.run_install(one, v).await;
+                });
+            }
+        }
+        let e = self.clone();
+        Ok(blocking(move || e.status()).await)
+    }
+
+    /// Install now's rules (the policy's), and the confirmation a release
+    /// with manual steps needs.
+    fn may_install(&self, v: &Version, confirm_manual: bool) -> Result<(), UpdatesError> {
+        let settings = self.inner.settings.borrow().clone();
+        let now = (self.inner.clock)();
+        let manual = self
+            .with_inputs(&settings, now, |i| {
+                policy::install_now(i, v)?;
+                Ok(i.releases.iter().any(|r| r.version == *v && r.manual_steps))
+            })
+            .unwrap_or(Err(Refusal::UnknownVersion))
+            .map_err(|r| match r {
+                Refusal::UnknownVersion => UpdatesError::UnknownVersion,
+                Refusal::Skipped => UpdatesError::VersionSkipped,
+                Refusal::NotCandidate => UpdatesError::InstallUnavailable("not_candidate"),
+                Refusal::Incapable(reason) => UpdatesError::InstallUnavailable(reason.code()),
+                Refusal::NotCurrent => UpdatesError::InstallUnavailable("not_current"),
+                Refusal::UpgradePath => UpdatesError::InstallUnavailable("upgrade_path"),
+            })?;
+        if manual && !confirm_manual {
+            return Err(UpdatesError::ManualConfirmationRequired);
+        }
+        Ok(())
+    }
+
+    /// One install, holding the one-check lock: its events, and on failure
+    /// the log line and the `failed` event. A queued version is taken off
+    /// the queue either way.
+    async fn run_install(&self, _one: OneAtATime, v: Version) -> Result<(), &'static str> {
+        *lock(&self.inner.installing) = Some(v.clone());
+        let result = self.install_steps(&v).await;
+        *lock(&self.inner.installing) = None;
+        let queued = self.updater().queued.as_deref() == Some(v.to_string().as_str());
+        if queued {
+            self.save_updater(|u| u.queued = None);
+        }
+        if let Err(code) = result {
+            *lock(&self.inner.failed) = Some(v.clone());
+            log_event!(UPDATE_INSTALL_FAILED, error = code);
+            self.publish(
+                UpdatesState::Failed,
+                Some(v.to_string()),
+                Some(code.to_string()),
+            );
+        }
+        result
+    }
+
+    async fn install_steps(&self, v: &Version) -> Result<(), &'static str> {
+        let bin = self.inner.bin.clone().ok_or("bin_unavailable")?;
+        // Policy again (a queued version may have been skipped since); the
+        // manual steps were confirmed when it was asked for.
+        self.may_install(v, true).map_err(|e| match e {
+            UpdatesError::VersionSkipped => "version_skipped",
+            UpdatesError::InstallUnavailable(r) => r,
+            _ => "unknown_version",
+        })?;
+        if let Some(busy) = (self.inner.installer.busy)() {
+            return Err(busy);
+        }
+        let (checked, release) = self.reverify(&bin, v).await?;
+        let target = self.inner.installer.target.ok_or("no_artifact")?;
+        let pin =
+            lodestar_update::install(&checked, v, target, lodestar_update::ArtifactKind::Binary)
+                .map_err(lodestar_update::Error::code)?;
+        self.room_for(&bin, &pin, &release)?;
+
+        *lock(&self.inner.last_progress) = None;
+        self.progress(v, 0, pin.size, true);
+        let part = download::download(&*self.inner.installer.source, &bin, &pin, &mut |n| {
+            self.progress(v, n, pin.size, n == pin.size)
+        })
+        .await
+        .map_err(download::DownloadError::code)?;
+
+        self.publish(UpdatesState::Verifying, Some(v.to_string()), None);
+        let (b, version) = (bin.clone(), v.clone());
+        let (body, minisig) = (
+            checked.manifest.body.clone(),
+            checked.manifest.minisig.clone(),
+        );
+        blocking(move || install::stage(&b, &version, &part, &body, &minisig))
+            .await
+            .map_err(|_| "stage_failed")?;
+        // As the supervisor will verify it before running it.
+        let e = self.clone();
+        let (b, version) = (bin.clone(), v.clone());
+        if !blocking(move || (e.inner.installer.verify)(&b, &version)).await {
+            let _ = bin.remove_overlay(v);
+            return Err("bad_overlay");
+        }
+        // §12.2 "At install time": against the trust state and clock now.
+        let (again, _) = self.reverify(&bin, v).await?;
+        lodestar_update::install(&again, v, target, lodestar_update::ArtifactKind::Binary)
+            .map_err(lodestar_update::Error::code)?;
+
+        self.publish(UpdatesState::Installing, Some(v.to_string()), None);
+        (self.inner.installer.switch)(v);
+        self.publish(UpdatesState::Restarting, Some(v.to_string()), None);
+        Ok(())
+    }
+
+    /// The last check's envelope verified again now (the trust state, the
+    /// clock, the marks); its result must be current and still list `v`.
+    async fn reverify(
+        &self,
+        bin: &Bin,
+        v: &Version,
+    ) -> Result<(Checked, lodestar_update::Release), &'static str> {
+        let envelope = lock(&self.inner.found)
+            .envelope
+            .clone()
+            .ok_or("not_checked")?;
+        let channel = self.inner.settings.borrow().channel.update();
+        let (checked, damaged) = self.verify(bin, channel, envelope, false).await?;
+        if damaged {
+            return Err(Notice::TrustDamaged.code());
+        }
+        let checked = checked.map_err(lodestar_update::Error::code)?;
+        if !current(&checked, (self.inner.clock)()) {
+            return Err("not_current");
+        }
+        let release = checked
+            .manifest
+            .releases
+            .iter()
+            .find(|r| r.version == *v)
+            .cloned()
+            .ok_or("unknown_version")?;
+        Ok((checked, release))
+    }
+
+    /// Room on `<data>/bin`'s disk for the binary, the index rebuild a
+    /// release needs and the store's snapshot when it migrates, plus a
+    /// margin.
+    fn room_for(
+        &self,
+        bin: &Bin,
+        pin: &lodestar_update::Pin,
+        release: &lodestar_update::Release,
+    ) -> Result<(), &'static str> {
+        let snapshot = if release.migrates {
+            std::fs::metadata(&self.inner.ctx.db).map_or(0, |m| m.len())
+        } else {
+            0
+        };
+        let need = pin
+            .size
+            .saturating_add(release.reindex_bytes)
+            .saturating_add(snapshot)
+            .saturating_add(SPACE_MARGIN);
+        let free = rustix::fs::statvfs(bin.dir())
+            .map(|s| s.f_bavail.saturating_mul(s.f_frsize))
+            .map_err(|_| "no_space")?;
+        if free < need {
+            return Err("no_space");
+        }
+        Ok(())
+    }
+
+    /// `downloading`, at most once a second (and always when `force`).
+    fn progress(&self, v: &Version, done: u64, total: u64, force: bool) {
+        {
+            let mut last = lock(&self.inner.last_progress);
+            if !force && last.is_some_and(|t| t.elapsed() < PROGRESS_EVERY) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        (self.inner.publish)(UpdatesEvent {
+            state: UpdatesState::Downloading,
+            version: Some(v.to_string()),
+            bytes_done: Some(done),
+            bytes_total: Some(total),
+            error: None,
+        });
+    }
+
+    async fn install_request_owned(
+        &self,
+        version: String,
+        when: InstallWhen,
+        confirm_manual: bool,
+    ) -> Result<UpdatesStatus, UpdatesError> {
+        self.install_request(&version, when, confirm_manual).await
+    }
+
+    /// The install under way, else the one queued for the window.
+    fn installing(&self) -> Option<Installing> {
+        if let Some(v) = lock(&self.inner.installing).clone() {
+            return Some(Installing {
+                version: v.to_string(),
+                when: InstallWhen::Now,
+            });
+        }
+        self.updater().queued.map(|version| Installing {
+            version,
+            when: InstallWhen::Window,
+        })
     }
 
     pub fn skip(&self, version: &str) -> Result<UpdatesStatus, UpdatesError> {
@@ -832,6 +1283,15 @@ impl UpdatesApi for Engine {
         Box::pin(self.check_now())
     }
 
+    fn install(
+        &self,
+        version: String,
+        when: InstallWhen,
+        confirm_manual: bool,
+    ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(self.install_request_owned(version, when, confirm_manual))
+    }
+
     fn skip(&self, version: String) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         let e = self.clone();
         Box::pin(blocking(move || e.skip(&version)))
@@ -857,6 +1317,13 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_800_000_000;
+    /// The binary every test release ships.
+    const BINARY: &[u8] = b"binary";
+
+    /// Where `version`'s binary is, as `testing::manifest` names it.
+    fn artifact(version: &str) -> String {
+        format!("https://github.com/dvortsis/lodestar-v2/releases/download/v{version}/lodestar")
+    }
     const STABLE: &str =
         "https://github.com/dvortsis/lodestar-v2/releases/download/update-manifest/stable.json";
 
@@ -868,6 +1335,12 @@ mod tests {
         events: Arc<Mutex<Vec<UpdatesEvent>>>,
         /// The engine's clock (Unix seconds); starts at [`NOW`].
         clock: Arc<std::sync::atomic::AtomicI64>,
+        /// Where downloads come from.
+        downloads: Arc<super::super::download::tests::Fake>,
+        /// What keeps an install waiting.
+        busy: Arc<Mutex<Option<&'static str>>>,
+        /// The versions a switch was asked for.
+        switched: Arc<Mutex<Vec<String>>>,
         engine: Engine,
     }
 
@@ -890,6 +1363,38 @@ mod tests {
         let keys = trust.clone();
         let clock = Arc::new(std::sync::atomic::AtomicI64::new(NOW));
         let time = clock.clone();
+        let downloads = Arc::new(super::super::download::tests::Fake::default());
+        let busy = Arc::new(Mutex::new(None));
+        let switched = Arc::new(Mutex::new(Vec::new()));
+        let (b, sw, verify_keys) = (busy.clone(), switched.clone(), trust.clone());
+        let installer = Installer {
+            source: downloads.clone(),
+            busy: Box::new(move || *lock(&b)),
+            switch: Box::new(move |v| lock(&sw).push(v.to_string())),
+            target: Some(lodestar_update::Target::X86_64LinuxMusl),
+            // The supervisor's verification, with the test keys.
+            verify: Box::new(move |bin, v| {
+                let dir = bin.overlay(v);
+                let read = |name| std::fs::read(dir.join(name)).ok();
+                let (Some(m), Some(sig), Some(binary)) = (
+                    read(super::super::overlay::MANIFEST),
+                    read(super::super::overlay::SIGNATURE),
+                    read(super::super::overlay::BINARY),
+                ) else {
+                    return false;
+                };
+                lodestar_update::overlay(
+                    &m,
+                    &String::from_utf8_lossy(&sig),
+                    lodestar_update::Sha256::of(&binary),
+                    binary.len() as u64,
+                    v,
+                    lodestar_update::Target::X86_64LinuxMusl,
+                    &verify_keys.embedded(vec![]),
+                )
+                .is_ok()
+            }),
+        };
         let engine = Engine::with(
             Context {
                 data_dir: data.unwrap_or_else(|| dir.path().to_path_buf()),
@@ -898,6 +1403,8 @@ mod tests {
                 supervised: true,
                 notices: vec![],
                 repository: "https://github.com/dvortsis/lodestar-v2".into(),
+                db: dir.path().join("lodestar.db"),
+                dev: false,
             },
             rx,
             Arc::new(move |e| lock(&sink).push(e)),
@@ -905,6 +1412,7 @@ mod tests {
             (jiff::tz::TimeZone::UTC, "UTC".into()),
             Box::new(move || time.load(std::sync::atomic::Ordering::Relaxed)),
             Box::new(move || Ok(keys.embedded(vec![]))),
+            installer,
         );
         Env {
             dir,
@@ -913,6 +1421,9 @@ mod tests {
             settings,
             events,
             clock,
+            downloads,
+            busy,
+            switched,
             engine,
         }
     }
@@ -921,9 +1432,41 @@ mod tests {
         /// Serves a stable manifest signed by `key` (the release key by
         /// default), dated `ts`, with one release.
         fn serve(&self, ts: i64, version: &str, key: Option<&lodestar_update::testing::TestKey>) {
-            let body = bytes(&manifest(Channel::Stable, ts as u64, version, b"binary"));
+            self.serve_with(ts, version, key, |_| {});
+        }
+
+        /// [`Env::serve`] with the manifest edited by `edit`; the release's
+        /// binary is served at its artifact URL.
+        fn serve_with(
+            &self,
+            ts: i64,
+            version: &str,
+            key: Option<&lodestar_update::testing::TestKey>,
+            edit: impl FnOnce(&mut serde_json::Value),
+        ) {
+            let mut m = manifest(Channel::Stable, ts as u64, version, BINARY);
+            edit(&mut m);
+            let body = bytes(&m);
             let signed = key.unwrap_or(&self.trust.release).signed(&body);
             self.fake.serve(STABLE, 200, None, &envelope(&signed, None));
+            self.downloads.serve(&artifact(version), 200, None, BINARY);
+        }
+
+        fn switched(&self) -> Vec<String> {
+            lock(&self.switched).clone()
+        }
+
+        /// Waits (at most 10 s) until `done`.
+        async fn until(&self, what: &str, mut done: impl FnMut(&Env) -> bool) {
+            let start = Instant::now();
+            while !done(self) {
+                assert!(
+                    start.elapsed() < Duration::from_secs(10),
+                    "{what}: {:?}",
+                    self.states()
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
         }
 
         fn set_clock(&self, t: i64) {
@@ -963,7 +1506,7 @@ mod tests {
             [UpdatesState::Checking, UpdatesState::Available],
             "one event per change"
         );
-        assert!(!s.capability.can_install);
+        assert!(s.capability.can_install, "{:?}", s.capability);
         // Only the updater's agent went out, once.
         assert_eq!(*e.fake.asked.lock().unwrap(), [STABLE]);
     }
@@ -1211,6 +1754,163 @@ mod tests {
         let s = e.engine.status();
         assert_eq!(s.capability.reason.as_deref(), Some("skipped_unreadable"));
         assert!(!s.releases[0].eligible);
+    }
+
+    /// Install now: downloaded, staged, verified as the supervisor will,
+    /// verified again, then the switch is asked for, with one event per
+    /// step.
+    #[tokio::test]
+    async fn install_now_stages_verifies_and_switches() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let s = e
+            .engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        assert!(s.capability.can_install, "{:?}", s.capability);
+        e.until("switched", |e| !e.switched().is_empty()).await;
+        assert_eq!(e.switched(), ["0.6.0"]);
+        let states = e.states();
+        let at = |s| {
+            states
+                .iter()
+                .position(|x| *x == s)
+                .unwrap_or_else(|| panic!("{s:?} in {states:?}"))
+        };
+        assert!(at(UpdatesState::Downloading) < at(UpdatesState::Verifying));
+        assert!(at(UpdatesState::Verifying) < at(UpdatesState::Installing));
+        assert!(at(UpdatesState::Installing) < at(UpdatesState::Restarting));
+        let bin = Bin::open(e.dir.path()).unwrap();
+        assert_eq!(bin.overlays().unwrap(), [Version::new(0, 6, 0)]);
+        assert_eq!(
+            std::fs::read(bin.overlay(&Version::new(0, 6, 0)).join("lodestar")).unwrap(),
+            BINARY
+        );
+        assert_eq!(*e.downloads.asked.lock().unwrap(), [artifact("0.6.0")]);
+    }
+
+    #[tokio::test]
+    async fn install_now_refuses_what_it_mustnt_install() {
+        let e = env(Mode::Notify);
+        e.serve_with(NOW - 100, "0.6.0", None, |m| {
+            m["releases"][0]["manual_steps"] = true.into();
+        });
+        e.engine.run_check().await.unwrap();
+        let ask = |v: &'static str, confirm| e.engine.install_request(v, InstallWhen::Now, confirm);
+        assert_eq!(
+            ask("9.9.9", false).await.unwrap_err(),
+            UpdatesError::UnknownVersion
+        );
+        assert_eq!(
+            ask("not a version", false).await.unwrap_err(),
+            UpdatesError::UnknownVersion
+        );
+        assert_eq!(
+            ask("0.6.0", false).await.unwrap_err(),
+            UpdatesError::ManualConfirmationRequired
+        );
+        e.engine.skip("0.6.0").unwrap();
+        assert_eq!(
+            ask("0.6.0", true).await.unwrap_err(),
+            UpdatesError::VersionSkipped
+        );
+        assert!(e.switched().is_empty());
+    }
+
+    /// A download that isn't the pinned binary, or a rebuild under way,
+    /// fails the install: `failed` with the code, no overlay, no switch.
+    #[tokio::test]
+    async fn a_bad_download_or_a_rebuild_fails_the_install() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        // Same size, another body: the hash catches it.
+        e.downloads.serve(&artifact("0.6.0"), 200, None, b"binarY");
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
+            .await;
+        let failed = lock(&e.events).last().cloned().unwrap();
+        assert_eq!(failed.error.as_deref(), Some("download_mismatch"));
+        assert!(e.switched().is_empty());
+        assert!(
+            Bin::open(e.dir.path())
+                .unwrap()
+                .overlays()
+                .unwrap()
+                .is_empty()
+        );
+
+        *lock(&e.busy) = Some("rebuild_running");
+        e.downloads.serve(&artifact("0.6.0"), 200, None, BINARY);
+        lock(&e.events).clear();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
+            .await;
+        assert_eq!(
+            lock(&e.events).last().unwrap().error.as_deref(),
+            Some("rebuild_running")
+        );
+        assert!(e.switched().is_empty());
+    }
+
+    /// `when: window` queues it: due at the window's opening, not before.
+    #[tokio::test]
+    async fn a_queued_install_waits_for_the_window() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let s = e
+            .engine
+            .install_request("0.6.0", InstallWhen::Window, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            s.installing,
+            Some(Installing {
+                version: "0.6.0".into(),
+                when: InstallWhen::Window
+            })
+        );
+        assert_eq!(e.states().last(), Some(&UpdatesState::WaitingWindow));
+        // NOW is 08:00 UTC; the window is 03:00-05:00.
+        let (v, due) = e.engine.next_install().unwrap();
+        assert_eq!((v, due), (Version::new(0, 6, 0), false));
+        let opens = NOW - 8 * 3600 + 86_400 + 3 * 3600;
+        assert_eq!(
+            e.engine.until_install(),
+            Some(Duration::from_secs((opens - NOW) as u64))
+        );
+        e.set_clock(opens + 60);
+        assert_eq!(e.engine.next_install(), Some((Version::new(0, 6, 0), true)));
+    }
+
+    /// Install automatically: an eligible release is due at its
+    /// `installs_at`; once it fails it waits for the next check.
+    #[tokio::test]
+    async fn an_automatic_install_is_due_in_the_window_and_not_retried() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 5 * 86_400, "0.6.0", None);
+        e.set_clock(NOW - 5 * 86_400 + 100);
+        e.engine.run_check().await.unwrap();
+        e.set_clock(NOW);
+        let (v, _) = e.engine.next_install().expect("an automatic install");
+        assert_eq!(v, Version::new(0, 6, 0));
+        let one = e.engine.inner.checking.clone().lock_owned().await;
+        e.downloads.serve(&artifact("0.6.0"), 500, None, b"");
+        assert!(e.engine.run_install(one, v).await.is_err());
+        assert_eq!(
+            e.engine.next_install(),
+            None,
+            "not retried before the next check"
+        );
     }
 
     #[tokio::test]

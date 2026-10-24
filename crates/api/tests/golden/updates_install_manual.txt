@@ -1,0 +1,2 @@
+422
+{"error":{"code":"manual_confirmation_required","field":"confirm_manual","message":"This release has manual steps. Read its notes, then confirm them."}}

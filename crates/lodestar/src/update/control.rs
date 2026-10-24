@@ -146,7 +146,6 @@ static INTENT: Mutex<Option<Intent>> = Mutex::new(None);
 
 /// Records an intent; the caller then asks for the graceful shutdown
 /// through `Restart::global().request()`.
-#[allow(dead_code)] // The updater's (part 5).
 pub fn set_intent(action: Action, version: Option<String>, lost: Option<u64>) {
     *INTENT.lock().unwrap_or_else(|e| e.into_inner()) = Some((action, version, lost));
 }

@@ -15,8 +15,8 @@ use axum::http::{Request, header};
 use axum::{Extension, Router};
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::updates::{
-    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, Policy, ReleaseInfo, RollbackInfo,
-    Running, UpdatesApi, UpdatesError, UpdatesStatus,
+    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, InstallWhen, Installing, Policy,
+    ReleaseInfo, RollbackInfo, Running, UpdatesApi, UpdatesError, UpdatesStatus,
 };
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_store::{Store, StoreConfig};
@@ -28,6 +28,7 @@ struct FakeEngine {
     checks: Mutex<u32>,
     skipped: Mutex<Vec<String>>,
     paused: Mutex<Option<u32>>,
+    installing: Mutex<Option<Installing>>,
 }
 
 fn status(e: &FakeEngine) -> UpdatesStatus {
@@ -102,6 +103,7 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
         },
         releases,
         pending: None,
+        installing: e.installing.lock().unwrap().clone(),
         rollback: RollbackInfo {
             available: false,
             to_version: Some("image".into()),
@@ -133,6 +135,27 @@ impl UpdatesApi for FakeEngine {
                 return Err(UpdatesError::RateLimited { retry_after: 42 });
             }
             drop(n);
+            Ok(status(self))
+        })
+    }
+
+    /// 0.6.0 installs; 0.6.1 has manual steps; 0.5.9 is skipped; 0.7.0
+    /// can't install here (`not_current`).
+    fn install(
+        &self,
+        version: String,
+        when: InstallWhen,
+        confirm_manual: bool,
+    ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(async move {
+            match version.as_str() {
+                "0.6.1" if !confirm_manual => return Err(UpdatesError::ManualConfirmationRequired),
+                "0.5.9" => return Err(UpdatesError::VersionSkipped),
+                "0.7.0" => return Err(UpdatesError::InstallUnavailable("not_current")),
+                "0.6.0" | "0.6.1" => {}
+                _ => return Err(UpdatesError::UnknownVersion),
+            }
+            *self.installing.lock().unwrap() = Some(Installing { version, when });
             Ok(status(self))
         })
     }
@@ -260,6 +283,7 @@ fn session(f: &Fixture) -> String {
 const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/updates"),
     ("POST", "/api/v1/updates/check"),
+    ("POST", "/api/v1/updates/install"),
     ("POST", "/api/v1/updates/skip"),
     ("POST", "/api/v1/updates/pause"),
     ("POST", "/api/v1/updates/history/clear"),
@@ -269,6 +293,7 @@ const ROUTES: &[(&str, &str)] = &[
 fn body_for(path: &str) -> Value {
     match path.rsplit('/').next() {
         Some("skip") => json!({"version": "0.6.0"}),
+        Some("install") => json!({"version": "0.6.0", "when": "now"}),
         Some("pause") => json!({"days": 1}),
         _ => json!({}),
     }
@@ -396,6 +421,58 @@ async fn updates_golden() {
     )
     .await;
     assert_eq!(cleared["history"], json!([]));
+    for (name, body) in [
+        (
+            "install_unknown",
+            json!({"version": "9.9.9", "when": "now"}),
+        ),
+        ("install_manual", json!({"version": "0.6.1", "when": "now"})),
+        (
+            "install_skipped",
+            json!({"version": "0.5.9", "when": "now"}),
+        ),
+        (
+            "install_unavailable",
+            json!({"version": "0.7.0", "when": "now"}),
+        ),
+        (
+            "install_bad",
+            json!({"version": "0.6.0", "when": "tomorrow"}),
+        ),
+    ] {
+        golden(
+            &f,
+            name,
+            req("POST", "/api/v1/updates/install", Some(&c), Some(body)),
+        )
+        .await;
+    }
+    let (status, _, _) = send(
+        &f,
+        req(
+            "POST",
+            "/api/v1/updates/install",
+            Some(&c),
+            Some(json!({"version": "0.6.1", "when": "window", "confirm_manual": true})),
+        ),
+    )
+    .await;
+    assert_eq!(status, 202);
+    let started = golden(
+        &f,
+        "install",
+        req(
+            "POST",
+            "/api/v1/updates/install",
+            Some(&c),
+            Some(json!({"version": "0.6.0", "when": "now"})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        started["installing"],
+        json!({"version": "0.6.0", "when": "now"})
+    );
 }
 
 #[tokio::test]

@@ -275,7 +275,9 @@ pub mod tests {
                 Ok(Opened {
                     status,
                     location,
-                    body: Box::new(Memory(body.chunks(Fake::CHUNK).map(<[u8]>::to_vec).collect())),
+                    body: Box::new(Memory(
+                        body.chunks(Fake::CHUNK).map(<[u8]>::to_vec).collect(),
+                    )),
                 })
             })
         }
@@ -308,7 +310,9 @@ pub mod tests {
         f.serve(URL, 302, Some(ASSET), b"");
         f.serve(ASSET, 200, None, &b);
         let mut seen = vec![];
-        let path = download(&f, &bin, &pin(&b), &mut |n| seen.push(n)).await.unwrap();
+        let path = download(&f, &bin, &pin(&b), &mut |n| seen.push(n))
+            .await
+            .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b);
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -378,7 +382,12 @@ pub mod tests {
             } else {
                 format!("https://github.com/hop/{i}")
             };
-            f.serve(&from, 302, Some(&format!("https://github.com/hop/{}", i + 1)), b"");
+            f.serve(
+                &from,
+                302,
+                Some(&format!("https://github.com/hop/{}", i + 1)),
+                b"",
+            );
         }
         f.serve("https://github.com/hop/6", 200, None, &b);
         assert_eq!(
@@ -414,6 +423,10 @@ pub mod tests {
         std::os::unix::fs::symlink(&target, part_path(&bin, &p)).unwrap();
         let got = download(&f, &bin, &p, &mut |_| {}).await;
         assert_eq!(got, Err(DownloadError::Io));
-        assert_eq!(std::fs::read(&target).unwrap(), b"keep", "not written through");
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"keep",
+            "not written through"
+        );
     }
 }

@@ -1,6 +1,7 @@
 //! Updates (architecture §12.2, §10.10.14): `GET /updates`,
-//! `POST /updates/check`, `POST /updates/skip`, `POST /updates/pause` and
-//! `POST /updates/history/clear` **(§2.19, a new route)**.
+//! `POST /updates/check`, `POST /updates/install`, `POST /updates/skip`,
+//! `POST /updates/pause` and `POST /updates/history/clear` **(§2.19, a
+//! new route)**.
 //!
 //! - **The binary answers** through [`UpdatesApi`], an `Extension`
 //!   beside `SystemApi`; without it every route is
@@ -26,8 +27,9 @@ use crate::ApiState;
 use crate::auth;
 use crate::dto::error::ErrorEnvelope;
 pub use crate::dto::updates::{
-    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, PauseRequest, PendingInstall,
-    Policy, ReleaseInfo, RollbackInfo, Running, SkipRequest, UpdatesStatus, UpdatesUnavailable,
+    Blocked, Capability, CheckState, CheckStatus, HistoryEntry, InstallRequest, InstallWhen,
+    Installing, PauseRequest, PendingInstall, Policy, ReleaseInfo, RollbackInfo, Running,
+    SkipRequest, UpdatesStatus, UpdatesUnavailable,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json as JsonBody, same_origin_json};
@@ -35,7 +37,7 @@ use crate::ops::BoxFuture;
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(status, check, skip, pause, clear_history))]
+#[openapi(paths(status, check, install, skip, pause, clear_history))]
 pub(crate) struct ApiDoc;
 
 /// What these routes ask of the update engine.
@@ -43,6 +45,14 @@ pub trait UpdatesApi: Send + Sync + fmt::Debug {
     fn status(&self) -> BoxFuture<'_, UpdatesStatus>;
     /// Runs the signed check now, then reports.
     fn check(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>>;
+    /// Installs `version` now (in the background: progress is on the
+    /// `updates` topic), or queues it for the next window.
+    fn install(
+        &self,
+        version: String,
+        when: InstallWhen,
+        confirm_manual: bool,
+    ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>>;
     /// Never installs `version` automatically again (`skipped`, reason
     /// `user`).
     fn skip(&self, version: String) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>>;
@@ -62,6 +72,13 @@ pub enum UpdatesError {
     Unavailable(UpdatesUnavailable),
     /// `<data>/bin` can't be opened, so nothing can be written there.
     BinUnavailable,
+    /// The release has manual steps and `confirm_manual` wasn't set.
+    ManualConfirmationRequired,
+    /// The version is skipped (by you, or because it failed here).
+    VersionSkipped,
+    /// It can't be installed now; the reason is a stable code
+    /// (`not_supervised`, `not_current`, `upgrade_path`, `busy`, …).
+    InstallUnavailable(&'static str),
     /// A value the route doesn't take; the message says which.
     Invalid {
         field: &'static str,
@@ -94,6 +111,22 @@ impl From<UpdatesError> for ApiError {
                 "bin_unavailable",
                 "Lodestar can't write its update files (the bin folder in its data folder).",
             ),
+            UpdatesError::ManualConfirmationRequired => ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "manual_confirmation_required",
+                "This release has manual steps. Read its notes, then confirm them.",
+            )
+            .field("confirm_manual"),
+            UpdatesError::VersionSkipped => ApiError::new(
+                StatusCode::CONFLICT,
+                "version_skipped",
+                "That version is skipped and won't be installed.",
+            ),
+            UpdatesError::InstallUnavailable(reason) => ApiError::new(
+                StatusCode::CONFLICT,
+                "install_unavailable",
+                format!("That version can't be installed now ({reason})."),
+            ),
             UpdatesError::Invalid { field, message } => {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_value", message)
                     .field(field)
@@ -124,6 +157,7 @@ pub fn routes() -> Router<ApiState> {
         Router::new()
             .route("/updates", get(status))
             .route("/updates/check", post(check))
+            .route("/updates/install", post(install))
             .route("/updates/skip", post(skip))
             .route("/updates/pause", post(pause))
             .route("/updates/history/clear", post(clear_history)),
@@ -184,6 +218,38 @@ pub(crate) async fn status(handle: Handle) -> ApiResult<Json<UpdatesStatus>> {
 pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     Ok(answer(api(handle)?.check().await))
+}
+
+/// Installs a release: at once (`now`, skipping the window and the wait),
+/// or at the next install window (`window`). Answers at once: the
+/// download, the checks and the restart follow on the `updates` topic.
+#[utoipa::path(
+    operation_id = "installUpdate",
+    post,
+    path = "/updates/install",
+    tag = "settings",
+    request_body = InstallRequest,
+    responses(
+        (status = 202, description = "Started, or queued for the window.", body = UpdatesStatus),
+        (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
+        (status = 409, description = "`version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture or Windows).", body = ErrorEnvelope),
+        (status = 422, description = "`manual_confirmation_required`: the release has manual steps.", body = ErrorEnvelope),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn install(
+    handle: Handle,
+    headers: HeaderMap,
+    JsonBody(req): JsonBody<InstallRequest>,
+) -> ApiResult<Response> {
+    same_origin_json(&headers)?;
+    let api = api(handle)?;
+    Ok(
+        match api.install(req.version, req.when, req.confirm_manual).await {
+            Ok(s) => (StatusCode::ACCEPTED, Json(s)).into_response(),
+            Err(e) => refusal(e),
+        },
+    )
 }
 
 /// Skips a release: it's never installed automatically, and Install now

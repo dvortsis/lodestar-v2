@@ -120,7 +120,10 @@ mod tests {
         stage(&bin, &v, &part, b"m", "s").unwrap();
         std::fs::write(&part, b"second").unwrap();
         stage(&bin, &v, &part, b"m2", "s2").unwrap();
-        assert_eq!(std::fs::read(bin.overlay(&v).join(BINARY)).unwrap(), b"second");
+        assert_eq!(
+            std::fs::read(bin.overlay(&v).join(BINARY)).unwrap(),
+            b"second"
+        );
         assert!(!bin.overlay(&v).join("junk").exists());
         // No part file: it fails, and leaves no .tmp behind.
         assert!(stage(&bin, &v, &part, b"m3", "s3").is_err());

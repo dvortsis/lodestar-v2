@@ -49,6 +49,7 @@ impl Unavailable {
             },
             releases: vec![],
             pending: None,
+            installing: None,
             rollback: RollbackInfo {
                 available: false,
                 to_version: None,
@@ -72,6 +73,15 @@ impl UpdatesApi for Unavailable {
     }
 
     fn check(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        self.refused()
+    }
+
+    fn install(
+        &self,
+        _version: String,
+        _when: lodestar_api::updates::InstallWhen,
+        _confirm_manual: bool,
+    ) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         self.refused()
     }
 
