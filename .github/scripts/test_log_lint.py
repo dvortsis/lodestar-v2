@@ -295,6 +295,14 @@ class Paths(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertNotEqual(log_lint.against_base(source, ["a.rs"], exempt), [], source)
 
+    def test_the_script_reads_its_own_lists(self):
+        # The next pull request's base is this copy: its lists must read
+        # back, whatever form they're written in.
+        own = Path(log_lint.__file__).read_text(encoding="utf-8")
+        self.assertEqual(log_lint.against_base(own, log_lint.NOT_YET_SWEPT, log_lint.EXEMPT), [])
+        for form in ["NOT_YET_SWEPT = []", "NOT_YET_SWEPT: list[str] = []"]:
+            self.assertEqual(log_lint.listed_in(form), [], form)
+
     def test_exempt_may_not_grow_against_the_base(self):
         base = 'NOT_YET_SWEPT = []\nEXEMPT = {("a.rs", "tracing"): "why"}\n'
         self.assertEqual(log_lint.against_base(base, [], {("a.rs", "tracing"): "why"}), [])

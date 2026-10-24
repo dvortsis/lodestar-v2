@@ -202,7 +202,10 @@ impl Writer {
         let store = self.store.take().expect("store");
         tokio::task::spawn_blocking(move || {
             if let Err(e) = store.checkpoint() {
-                tracing::warn!("WAL checkpoint at shutdown failed: {e}");
+                lodestar_log::log_event!(
+                    crate::log_events::CHECKPOINT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
             }
             store
         })
@@ -250,11 +253,19 @@ impl Writer {
             let snaps = store.purge_snapshots(now, hits_before);
             for s in &snaps.expired {
                 let days = lodestar_store::snapshots::RETAIN_DAYS;
-                let what = s.kind.describe();
-                tracing::info!("deleted {what} {}: over {days} days old", s.path.display());
+                lodestar_log::log_event!(
+                    crate::log_events::SNAPSHOT_EXPIRED,
+                    what = s.kind.describe(),
+                    path = lodestar_log::Path::new(&s.path),
+                    days = days
+                );
             }
-            for w in &snaps.warnings {
-                tracing::warn!("{w}");
+            // Their text names paths and errors: counted, not repeated.
+            if !snaps.warnings.is_empty() {
+                lodestar_log::log_event!(
+                    crate::log_events::SNAPSHOT_PURGE_PROBLEMS,
+                    count = snaps.warnings.len()
+                );
             }
             (store, r)
         })
@@ -267,7 +278,10 @@ impl Writer {
                     self.held.remove(&h);
                 }
             }
-            Err(e) => tracing::warn!("purging filter state failed: {e}"),
+            Err(e) => lodestar_log::log_event!(
+                crate::log_events::FILTER_PURGE_FAILED,
+                error = crate::log_events::store_error(&e)
+            ),
         }
     }
 
@@ -346,7 +360,10 @@ impl Writer {
                 // leases stay held, so the keys aren't fetched again in
                 // this run.
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                tracing::error!("store write failed: {e}");
+                lodestar_log::log_event!(
+                    crate::log_events::STORE_WRITE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
                 return;
             }
         };
@@ -483,7 +500,10 @@ impl Writer {
                 // Tried again at the next start.
                 self.backfill_done = true;
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                tracing::error!("background enrichment failed: {e}");
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
             }
         }
     }
@@ -507,7 +527,10 @@ impl Writer {
                 self.have.replace(bloom);
                 self.stats.filter_rebuilds.fetch_add(1, Ordering::Relaxed);
             }
-            Err(e) => tracing::error!("rebuilding the have-filter failed: {e}"),
+            Err(e) => lodestar_log::log_event!(
+                crate::log_events::HAVE_REBUILD_FAILED,
+                error = crate::log_events::store_error(&e)
+            ),
         }
     }
 
@@ -522,7 +545,10 @@ impl Writer {
         self.store = Some(store);
         if let Err(e) = result {
             self.stats.errors.fetch_add(1, Ordering::Relaxed);
-            tracing::error!("saving the fetch queue failed: {e}");
+            lodestar_log::log_event!(
+                crate::log_events::QUEUE_SAVE_FAILED,
+                error = crate::log_events::store_error(&e)
+            );
         }
     }
 }

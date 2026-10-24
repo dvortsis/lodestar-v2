@@ -953,8 +953,11 @@ impl SearchIndex {
             let key = format!("{of:?}");
             let ids = match files::compile(of, &self.files.fields) {
                 Some(q) => files::torrent_ids(&files_searcher, q.as_ref(), &key, &self.files.cache)
-                    .unwrap_or_else(|e| {
-                        tracing::error!("file index search failed: {e}");
+                    .unwrap_or_else(|_| {
+                        lodestar_log::log_event!(
+                            crate::log_events::FILE_SEARCH_FAILED,
+                            error = lodestar_log::Error::kind("tantivy")
+                        );
                         files::IdSet::default()
                     }),
                 None => files::IdSet::default(),
@@ -1273,7 +1276,10 @@ fn doc_enrichment(store: &mut Store, id: i64) -> Result<DocEnrichment> {
                 let comp = Composition::decode(&e.comp).ok();
                 return Ok(DocEnrichment::new(&record, comp.as_ref()));
             }
-            Err(err) => tracing::debug!(id, "unreadable enrichment: {err}"),
+            Err(_) => lodestar_log::log_event!(
+                crate::log_events::ENRICHMENT_UNREADABLE,
+                torrent_id = id as u64
+            ),
         }
     }
     Ok(DocEnrichment::default())

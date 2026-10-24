@@ -897,8 +897,9 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
             "{out}"
         );
     }
-    // Peer activity has no real event yet (the fetch and DHT lines come
-    // with B-log1b): `logging::tests` holds its rendering per output.
+    // Peer activity's one event, `fetch.failed`, needs the crawler, which
+    // the canary runs without: `logging::tests` holds its rendering per
+    // output.
 }
 
 #[test]

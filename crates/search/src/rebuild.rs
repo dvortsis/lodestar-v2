@@ -153,9 +153,11 @@ fn rename_with(from: &Path, to: &Path, mut sleep: impl FnMut(Duration)) -> Resul
         match std::fs::rename(from, to) {
             Ok(()) => break,
             Err(e) if attempt < RENAME_ATTEMPTS && e.kind() != std::io::ErrorKind::NotFound => {
-                tracing::warn!(
-                    "index: renaming {} (attempt {attempt}): {e}",
-                    from.display()
+                lodestar_log::log_event!(
+                    crate::log_events::RENAME_RETRY,
+                    path = lodestar_log::Path::new(from),
+                    attempt = lodestar_log::Count(u64::from(attempt)),
+                    error = lodestar_log::Error::io(&e)
                 );
                 sleep(wait);
                 wait = (wait * 2).min(Duration::from_secs(4));
@@ -633,7 +635,13 @@ impl Serving {
         let store_path = store_path.to_path_buf();
         let background = match build {
             Some((store, builder, snapshot, progress)) => {
-                tracing::info!("index: rebuilding {want} while {} serves", progress.from);
+                lodestar_log::log_event!(
+                    crate::log_events::REBUILD_STARTED,
+                    schema = lodestar_log::Count(u64::from(want.schema)),
+                    tokenizer = lodestar_log::Count(u64::from(want.tokenizer)),
+                    serving_schema = lodestar_log::Count(u64::from(progress.from.schema)),
+                    serving_tokenizer = lodestar_log::Count(u64::from(progress.from.tokenizer))
+                );
                 *lock(&shared.progress) = Some(progress);
                 thread.spawn(move || {
                     let done =
@@ -646,7 +654,12 @@ impl Serving {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            tracing::error!("index: rebuilding {want} failed: {e}");
+                            lodestar_log::log_event!(
+                                crate::log_events::REBUILD_FAILED,
+                                schema = lodestar_log::Count(u64::from(want.schema)),
+                                tokenizer = lodestar_log::Count(u64::from(want.tokenizer)),
+                                error = crate::log_events::error(&e)
+                            );
                             sh.update(|p| {
                                 p.phase = RebuildPhase::Failed;
                                 p.error = Some(e.to_string());
@@ -747,7 +760,11 @@ impl Serving {
 impl Drop for Serving {
     fn drop(&mut self) {
         if let Err(e) = self.halt() {
-            tracing::warn!("index: stopping: {e}");
+            lodestar_log::log_event!(
+                crate::log_events::STOP_FAILED,
+                what = "index",
+                error = crate::log_events::error(&e)
+            );
         }
     }
 }
@@ -807,7 +824,12 @@ fn newest_servable(
         // No index there at all (a crash while creating it): nothing to
         // keep.
         if !path.join("meta.json").exists() || !path.join("files").join("meta.json").exists() {
-            tracing::warn!("index: {v} holds no index; not serving it");
+            lodestar_log::log_event!(
+                crate::log_events::VERSION_SKIPPED,
+                schema = lodestar_log::Count(u64::from(v.schema)),
+                tokenizer = lodestar_log::Count(u64::from(v.tokenizer)),
+                reason = "empty"
+            );
             continue;
         }
         let mut wait = Duration::from_millis(100);
@@ -815,7 +837,13 @@ fn newest_servable(
         let opened = loop {
             match SearchIndex::open_existing(&path) {
                 Err(e) if attempt < OPEN_ATTEMPTS => {
-                    tracing::warn!("index: opening {v} (attempt {attempt}): {e}");
+                    lodestar_log::log_event!(
+                        crate::log_events::OPEN_RETRY,
+                        schema = lodestar_log::Count(u64::from(v.schema)),
+                        tokenizer = lodestar_log::Count(u64::from(v.tokenizer)),
+                        attempt = lodestar_log::Count(u64::from(attempt)),
+                        error = crate::log_events::error(&e)
+                    );
                     std::thread::sleep(wait);
                     wait *= 2;
                     attempt += 1;
@@ -825,7 +853,12 @@ fn newest_servable(
         };
         match opened {
             Some((index, compat)) => return Ok(Some((v, index, compat))),
-            None => tracing::warn!("index: {v} lacks fields every search needs; not serving it"),
+            None => lodestar_log::log_event!(
+                crate::log_events::VERSION_SKIPPED,
+                schema = lodestar_log::Count(u64::from(v.schema)),
+                tokenizer = lodestar_log::Count(u64::from(v.tokenizer)),
+                reason = "incompatible"
+            ),
         }
     }
     Ok(None)
@@ -870,7 +903,10 @@ fn rebuild_and_swap(
                 // A busy database; anything else repeats and is logged
                 // each time.
                 shared.update(|p| p.errors += 1);
-                tracing::warn!("index rebuild: {e}");
+                lodestar_log::log_event!(
+                    crate::log_events::REBUILD_RETRY,
+                    error = crate::log_events::error(&e)
+                );
                 shared.pause(wait);
                 wait = (wait * 2).min(Duration::from_secs(30));
             }
@@ -899,7 +935,11 @@ fn rebuild_and_swap(
     if let Some(old) = old_live
         && let Err(e) = old.stop()
     {
-        tracing::warn!("index: stopping the old indexer: {e}");
+        lodestar_log::log_event!(
+            crate::log_events::STOP_FAILED,
+            what = "old_indexer",
+            error = crate::log_events::error(&e)
+        );
     }
     // What readers can find now; torrents past it are new to them at the
     // swap, and no live indexer reported them.
@@ -960,7 +1000,7 @@ fn rebuild_and_swap(
             at: unix_now(),
         });
     }
-    tracing::info!("index: swapped to the rebuilt index");
+    lodestar_log::log_event!(crate::log_events::SWAPPED);
     Ok(Some(old.holders()))
 }
 
@@ -994,7 +1034,10 @@ fn restart_old(shared: &Shared, store_path: &Path, config: &ServingConfig) {
         });
     match started {
         Ok(live) => *lock(&shared.live) = Some(live),
-        Err(e) => tracing::error!("index: restarting the old indexer: {e}"),
+        Err(e) => lodestar_log::log_event!(
+            crate::log_events::OLD_INDEXER_RESTART_FAILED,
+            error = crate::log_events::error(&e)
+        ),
     }
 }
 
@@ -1018,7 +1061,7 @@ fn wait_released(shared: &Shared, retired: &Weak<()>) -> bool {
             return true;
         }
         if start.elapsed() >= limit {
-            tracing::warn!("index: the retired index is still open; deleting it anyway");
+            lodestar_log::log_event!(crate::log_events::RETIRED_STILL_OPEN);
             return true;
         }
         if !shared.pause(wait) {
@@ -1040,14 +1083,17 @@ fn clean(shared: &Shared, root: &Path, want: IndexVersion) {
         match clean_once(root, want) {
             Ok(true) => return,
             Ok(false) => {}
-            Err(e) => tracing::debug!("index cleanup: {e}"),
+            Err(e) => lodestar_log::log_event!(
+                crate::log_events::CLEANUP_RETRY,
+                error = crate::log_events::error(&e)
+            ),
         }
         if attempt + 1 == CLEAN_ATTEMPTS || !shared.pause(wait) {
             break;
         }
         wait = (wait * 2).min(Duration::from_secs(10));
     }
-    tracing::warn!("index: some old index directories remain; deleting them at the next start");
+    lodestar_log::log_event!(crate::log_events::CLEANUP_LEFT);
 }
 
 const CLEAN_ATTEMPTS: u32 = 20;
@@ -1066,7 +1112,10 @@ fn clean_once(root: &Path, want: IndexVersion) -> Result<bool> {
             continue;
         }
         if let Err(e) = discard(&path) {
-            tracing::debug!("index cleanup: {}: {e}", path.display());
+            lodestar_log::log_event!(
+                crate::log_events::CLEANUP_RETRY,
+                error = lodestar_log::Error::io(&e)
+            );
             clean = false;
         }
     }
