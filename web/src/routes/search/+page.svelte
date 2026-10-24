@@ -34,6 +34,25 @@
 		};
 	});
 
+	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs
+	// them at once; otherwise the empty state comes with the first interaction, or after 30 s, as the
+	// shell's chrome does (§10.1: the bare page is Lighthouse's). Their sheets come with them.
+	type Panel = typeof import('$lib/features/search/results/ResultsPanel.svelte').default;
+	let Results = $state<Panel>();
+	let loadingResults: Promise<unknown> | undefined;
+	function loadResults() {
+		loadingResults ??= Promise.all([
+			import('$lib/features/search/results/ResultsPanel.svelte'),
+			import('$lib/features/search/results/row.css'),
+			import('$lib/features/search/results/results.css')
+		]).then(([mod]) => (Results = mod.default));
+	}
+	$effect(() => {
+		const p = page.url.searchParams;
+		if (p.get('q') || p.get('hidden') === '1' || p.get('hidden') === 'true') loadResults();
+	});
+	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
+
 	// S-detail's drawer: opened with a shallow pushState carrying `detail` in page.state. The glob
 	// is empty until `DetailHost.svelte` exists, so neither slice edits the other's files, and the
 	// drawer never joins this route's first load.
@@ -55,7 +74,9 @@
 		<!-- S-search-2: the facet rail. -->
 		<div id="search-rail"></div>
 		<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
-		<div id="results"></div>
+		<div id="results">
+			{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}
+		</div>
 		<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 		<div id="search-drawer">
 			{#if Host && drawerOpen}<Host />{/if}

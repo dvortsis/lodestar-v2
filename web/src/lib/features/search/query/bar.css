@@ -13,20 +13,6 @@ search[data-search-bar] {
 	}
 }
 
-/* The page grid (routes/search): one column below x-large; rail + results at x-large; rail +
-   results + drawer from xx-large (§10.15; tracks from §10.2). It is here, in the sheet that loads
-   with the first interaction, because the regions are empty before then: the first slice that
-   paints into them on first load moves this rule into the route's own stylesheet. */
-.search-grid {
-	@apply grid gap-6;
-	@variant x-large {
-		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr);
-	}
-	@variant xx-large {
-		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr) auto;
-	}
-}
-
 /* Token classes (§10.4: weight + mono + colour; the gap filled by typography-ui). */
 .qt-field {
 	@apply font-mono font-semibold;

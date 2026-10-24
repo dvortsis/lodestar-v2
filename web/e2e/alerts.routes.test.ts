@@ -280,14 +280,32 @@ test.describe('one alert', () => {
 		expect(mid).toBeLessThan(below);
 		await expect.poll(() => mock.calls('markAlertsRead').length).toBe(1);
 		expect(body(mock.calls('markAlertsRead')[0]!)).toEqual({ saved_search: 1, through: 5 });
-		await expect(page.getByTestId('alert-title-5')).toHaveText('Lantern Keeper S01E05');
-		await expect(page.getByTestId('alert-raw-5')).toContainText('Lantern.Keeper.S01E05');
-		await expect(page.getByTestId('alert-size-5')).toHaveText('2.00 GiB');
-		await expect(page.getByTestId('alert-trackers-5')).toContainText('4 / 20');
+		await expect(page.getByTestId('alert-row-5-title')).toHaveText('Lantern Keeper S01E05');
+		await expect(page.getByTestId('alert-row-5-raw')).toContainText('Lantern.Keeper.S01E05');
+		await expect(page.getByTestId('alert-row-5-size')).toHaveText('2.00 GiB');
+		await expect(page.getByTestId('alert-row-5-trackers')).toContainText('4 / 20');
 		await expect(page.getByTestId('alert-open-search')).toHaveAttribute(
 			'href',
 			/^\/search\?q=lantern\+keeper\+1080p/
 		);
+	});
+
+	test('on a phone the row still shows when it matched (its own fact comes first)', async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width: 390, height: 800 });
+		detailMocks(mock, { ...LANTERN, unread: 0 }, [row(3, true), row(2, true)]);
+		await go('/alerts/1');
+		const matched = page.getByTestId('alert-row-3-matched');
+		await expect(matched).toBeVisible();
+		const box = (await matched.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(390);
+		// Inside the row, which clips its facts line at its own edge.
+		const rowBox = (await page.getByTestId('alert-row-3').boundingBox())!;
+		expect(box.x + box.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
 	});
 
 	test('with nothing unread there is no mark and nothing is marked', async ({ page, go, mock }) => {

@@ -1,7 +1,7 @@
-// The composition bar's inputs from a row's server-sent shares. Nothing is computed here: the
+// The composition bar's inputs from a hit's server-sent shares. Nothing is computed here: the
 // shares are the server's whole percents, and "dominant" is the largest of them.
-import type { Group } from '$lib/charts/shared';
 import type { components } from '$lib/api/schema';
+import type { Group } from '$lib/charts/shared';
 import { groupLabel, groupOf } from '$lib/features/detail/composition/groups';
 import { m } from '$lib/paraglide/messages.js';
 
@@ -19,7 +19,8 @@ export function composition(
 	formatShare: (pct: number, locale: string) => string,
 	locale: string
 ): BarInput | null {
-	if (shares.length === 0) return null;
+	const [first] = shares;
+	if (!first) return null;
 	const known = shares.map((s) => ({ ...s, group: groupOf(s.group) }));
 	const label = (s: (typeof known)[number]) =>
 		m.dominant_share({ share: formatShare(s.pct_bytes, locale), group: groupLabel(s.group) });

@@ -48,6 +48,38 @@ describe('merge', () => {
 		expect(r.messages.zh).toEqual({ search_results_count: '{count} 个结果' });
 	});
 
+	it("merges a feature part's own folder, with the part's prefix", () => {
+		put(feature('search'), 'en', { search_page_title: 'Search' });
+		put(feature('search/results'), 'en', { search_results_none: 'No torrents match' });
+		put(feature('search/results'), 'zh', { search_results_none: '没有匹配的种子' });
+		const r = run();
+		expect(r.errors).toEqual([]);
+		expect(r.messages.en).toEqual({
+			search_page_title: 'Search',
+			search_results_none: 'No torrents match'
+		});
+		expect(discover(root).map((s) => s.name)).toContain('search/results');
+	});
+
+	it("fails on a part's key without the part's prefix", () => {
+		put(feature('search/facets'), 'en', { search_results_x: 'wrong folder' });
+		const r = run();
+		expect(r.errors).toHaveLength(1);
+		expect(r.errors[0]).toMatch(/must start with "search_facets_"/);
+	});
+
+	it('fails on a key a feature and its part both define', () => {
+		put(feature('search'), 'en', { search_results_none: 'one' });
+		put(feature('search/results'), 'en', { search_results_none: 'two' });
+		expect(run().errors.filter((e) => e.includes('duplicate key'))).toHaveLength(1);
+	});
+
+	it('ignores a part folder with no messages', () => {
+		mkdirSync(join(root, feature('search/query')), { recursive: true });
+		put(feature('search'), 'en', { search_page_title: 'Search' });
+		expect(discover(root).map((s) => s.name)).not.toContain('search/query');
+	});
+
 	it('fails on a key defined by two features', () => {
 		// "a" and "a-x" both own the "a_x_" namespace prefix space: a_x_y is valid in each.
 		put(feature('a'), 'en', { a_x_y: 'one' });

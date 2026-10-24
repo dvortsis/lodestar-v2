@@ -41,6 +41,10 @@ export function createShellStatus(
 		get connection() {
 			return connection;
 		},
+		/** The last rebuild snapshot (the search results' rebuild banner reads it). */
+		get rebuild() {
+			return rebuild;
+		},
 		/** Call from an effect; it records that the stream has answered once. */
 		observe() {
 			if (client.status === 'live') everLive = true;

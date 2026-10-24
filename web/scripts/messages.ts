@@ -2,6 +2,9 @@
 // (messages/{en,zh}.json). One file per feature means translations never conflict.
 //
 //   src/lib/features/<feature>/messages/{en,zh}.json   keys start with "<feature>_"
+//   src/lib/features/<feature>/<part>/messages/{en,zh}.json   keys start with "<feature>_<part>_"
+//     (one level: a feature's parts keep their own files, so slices that share a feature never
+//     edit the same catalogue)
 //   src/lib/i18n/messages/{en,zh}.json                 shared keys: glossary terms (bare) and common_*
 //
 // Errors (exit 1): unreadable or non-string messages, bad key names, a key defined twice,
@@ -80,13 +83,24 @@ export function discover(root: string): Source[] {
 	];
 	const features = join(root, 'src/lib/features');
 	if (existsSync(features)) {
+		const key = (name: string) => name.replaceAll('-', '_');
 		for (const entry of readdirSync(features, { withFileTypes: true })) {
 			if (!entry.isDirectory()) continue;
 			sources.push({
 				name: entry.name,
-				prefixes: [`${entry.name.replaceAll('-', '_')}_`],
+				prefixes: [`${key(entry.name)}_`],
 				dir: join(features, entry.name, 'messages')
 			});
+			for (const part of readdirSync(join(features, entry.name), { withFileTypes: true })) {
+				if (!part.isDirectory() || part.name === 'messages') continue;
+				const dir = join(features, entry.name, part.name, 'messages');
+				if (!existsSync(dir)) continue;
+				sources.push({
+					name: `${entry.name}/${part.name}`,
+					prefixes: [`${key(entry.name)}_${key(part.name)}_`],
+					dir
+				});
+			}
 		}
 	}
 	return sources.sort((a, b) => a.name.localeCompare(b.name));
