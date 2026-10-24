@@ -51,7 +51,6 @@ static CHILD: OnceLock<Child> = OnceLock::new();
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 /// This process's child state, once `serve --child` set it up.
-#[allow(dead_code)] // The updater's (part 5).
 pub fn current() -> Option<&'static Child> {
     CHILD.get()
 }
@@ -378,7 +377,6 @@ impl Child {
 
     /// What a rollback requested now would lose: torrents stored since
     /// the update, when this version migrated the store.
-    #[allow(dead_code)] // The updater's (part 5).
     pub fn lost_torrents(&self) -> Option<u64> {
         self.bin
             .read::<Probation>("probation.json")

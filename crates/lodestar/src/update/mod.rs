@@ -102,7 +102,8 @@ pub fn start(
     settings: &crate::settings::Registry,
     events: &std::sync::Arc<lodestar_api::events::EventHub>,
 ) -> Started {
-    let version = env!("CARGO_PKG_VERSION").to_string();
+    // The build's own version: a nightly keeps its suffix.
+    let version = env!("LODESTAR_BUILD_VERSION").to_string();
     let unavailable = |why: lodestar_api::updates::UpdatesUnavailable| Started {
         api: std::sync::Arc::new(unavailable::Unavailable {
             why,

@@ -36,6 +36,8 @@ pub enum Reason {
     DevBuild,
     /// `<data>/bin` is on a `noexec` mount.
     Noexec,
+    /// Whether `<data>/bin` is on a `noexec` mount couldn't be read.
+    NoexecUnknown,
     /// `<data>/bin` can't be written.
     NotWritable,
     /// A package manager owns this installation.
@@ -44,6 +46,8 @@ pub enum Reason {
     ImageMode,
     /// `trust.json` doesn't verify.
     TrustDamaged,
+    /// `skipped` can't be read: a skip mustn't be forgotten.
+    SkippedUnreadable,
     /// No key is known for the channel (Nightly, until it exists).
     ChannelUnavailable,
     /// Installing arrives in part 5 of B-update.
@@ -56,10 +60,12 @@ impl Reason {
             Reason::NotSupervised => "not_supervised",
             Reason::DevBuild => "dev_build",
             Reason::Noexec => "noexec",
+            Reason::NoexecUnknown => "noexec_unknown",
             Reason::NotWritable => "not_writable",
             Reason::PackageManaged => "package_managed",
             Reason::ImageMode => "image_mode",
             Reason::TrustDamaged => "trust_damaged",
+            Reason::SkippedUnreadable => "skipped_unreadable",
             Reason::ChannelUnavailable => "channel_unavailable",
             Reason::NotBuiltYet => "not_built_yet",
         }

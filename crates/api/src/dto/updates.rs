@@ -202,7 +202,10 @@ pub struct HistoryEntry {
 /// `GET /updates`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UpdatesStatus {
-    /// Why updates aren't available at all; null otherwise.
+    /// Why updates aren't available at all; null otherwise. When it's
+    /// set, only `running.version` and this field mean anything: the
+    /// policy shows the defaults, and there are no releases, history or
+    /// rollback.
     #[schema(required = true)]
     pub unavailable: Option<UpdatesUnavailable>,
     pub status: CheckStatus,

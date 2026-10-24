@@ -225,6 +225,9 @@ pub struct SettingsEvent {
 #[serde(rename_all = "snake_case")]
 pub enum UpdatesState {
     Checking,
+    /// A check ended with nothing to install (every check ends with
+    /// `checked`, `available` or `failed`).
+    Checked,
     Available,
     Downloading,
     Verifying,

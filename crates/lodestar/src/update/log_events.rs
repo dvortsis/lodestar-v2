@@ -38,6 +38,15 @@ lodestar_log::catalogue! {
         message: "The update check failed",
         fields: { error: Label },
     }
+    /// An entry in `<data>/bin` couldn't be read while the update check
+    /// gathered the installed versions' trust; it's skipped.
+    UPDATE_OVERLAY_UNREADABLE {
+        id: "update.overlay_unreadable",
+        component: System,
+        level: Warn,
+        message: "An entry in the update folder couldn't be read; skipped",
+        fields: { error: Error },
+    }
     /// The new version passed its self-test: the update is kept.
     UPDATE_PROBATION_PASSED {
         id: "update.probation_passed",
