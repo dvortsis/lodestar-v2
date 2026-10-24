@@ -118,7 +118,7 @@ pub use lodestar_filter::lists::apply;
 
 /// The HTTP client (§16: reqwest on rustls with ring, as the tracker
 /// scraper uses).
-fn client(limits: &Limits) -> reqwest::Client {
+fn client(limits: &Limits) -> Result<reqwest::Client, reqwest::Error> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
@@ -130,9 +130,7 @@ fn client(limits: &Limits) -> reqwest::Client {
     } else {
         builder.no_proxy()
     };
-    builder
-        .build()
-        .expect("an HTTP client with a crypto provider")
+    builder.build()
 }
 
 /// A parsed list, encoded for the store.
@@ -420,7 +418,18 @@ pub async fn run(
     ips: Arc<SharedIps>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    let client = client(&limits);
+    // Without a client (no usable TLS roots, say) the lists can't be
+    // fetched: say so once and stop, rather than taking the task down.
+    let client = match client(&limits) {
+        Ok(client) => client,
+        Err(e) => {
+            log_event!(
+                events::FILTERS_SUBSCRIPTIONS_CLIENT_FAILED,
+                error = Error::new(&e)
+            );
+            return;
+        }
+    };
     loop {
         tokio::select! {
             _ = refresh_due(&store, &client, &limits, &filter, &ips, crate::unix_now()) => {}
@@ -542,7 +551,7 @@ mod tests {
         let shrunk = b"10.0.0.0/8\n".to_vec();
         let (url, server) = serve(vec![(200, v1), (304, Vec::new()), (200, shrunk)]);
         let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Ip, false)]);
-        let agent = client(&limits);
+        let agent = client(&limits).unwrap();
         assert_eq!(
             refresh_due(&store, &agent, &limits, &filter, &ips, 1_000).await,
             1
@@ -590,7 +599,7 @@ mod tests {
             list(&url_a, ListKind::Content, false),
             list(&url_b, ListKind::Content, true),
         ]);
-        let agent = client(&limits);
+        let agent = client(&limits).unwrap();
         assert_eq!(
             refresh_due(&store, &agent, &limits, &filter, &ips, 5).await,
             2
@@ -635,7 +644,7 @@ mod tests {
         let (a, b, c) = ([0xa1; 20], [0xb2; 20], [0xc3; 20]);
         let (url, server) = serve(vec![(200, hashes(&[a, b, c])), (200, hashes(&[a, b]))]);
         let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Content, true)]);
-        let agent = client(&limits);
+        let agent = client(&limits).unwrap();
         refresh_due(&store, &agent, &limits, &filter, &ips, 5).await;
         let before = crate::floor::KEPT.load(std::sync::atomic::Ordering::Relaxed);
         refresh_due(&store, &agent, &limits, &filter, &ips, 5 + 86_400).await;
@@ -668,7 +677,7 @@ mod tests {
     async fn failures_are_recorded_not_applied() {
         let (url, server) = serve(vec![(404, Vec::new()), (200, b"\0\0binary".to_vec())]);
         let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Ip, false)]);
-        let agent = client(&limits);
+        let agent = client(&limits).unwrap();
         refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert_eq!(sub.status, "error");
