@@ -79,5 +79,5 @@ You don't need an account, a licence key or an open port on your router.
 <!-- nav:start -->
 ---
 
-[← Lodestar setup guide](README.md) · [Contents](README.md#contents) · [Chapter 2: Install Lodestar on Unraid and Docker →](02-install-lodestar-on-unraid-and-docker.md)
+[← Lodestar setup guide](README.md) · [Contents](README.md#contents) · [Chapter 2: Install on Unraid and Docker →](02-install-lodestar-on-unraid-and-docker.md)
 <!-- nav:end -->

@@ -1,4 +1,10 @@
-<p align="center"><img src="../../brand/source/icons/compass_dark.svg" alt="Lodestar logo" width="160"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../../brand/source/logos/horizontal_dark_transparent.png">
+    <source media="(prefers-color-scheme: light)" srcset="../../brand/source/logos/horizontal_light_transparent.png">
+    <img src="../../brand/source/logos/horizontal_light_transparent.png" alt="Lodestar logo" width="380">
+  </picture>
+</p>
 
 # Lodestar setup guide
 
@@ -23,8 +29,11 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
 | Reach Lodestar from outside my home | [Chapter 3](03-keep-lodestar-safe.md#31-keep-the-web-ui-off-the-internet) |
 | Run Lodestar through a VPN | [Chapter 3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn) |
 | Back up and restore Lodestar | [Chapter 3](03-keep-lodestar-safe.md#37-back-up-and-restore) |
-| Install on Windows or Linux **(planned)** | [Chapter 4](04-install-on-windows-and-linux.md) |
+| Install on Windows or Linux | [Chapter 4](04-install-on-windows-and-linux.md) |
+| Search, browse and check crawler health | [Chapter 5](05-use-lodestar.md) |
 | Fix a problem | [Chapter 6](06-troubleshooting.md) |
+
+**Reading paths.** First-time installers read Chapters 1 to 3 in order. Returning readers use the table above to jump to a task, backup step or fix.
 
 ## Contents
 
@@ -35,7 +44,7 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
   - [1.3 Check what you need](01-before-you-start.md#13-check-what-you-need)
   - [1.4 Choose how to install](01-before-you-start.md#14-choose-how-to-install)
   - [1.5 Check your understanding](01-before-you-start.md#15-check-your-understanding)
-- [Chapter 2: Install Lodestar on Unraid and Docker](02-install-lodestar-on-unraid-and-docker.md)
+- [Chapter 2: Install on Unraid and Docker](02-install-lodestar-on-unraid-and-docker.md)
   - [2.1 Install with the Unraid template](02-install-lodestar-on-unraid-and-docker.md#21-install-with-the-unraid-template)
   - [2.2 Settings in the Unraid template](02-install-lodestar-on-unraid-and-docker.md#22-settings-in-the-unraid-template)
   - [2.3 Check the user the container runs as](02-install-lodestar-on-unraid-and-docker.md#23-check-the-user-the-container-runs-as)
@@ -57,7 +66,9 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
   - [4.3 Run it or stop](04-install-on-windows-and-linux.md#43-run-it-or-stop)
   - [4.4 Install on Linux](04-install-on-windows-and-linux.md#44-install-on-linux)
 - [Chapter 5: Use Lodestar](05-use-lodestar.md)
-  - [5.1 See what is planned](05-use-lodestar.md#51-see-what-is-planned)
+  - [5.1 Search and filter](05-use-lodestar.md#51-search-and-filter)
+  - [5.2 Inspect a torrent](05-use-lodestar.md#52-inspect-a-torrent)
+  - [5.3 Browse Discover and Insights](05-use-lodestar.md#53-browse-discover-and-insights)
 - [Chapter 6: Troubleshooting](06-troubleshooting.md)
   - [6.1 Common problems](06-troubleshooting.md#61-common-problems)
   - [6.2 Get help](06-troubleshooting.md#62-get-help)
@@ -77,7 +88,7 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
 
 ## About this guide
 
-This guide covers Lodestar as built on `main` (no released version yet). Last updated 2026-10-22. Facts come from `packaging/unraid/lodestar.xml`, `packaging/unraid/lodestar-gluetun.xml`, `packaging/docker/README.md`, `docker-compose.yml`, `docs/operations.md` and `docs/architecture.md` §12. They are listed in [`docs/setup.facts.md`](../setup.facts.md).
+This guide covers Lodestar v0.5.0. Last updated 2026-10-24. Facts come from `packaging/unraid/lodestar.xml`, `packaging/unraid/lodestar-gluetun.xml`, `packaging/docker/README.md`, `docker-compose.yml`, `docs/operations.md` and `docs/architecture.md` §12. They are listed in [`docs/setup.facts.md`](../setup.facts.md). Form illustrations in Chapter 2 are generated from `packaging/unraid/lodestar.xml`; see [`images/SHOTLIST.md`](images/SHOTLIST.md) for live capture instructions.
 
 <!-- nav:start -->
 ---

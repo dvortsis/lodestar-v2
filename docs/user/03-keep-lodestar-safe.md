@@ -194,5 +194,5 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 <!-- nav:start -->
 ---
 
-[← Chapter 2: Install Lodestar on Unraid and Docker](02-install-lodestar-on-unraid-and-docker.md) · [Contents](README.md#contents) · [Chapter 4: Install on Windows and Linux →](04-install-on-windows-and-linux.md)
+[← Chapter 2: Install on Unraid and Docker](02-install-lodestar-on-unraid-and-docker.md) · [Contents](README.md#contents) · [Chapter 4: Install on Windows and Linux →](04-install-on-windows-and-linux.md)
 <!-- nav:end -->
