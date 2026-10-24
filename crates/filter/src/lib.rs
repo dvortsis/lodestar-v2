@@ -21,6 +21,7 @@ mod hash;
 mod held;
 pub mod lists;
 pub mod load;
+pub mod log_events;
 mod matcher;
 pub mod normalize;
 mod packs;
