@@ -358,6 +358,15 @@ lodestar_log::catalogue! {
         message: "Reading the blocklist subscriptions failed",
         fields: { error: Error },
     }
+    /// The HTTP client for blocklist refreshes couldn't be built, so no
+    /// list is refreshed this run.
+    FILTERS_SUBSCRIPTIONS_CLIENT_FAILED {
+        id: "filters.subscriptions_client_failed",
+        component: Filters,
+        level: Error,
+        message: "Blocklists can't be refreshed: the HTTP client couldn't be set up",
+        fields: { error: Error },
+    }
     /// Refreshed lists couldn't be applied.
     FILTERS_SUBSCRIPTIONS_APPLY_FAILED {
         id: "filters.subscriptions_apply_failed",
