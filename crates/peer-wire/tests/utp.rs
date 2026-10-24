@@ -161,15 +161,29 @@ async fn hostile_peers_fail_the_same_way_over_utp() {
 /// (Windows hands ports out in sequence), which answers the SYN and fails
 /// the fetch at once (`early eof`, serving another torrent) instead of
 /// leaving it to time out.
+///
+/// The UDP port is taken first, from the system's UDP ports, then the
+/// TCP listener on the same number. The other way round, a TCP port can
+/// fall in a range Windows reserves for UDP (Hyper-V, WinNAT): every port
+/// handed out next to it was refused, and 100 tries in a row failed on CI.
 async fn tcp_only_peer(seed: Seed) -> (FakePeer, std::net::UdpSocket) {
-    for _ in 0..100 {
-        let peer =
-            FakePeer::spawn(vec![seed.clone()], Accept::Both, Behavior::Honest, vec![]).await;
-        if let Ok(silent) = std::net::UdpSocket::bind(peer.addr()) {
+    const TRIES: usize = 100;
+    for _ in 0..TRIES {
+        let silent = std::net::UdpSocket::bind("127.0.0.1:0").expect("a UDP port");
+        let at = silent.local_addr().expect("bound");
+        let peer = FakePeer::spawn_at(
+            at,
+            vec![seed.clone()],
+            Accept::Both,
+            Behavior::Honest,
+            vec![],
+        )
+        .await;
+        if let Ok(peer) = peer {
             return (peer, silent);
         }
     }
-    panic!("no port free over both TCP and UDP");
+    panic!("no UDP port of {TRIES} was also free over TCP");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
