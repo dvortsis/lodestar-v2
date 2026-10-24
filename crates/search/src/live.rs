@@ -247,7 +247,11 @@ impl LiveIndexer {
                     st.errors.fetch_add(1, Ordering::Relaxed);
                     *st.last_error.lock().unwrap_or_else(PoisonError::into_inner) =
                         Some(e.to_string());
-                    tracing::warn!("indexer: {e}; retrying in {backoff:?}");
+                    lodestar_log::log_event!(
+                        crate::log_events::INDEXER_RETRY,
+                        backoff_ms = backoff.as_millis() as u64,
+                        error = crate::log_events::error(&e)
+                    );
                     if !pause(&s, backoff) {
                         // Stopping: what failed (the last commit, say) is
                         // what `stop` reports.
@@ -416,7 +420,10 @@ fn report_gap(
             });
         }
         Ok(_) => {}
-        Err(e) => tracing::warn!("indexer: counting torrents to report: {e}"),
+        Err(e) => lodestar_log::log_event!(
+            crate::log_events::INDEXER_COUNT_FAILED,
+            error = crate::log_events::error(&e)
+        ),
     }
     *reported = last;
 }

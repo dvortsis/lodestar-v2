@@ -130,7 +130,10 @@ impl SourcePlugin for DhtSource {
             let node = Node::start(config, Some(tx))
                 .await
                 .map_err(|e| PluginError(format!("DHT bind failed: {e}")))?;
-            tracing::info!(addrs = ?node.local_addrs(), "DHT node started");
+            lodestar_log::log_event!(
+                crate::log_events::DHT_STARTED,
+                sockets = node.local_addrs().len()
+            );
             *self.node.lock().expect("dht handle lock") = Some(node.handle());
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             let mut requests_open = true;

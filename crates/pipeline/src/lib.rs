@@ -175,7 +175,10 @@ fn load_filter(filter: &Handle, state: &FilterState) {
     filter.update(|core| {
         for (hash, origin) in &state.cs_hashes {
             let origin = Origin::from_code(*origin).unwrap_or_else(|| {
-                tracing::warn!(origin, "unknown CS-1 origin; kept as imported");
+                lodestar_log::log_event!(
+                    log_events::CS_ORIGIN_UNKNOWN,
+                    origin = u64::from(*origin)
+                );
                 Origin::Imported
             });
             core.cs.add_hash(*hash, origin);
@@ -423,10 +426,10 @@ impl Pipeline {
         ) = tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
             .await
             .map_err(Error::Join)??;
-        tracing::info!(
+        lodestar_log::log_event!(
+            log_events::STARTING,
             stored = have.len(),
-            queued = queue.len(),
-            "pipeline starting"
+            queued = queue.len()
         );
         let have = Arc::new(have);
         load_filter(&config.filter, &filter_state);
@@ -436,7 +439,13 @@ impl Pipeline {
             notes.extend(e.load_class_rules(&class_rules));
             notes
         }) {
-            tracing::warn!("filter: {note}");
+            let (what, rule, reason) = log_events::filter_note(&note);
+            lodestar_log::log_event!(
+                log_events::FILTER_RULE_SKIPPED,
+                what = what,
+                rule = rule,
+                reason = reason
+            );
         }
         let held = config.held.clone();
         for (h, _) in &filter_state.held {
@@ -502,10 +511,10 @@ impl Pipeline {
             let emitter = Emitter::new(id, emit_tx.clone());
             let error = Arc::default();
             if !enabled {
-                tracing::info!(
+                lodestar_log::log_event!(
+                    log_events::SOURCE_NOT_STARTED,
                     plugin = m.id,
-                    ?state,
-                    "source not started: it isn't enabled"
+                    state = log_events::state(state)
                 );
                 tasks.push(tokio::spawn(async { Ok(()) }));
                 sources.push(SourceEntry {
@@ -542,7 +551,11 @@ impl Pipeline {
                 let result = p.run(ctx).await;
                 flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
-                    tracing::error!(plugin = p.manifest().id, "source stopped: {e}");
+                    lodestar_log::log_event!(
+                        log_events::SOURCE_FAILED,
+                        plugin = p.manifest().id,
+                        error = lodestar_log::Error::new(e)
+                    );
                     *last_error.lock().expect("source error lock") = Some(e.to_string());
                 }
                 result
@@ -785,10 +798,14 @@ impl Pipeline {
             let id = s.plugin.manifest().id;
             // A plugin that ignores shutdown mustn't hold up the rest.
             match tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut task).await {
-                Ok(Ok(Err(e))) => tracing::warn!(plugin = id, "source stopped with an error: {e}"),
+                Ok(Ok(Err(e))) => lodestar_log::log_event!(
+                    log_events::SOURCE_STOP_FAILED,
+                    plugin = id,
+                    error = lodestar_log::Error::new(&e)
+                ),
                 Ok(_) => {}
                 Err(_) => {
-                    tracing::warn!(plugin = id, "source didn't stop in time; aborting it");
+                    lodestar_log::log_event!(log_events::SOURCE_STOP_TIMEOUT, plugin = id);
                     task.abort();
                 }
             }

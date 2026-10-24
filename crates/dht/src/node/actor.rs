@@ -344,6 +344,9 @@ struct Actor {
     /// Scrape lookups that ran out of query budget, to drive next tick.
     stalled: Vec<u32>,
     last_prune: Instant,
+    /// When `dht.harvest_summary` was last written, and the counters then
+    /// (sample, get_peers, announce, lookups, dropped).
+    last_summary: (Instant, [u64; 5]),
     /// IPs we've sent to lately, to tell unsolicited queries apart.
     contacted: SeenFilter,
     unsolicited_from: UnsolicitedFrom,
@@ -415,6 +418,7 @@ pub(crate) async fn run(
         scrape_rate: scrape_bucket(cfg.intensity, now),
         stalled: Vec::new(),
         last_prune: now,
+        last_summary: (now, [0; 5]),
         contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
         unsolicited_from: UnsolicitedFrom::default(),
         paused: cfg.paused,
@@ -577,6 +581,34 @@ impl Actor {
         }
     }
 
+    /// Writes `dht.harvest_summary`: what was harvested since the last
+    /// one, if anything was.
+    fn summarize(&mut self, now_i: Instant) {
+        let s = &self.stats;
+        let g = |c: &std::sync::atomic::AtomicU64| c.load(Ordering::Relaxed);
+        let now = [
+            g(&s.harvested_sample),
+            g(&s.harvested_get_peers),
+            g(&s.harvested_announce),
+            g(&s.lookups_completed),
+            g(&s.harvest_dropped),
+        ];
+        let (then, before) = self.last_summary;
+        let d = |i: usize| now[i].saturating_sub(before[i]);
+        if (0..5).any(|i| d(i) > 0) {
+            lodestar_log::log_event!(
+                crate::log_events::HARVEST_SUMMARY,
+                seconds = now_i.duration_since(then).as_secs(),
+                sample = d(0),
+                get_peers = d(1),
+                announce = d(2),
+                lookups = d(3),
+                dropped = d(4)
+            );
+        }
+        self.last_summary = (now_i, now);
+    }
+
     /// Hands a hash to the pipeline. Sightings without peers are
     /// deduplicated; announces and lookup results always pass.
     fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) {
@@ -600,6 +632,12 @@ impl Actor {
             Source::Sample | Source::GetPeers => return,
         };
         Stats::inc(counter);
+        lodestar_log::log_event!(
+            crate::log_events::KEY_HARVESTED,
+            torrent = lodestar_log::Torrent(&hash.0),
+            source = source_label(source),
+            peers = peers.len()
+        );
         if let Some(tx) = &self.harvest {
             let h = Harvest {
                 info_hash: hash,
@@ -1358,6 +1396,9 @@ impl Actor {
             self.sampler.prune(now_i);
             self.last_prune = now_i;
         }
+        if now_i.duration_since(self.last_summary.0) >= crate::log_events::SUMMARY_EVERY {
+            self.summarize(now_i);
+        }
         while !self.paused && self.active_get_peers < MAX_GET_PEERS {
             let Some(hash) = self.get_peers_queue.pop_front() else {
                 break;
@@ -1492,6 +1533,16 @@ impl Actor {
             nodes,
         }
         .save(path)
+    }
+}
+
+/// A harvest source as a label.
+fn source_label(s: Source) -> &'static str {
+    match s {
+        Source::Sample => "sample",
+        Source::GetPeers => "get_peers",
+        Source::Announce => "announce",
+        Source::Lookup => "lookup",
     }
 }
 

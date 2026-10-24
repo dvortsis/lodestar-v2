@@ -134,6 +134,22 @@ pub async fn fetch(
     info_hash: InfoHash,
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
+    let r = fetch_any(addr, info_hash, opts).await;
+    // A blocklisted address is never contacted: not a failed fetch.
+    if let Err(e) = &r
+        && !matches!(e, Error::Denied)
+    {
+        crate::log_events::count(e.kind());
+    }
+    r
+}
+
+/// [`fetch`], over uTP first and TCP as the fallback when allowed.
+async fn fetch_any(
+    addr: SocketAddr,
+    info_hash: InfoHash,
+    opts: &FetchOptions,
+) -> Result<Fetched, Error> {
     if opts.deny.as_ref().is_some_and(|d| d.denies(addr.ip())) {
         return Err(Error::Denied);
     }
@@ -188,8 +204,21 @@ async fn fetch_via(
             other => other,
         },
     };
-    if r.is_ok() {
-        opts.stats.succeeded(transport);
+    match &r {
+        Ok(_) => opts.stats.succeeded(transport),
+        Err(e) => {
+            let kind = e.kind();
+            lodestar_log::log_event!(
+                crate::log_events::FETCH_FAILED,
+                torrent = lodestar_log::Torrent(&info_hash.0),
+                peer = lodestar_log::Peer(addr),
+                error = lodestar_log::Error::kind(crate::log_events::label(kind)),
+                attempt = match transport {
+                    Transport::Tcp => "tcp",
+                    Transport::Utp => "utp",
+                }
+            );
+        }
     }
     (r, connected.load(Ordering::Relaxed))
 }

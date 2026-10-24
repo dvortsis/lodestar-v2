@@ -44,16 +44,7 @@ from pathlib import Path
 
 # Files whose plain `tracing` lines B-log1b converts (open PRs touched them
 # when B-log1 ran). Remove a file when it's converted; never add one.
-NOT_YET_SWEPT = [
-    "crates/pipeline/src/control.rs",
-    "crates/pipeline/src/dht.rs",
-    "crates/pipeline/src/lib.rs",
-    "crates/pipeline/src/worker.rs",
-    "crates/pipeline/src/writer.rs",
-    "crates/search/src/index.rs",
-    "crates/search/src/live.rs",
-    "crates/search/src/rebuild.rs",
-]
+NOT_YET_SWEPT: list[str] = []
 
 # Narrow, named exemptions: (path, rule) and why.
 EXEMPT = {
@@ -370,6 +361,14 @@ def assigned(source: str, name: str):
         if (
             isinstance(node, ast.Assign)
             and any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
+        ):
+            return ast.literal_eval(node.value)
+        # `NAME: list[str] = []`, as an empty list is best written.
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+            and node.value is not None
         ):
             return ast.literal_eval(node.value)
     return None
