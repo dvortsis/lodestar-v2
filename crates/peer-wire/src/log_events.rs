@@ -7,18 +7,21 @@
 //! `default_on` rule).
 //!
 //! Counting never blocks a fetch: the summary's counters are atomics, and
-//! whichever failure first finds a minute gone writes it. With no failures
-//! there's no summary.
+//! whichever failed fetch first finds a minute gone writes it. With no
+//! failures there's no summary, so a quiet spell is folded into the next
+//! one; `seconds` says how long it covers.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use crate::FailureKind;
 
 lodestar_log::catalogue! {
     "lodestar-peer-wire";
-    /// Fetching a torrent's metadata from a peer failed: `error` is the
-    /// kind, `attempt` the transport tried.
+    /// One transport's try at a torrent's metadata from a peer failed:
+    /// `error` is the kind, `attempt` the transport (a uTP failure can
+    /// still end in a TCP success).
     FETCH_FAILED {
         id: "fetch.failed",
         component: Fetch,
@@ -27,12 +30,13 @@ lodestar_log::catalogue! {
         message: "Metadata fetch failed",
         fields: { torrent: Hash, peer: Peer, error: Error, attempt: Label },
     }
-    /// The fetches that failed in the last `seconds`, by kind.
+    /// The fetches that failed since the last summary (`seconds` ago), by
+    /// their final kind; a blocklisted address isn't counted.
     FAILED_SUMMARY {
         id: "fetch.failed_summary",
         component: Fetch,
         level: Info,
-        message: "Metadata fetches that failed in the last minute",
+        message: "Metadata fetches that failed since the last summary",
         fields: { seconds: Size, unreachable: Size, timed_out: Size, refused: Size, encryption_failed: Size, invalid: Size, oversize: Size },
     }
 }
@@ -42,8 +46,9 @@ pub const SUMMARY_EVERY_SECS: u64 = 60;
 
 const KINDS: usize = 6;
 
-/// Failures since the last summary, by kind, and when that was (Unix
-/// seconds; 0 before the first failure).
+/// Failures since the last summary, by kind, and when that was (seconds
+/// since the first failure, plus one: 0 before it). A monotonic clock, so
+/// a stepped wall clock can't stretch or stall the window.
 struct Summary {
     failed: [AtomicU64; KINDS],
     since: AtomicU64,
@@ -73,11 +78,11 @@ fn index(k: FailureKind) -> usize {
     }
 }
 
-/// Counts a failure, and writes the summary when a minute has gone by.
+/// Counts a failed fetch, and writes the summary when a minute has gone
+/// by.
 pub(crate) fn count(k: FailureKind) {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    static START: OnceLock<Instant> = OnceLock::new();
+    let now = START.get_or_init(Instant::now).elapsed().as_secs() + 1;
     SUMMARY.count(k, now, SUMMARY_EVERY_SECS);
 }
 
@@ -109,16 +114,18 @@ impl Summary {
         {
             return;
         }
-        let n = |i: usize| self.failed[i].swap(0, Ordering::Relaxed);
+        // Taken whether or not the summary is on, so turning it on later
+        // starts from this minute.
+        let n: [u64; KINDS] = std::array::from_fn(|i| self.failed[i].swap(0, Ordering::Relaxed));
         lodestar_log::log_event!(
             FAILED_SUMMARY,
             seconds = now - last,
-            unreachable = n(0),
-            timed_out = n(1),
-            refused = n(2),
-            encryption_failed = n(3),
-            invalid = n(4),
-            oversize = n(5)
+            unreachable = n[0],
+            timed_out = n[1],
+            refused = n[2],
+            encryption_failed = n[3],
+            invalid = n[4],
+            oversize = n[5]
         );
     }
 }
