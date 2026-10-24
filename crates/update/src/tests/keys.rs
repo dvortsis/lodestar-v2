@@ -731,6 +731,12 @@ fn merge_and_load_refuse_what_does_not_extend() {
         statements: vec![s(1, 5), s(2, 7)],
         ..TrustState::default()
     };
+    // A seq that disagrees with the statements is never taken.
+    let wrong = TrustState {
+        seq: 3,
+        ..longer.clone()
+    };
+    assert_eq!(TrustState::merge(&old, wrong), old);
     let merged = TrustState::merge(&old, longer.clone());
     assert_eq!((merged.seq, &merged.statements), (2, &longer.statements));
     // A channel named twice is damage.

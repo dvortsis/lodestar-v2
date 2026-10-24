@@ -35,6 +35,7 @@ pub use doc::{
 };
 pub use keys::Embedded;
 pub use minisign::{PublicKey, Signature};
+pub use semver;
 pub use trust::{Marks, TrustState};
 pub use verify::{Checked, Freshness, Manifest, Overlay, Pin, check, install, overlay};
 

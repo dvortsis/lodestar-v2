@@ -24,9 +24,13 @@ exists, fails the check, so converting a file means taking it off.
 
 Usage: python3 .github/scripts/log_lint.py [--base REF] [repo root]
 
-`--base REF` also checks that NOT_YET_SWEPT names nothing REF's copy
-doesn't (CI passes the pull request's base branch), so the list can't
-grow in a pull request.
+`--base REF` also checks that NOT_YET_SWEPT and EXEMPT name nothing REF's
+copy doesn't (CI passes the pull request's base branch), so neither can
+grow in a pull request. A base whose copy can't be read fails the check.
+
+Manifests are parsed with `tomllib`: every dependency table outside
+dev-dependencies (`[target.<cfg>]` and inline tables included) is walked
+for the `log` crate and a renamed `tracing`; one that doesn't parse fails.
 """
 
 from __future__ import annotations
@@ -35,14 +39,12 @@ import ast
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 # Files whose plain `tracing` lines B-log1b converts (open PRs touched them
 # when B-log1 ran). Remove a file when it's converted; never add one.
 NOT_YET_SWEPT = [
-    "crates/api/src/auth.rs",
-    "crates/api/src/auth/guard.rs",
-    "crates/api/src/auth/http.rs",
     "crates/filter/src/lists.rs",
     "crates/lodestar/src/fixture.rs",
     "crates/lodestar/src/insights.rs",
@@ -140,7 +142,6 @@ ERROR_FIELD = re.compile(
     r"(?:^|[(,{])\s*[%?]\s*&?(?:e|err|error|\w+_err|\w+_error|err_\w+|error_\w+)\b"
     r")"
 )
-RENAMED_DEP = re.compile(r"""\bpackage\s*=\s*["']tracing["']""")
 
 
 def strip(code: str) -> str:
@@ -269,31 +270,83 @@ def check_source(rel: str, code: str, swept: bool = True) -> list[str]:
     return findings
 
 
-# `log = …`, `"log" = …`, `log.workspace = true`, `log.version = …`,
-# `[dependencies.log]`, or another name with `package = "log"`.
-LOG_DEP = re.compile(
-    r"""^\s*(?:(?:log|"log"|'log')\s*[=.]|\[\s*[\w.'"()-]*dependencies\s*\.\s*["']?log["']?\s*\])"""
-    r"""|\bpackage\s*=\s*["']log["']"""
-)
-SECTION = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]")
+# The dependency tables a manifest can hold outside dev-dependencies, at
+# the top or under `[target.<cfg>]` (Cargo also takes the underscored
+# spellings).
+DEP_TABLES = ("dependencies", "build-dependencies", "build_dependencies")
+DEV_TABLES = ("dev-dependencies", "dev_dependencies")
+
+
+def manifest_paths(root: Path) -> list[Path]:
+    """Every first-party manifest: the crates and the bench (linked into
+    `serve --fixture`)."""
+    return sorted(root.glob("crates/*/Cargo.toml")) + sorted(root.glob("bench/Cargo.toml"))
+
+
+def workspace_deps(root: Path) -> tuple[dict, list[str]]:
+    """The root manifest's `[workspace.dependencies]`, for `x.workspace =
+    true` entries, and any problem reading it."""
+    p = root / "Cargo.toml"
+    if not p.is_file():
+        return {}, []
+    try:
+        doc = tomllib.loads(p.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        return {}, [f"Cargo.toml: doesn't parse ({e}): the logging check can't read it"]
+    deps = doc.get("workspace", {}).get("dependencies", {})
+    return (deps if isinstance(deps, dict) else {}), []
+
+
+def dep_tables(doc: dict) -> list[tuple[str, dict]]:
+    """Every non-dev dependency table in a parsed manifest, named as a
+    finding shows it: `[dependencies]`, `[target.'cfg(…)'.build-dependencies]`."""
+    out = []
+    for name in DEP_TABLES:
+        if isinstance(doc.get(name), dict):
+            out.append((name, doc[name]))
+    targets = doc.get("target", {})
+    if isinstance(targets, dict):
+        for cfg, table in targets.items():
+            if not isinstance(table, dict):
+                continue
+            for name in DEP_TABLES:
+                if isinstance(table.get(name), dict):
+                    out.append((f"target.'{cfg}'.{name}", table[name]))
+    return out
+
+
+def package_of(name: str, spec, workspace: dict) -> str:
+    """The crate a dependency entry really names: its `package`, or the
+    workspace entry's for `x.workspace = true`, else its key."""
+    if isinstance(spec, dict):
+        if isinstance(spec.get("package"), str):
+            return spec["package"]
+        if spec.get("workspace") is True:
+            return package_of(name, workspace.get(name), {})
+    return name
 
 
 def manifests(root: Path) -> list[str]:
-    """A dependency renamed from `tracing`, or on the `log` crate (its
-    macros are another way round `log_event!`), in any crate's manifest.
-    Dev-dependencies serve tests only."""
-    out = []
-    for p in sorted(root.glob("crates/*/Cargo.toml")):
+    """A dependency on the `log` crate (its macros are another way round
+    `log_event!`), or one renamed from `tracing`, in any first-party
+    manifest's dependency tables, `[target.<cfg>]` ones and inline tables
+    included. Dev-dependencies serve tests only. A manifest that doesn't
+    parse is a finding: the check fails closed."""
+    workspace, out = workspace_deps(root)
+    for p in manifest_paths(root):
         rel = p.relative_to(root).as_posix()
-        section = ""
-        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            code = line.split("#", 1)[0]
-            if m := SECTION.match(code):
-                section = m.group(1)
-            if RENAMED_DEP.search(code):
-                out.append(f"{rel}:{i}: `tracing` renamed: use `log_event!`")
-            if "dev-dependencies" not in section and LOG_DEP.search(code):
-                out.append(f"{rel}:{i}: the `log` crate: use `log_event!`")
+        try:
+            doc = tomllib.loads(p.read_text(encoding="utf-8"))
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+            out.append(f"{rel}: doesn't parse ({e}): the logging check can't read it")
+            continue
+        for table, deps in dep_tables(doc):
+            for name, spec in deps.items():
+                package = package_of(name, spec, workspace)
+                if package == "log":
+                    out.append(f"{rel}: [{table}] {name}: the `log` crate: use `log_event!`")
+                elif package == "tracing" and name != "tracing":
+                    out.append(f"{rel}: [{table}] {name}: `tracing` renamed: use `log_event!`")
     return out
 
 
@@ -320,15 +373,28 @@ def run(root: Path, not_yet: list[str] = NOT_YET_SWEPT) -> list[str]:
     return problems
 
 
-def listed_in(source: str) -> list[str] | None:
-    """The NOT_YET_SWEPT list in a copy of this script, or None."""
+def assigned(source: str, name: str):
+    """The literal assigned to `name` at the top of a copy of this script,
+    or None when there's no such assignment."""
     for node in ast.parse(source).body:
         if (
             isinstance(node, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "NOT_YET_SWEPT" for t in node.targets)
+            and any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
         ):
-            return list(ast.literal_eval(node.value))
+            return ast.literal_eval(node.value)
     return None
+
+
+def listed_in(source: str) -> list[str] | None:
+    """The NOT_YET_SWEPT list in a copy of this script, or None."""
+    value = assigned(source, "NOT_YET_SWEPT")
+    return None if value is None else list(value)
+
+
+def exempt_in(source: str) -> set | None:
+    """The EXEMPT keys in a copy of this script, or None."""
+    value = assigned(source, "EXEMPT")
+    return None if not isinstance(value, dict) else set(value)
 
 
 def grown(base: list[str] | None, now: list[str]) -> list[str]:
@@ -338,16 +404,58 @@ def grown(base: list[str] | None, now: list[str]) -> list[str]:
     return [f"{e}: added to NOT_YET_SWEPT: the list may only shrink" for e in now if e not in base]
 
 
-def base_list(root: Path, ref: str) -> list[str] | None:
-    shown = subprocess.run(
-        ["git", "-C", str(root), "show", f"{ref}:.github/scripts/log_lint.py"],
+def grown_exempt(base: set | None, now: dict) -> list[str]:
+    """Exemptions `now` adds to `base`'s (none when base has no script)."""
+    if base is None:
+        return []
+    return [
+        f"{path} ({rule}): added to EXEMPT: exemptions may only shrink"
+        for path, rule in sorted(now)
+        if (path, rule) not in base
+    ]
+
+
+class BaseUnreadable(Exception):
+    """The base has the script, but its lists can't be read."""
+
+
+def against_base(source: str | None, not_yet: list[str], exempt: dict) -> list[str]:
+    """What the lists add to the base's copy of this script (`source`,
+    None when the base has none). Fails closed: a copy whose lists can't
+    be read is a finding, never a pass."""
+    if source is None:
+        return []
+    try:
+        base_not_yet = listed_in(source)
+        base_exempt = exempt_in(source)
+    except (SyntaxError, ValueError, TypeError) as e:
+        return [f"--base: the base's log_lint.py can't be read ({e}): the lists can't be compared"]
+    problems = []
+    if base_not_yet is None:
+        problems.append("--base: the base's log_lint.py has no readable NOT_YET_SWEPT list")
+    if base_exempt is None:
+        problems.append("--base: the base's log_lint.py has no readable EXEMPT table")
+    problems += grown(base_not_yet, not_yet)
+    problems += grown_exempt(base_exempt, exempt)
+    return problems
+
+
+def base_source(root: Path, ref: str) -> str | None:
+    """The base's copy of this script, or None when it has none. A ref
+    that doesn't resolve fails the check rather than passing it."""
+    if subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
         capture_output=True,
-        text=True,
-    )
-    if shown.returncode != 0:
+    ).returncode != 0:
+        raise BaseUnreadable(f"--base {ref}: no such commit")
+    path = f"{ref}:.github/scripts/log_lint.py"
+    if subprocess.run(["git", "-C", str(root), "cat-file", "-e", path], capture_output=True).returncode != 0:
         # No such file at the base yet: nothing to compare with.
         return None
-    return listed_in(shown.stdout)
+    shown = subprocess.run(["git", "-C", str(root), "show", path], capture_output=True, text=True)
+    if shown.returncode != 0:
+        raise BaseUnreadable(f"--base {ref}: its log_lint.py can't be read")
+    return shown.stdout
 
 
 def main() -> int:
@@ -358,7 +466,10 @@ def main() -> int:
     root = Path(args[0]) if args else Path(__file__).resolve().parents[2]
     problems = run(root)
     if base is not None:
-        problems.extend(grown(base_list(root, base), NOT_YET_SWEPT))
+        try:
+            problems.extend(against_base(base_source(root, base), NOT_YET_SWEPT, EXEMPT))
+        except BaseUnreadable as e:
+            problems.append(str(e))
     for p in problems:
         print(p)
     if problems:

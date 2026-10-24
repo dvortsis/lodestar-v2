@@ -292,6 +292,40 @@ async fn discoveries_become_stored_torrents_and_survive_a_restart() {
 /// its state on shutdown. (Harvesting itself is covered by the dht crate's
 /// in-process network tests.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stored_torrent_is_seen_in_the_hot_columns_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seeds = vec![Seed::v1(info_dict("Gamma"))];
+    let gamma = InfoHash(seeds[0].info_hash);
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let (feed, feed_tx) = scripted("feed");
+    let hot = Arc::new(lodestar_store::HotColumns::new());
+    let cfg = PipelineConfig {
+        hot: Some(hot.clone()),
+        ..config()
+    };
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(cfg, store, vec![feed]).await.unwrap();
+    feed_tx
+        .send(Found::key(gamma, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&gamma).unwrap().unwrap();
+    let row = store.torrent(id).unwrap().unwrap();
+    // `seen:`, the seen sort and the freshness prior read this column: a
+    // new torrent counts as seen when it was discovered, not never.
+    assert_eq!(
+        i64::from(hot.get(lodestar_store::Col::LastSeen, id as u64)),
+        row.last_seen_at
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_dht_plugin_runs_inside_the_pipeline() {
     use lodestar_dht::node::Config;
     use lodestar_pipeline::DhtSource;

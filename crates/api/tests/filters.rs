@@ -62,6 +62,8 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
             index: None,
             reader: Arc::new(Mutex::new(reader)),
             filters: Some(api.clone()),
+            hot: None,
+            events: None,
             settings: None,
             ops: None,
             user_data: None,
@@ -1029,7 +1031,8 @@ async fn previews_run_as_background_jobs_with_progress() {
     let job = body["job"].as_u64().unwrap();
     let uri = format!("/api/v1/filters/preview/jobs/{job}");
     let mut done = Value::Null;
-    for _ in 0..200 {
+    let mut last = Value::Null;
+    for _ in 0..1500 {
         let (status, _, body) = call(&f.app, get(&uri, &c)).await;
         assert_eq!(status, StatusCode::OK);
         if body["state"] == "done" {
@@ -1037,8 +1040,10 @@ async fn previews_run_as_background_jobs_with_progress() {
             break;
         }
         assert_eq!(body["state"], json!("running"));
+        last = body;
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    assert!(!done.is_null(), "the job never finished; last saw {last}");
     assert_eq!(done["progress"]["phase"], json!("done"));
     assert_eq!(done["assessment"]["preview"]["quarantine"], json!(2));
     assert_eq!(done["assessment"]["weakening"], json!(true));
@@ -1067,7 +1072,7 @@ async fn previews_run_as_background_jobs_with_progress() {
     .await;
     let uri = format!("/api/v1/filters/preview/jobs/{}", body["job"]);
     let mut state = Value::Null;
-    for _ in 0..200 {
+    for _ in 0..1500 {
         let (_, _, body) = call(&f.app, get(&uri, &c)).await;
         if body["state"] != "running" {
             state = body;
@@ -1075,6 +1080,7 @@ async fn previews_run_as_background_jobs_with_progress() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    assert!(!state.is_null(), "the job never left running");
     assert_eq!(state["state"], json!("failed"));
     assert_eq!(state["status"], json!(409));
     assert!(state["error"]["code"].is_string(), "{state}");

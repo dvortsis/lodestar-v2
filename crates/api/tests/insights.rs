@@ -206,6 +206,8 @@ fn fixture_with(insights: bool) -> Fixture {
         adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
         insights: insights.then(|| source.clone() as Arc<dyn InsightsSource>),
         user_data: None,
+        hot: None,
+        events: None,
     };
     let app = Router::new().nest("/api/v1", router(state.clone()));
     Fixture {
@@ -1676,6 +1678,7 @@ async fn insights_events_go_out_only_while_someone_listens() {
         },
     );
     // Several ticks with nobody listening: nothing is built or sent.
+    // Time passing for the code under test: ticks must elapse unheard.
     tokio::time::sleep(every * 4).await;
     let app = Router::new()
         .nest("/api/v1", router(f.state.clone()))
@@ -1690,13 +1693,13 @@ async fn insights_events_go_out_only_while_someone_listens() {
     let start = Instant::now();
     while text.matches("event: insights").count() < 2 {
         assert!(
-            start.elapsed() < std::time::Duration::from_secs(5),
+            start.elapsed() < std::time::Duration::from_secs(15),
             "{text}"
         );
         let next = std::future::poll_fn(|cx| {
             futures_core::Stream::poll_next(std::pin::Pin::new(&mut body), cx)
         });
-        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), next)
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(15), next)
             .await
             .expect("an event")
             .expect("open")

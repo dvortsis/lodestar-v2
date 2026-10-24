@@ -93,6 +93,7 @@ fn spec<'a>(node: &'a Node, scope: &'a str) -> SearchSpec<'a> {
         sort: Sort::Relevance,
         limit: 20,
         now: NOW,
+        utc_offset: 0,
     }
 }
 
@@ -274,6 +275,7 @@ fn readers_never_see_a_generation_older_than_the_last_commit() {
         add(&mut store, &names(10 + i..11 + i));
         commit(&mut store, &mut w);
         visible.store(11 + i, Ordering::Release);
+        // Paces the writer so readers overlap its commits.
         std::thread::sleep(Duration::from_millis(2));
     }
     stop.store(true, Ordering::Relaxed);
@@ -334,6 +336,7 @@ fn facets_are_cached_per_generation_and_shared_with_a_searchs_lease() {
         scope: "",
         sort: Sort::Relevance,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     let (a, o) = cache.facets(&index, &fs, &c).unwrap();
@@ -384,6 +387,7 @@ fn cached_hits_are_within_two_milliseconds() {
         scope: "",
         sort: Sort::Relevance,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     let s = SearchSpec {

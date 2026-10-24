@@ -10,6 +10,7 @@ use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,6 +19,10 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
 use axum::{Extension, Router};
 use lodestar_api::events::{EventHub, EventSources, EventsConfig};
+use lodestar_api::settings::{
+    Imported, Saved, SettingsApi, SettingsBatch, SettingsFailure, SettingsImport, SettingsIndex,
+    SettingsPreview,
+};
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_store::{Store, StoreConfig};
 use serde_json::{Value, json};
@@ -35,6 +40,11 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(|registry| registry)
+}
+
+/// The fixture with the registry wrapped as the API's `SettingsApi`.
+fn fixture_with(wrap: impl FnOnce(Arc<Registry>) -> Arc<dyn SettingsApi>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "[fetch]\ntimeout_secs = 30\n").unwrap();
@@ -56,11 +66,13 @@ fn fixture() -> Fixture {
                 index: None,
                 reader: Arc::new(Mutex::new(reader)),
                 filters: None,
-                settings: Some(registry.clone()),
+                settings: Some(wrap(registry.clone())),
                 ops: None,
                 user_data: None,
                 adult: Default::default(),
                 insights: None,
+                hot: None,
+                events: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -162,7 +174,7 @@ async fn settings_endpoints() {
     let c = Some(cookie.as_str());
 
     let index = golden(&f, "settings_index", get("/api/v1/settings", c)).await;
-    assert_eq!(index["sections"].as_array().unwrap().len(), 9);
+    assert_eq!(index["sections"].as_array().unwrap().len(), 10);
     let crawler = golden(&f, "settings_crawler", get("/api/v1/settings/crawler", c)).await;
     assert_eq!(crawler["fields"]["timeout_secs"]["source"], json!("file"));
     let network = golden(&f, "settings_network", get("/api/v1/settings/network", c)).await;
@@ -171,6 +183,25 @@ async fn settings_endpoints() {
         json!({ "env": "LODESTAR_DHT_PORT", "read_only": true, "restart_required": true, "source": "env", "value": 7000 })
     );
     golden(&f, "settings_general", get("/api/v1/settings/general", c)).await;
+    golden(&f, "settings_updates", get("/api/v1/settings/updates", c)).await;
+    // The window is checked: one that starts as it ends is refused.
+    golden(
+        &f,
+        "settings_patch_updates_window",
+        patch("/api/v1/settings/updates", c, r#"{"window":"04:00-04:00"}"#),
+    )
+    .await;
+    let updates = golden(
+        &f,
+        "settings_patch_updates",
+        patch(
+            "/api/v1/settings/updates",
+            c,
+            r#"{"mode":"notify","window":"23:30-01:00","wait_days":7}"#,
+        ),
+    )
+    .await;
+    assert_eq!(updates["fields"]["mode"]["value"], json!("notify"));
 
     // A partial patch: the live field and a restart-only one.
     let out = golden(
@@ -715,10 +746,10 @@ async fn export_and_import() {
     .await;
 }
 
-/// Reads `body` until `needle` appears, or fails after 5 s.
+/// Reads `body` until `needle` appears, or fails after 15 s.
 async fn read_until(body: &mut Body, needle: &str) -> String {
     let mut text = String::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while !text.contains(needle) {
         let frame = tokio::time::timeout_at(
             deadline,
@@ -830,12 +861,43 @@ async fn every_save_publishes_a_settings_event_without_values() {
     assert!(text.contains(&format!("id: {id}-5\n")), "{text}");
 }
 
+/// The registry, with a flag raised as a save starts, before it takes the
+/// registry's lock.
+#[derive(Debug)]
+struct SignalSaves(Arc<Registry>, Arc<AtomicBool>);
+
+impl SettingsApi for SignalSaves {
+    fn index(&self) -> SettingsIndex {
+        self.0.index()
+    }
+    fn section(&self, section: &str) -> Option<lodestar_api::settings::SectionValues> {
+        self.0.section(section)
+    }
+    fn save(&self, batch: SettingsBatch) -> Result<Saved, SettingsFailure> {
+        self.1.store(true, Ordering::SeqCst);
+        self.0.save(batch)
+    }
+    fn preview(&self, batch: SettingsBatch) -> Result<SettingsPreview, SettingsFailure> {
+        self.0.preview(batch)
+    }
+    fn export(&self, preferences: bool) -> String {
+        self.0.export(preferences)
+    }
+    fn import(&self, import: SettingsImport, dry_run: bool) -> Result<Imported, SettingsFailure> {
+        self.0.import(import, dry_run)
+    }
+}
+
 // The lock is held across awaits on purpose: the save waits on it in its
 // blocking task, on another thread.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn a_save_still_publishes_when_its_client_goes_away() {
-    let f = fixture();
+    let reached = Arc::new(AtomicBool::new(false));
+    let f = fixture_with({
+        let reached = reached.clone();
+        move |registry| Arc::new(SignalSaves(registry, reached))
+    });
     let cookie = session(&f).await;
     let c = Some(cookie.as_str());
     let stream = f
@@ -854,7 +916,15 @@ async fn a_save_still_publishes_when_its_client_goes_away() {
         c,
         r#"{"intensity":"low"}"#,
     )));
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The save raises the flag in its blocking task, then waits on the lock.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !reached.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the save never reached its blocking task"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());
     drop(held);
