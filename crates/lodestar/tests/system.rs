@@ -15,13 +15,7 @@ use serde_json::Value;
 
 const PASSWORD: &str = "correct horse battery";
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
 fn request(port: u16, head: &str, body: &str) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -81,6 +75,24 @@ fn strings(v: &Value, out: &mut Vec<String>) {
 struct Server {
     child: Child,
     lines: mpsc::Receiver<String>,
+    /// Every line so far, for the port each start serves on.
+    log: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+impl Server {
+    /// The port of the `n`th start (from 1): a restart binds a new one.
+    fn port(&self, n: usize) -> u16 {
+        let mut port = 0;
+        wait_until("no serving port", || {
+            let log = self.log.lock().unwrap();
+            if log.matches(" app.serving: ").count() < n {
+                return false;
+            }
+            port = common::serving_port(&log).unwrap_or(0);
+            port != 0
+        });
+        port
+    }
 }
 
 impl Drop for Server {
@@ -93,10 +105,9 @@ impl Drop for Server {
 #[test]
 fn system_reports_and_restarts_in_place() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
     let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
         .env("LODESTAR_DATA_DIR", dir.path())
-        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
         .env("LODESTAR_DHT_ENABLED", "false")
         .env("LODESTAR_LOG", "info")
         .stdout(Stdio::null())
@@ -105,17 +116,25 @@ fn system_reports_and_restarts_in_place() {
         .unwrap();
     let stderr = child.stderr.take().unwrap();
     let (tx, lines) = mpsc::channel();
+    let log = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let all = log.clone();
     std::thread::spawn(move || {
         use std::io::BufRead;
         for line in std::io::BufReader::new(stderr)
             .lines()
             .map_while(Result::ok)
         {
+            {
+                let mut all = all.lock().unwrap();
+                all.push_str(&line);
+                all.push('\n');
+            }
             let _ = tx.send(line);
         }
     });
-    let mut server = Server { child, lines };
+    let mut server = Server { child, lines, log };
     let pid = server.child.id();
+    let port = server.port(1);
     wait_until("the server didn't come up", || healthy(port));
 
     let token = loop {
@@ -237,8 +256,9 @@ fn system_reports_and_restarts_in_place() {
     let restart = json_request(port, "POST", "/api/v1/system/restart", &cookie, "");
     assert!(restart.starts_with("HTTP/1.0 202"), "{restart}");
     assert_eq!(body(&restart)["restarting"], true);
-    // It goes away, then comes back as the same process.
-    wait_until("it never went away", || !healthy(port));
+    // It comes back as the same process, on the port its new start
+    // bound (it asks for any).
+    let port = server.port(2);
     wait_until("it didn't come back", || healthy(port));
     assert!(
         server.child.try_wait().unwrap().is_none(),

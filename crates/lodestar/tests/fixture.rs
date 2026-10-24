@@ -17,13 +17,7 @@ use serde_json::Value;
 
 const PASSWORD: &str = "correct horse battery";
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
 fn request(port: u16, head: &str, body: &str) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -62,19 +56,20 @@ fn enc(s: &str) -> String {
         .collect()
 }
 
-/// A running `serve --fixture`, with its log collected.
+/// A running `serve --fixture`, with its log collected. `port` is known
+/// once [`ready`](Server::ready) has seen its `app.serving` line.
 struct Server {
     child: Child,
     port: u16,
+    ports: std::sync::mpsc::Receiver<u16>,
     log: std::thread::JoinHandle<String>,
 }
 
 fn spawn(args: &[&str], env: &[(&str, &str)]) -> Server {
-    let port = free_port();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
     cmd.arg("serve")
         .args(args)
-        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
         .env("LODESTAR_LOG", "info")
         .env_remove("LODESTAR_DATA_DIR")
         .env_remove("LODESTAR_SHOW_ADULT")
@@ -88,18 +83,27 @@ fn spawn(args: &[&str], env: &[(&str, &str)]) -> Server {
         .spawn()
         .unwrap();
     let stderr = child.stderr.take().unwrap();
+    let (port_tx, ports) = std::sync::mpsc::channel();
     let log = std::thread::spawn(move || {
         let mut all = String::new();
         for line in std::io::BufReader::new(stderr)
             .lines()
             .map_while(Result::ok)
         {
+            if let Some(port) = common::serving_port(&line) {
+                let _ = port_tx.send(port);
+            }
             all.push_str(&line);
             all.push('\n');
         }
         all
     });
-    Server { child, port, log }
+    Server {
+        child,
+        port: 0,
+        ports,
+        log,
+    }
 }
 
 impl Server {
@@ -107,7 +111,12 @@ impl Server {
     fn ready(&mut self) {
         let start = Instant::now();
         loop {
-            if let Some(r) = request(self.port, "GET /healthz HTTP/1.0", "") {
+            if self.port == 0 {
+                self.port = self.ports.try_recv().unwrap_or(0);
+            }
+            if self.port != 0
+                && let Some(r) = request(self.port, "GET /healthz HTTP/1.0", "")
+            {
                 assert!(r.starts_with("HTTP/1.0 200"), "{r}");
                 return;
             }
@@ -459,7 +468,7 @@ fn a_foreign_folder_is_refused_untouched() {
         let out = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .args(["serve", "--fixture"])
             .arg(dir.path())
-            .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{}", free_port()))
+            .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(3), "{out:?}");
