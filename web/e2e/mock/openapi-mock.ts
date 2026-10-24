@@ -183,6 +183,28 @@ export class OpenApiMock {
 		if (op.id === 'listSavedSearches' && override === undefined) {
 			return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
 		}
+		// The facet rail (S-search-2b) asks for counts beside the results at x-large: no groups by
+		// default, so specs that don't test the rail needn't mock it.
+		if (op.id === 'facetsPost' && override === undefined) {
+			const empty = {
+				backfill_before: null,
+				buckets: { seeders: null, trackers: null },
+				canonical: '',
+				facets: {},
+				histograms: {},
+				sample_rate: null,
+				sampled: false,
+				took_ms: 0,
+				total: 0,
+				total_approx: false,
+				unavailable: []
+			};
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify(empty)
+			});
+		}
 		let status: number, body: Json, headers: Record<string, string> | undefined;
 		const pick = (v: unknown) => {
 			if (
