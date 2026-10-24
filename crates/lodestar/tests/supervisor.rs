@@ -364,10 +364,19 @@ fn now() -> u64 {
         .as_secs()
 }
 
+/// The live children of `pid`: from `/proc` on Linux, from `pgrep -P`
+/// elsewhere (macOS has no `/proc`).
 fn children(pid: u32) -> Vec<u32> {
-    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-        .unwrap_or_default()
-        .split_whitespace()
+    #[cfg(target_os = "linux")]
+    let list =
+        std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
+    #[cfg(not(target_os = "linux"))]
+    let list = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    list.split_whitespace()
         .filter_map(|p| p.parse().ok())
         .collect()
 }
@@ -463,14 +472,17 @@ fn an_expired_overlay_starts_then_a_newer_image_wins() {
         !env.bin("pending").exists() && env.healthy()
     });
     // What runs is the sealed in-memory copy that was verified, not the
-    // file in `<data>/bin`.
-    let kids = children(r.child.id());
-    let exe = std::fs::read_link(format!("/proc/{}/exe", kids[0])).unwrap();
-    assert!(
-        exe.to_string_lossy().starts_with("/memfd:lodestar"),
-        "{}",
-        exe.display()
-    );
+    // file in `<data>/bin` (Linux only: elsewhere the path is run).
+    #[cfg(target_os = "linux")]
+    {
+        let kids = children(r.child.id());
+        let exe = std::fs::read_link(format!("/proc/{}/exe", kids[0])).unwrap();
+        assert!(
+            exe.to_string_lossy().starts_with("/memfd:lodestar"),
+            "{}",
+            exe.display()
+        );
+    }
     assert!(env.bin("active").exists() && env.bin(NEW).exists());
     assert!(
         env.bin("0.4.0").exists(),
@@ -784,6 +796,8 @@ fn revoked_and_not_newer_overlays_dont_run() {
 }
 
 /// A grandchild left behind is reparented to the supervisor and reaped.
+/// Linux only: the supervisor is a subreaper there, and nowhere else.
+#[cfg(target_os = "linux")]
 #[test]
 fn orphans_are_reaped() {
     let env = Env::new();
@@ -911,12 +925,15 @@ fn an_active_downgrade_runs_the_image() {
     .unwrap();
     let mut r = env.start(&env.overrides(json!({})));
     wait_until("the image didn't start", LONG, || env.healthy());
-    let exe = std::fs::read_link(format!("/proc/{}/exe", children(r.child.id())[0])).unwrap();
-    assert!(
-        !exe.to_string_lossy().starts_with("/memfd:"),
-        "{}",
-        exe.display()
-    );
+    #[cfg(target_os = "linux")]
+    {
+        let exe = std::fs::read_link(format!("/proc/{}/exe", children(r.child.id())[0])).unwrap();
+        assert!(
+            !exe.to_string_lossy().starts_with("/memfd:"),
+            "{}",
+            exe.display()
+        );
+    }
     let log = r.log();
     assert!(
         log.contains("isn't newer than the version it replaced"),
@@ -949,6 +966,8 @@ fn a_transient_error_keeps_the_overlay_and_an_oversize_binary_doesnt() {
 }
 
 /// A child that ignores a forwarded TERM is killed after the grace period.
+/// Linux only: it waits for the child's TERM handler in `/proc`.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_child_that_ignores_a_stop_is_killed() {
     let env = Env::new();
@@ -980,7 +999,9 @@ fn a_child_that_ignores_a_stop_is_killed() {
 }
 
 /// The child stops when its supervisor dies (PR_SET_PDEATHSIG), even by
-/// SIGKILL, which the supervisor can't forward.
+/// SIGKILL, which the supervisor can't forward. Linux only, as
+/// PR_SET_PDEATHSIG is.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_child_stops_with_its_supervisor() {
     let env = Env::new();
