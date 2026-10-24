@@ -49,6 +49,8 @@ pub struct Services {
     listener: TcpListener,
     /// `/system` (B2c), layered beside the hub.
     system: Arc<dyn lodestar_api::system::SystemApi>,
+    /// `/updates` (B-update), beside `/system`.
+    updates: Arc<dyn lodestar_api::updates::UpdatesApi>,
 }
 
 /// What has to be stopped on the way out.
@@ -65,6 +67,8 @@ pub struct Handles {
     insights: (watch::Sender<bool>, JoinHandle<()>),
     /// Saved searches → alerts (B9), while search is on.
     percolator: Option<(watch::Sender<bool>, JoinHandle<()>)>,
+    /// The update engine's scheduled checks (B-update).
+    updates: Option<(watch::Sender<bool>, JoinHandle<()>)>,
 }
 
 impl Services {
@@ -139,13 +143,15 @@ impl Services {
                 // After an unclean stop, the counts a crash can lose are
                 // recounted (§7), before the pipeline writes any.
                 match insights::repair_after_unclean_stop(&mut store) {
-                    Ok(Some(r)) if r.changed() => tracing::info!(
-                        "insights: repaired the rollups after an unclean stop: {r:?}"
-                    ),
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!("insights: the repair after an unclean stop failed: {e}")
+                    Ok(Some(r)) if r.changed() => {
+                        lodestar_log::log_event!(crate::logging::events::INSIGHTS_REPAIRED)
                     }
+                    Ok(_) => {}
+                    Err(e) => lodestar_log::log_event!(
+                        crate::logging::events::INSIGHTS_STEP_FAILED,
+                        step = "repair",
+                        error = lodestar_log::Error::new(&e)
+                    ),
                 }
                 // Settings and lists change through a second connection, so
                 // they never wait behind the ingest writer for long.
@@ -159,15 +165,11 @@ impl Services {
                 // snapshot, or rebuilt from SQLite after a crash.
                 let started = std::time::Instant::now();
                 let (hot, from_snapshot) = lodestar_pipeline::open_hot(&mut store, &hot_dir2)?;
-                tracing::info!(
+                lodestar_log::log_event!(
+                    crate::logging::events::APP_HOT_COLUMNS,
                     torrents = hot.len(),
                     ms = started.elapsed().as_millis() as u64,
-                    "hot columns {}",
-                    if from_snapshot {
-                        "loaded"
-                    } else {
-                        "rebuilt from the store"
-                    }
+                    from = if from_snapshot { "snapshot" } else { "store" }
                 );
                 let hot = Arc::new(hot);
                 let user_data = Store::open(&db, store_config.clone())?;
@@ -424,11 +426,21 @@ impl Services {
         let (listener, bound) =
             system::address::bind(address, config, &control, &system::address::SystemClock).await?;
         let served = bound.serving;
-        let system = system::System::start(config, bound, &api, &settings, control, &events);
-        tracing::info!(
-            "UI on {}, status page on /status (data in {})",
-            ops::ui_address(served),
-            config.data_dir.display()
+        // The update engine (B-update): none for a fixture.
+        let updates = crate::update::start(config, &settings, &events);
+        let system = system::System::start(
+            config,
+            bound,
+            &api,
+            &settings,
+            control,
+            &events,
+            updates.row.clone(),
+        );
+        lodestar_log::log_event!(
+            crate::logging::events::APP_SERVING,
+            address = lodestar_log::Listen(served),
+            path = lodestar_log::Path::new(&config.data_dir)
         );
         Ok(Services {
             export_adult: settings::content::follow_export(settings.subscribe()),
@@ -443,9 +455,11 @@ impl Services {
                 hot_dir,
                 insights: (stop_insights, recorder),
                 percolator,
+                updates: updates.task,
             },
             listener,
             system,
+            updates: updates.api,
         })
     }
 
@@ -480,6 +494,7 @@ impl Services {
             handles,
             listener,
             system,
+            updates,
         } = self;
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
@@ -491,23 +506,70 @@ impl Services {
             .layer(Extension(jobs.clone()))
             .layer(Extension(export_adult))
             .layer(Extension(system))
+            .layer(Extension(updates))
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
         // and closing the jobs ends open exports, so the graceful
         // shutdown doesn't wait on them.
         let hub = events.clone();
+        let (stopping_tx, stopping) = watch::channel(false);
         let signal = async move {
             signal.await;
             hub.close();
             jobs.close();
             logs.close();
+            let _ = stopping_tx.send(true);
         };
-        axum::serve(listener, app)
+        let serve = axum::serve(listener, app)
             .with_graceful_shutdown(signal)
-            .await?;
+            .into_future();
+        // A client holding a download open without reading would keep the
+        // graceful shutdown waiting forever, and nothing below would run.
+        // Past the bound its connections are dropped: the tasks axum
+        // spawned for them run on, detached, until the runtime ends, and
+        // hold only the router's state, nothing `shutdown` waits on.
+        let served = tokio::select! {
+            served = serve => served,
+            () = forced_after(stopping, SHUTDOWN_GRACE) => {
+                lodestar_log::log_event!(
+                    crate::logging::events::APP_SHUTDOWN_FORCED,
+                    waited_s = SHUTDOWN_GRACE.as_secs()
+                );
+                Ok(())
+            }
+        };
+        // Saved and logged whatever `serve` returned: no error skips the
+        // save or the required `app.stop`.
         events.close();
-        handles.shutdown().await
+        let stopped = handles.shutdown().await;
+        // Required, and last: pending fold summaries are written first.
+        lodestar_log::log_event!(
+            crate::logging::events::APP_STOP,
+            clean = stopped.is_ok() && served.is_ok()
+        );
+        served?;
+        stopped
     }
+}
+
+/// How long the graceful shutdown waits for open connections once the
+/// signal fires (B-log1b, §2.19).
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+
+/// How long the runtime waits, once serving has ended, for blocking tasks
+/// still running (a stuck read): the exit, and the Windows service's stop,
+/// never hang on one. With [`SHUTDOWN_GRACE`] and the saves, inside the
+/// update supervisor's and the SCM's 30 s.
+pub const RUNTIME_GRACE: Duration = Duration::from_secs(5);
+
+/// Resolves `grace` after `stopping` turns true; never if it doesn't.
+async fn forced_after(mut stopping: watch::Receiver<bool>, grace: Duration) {
+    while !*stopping.borrow_and_update() {
+        if stopping.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+    tokio::time::sleep(grace).await;
 }
 
 impl Handles {
@@ -515,7 +577,14 @@ impl Handles {
     /// pipeline (which saves the queue and DHT state and commits the last
     /// batch), then the indexer, then the percolator.
     pub async fn shutdown(self) -> Result<(), BoxError> {
-        tracing::info!("shutting down: saving the queue and DHT state");
+        lodestar_log::log_event!(crate::logging::events::APP_STOPPING);
+        // A check under way is abandoned: it writes only after it's
+        // verified, by rename, so nothing is left half-written.
+        if let Some((stop, task)) = self.updates {
+            let _ = stop.send(true);
+            task.abort();
+            let _ = task.await;
+        }
         let (stop, refresher) = self.subscriptions;
         let _ = stop.send(true);
         let _ = refresher.await;
@@ -529,8 +598,14 @@ impl Handles {
         .await
         {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::error!("saving hot columns: {e}"),
-            Err(e) => tracing::error!("saving hot columns: {e}"),
+            Ok(Err(e)) => lodestar_log::log_event!(
+                crate::logging::events::APP_HOT_SAVE_FAILED,
+                error = lodestar_log::Error::new(&e)
+            ),
+            Err(e) => lodestar_log::log_event!(
+                crate::logging::events::APP_HOT_SAVE_FAILED,
+                error = lodestar_log::Error::new(&e)
+            ),
         }
         if let Some(search) = self.search {
             // After the writer, so the last batch gets indexed too. Other
@@ -547,7 +622,7 @@ impl Handles {
             let _ = stop.send(true);
             let _ = task.await;
         }
-        tracing::info!("stopped cleanly");
+        lodestar_log::log_event!(crate::logging::events::APP_STOPPED_CLEANLY);
         Ok(())
     }
 }

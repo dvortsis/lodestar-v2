@@ -13,7 +13,7 @@
   <Overview>Lodestar crawls the BitTorrent DHT, fetches torrent metadata from peers and makes it searchable. It keeps names, file lists, sizes, dates and swarm counts in one local index. Open the web UI after the first start. The setup token appears in the container log. Enter it to create the admin password. This variant sends all traffic through your gluetun container, so the DHT and peer traffic leave through the VPN and never from your own address. Publish the web UI port on the gluetun container, not here. The VPN container must be named gluetun; if yours has another name, change it in the Network setting (Extra Parameters: --network=container:NAME). The [IP] WebUI link may not resolve with container networking, so open the web UI at your server address and the port published on gluetun. Inbound DHT reach needs a port your VPN provider forwards (see the notes in docs/operations.md).</Overview>
   <Category>Network:Web Downloaders:Other</Category>
   <WebUI>http://[IP]:8090</WebUI>
-  <ExtraParams>--network=container:gluetun</ExtraParams>
+  <ExtraParams>--network=container:gluetun --stop-timeout=60</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>

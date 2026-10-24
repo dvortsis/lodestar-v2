@@ -10,13 +10,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
 fn healthz(port: u16) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -42,26 +36,33 @@ fn wait_for<T>(limit: Duration, mut check: impl FnMut() -> Option<T>) -> Option<
     }
 }
 
-/// A config in `dir`: data beside it, HTTP on `port`, any DHT port.
-fn write_config(dir: &Path, port: u16) -> std::path::PathBuf {
+/// A config in `dir`: data beside it, HTTP and the DHT on any port.
+fn write_config(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("config.toml");
     std::fs::write(
         &path,
         format!(
-            "data_dir = '{}'\nlog = \"info\"\n[http]\nbind = \"127.0.0.1:{port}\"\n\
+            "data_dir = '{}'\nlog = \"info\"\n[http]\nbind = \"{}\"\n\
              [dht]\nbind = [\"0.0.0.0:0\"]\n",
-            dir.join("data").display()
+            dir.join("data").display(),
+            common::ANY_PORT
         ),
     )
     .unwrap();
     path
 }
 
+/// The port the server's `app.serving` line in `log_path` names.
+fn port_in(log_path: &Path, limit: Duration) -> Option<u16> {
+    wait_for(limit, || {
+        common::serving_port(&std::fs::read_to_string(log_path).unwrap_or_default())
+    })
+}
+
 #[test]
 fn an_ordinary_run_without_a_console_serves() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let config = write_config(dir.path(), port);
+    let config = write_config(dir.path());
     let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
         .arg("--config")
         .arg(&config)
@@ -70,7 +71,9 @@ fn an_ordinary_run_without_a_console_serves() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let health = wait_for(Duration::from_secs(60), || healthz(port));
+    let jsonl = dir.path().join("data").join("logs").join("lodestar.jsonl");
+    let health = port_in(&jsonl, Duration::from_secs(60))
+        .and_then(|port| wait_for(Duration::from_secs(60), || healthz(port)));
     let _ = child.kill();
     let _ = child.wait();
     let health = health.expect("server didn't come up");
@@ -122,14 +125,13 @@ fn can_register() -> bool {
 
 /// Registers service `name` running `exe` as `account` (LocalSystem when
 /// `None`). Its environment points `%ProgramData%` at `program_data`, so
-/// its default data folder is `program_data\Lodestar`, and sets the HTTP
-/// address to `port` and any DHT port.
+/// its default data folder is `program_data\Lodestar`, and lets HTTP and
+/// the DHT take any port.
 fn register(
     name: &str,
     exe: &Path,
     account: Option<&str>,
     program_data: &Path,
-    port: u16,
     cleanup: Option<std::path::PathBuf>,
 ) -> Registered {
     let bin_path = format!("\"{}\"", exe.display());
@@ -144,8 +146,9 @@ fn register(
         cleanup,
     };
     let env = format!(
-        "ProgramData={}\\0LODESTAR_HTTP_BIND=127.0.0.1:{port}\\0LODESTAR_DHT_PORT=0\\0LODESTAR_LOG=info",
-        program_data.display()
+        "ProgramData={}\\0LODESTAR_HTTP_BIND={}\\0LODESTAR_DHT_PORT=0\\0LODESTAR_LOG=info",
+        program_data.display(),
+        common::ANY_PORT
     );
     let key = format!("HKLM\\SYSTEM\\CurrentControlSet\\Services\\{name}");
     let out = Command::new("reg.exe")
@@ -190,11 +193,13 @@ fn sddl(path: &Path) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// Starts `service`, waits for /healthz on `port` and returns the log.
-fn start_and_check(service: &Registered, port: u16, log_path: &Path) -> String {
+/// Starts `service`, waits for /healthz on the port its log names and
+/// returns the log.
+fn start_and_check(service: &Registered, log_path: &Path) -> String {
     let log = || std::fs::read_to_string(log_path).unwrap_or_default();
     sc(&["start", &service.name]);
-    let health = wait_for(Duration::from_secs(90), || healthz(port));
+    let health = port_in(log_path, Duration::from_secs(90))
+        .and_then(|port| wait_for(Duration::from_secs(90), || healthz(port)));
     let health = health.unwrap_or_else(|| {
         panic!(
             "service didn't come up: {}\nlog:\n{}",
@@ -232,13 +237,12 @@ fn runs_as_a_service() {
         return;
     }
     let root = tempfile::tempdir().unwrap();
-    let port = free_port();
     let name = format!("LodestarTest{}", std::process::id());
     let exe = Path::new(env!("CARGO_BIN_EXE_lodestar"));
-    let service = register(&name, exe, None, root.path(), port, None);
+    let service = register(&name, exe, None, root.path(), None);
     let data = root.path().join("Lodestar");
     let log_path = data.join("logs").join("lodestar.log");
-    start_and_check(&service, port, &log_path);
+    start_and_check(&service, &log_path);
 
     // The service created its data folder private: owned by SYSTEM or
     // Administrators, nothing inherited, only SYSTEM, Administrators and
@@ -303,14 +307,12 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     std::fs::create_dir_all(&data).unwrap();
 
     let name = format!("LodestarVa{}", std::process::id());
-    let port = free_port();
     let account = format!("NT SERVICE\\{name}");
     let service = register(
         &name,
         &exe,
         Some(&account),
         &program_data,
-        port,
         Some(root.clone()),
     );
     let sid = service_sid(&name);
@@ -335,7 +337,7 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
     ]);
 
     let log_path = data.join("logs").join("lodestar.log");
-    start_and_check(&service, port, &log_path);
+    start_and_check(&service, &log_path);
     let stopped = stop(&service);
     assert_eq!(
         field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
@@ -386,17 +388,15 @@ fn its_virtual_account_creates_a_missing_folder() {
     let data = program_data.join("Lodestar");
 
     let name = format!("LodestarVn{}", std::process::id());
-    let port = free_port();
     let account = format!("NT SERVICE\\{name}");
     let service = register(
         &name,
         &exe,
         Some(&account),
         &program_data,
-        port,
         Some(root.clone()),
     );
-    start_and_check(&service, port, &data.join("logs").join("lodestar.log"));
+    start_and_check(&service, &data.join("logs").join("lodestar.log"));
     let sid = service_sid(&name);
     let sd = sddl(&data);
     assert!(sd.starts_with(&format!("O:{sid}")), "{sd}");

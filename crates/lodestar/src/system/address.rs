@@ -150,14 +150,20 @@ fn read(store: &Store, kind: Kind) -> Option<Record> {
     let text = match store.setting_text(&kind.key()) {
         Ok(text) => text?,
         Err(e) => {
-            tracing::warn!("address: reading the pending change: {e}");
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_PENDING_UNREADABLE,
+                error = lodestar_log::Error::new(&e)
+            );
             return None;
         }
     };
     match serde_json::from_str::<Record>(&text) {
         Ok(r) if r.kind == kind => Some(r),
         Ok(_) | Err(_) => {
-            tracing::warn!("address: ignoring an unreadable pending change");
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_PENDING_UNREADABLE,
+                error = lodestar_log::Error::kind("unreadable")
+            );
             None
         }
     }
@@ -177,9 +183,9 @@ fn write(store: &mut Store, kind: Kind, record: Option<&Record>) -> bool {
     match result {
         Ok(()) => true,
         Err(e) => {
-            tracing::error!(
-                "address: storing the pending address change failed ({e}); it won't survive a \
-                 restart"
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_SAVE_FAILED,
+                error = lodestar_log::Error::new(&e)
             );
             false
         }
@@ -290,12 +296,18 @@ pub async fn prepare(config: &Config, clock: &dyn Clock) -> Prepared {
     let (store, record) = match opened {
         Ok(Ok(Some(found))) => found,
         Ok(Ok(None)) => return Prepared::nothing(config),
-        Ok(Err(e)) => {
-            tracing::warn!("address: opening the store to check a pending change: {e}");
+        Ok(Err(_)) => {
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_PENDING_UNREADABLE,
+                error = lodestar_log::Error::kind("store_unopened")
+            );
             return Prepared::nothing(config);
         }
         Err(e) => {
-            tracing::warn!("address: {e}");
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_PENDING_UNREADABLE,
+                error = lodestar_log::Error::new(&e)
+            );
             return Prepared::nothing(config);
         }
     };
@@ -304,24 +316,21 @@ pub async fn prepare(config: &Config, clock: &dyn Clock) -> Prepared {
     let now = clock.now();
     match decide(&record, env_set, effective, now) {
         Decision::Leave => {
-            tracing::info!(
-                "address: LODESTAR_HTTP_BIND sets the address; the pending change waits until \
-                 it's removed"
-            );
+            lodestar_log::log_event!(crate::logging::events::ADDRESS_ENV_HOLDS);
             Prepared::nothing(config)
         }
         Decision::Clear(why) => {
-            tracing::info!("address: dropping the pending address change: {why}");
+            lodestar_log::log_event!(crate::logging::events::ADDRESS_CHANGE_DROPPED, reason = why);
             let _ = blocking(store, move |s| write(s, Kind::HttpBind, None)).await;
             Prepared::nothing(config)
         }
         Decision::Revert => {
             let new = record.new_addr().unwrap_or(effective);
-            tracing::warn!(
-                "address: nobody confirmed {} within {} minutes; going back to {}",
-                ui_address(new),
-                WINDOW_SECS / 60,
-                ui_address(record.previous_addr(config.http.bind))
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_REVERTING,
+                address = lodestar_log::Listen(new),
+                previous = lodestar_log::Listen(record.previous_addr(config.http.bind)),
+                minutes = lodestar_log::Count(WINDOW_SECS / 60)
             );
             revert_at_start(config, store, record, new).await
         }
@@ -340,9 +349,11 @@ pub async fn prepare(config: &Config, clock: &dyn Clock) -> Prepared {
                 }
             }
             Err(e) => {
-                tracing::error!(
-                    "address: binding the new address {new} failed ({e}); going back to {}",
-                    ui_address(record.previous_addr(config.http.bind))
+                lodestar_log::log_event!(
+                    crate::logging::events::ADDRESS_BIND_FAILED,
+                    address = lodestar_log::Listen(new),
+                    previous = lodestar_log::Listen(record.previous_addr(config.http.bind)),
+                    error = lodestar_log::Error::io(&e)
                 );
                 revert_at_start(config, store, record, new).await
             }
@@ -390,11 +401,14 @@ async fn revert_at_start(
             reverted: Some((new, previous)),
             ..nothing
         },
-        Err(e) => {
+        Err(_) => {
             // The record stays, so the next start tries again; this run
             // binds the previous address regardless, and says so for the
             // health check.
-            tracing::error!("address: saving the previous address failed: {e}");
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_REVERT_SAVE_FAILED,
+                error = lodestar_log::Error::kind("save_failed")
+            );
             if let Ok(mut store) = Store::open(config.db_path(), config.store_config()) {
                 let record = Record {
                     serving: Some(Value::String(previous.to_string())),
@@ -483,12 +497,11 @@ pub async fn bind(
                 )
             })
             .await?;
-            tracing::warn!(
-                "address: now at {}. Open it and choose \"Keep this address\" within {} \
-                 minutes, or Lodestar goes back to {}",
-                ui_address(config.http.bind),
-                WINDOW_SECS / 60,
-                ui_address(record.previous_addr(base))
+            lodestar_log::log_event!(
+                crate::logging::events::ADDRESS_CONFIRM_NEEDED,
+                address = lodestar_log::Listen(config.http.bind),
+                minutes = lodestar_log::Count(WINDOW_SECS / 60),
+                previous = lodestar_log::Listen(record.previous_addr(base))
             );
             (listener, Some(record))
         }
@@ -496,8 +509,9 @@ pub async fn bind(
             if other.is_some() {
                 // Bound on the pending address, but the registry has since
                 // disagreed: nothing to confirm.
-                tracing::info!(
-                    "address: dropping the pending address change: it no longer applies"
+                lodestar_log::log_event!(
+                    crate::logging::events::ADDRESS_CHANGE_DROPPED,
+                    reason = "no longer applies"
                 );
                 let store = store.clone();
                 tokio::task::spawn_blocking(move || {
@@ -507,11 +521,10 @@ pub async fn bind(
             }
             let addr = fallback.unwrap_or(config.http.bind);
             if fallback.is_some() {
-                tracing::warn!(
-                    "address: serving on {} although the saved address is {}; the previous \
-                     address couldn't be saved back, and the next start tries again",
-                    ui_address(addr),
-                    ui_address(config.http.bind)
+                lodestar_log::log_event!(
+                    crate::logging::events::ADDRESS_SERVING_FALLBACK,
+                    address = lodestar_log::Listen(addr),
+                    saved = lodestar_log::Listen(config.http.bind)
                 );
             }
             let listener = TcpListener::bind(addr)
@@ -757,7 +770,10 @@ impl Address {
                         "storing the kept address failed".into(),
                     ));
                 }
-                tracing::info!("address: kept {}", ui_address(inner.serving));
+                lodestar_log::log_event!(
+                    crate::logging::events::ADDRESS_KEPT,
+                    address = lodestar_log::Listen(inner.serving)
+                );
                 inner.record = None;
                 inner.armed = None;
                 drop(inner);
@@ -799,29 +815,28 @@ impl Address {
         let restarting = match record.state {
             // Never applied: undoing the save is enough.
             Pending::AwaitingRestart => {
-                tracing::info!(
-                    "address: the change to {} was undone before a restart",
-                    record.new_addr().map_or_else(String::new, ui_address)
-                );
+                lodestar_log::log_event!(crate::logging::events::ADDRESS_CHANGE_UNDONE);
                 false
             }
             Pending::AwaitingConfirmation => {
                 inner.reverted = Some((inner.serving, previous));
                 match why {
-                    Why::Expired => tracing::warn!(
-                        "address: nobody confirmed {} within {} minutes; going back to {}",
-                        ui_address(inner.serving),
-                        WINDOW_SECS / 60,
-                        ui_address(previous)
+                    Why::Expired => lodestar_log::log_event!(
+                        crate::logging::events::ADDRESS_REVERTING,
+                        address = lodestar_log::Listen(inner.serving),
+                        previous = lodestar_log::Listen(previous),
+                        minutes = lodestar_log::Count(WINDOW_SECS / 60)
                     ),
-                    Why::Asked => {
-                        tracing::info!("address: going back to {} as asked", ui_address(previous))
-                    }
+                    Why::Asked => lodestar_log::log_event!(
+                        crate::logging::events::ADDRESS_REVERT_ASKED,
+                        address = lodestar_log::Listen(inner.serving),
+                        previous = lodestar_log::Listen(previous)
+                    ),
                 }
                 if !self.restart.available() {
-                    tracing::warn!(
-                        "address: {} applies when Lodestar is next restarted",
-                        ui_address(previous)
+                    lodestar_log::log_event!(
+                        crate::logging::events::ADDRESS_APPLIES_AT_RESTART,
+                        address = lodestar_log::Listen(previous)
                     );
                 }
                 self.restart.available()
@@ -849,7 +864,10 @@ impl Address {
             Err(e) => {
                 // The deadline has passed and the record stays: a restart
                 // goes back before binding, through a fresh registry.
-                tracing::error!("address: going back failed: {e:?}");
+                lodestar_log::log_event!(
+                    crate::logging::events::ADDRESS_REVERT_FAILED,
+                    error = lodestar_log::Error::new(&e)
+                );
                 if self.restart.available() {
                     self.restart.request();
                 }

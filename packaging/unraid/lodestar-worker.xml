@@ -13,7 +13,7 @@
   <Overview>Requires Lodestar v0.6+. A worker adds crawling, metadata fetching and processing capacity to an existing Lodestar and sends the results to it. It keeps no database and no search index and has no web UI. In the main Lodestar, open Settings, then Workers, then Add worker. Copy the address and the one-time token (valid for 15 minutes) into the fields below. The worker only needs to reach the main instance's cluster port (8091/tcp).</Overview>
   <Category>Network:Web Downloaders:Other</Category>
   <WebUI></WebUI>
-  <ExtraParams></ExtraParams>
+  <ExtraParams>--stop-timeout=60</ExtraParams>
   <PostArgs>worker</PostArgs>
   <CPUset/>
   <DateInstalled/>
