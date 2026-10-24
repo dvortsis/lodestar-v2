@@ -37,15 +37,22 @@
 	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs
 	// them at once; otherwise the empty state comes with the first interaction, or after 30 s, as the
 	// shell's chrome does (§10.1: the bare page is Lighthouse's). Their sheets come with them.
+	// The facet rail's host comes with them; it loads the rail itself where the rail shows.
 	type Panel = typeof import('$lib/features/search/results/ResultsPanel.svelte').default;
+	type Host = typeof import('$lib/features/search/facets/FacetsHost.svelte').default;
 	let Results = $state<Panel>();
+	let Facets = $state<Host>();
 	let loadingResults: Promise<unknown> | undefined;
 	function loadResults() {
 		loadingResults ??= Promise.all([
 			import('$lib/features/search/results/ResultsPanel.svelte'),
+			import('$lib/features/search/facets/FacetsHost.svelte'),
 			import('$lib/features/search/results/row.css'),
 			import('$lib/features/search/results/results.css')
-		]).then(([mod]) => (Results = mod.default));
+		]).then(([panel, host]) => {
+			Results = panel.default;
+			Facets = host.default;
+		});
 	}
 	$effect(() => {
 		const p = page.url.searchParams;
@@ -72,7 +79,9 @@
 	<QueryBar bind:this={bar} />
 	<div class="search-grid px-4">
 		<!-- S-search-2: the facet rail. -->
-		<div id="search-rail"></div>
+		<div id="search-rail">
+			{#if Facets}<Facets />{/if}
+		</div>
 		<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
 		<div id="results">
 			{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}

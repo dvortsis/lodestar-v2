@@ -178,9 +178,25 @@ const engagedSearch = viewOf([
 const resultsLazy = [
 	...new Set(RESULTS.flatMap((k) => ownChunk(k, resultsOnDemand, false, engagedSearch)))
 ];
+// The facet rail (S-search-2b): its host loads with the results, and the rail with it where the
+// rail shows (x-large); below that, on the first Filters press, which also brings the sheet (on
+// demand). Measured beyond the engaged view and the results panel it loads with.
+const FACETS = [
+	'src/lib/features/search/facets/FacetsHost.svelte',
+	'src/lib/features/search/facets/FacetRail.svelte'
+];
+const facetsOnDemand = [/ui\/overlays\/Sheet\.svelte$/];
+const facetsLazy = [
+	...new Set(
+		FACETS.flatMap((k) => ownChunk(k, facetsOnDemand, false, [...engagedSearch, ...resultsLazy]))
+	)
+];
+
 // Never pass by measuring nothing: a renamed or moved file must fail here, not drop the entry.
 if (Object.keys(manifest).length && !resultsLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Search results (lazy): no chunk found for ResultsPanel.svelte in the manifest');
+if (Object.keys(manifest).length && !facetsLazy.some((f) => f.endsWith('.js')))
+	throw new Error('Facet rail (lazy): no chunk found for the facet rail in the manifest');
 
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
@@ -242,6 +258,7 @@ export default [
 	// and its virtualiser are 12 KB of it, the panel 5.2 KB, the row 3.9 KB, the row actions 1.9 KB;
 	// the rest is what the shell's Chrome would bring too (the key registry, the event client).
 	entry('Search results (lazy)', resultsLazy, '41.5 KB'),
+	entry('Facet rail (lazy)', facetsLazy, '15 KB'),
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '28.5 KB'),
 	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.4 KB'),
 	entry(

@@ -1,6 +1,6 @@
 # features/search
 
-The search screen (architecture §10.4). The page shell is `routes/search/+page.svelte`. Decisions: `docs/decisions/2026-10-23-S-search-1.md` (the bar), `2026-10-23-S-search-1-part2.md` (the strip and the Syntax popover) and `2026-10-24-S-search-2a.md` (the results list).
+The search screen (architecture §10.4). The page shell is `routes/search/+page.svelte`. Decisions: `docs/decisions/2026-10-23-S-search-1.md` (the bar), `2026-10-23-S-search-1-part2.md` (the strip and the Syntax popover), `2026-10-24-S-search-2a.md` (the results list) and `2026-10-24-S-search-2b.md` (the facet rail).
 
 ## Who owns what
 
@@ -9,7 +9,7 @@ The search screen (architecture §10.4). The page shell is `routes/search/+page.
 | `query/`                            | S-search-1 | The query bar and editor, the highlighter, the error line, the active-filter strip, Syntax popover |
 | `messages/{en,zh}.json`             | all search | One catalogue for the search family; each slice appends keys under its own sub-prefix              |
 | `routes/search/+page.svelte`        | S-search-1 | The page shell; later slices get named mount lines in it                                           |
-| `results/` (list); facet rail (2b)  | S-search-2 | Mounted in `#results` (and `#search-rail`); see `results/README.md`                                |
+| `results/` (list), `facets/` (rail) | S-search-2 | Mounted in `#results` and `#search-rail`; see `results/README.md` and `facets/README.md`           |
 | results toolbar                     | S-search-3 | Mounted at the top of `#results`                                                                   |
 | listbox (autocomplete)              | S-search-4 | Attaches to the editor (see "The editor" below)                                                    |
 | `features/detail/DetailHost.svelte` | S-detail   | Rendered in `#search-drawer` from a lazy glob                                                      |
@@ -22,7 +22,7 @@ Under the heading, the `<search>` landmark holds the bar, its message line and t
 
 | id              | Filled by                   | Notes                                                                                           |
 | --------------- | --------------------------- | ----------------------------------------------------------------------------------------------- |
-| `search-rail`   | S-search-2                  | No landmark role until it has content.                                                          |
+| `search-rail`   | S-search-2                  | `facets/FacetsHost.svelte`: the rail (an `aside`) from x-large, a Filters button below.         |
 | `results`       | S-search-3, then S-search-2 | Toolbar, then the list.                                                                         |
 | `search-drawer` | S-detail                    | `DetailHost.svelte` renders while `'detail' in page.state`; it positions itself per breakpoint. |
 

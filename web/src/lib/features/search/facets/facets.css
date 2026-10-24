@@ -1,0 +1,177 @@
+/* The facet rail (FacetRail.svelte and its groups). A plain sheet, loaded with the rail's chunk:
+   a lazily imported component's own <style> would load with /search's route. Token variables
+   only: utility names would land in the global 20 KB sheet. */
+.fr {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 6);
+	width: 100%;
+	max-width: var(--rail-width);
+	min-width: 0;
+	color: var(--color-base-content);
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+}
+.fr-group {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+}
+.fr-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: calc(var(--spacing) * 2);
+}
+.fr-title {
+	margin: 0;
+	font-size: var(--text-body);
+	line-height: var(--text-body--line-height);
+	font-weight: var(--font-weight-semibold);
+}
+.fr-list {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.fr-value {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+	min-height: calc(var(--spacing) * 8);
+}
+.fr-value .fr-label {
+	flex: 1 1 0;
+	min-width: 0;
+}
+.fr-value.fr-selected .fr-label {
+	font-weight: var(--font-weight-medium);
+}
+.fr-value.fr-excluded .fr-label {
+	text-decoration: line-through;
+	color: var(--color-muted-text);
+}
+.fr-count {
+	flex: none;
+	color: var(--color-muted-text);
+	font-variant-numeric: tabular-nums;
+}
+.fr-icon-button {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: calc(var(--spacing) * 6);
+	height: calc(var(--spacing) * 6);
+	border: 0;
+	border-radius: var(--radius-selector);
+	background: transparent;
+	color: var(--color-muted-text);
+	cursor: pointer;
+}
+.fr-icon-button:hover {
+	background: var(--color-hover);
+}
+.fr-icon-button[aria-pressed='true'] {
+	color: var(--color-error);
+}
+.fr-icon-button:focus-visible,
+.fr-text-button:focus-visible,
+.fr-preset:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}
+.fr-text-button {
+	align-self: flex-start;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--color-primary);
+	font: inherit;
+	text-decoration: underline;
+	text-underline-offset: calc(var(--spacing) / 2);
+	cursor: pointer;
+}
+.fr-muted {
+	margin: 0;
+	color: var(--color-muted-text);
+}
+.fr-presets {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing);
+}
+.fr-preset {
+	min-height: calc(var(--spacing) * 7);
+	padding-inline: calc(var(--spacing) * 2);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-selector);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	font: inherit;
+	cursor: pointer;
+}
+.fr-preset[aria-pressed='true'] {
+	border-color: var(--color-primary);
+	background: var(--color-selected);
+	font-weight: var(--font-weight-medium);
+}
+.fr-preset:disabled {
+	color: var(--color-muted-text);
+	cursor: not-allowed;
+}
+.fr-more > summary {
+	cursor: pointer;
+	font-size: var(--text-body);
+	font-weight: var(--font-weight-semibold);
+}
+.fr-more[open] > summary {
+	margin-block-end: calc(var(--spacing) * 4);
+}
+.fr-more-body {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 6);
+}
+.fr-note {
+	display: flex;
+	gap: var(--spacing);
+	margin: 0;
+	color: var(--color-muted-text);
+	font-size: var(--text-caption);
+	line-height: var(--text-caption--line-height);
+}
+.fr-note .fr-note-icon {
+	flex: none;
+	width: var(--icon-size-row);
+	height: var(--icon-size-row);
+}
+@media (pointer: coarse) {
+	.fr-value,
+	.fr-preset,
+	.fr-icon-button {
+		min-height: var(--target-min);
+	}
+	.fr-icon-button {
+		min-width: var(--target-min);
+	}
+}
+.fr-find {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: var(--control-height-dense);
+	padding-inline: calc(var(--spacing) * 2);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-field);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	font: inherit;
+}
+.fr-find:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}
