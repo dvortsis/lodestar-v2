@@ -206,14 +206,25 @@ export function createResults() {
 		loadMore: () => untrack(loadMore),
 		/**
 		 * The panel unmounted (the person left /search): what was answered before can be stale when
-		 * they come back (a setting changed, the index moved), so the next `load` asks again. The
-		 * rows stay, under the refine hairline, until that answer arrives.
+		 * they come back, and may no longer be allowed (a setting changed, e.g. "Show adult content"
+		 * turned off). So the rows go too, and the next `load` starts from loading, not from the old
+		 * rows under the refine hairline (which an error would then keep on screen).
 		 */
 		forget() {
 			slot.cancel();
 			inflightKey = settledKey = null;
+			hits = [];
+			total = 0;
+			totalApprox = false;
+			notices = [];
+			error = null;
+			cursor = null;
+			moreError = null;
+			shownKey = null;
+			expired = false;
 			refining = false;
 			loadingMore = false;
+			status = 'empty';
 		},
 		/** Retry: the current query again (after an error), or the next page. */
 		retry() {
