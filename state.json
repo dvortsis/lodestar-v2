@@ -1617,7 +1617,7 @@
   "heartbeat-1139": "open: #125 B-update PR1 (af3874e, round 1 in progress), #92 P-release (49fdebe, round 2), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B11b part 2, B-log2; nothing newly ready",
   "heartbeat-1238": "open: #127 B-log2 part 1 (reviews running), #103 W9 + #48 M4 owner-blocked (M4 still on ExitPlanMode prompt; runner answer queued); running: B11b part 2, B-update PR2; nothing newly ready (B-log1b waits B-log2)",
   "heartbeat-1338": "open: #127 B-log2 part 1 (round 1 fixing, 160a1bc), #103 W9 (d89aa6d, baselines), #48 M4 (da63255, merging main); running: B11b part 2, B-update PR2; nothing newly ready",
-  "last_heartbeat": "2026-10-24T15:38Z: idle. No open PRs; main green (CI 14:28Z). v0.5.0 tag not pushed yet (owner action). Freeze owner-held.",
+  "last_heartbeat": "2026-10-24T15:40Z: paused by owner; no open PRs, no running slices.",
   "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
   "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
   "launch_freeze": "SET 2026-10-24T03:31Z by OWNER (typed in session_01SE4bp9YdZmHr8RN4FHpbmm 03:30Z, verified): 'Let's get .5 finished up. You can start the remaining .5 slices when ready. Hold off on starting other slices until .5 is finished.' Owner usage ~7% left, resets 2026-10-30T00:00Z. v0.5 remaining: S-search-2 (2a,2b) -> S-search-3 (same session) -> G-v05. | 2026-10-24T03:38Z OWNER-HELD (typed 03:37Z in session_01SE4bp9YdZmHr8RN4FHpbmm, verified): 'pause starting any new slices that aren't .5 until my say so.' Freeze on non-v0.5 slices persists after G-v05 until the owner lifts it. Paused in-flight work also stays paused until the owner says.",
@@ -1636,7 +1636,8 @@
   "notify_owner_on": "DONE: G-v05 pass notified 09:10Z. Freeze still owner-held.",
   "merged_168": "subscriptions client panic fix merged ef236b19",
   "merged_170": "macOS supervisor tests fixed, merged bbe95fc3 07:58Z; watch main CI on it (log-delete flake may still hit macOS)",
-  "v050": "Owner (typed in runner session 2026-10-24 ~12:45Z): \"Yes, tag as .5\". Version bump PR #172 merged 2e97defe. Tag push v0.5.0 refused (HTTP 403 from git proxy) - owner must push the tag; then approve the release environment; draft release then publish. | Release notes written (owner: \"Please write\") as docs/releases/v0.5.0.md, PR #173 merged. Owner still to: push tag v0.5.0 at 2e97defe (session cannot push tags), approve release env, paste notes, publish draft."
+  "v050": "Owner (typed in runner session 2026-10-24 ~12:45Z): \"Yes, tag as .5\". Version bump PR #172 merged 2e97defe. Tag push v0.5.0 refused (HTTP 403 from git proxy) - owner must push the tag; then approve the release environment; draft release then publish. | Release notes written (owner: \"Please write\") as docs/releases/v0.5.0.md, PR #173 merged. Owner still to: push tag v0.5.0 at 2e97defe (session cannot push tags), approve release env, paste notes, publish draft.",
+  "runner_paused": "PAUSED 2026-10-24T15:40Z by OWNER (typed in runner session: \"pause runner until I start up again.\"). Heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW and watchdog trig_0172BngAUoA4NRaRWBYiRWVf disabled (not deleted). On resume: re-enable both, then reconcile. Pending owner actions: push tag v0.5.0 at 2e97defe, approve release env, paste docs/releases/v0.5.0.md, publish draft. Launch freeze still owner-held."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
