@@ -75,8 +75,22 @@ impl FakePeer {
         behavior: Behavior,
         pex: Vec<SocketAddr>,
     ) -> FakePeer {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
+        let addr = "127.0.0.1:0".parse().expect("addr");
+        FakePeer::spawn_at(addr, seeds, accept, behavior, pex)
+            .await
+            .expect("bind")
+    }
+
+    /// [`spawn`](Self::spawn) on `addr`, which may be taken.
+    pub async fn spawn_at(
+        addr: SocketAddr,
+        seeds: Vec<Seed>,
+        accept: Accept,
+        behavior: Behavior,
+        pex: Vec<SocketAddr>,
+    ) -> std::io::Result<FakePeer> {
+        let listener = TcpListener::bind(addr).await?;
+        let addr = listener.local_addr()?;
         let seeds = Arc::new(seeds);
         let pex = Arc::new(pex);
         let task = tokio::spawn(async move {
@@ -88,11 +102,11 @@ impl FakePeer {
                 });
             }
         });
-        FakePeer {
+        Ok(FakePeer {
             addr,
             task,
             utp: None,
-        }
+        })
     }
 
     /// The same peer, reached over uTP on a loopback UDP port.
