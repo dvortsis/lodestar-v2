@@ -21,6 +21,7 @@ pub mod natural;
 mod percolate;
 pub mod query;
 mod rebuild;
+mod retry_dir;
 pub mod schema;
 mod sorted;
 mod stem;
