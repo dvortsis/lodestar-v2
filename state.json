@@ -1541,7 +1541,8 @@
   "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d",
   "subscriptions-msg-nit": "optional: add \"restart Lodestar to try again\" to filters.subscriptions_client_failed message; Filters screen gives no sign refresh stopped",
   "forget-clears-rows": "S-search-2b must make forget() clear hits/shownKey/status (adult rows visible after toggle-off until answer; persist on error). Verify in 2b review.",
-  "main-macos-supervisor": "main ci-ok red (test macos-latest): supervisor.rs children() reads /proc; 5 tests assert Linux-only features. Runner fix branch fix/supervisor-tests-macos; needs full-ci label/workflow_dispatch for macOS."
+  "main-macos-supervisor": "main ci-ok red (test macos-latest): supervisor.rs children() reads /proc; 5 tests assert Linux-only features. Runner fix branch fix/supervisor-tests-macos; needs full-ci label/workflow_dispatch for macOS.",
+  "log-delete-flake-macos": "logging::source_tests::delete_while_writers_run_and_a_compression_is_in_flight failed on macOS (#170 run 40073135952, 07:27Z): deleted:0 skipped:[] after 600 lines/2 rotations. Passed on prior macOS run. Possible race: delete while compression in flight sees no closed files. For B-log1b session when owner lifts pause (or fix if it recurs on main)."
  },
  "blocked_on_owner": [],
  "launches_today": 32,
