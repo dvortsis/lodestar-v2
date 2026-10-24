@@ -7,13 +7,7 @@ use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
 fn request(port: u16, head: &str, body: &str) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -45,22 +39,22 @@ fn get_with(port: u16, path: &str, cookie: &str) -> String {
 #[test]
 fn serves_status_and_stops_cleanly() {
     let dir = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let bind = format!("127.0.0.1:{port}");
     // Scrape a local tracker nothing listens on, never the public list.
     std::fs::write(
         dir.path().join("config.toml"),
         "[scrape]\ntrackers = [\"udp://127.0.0.1:9\"]\n",
     )
     .unwrap();
-    let env = |c: &mut Command| {
+    // The server binds any port and says which in `app.serving` (an
+    // Info line); the health check is then pointed at that port.
+    let env = |c: &mut Command, bind: &str| {
         c.env("LODESTAR_DATA_DIR", dir.path())
-            .env("LODESTAR_HTTP_BIND", &bind)
+            .env("LODESTAR_HTTP_BIND", bind)
             .env("LODESTAR_DHT_PORT", "0")
-            .env("LODESTAR_LOG", "warn");
+            .env("LODESTAR_LOG", "info");
     };
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
-    env(&mut cmd);
+    env(&mut cmd, common::ANY_PORT);
     let mut child = cmd
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -69,6 +63,7 @@ fn serves_status_and_stops_cleanly() {
     // The first run prints its setup token to the log (§12).
     let stderr = child.stderr.take().unwrap();
     let (token_tx, token_rx) = std::sync::mpsc::channel();
+    let (port_tx, port_rx) = std::sync::mpsc::channel();
     let log = std::thread::spawn(move || {
         use std::io::BufRead;
         let mut all = String::new();
@@ -79,12 +74,19 @@ fn serves_status_and_stops_cleanly() {
             if let Some(rest) = line.split("setup token ").nth(1) {
                 let _ = token_tx.send(rest.split_whitespace().next().unwrap_or("").to_string());
             }
+            if let Some(port) = common::serving_port(&line) {
+                let _ = port_tx.send(port);
+            }
             all.push_str(&line);
             all.push('\n');
         }
         all
     });
 
+    let port = port_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the port it serves on");
+    let bind = format!("127.0.0.1:{port}");
     let start = Instant::now();
     let health = loop {
         if let Some(r) = get(port, "/healthz") {
@@ -99,7 +101,7 @@ fn serves_status_and_stops_cleanly() {
     assert!(health.starts_with("HTTP/1.0 200"), "{health}");
 
     let mut check = Command::new(env!("CARGO_BIN_EXE_lodestar"));
-    env(&mut check);
+    env(&mut check, &bind);
     assert!(check.arg("healthcheck").status().unwrap().success());
 
     // Status and the API need a session; metrics and health don't.
@@ -249,7 +251,7 @@ fn serves_status_and_stops_cleanly() {
 
     // Nothing listening any more: the health check fails.
     let mut check = Command::new(env!("CARGO_BIN_EXE_lodestar"));
-    env(&mut check);
+    env(&mut check, &bind);
     assert!(
         !check
             .arg("healthcheck")

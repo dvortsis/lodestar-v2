@@ -2,7 +2,7 @@
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
-import { checkFirstLoad } from './scripts/first-load.mjs';
+import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
 import { routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
@@ -34,6 +34,15 @@ const strays = checkFirstLoad('/search', search.js);
 if (strays.length)
 	throw new Error(
 		`The search route's first load carries code it doesn't use:\n  ${strays.join('\n  ')}`
+	);
+
+// The route table (kit's app.js) lists no route's JS to preload: that list grew with every route
+// (scripts/first-load.mjs `routePreloads`).
+const appEntry = search.js.find((f) => /\/entry\/app\.[^/]*\.js$/.test(f));
+const preloaded = appEntry ? preloadedJs(readFileSync(appEntry, 'utf8')) : [];
+if (preloaded.length)
+	throw new Error(
+		`The route table preloads other routes' JS on the search route's first load:\n  ${preloaded.join('\n  ')}`
 	);
 
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
@@ -119,12 +128,32 @@ const settingsOnDemand = [
 ];
 const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
 
+// What another route can still add to /search's first load (runner, 2026-10-24):
+// - The route table: one import and one dictionary entry per route, about 27 B gzipped. The budget
+//   allows 1.26 KB (measured with only / and /search) plus 40 B a route, so a route that adds
+//   more fails here.
+// - The vendor chunk holds only modules /search reaches (the stray check above), but it is shared,
+//   so another route that uses more of those modules' exports keeps them in it. Fully used, those
+//   modules measured 31.07 KB (a build without tree-shaking, against 30.42 KB with every route on
+//   main). The budget is that ceiling: another route can't pass it, and only a new dependency of
+//   /search's own can (raise it then, on purpose).
+const routeCount = existsSync('.svelte-kit/generated/client-optimized/app.js')
+	? (readFileSync('.svelte-kit/generated/client-optimized/app.js', 'utf8')
+			.match(/dictionary = (\{[\s\S]*?\});/)?.[1]
+			.match(/"\/[^"]*":/g)?.length ?? 0)
+	: 0;
+const vendor = Object.values(manifest).find((chunk) => chunk.name === 'vendor');
+
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
 	entry('CSS', search.css, '20 KB'),
+	...(appEntry
+		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
+		: []),
+	...(vendor ? [entry('Search vendor chunk', [`build/${vendor.file}`], '31.1 KB')] : []),
 	// Total first load: html + search JS + CSS + the Latin font (fetched at first layout, not preloaded).
 	entry(
 		'Total first load',
@@ -137,10 +166,12 @@ export default [
 	entry('Mono font (lazy)', monoFonts, '25 KB'),
 	// Route budgets (runner decision, owner's §10.1 headroom rules): each route's own JS + CSS.
 	// Measured 25.96 KB with its lazy chunks (the screen, both layouts, labels, formatters, and the
-	// Svelte runtime only this route uses since #132 moved it out of /search's first load).
-	entry('Compare route (own JS + CSS)', own('/compare'), '28 KB'),
-	// Measured 42.4 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
-	// the Svelte runtime only lazy routes use), a 10 KB page with both languages' messages, the key
+	// Svelte runtime only this route uses since #132 moved it out of /search's first load); 28.06 KB
+	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
+	// messages). Limit: measured + 10%.
+	entry('Compare route (own JS + CSS)', own('/compare'), '31 KB'),
+	// Measured 42.8 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
+	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
 	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),

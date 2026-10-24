@@ -4,12 +4,13 @@
 //! becomes `lodestar.log.1` (replacing the previous one) and a new file
 //! starts, so the folder never holds more than twice the cap.
 //!
-//! This stands in until the structured log file of §12.1 exists.
+//! Since B-log1b the service's logging runtime writes its console here
+//! ([`Console`]), beside the structured `lodestar.jsonl`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -19,6 +20,44 @@ pub const MAX_BYTES: u64 = 16 << 20;
 /// `<data>/logs/lodestar.log`.
 pub fn path(data_dir: &Path) -> PathBuf {
     data_dir.join("logs").join("lodestar.log")
+}
+
+/// Creates the logs folder if it's missing. A folder made here holds the
+/// setup token, and is made before the runtime's file sink would make it
+/// (and lock it down), so it's locked down here the same way: only its
+/// owner, SYSTEM and Administrators, whatever an admin-chosen data folder
+/// lets Users read. Failing that, it's removed again and nothing is
+/// written. An existing folder keeps its ACL; the file sink checks it.
+fn create_private(dir: &Path) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    if let Err(e) = lodestar_integrations::secret::restrict_dir_acl(dir) {
+        let _ = fs::remove_dir(dir);
+        return Err(e);
+    }
+    // Until the ACL changed, whoever may write to the data folder could
+    // plant an entry in the new folder (it keeps its own ACL) or swap it
+    // for a link: it must still be an empty real folder.
+    let real = fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir());
+    let empty = fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none());
+    let planted = !(real && empty);
+    if planted {
+        let _ = fs::remove_dir(dir);
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the new logs folder changed before its access was restricted",
+        ));
+    }
+    Ok(())
 }
 
 /// An append-only log file that rotates once at `max` bytes.
@@ -40,7 +79,7 @@ impl LogFile {
     /// Opens (or creates) `path` for appending, creating its folder.
     pub fn open(path: PathBuf, max: u64) -> io::Result<LogFile> {
         if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
+            create_private(dir)?;
         }
         let file = append(&path)?;
         let size = file.metadata()?.len();
@@ -118,6 +157,45 @@ impl<'a> MakeWriter<'a> for LogFile {
     }
 }
 
+/// The logging runtime's console for the service: what it writes for a
+/// line is kept until it flushes, then written as one record, so a line
+/// never straddles a rotation.
+#[derive(Debug)]
+pub struct Console {
+    file: Arc<LogFile>,
+    pending: Vec<u8>,
+}
+
+impl Console {
+    pub fn new(file: Arc<LogFile>) -> Console {
+        Console {
+            file,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl Write for Console {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let line = std::mem::take(&mut self.pending);
+        self.file.write_record(&line)
+    }
+}
+
+impl Drop for Console {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +264,92 @@ mod tests {
         fs::create_dir_all(dir.path().join("logs")).unwrap();
         write(&log, "cccc\n");
         assert_eq!(fs::read_to_string(&p).unwrap(), "cccc\n");
+    }
+
+    /// A logs folder made here is private even inside a data folder that
+    /// lets Users read; an existing one keeps its ACL.
+    #[cfg(windows)]
+    #[test]
+    fn a_new_logs_folder_is_locked_down_first() {
+        let dir = tempfile::tempdir().unwrap();
+        // A data folder anyone in Users may read, as an admin might pick.
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let icacls = Path::new(&root).join("System32").join("icacls.exe");
+        let shared = |p: &Path| {
+            let ok = std::process::Command::new(&icacls)
+                .arg(p)
+                .args(["/grant", "*S-1-5-32-545:(OI)(CI)R"])
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        };
+        shared(dir.path());
+        let _log = LogFile::open(path(dir.path()), MAX_BYTES).unwrap();
+        crate::windows::acl::log_folder(&dir.path().join("logs")).unwrap();
+        // A folder that was already there isn't touched.
+        let kept = dir.path().join("kept");
+        fs::create_dir(&kept).unwrap();
+        let _log = LogFile::open(kept.join("lodestar.log"), MAX_BYTES).unwrap();
+        assert!(crate::windows::acl::log_folder(&kept).is_err());
+    }
+
+    #[test]
+    fn the_console_writes_each_line_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = Arc::new(LogFile::open(path(dir.path()), 40).unwrap());
+        let mut c = Console::new(file.clone());
+        for n in 0..3 {
+            c.write_all(format!("line number {n} of three").as_bytes())
+                .unwrap();
+            c.write_all(b"\n").unwrap();
+            c.flush().unwrap();
+        }
+        // Each line went whole into one file or the other.
+        let now = fs::read_to_string(path(dir.path())).unwrap();
+        let old = fs::read_to_string(file.rotated_path()).unwrap();
+        assert_eq!(now, "line number 2 of three\n");
+        assert_eq!(old, "line number 1 of three\n");
+    }
+
+    /// The service's runtime writes its console here: the setup token's
+    /// line reads as it does on a console, token right after the words,
+    /// and its JSONL file goes to the logs folder beside it.
+    #[test]
+    fn the_service_runtime_writes_the_token_line_here() {
+        use crate::logging::Runtime;
+        use crate::logging::state::Applied;
+        use crate::settings::logging::Logging;
+        use lodestar_log::{Record, Sink, Value};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = Arc::new(LogFile::open(path(dir.path()), MAX_BYTES).unwrap());
+        let section = Logging {
+            file_folder: dir.path().join("logs").display().to_string(),
+            ..Logging::default()
+        };
+        let rt = Runtime::new(
+            Box::new(Console::new(file)),
+            Applied::compute(&section, crate::unix_now()),
+        );
+        rt.open_file();
+        let fields = [
+            ("token", Value::Secret("ABCD-1234-EFGH-5678")),
+            ("address", Value::Listen("0.0.0.0:8191".parse().unwrap())),
+        ];
+        rt.record(&Record {
+            event: &crate::logging::events::AUTH_SETUP_TOKEN::EVENT,
+            fields: &fields,
+        });
+        let log = fs::read_to_string(path(dir.path())).unwrap();
+        assert!(
+            log.contains(
+                "enter setup token ABCD-1234-EFGH-5678 address=\"http://<this host's address>:8191/\"\n"
+            ),
+            "{log}"
+        );
+        let jsonl = fs::read_to_string(dir.path().join("logs").join("lodestar.jsonl")).unwrap();
+        assert!(jsonl.contains(r#""event":"auth.setup_token""#), "{jsonl}");
     }
 }

@@ -186,7 +186,8 @@ Back up the whole directory while the container is stopped.
 
 The compose file sets `stop_grace_period: 60s`: shutdown flushes the index and
 database, which can take longer than Docker's default 10 s. Keep that (or
-`docker stop --time 60`) if you run it another way.
+`docker stop --time 60`) if you run it another way. The Unraid templates pass
+`--stop-timeout=60` in Extra Parameters for the same reason.
 
 ## Health check
 
