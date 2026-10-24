@@ -272,13 +272,13 @@
    "notes": "2026-10-24T02:08Z assigned to S-search-1's session (runner decision: context reuse); brief first (shared row replacing HitRow/AlertHitRow within Discover 42.8/45 & Alert 43.2/45, facet rail, all states, c/ManualMagnet, nested messages, split plan) | 2026-10-24T02:16Z brief approved (2a rows/states/keys/nested msgs + Alerts/Discover row swap; 2b facet rail). Decisions: 2a swaps HitRow (or 2b if #140 not merged); +N/h only from newly-searchable metric else drop; cold-start <1M searchable unless \u00a710.4 says; badges 5; 84 px file-clause lists | 2026-10-24T02:46Z 2a sizes: results lazy 45.1 total / 37.6 beyond Live -> limit 41.5 via beyond() option; Alert 44.36 with lazy alerts/commands; report lhci /search?q=lantern (info) | 2026-10-24T05:08Z #167 2a (400c601, +3.1k incl Discover+Alerts swap): Discover 44.81/45, Alert 44.45/45, results lazy 31.29/34.5 (beyond), bare lhci 96,322; /search?q mobile LCP 3.6s (preload trial for panel); runner review running; 2b local | #167 r1 FIX @400c601a: stale results across remount (content-safety), alerts matched clipped at 390px, boot-shell CLS red, polite recount, test timeouts; beyond=Live set only (limit 41.5); routePreloads narrowed to /search; item5 136ms dropped. Reviewer a6216c8e3aa86facc for re-review. | #167 (2a) MERGED 7d1e11dd after r2 MERGE. 2b may push; required first commit: forget() clears rows (content-safety) + test. | 2b PR #169 @f61ffe04 opened 06:44Z; reviewer a66e767ef86cc584f | #169 r1 FIX: toggles build on stale shown AST (use search.ast); toggle merges positive conjuncts AND->OR; stale lease double ask; unrewritable values disable. Reviewer a66e767ef86cc584f. | #169 (2b) MERGED 5462fa2b after r2 MERGE."
   },
   "S-search-3": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_015U1ernRx1MK1knzFVYDnee",
    "pr": 171,
    "attempt": 0,
    "review_rounds": 1,
-   "notes": "2026-10-24T03:31Z to S-search-2's session after 2b (no new launch) | brief sent 06:50Z; start local, push after #169 merges | built locally e2f024d4 (~790 lines); toolbar lazy 4.0/4.4 approved; +0.22 first load; skip-to-results link required (WCAG 2.4.1). Push after #169. | required: pending clears on search.text change (+test). May push now (07:55Z). | PR #171 @fd114c3a opened 07:57Z (~1,000 lines); reviewer aee1c847e901db774 | #171 r1 FIX (1 blocking: waitFor 1s at ResultsToolbar.test.ts:107; + save() catch toast; doc wording). Runner checks delta directly."
+   "notes": "2026-10-24T03:31Z to S-search-2's session after 2b (no new launch) | brief sent 06:50Z; start local, push after #169 merges | built locally e2f024d4 (~790 lines); toolbar lazy 4.0/4.4 approved; +0.22 first load; skip-to-results link required (WCAG 2.4.1). Push after #169. | required: pending clears on search.text change (+test). May push now (07:55Z). | PR #171 @fd114c3a opened 07:57Z (~1,000 lines); reviewer aee1c847e901db774 | #171 r1 FIX (1 blocking: waitFor 1s at ResultsToolbar.test.ts:107; + save() catch toast; doc wording). Runner checks delta directly. | #171 MERGED 46672773 08:47Z."
   },
   "S-detail": {
    "status": "merged",
