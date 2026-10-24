@@ -2,6 +2,7 @@
 // refused open redirect, rate limiting, and a session that expires mid-use. axe runs on each
 // screen in Riverstone light and dark.
 import { expectNoA11yViolations } from './a11y';
+import { body } from './search-results.fixtures';
 import { expect, test } from './support/test';
 
 const TOKEN = 'AB12-CD34-EF56-7890';
@@ -124,6 +125,8 @@ test('sign in returns to next', async ({ page, go, mock }) => {
 	);
 	// The search page parses the query it lands on (S-search-1).
 	mock.on('parseQuery', { ast: { op: 'word', field: 'any', word: 'ubuntu' }, canonical: 'ubuntu' });
+	// ...and asks for its results (S-search-2): none, so the request can't outlive the test unmocked.
+	mock.on('searchPost', body([], { canonical: 'ubuntu' }));
 	await go(`/login?next=${encodeURIComponent('/search?q=ubuntu&sort=size')}`);
 	await page.getByLabel('Password').fill('not it at all');
 	await page.getByRole('button', { name: 'Sign in' }).click();
