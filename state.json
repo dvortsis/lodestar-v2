@@ -281,13 +281,13 @@
       "notes": ""
     },
     "S-detail": {
-      "status": "fixing",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01Vw3taNg7BTdtsCqWtZVMP3",
       "pr": 139,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review | 2026-10-23T22:54Z released 3rd of 4 | 2026-10-23T23:17Z pushed dc0b279 (drawer 26.9/29.2, /t 22.4/24.3, on-demand 27.0/29.7; search JS 41.09; lhci 97,561); first runner fresh review running | 2026-10-23T23:37Z #139 review FIX: drawer stuck hidden after 2nd push (blocking, reproduced); fixed sleep in fixture spec; marker. Important: leechers \u2248, worker onerror, coalesce tree builds, bidi display helper lib/util/bidi.ts, ManualMagnet mount, DetailHost static fan-out (+0.74 search JS, other routes +1-2 KB) | 2026-10-24T00:00Z fixes pushed 086d80b (all items; thin DetailHost; search JS 40.88; lhci 95,237; drawer 25.9/28.5); marker kept for CI baseline regen, then removal push; runner checks delta then | 2026-10-24T00:26Z fef8bc3 delta OK (open.ts one entry/session, bidi helper); playwright red -> asked session to triage",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review | 2026-10-23T22:54Z released 3rd of 4 | 2026-10-23T23:17Z pushed dc0b279 (drawer 26.9/29.2, /t 22.4/24.3, on-demand 27.0/29.7; search JS 41.09; lhci 97,561); first runner fresh review running | 2026-10-23T23:37Z #139 review FIX: drawer stuck hidden after 2nd push (blocking, reproduced); fixed sleep in fixture spec; marker. Important: leechers \u2248, worker onerror, coalesce tree builds, bidi display helper lib/util/bidi.ts, ManualMagnet mount, DetailHost static fan-out (+0.74 search JS, other routes +1-2 KB) | 2026-10-24T00:00Z fixes pushed 086d80b (all items; thin DetailHost; search JS 40.88; lhci 95,237; drawer 25.9/28.5); marker kept for CI baseline regen, then removal push; runner checks delta then | 2026-10-24T00:26Z fef8bc3 delta OK (open.ts one entry/session, bidi helper); playwright red -> asked session to triage | 2026-10-24T01:06Z #139 merged 916be2f",
       "catch_ups": 0
     },
     "D-docker": {
@@ -489,7 +489,7 @@
       "pr": 140,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason | 2026-10-24T01:06Z released 4th of 4; runner independent review after push",
       "catch_ups": 0
     },
     "S-alerts": {
