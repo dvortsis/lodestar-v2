@@ -42,3 +42,10 @@ Measured on `main` at 9c270ad (`/search`, gzipped), against a copy with only `/`
 | Mobile LCP       | about 1.5 s | about 1.5 s |
 
 What another route can still add is the route table's 27 B or so per route, plus vendor growth up to the 31.1 KB ceiling. About 0.7 KB of the ceiling is left today, and it is spent only once, however many routes land.
+
+## Also in this PR: S-detail's loading state (runner, named hook edit)
+
+- **What failed:** CI caught an axe `aria-prohibited-attr` on `/t/{hash}`'s loading placeholder (`DetailView.svelte`), a `div` with `aria-label` and no role.
+  - The smoke test runs axe once the heading shows, which can be before the torrent arrives. So it failed only when a run caught the loading state: 1 in 36 on CI.
+- **The fix:** the placeholder is a polite status (`role="status"`), with its label and `aria-busy`. It goes away when the torrent loads, so the loaded page is unchanged.
+- **Test:** `detail.routes.test.ts` holds the torrent, runs axe on the loading state, then on the loaded page. The test fails without the role.
