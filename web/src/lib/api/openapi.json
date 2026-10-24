@@ -5974,6 +5974,85 @@
         ]
       }
     },
+    "/updates/install": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Installs a release: at once (`now`, skipping the window and the wait),\nor at the next install window (`window`). Answers at once: the\ndownload, the checks and the restart follow on the `updates` topic.",
+        "operationId": "installUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Started, or queued for the window.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`unknown_version`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture or Windows).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`manual_confirmation_required`: the release has manual steps.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/updates/pause": {
       "post": {
         "tags": [
@@ -7552,7 +7631,7 @@
               "string",
               "null"
             ],
-            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`channel_unavailable` or `not_built_yet`; or, when `unavailable`\nis set, the same reason (`windows_helper`, …). Install\nautomatically then behaves as Check and notify."
+            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`skipped_unreadable`, `noexec_unknown` or `channel_unavailable`;\nor, when `unavailable`\nis set, the same reason (`windows_helper`, …). Install\nautomatically then behaves as Check and notify."
           }
         }
       },
@@ -12052,6 +12131,57 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "InstallRequest": {
+        "type": "object",
+        "description": "`POST /updates/install`. A release with manual steps needs\n`confirm_manual: true` (the steps are in its notes), else\n`422 manual_confirmation_required`.",
+        "required": [
+          "version",
+          "when"
+        ],
+        "properties": {
+          "confirm_manual": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string",
+            "description": "When `POST /updates/install` installs.",
+            "enum": [
+              "now",
+              "window"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "confirm_manual": false,
+          "version": "0.6.0",
+          "when": "now"
+        }
+      },
+      "Installing": {
+        "type": "object",
+        "description": "An install under way or queued for the window.",
+        "required": [
+          "version",
+          "when"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string",
+            "description": "When `POST /updates/install` installs.",
+            "enum": [
+              "now",
+              "window"
+            ]
           }
         }
       },
@@ -18309,6 +18439,7 @@
           "policy",
           "releases",
           "pending",
+          "installing",
           "rollback",
           "notices",
           "history"
@@ -18322,6 +18453,17 @@
             "items": {
               "$ref": "#/components/schemas/HistoryEntry"
             }
+          },
+          "installing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Installing",
+                "description": "An install under way (`now`), or one asked for at the next window\n(`window`); null otherwise. Progress is on the `updates` topic."
+              }
+            ]
           },
           "notices": {
             "type": "array",

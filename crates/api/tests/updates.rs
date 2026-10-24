@@ -82,8 +82,8 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
             withdrawn: false,
         },
         capability: Capability {
-            can_install: false,
-            reason: Some("not_built_yet".into()),
+            can_install: true,
+            reason: None,
         },
         policy: Policy {
             mode: "notify".into(),

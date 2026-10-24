@@ -1855,6 +1855,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/updates/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Installs a release: at once (`now`, skipping the window and the wait),
+         *     or at the next install window (`window`). Answers at once: the
+         *     download, the checks and the restart follow on the `updates` topic.
+         */
+        post: operations["installUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/updates/pause": {
         parameters: {
             query?: never;
@@ -2401,7 +2422,8 @@ export interface components {
             /**
              * @description Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
              *     `package_managed`, `image_mode`, `trust_damaged`,
-             *     `channel_unavailable` or `not_built_yet`; or, when `unavailable`
+             *     `skipped_unreadable`, `noexec_unknown` or `channel_unavailable`;
+             *     or, when `unavailable`
              *     is set, the same reason (`windows_helper`, …). Install
              *     automatically then behaves as Check and notify.
              */
@@ -4379,6 +4401,34 @@ export interface components {
             serve: number | null;
             /** Format: int64 */
             understand: number;
+        };
+        /**
+         * @description `POST /updates/install`. A release with manual steps needs
+         *     `confirm_manual: true` (the steps are in its notes), else
+         *     `422 manual_confirmation_required`.
+         * @example {
+         *       "confirm_manual": false,
+         *       "version": "0.6.0",
+         *       "when": "now"
+         *     }
+         */
+        InstallRequest: {
+            confirm_manual?: boolean;
+            version: string;
+            /**
+             * @description When `POST /updates/install` installs.
+             * @enum {string}
+             */
+            when: "now" | "window";
+        };
+        /** @description An install under way or queued for the window. */
+        Installing: {
+            version: string;
+            /**
+             * @description When `POST /updates/install` installs.
+             * @enum {string}
+             */
+            when: "now" | "window";
         };
         /** @enum {string} */
         JobPhase: "reading" | "quarantine" | "tombstones" | "done";
@@ -7324,6 +7374,7 @@ export interface components {
         UpdatesStatus: {
             capability: components["schemas"]["Capability"];
             history: components["schemas"]["HistoryEntry"][];
+            installing: null | components["schemas"]["Installing"];
             /**
              * @description `revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,
              *     `pending_unwritable`, `bad_overlay`, `rolled_back`,
@@ -11135,6 +11186,67 @@ export interface operations {
             };
             /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Started, or queued for the window. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `unknown_version`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `version_skipped`; `install_unavailable` with the reason; or `updates_unavailable` (a fixture or Windows). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `manual_confirmation_required`: the release has manual steps. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

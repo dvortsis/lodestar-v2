@@ -1913,6 +1913,50 @@ mod tests {
         );
     }
 
+    /// A version in probation announces `checking_health` at start; a
+    /// rollback the history records is announced once, not again.
+    #[tokio::test]
+    async fn the_start_announces_probation_and_a_rollback_once() {
+        let e = env(Mode::Notify);
+        let bin = Bin::open(e.dir.path()).unwrap();
+        bin.write(
+            "pending",
+            &pending::Pending {
+                format: pending::PENDING_FORMAT,
+                version: "0.5.0".into(),
+                previous: "0.4.9".into(),
+                kind: pending::Kind::Install,
+                attempts: 1,
+                used_ms: 0,
+                index_before: vec![],
+            },
+        )
+        .unwrap();
+        history::append(
+            &bin,
+            history::Entry {
+                version: "0.5.1".into(),
+                from: "0.5.0".into(),
+                level: None,
+                at: 1_000,
+                result: history::Outcome::RolledBack,
+                reason: Some("selftest".into()),
+                lost_torrents: None,
+                journal: Some(1_000),
+            },
+        )
+        .unwrap();
+        e.engine.announce_start();
+        assert_eq!(
+            e.states(),
+            [UpdatesState::CheckingHealth, UpdatesState::RolledBack]
+        );
+        lock(&e.events).clear();
+        // A restart: the rollback was announced; probation still runs.
+        e.engine.announce_start();
+        assert_eq!(e.states(), [UpdatesState::CheckingHealth]);
+    }
+
     #[tokio::test]
     async fn a_damaged_trust_file_blocks_installs_and_is_never_overwritten() {
         let e = env(Mode::Auto);
