@@ -17,7 +17,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import EmptyState from '$lib/ui/feedback/EmptyState.svelte';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
-	import { VirtualList } from '$lib/ui/lists';
+	import VirtualList from '$lib/ui/lists/VirtualList.svelte';
 	import { defaultRowHeight, tokenPx } from '$lib/ui/overlays/motion';
 	import { Discover, type HitGroup, type SearchHit } from './discover.svelte';
 	import HitRow from './HitRow.svelte';
@@ -110,7 +110,7 @@
 		const pop = keys.pushScope('discover');
 		const off = [
 			keys.register({
-				id: 'list.next',
+				id: 'results.next',
 				title: () => m.discover_key_next(),
 				section: () => m.discover_section(),
 				scope: 'discover',
@@ -118,7 +118,7 @@
 				run: () => step(1)
 			}),
 			keys.register({
-				id: 'list.previous',
+				id: 'results.previous',
 				title: () => m.discover_key_previous(),
 				section: () => m.discover_section(),
 				scope: 'discover',
