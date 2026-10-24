@@ -330,7 +330,6 @@ pub async fn prepare(config: &Config, clock: &dyn Clock) -> Prepared {
                 crate::logging::events::ADDRESS_REVERTING,
                 address = lodestar_log::Listen(new),
                 previous = lodestar_log::Listen(record.previous_addr(config.http.bind)),
-                why = "unconfirmed",
                 minutes = lodestar_log::Count(WINDOW_SECS / 60)
             );
             revert_at_start(config, store, record, new).await
@@ -826,15 +825,12 @@ impl Address {
                         crate::logging::events::ADDRESS_REVERTING,
                         address = lodestar_log::Listen(inner.serving),
                         previous = lodestar_log::Listen(previous),
-                        why = "unconfirmed",
                         minutes = lodestar_log::Count(WINDOW_SECS / 60)
                     ),
                     Why::Asked => lodestar_log::log_event!(
-                        crate::logging::events::ADDRESS_REVERTING,
+                        crate::logging::events::ADDRESS_REVERT_ASKED,
                         address = lodestar_log::Listen(inner.serving),
-                        previous = lodestar_log::Listen(previous),
-                        why = "asked",
-                        minutes = lodestar_log::Count(WINDOW_SECS / 60)
+                        previous = lodestar_log::Listen(previous)
                     ),
                 }
                 if !self.restart.available() {

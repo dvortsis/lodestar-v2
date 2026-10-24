@@ -464,14 +464,22 @@ lodestar_log::catalogue! {
         message: "address: dropping the pending address change",
         fields: { reason: Label },
     }
-    /// Nobody confirmed the new address in time (or the change was asked
-    /// to be undone): going back.
+    /// Nobody confirmed the new address within `minutes`: going back.
     ADDRESS_REVERTING {
         id: "address.reverting",
         component: System,
         level: Warn,
-        message: "address: going back to the previous address",
-        fields: { address: Label, previous: Label, why: Label, minutes: Label },
+        message: "address: going back to the previous address; nobody confirmed the new one in time",
+        fields: { address: Label, previous: Label, minutes: Label },
+    }
+    /// The admin asked to undo an address change waiting for
+    /// confirmation: going back.
+    ADDRESS_REVERT_ASKED {
+        id: "address.revert_asked",
+        component: System,
+        level: Info,
+        message: "address: going back to the previous address, as asked",
+        fields: { address: Label, previous: Label },
     }
     /// The new address couldn't be bound: going back.
     ADDRESS_BIND_FAILED {

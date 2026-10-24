@@ -204,7 +204,11 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match runtime.block_on(serve_as(config, supervised)) {
+            let served = runtime.block_on(serve_as(config, supervised));
+            // A blocking task still running (a stuck read, a download's
+            // reader) can't hold the exit.
+            runtime.shutdown_timeout(services::RUNTIME_GRACE);
+            match served {
                 Ok(Some(code)) => ExitCode::from(code),
                 Ok(None) => ExitCode::SUCCESS,
                 Err(e) => command_failed("serve", &*e),

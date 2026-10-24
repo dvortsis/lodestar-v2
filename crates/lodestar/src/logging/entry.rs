@@ -37,6 +37,10 @@ pub enum FieldType {
     Data(Kind),
     Error,
     Label,
+    /// An address to open (`Listen`): a label in the file, as it is
+    /// (`0.0.0.0:8191`); on the console, the URL a person opens
+    /// (`http://<this host's address>:8191/`).
+    Listen,
     /// The setup token: `setup_token` in the file, written bare on the
     /// console.
     Secret,
@@ -49,7 +53,7 @@ impl FieldType {
         match self {
             FieldType::Data(k) => k.name(),
             FieldType::Error => "error",
-            FieldType::Label => "label",
+            FieldType::Label | FieldType::Listen => "label",
             // Its own kind, so a reader redacts it by kind, not by name.
             FieldType::Secret => "setup_token",
             FieldType::Untyped => "untyped",
@@ -175,6 +179,7 @@ impl Entry {
             .map(|(name, v)| {
                 let kind = match v {
                     lodestar_log::Value::Secret(_) => FieldType::Secret,
+                    lodestar_log::Value::Listen(_) => FieldType::Listen,
                     _ => match v.kind() {
                         FieldKind::Data(k) => FieldType::Data(k),
                         FieldKind::Error => FieldType::Error,
@@ -428,6 +433,14 @@ impl Entry {
                 FieldType::Secret => {
                     let _ = write!(line, " {}", f.value.text());
                 }
+                FieldType::Listen => {
+                    let text = f.value.text();
+                    let shown = match text.parse() {
+                        Ok(addr) => crate::ops::ui_address(addr),
+                        Err(_) => text.into_owned(),
+                    };
+                    let _ = write!(line, " {}={}", f.name, quote(&shown));
+                }
                 _ => {
                     let _ = write!(line, " {}={}", f.name, quote(&f.value.text()));
                 }
@@ -595,6 +608,33 @@ mod tests {
             "{}",
             s.text()
         );
+    }
+
+    /// An address to open reads as a URL on the console and as it is in
+    /// the file.
+    #[test]
+    fn addresses_read_as_urls_on_the_console() {
+        for (addr, console) in [
+            (
+                "0.0.0.0:8191",
+                r#"address="http://<this host's address>:8191/""#,
+            ),
+            ("192.168.1.5:8191", "address=http://192.168.1.5:8191/"),
+        ] {
+            let fields = [("address", Value::Listen(addr.parse().unwrap()))];
+            let r = Record {
+                event: &TOKEN::EVENT,
+                fields: &fields,
+            };
+            let e = Entry::typed(Stamp { millis: 0 }, &r, Mask::PRIVATE, None);
+            assert!(e.text().ends_with(console), "{}", e.text());
+            let v: serde_json::Value = serde_json::from_str(&e.json(None, None)).unwrap();
+            assert_eq!(
+                v["fields"]["address"],
+                serde_json::json!({"kind": "label", "value": addr}),
+                "{v}"
+            );
+        }
     }
 
     #[test]

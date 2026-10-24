@@ -538,6 +538,12 @@ impl Services {
 /// signal fires (B-log1b, §2.19).
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
+/// How long the runtime waits, once serving has ended, for blocking tasks
+/// still running (a stuck read): the exit, and the Windows service's stop,
+/// never hang on one. With [`SHUTDOWN_GRACE`] and the saves, inside the
+/// update supervisor's and the SCM's 30 s.
+pub const RUNTIME_GRACE: Duration = Duration::from_secs(5);
+
 /// Resolves `grace` after `stopping` turns true; never if it doesn't.
 async fn forced_after(mut stopping: watch::Receiver<bool>, grace: Duration) {
     while !*stopping.borrow_and_update() {
