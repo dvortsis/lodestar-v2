@@ -10,6 +10,7 @@
 //! exchange runs under one deadline.
 
 mod fetch;
+pub mod log_events;
 pub mod message;
 pub mod mse;
 mod rc4;

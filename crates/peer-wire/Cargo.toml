@@ -15,6 +15,7 @@ testing = []
 [dependencies]
 lodestar-bencode.workspace = true
 lodestar-metainfo.workspace = true
+lodestar-log.workspace = true
 # Path rather than workspace dependency: the root manifest isn't this
 # slice's to edit.
 lodestar-utp = { path = "../utp" }
