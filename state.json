@@ -1540,7 +1540,8 @@
   "docs-operations-firstrun": "2026-10-24T02:00Z docs/operations.md:86 first-run example stale (setup token line now shows http://<this host's address>:PORT/); for docs follow-up",
   "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d",
   "subscriptions-msg-nit": "optional: add \"restart Lodestar to try again\" to filters.subscriptions_client_failed message; Filters screen gives no sign refresh stopped",
-  "forget-clears-rows": "S-search-2b must make forget() clear hits/shownKey/status (adult rows visible after toggle-off until answer; persist on error). Verify in 2b review."
+  "forget-clears-rows": "S-search-2b must make forget() clear hits/shownKey/status (adult rows visible after toggle-off until answer; persist on error). Verify in 2b review.",
+  "main-macos-supervisor": "main ci-ok red (test macos-latest): supervisor.rs children() reads /proc; 5 tests assert Linux-only features. Runner fix branch fix/supervisor-tests-macos; needs full-ci label/workflow_dispatch for macOS."
  },
  "blocked_on_owner": [],
  "launches_today": 32,
@@ -1613,7 +1614,7 @@
   "heartbeat-1139": "open: #125 B-update PR1 (af3874e, round 1 in progress), #92 P-release (49fdebe, round 2), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B11b part 2, B-log2; nothing newly ready",
   "heartbeat-1238": "open: #127 B-log2 part 1 (reviews running), #103 W9 + #48 M4 owner-blocked (M4 still on ExitPlanMode prompt; runner answer queued); running: B11b part 2, B-update PR2; nothing newly ready (B-log1b waits B-log2)",
   "heartbeat-1338": "open: #127 B-log2 part 1 (round 1 fixing, 160a1bc), #103 W9 (d89aa6d, baselines), #48 M4 (da63255, merging main); running: B11b part 2, B-update PR2; nothing newly ready",
-  "last_heartbeat": "2026-10-24T03:38Z: owner-held freeze on non-v0.5. Active: S-search-2 (2a building). Open PRs: #163 CI running (merge on green), #166 Windows CI running (merge on green), #140 conflicted on .size-limit.mjs -> catch-up asked. Paused: B-update, S-settings-1, M-settings-form, X-sleeps, B-log1b 4b.",
+  "last_heartbeat": "2026-10-24T06:40Z: no open PRs; S-search-2b local in session_015U1e (size limit 16.8 decided); main red on macOS only since #150 unmasked it: 7 supervisor tests read /proc -> fix/supervisor-tests-macos (runner) in progress. Freeze held by owner.",
   "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
   "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
   "launch_freeze": "SET 2026-10-24T03:31Z by OWNER (typed in session_01SE4bp9YdZmHr8RN4FHpbmm 03:30Z, verified): 'Let's get .5 finished up. You can start the remaining .5 slices when ready. Hold off on starting other slices until .5 is finished.' Owner usage ~7% left, resets 2026-10-30T00:00Z. v0.5 remaining: S-search-2 (2a,2b) -> S-search-3 (same session) -> G-v05. | 2026-10-24T03:38Z OWNER-HELD (typed 03:37Z in session_01SE4bp9YdZmHr8RN4FHpbmm, verified): 'pause starting any new slices that aren't .5 until my say so.' Freeze on non-v0.5 slices persists after G-v05 until the owner lifts it. Paused in-flight work also stays paused until the owner says.",
