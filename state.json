@@ -483,13 +483,13 @@
       "catch_ups": 1
     },
     "S-discover": {
-      "status": "review",
+      "status": "in_review",
       "model": "sonnet",
       "session": "session_01WDCNhJgVXT9PMQKAiwhGkv",
       "pr": 140,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason | 2026-10-24T01:06Z released 4th of 4; runner independent review after push",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason | 2026-10-24T01:06Z released 4th of 4; runner independent review after push | 2026-10-24T01:25Z pushed 3de5104 (/discover own 42.29/45); runner independent review running",
       "catch_ups": 0
     },
     "S-alerts": {
@@ -1623,7 +1623,7 @@
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
     "m4-done": "satisfied 035ca7f",
-    "main_red": "2026-10-23T21:28Z resolved: #150 merged 2bef5df (macOS FIFO test)",
+    "main_red": "2026-10-24T01:25Z main web size red since #139 (Compare 28.06>28) -> runner #160 (31 KB, measured+10%). macOS tests/supervisor failed on 004e710 (#156 merge): 7 tests 'no child started (after 120 s)' - watching 54c7dd2 run",
     "csp_test": "2026-10-23T21:53Z runner PR #153: CSP test expected 2 inline scripts, boot-nav made 3 (only with real web/build; prod CSP derived, unaffected) | 2026-10-23T22:47Z #153 merged 21cff90"
   },
   "registered_sessions": {},
