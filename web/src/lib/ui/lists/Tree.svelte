@@ -5,6 +5,7 @@
 	import IconCaretRight from '~icons/ph/caret-right';
 	import IconFolder from '~icons/ph/folder';
 	import IconFile from '~icons/ph/file';
+	import IconCheck from '~icons/ph/check';
 	import VirtualList from './VirtualList.svelte';
 	import {
 		buildIndex,
@@ -34,6 +35,8 @@
 		index?: TreeIndex;
 		/** Row height in px, fixed per density. Defaults to `--row-height-compact`. */
 		rowHeight?: number;
+		/** Text for the marker on `marked` nodes ("Matched"). */
+		markedLabel?: string;
 		class?: string;
 	}
 	let {
@@ -46,6 +49,7 @@
 		onActivate,
 		index: indexProp,
 		rowHeight,
+		markedLabel = '',
 		class: className = ''
 	}: Props = $props();
 
@@ -197,7 +201,11 @@
 			{:else}
 				<IconFile class="size-(--icon-size-row) shrink-0 text-muted-text" aria-hidden="true" />
 			{/if}
-			<span class="min-w-0 flex-1 truncate">{n.name}</span>
+			<span class="min-w-0 flex-1 truncate {n.marked ? 'font-medium' : ''}">{n.name}</span>
+			{#if n.marked}
+				<IconCheck class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
+				<span class="sr-only">{markedLabel}</span>
+			{/if}
 			{#if n.size}
 				<span class="shrink-0 text-small text-muted-text tabular-nums">{n.size}</span>
 			{/if}

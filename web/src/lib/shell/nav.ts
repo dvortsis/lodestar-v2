@@ -41,6 +41,7 @@ export const MORE: readonly MoreItem[] = [
 /** Whether `pathname` is inside the destination (`/insights/harvest` is inside `/insights`). */
 export function isActive(destination: Destination, pathname: string): boolean {
 	const root = '/' + destination.href.split('/')[1];
+	if (destination.id === 'search' && pathname.startsWith('/t/')) return true;
 	return pathname === root || pathname.startsWith(root + '/');
 }
 

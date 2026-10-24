@@ -1,4 +1,27 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
-	"common_language_name": "中文"
+	"adult_kind_audio": "音频",
+	"adult_kind_comics": "漫画",
+	"adult_kind_game": "游戏",
+	"adult_kind_movie": "电影",
+	"adult_kind_photos": "照片",
+	"adult_kind_scene": "场景",
+	"adult_kind_vr": "VR",
+	"archives": "压缩包",
+	"common_language_name": "中文",
+	"content_type_adult": "成人",
+	"content_type_audiobook": "有声书",
+	"content_type_comic": "漫画",
+	"content_type_ebook": "电子书",
+	"content_type_game": "游戏",
+	"content_type_images": "图片",
+	"content_type_movie": "电影",
+	"content_type_music": "音乐",
+	"content_type_other": "其他",
+	"content_type_software": "软件",
+	"content_type_tv": "剧集",
+	"content_type_video": "视频",
+	"documents": "文档",
+	"dominant_share": "{share}{group}",
+	"images": "图片"
 }
