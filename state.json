@@ -278,7 +278,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-24T03:31Z to S-search-2's session after 2b (no new launch) | brief sent 06:50Z; start local, push after #169 merges"
+   "notes": "2026-10-24T03:31Z to S-search-2's session after 2b (no new launch) | brief sent 06:50Z; start local, push after #169 merges | built locally e2f024d4 (~790 lines); toolbar lazy 4.0/4.4 approved; +0.22 first load; skip-to-results link required (WCAG 2.4.1). Push after #169."
   },
   "S-detail": {
    "status": "merged",
@@ -1584,7 +1584,8 @@
   "2026-10-23T23:35Z UPDATE Settings question: measured with 'shell excluded' (owner's own wording) screen = 52.3 KB now; after S-settings-1 trims est 48-50; with option A (edit chunk on demand) ~40. B would need ~55.",
   "2026-10-24T01:02Z \u00a72.19 flags (B-log1b): shutdown bounded at 10 s after a stalled client (Unraid templates get --stop-timeout=60 so the save isn't SIGKILLed); address lines show http://<host>:PORT/ in text logs, raw bind address in JSONL",
   "2026-10-24T01:30Z \u00a72.19 (S-search-1 #161): to keep /search's first load from growing per route, other routes' JS is no longer preloaded from the entry; it loads on hover/touch (small waterfall on first visit to another page; measured before merge)",
-  "2026-10-24T03:14Z RESOLVED: Settings budget -> owner chose A"
+  "2026-10-24T03:14Z RESOLVED: Settings budget -> owner chose A",
+  "G-v05 flags (\u00a72.19, S-search-3): density replaces history entry; swarm sorts withheld until W5 accepts them; search user-guide chapter follow-up. (S-search-2b): Size open top edge reads \"\u2014\"; Seeders/Trackers \"Not available yet\" until M4."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
