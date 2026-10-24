@@ -1538,7 +1538,7 @@
     "paraglide-per-locale": "2026-10-23T23:37Z idea: Paraglide 2.29 experimentalStaticLocale per-locale builds (en/zh) would drop the other locale's strings from every message module (every route). Needs Rust embed/serve per locale (cookie/Accept-Language). Evaluate as a perf slice after M5 web lands; owner-visible (binary size).",
     "bidi-search-rows": "2026-10-23T23:37Z after #139: apply lib/util/bidi.ts to search result rows (S-search-1/2)",
     "docs-operations-firstrun": "2026-10-24T02:00Z docs/operations.md:86 first-run example stale (setup token line now shows http://<this host's address>:PORT/); for docs follow-up",
-    "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr)"
+    "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d"
   },
   "blocked_on_owner": [],
   "launches_today": 32,
