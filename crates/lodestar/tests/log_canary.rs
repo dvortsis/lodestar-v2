@@ -701,6 +701,18 @@ fn run_1_private_shows_no_fixture_identifier() {
         all_file.contains("\"event\":\"app.start\""),
         "start-up lines reach the file"
     );
+    // The start-up and shutdown lines are there (B-log1b part 2b).
+    logged(
+        &all_console,
+        &all_file,
+        &[
+            "app.hot_columns",
+            "app.serving",
+            "app.stopping",
+            "app.stopped_cleanly",
+            "app.stop",
+        ],
+    );
     // A subscription's URL is hidden with URLs off.
     assert!(!all_file.contains("127.0.0.1:9/"), "{all_file}");
 }

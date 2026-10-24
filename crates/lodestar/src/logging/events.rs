@@ -26,7 +26,7 @@ lodestar_log::catalogue! {
         level: Info,
         required: true,
         message: "Lodestar stopped",
-        fields: {},
+        fields: { clean: Label },
     }
     /// A panic, from the hook `settings::log::init` installs. The panic's
     /// message can hold anything, so only where it happened is shown.
@@ -44,7 +44,7 @@ lodestar_log::catalogue! {
         component: System,
         level: Info,
         required: true,
-        message: "Lodestar is restarting",
+        message: "restart requested: shutting down, then starting again",
         fields: {},
     }
     /// The first-run setup token (§12; call site: the follow-up sweep,
@@ -430,5 +430,394 @@ lodestar_log::catalogue! {
         level: Warn,
         message: "A percolator run failed; retrying",
         fields: { panicked: Label, error: Error },
+    }
+    /// The pending address change couldn't be read; none applies.
+    ADDRESS_PENDING_UNREADABLE {
+        id: "address.pending_unreadable",
+        component: System,
+        level: Warn,
+        message: "address: the pending address change couldn't be read; it's ignored",
+        fields: { error: Error },
+    }
+    /// The pending address change couldn't be stored: it won't survive a
+    /// restart.
+    ADDRESS_SAVE_FAILED {
+        id: "address.save_failed",
+        component: System,
+        level: Error,
+        message: "address: storing the pending address change failed; it won't survive a restart",
+        fields: { error: Error },
+    }
+    /// `LODESTAR_HTTP_BIND` sets the address; the pending change waits.
+    ADDRESS_ENV_HOLDS {
+        id: "address.env_holds",
+        component: System,
+        level: Info,
+        message: "address: LODESTAR_HTTP_BIND sets the address; the pending change waits until it's removed",
+        fields: {},
+    }
+    /// The pending change no longer applies and is dropped.
+    ADDRESS_CHANGE_DROPPED {
+        id: "address.change_dropped",
+        component: System,
+        level: Info,
+        message: "address: dropping the pending address change",
+        fields: { reason: Label },
+    }
+    /// Nobody confirmed the new address in time (or the change was asked
+    /// to be undone): going back.
+    ADDRESS_REVERTING {
+        id: "address.reverting",
+        component: System,
+        level: Warn,
+        message: "address: going back to the previous address",
+        fields: { address: Label, previous: Label, why: Label, minutes: Label },
+    }
+    /// The new address couldn't be bound: going back.
+    ADDRESS_BIND_FAILED {
+        id: "address.bind_failed",
+        component: System,
+        level: Error,
+        message: "address: binding the new address failed; going back",
+        fields: { address: Label, previous: Label, error: Error },
+    }
+    /// The previous address couldn't be saved back; the next start tries
+    /// again.
+    ADDRESS_REVERT_SAVE_FAILED {
+        id: "address.revert_save_failed",
+        component: System,
+        level: Error,
+        message: "address: saving the previous address failed; the next start tries again",
+        fields: { error: Error },
+    }
+    /// Serving on a new address that has to be confirmed in the UI.
+    ADDRESS_CONFIRM_NEEDED {
+        id: "address.confirm_needed",
+        component: System,
+        level: Warn,
+        message: "address: now serving at a new address; open it and choose \"Keep this address\" in time, or Lodestar goes back",
+        fields: { address: Label, minutes: Label, previous: Label },
+    }
+    /// Serving on the previous address, which couldn't be saved back.
+    ADDRESS_SERVING_FALLBACK {
+        id: "address.serving_fallback",
+        component: System,
+        level: Warn,
+        message: "address: serving on the previous address although another is saved; the next start tries again",
+        fields: { address: Label, saved: Label },
+    }
+    /// The new address was kept.
+    ADDRESS_KEPT {
+        id: "address.kept",
+        component: System,
+        level: Info,
+        message: "address: kept the new address",
+        fields: { address: Label },
+    }
+    /// A saved change was undone before the restart that would apply it.
+    ADDRESS_CHANGE_UNDONE {
+        id: "address.change_undone",
+        component: System,
+        level: Info,
+        message: "address: the address change was undone before a restart",
+        fields: {},
+    }
+    /// The previous address applies only at the next restart.
+    ADDRESS_APPLIES_AT_RESTART {
+        id: "address.applies_at_restart",
+        component: System,
+        level: Warn,
+        message: "address: the previous address applies when Lodestar is next restarted",
+        fields: { address: Label },
+    }
+    /// Going back failed; a restart goes back before binding.
+    ADDRESS_REVERT_FAILED {
+        id: "address.revert_failed",
+        component: System,
+        level: Error,
+        message: "address: going back failed",
+        fields: { error: Error },
+    }
+    /// The process replaces itself with the binary at `path` (a restart
+    /// on Unix).
+    APP_REEXEC {
+        id: "app.reexec",
+        component: System,
+        level: Info,
+        message: "Restarting: starting the binary again",
+        fields: { path: Path },
+    }
+    /// Windows leaves too few dynamic ports for the fetch pool. To fix
+    /// it, run `netsh int <family> set dynamicport tcp start=<fix_start>
+    /// num=<fix_count>` as administrator (no fix: 0), or lower the
+    /// crawler's intensity or max_sockets.
+    WINDOWS_PORTS_LOW {
+        id: "windows.ports_low",
+        component: System,
+        level: Warn,
+        message: "Windows has too few ports left for outgoing connections; fetches may fail and other programs may lose network access. To fix it, run `netsh int <family> set dynamicport tcp start=<fix_start> num=<fix_count>` in a Command Prompt opened as administrator, then check `netsh int <family> show excludedportrange protocol=tcp` (Hyper-V and WinNAT reserve ports); or lower the crawler's intensity or max_sockets. fix_count=0: no range is large enough, so lower them",
+        fields: { family: Label, available: Size, excluded: Size, needed: Size, max_sockets: Size, fix_start: Size, fix_count: Size },
+    }
+    /// The dynamic port range is wide enough.
+    WINDOWS_PORTS_OK {
+        id: "windows.ports_ok",
+        component: System,
+        level: Debug,
+        message: "Windows' dynamic port range leaves enough ports",
+        fields: { family: Label, start: Size, end: Size, available: Size },
+    }
+    /// The dynamic port range couldn't be read.
+    WINDOWS_PORTS_UNREADABLE {
+        id: "windows.ports_unreadable",
+        component: System,
+        level: Debug,
+        message: "Windows' dynamic port range couldn't be read",
+        fields: { family: Label },
+    }
+    /// `LODESTAR_PRIORITY` isn't one Lodestar knows; below normal is kept.
+    WINDOWS_PRIORITY_UNKNOWN {
+        id: "windows.priority_unknown",
+        component: System,
+        level: Warn,
+        message: "LODESTAR_PRIORITY is unknown (use below_normal or normal); keeping below normal",
+        fields: {},
+    }
+    /// The process runs at below-normal priority.
+    WINDOWS_PRIORITY_LOWERED {
+        id: "windows.priority_lowered",
+        component: System,
+        level: Info,
+        message: "Running at below-normal priority",
+        fields: {},
+    }
+    /// The process priority couldn't be lowered.
+    WINDOWS_PRIORITY_FAILED {
+        id: "windows.priority_failed",
+        component: System,
+        level: Warn,
+        message: "The process priority couldn't be lowered",
+        fields: { error: Error },
+    }
+    /// The Windows service starts, with its data folder.
+    SERVICE_STARTING {
+        id: "service.starting",
+        component: System,
+        level: Info,
+        message: "service: starting",
+        fields: { path: Path },
+    }
+    /// The Windows service was asked to stop.
+    SERVICE_STOPPING {
+        id: "service.stopping",
+        component: System,
+        level: Info,
+        message: "service: stopping",
+        fields: {},
+    }
+    /// The Windows service stopped.
+    SERVICE_STOPPED {
+        id: "service.stopped",
+        component: System,
+        level: Info,
+        message: "service: stopped",
+        fields: {},
+    }
+    /// The Windows service stopped on an error.
+    SERVICE_FAILED {
+        id: "service.failed",
+        component: System,
+        level: Error,
+        message: "service: stopped on an error",
+        fields: { error: Error },
+    }
+    /// `serve --fixture`: test data, not a real install.
+    FIXTURE_MODE {
+        id: "fixture.mode",
+        component: System,
+        level: Warn,
+        message: "fixture mode: test data in this folder, not a real install",
+        fields: { path: Path },
+    }
+    /// The fixture's 24 h and 7 d numbers no longer match its manifest.
+    FIXTURE_STALE {
+        id: "fixture.stale",
+        component: System,
+        level: Warn,
+        message: "this fixture was built more than six hours ago: its 24 h and 7 d numbers and cohort finality no longer match fixture.json; delete the folder to rebuild it",
+        fields: {},
+    }
+    FIXTURE_BUILDING {
+        id: "fixture.building",
+        component: System,
+        level: Info,
+        message: "building the fixture",
+        fields: { path: Path, anchor: Label },
+    }
+    FIXTURE_BUILT {
+        id: "fixture.built",
+        component: System,
+        level: Info,
+        message: "fixture built",
+        fields: { torrents: Size, visible: Size, manifest: Path },
+    }
+    FIXTURE_SERVING {
+        id: "fixture.serving",
+        component: System,
+        level: Info,
+        message: "serving the fixture",
+        fields: { path: Path },
+    }
+    /// Claimed with the password from the environment, never shown.
+    FIXTURE_CLAIMED {
+        id: "fixture.claimed",
+        component: System,
+        level: Info,
+        message: "claimed with LODESTAR_FIXTURE_PASSWORD",
+        fields: {},
+    }
+    FIXTURE_PASSWORD_IGNORED {
+        id: "fixture.password_ignored",
+        component: System,
+        level: Info,
+        message: "LODESTAR_FIXTURE_PASSWORD ignored: this fixture is claimed already; sign in with its password",
+        fields: {},
+    }
+    /// Served beyond this computer.
+    FIXTURE_PUBLIC {
+        id: "fixture.public",
+        component: System,
+        level: Warn,
+        message: "the fixture is served beyond this computer; it's test data, but anyone who can reach the address can try to sign in",
+        fields: { address: Label },
+    }
+    /// A temporary fixture's folder couldn't be removed.
+    FIXTURE_CLEANUP_FAILED {
+        id: "fixture.cleanup_failed",
+        component: System,
+        level: Warn,
+        message: "the temporary fixture's folder couldn't be removed",
+        fields: { path: Path, error: Error },
+    }
+    /// The fixture couldn't be built or served.
+    FIXTURE_FAILED {
+        id: "fixture.failed",
+        component: System,
+        level: Error,
+        message: "the fixture couldn't be built or served",
+        fields: { error: Error },
+    }
+    /// The Insights recorder stopped; Insights stops updating until a
+    /// restart.
+    INSIGHTS_RECORDER_STOPPED {
+        id: "insights.recorder_stopped",
+        component: Search,
+        level: Error,
+        message: "insights: the recorder stopped",
+        fields: { error: Error },
+    }
+    /// One of the recorder's steps failed; the next tick tries again.
+    /// `step` names it; the error shows its kind only.
+    INSIGHTS_STEP_FAILED {
+        id: "insights.step_failed",
+        component: Search,
+        level: Warn,
+        message: "insights: a recorder step failed; the next tick tries again",
+        fields: { step: Label, error: Error },
+    }
+    /// Metrics with no aggregation kind: their hourly rows are kept.
+    INSIGHTS_UNKNOWN_METRICS {
+        id: "insights.unknown_metrics",
+        component: Search,
+        level: Warn,
+        message: "insights: some metrics have no aggregation kind; their hourly rows are kept",
+        fields: { count: Size },
+    }
+    /// The daily compaction folded hourly rows up to a day.
+    INSIGHTS_COMPACTED {
+        id: "insights.compacted",
+        component: Search,
+        level: Debug,
+        message: "insights: compacted",
+        fields: { day: Label, rows: Size },
+    }
+    /// The rollups were recounted after an unclean stop.
+    INSIGHTS_REPAIRED {
+        id: "insights.repaired",
+        component: Search,
+        level: Info,
+        message: "insights: repaired the rollups after an unclean stop",
+        fields: {},
+    }
+    /// The swarm-stats columns are ready: from last run's snapshot, or
+    /// rebuilt from the store after a crash.
+    APP_HOT_COLUMNS {
+        id: "app.hot_columns",
+        component: System,
+        level: Info,
+        message: "Swarm-stats columns ready",
+        fields: { torrents: Size, ms: Size, from: Label },
+    }
+    /// Serving: the UI's address and the data folder.
+    APP_SERVING {
+        id: "app.serving",
+        component: System,
+        level: Info,
+        message: "UI ready; status page on /status",
+        fields: { address: Label, path: Path },
+    }
+    /// Shutting down: saving the queue and the DHT state.
+    APP_STOPPING {
+        id: "app.stopping",
+        component: System,
+        level: Info,
+        message: "shutting down: saving the queue and DHT state",
+        fields: {},
+    }
+    /// The swarm-stats snapshot couldn't be saved; the next start rebuilds
+    /// it from the store.
+    APP_HOT_SAVE_FAILED {
+        id: "app.hot_save_failed",
+        component: System,
+        level: Error,
+        message: "Saving the swarm-stats snapshot failed; the next start rebuilds it",
+        fields: { error: Error },
+    }
+    /// A client kept the graceful shutdown waiting (a download or export
+    /// held open without reading): its connections are dropped after
+    /// `waited_s` seconds so the queue, the DHT state and the index are
+    /// still saved.
+    APP_SHUTDOWN_FORCED {
+        id: "app.shutdown_forced",
+        component: System,
+        level: Warn,
+        message: "Open connections kept the shutdown waiting; closing them",
+        fields: { waited_s: Size },
+    }
+    /// A command (`serve`, `import-bitmagnet`) ended on an error. Its
+    /// text, scrubbed of URL credentials, goes to stderr for the person
+    /// who ran it; the line shows the command only.
+    APP_COMMAND_FAILED {
+        id: "app.command_failed",
+        component: System,
+        level: Error,
+        message: "The command failed",
+        fields: { command: Label, error: Error },
+    }
+    /// A bitmagnet import's progress, every 100,000 torrents read.
+    APP_IMPORT_PROGRESS {
+        id: "app.import_progress",
+        component: Sources,
+        level: Info,
+        message: "Importing from bitmagnet",
+        fields: { read: Size, new: Size, per_second: Size },
+    }
+    /// Every service stopped in order: the queue, the DHT state and the
+    /// index are saved.
+    APP_STOPPED_CLEANLY {
+        id: "app.stopped_cleanly",
+        component: System,
+        level: Info,
+        message: "stopped cleanly: the queue, the DHT state and the index are saved",
+        fields: {},
     }
 }

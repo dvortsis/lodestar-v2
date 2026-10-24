@@ -105,8 +105,6 @@ mod scm {
     use std::time::Duration;
 
     use tokio::sync::watch;
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
     use windows_service::service::{
         ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
         ServiceType,
@@ -217,17 +215,24 @@ mod scm {
                     &data_dir,
                     config.as_ref().map_or("info", |c| c.log.as_str()),
                 );
-                tracing::info!("service: starting (data in {})", data_dir.display());
+                lodestar_log::log_event!(
+                    crate::logging::events::SERVICE_STARTING,
+                    path = lodestar_log::Path::new(&data_dir)
+                );
                 match config
                     .map_err(BoxError::from)
                     .and_then(|c| serve(&c, stop_rx))
                 {
                     Ok(()) => {
-                        tracing::info!("service: stopped");
+                        lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPED);
                         0
                     }
-                    Err(e) => {
-                        tracing::error!("service: stopped on an error: {e}");
+                    // Its message can name a path: the kind only.
+                    Err(_) => {
+                        lodestar_log::log_event!(
+                            crate::logging::events::SERVICE_FAILED,
+                            error = lodestar_log::Error::kind("serve")
+                        );
                         1
                     }
                 }
@@ -379,28 +384,22 @@ mod scm {
                 std::future::pending::<()>().await;
             }
         }
-        tracing::info!("service: stopping");
+        lodestar_log::log_event!(crate::logging::events::SERVICE_STOPPING);
     }
 
-    /// The service's subscriber: the log file, no console.
-    ///
-    /// A log level saved in Settings applies at the next start here: the
-    /// live reload handle is private to `settings::log`, whose `init`
-    /// writes to stderr only.
+    /// The service's logging: the same runtime as everywhere else
+    /// (`settings::log::init_with_writer`), its console going to
+    /// `<data>\logs\lodestar.log` (where the setup token's line is found)
+    /// and its JSONL file opening through `follow` in the logs folder.
+    /// Without the file, the console goes nowhere; the JSONL file still
+    /// opens.
     fn init_logging(data_dir: &std::path::Path, filter: &str) {
-        let Ok(file) = LogFile::open(logfile::path(data_dir), logfile::MAX_BYTES) else {
-            return;
-        };
-        let filter = crate::settings::log::parse(filter)
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-        let _ = tracing_subscriber::registry()
-            .with(filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .with_writer(file),
-            )
-            .try_init();
+        let console: Box<dyn std::io::Write + Send> =
+            match LogFile::open(logfile::path(data_dir), logfile::MAX_BYTES) {
+                Ok(file) => Box::new(logfile::Console::new(std::sync::Arc::new(file))),
+                Err(_) => Box::new(std::io::sink()),
+            };
+        crate::settings::log::init_with_writer(filter, console);
     }
 }
 

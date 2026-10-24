@@ -9,6 +9,8 @@
 		value: MetricValue;
 		/** Server-computed share as a 0–1 ratio. Omit to hide the percentage. */
 		share?: MetricValue;
+		/** CSS colour of the bar (e.g. a `GROUP_COLOR` token). Defaults to `var(--data-1)`. */
+		color?: string;
 	}
 	interface Props {
 		items: Item[];
@@ -52,7 +54,7 @@
 				<div
 					class="h-full rounded-selector"
 					style:width={lengthPct(numeric(item.value), scale)}
-					style:background-color="var(--data-1)"
+					style:background-color={item.color ?? 'var(--data-1)'}
 				></div>
 			</div>
 		</li>

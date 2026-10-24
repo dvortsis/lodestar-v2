@@ -1,0 +1,71 @@
+// Copy and open the magnet link (§10.16 `c` and `o`). Magnets come from the detail body, the only
+// place the server sends one; the scheme is checked before anything uses it as a URL.
+import { api } from '$lib/api/client';
+import { copyText } from '$lib/util/clipboard';
+import { isMagnet } from '$lib/util/magnet';
+import { toast } from '$lib/ui/feedback/toasts.svelte';
+import { m } from '$lib/paraglide/messages.js';
+import { cacheDetail, cachedDetail } from './cache';
+import { manual } from './manual.svelte';
+
+let manualMounted = false;
+
+/** Show the manual field, mounting it once on demand (the `c` key can run with no drawer open). */
+async function showManual(magnet: string) {
+	manual.magnet = magnet;
+	if (manualMounted) return;
+	manualMounted = true;
+	const [{ mount }, mod] = await Promise.all([import('svelte'), import('./ManualMagnet.svelte')]);
+	mount(mod.default, { target: document.body });
+}
+
+export async function magnetFor(hash: string): Promise<string | null> {
+	const cached = cachedDetail(hash);
+	const detail = cached ?? (await api.get('/torrents/{hash}', { path: { hash } }));
+	if (!cached) cacheDetail(hash, detail);
+	return isMagnet(detail.magnet) ? detail.magnet : null;
+}
+
+/** Copy `magnet` (or the one for `hash`). Toasts on success; on failure opens the manual field. */
+export async function copyMagnet(source: { magnet: string } | { hash: string }) {
+	let magnet: string | null = null;
+	try {
+		magnet =
+			'magnet' in source
+				? isMagnet(source.magnet)
+					? source.magnet
+					: null
+				: await magnetFor(source.hash);
+	} catch {
+		magnet = null;
+	}
+	if (!magnet) {
+		toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
+		return 'failed' as const;
+	}
+	const result = await copyText(magnet);
+	if (result === 'copied') toast.push({ kind: 'success', text: m.detail_magnet_copied() });
+	else await showManual(magnet);
+	return result;
+}
+
+/** Hand the magnet to the system's torrent client by following it as a link. */
+export async function openMagnet(source: { magnet: string } | { hash: string }) {
+	let magnet: string | null = null;
+	try {
+		magnet = 'magnet' in source ? source.magnet : await magnetFor(source.hash);
+	} catch {
+		magnet = null;
+	}
+	if (!isMagnet(magnet)) {
+		toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
+		return false;
+	}
+	const a = document.createElement('a');
+	a.href = magnet;
+	a.rel = 'noopener';
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	return true;
+}

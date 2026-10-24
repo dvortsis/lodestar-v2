@@ -4,6 +4,7 @@ import { stubLayout } from './testing/layout';
 import ListHarness from './testing/ListHarness.svelte';
 import TableHarness from './testing/TableHarness.svelte';
 import TreeHarness from './testing/TreeHarness.svelte';
+import Tree from './Tree.svelte';
 import type { FlatNode } from './tree-model';
 
 beforeAll(() => stubLayout());
@@ -512,5 +513,21 @@ describe('review follow-ups', () => {
 		render(TreeHarness, { nodes: sample });
 		const inner = items()[0]!.firstElementChild as HTMLElement;
 		expect(inner.style.paddingInlineStart).toContain('--icon-size-row');
+	});
+
+	it('Tree: a marked node is medium weight with a "Matched" marker in text', () => {
+		render(Tree, {
+			nodes: [
+				{ id: 'a', depth: 0, name: 'a.mkv', dir: false, marked: true },
+				{ id: 'b', depth: 0, name: 'b.mkv', dir: false }
+			],
+			label: 'Files',
+			markedLabel: 'Matched'
+		});
+		const [a, b] = items();
+		expect(within(a!).getByText('a.mkv').className).toContain('font-medium');
+		expect(within(a!).getByText('Matched').className).toContain('sr-only');
+		expect(within(b!).queryByText('Matched')).toBeNull();
+		expect(within(b!).getByText('b.mkv').className).not.toContain('font-medium');
 	});
 });

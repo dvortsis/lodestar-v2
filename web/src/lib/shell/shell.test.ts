@@ -226,7 +226,7 @@ describe('navigation', () => {
 		expect(isActive(search, '/search/')).toBe(true);
 		expect(isActive(settings, '/settings/about')).toBe(true);
 		expect(isActive(settings, '/settingsx')).toBe(false);
-		expect(isActive(search, '/t/abc')).toBe(false);
+		expect(isActive(search, '/t/abc')).toBe(true); // a torrent opened from Search keeps Search current
 	});
 
 	it('keeps density when moving between destinations, and only then', () => {

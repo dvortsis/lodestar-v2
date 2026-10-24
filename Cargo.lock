@@ -1592,10 +1592,10 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "lodestar-classify",
+ "lodestar-log",
  "lodestar-search",
  "lodestar-store",
  "proptest",
- "tracing",
  "unicode-normalization",
 ]
 
