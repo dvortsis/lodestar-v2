@@ -6,6 +6,7 @@
 	//   query (`/facets`'s `total`), and nothing is written until it is pressed.
 	// The rail's chunk, its counts and the sheet load only where the rail shows: below x-large, on
 	// the first open.
+	import { createPending } from './pending.svelte';
 	import { onMount } from 'svelte';
 	import Sliders from '~icons/ph/sliders-horizontal';
 	import { formatCount } from '$lib/format';
@@ -78,14 +79,10 @@
 
 	// What a click edits: the newest query, never the rows' (`shown` changes only when /search
 	// answers, so two quick clicks, or a click after a new query failed, would edit a stale one).
-	// The edit handed to W5 counts until W5 adopts it (its `ast` changes once the server printed it
-	// back), then W5's parsed query; the rows' query only while W5 has none (a parse error).
-	let pending = $state.raw<Ast | null>(null);
-	$effect(() => {
-		void search.ast;
-		pending = null;
-	});
-	const base = $derived(pending ?? search.ast ?? shown?.[0] ?? null);
+	// The edit handed to W5 counts until W5's query moves (pending.svelte.ts), then W5's parsed
+	// query; the rows' query only while W5 has none (a parse error).
+	const pending = createPending({ ast: () => search.ast, text: () => search.text });
+	const base = $derived(pending.value ?? search.ast ?? shown?.[0] ?? null);
 
 	// The bottom sheet's staged query and its own counts (no lease: it isn't a shown query).
 	let staged = $state.raw<Ast | null>(null);
@@ -108,10 +105,8 @@
 
 	function apply(next: Ast) {
 		ensureSearchPath();
-		pending = next;
-		search.setAst(next).catch(() => {
-			if (pending === next) pending = null; // W5 kept its query: edit that one
-		});
+		pending.set(next);
+		search.setAst(next).catch(() => pending.drop(next)); // W5 kept its query: edit that one
 	}
 	function change(next: Ast) {
 		if (mode === 'bottom') staged = next;
