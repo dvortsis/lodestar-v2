@@ -104,8 +104,10 @@ describe('ResultsToolbar', () => {
 		expect(search.setSort).toHaveBeenCalledWith('-size');
 		visit('/t/' + 'a'.repeat(40) + '?q=lantern');
 		await fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
-		await waitFor(() =>
-			expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=compact', expect.anything())
+		await waitFor(
+			() =>
+				expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=compact', expect.anything()),
+			WAIT
 		);
 	});
 

@@ -7,6 +7,7 @@
 	import Select from '$lib/ui/fields/Select.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { formatCompact, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -57,6 +58,9 @@
 		try {
 			Dialog ??= (await import('$lib/features/alerts/SaveSearchDialog.svelte')).default;
 			open = true;
+		} catch {
+			// The dialog's chunk didn't load (offline, or a new version replaced it): say so.
+			toast.push({ kind: 'error', text: m.search_toolbar_save_failed() });
 		} finally {
 			saving = false;
 		}

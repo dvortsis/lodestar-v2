@@ -115,5 +115,6 @@
 	"search_toolbar_density": "密度",
 	"search_toolbar_comfortable": "舒适",
 	"search_toolbar_compact": "紧凑",
-	"search_toolbar_save": "保存搜索"
+	"search_toolbar_save": "保存搜索",
+	"search_toolbar_save_failed": "无法打开“保存搜索”。请重新加载页面后再试。"
 }
