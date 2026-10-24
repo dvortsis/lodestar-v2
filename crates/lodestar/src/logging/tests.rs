@@ -475,3 +475,56 @@ fn every_declared_catalogue_is_registered() {
     assert_eq!(got.len(), 1, "{got:?}");
     assert!(got[0].contains("lodestar-search"), "{got:?}");
 }
+
+/// `fetch.failed` puts a peer beside a torrent: peer activity, in the
+/// file only with that opt-in, never on the console. `dht.key_harvested`
+/// carries no peer at all.
+#[test]
+fn a_failed_fetch_shows_its_peer_only_with_peer_activity() {
+    use crate::settings::logging::Verbosity;
+    let peer: std::net::SocketAddr = PEER.parse().unwrap();
+    let record = |rt: &Runtime| {
+        let failed = [
+            ("torrent", Value::Torrent(&HASH)),
+            ("peer", Value::Peer(peer)),
+            (
+                "error",
+                Value::Error(lodestar_log::Error::kind("timed_out")),
+            ),
+            ("attempt", Value::Label("tcp")),
+        ];
+        rt.record(&Record {
+            event: &lodestar_peer_wire::log_events::FETCH_FAILED::EVENT,
+            fields: &failed,
+        });
+        let harvested = [
+            ("torrent", Value::Torrent(&HASH)),
+            ("source", Value::Label("sample")),
+            ("peers", Value::Size(3)),
+        ];
+        rt.record(&Record {
+            event: &lodestar_dht::log_events::KEY_HARVESTED::EVENT,
+            fields: &harvested,
+        });
+    };
+    for activity in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let l = section(|l| {
+            l.verbosity = Verbosity::Everything;
+            l.data = DataPreset::Full;
+            l.data_until = UNTIL_OFF;
+            l.console_detail = ConsoleDetail::File;
+            if activity {
+                l.peer_activity_until = unix_now() + 600;
+            }
+        });
+        let (rt, console) = runtime(dir.path(), &l);
+        record(&rt);
+        let (c, f) = (console.text(), file_text(dir.path()));
+        assert!(f.contains("\"event\":\"fetch.failed\""), "{f}");
+        assert!(f.contains("\"event\":\"dht.key_harvested\""), "{f}");
+        assert!(f.contains(&"c9".repeat(20)), "Full shows the hash: {f}");
+        assert_eq!(f.contains("203.0.113.9"), activity, "{activity}: {f}");
+        assert!(!c.contains("203.0.113.9"), "never on the console: {c}");
+    }
+}
