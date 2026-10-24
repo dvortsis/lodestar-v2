@@ -12,6 +12,8 @@ export interface FlatNode {
 	dir: boolean;
 	/** Already formatted by `lib/format` (folder sizes included). */
 	size?: string;
+	/** A match (a search hit's file): medium weight plus a "Matched" marker, never colour alone. */
+	marked?: boolean;
 }
 
 export interface TreeIndex {
