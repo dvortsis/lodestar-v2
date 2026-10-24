@@ -75,6 +75,21 @@ describe('ResultsPanel with a query', () => {
 		unmount();
 	});
 
+	it('drops the old rows on unmount: a failed request after a remount shows none of them', async () => {
+		api.post.mockResolvedValue(page([1, 2]));
+		const first = render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(2), WAIT);
+		first.unmount();
+		expect(results.hits).toEqual([]);
+		// e.g. "Show adult content" was turned off meanwhile, and the new request fails.
+		const { ApiError } = await import('$lib/api/client');
+		api.post.mockRejectedValue(new ApiError(503, 'unavailable', 'down'));
+		render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() => expect(screen.getByTestId('results-error')).toBeTruthy(), WAIT);
+		expect(screen.queryAllByRole('row')).toHaveLength(0);
+		expect(results.status).toBe('error');
+	});
+
 	it('asks again after a remount: answers from before it may be stale', async () => {
 		api.post.mockResolvedValue(page([1]));
 		const first = render(ResultsPanel, { focusBar: () => {} });
