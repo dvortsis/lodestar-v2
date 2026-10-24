@@ -73,10 +73,11 @@ test('the loading state is axe-clean, and so is the page once it loads', async (
 	let release!: () => void;
 	const held = new Promise<void>((r) => (release = r));
 	mockTorrent(mock);
-	mock.on('getTorrent', async () => {
+	// The mock awaits a handler; its type only allows sync ones.
+	mock.on('getTorrent', (async () => {
 		await held;
 		return detail();
-	});
+	}) as never);
 	await go(`/t/${HASH}`);
 	const loading = page.getByRole('status', { name: 'Loading torrent…' });
 	await expect(loading).toHaveAttribute('aria-busy', 'true');
