@@ -72,7 +72,32 @@ test.describe('responsive navigation', () => {
 	});
 
 	for (const width of [1023, 640, 390, 320]) {
-		test(`collapses behind a menu button at ${width} px`, async ({ page, go }) => {
+		test(`collapses behind a menu button at ${width} px`, async ({ page, go, mock }) => {
+			mock.on('getDiscover', {
+				newest: {
+					hits: [],
+					limit: 50,
+					next_cursor: null,
+					notices: [],
+					offset: 0,
+					total: 0,
+					total_approx: false,
+					type: null
+				},
+				rising: {
+					hits: [],
+					reason: 'needs_swarm_history',
+					status: 'unavailable',
+					truncated: false
+				},
+				recently_resolved: {
+					hits: [],
+					reason: 'needs_resolution_history',
+					status: 'unavailable',
+					truncated: false
+				}
+			});
+			mock.on('getSettings', { fields: {}, restart_required: [], revision: 1, section: 'content' });
 			await page.setViewportSize({ width, height: 800 });
 			await go('/search');
 			await expect(nav(page)).toHaveCount(0);

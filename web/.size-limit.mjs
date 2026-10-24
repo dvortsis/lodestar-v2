@@ -170,7 +170,10 @@ export default [
 	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
 	// messages). Limit: measured + 10%.
 	entry('Compare route (own JS + CSS)', own('/compare'), '31 KB'),
-	entry('Discover route (own JS + CSS)', own('/discover'), '15 KB'),
+	// Measured 42.8 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
+	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
+	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
+	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
 	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
