@@ -188,8 +188,22 @@ async fn fetch_via(
             other => other,
         },
     };
-    if r.is_ok() {
-        opts.stats.succeeded(transport);
+    match &r {
+        Ok(_) => opts.stats.succeeded(transport),
+        Err(e) => {
+            let kind = e.kind();
+            lodestar_log::log_event!(
+                crate::log_events::FETCH_FAILED,
+                torrent = lodestar_log::Torrent(&info_hash.0),
+                peer = lodestar_log::Peer(addr),
+                error = lodestar_log::Error::kind(crate::log_events::label(kind)),
+                attempt = match transport {
+                    Transport::Tcp => "tcp",
+                    Transport::Utp => "utp",
+                }
+            );
+            crate::log_events::count(kind);
+        }
     }
     (r, connected.load(Ordering::Relaxed))
 }
