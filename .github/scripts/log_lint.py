@@ -363,6 +363,14 @@ def assigned(source: str, name: str):
             and any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
         ):
             return ast.literal_eval(node.value)
+        # `NAME: list[str] = []`, as an empty list is best written.
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+            and node.value is not None
+        ):
+            return ast.literal_eval(node.value)
     return None
 
 

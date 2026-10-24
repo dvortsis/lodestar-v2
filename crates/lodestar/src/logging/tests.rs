@@ -514,6 +514,7 @@ fn a_failed_fetch_shows_its_peer_only_with_peer_activity() {
             l.data = DataPreset::Full;
             l.data_until = UNTIL_OFF;
             l.console_detail = ConsoleDetail::File;
+            l.change_details_until = unix_now() + 600;
             if activity {
                 l.peer_activity_until = unix_now() + 600;
             }
@@ -525,6 +526,8 @@ fn a_failed_fetch_shows_its_peer_only_with_peer_activity() {
         assert!(f.contains("\"event\":\"dht.key_harvested\""), "{f}");
         assert!(f.contains(&"c9".repeat(20)), "Full shows the hash: {f}");
         assert_eq!(f.contains("203.0.113.9"), activity, "{activity}: {f}");
+        // On the console (it's the file's detail), but without the peer.
+        assert!(c.contains(" fetch.failed: "), "{c}");
         assert!(!c.contains("203.0.113.9"), "never on the console: {c}");
     }
 }

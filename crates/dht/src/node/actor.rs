@@ -581,8 +581,6 @@ impl Actor {
         }
     }
 
-    /// Hands a hash to the pipeline. Sightings without peers are
-    /// deduplicated; announces and lookup results always pass.
     /// Writes `dht.harvest_summary`: what was harvested since the last
     /// one, if anything was.
     fn summarize(&mut self, now_i: Instant) {
@@ -611,6 +609,8 @@ impl Actor {
         self.last_summary = (now_i, now);
     }
 
+    /// Hands a hash to the pipeline. Sightings without peers are
+    /// deduplicated; announces and lookup results always pass.
     fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) {
         // Paused, nothing is harvested; the answers of lookups already
         // running still reach the pool that asked.
