@@ -12,9 +12,9 @@
 		/** The drawer closes; the page links to /search. */
 		onBack?: () => void;
 		onRetry: () => void;
-		heading?: 'h2' | 'h3';
+		level?: 2 | 3;
 	}
-	let { error, onBack, onRetry, heading = 'h3' }: Props = $props();
+	let { error, onBack, onRetry, level = 3 }: Props = $props();
 
 	const missing = $derived(error.code === 'torrent_not_found' || error.code === 'bad_hash');
 	const adultHidden = $derived(error.code === 'adult_hidden');
@@ -22,9 +22,9 @@
 
 {#if missing || adultHidden}
 	<div class="ls-detail-stack" data-testid={missing ? 'detail-not-found' : 'detail-adult-hidden'}>
-		<svelte:element this={heading} class="text-title font-semibold">
+		<div role="heading" aria-level={level} class="text-title font-semibold">
 			{missing ? m.detail_not_found_title() : m.detail_adult_title()}
-		</svelte:element>
+		</div>
 		<p class="text-muted-text">{missing ? m.detail_not_found_body() : m.detail_adult_body()}</p>
 		<div class="ls-detail-row">
 			{#if adultHidden}

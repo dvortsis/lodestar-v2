@@ -24,7 +24,7 @@
 	let { model, mode, onBack }: Props = $props();
 
 	// The page's title is its h1, so its sections are h2; the drawer's title is an h2.
-	const heading = $derived(mode === 'page' ? 'h2' : 'h3');
+	const level = $derived(mode === 'page' ? 2 : 3);
 	const detail = $derived(model.detail);
 	const hit = $derived(model.hit);
 	const error = $derived(model.error);
@@ -67,7 +67,7 @@
 	{/if}
 
 	{#if error && ErrorState}
-		<ErrorState {error} {onBack} {heading} onRetry={() => model.retry()} />
+		<ErrorState {error} {onBack} {level} onRetry={() => model.retry()} />
 	{/if}
 
 	{#if detail}
@@ -86,16 +86,16 @@
 				>
 			{/if}
 		</div>
-		<Summary {detail} {hit} {heading} />
+		<Summary {detail} {hit} {level} />
 		<section
 			class="ls-detail-section"
 			aria-labelledby="detail-h-contents"
 			data-section="contents"
 			use:whenVisible={loadContents}
 		>
-			<svelte:element this={heading} id="detail-h-contents"
-				>{m.detail_section_contents()}</svelte:element
-			>
+			<div role="heading" aria-level={level} id="detail-h-contents">
+				{m.detail_section_contents()}
+			</div>
 			{#if Contents}
 				<Contents {detail} {hit} />
 			{:else}
@@ -108,9 +108,7 @@
 			data-section="parsed"
 			use:whenVisible={loadParsed}
 		>
-			<svelte:element this={heading} id="detail-h-parsed"
-				>{m.detail_section_parsed()}</svelte:element
-			>
+			<div role="heading" aria-level={level} id="detail-h-parsed">{m.detail_section_parsed()}</div>
 			{#if Parsed}
 				<Parsed hash={detail.hash} {hit} />
 			{:else}

@@ -102,7 +102,11 @@ const onDemandOf = (route, onDemand) => walk(route, onDemand, true);
 
 // Detail: the DetailHost module, and the sections that load when scrolled to (or on an error).
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
-const detailLazy = [/features\/detail\/(Contents|ErrorState|parsed\/Parsed)\.svelte$/];
+// The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
+const detailLazy = [
+	/features\/detail\/(Contents|ErrorState|parsed\/Parsed)\.svelte$/,
+	/features\/detail\/commands\.ts$/
+];
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
 // them: every control but the toggle and the text input (per type), instant mode, previews, the
@@ -160,12 +164,12 @@ export default [
 	// Detail (S-detail): the first view is the header and the summary. Contents (composition and the
 	// file tree with its virtual list), Parsed and the error state are separate chunks that load as
 	// their section scrolls near or an error shows, each gated by the on-demand entry.
-	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29.2 KB'),
-	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '24.3 KB'),
+	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '28.5 KB'),
+	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.4 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'29.7 KB'
+		'33.9 KB'
 	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB

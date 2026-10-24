@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { showBidi } from './bidi';
 
 describe('showBidi', () => {
-	it('shows every override, embedding and isolate as a marker', () => {
+	it('shows every override, embedding and isolating mark as a marker', () => {
 		const controls = ['‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩'];
 		expect(showBidi(controls.join(''))).toBe(
 			'<U+202A><U+202B><U+202C><U+202D><U+202E><U+2066><U+2067><U+2068><U+2069>'
