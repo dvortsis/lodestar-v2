@@ -1,6 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"search_page_title": "搜索",
+	"search_page_skip_results": "跳到结果",
 	"search_query_label": "搜索种子",
 	"search_query_placeholder": "按名称搜索，或添加筛选条件，例如 res:1080p",
 	"search_query_placeholder_short": "搜索，或筛选：res:1080p",
@@ -99,5 +100,21 @@
 	"search_filters_any_of": "任一：{clauses}",
 	"search_filters_all_of": "全部：{clauses}",
 	"search_filters_everything": "全部",
-	"search_filters_unknown": "筛选条件"
+	"search_filters_unknown": "筛选条件",
+	"search_toolbar_count_one": "1 个结果",
+	"search_toolbar_count_other": "{count} 个结果",
+	"search_toolbar_count_about": "≈ {count} 个结果",
+	"search_toolbar_sort": "排序",
+	"search_toolbar_sort_relevance": "相关度",
+	"search_toolbar_sort_newest": "最新发现",
+	"search_toolbar_sort_oldest": "最早发现",
+	"search_toolbar_sort_largest": "最大",
+	"search_toolbar_sort_smallest": "最小",
+	"search_toolbar_sort_most_files": "文件最多",
+	"search_toolbar_sort_fewest_files": "文件最少",
+	"search_toolbar_density": "密度",
+	"search_toolbar_comfortable": "舒适",
+	"search_toolbar_compact": "紧凑",
+	"search_toolbar_save": "保存搜索",
+	"search_toolbar_save_failed": "无法打开“保存搜索”。请重新加载页面后再试。"
 }

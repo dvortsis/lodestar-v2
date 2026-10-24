@@ -9,6 +9,7 @@ The search page's results list (S-search-2a; architecture §10.4, §10.5, §10.1
 - `RowActions.svelte`: Copy magnet and More (Open in a new tab, Copy info hash). Loaded with the first results; the More menu (Bits UI) loads on its first click. Out of the tab order: the keyboard has `c`, `o`, and Shift+F10 or the menu key on a row for More.
 - `results.svelte.ts`: the store (below).
 - `ResultsPanel.svelte` + `results.css`: the panel in `#results`: every state, the list, j/k. `results.css` also holds the page grid's rule (see the search README).
+  - **Paging (S-search-3):** the list's sentinel asks for the next cursor page as it scrolls near the end. Under the list, a visible "Load more" does the same for the keyboard and AT, and an end line replaces it after the last page. One request either way (the store ignores a second `loadMore` while one is out). Focus stays on the button while a page loads, and moves to the end line, or to Retry when the page fails, if the button had it. A new page isn't announced, beyond the list's own "Loading more torrents…" status (§10.13).
 - `commands.ts`: j/k in the `search` scope.
 - `composition.ts`: a hit's composition as CategoryBar segments, summary and dominant share.
 - `links.ts`: resolved links for the empty state and the adult notice.

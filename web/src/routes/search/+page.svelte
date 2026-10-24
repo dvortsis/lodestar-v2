@@ -37,10 +37,13 @@
 	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs
 	// them at once; otherwise the empty state comes with the first interaction, or after 30 s, as the
 	// shell's chrome does (§10.1: the bare page is Lighthouse's). Their sheets come with them.
-	// The facet rail's host comes with them; it loads the rail itself where the rail shows.
+	// The facet rail's host comes with them; it loads the rail itself where the rail shows. So does
+	// S-search-3's toolbar, which shows once there is a query.
 	type Panel = typeof import('$lib/features/search/results/ResultsPanel.svelte').default;
 	type Host = typeof import('$lib/features/search/facets/FacetsHost.svelte').default;
+	type Bar = typeof import('$lib/features/search/toolbar/ResultsToolbar.svelte').default;
 	let Results = $state<Panel>();
+	let Toolbar = $state<Bar>();
 	let Facets = $state<Host>();
 	let loadingResults: Promise<unknown> | undefined;
 	function loadResults() {
@@ -48,10 +51,13 @@
 			import('$lib/features/search/results/ResultsPanel.svelte'),
 			import('$lib/features/search/facets/FacetsHost.svelte'),
 			import('$lib/features/search/results/row.css'),
-			import('$lib/features/search/results/results.css')
-		]).then(([panel, host]) => {
+			import('$lib/features/search/results/results.css'),
+			import('$lib/features/search/toolbar/ResultsToolbar.svelte'),
+			import('$lib/features/search/toolbar/toolbar.css')
+		]).then(([panel, host, , , bar]) => {
 			Results = panel.default;
 			Facets = host.default;
+			Toolbar = bar.default;
 		});
 	}
 	$effect(() => {
@@ -59,6 +65,20 @@
 		if (p.get('q') || p.get('hidden') === '1' || p.get('hidden') === 'true') loadResults();
 	});
 	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
+
+	// "Skip to results" (WCAG 2.4.1): at x-large the facet rail comes before the results, a tab stop
+	// per value. The link is the first focusable in the page content (after the shell's skip link and
+	// navigation) and goes to the list's active row, or to the region itself while there is no list
+	// (the empty state, a skeleton, an error).
+	function skipToResults(event: MouseEvent) {
+		event.preventDefault();
+		const region = document.getElementById('results');
+		if (!region) return;
+		const row = region.querySelector<HTMLElement>('[role="grid"] [role="row"][tabindex="0"]');
+		if (row) return row.focus();
+		region.setAttribute('tabindex', '-1');
+		region.focus();
+	}
 
 	// S-detail's drawer: opened with a shallow pushState carrying `detail` in page.state. The glob
 	// is empty until `DetailHost.svelte` exists, so neither slice edits the other's files, and the
@@ -75,6 +95,13 @@
 </script>
 
 <div class="flex flex-col gap-2 pb-4">
+	<!-- The shell's skip link's classes: visible on focus, and no new utilities in the global sheet. -->
+	<a
+		href="#results"
+		class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid"
+		data-testid="skip-to-results"
+		onclick={skipToResults}>{m.search_page_skip_results()}</a
+	>
 	<h1 class="mt-4 px-4 text-display font-semibold">{m.search_page_title()}</h1>
 	<QueryBar bind:this={bar} />
 	<div class="search-grid px-4">
@@ -84,6 +111,7 @@
 		</div>
 		<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
 		<div id="results">
+			{#if Toolbar}<Toolbar />{/if}
 			{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}
 		</div>
 		<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->

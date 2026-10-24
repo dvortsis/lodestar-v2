@@ -1,6 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"search_page_title": "Search",
+	"search_page_skip_results": "Skip to results",
 	"search_query_label": "Search torrents",
 	"search_query_placeholder": "Search by name, or add a filter such as res:1080p",
 	"search_query_placeholder_short": "Search, or filter: res:1080p",
@@ -99,5 +100,21 @@
 	"search_filters_any_of": "Any of: {clauses}",
 	"search_filters_all_of": "All of: {clauses}",
 	"search_filters_everything": "Everything",
-	"search_filters_unknown": "Filter"
+	"search_filters_unknown": "Filter",
+	"search_toolbar_count_one": "1 result",
+	"search_toolbar_count_other": "{count} results",
+	"search_toolbar_count_about": "≈ {count} results",
+	"search_toolbar_sort": "Sort",
+	"search_toolbar_sort_relevance": "Relevance",
+	"search_toolbar_sort_newest": "Newest discovered",
+	"search_toolbar_sort_oldest": "Oldest discovered",
+	"search_toolbar_sort_largest": "Largest",
+	"search_toolbar_sort_smallest": "Smallest",
+	"search_toolbar_sort_most_files": "Most files",
+	"search_toolbar_sort_fewest_files": "Fewest files",
+	"search_toolbar_density": "Density",
+	"search_toolbar_comfortable": "Comfortable",
+	"search_toolbar_compact": "Compact",
+	"search_toolbar_save": "Save search",
+	"search_toolbar_save_failed": "Couldn't open Save search. Reload the page and try again."
 }
