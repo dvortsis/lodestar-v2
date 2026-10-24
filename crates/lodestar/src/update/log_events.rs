@@ -22,6 +22,31 @@ lodestar_log::catalogue! {
         message: "Couldn't record the store upgrade; the new version won't start",
         fields: { error: Error },
     }
+    /// A signed check found a release newer than the running version.
+    UPDATE_AVAILABLE {
+        id: "update.available",
+        component: System,
+        level: Info,
+        message: "An update is available",
+        fields: {},
+    }
+    /// The signed update check failed (the code says why; never a URL).
+    UPDATE_CHECK_FAILED {
+        id: "update.check_failed",
+        component: System,
+        level: Warn,
+        message: "The update check failed",
+        fields: { error: Label },
+    }
+    /// An entry in `<data>/bin` couldn't be read while the update check
+    /// gathered the installed versions' trust; it's skipped.
+    UPDATE_OVERLAY_UNREADABLE {
+        id: "update.overlay_unreadable",
+        component: System,
+        level: Warn,
+        message: "An entry in the update folder couldn't be read; skipped",
+        fields: { error: Error },
+    }
     /// The new version passed its self-test: the update is kept.
     UPDATE_PROBATION_PASSED {
         id: "update.probation_passed",

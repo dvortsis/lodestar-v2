@@ -149,7 +149,14 @@ async fn hops(f: &dyn Fetch, url: Url) -> Result<Option<Vec<u8>>, CheckError> {
         if !hop_allowed(&at) {
             return Err(CheckError::Redirect);
         }
-        let hop = f.get(&at).await?;
+        let hop = match f.get(&at).await {
+            // The first URL is ours (`source`): one the client refuses
+            // is no usable source, not a redirect.
+            Err(CheckError::Redirect) if hop_number == 0 => {
+                return Err(CheckError::NoReleaseSource);
+            }
+            r => r?,
+        };
         match hop.status {
             200 => return Ok(Some(hop.body)),
             404 if hop_number == 0 => return Ok(None),
@@ -228,6 +235,7 @@ pub mod tests {
     #[derive(Default)]
     pub struct Fake {
         pub routes: Mutex<HashMap<String, Hop>>,
+        pub errors: Mutex<HashMap<String, CheckError>>,
         pub asked: Mutex<Vec<String>>,
     }
 
@@ -242,6 +250,11 @@ pub mod tests {
                 },
             );
         }
+
+        /// Fails requests to `url` with `e`, as the client would.
+        pub fn fail(&self, url: &str, e: CheckError) {
+            self.errors.lock().unwrap().insert(url.to_string(), e);
+        }
     }
 
     impl Fetch for Fake {
@@ -251,7 +264,11 @@ pub mod tests {
         ) -> Pin<Box<dyn Future<Output = Result<Hop, CheckError>> + Send + 'a>> {
             self.asked.lock().unwrap().push(url.to_string());
             let hop = self.routes.lock().unwrap().get(url.as_str()).cloned();
+            let error = self.errors.lock().unwrap().get(url.as_str()).copied();
             Box::pin(async move {
+                if let Some(e) = error {
+                    return Err(e);
+                }
                 Ok(hop.unwrap_or(Hop {
                     status: 404,
                     location: None,
@@ -356,6 +373,25 @@ pub mod tests {
         assert_eq!(
             fetch(&f, Url::parse(STABLE).unwrap()).await,
             Err(CheckError::Status(500))
+        );
+    }
+
+    /// A URL the client refuses is no release source on the first hop
+    /// (that URL is ours) and a refused redirect after it.
+    #[tokio::test]
+    async fn a_refused_url_is_no_source_first_and_a_redirect_after() {
+        let f = Fake::default();
+        f.fail(STABLE, CheckError::Redirect);
+        assert_eq!(
+            fetch(&f, Url::parse(STABLE).unwrap()).await,
+            Err(CheckError::NoReleaseSource)
+        );
+        let f = Fake::default();
+        f.serve(STABLE, 302, Some("https://github.com/next"), b"");
+        f.fail("https://github.com/next", CheckError::Redirect);
+        assert_eq!(
+            fetch(&f, Url::parse(STABLE).unwrap()).await,
+            Err(CheckError::Redirect)
         );
     }
 

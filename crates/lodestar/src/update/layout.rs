@@ -169,19 +169,41 @@ impl Bin {
     }
 
     /// The overlay folders: names that are strict versions, each a real
-    /// folder (`<version>.bad` and anything else is ignored).
+    /// folder (`<version>.bad` and anything else is ignored). An entry that
+    /// can't be read fails the whole list.
     pub fn overlays(&self) -> io::Result<Vec<Version>> {
+        self.scan(Err)
+    }
+
+    /// [`Bin::overlays`], skipping (and handing to `bad`) an entry that
+    /// can't be read, so one bad entry doesn't hide the others.
+    pub fn overlays_skipping(&self, mut bad: impl FnMut(&io::Error)) -> io::Result<Vec<Version>> {
+        self.scan(|e| {
+            bad(&e);
+            Ok(())
+        })
+    }
+
+    fn scan(&self, mut bad: impl FnMut(io::Error) -> io::Result<()>) -> io::Result<Vec<Version>> {
         let mut out = Vec::new();
         for entry in fs::read_dir(&self.dir)? {
-            let entry = entry?;
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    bad(e)?;
+                    continue;
+                }
+            };
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
             let Some(v) = parse_version(&name) else {
                 continue;
             };
-            if entry.file_type()?.is_dir() {
-                out.push(v);
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => out.push(v),
+                Ok(_) => {}
+                Err(e) => bad(e)?,
             }
         }
         out.sort();
