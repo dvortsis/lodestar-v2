@@ -43,13 +43,7 @@ const PASSWORD: &str = "canary-first-password-1";
 const PASSWORD_2: &str = "canary-second-password-2";
 const WRONG: &str = "canary-wrong-password-3";
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
 fn now() -> i64 {
     std::time::SystemTime::now()
@@ -156,11 +150,10 @@ impl Server {
     fn start() -> Server {
         let dir = tempfile::tempdir().unwrap();
         let hash = seed(dir.path());
-        let port = free_port();
         let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .env_remove("LODESTAR_LOG")
             .env("LODESTAR_DATA_DIR", dir.path())
-            .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
+            .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
             .env("LODESTAR_DHT_PORT", "0")
             .env("LODESTAR_DHT_ENABLED", "false")
             .stdout(Stdio::null())
@@ -194,6 +187,17 @@ impl Server {
             assert!(
                 start.elapsed() < Duration::from_secs(30),
                 "no setup token: {text}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let port = loop {
+            if let Some(p) = common::serving_port(&stderr.lock().unwrap()) {
+                break p;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "no serving port: {}",
+                stderr.lock().unwrap()
             );
             std::thread::sleep(Duration::from_millis(50));
         };
