@@ -50,6 +50,8 @@ export function createResults() {
 	/** The latest request's failure; the rows (if any) are the previous query's. */
 	let error = $state.raw<ApiError | null>(null);
 	let cursor = $state<string | null>(null);
+	/** The first page's cursor: it names the index snapshot the rows came from (`/facets` lease). */
+	let lease = $state<string | null>(null);
 	let loadingMore = $state(false);
 	let moreError = $state.raw<ApiError | null>(null);
 	/** The query the rows answer, as a key; a reload of the same query keeps them. */
@@ -103,6 +105,7 @@ export function createResults() {
 			shownKey = null;
 			inflightKey = null;
 			settledKey = null;
+			lease = null;
 			status = 'empty';
 			return;
 		}
@@ -117,6 +120,7 @@ export function createResults() {
 			totalApprox = r.total_approx;
 			notices = r.notices;
 			cursor = r.next_cursor;
+			lease = r.next_cursor;
 			shownKey = key;
 			settledKey = key;
 			status = 'ready';
@@ -190,6 +194,10 @@ export function createResults() {
 		get moreError() {
 			return moreError;
 		},
+		/** The first page's `next_cursor`, for `/facets` to count the same snapshot (null: one page). */
+		get lease() {
+			return lease;
+		},
 		/** The key of the query the rows answer (the list resets its scroll when it changes). */
 		get shown() {
 			return shownKey;
@@ -206,14 +214,26 @@ export function createResults() {
 		loadMore: () => untrack(loadMore),
 		/**
 		 * The panel unmounted (the person left /search): what was answered before can be stale when
-		 * they come back (a setting changed, the index moved), so the next `load` asks again. The
-		 * rows stay, under the refine hairline, until that answer arrives.
+		 * they come back, and may no longer be allowed (a setting changed, e.g. "Show adult content"
+		 * turned off). So the rows go too, and the next `load` starts from loading, not from the old
+		 * rows under the refine hairline (which an error would then keep on screen).
 		 */
 		forget() {
 			slot.cancel();
 			inflightKey = settledKey = null;
+			hits = [];
+			total = 0;
+			totalApprox = false;
+			notices = [];
+			error = null;
+			cursor = null;
+			lease = null;
+			moreError = null;
+			shownKey = null;
+			expired = false;
 			refining = false;
 			loadingMore = false;
+			status = 'empty';
 		},
 		/** Retry: the current query again (after an error), or the next page. */
 		retry() {
