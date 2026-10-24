@@ -174,6 +174,41 @@ describe('search state', () => {
 		expect(f.calls).toEqual([{ url: '/search?q=old', push: true }]);
 	});
 
+	it('typing during a structured edit wins: the edit is dropped and the draft parses', async () => {
+		const f = fakeNav('http://x/search?q=lantern+res');
+		let release!: () => void;
+		fetchMock.mockImplementationOnce(
+			() => new Promise((r) => (release = () => r(json({ canonical: 'lantern', hits: [] }))))
+		);
+		const s = createSearchState(f.nav);
+		const edit = s.setAst(word('lantern'));
+		s.setText('lantern more'); // typed before the server answered the edit
+		release();
+		await edit;
+		expect(s.text).toBe('lantern more');
+		expect(f.calls).toEqual([]); // the edit committed nothing
+		await vi.advanceTimersByTimeAsync(200);
+		expect(s.ast).toEqual(word('lantern more'));
+		expect(f.calls).toEqual([{ url: '/search?q=lantern+more', push: false }]);
+	});
+
+	it('a parse answer for an older draft never becomes the AST', async () => {
+		const f = fakeNav();
+		let release!: () => void;
+		fetchMock.mockImplementationOnce(
+			() => new Promise((r) => (release = () => r(json({ ast: word('old'), canonical: 'old' }))))
+		);
+		const s = createSearchState(f.nav);
+		s.setText('old');
+		await vi.advanceTimersByTimeAsync(200); // the parse of "old" is in flight
+		s.setText('new');
+		release();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toBeNull(); // not "old"
+		await vi.advanceTimersByTimeAsync(200);
+		expect(s.ast).toEqual(word('new'));
+	});
+
 	it('setAst clears parsing on success and on error', async () => {
 		const f = fakeNav();
 		const s = createSearchState(f.nav);

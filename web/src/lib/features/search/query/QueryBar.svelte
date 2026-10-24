@@ -42,10 +42,13 @@
 
 	onMount(() => onFirstInteraction(engage));
 
-	// A query (or `hidden=1`) in the URL needs its text, checks and chips now: a pasted link, back.
+	// A query (or `hidden`) in the URL needs its text, checks and chips now: a pasted link, back.
+	// `hidden` reads as W5's `readUrl` does ("1" or "true"); importing it would put W5 on the
+	// first load.
 	$effect(() => {
 		const p = page.url.searchParams;
-		if (p.get('q') || p.get('hidden') === '1') void engage();
+		const hidden = p.get('hidden');
+		if (p.get('q') || hidden === '1' || hidden === 'true') void engage();
 	});
 
 	/** `/` (search.focus): focus with the caret at the end. */

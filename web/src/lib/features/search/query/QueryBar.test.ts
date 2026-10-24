@@ -245,7 +245,8 @@ describe('the static first-paint bar (app.html)', () => {
 	});
 });
 
-describe('the active-filter strip', () => {
+// Its chunks load lazily: a cold run (CI) needs longer than vitest's 5 s default.
+describe('the active-filter strip', { timeout: 20_000 }, () => {
 	it('renders chips from the AST and removes one through the server', async () => {
 		visit('/search?q=lantern+res%3A1080p');
 		const { editor } = setup();
@@ -291,6 +292,14 @@ describe('the active-filter strip', () => {
 			)
 		);
 		await wait(() => expect(document.activeElement).toBe(editor));
+	});
+
+	it('isolates values, so a direction override in one cannot reorder the label', async () => {
+		visit('/search?q=res%3A%E2%80%AEabc');
+		setup();
+		await screen.findByRole('button', { name: /^Remove filter: Resolution:/ }, LAZY);
+		const mono = screen.getByRole('group', { name: 'Active filters' }).querySelector('bdi');
+		expect(mono?.textContent).toBe('\u202eabc');
 	});
 
 	it('keeps the chip and offers Retry when the removal fails', async () => {
@@ -351,7 +360,8 @@ describe('the active-filter strip', () => {
 	});
 });
 
-describe('the Syntax popover', () => {
+// Its chunks load lazily: a cold run (CI) needs longer than vitest's 5 s default.
+describe('the Syntax popover', { timeout: 20_000 }, () => {
 	it('opens on its button, and Try sets and submits an example', async () => {
 		const { editor } = setup();
 		await fireEvent.click(screen.getByRole('button', { name: 'Syntax' }));

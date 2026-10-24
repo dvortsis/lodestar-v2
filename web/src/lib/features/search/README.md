@@ -34,6 +34,10 @@ The grid's rule lives in `query/bar.css`, which loads with the first interaction
 - **Key scope `search`:** the page pushes it and registers `search.focus` (`/`) in `query/commands.ts`, from `import('$lib/keys')` after the first interaction. S-search-2 registers its own commands (j/k, o, c, s, x) in the same scope, the same way. Never import `$lib/keys` statically into the route.
 - **The first load is full** (§10.1: 102,400 bytes in Lighthouse; about 7.6 KB left after S-search-1). Anything the bare page doesn't paint loads lazily, and a lazily imported component's own `<style>` still loads with the route (kit), so put lazy styles in a stylesheet imported after mount (`query/bar.css` is the model). Writing a utility class name anywhere in `src/`, comments included, adds it to the global 20 KB sheet: use token variables for anything the sheet doesn't already have.
 
+## The strip (for S-search-2)
+
+The active-filter strip sits under the bar inside the `<search>` landmark. **It reserves no height:** it loads with the bar's lazy part when the URL has a query or `hidden`, and only renders once there's a chip. So on a pasted link with chips, the results below shift down once, when the strip appears. The results list should either paint after the strip, or the page should reserve the strip's row when the URL's query has a structured clause.
+
 ## The editor (for S-search-4)
 
 `QueryBar.svelte` is the static part. `Live.svelte` (lazy) attaches `query/editor.ts` to the `contenteditable="plaintext-only"` element:

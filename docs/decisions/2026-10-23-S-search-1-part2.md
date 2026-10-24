@@ -29,14 +29,21 @@ The active-filter strip, its chips and the Syntax popover (architecture §10.4, 
   - Without it, Clear all made two entries, and Back landed on the free text with `hidden=1`, a state the user never saw.
   - Tests: W5's unit test checks one entry, and the strip's test checks Clear all pushes once.
 - **Quick removals in a row all land.** Each one builds on the one in flight and finds its clause by node identity, so a press during the round trip doesn't bring the first chip back. A clause that's gone, after a new query, is left alone. One announcement names every removed filter once the last one lands.
+- **If the second of two quick removals fails,** neither lands: the first was superseded by the second, which carried both. The banner's Retry repeats the second only, so the first chip stays and can be removed again. Nothing is lost and the strip always matches the URL.
+- **Typing wins over a removal in flight** (runner, 2026-10-23, named hook edits in W5's `search.svelte.ts`):
+  - `setText` cancels a structured edit or a parse in flight;
+  - `setAst` drops its answer if the draft changed after it started;
+  - `parse()` sets `ast` only for the current draft.
+  - Before this, typing during a removal's round trip was overwritten by the server's text, and the chips showed the discarded draft.
 - **Removing a chip rewrites the bar** with the server's text for what's left. That includes a draft that wasn't parsed yet or had a syntax error. Undo brings the draft back.
 - **Removing:** a failed removal keeps the chip and shows an error banner with Retry. Focus moves to the next chip, else the editor (Chip's `fallbackFocus`), and a polite region says "Removed filter: {label}". It is a separate region from the message line, so a removal never replaces a parse error's text.
-- **No animation** on change (§10.2). Chips are keyed by label, so removing one doesn't re-create its neighbours and lose the focus handed to the next chip.
+- **No animation** on change (§10.2). Chips are keyed by their AST node, not by label or position. So removing one doesn't re-create its neighbours, even one with the same label, and the focus handed to the next chip stays put.
 
 ## Loading (§10.1)
 
 - **The strip loads only once there's a chip,** and the Syntax popover on its first open. Neither is in `/search`'s first load. The bar's lazy part now also loads at once when the URL carries `hidden=1`, so that chip shows without an interaction.
-- **The Syntax button is on the first load,** as a plain button that loads the popover when pressed. `app.html`'s static bar has a matching inert button, so the editor's box stays the same from first paint (`boot-shell.routes.test.ts`, ≤ 1 px).
+- **The Syntax button is on the first load,** as a plain button that loads the popover when pressed. `app.html`'s static bar has a matching inert button, so the editor's box stays the same from first paint (`boot-shell.routes.test.ts`, ≤ 1 px). The runner confirmed this hub edit.
+  - **Other languages:** the static button says "Syntax". The boot script only paints the static shell for English (`boot-locales`), as with part 1's placeholder, so a zh page never shows it and its own "语法" button causes no shift on hydrate. If a locale joins `boot-locales`, its static strings must too, or the button's width shifts when the app takes over.
 - **The label code isn't a chunk of its own** (a deviation from the brief's step 9; the runner accepted it, 2026-10-23). `clauses.ts` (the label messages and formatters) loads with the bar's lazy part on the first interaction, even with no chip, instead of with the strip as the brief's step 9 listed. The bare page's first load doesn't include it either way. Splitting it would add a request on the first chip for a few KB.
 - **A late popover doesn't take focus.** The Syntax popover opens once its chunk has loaded, and only if focus is still on the button (or nowhere). If the user has started typing meanwhile, it stays closed. A chunk that fails to load leaves the button as it was.
 - **Measured on `/search`:** search JS 39.56 → 40.17 kB (`main` at 21cff90), CSS 19.83 kB unchanged, and Lighthouse 94,845 B (mobile LCP about 1.5 s, CLS 0). Every class the strip and popover use was already in the global sheet.

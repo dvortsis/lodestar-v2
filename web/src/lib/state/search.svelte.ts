@@ -76,12 +76,14 @@ export function createSearchState(nav: Nav = kitNav) {
 
 	/**
 	 * Parses `t` on the server (latest wins). Returns the canonical text, null on an error, or
-	 * undefined when a newer run superseded this one (the caller must then do nothing).
+	 * undefined when a newer run superseded this one, or the draft moved on from `t` (the caller
+	 * must then do nothing: the newer draft's own parse owns `ast`).
 	 */
 	async function parse(t: string): Promise<string | null | undefined> {
 		parsing = true;
 		try {
 			const r = await slot.run((signal) => api.get('/parse', { query: { q: t }, signal }));
+			if (t !== text) return undefined;
 			ast = r.ast;
 			parseError = null;
 			parsing = false;
@@ -136,6 +138,8 @@ export function createSearchState(nav: Nav = kitNav) {
 		setText(t: string) {
 			text = t;
 			clearTimeout(timer);
+			// Typing wins over a structured edit or a parse in flight: their answers are for older text.
+			slot.cancel();
 			timer = setTimeout(async () => {
 				const canonical = await parse(t);
 				if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
@@ -159,6 +163,7 @@ export function createSearchState(nav: Nav = kitNav) {
 		 */
 		async setAst(next: Ast, options: { hidden?: boolean } = {}) {
 			clearTimeout(timer);
+			const draft = text;
 			parsing = true; // supersedes any parse in flight, so this call owns the flag
 			try {
 				const r = await slot.run((signal) =>
@@ -178,6 +183,7 @@ export function createSearchState(nav: Nav = kitNav) {
 						signal
 					})
 				);
+				if (text !== draft) return; // typed meanwhile: the newer draft wins
 				ast = next;
 				parseError = null;
 				parsing = false;

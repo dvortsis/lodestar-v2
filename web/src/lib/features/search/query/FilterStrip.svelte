@@ -60,11 +60,13 @@
 	});
 </script>
 
+<!-- Values are isolated (<bdi>): a pasted value with a direction override (`group:\u202eabc`)
+     can't reorder the rest of the label. -->
 {#snippet text(label: Label)}
 	<span class="sr-only">{label.text}</span>
 	<span aria-hidden="true"
-		>{#each label.parts as part, i (i)}{#if typeof part === 'string'}{part}{:else}<Mono
-					>{part.mono}</Mono
+		>{#each label.parts as part, i (i)}{#if typeof part === 'string'}{part}{:else}<bdi
+					><Mono>{part.mono}</Mono></bdi
 				>{/if}{/each}</span
 	>
 {/snippet}

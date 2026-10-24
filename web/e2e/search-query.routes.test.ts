@@ -214,12 +214,17 @@ test('chips render from the server AST; removing one goes through the server', a
 	await expect(editor(page)).toHaveText('lantern ext:mkv');
 });
 
-test('Clear all keeps the free text', async ({ page, go }) => {
+test('Clear all keeps the free text, in one step Back undoes', async ({ page, go }) => {
 	await go('/search?q=lantern+res%3A1080p&hidden=1');
 	await page.getByRole('button', { name: 'Clear all' }).click();
 	await expectQuery(page, 'lantern');
 	await expect(strip(page)).toHaveCount(0);
 	await expect(editor(page)).toBeFocused();
+	// One history entry: Back restores both the filter and `hidden=1`.
+	await page.goBack();
+	await expectQuery(page, 'lantern res:1080p', '1');
+	await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+	await expect(removeChip(page, 'Including: Hidden by filters')).toBeVisible();
 });
 
 test('the hidden=1 chip', async ({ page, go }) => {
