@@ -84,8 +84,8 @@ fn run(script: &str) -> Result<String, String> {
 pub fn apply() {
     let priority = match Priority::from_env(std::env::var(ENV).ok().as_deref()) {
         Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("priority: {e}; keeping below normal");
+        Err(_) => {
+            lodestar_log::log_event!(crate::logging::events::WINDOWS_PRIORITY_UNKNOWN);
             Priority::BelowNormal
         }
     };
@@ -93,8 +93,12 @@ pub fn apply() {
         return;
     }
     match set(std::process::id(), priority) {
-        Ok(()) => tracing::info!("priority: running at below-normal priority"),
-        Err(e) => tracing::warn!("priority: couldn't lower the process priority: {e}"),
+        Ok(()) => lodestar_log::log_event!(crate::logging::events::WINDOWS_PRIORITY_LOWERED),
+        // PowerShell's message: kept out of the line.
+        Err(_) => lodestar_log::log_event!(
+            crate::logging::events::WINDOWS_PRIORITY_FAILED,
+            error = lodestar_log::Error::kind("powershell")
+        ),
     }
 }
 

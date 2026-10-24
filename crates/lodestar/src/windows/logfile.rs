@@ -4,12 +4,13 @@
 //! becomes `lodestar.log.1` (replacing the previous one) and a new file
 //! starts, so the folder never holds more than twice the cap.
 //!
-//! This stands in until the structured log file of §12.1 exists.
+//! Since B-log1b the service's logging runtime writes its console here
+//! ([`Console`]), beside the structured `lodestar.jsonl`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -118,6 +119,45 @@ impl<'a> MakeWriter<'a> for LogFile {
     }
 }
 
+/// The logging runtime's console for the service: what it writes for a
+/// line is kept until it flushes, then written as one record, so a line
+/// never straddles a rotation.
+#[derive(Debug)]
+pub struct Console {
+    file: Arc<LogFile>,
+    pending: Vec<u8>,
+}
+
+impl Console {
+    pub fn new(file: Arc<LogFile>) -> Console {
+        Console {
+            file,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl Write for Console {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let line = std::mem::take(&mut self.pending);
+        self.file.write_record(&line)
+    }
+}
+
+impl Drop for Console {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +226,61 @@ mod tests {
         fs::create_dir_all(dir.path().join("logs")).unwrap();
         write(&log, "cccc\n");
         assert_eq!(fs::read_to_string(&p).unwrap(), "cccc\n");
+    }
+
+    #[test]
+    fn the_console_writes_each_line_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = Arc::new(LogFile::open(path(dir.path()), 40).unwrap());
+        let mut c = Console::new(file.clone());
+        for n in 0..3 {
+            c.write_all(format!("line number {n} of three").as_bytes())
+                .unwrap();
+            c.write_all(b"\n").unwrap();
+            c.flush().unwrap();
+        }
+        // Each line went whole into one file or the other.
+        let now = fs::read_to_string(path(dir.path())).unwrap();
+        let old = fs::read_to_string(file.rotated_path()).unwrap();
+        assert_eq!(now, "line number 2 of three\n");
+        assert_eq!(old, "line number 1 of three\n");
+    }
+
+    /// The service's runtime writes its console here: the setup token's
+    /// line reads as it does on a console, token right after the words,
+    /// and its JSONL file goes to the logs folder beside it.
+    #[test]
+    fn the_service_runtime_writes_the_token_line_here() {
+        use crate::logging::Runtime;
+        use crate::logging::state::Applied;
+        use crate::settings::logging::Logging;
+        use lodestar_log::{Record, Sink, Value};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = Arc::new(LogFile::open(path(dir.path()), MAX_BYTES).unwrap());
+        let section = Logging {
+            file_folder: dir.path().join("logs").display().to_string(),
+            ..Logging::default()
+        };
+        let rt = Runtime::new(
+            Box::new(Console::new(file)),
+            Applied::compute(&section, crate::unix_now()),
+        );
+        rt.open_file();
+        let fields = [
+            ("token", Value::Secret("ABCD-1234-EFGH-5678")),
+            ("address", Value::Listen("0.0.0.0:8191".parse().unwrap())),
+        ];
+        rt.record(&Record {
+            event: &crate::logging::events::AUTH_SETUP_TOKEN::EVENT,
+            fields: &fields,
+        });
+        let log = fs::read_to_string(path(dir.path())).unwrap();
+        assert!(
+            log.contains("enter setup token ABCD-1234-EFGH-5678 address=0.0.0.0:8191\n"),
+            "{log}"
+        );
+        let jsonl = fs::read_to_string(dir.path().join("logs").join("lodestar.jsonl")).unwrap();
+        assert!(jsonl.contains(r#""event":"auth.setup_token""#), "{jsonl}");
     }
 }

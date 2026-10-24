@@ -289,13 +289,26 @@ mod imp {
         if temporary {
             // The whole fixture lives here; nothing else was put in it.
             if let Err(e) = std::fs::remove_dir_all(&dir) {
-                tracing::warn!("removing {}: {e}", dir.display());
+                lodestar_log::log_event!(
+                    crate::logging::events::FIXTURE_CLEANUP_FAILED,
+                    path = lodestar_log::Path::new(&dir),
+                    error = lodestar_log::Error::io(&e)
+                );
             }
         }
         match outcome {
             Ok(()) => ExitCode::SUCCESS,
+            // The text can name a path: the kind only, and the reason to
+            // stderr, where the person who ran the command reads it.
             Err(e) => {
-                tracing::error!("{e}");
+                lodestar_log::log_event!(
+                    crate::logging::events::FIXTURE_FAILED,
+                    error = lodestar_log::Error::kind("fixture")
+                );
+                eprintln!(
+                    "lodestar serve --fixture: {}",
+                    lodestar_log::url::scrub_text(&e)
+                );
                 ExitCode::FAILURE
             }
         }
@@ -306,50 +319,48 @@ mod imp {
 
     fn run(config: &Config, found: &Found) -> Result<(), String> {
         let dir = &config.data_dir;
-        tracing::warn!(
-            "fixture mode: test data in {}, not a real install",
-            dir.display()
+        lodestar_log::log_event!(
+            crate::logging::events::FIXTURE_MODE,
+            path = lodestar_log::Path::new(dir)
         );
         if let Found::Fixture { anchor } = *found {
             if crate::unix_now() > anchor + STABLE_SECS {
-                tracing::warn!(
-                    "this fixture was built more than six hours ago: its 24 h and 7 d numbers \
-                     and cohort finality no longer match fixture.json; delete the folder to \
-                     rebuild it"
-                );
+                lodestar_log::log_event!(crate::logging::events::FIXTURE_STALE);
             }
         }
         if *found == Found::Empty {
             let anchor = data::anchor(crate::unix_now());
-            tracing::info!(
-                "building the fixture in {} (anchor {anchor})",
-                dir.display()
+            lodestar_log::log_event!(
+                crate::logging::events::FIXTURE_BUILDING,
+                path = lodestar_log::Path::new(dir),
+                anchor = lodestar_log::Count(anchor as u64)
             );
             let m = data::build(dir, anchor).map_err(|e| format!("building the fixture: {e}"))?;
-            tracing::info!(
-                "fixture built: {} torrents, {} shown by default; manifest {}",
-                m.counts.total,
-                m.counts.visible,
-                dir.join(data::MANIFEST).display()
+            let manifest = dir.join(data::MANIFEST);
+            lodestar_log::log_event!(
+                crate::logging::events::FIXTURE_BUILT,
+                torrents = m.counts.total as u64,
+                visible = m.counts.visible as u64,
+                manifest = lodestar_log::Path::new(&manifest)
             );
         } else {
-            tracing::info!("serving the fixture in {}", dir.display());
+            lodestar_log::log_event!(
+                crate::logging::events::FIXTURE_SERVING,
+                path = lodestar_log::Path::new(dir)
+            );
         }
         if let Some(password) = std::env::var(PASSWORD_VAR).ok().filter(|p| !p.is_empty()) {
             if claim(config, &password)? {
-                tracing::info!("claimed with {PASSWORD_VAR}");
+                lodestar_log::log_event!(crate::logging::events::FIXTURE_CLAIMED);
             } else {
-                tracing::info!(
-                    "{PASSWORD_VAR} ignored: this fixture is claimed already; sign in with its \
-                     password"
-                );
+                lodestar_log::log_event!(crate::logging::events::FIXTURE_PASSWORD_IGNORED);
             }
         }
         let bind = config.http.bind;
         if !bind.ip().is_loopback() {
-            tracing::warn!(
-                "the fixture is served on {bind}, beyond this computer; it's test data, but anyone \
-                 who can reach the address can try to sign in"
+            lodestar_log::log_event!(
+                crate::logging::events::FIXTURE_PUBLIC,
+                address = lodestar_log::Listen(bind)
             );
         }
         OFFLINE.store(true, Ordering::Relaxed);
