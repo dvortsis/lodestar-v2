@@ -69,7 +69,11 @@ impl Funnel for WorkerFunnel {
             Some(token) => self.coordinator.lost(key, token, loss),
             // Every key enters the pool under a lease; one without is a
             // bug, and counting it would unbalance the funnel.
-            None => tracing::warn!(key = %key, "a pool loss without a lease"),
+            None => lodestar_log::log_event!(
+                crate::log_events::LEASE_MISSING,
+                key = lodestar_log::Torrent(&key.0),
+                stage = "lost"
+            ),
         }
     }
 }
@@ -137,7 +141,11 @@ impl PrepareStage {
             self.preparer = preparer;
             for (fk, result) in done {
                 let Some(token) = self.leases.take(&fk.key) else {
-                    tracing::warn!(key = %fk.key, "a fetched key without a lease");
+                    lodestar_log::log_event!(
+                        crate::log_events::LEASE_MISSING,
+                        key = lodestar_log::Torrent(&fk.key.0),
+                        stage = "fetched"
+                    );
                     continue;
                 };
                 match result {
@@ -196,7 +204,11 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
     let mut prepared = preparer
         .prepare(&info, Some(&fk.fetched.info))
         .map_err(|e| {
-            tracing::warn!(key = %fk.key, "preparing failed: {e}");
+            lodestar_log::log_event!(
+                crate::log_events::PREPARE_FAILED,
+                key = lodestar_log::Torrent(&fk.key.0),
+                error = lodestar_log::Error::new(&e)
+            );
             Loss::Invalid
         })?;
     // Enrichment runs here, on the worker side (§19.4).

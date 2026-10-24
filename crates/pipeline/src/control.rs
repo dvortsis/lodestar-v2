@@ -58,13 +58,13 @@ const KEEP: usize = (REACH_WINDOW_SECS / 10 + 2) as usize;
 
 /// The priority saved in the app for `plugin`, if any (an unreadable
 /// value is ignored with a warning).
-pub fn saved_priority(store: &Store, plugin: &str) -> Result<Option<Priority>, Error> {
+pub fn saved_priority(store: &Store, plugin: &'static str) -> Result<Option<Priority>, Error> {
     let Some(text) = store.setting_text(&format!("{PRIORITY_KEY}{plugin}"))? else {
         return Ok(None);
     };
     let parsed = serde_json_str(&text).and_then(parse_priority);
     if parsed.is_none() {
-        tracing::warn!(plugin, "ignoring a saved source priority that isn't one");
+        lodestar_log::log_event!(crate::log_events::PRIORITY_UNREADABLE, plugin = plugin);
     }
     Ok(parsed)
 }
@@ -493,12 +493,19 @@ impl Control {
             let now = self.now_t();
             self.inner.samples.lock().expect("samples lock").rates_from = now;
         }
-        tracing::info!("crawler {}", if paused { "paused" } else { "resumed" });
+        lodestar_log::log_event!(
+            crate::log_events::CRAWLER_TOGGLED,
+            state = if paused { "paused" } else { "resumed" }
+        );
         let kind = if paused { event::PAUSE } else { event::RESUME };
         // The pause is applied either way; a lost event costs Insights a
         // gap annotation, not the user their pause.
         if let Err(e) = self.record(kind, String::new()).await {
-            tracing::error!("crawler: recording the pause event failed: {e}");
+            lodestar_log::log_event!(
+                crate::log_events::EVENT_UNRECORDED,
+                what = "pause",
+                error = crate::log_events::error(&e)
+            );
         }
         true
     }
@@ -516,7 +523,11 @@ impl Control {
             .record(event::INTENSITY, intensity_name(intensity).into())
             .await
         {
-            tracing::error!("crawler: recording the intensity event failed: {e}");
+            lodestar_log::log_event!(
+                crate::log_events::EVENT_UNRECORDED,
+                what = "intensity",
+                error = crate::log_events::error(&e)
+            );
         }
         true
     }
@@ -695,7 +706,11 @@ impl Control {
             }
             if let Some(state) = state {
                 store.set_source_state(id, state)?;
-                tracing::info!(plugin = manifest.id, ?state, "source state changed");
+                lodestar_log::log_event!(
+                    crate::log_events::SOURCE_STATE_CHANGED,
+                    plugin = manifest.id,
+                    state = crate::log_events::state(state)
+                );
             }
             Ok::<_, SourceError>(())
         })
