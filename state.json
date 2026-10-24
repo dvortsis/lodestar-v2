@@ -1539,7 +1539,6 @@
   "bidi-search-rows": "2026-10-23T23:37Z after #139: apply lib/util/bidi.ts to search result rows (S-search-1/2)",
   "docs-operations-firstrun": "2026-10-24T02:00Z docs/operations.md:86 first-run example stale (setup token line now shows http://<this host's address>:PORT/); for docs follow-up",
   "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d",
-  "subscriptions-expect": "PR #168 open @377ff12d; review clean; awaiting CI then merge",
   "subscriptions-msg-nit": "optional: add \"restart Lodestar to try again\" to filters.subscriptions_client_failed message; Filters screen gives no sign refresh stopped"
  },
  "blocked_on_owner": [],
@@ -1629,7 +1628,8 @@
   "reviewer_template": "runner-rv-common.txt on runner-state (backup of $S/rv-common.txt; restored after a reviewer deleted rv-*.txt)",
   "owner_decision_settings_split": "2026-10-24T03:14Z OWNER (typed in session_01SE4bp9YdZmHr8RN4FHpbmm 03:13Z, verified via transcript): option A \u2014 draft/conflict code loads on first edit; 45 KB limit kept",
   "usage_pause": "2026-10-24T03:31Z runner: paused in-flight non-v0.5 work at safe points to conserve usage: B-update 5/5, S-settings-1, M-settings-form-3, X-sleeps next part, B-log1b 4b. Finishing only open PRs #140, #163, #165, #166. Lean reviews (resume reviewer for fix rounds). Owner may lift.",
-  "notify_owner_on": "G-v05 pass (with usage note)"
+  "notify_owner_on": "G-v05 pass (with usage note)",
+  "merged_168": "subscriptions client panic fix merged ef236b19"
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
