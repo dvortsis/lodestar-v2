@@ -277,8 +277,8 @@
    "session": "session_015U1ernRx1MK1knzFVYDnee",
    "pr": 171,
    "attempt": 0,
-   "review_rounds": 0,
-   "notes": "2026-10-24T03:31Z to S-search-2's session after 2b (no new launch) | brief sent 06:50Z; start local, push after #169 merges | built locally e2f024d4 (~790 lines); toolbar lazy 4.0/4.4 approved; +0.22 first load; skip-to-results link required (WCAG 2.4.1). Push after #169. | required: pending clears on search.text change (+test). May push now (07:55Z). | PR #171 @fd114c3a opened 07:57Z (~1,000 lines); reviewer aee1c847e901db774"
+   "review_rounds": 1,
+   "notes": "2026-10-24T03:31Z to S-search-2's session after 2b (no new launch) | brief sent 06:50Z; start local, push after #169 merges | built locally e2f024d4 (~790 lines); toolbar lazy 4.0/4.4 approved; +0.22 first load; skip-to-results link required (WCAG 2.4.1). Push after #169. | required: pending clears on search.text change (+test). May push now (07:55Z). | PR #171 @fd114c3a opened 07:57Z (~1,000 lines); reviewer aee1c847e901db774 | #171 r1 FIX (1 blocking: waitFor 1s at ResultsToolbar.test.ts:107; + save() catch toast; doc wording). Runner checks delta directly."
   },
   "S-detail": {
    "status": "merged",
@@ -1540,7 +1540,8 @@
   "docs-operations-firstrun": "2026-10-24T02:00Z docs/operations.md:86 first-run example stale (setup token line now shows http://<this host's address>:PORT/); for docs follow-up",
   "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d",
   "subscriptions-msg-nit": "optional: add \"restart Lodestar to try again\" to filters.subscriptions_client_failed message; Filters screen gives no sign refresh stopped",
-  "log-delete-flake-macos": "logging::source_tests::delete_while_writers_run_and_a_compression_is_in_flight failed on macOS (#170 run 40073135952, 07:27Z): deleted:0 skipped:[] after 600 lines/2 rotations. Passed on prior macOS run. Possible race: delete while compression in flight sees no closed files. For B-log1b session when owner lifts pause (or fix if it recurs on main)."
+  "log-delete-flake-macos": "logging::source_tests::delete_while_writers_run_and_a_compression_is_in_flight failed on macOS (#170 run 40073135952, 07:27Z): deleted:0 skipped:[] after 600 lines/2 rotations. Passed on prior macOS run. Possible race: delete while compression in flight sees no closed files. For B-log1b session when owner lifts pause (or fix if it recurs on main).",
+  "g-v05-fixture-config": "G-v05: *.fixture.test.ts specs are not in any Playwright project testMatch; gate must run search-keyboard.fixture with a copied config against lodestar serve --fixture (E2E_FIXTURE_URL)."
  },
  "blocked_on_owner": [],
  "launches_today": 32,
