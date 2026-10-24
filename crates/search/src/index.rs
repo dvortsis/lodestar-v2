@@ -29,6 +29,7 @@ use crate::doc::{DocEnrichment, TorrentDoc};
 use crate::files::{self, FileFields};
 use crate::filter::{FastRange, PostFilter};
 use crate::query::{Node, When};
+use crate::retry_dir::Retrying;
 use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
 use crate::sorted::{self, By, SegmentCache};
 use crate::tokenizer::{NAME_TOKENIZER, NameTokenizer};
@@ -571,12 +572,12 @@ impl SearchIndex {
         let files_dir = dir.join("files");
         std::fs::create_dir_all(&files_dir).map_err(Error::Io)?;
         let (schema, fields) = schema::build();
-        let index = Index::open_or_create(MmapDirectory::open(dir)?, schema)?;
+        let index = Index::open_or_create(Retrying::new(MmapDirectory::open(dir)?), schema)?;
         let (file_schema, file_fields) = files::schema();
         let file_index = Index::builder()
             .schema(file_schema)
             .settings(files::settings())
-            .open_or_create(MmapDirectory::open(&files_dir)?)?;
+            .open_or_create(Retrying::new(MmapDirectory::open(&files_dir)?))?;
         SearchIndex::wrap(index, fields, file_index, file_fields)
     }
 
@@ -587,8 +588,8 @@ impl SearchIndex {
     /// `None` when it lacks a field no search works without, which is a
     /// schema mismatch; an error opening it is just an error.
     pub(crate) fn open_existing(dir: &Path) -> Result<Option<(SearchIndex, Compat)>> {
-        let index = Index::open(MmapDirectory::open(dir)?)?;
-        let file_index = Index::open(MmapDirectory::open(dir.join("files"))?)?;
+        let index = Index::open(Retrying::new(MmapDirectory::open(dir)?))?;
+        let file_index = Index::open(Retrying::new(MmapDirectory::open(dir.join("files"))?))?;
         let (schema, fields) = schema::build();
         let (file_schema, file_fields) = files::schema();
         let compat = if index.schema() == schema && file_index.schema() == file_schema {
