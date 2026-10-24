@@ -19,6 +19,8 @@ export class DetailModel {
 	detail = $state.raw<TorrentDetail | null>(null);
 	hit = $state.raw<SearchHit | null>(null);
 	status = $state<Status>('loading');
+	/** The hit lookup has finished (found or not): the title won't change again. */
+	hitDone = $state(false);
 	error = $state<ApiError | null>(null);
 	/** The title shown before and after load: resolved title, else the raw name. */
 	title = $derived(this.hit?.title ?? this.detail?.name ?? this.hit?.name ?? '');
@@ -36,6 +38,7 @@ export class DetailModel {
 		const hit = cachedHit(hash) ?? null;
 		const cached = cachedDetail(hash);
 		this.hit = hit;
+		this.hitDone = !!hit;
 		this.detail = cached ?? null;
 		this.status = cached ? 'ready' : 'loading';
 		if (!cached) void this.fetchDetail(hash);
@@ -83,7 +86,9 @@ export class DetailModel {
 				cacheHit(hash, first);
 				this.hit = first;
 			}
-		} catch {
+			this.hitDone = true;
+		} catch (e) {
+			if (!isAbort(e)) this.hitDone = true;
 			// The header and rows fall back to their null states; the detail error is the one shown.
 		}
 	}

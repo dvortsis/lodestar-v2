@@ -12,9 +12,9 @@
 	interface Props {
 		detail: TorrentDetail;
 		hit: SearchHit | null;
-		heading?: 'h2' | 'h3';
+		level?: 2 | 3;
 	}
-	let { detail, hit, heading = 'h3' }: Props = $props();
+	let { detail, hit, level = 3 }: Props = $props();
 
 	const locale = $derived(currentLocale());
 	const flags = $derived(
@@ -38,7 +38,7 @@
 </script>
 
 <section class="ls-detail-section" aria-labelledby="detail-h-summary" data-section="summary">
-	<svelte:element this={heading} id="detail-h-summary">{m.detail_section_summary()}</svelte:element>
+	<div role="heading" aria-level={level} id="detail-h-summary">{m.detail_section_summary()}</div>
 	<dl class="ls-detail-facts">
 		<dt>{m.detail_size()}</dt>
 		<dd class="tabular-nums" data-testid="detail-size">{formatBytes(detail.size, locale)}</dd>
