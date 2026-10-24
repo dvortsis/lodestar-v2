@@ -483,13 +483,13 @@
       "catch_ups": 1
     },
     "S-discover": {
-      "status": "in_review",
+      "status": "fixing",
       "model": "sonnet",
       "session": "session_01WDCNhJgVXT9PMQKAiwhGkv",
       "pr": 140,
       "attempt": 0,
-      "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason | 2026-10-24T01:06Z released 4th of 4; runner independent review after push | 2026-10-24T01:25Z pushed 3de5104 (/discover own 42.29/45); runner independent review running",
+      "review_rounds": 1,
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:45:34Z PR #140 head 55dfb94; search lhci 102,840 (chunk leak) -> held for #132; own 34.6 KB vs 15 target: runner rule = hard limit \u00a710.1 45 KB route JS, 15 KB target with reason | 2026-10-24T01:06Z released 4th of 4; runner independent review after push | 2026-10-24T01:25Z pushed 3de5104 (/discover own 42.29/45); runner independent review running | 2026-10-24T01:36Z #140 review FIX: keyboard spec unmocked searchGet (blocking, fix b9bbb4c local); \u2248 via formatter; failed tab change leaves stale rows; shared message keys; stale body/decisions; Discover entry 45 KB signed off (rule). Carry: re-measure when S-search-2 shared row replaces HitRow",
       "catch_ups": 0
     },
     "S-alerts": {
