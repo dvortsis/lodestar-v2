@@ -66,8 +66,10 @@ test('every stop on the top bar shows a visible focus ring', async ({ page, go, 
 test('Enter on a destination navigates, marks it current and moves focus to main', async ({
 	page,
 	go,
-	kbd
+	kbd,
+	mock
 }) => {
+	mock.on('listSavedSearches', []);
 	await go('/search');
 	await kbd.tabTo(page.getByRole('link', { name: 'Alerts' }));
 	await kbd.press('Enter');
