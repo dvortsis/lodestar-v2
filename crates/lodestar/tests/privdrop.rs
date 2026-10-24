@@ -19,19 +19,13 @@ fn root() -> bool {
     }
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
-fn lodestar(data: &Path, port: u16) -> Command {
+fn lodestar(data: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_lodestar"));
     c.env_clear()
         .env("LODESTAR_DATA_DIR", data)
-        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
         .env("LODESTAR_DHT_PORT", "0")
         .env("LODESTAR_LOG", "info");
     c
@@ -94,8 +88,7 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
     // The data directory sits under the tempdir, which must be traversable.
     std::fs::set_permissions(tmp.path(), PermissionsExt::from_mode(0o755)).unwrap();
 
-    let port = free_port();
-    let mut child = lodestar(&data, port)
+    let mut child = lodestar(&data)
         .env("PUID", "4242")
         .env("PGID", "4343")
         .stdout(Stdio::null())
@@ -104,10 +97,29 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
         .unwrap();
     let pid = child.id();
     let stderr = child.stderr.take().unwrap();
-    let log = std::thread::spawn(move || std::io::read_to_string(stderr).unwrap_or_default());
+    let (port_tx, port_rx) = std::sync::mpsc::channel();
+    let log = std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut all = String::new();
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some(port) = common::serving_port(&line) {
+                let _ = port_tx.send(port);
+            }
+            all.push_str(&line);
+            all.push('\n');
+        }
+        all
+    });
 
     let start = Instant::now();
-    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+    let mut port = 0;
+    while port == 0 || std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        if port == 0 {
+            port = port_rx.try_recv().unwrap_or(0);
+        }
         assert!(
             start.elapsed() < Duration::from_secs(20),
             "server didn't come up"
@@ -159,7 +171,8 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
     assert_eq!(owner(&outside), (0, 0));
 
     // The health check drops too, and doesn't need to write anything.
-    let check = lodestar(&data, port)
+    let check = lodestar(&data)
+        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
         .env("PUID", "4242")
         .env("PGID", "4343")
         .arg("healthcheck")
@@ -195,7 +208,6 @@ fn bad_ids_and_symlinked_data_dirs_stop_start_up() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
-    let port = free_port();
     for (puid, pgid, says) in [
         ("0", "100", "LODESTAR_ALLOW_ROOT=1"),
         ("99", "0", "LODESTAR_ALLOW_ROOT=1"),
@@ -203,7 +215,7 @@ fn bad_ids_and_symlinked_data_dirs_stop_start_up() {
         ("-1", "100", "not a number"),
         ("4294967295", "100", "reserved"),
     ] {
-        let mut c = lodestar(&data, port);
+        let mut c = lodestar(&data);
         c.env("PUID", puid).env("PGID", pgid);
         let e = refused(c);
         assert!(e.contains(says), "{puid}:{pgid}: {e}");
@@ -215,7 +227,7 @@ fn bad_ids_and_symlinked_data_dirs_stop_start_up() {
     let foreign = tmp.path().join("foreign");
     std::fs::create_dir(&foreign).unwrap();
     std::fs::write(foreign.join("keep"), b"").unwrap();
-    let e = refused(lodestar(&foreign, port));
+    let e = refused(lodestar(&foreign));
     assert!(e.contains("doesn't look like Lodestar's"), "{e}");
     assert_eq!(owner(&foreign.join("keep")), (0, 0));
 
@@ -223,13 +235,13 @@ fn bad_ids_and_symlinked_data_dirs_stop_start_up() {
     let locked = tmp.path().join("locked");
     std::fs::create_dir(&locked).unwrap();
     std::fs::set_permissions(&locked, PermissionsExt::from_mode(0o700)).unwrap();
-    let e = refused(lodestar(&locked.join("data"), port));
+    let e = refused(lodestar(&locked.join("data")));
     assert!(e.contains("a parent folder doesn't let it in"), "{e}");
 
     let real = tmp.path().join("real");
     std::fs::create_dir(&real).unwrap();
     symlink(&real, &data).unwrap();
-    let e = refused(lodestar(&data, port));
+    let e = refused(lodestar(&data));
     assert!(e.contains("symlink"), "{e}");
     assert_eq!(owner(&real), (0, 0));
 }
@@ -253,7 +265,7 @@ fn root_without_setuid_stops_before_any_change() {
         .arg(env!("CARGO_BIN_EXE_lodestar"))
         .env_clear()
         .env("LODESTAR_DATA_DIR", &data)
-        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{}", free_port()))
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
         .env("LODESTAR_DHT_PORT", "0");
     let e = refused(c);
     assert!(e.contains("without the SETUID/SETGID capabilities"), "{e}");

@@ -14,13 +14,7 @@ use std::time::{Duration, Instant};
 /// A rotated log file, named as the writer names them.
 const ROTATED: &str = "lodestar-20261001T000000.000Z.jsonl";
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
+mod common;
 
 /// Whether the server's stderr shows it gave up before serving.
 fn child_exited(log: &Arc<Mutex<String>>) -> bool {
@@ -49,8 +43,13 @@ struct Server {
 }
 
 impl Server {
-    /// A server set up and signed in, its logs folder seeded with a
-    /// rotated file of `mib` MiB of valid lines.
+    /// A server set up and signed in, its logs folder then seeded with a
+    /// rotated file of `mib` MiB of valid lines. Seeded after the start:
+    /// a rotated file there when the log file opens is queued for
+    /// compression, and a `.gz` download inflates as it streams, which
+    /// in a debug build on a loaded machine is slow enough that the
+    /// server is still waiting on it, not on the client, when the signal
+    /// comes.
     fn start(mib: usize) -> Server {
         let dir = tempfile::tempdir().unwrap();
         // Lodestar's own folder (run as root, the privilege drop hands
@@ -59,14 +58,10 @@ impl Server {
         let logs = dir.path().join("logs");
         std::fs::create_dir(&logs).unwrap();
         std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).unwrap();
-        if mib > 0 {
-            seed(&logs.join(ROTATED), mib);
-        }
-        let port = free_port();
         let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .env_remove("LODESTAR_LOG")
             .env("LODESTAR_DATA_DIR", dir.path())
-            .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
+            .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
             .env("LODESTAR_DHT_PORT", "0")
             .env("LODESTAR_DHT_ENABLED", "false")
             .stdout(Stdio::null())
@@ -103,6 +98,11 @@ impl Server {
             token = rest.split_whitespace().next().unwrap_or("").to_string();
             true
         });
+        let mut port = 0;
+        wait_for(30, "the port it serves on", || {
+            port = common::serving_port(&stderr.lock().unwrap()).unwrap_or(0);
+            port != 0
+        });
         let mut s = Server {
             dir,
             port,
@@ -127,6 +127,15 @@ impl Server {
             .and_then(|c| c.split(';').next())
             .unwrap()
             .to_string();
+        if mib > 0 {
+            let file = logs.join(ROTATED);
+            seed(&file, mib);
+            // Run as root, the server took its folder for its own account:
+            // the file is that account's too, as a rotation would make it.
+            use std::os::unix::fs::MetadataExt;
+            let owner = std::fs::metadata(&logs).unwrap();
+            std::os::unix::fs::chown(&file, Some(owner.uid()), Some(owner.gid())).unwrap();
+        }
         s
     }
 
@@ -223,18 +232,10 @@ fn a_stalled_download_cannot_hold_the_shutdown() {
     // More than the socket buffers on both ends can hold, so the
     // download can't finish into the kernel's buffers.
     let mut s = Server::start(48);
-    // Opening the log file queues the seeded file for compression, and
-    // the listing then names only the `.gz`. Wait for it and download
-    // that name, which streams inflated: the same 48 MiB.
-    let gz = s.dir.path().join("logs").join(format!("{ROTATED}.gz"));
-    let plain = s.dir.path().join("logs").join(ROTATED);
-    wait_for(30, "the seeded file to be compressed", || {
-        gz.exists() && !plain.exists()
-    });
     let mut stalled = TcpStream::connect(("127.0.0.1", s.port)).unwrap();
     write!(
         stalled,
-        "GET /api/v1/logs/files/{ROTATED}.gz?redact=false HTTP/1.0\r\nHost: localhost\r\nCookie: {}\r\n\r\n",
+        "GET /api/v1/logs/files/{ROTATED}?redact=false HTTP/1.0\r\nHost: localhost\r\nCookie: {}\r\n\r\n",
         s.cookie
     )
     .unwrap();
