@@ -300,13 +300,13 @@
    "notes": "merged 09:58 as 2773dd2 (#59); image 22 MiB, smoke healthy/SPA/clean stop on CI"
   },
   "G-v05": {
-   "status": "pending",
+   "status": "passed",
    "model": "opus",
    "session": null,
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "PASSED 2026-10-24T09:10Z on main 46672773: keyboard-only search->Skip->drawer->c copies magnet vs lodestar serve --fixture (1/1); search-query 4/4, search-facets 1/1, detail 5/5 vs fixture server; size-limit all within (first load 84.09/100, search JS 41.22/45, CSS 19.83/20); main CI all green incl. playwright (axe), smoke linux/amd64 (healthz, embedded UI, compose config, PUID/PGID, clean stop), macOS. Docker image excludes fixture feature by design, so the fixture search ran against the binary. Tag v0.5.0 + full release notes wait for owner."
   },
   "B11a": {
    "status": "merged",
@@ -1633,7 +1633,7 @@
   "reviewer_template": "runner-rv-common.txt on runner-state (backup of $S/rv-common.txt; restored after a reviewer deleted rv-*.txt)",
   "owner_decision_settings_split": "2026-10-24T03:14Z OWNER (typed in session_01SE4bp9YdZmHr8RN4FHpbmm 03:13Z, verified via transcript): option A \u2014 draft/conflict code loads on first edit; 45 KB limit kept",
   "usage_pause": "2026-10-24T03:31Z runner: paused in-flight non-v0.5 work at safe points to conserve usage: B-update 5/5, S-settings-1, M-settings-form-3, X-sleeps next part, B-log1b 4b. Finishing only open PRs #140, #163, #165, #166. Lean reviews (resume reviewer for fix rounds). Owner may lift.",
-  "notify_owner_on": "G-v05 pass (with usage note)",
+  "notify_owner_on": "DONE: G-v05 pass notified 09:10Z. Freeze still owner-held.",
   "merged_168": "subscriptions client panic fix merged ef236b19",
   "merged_170": "macOS supervisor tests fixed, merged bbe95fc3 07:58Z; watch main CI on it (log-delete flake may still hit macOS)"
  },
