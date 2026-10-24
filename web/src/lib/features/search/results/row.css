@@ -1,0 +1,143 @@
+/* The shared result row (ResultRow.svelte). A plain sheet, not the component's own <style>: kit
+   loads a lazily imported component's <style> with the route, and Search loads the row lazily.
+   Search imports this with the results chunk; Discover and Alerts import it with their page.
+   Token variables only: utility names would land in the global 20 KB sheet. */
+.rr-row {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 3);
+	box-sizing: border-box;
+	height: 100%;
+	min-width: 0;
+	padding-inline: calc(var(--spacing) * 3);
+	padding-block: var(--spacing);
+	overflow: hidden;
+	color: var(--color-base-content);
+}
+.rr-main {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	justify-content: center;
+	min-width: 0;
+	overflow: hidden;
+}
+.rr-compact .rr-main {
+	flex-direction: row;
+	align-items: center;
+	gap: calc(var(--spacing) * 3);
+}
+.rr-title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--text-body);
+	line-height: var(--text-body--line-height);
+	font-weight: var(--font-weight-medium);
+}
+.rr-compact .rr-title {
+	flex: 1 1 0;
+}
+.rr-raw,
+.rr-facts,
+.rr-matched {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	color: var(--color-muted-text);
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+}
+.rr-raw {
+	gap: calc(var(--spacing) * 2);
+}
+.rr-raw .rr-raw-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.rr-via {
+	flex: none;
+}
+.rr-facts {
+	gap: calc(var(--spacing) * 4);
+	font-variant-numeric: tabular-nums;
+}
+.rr-compact .rr-facts {
+	flex: none;
+	gap: calc(var(--spacing) * 3);
+}
+.rr-fact,
+.rr-badges {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--spacing);
+}
+.rr-fact .rr-icon {
+	flex: none;
+	width: var(--icon-size-row);
+	height: var(--icon-size-row);
+}
+/* §10.2: 4 px tags in caption type. */
+.rr-badge {
+	padding-inline: var(--spacing);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-selector);
+	color: var(--color-base-content);
+	font-size: var(--text-caption);
+	line-height: var(--text-caption--line-height);
+}
+.rr-bar {
+	flex: none;
+	width: var(--compbar-min-width);
+}
+.rr-actions {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: var(--spacing);
+}
+/* Row actions: on hover and focus, always under a coarse pointer (§10.4: never hover-only on touch). */
+.rr-action {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--spacing);
+	min-height: calc(var(--spacing) * 8);
+	padding-inline: calc(var(--spacing) * 2);
+	border: 0;
+	border-radius: var(--radius-field);
+	background: transparent;
+	color: var(--color-base-content);
+	font-size: var(--text-small);
+	cursor: pointer;
+}
+.rr-action:hover {
+	background: var(--color-hover);
+}
+.rr-action .rr-icon {
+	width: var(--icon-size-row);
+	height: var(--icon-size-row);
+}
+.rr-row .rr-actions {
+	opacity: 0;
+}
+.rr-row:hover .rr-actions,
+.rr-row:focus-within .rr-actions,
+[aria-selected='true'] .rr-row .rr-actions,
+:focus > .rr-row .rr-actions,
+:focus-visible .rr-row .rr-actions {
+	opacity: 1;
+}
+@media (pointer: coarse) {
+	.rr-row .rr-actions {
+		opacity: 1;
+	}
+	.rr-action {
+		min-width: var(--target-min);
+		min-height: var(--target-min);
+	}
+}

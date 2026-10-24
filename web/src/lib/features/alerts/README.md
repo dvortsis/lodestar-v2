@@ -48,5 +48,5 @@ The dialog has no filter or AST input: Search's current query text is the whole 
 - `since.ts`: where the "New since …" divider goes (a pure function of the server's `read` flags).
 - `throttle.ts`: the 10 s window for the polite live region.
 - `errors.ts`: save failures → field or form message.
-- `AlertsListPage.svelte`, `AlertDetailPage.svelte`: the pages. `AlertHitRow.svelte`: an interim result row (`TODO(S-search-2)`).
+- `AlertsListPage.svelte`, `AlertDetailPage.svelte`: the pages. The detail page lists hits with the shared `ResultRow` (`features/search/results`), adding its "Matched" time in the row's `extra` snippet.
 - `SaveSearchDialog.svelte`, `DeleteAlertDialog.svelte`: loaded with `import()` on first use. `PauseToggle.svelte`, `ChannelBadges.svelte`.

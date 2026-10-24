@@ -20,7 +20,8 @@
 	import VirtualList from '$lib/ui/lists/VirtualList.svelte';
 	import { defaultRowHeight, tokenPx } from '$lib/ui/overlays/motion';
 	import { Discover, type HitGroup, type SearchHit } from './discover.svelte';
-	import HitRow from './HitRow.svelte';
+	import ResultRow from '$lib/features/search/results/ResultRow.svelte';
+	import '$lib/features/search/results/row.css';
 	import { knownTab, searchHref, tabHref, tabLabel, torrentHref, typeParam, TYPES } from './tabs';
 	import { unavailableText } from './unavailable';
 
@@ -314,7 +315,7 @@
 									style:--i={index}
 									data-testid="discover-row-{hit.hash}"
 								>
-									<HitRow {hit} {density} />
+									<ResultRow {hit} {density} testid="discover-row-{hit.hash}" root={false} />
 								</div>
 							{/snippet}
 						</VirtualList>
@@ -360,10 +361,11 @@
 											<a
 												href={resolve(href as Route)}
 												class="dsc-row-link {FOCUS_RING}"
-												data-testid="discover-{s.id}-{hit.hash}"><HitRow {hit} {density} /></a
+												data-testid="discover-{s.id}-{hit.hash}"
+												><ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" /></a
 											>
 										{:else}
-											<HitRow {hit} {density} />
+											<ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" />
 										{/if}
 									</li>
 								{/each}
@@ -510,7 +512,8 @@
 	.dsc-cell {
 		position: relative;
 		height: 100%;
-		border-top: var(--border) solid var(--color-base-300);
+		/* The rule between rows takes no height: the shared row fills the cell's 64 px exactly. */
+		box-shadow: inset 0 var(--border) 0 var(--color-base-300);
 	}
 	.dsc-skeletons {
 		display: flex;
@@ -532,7 +535,7 @@
 		list-style: none;
 	}
 	.dsc-plain li {
-		border-top: var(--border) solid var(--color-base-300);
+		box-shadow: inset 0 var(--border) 0 var(--color-base-300); /* no height: see .dsc-cell */
 	}
 	.dsc-row-link {
 		display: block;

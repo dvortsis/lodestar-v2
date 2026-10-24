@@ -124,8 +124,15 @@ describe('routePreloads', () => {
 			'_app/immutable/assets/a.css'
 		]);
 	});
+	it("keeps only CSS for a route node's own lazy parts", () => {
+		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/nodes/11.Cq2.js' })).toEqual([
+			'_app/immutable/assets/a.css'
+		]);
+	});
 	it('leaves every other dynamic import as Vite has it', () => {
-		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/nodes/4.Cq2.js' })).toEqual(deps);
+		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/chunks/Live.Cq2.js' })).toEqual(
+			deps
+		);
 	});
 });
 

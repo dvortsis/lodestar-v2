@@ -14,13 +14,6 @@
 	"discover_resolved": "Recently resolved",
 	"discover_resolved_how": "Torrents whose name did not say what they were, and that Lodestar has just identified.",
 	"discover_truncated": "More matched than are listed here.",
-	"discover_not_classified": "Not classified yet",
-	"discover_trackers_of": "{reporting} / {checked}",
-	"discover_trackers_reporting": "{reporting} of {checked} trackers",
-	"discover_resolved_via_files": "resolved via files",
-	"discover_resolved_via_folder": "resolved via folder",
-	"discover_resolved_via_structure": "resolved via structure",
-	"discover_resolved_via_other": "resolved via {method}",
 	"discover_unavailable_search_disabled": "Search is turned off, so this can't be listed.",
 	"discover_unavailable_search_disabled_action": "Turn on search",
 	"discover_unavailable_no_title": "Torrents without a resolved title can't be listed here.",
@@ -49,7 +42,5 @@
 	"discover_retry": "Try again",
 	"discover_newest_unit": "torrents",
 	"discover_key_next": "Next torrent",
-	"discover_key_previous": "Previous torrent",
-	"discover_files_one": "{count} file",
-	"discover_files_other": "{count} files"
+	"discover_key_previous": "Previous torrent"
 }

@@ -292,7 +292,7 @@ test.describe('widths', () => {
 			expect(box!.height).toBeCloseTo(64, 0);
 			// Nothing inside the fixed-height row is clipped (title, raw name and facts all fit).
 			expect(
-				await first.locator('.dsc-row').evaluate((el) => el.scrollHeight - el.clientHeight)
+				await first.locator('.rr-row').evaluate((el) => el.scrollHeight - el.clientHeight)
 			).toBeLessThanOrEqual(0);
 			// Tabs scroll inside their own box, not the page.
 			await expect(page.getByRole('navigation', { name: 'Type' })).toBeVisible();

@@ -38,7 +38,6 @@ vi.mock('$lib/state/events.svelte', () => ({
 }));
 
 import AlertDetailPage from './AlertDetailPage.svelte';
-import AlertHitRow from './AlertHitRow.svelte';
 import AlertsListPage from './AlertsListPage.svelte';
 import ChannelBadges from './ChannelBadges.svelte';
 import DeleteAlertDialog from './DeleteAlertDialog.svelte';
@@ -112,44 +111,6 @@ describe('PauseToggle', () => {
 		await fireEvent.click(toggle);
 		await waitFor(() => expect(toggle.checked).toBe(false));
 		expect(toasts.items[0]?.kind).toBe('error');
-	});
-});
-
-describe('AlertHitRow', () => {
-	it('shows the facts with the server’s values', () => {
-		render(AlertHitRow, { row: row(7, false, { seeders: 12, leechers: 3 }) });
-		expect(screen.getByTestId('alert-title-7').textContent).toBe('Lantern Keeper 7');
-		expect(screen.getByTestId('alert-raw-7').textContent).toBe('Lantern.Keeper.7');
-		expect(screen.getByTestId('alert-size-7').textContent).toBe('2.00 GiB');
-		expect(screen.getByTestId('alert-files-7').textContent?.trim()).toBe('5 files');
-		expect(screen.getByTestId('alert-swarm-7').textContent?.trim()).toBe('12 seeders, 3 leechers');
-		expect(screen.getByTestId('alert-trackers-7').textContent).toContain('4 / 20');
-		expect(screen.getByTestId('alert-comp-7-dominant').textContent).toBe('82% video');
-		expect(screen.getByRole('img', { name: /82% video, 11% audio/ })).toBeTruthy();
-	});
-	it('marks estimated seeders with ≈ and a suspect swarm in words', () => {
-		render(AlertHitRow, { row: row(9, true, { seeders_approx: true, swarm_suspect: true }) });
-		expect(screen.getByTestId('alert-swarm-9').textContent).toContain('≈');
-		expect(screen.getByTestId('alert-suspect-9').textContent).toContain('Suspect seeders');
-	});
-	it('says so for null values: no title, never scraped, not classified', () => {
-		render(AlertHitRow, {
-			row: row(8, true, {
-				title: null,
-				composition: [],
-				seeders: null,
-				leechers: null,
-				trackers_checked: null,
-				trackers_reporting: null,
-				files: 1
-			})
-		});
-		expect(screen.getByTestId('alert-title-8').textContent).toBe('Lantern.Keeper.8');
-		expect(screen.queryByTestId('alert-raw-8')).toBeNull();
-		expect(screen.getByTestId('alert-comp-8').textContent).toBe('Not classified yet');
-		expect(screen.getByTestId('alert-swarm-8').textContent).toContain('Never scraped');
-		expect(screen.getByTestId('alert-trackers-8').textContent).toContain('Never scraped');
-		expect(screen.getByTestId('alert-files-8').textContent?.trim()).toBe('1 file');
 	});
 });
 
@@ -592,10 +553,12 @@ describe('the detail page', () => {
 		await screen.findByTestId('alert-row-5');
 		const ids = () =>
 			keys.list().filter((c) => c.scope === 'alerts' && c.id.startsWith('results.'));
-		expect(ids().map((c) => [c.id, c.keys])).toEqual([
-			['results.next', ['j']],
-			['results.previous', ['k']]
-		]);
+		await waitFor(() =>
+			expect(ids().map((c) => [c.id, c.keys])).toEqual([
+				['results.next', ['j']],
+				['results.previous', ['k']]
+			])
+		);
 		unmount();
 		expect(ids()).toEqual([]);
 	});

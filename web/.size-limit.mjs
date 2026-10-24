@@ -36,13 +36,17 @@ if (strays.length)
 		`The search route's first load carries code it doesn't use:\n  ${strays.join('\n  ')}`
 	);
 
-// The route table (kit's app.js) lists no route's JS to preload: that list grew with every route
-// (scripts/first-load.mjs `routePreloads`).
+// The route table (kit's app.js), budgeted below.
 const appEntry = search.js.find((f) => /\/entry\/app\.[^/]*\.js$/.test(f));
-const preloaded = appEntry ? preloadedJs(readFileSync(appEntry, 'utf8')) : [];
+// No file on the first load lists JS to preload (scripts/first-load.mjs `routePreloads`): the route
+// table's list grew with every route, and a route node's with every chunk its lazy parts use
+// (S-search-2's results panel).
+const preloaded = search.js.flatMap((f) =>
+	preloadedJs(readFileSync(f, 'utf8')).map((js) => `${f}: ${js}`)
+);
 if (preloaded.length)
 	throw new Error(
-		`The route table preloads other routes' JS on the search route's first load:\n  ${preloaded.join('\n  ')}`
+		`The search route's first load preloads JS it doesn't run yet:\n  ${preloaded.join('\n  ')}`
 	);
 
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
@@ -58,9 +62,9 @@ const manifest = existsSync('.svelte-kit/output/client/.vite/manifest.json')
 	? JSON.parse(readFileSync('.svelte-kit/output/client/.vite/manifest.json', 'utf8'))
 	: {};
 const keyOf = new Map(Object.entries(manifest).map(([key, chunk]) => [`build/${chunk.file}`, key]));
-const walk = (route, onDemand, collectOnDemand) => {
+const walk = (route, onDemand, collectOnDemand, beyond = []) => {
 	const mine = routeFiles(route);
-	const shared = new Set([...search.js, ...search.css]);
+	const shared = new Set([...search.js, ...search.css, ...beyond]);
 	const seen = new Set();
 	const files = new Set();
 	const later = new Set();
@@ -82,19 +86,23 @@ const walk = (route, onDemand, collectOnDemand) => {
 	for (const f of mine.css) if (!shared.has(f)) files.add(f);
 	return collectOnDemand ? [...later].filter((f) => !files.has(f)) : [...files];
 };
-const own = (route, { onDemand = [] } = {}) => walk(route, onDemand, false);
+const own = (route, { onDemand = [], beyond = [] } = {}) => walk(route, onDemand, false, beyond);
 // A lazily imported module (a manifest key), measured the same way: what the search route doesn't
-// already load, through static imports and mount-time dynamic imports.
-const ownChunk = (sourceKey, onDemand = [], collectOnDemand = false) => {
-	const shared = new Set([...search.js, ...search.css]);
+// already load, through static imports and mount-time dynamic imports. A shared chunk has no source
+// key, so `onDemand` also tests `chunk:<its name>` (e.g. /^chunk:magnet$/).
+// `beyond` lists files the view has already loaded when this chunk loads (e.g. `viewOf(...)`): they
+// are left out like the first load's, so the entry measures only what this chunk adds.
+const ownChunk = (sourceKey, onDemand = [], collectOnDemand = false, beyond = []) => {
+	const shared = new Set([...search.js, ...search.css, ...beyond]);
 	const seen = new Set();
 	const now = new Set();
 	const later = new Set();
-	const matches = (key) => onDemand.some((re) => re.test(key));
+	const matches = (key, chunk) =>
+		onDemand.some((re) => re.test(key) || (!!chunk.name && re.test(`chunk:${chunk.name}`)));
 	const visit = (key, demanded) => {
 		const chunk = manifest[key];
 		if (!chunk || shared.has(`build/${chunk.file}`)) return;
-		const demand = demanded || matches(key);
+		const demand = demanded || matches(key, chunk);
 		const id = `${demand}:${key}`;
 		if (seen.has(id)) return;
 		seen.add(id);
@@ -144,8 +152,43 @@ const routeCount = existsSync('.svelte-kit/generated/client-optimized/app.js')
 	: 0;
 const vendor = Object.values(manifest).find((chunk) => chunk.name === 'vendor');
 
+// Search results (S-search-2): the panel, its row and its sheets, loaded on a query or the first
+// interaction, plus what it loads with the first results (the row actions, the j/k commands and the
+// key registry). Opening a result (the drawer, its commands), copying a magnet and the More menu load
+// on demand: the Detail entries gate the first two, and the menu (Bits UI) is the shell's too.
+const RESULTS = [
+	'src/lib/features/search/results/ResultsPanel.svelte',
+	'src/lib/features/search/results/results.css',
+	// row.css shares a chunk with Alerts' detail page, so it has no key of its own.
+	...Object.keys(manifest).filter((k) =>
+		(manifest[k].css ?? []).some((c) => /\/row\.[^/]*\.css$/.test(c))
+	)
+];
+const resultsOnDemand = [/features\/detail\//, /^chunk:magnet$/, /^chunk:Menu$/];
+// What the view has loaded by the time the panel does (runner, 2026-10-24): the first load, the
+// bar's lazy part (a URL with a query, or the first interaction, engages it) and the shell's
+// engagement set (Chrome and what it loads at mount; its palette, error view and menus on demand).
+const viewOf = (...parts) => [
+	...new Set(parts.flatMap(([key, onDemand]) => ownChunk(key, onDemand)))
+];
+const engagedSearch = viewOf(
+	['src/lib/features/search/query/Live.svelte', [/query\/(FilterStrip|SyntaxPopover)\.svelte$/]],
+	[
+		'src/lib/shell/Chrome.svelte',
+		[/shell\/(CommandPalette|ErrorView|OverflowMenu|StateScene)\.svelte$/, /^chunk:Menu$/]
+	]
+);
+const resultsLazy = [
+	...new Set(RESULTS.flatMap((k) => ownChunk(k, resultsOnDemand, false, engagedSearch)))
+];
+// Never pass by measuring nothing: a renamed or moved file must fail here, not drop the entry.
+if (Object.keys(manifest).length && !resultsLazy.some((f) => f.endsWith('.js')))
+	throw new Error('Search results (lazy): no chunk found for ResultsPanel.svelte in the manifest');
+
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
+// The alert page's j/k (and the key registry) load after mount, as Detail's commands do.
+const alertOnDemand = [...alertDialogs, /features\/alerts\/commands\.ts$/];
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
@@ -177,7 +220,7 @@ export default [
 	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertDialogs }), '45 KB'),
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
@@ -198,6 +241,10 @@ export default [
 	// Detail (S-detail): the first view is the header and the summary. Contents (composition and the
 	// file tree with its virtual list), Parsed and the error state are separate chunks that load as
 	// their section scrolls near or an error shows, each gated by the on-demand entry.
+	// Beyond the engaged search view (runner, 2026-10-24: measured + 10%, under the 45 KB per-view
+	// cap): 31.32 KB, so 34.5 KB. VirtualList and its virtualiser are 12 KB of it, the panel 5.2 KB,
+	// the row 3.9 KB, the row actions 1.9 KB.
+	entry('Search results (lazy)', resultsLazy, '34.5 KB'),
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '28.5 KB'),
 	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.4 KB'),
 	entry(
