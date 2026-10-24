@@ -1,7 +1,7 @@
 //! `<data>/bin/history.json` (§12.2): the last 20 updates, outside the
 //! store, so a restore can't erase it. The supervisor appends a rollback's
 //! outcome (keyed by its journal, so a repeated step doesn't add it
-//! twice); the updater (part 3) appends installs and clears it.
+//! twice); the updater (part 5) appends installs and clears it.
 
 use serde::{Deserialize, Serialize};
 

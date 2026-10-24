@@ -136,7 +136,7 @@ pub fn take(bin: &Bin, run_id: &str, code: Option<i32>) -> Option<Request> {
     read.filter(|r| r.run_id == run_id && r.action == action)
 }
 
-/// What the updater (part 3) asks `serve` to do after its graceful
+/// What the updater (part 5) asks `serve` to do after its graceful
 /// shutdown, instead of restarting: switch to a staged version, or roll
 /// back. `main.rs` turns it into `request.json` and the exit code.
 /// An action, the version it names, and the torrents a rollback loses.
@@ -146,7 +146,7 @@ static INTENT: Mutex<Option<Intent>> = Mutex::new(None);
 
 /// Records an intent; the caller then asks for the graceful shutdown
 /// through `Restart::global().request()`.
-#[allow(dead_code)] // The updater's (part 3).
+#[allow(dead_code)] // The updater's (part 5).
 pub fn set_intent(action: Action, version: Option<String>, lost: Option<u64>) {
     *INTENT.lock().unwrap_or_else(|e| e.into_inner()) = Some((action, version, lost));
 }

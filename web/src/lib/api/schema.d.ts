@@ -1796,6 +1796,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The update engine's state: the last check, the running version, what
+         *     this installation can do, the policy in effect, the releases found
+         *     (with why each does or doesn't install automatically), any version in
+         *     probation, Roll back, the notices and the history.
+         */
+        get: operations["getUpdates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/updates/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Checks for updates now: the one signed request, at any mode. At most
+         *     once a minute.
+         */
+        post: operations["checkUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/updates/history/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clears the update history (`history.json`). */
+        post: operations["clearUpdateHistory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/updates/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pauses automatic installs for 1, 7 or 30 days; 0 resumes. Checks and
+         *     Install now carry on.
+         */
+        post: operations["pauseUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/updates/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skips a release: it's never installed automatically, and Install now
+         *     refuses it (`version_skipped`).
+         */
+        post: operations["skipUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user-items": {
         parameters: {
             query?: never;
@@ -2256,6 +2355,23 @@ export interface components {
         BackgroundJobs: {
             jobs: components["schemas"]["BackgroundJob"][];
         };
+        /** @description One reason a release doesn't install automatically. */
+        Blocked: {
+            /**
+             * @description `mode`, `level`, `manual_steps`, `reindex`, `wait`, `paused`,
+             *     `not_current`, `upgrade_path` or `capability`.
+             */
+            code: string;
+            /** @description The capability reason (`capability`). */
+            reason?: string | null;
+            /**
+             * Format: int64
+             * @description The time it lifts (`wait`, `paused`).
+             */
+            until?: number | null;
+            /** @description The release to install first (`upgrade_path`). */
+            via?: string | null;
+        };
         /** @enum {string} */
         Bucket: "hour" | "day";
         /** @description How the build was made. */
@@ -2278,6 +2394,18 @@ export interface components {
              *     when the binary embeds the stub page.
              */
             ui_build_id: string | null;
+        };
+        /** @description Whether this installation can install updates itself. */
+        Capability: {
+            can_install: boolean;
+            /**
+             * @description Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
+             *     `package_managed`, `image_mode`, `trust_damaged`,
+             *     `channel_unavailable` or `not_built_yet`; or, when `unavailable`
+             *     is set, the same reason (`windows_helper`, …). Install
+             *     automatically then behaves as Check and notify.
+             */
+            reason: string | null;
         };
         /** @description One change to filtering (§20.7), tagged by `op`. */
         Change: {
@@ -2447,6 +2575,28 @@ export interface components {
         CharRange: {
             end: number;
             start: number;
+        };
+        CheckStatus: {
+            /**
+             * Format: int64
+             * @description Unix seconds of the last completed check.
+             */
+            checked_at: number | null;
+            /**
+             * @description The last check's error code (`no_release_source`, `network`,
+             *     `redirect_refused`, `bad_signature`, …).
+             */
+            error: string | null;
+            /**
+             * Format: int64
+             * @description When the next scheduled check runs; null when updates are off.
+             */
+            next_check_at: number | null;
+            /**
+             * @description The check's state.
+             * @enum {string}
+             */
+            state: "idle" | "checking" | "ok" | "failed";
         };
         ClassRule: {
             adult: boolean;
@@ -3285,6 +3435,10 @@ export interface components {
             /** @enum {string} */
             event: "settings";
         } | {
+            data: components["schemas"]["UpdatesEvent"];
+            /** @enum {string} */
+            event: "updates";
+        } | {
             data: components["schemas"]["ResyncEvent"];
             /** @enum {string} */
             event: "resync";
@@ -3911,6 +4065,19 @@ export interface components {
              * @description Inclusive.
              */
             lo: number;
+        };
+        /** @description One update in `history.json`, newest last. */
+        HistoryEntry: {
+            /** Format: int64 */
+            at: number;
+            from: string;
+            level: string | null;
+            /** Format: int64 */
+            lost_torrents: number | null;
+            reason: string | null;
+            /** @description `installed`, `rolled_back`, `failed` or `skipped`. */
+            result: string;
+            version: string;
         };
         /**
          * @description A section of result rows (the row search returns) that may not be
@@ -5021,6 +5188,11 @@ export interface components {
             new: string;
             old: string;
         };
+        /** @description `POST /updates/pause`: 1, 7 or 30 days; 0 resumes. */
+        PauseRequest: {
+            /** Format: int32 */
+            days: number;
+        };
         PausedSpan: {
             /**
              * Format: int64
@@ -5045,6 +5217,45 @@ export interface components {
             name: string;
             /** @description `file:<path>` or `list:<id>`, for `resolve_floor_removal`. */
             source: string;
+        };
+        /** @description A version in probation after an install or a rollback. */
+        PendingInstall: {
+            /** Format: int32 */
+            attempts: number;
+            /** @description `install` or `restored`. */
+            kind: string;
+            version: string;
+        };
+        /** @description The policy in effect, as the settings and the clock make it. */
+        Policy: {
+            allow_reindex: boolean;
+            /** @description `fixes`, `features` or `all`. */
+            level: string;
+            /** @description `off`, `notify`, `auto` or `image`. */
+            mode: string;
+            /**
+             * Format: int64
+             * @description When the window next opens (or now, while it's open).
+             */
+            next_window_at: number | null;
+            /**
+             * Format: int64
+             * @description Updates are paused until then.
+             */
+            paused_until: number | null;
+            /**
+             * @description Whether security fixes install automatically (the effective
+             *     "Always install security fixes").
+             */
+            security_fixes: boolean;
+            /** Format: int32 */
+            wait_days: number;
+            window: string;
+            /**
+             * @description The zone the window is in: an IANA name, or `UTC` when none was
+             *     found on the host.
+             */
+            window_zone: string;
         };
         /**
          * @description What a change would do (§20.10). Counts come from the review queue,
@@ -5261,6 +5472,34 @@ export interface components {
          * @enum {string}
          */
         RebuildPhase: "building" | "finishing" | "swapping" | "failed" | "done";
+        /** @description A release newer than the running version. */
+        ReleaseInfo: {
+            blocked_by: components["schemas"]["Blocked"][];
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            date: number;
+            /** @description It installs automatically (at `installs_at`). */
+            eligible: boolean;
+            /** Format: int64 */
+            installs_at: number | null;
+            /** @description `fix`, `feature` or `major`. */
+            level: string;
+            manual_steps: boolean;
+            migrates: boolean;
+            /** @description Signed text; render as plain text or sanitised Markdown. */
+            notes: string;
+            notes_url: string | null;
+            reindex: boolean;
+            /**
+             * Format: int64
+             * @description Bytes a reindex needs, estimated.
+             */
+            reindex_bytes: number;
+            security: boolean;
+            version: string;
+        };
         RemovedCount: {
             /** @description Content type, or `unclassified`. */
             key: string;
@@ -5315,6 +5554,18 @@ export interface components {
          * @enum {string}
          */
         ResyncReason: "restarted" | "expired" | "malformed" | "lagged" | "visibility";
+        /** @description Whether Roll back is offered (§10.10.7's Danger zone). */
+        RollbackInfo: {
+            available: boolean;
+            /**
+             * Format: int64
+             * @description Torrents a rollback would lose, when the store would be restored;
+             *     null when it can't be counted.
+             */
+            lost_torrents: number | null;
+            /** @description `image` or a version. */
+            to_version: string | null;
+        };
         /** @description One of your rules. */
         RuleEntry: {
             /** @description Null for an action code this server doesn't know. */
@@ -5329,6 +5580,26 @@ export interface components {
              */
             shadow_until: number | null;
             unless: string | null;
+        };
+        /** @description The version running now. */
+        Running: {
+            /** @description The update channel this installation follows. */
+            channel: string;
+            /**
+             * @description The container image's (the supervisor's) own version, when it
+             *     differs: "Image 0.5.2 · running 0.5.3 (updated in place)".
+             */
+            image_version: string | null;
+            /** @description It runs an installed update rather than the image's own code. */
+            overlay: boolean;
+            /** @description Its signing key was revoked after it was installed. */
+            revoked_key: boolean;
+            version: string;
+            /**
+             * @description Its release has been withdrawn: Roll back is offered, never done
+             *     silently.
+             */
+            withdrawn: boolean;
         };
         /** @description One example torrent for `POST /filters/test`, never stored or logged. */
         Sample: {
@@ -6140,6 +6411,10 @@ export interface components {
             /** @description Other torrents containing one of this torrent's files. */
             same_file: components["schemas"]["HitGroup"];
         };
+        /** @description `POST /updates/skip`. */
+        SkipRequest: {
+            version: string;
+        };
         /** @description One source plugin of this build. */
         Source: {
             /**
@@ -6789,7 +7064,7 @@ export interface components {
          * @description What a client subscribes to with `?topics=`.
          * @enum {string}
          */
-        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings";
+        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings" | "updates";
         /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
@@ -7017,6 +7292,59 @@ export interface components {
              */
             unread: number;
         };
+        /**
+         * @description `event: updates`: the update engine's state changed. Progress
+         *     (`bytes_done`) is sent at most once a second; fetch `GET /updates`
+         *     for the rest.
+         * @example {
+         *       "bytes_done": null,
+         *       "bytes_total": null,
+         *       "error": null,
+         *       "state": "available",
+         *       "version": "0.6.0"
+         *     }
+         */
+        UpdatesEvent: {
+            /** Format: int64 */
+            bytes_done: number | null;
+            /** Format: int64 */
+            bytes_total: number | null;
+            /** @description A stable error code with `failed`. */
+            error: string | null;
+            state: components["schemas"]["UpdatesState"];
+            /** @description The release it concerns, when there is one. */
+            version: string | null;
+        };
+        /**
+         * @description Where the update engine is (§12.2).
+         * @enum {string}
+         */
+        UpdatesState: "checking" | "checked" | "available" | "downloading" | "verifying" | "waiting_window" | "installing" | "restarting" | "checking_health" | "done" | "rolled_back" | "failed";
+        /** @description `GET /updates`. */
+        UpdatesStatus: {
+            capability: components["schemas"]["Capability"];
+            history: components["schemas"]["HistoryEntry"][];
+            /**
+             * @description `revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,
+             *     `pending_unwritable`, `bad_overlay`, `rolled_back`,
+             *     `manifest_lapsed`, `channel_unavailable`, …
+             */
+            notices: string[];
+            pending: null | components["schemas"]["PendingInstall"];
+            policy: components["schemas"]["Policy"];
+            /** @description Newer releases, newest first. */
+            releases: components["schemas"]["ReleaseInfo"][];
+            rollback: components["schemas"]["RollbackInfo"];
+            running: components["schemas"]["Running"];
+            status: components["schemas"]["CheckStatus"];
+            unavailable: null | components["schemas"]["UpdatesUnavailable"];
+        };
+        /**
+         * @description Why this process has no update engine.
+         * @example windows_helper
+         * @enum {string}
+         */
+        UpdatesUnavailable: "fixture" | "network" | "windows_helper";
         /**
          * @description `GET /user-items/{hash}`: the marks and the collections it is in.
          * @example {
@@ -10707,6 +11035,222 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SiblingsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    checkUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `rate_limited`, with `Retry-After`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    clearUpdateHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pauseUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PauseRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_value` for any other number of days. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    skipUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkipRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `unknown_version`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
