@@ -115,5 +115,6 @@
 	"search_toolbar_density": "Density",
 	"search_toolbar_comfortable": "Comfortable",
 	"search_toolbar_compact": "Compact",
-	"search_toolbar_save": "Save search"
+	"search_toolbar_save": "Save search",
+	"search_toolbar_save_failed": "Couldn't open Save search. Reload the page and try again."
 }

@@ -67,8 +67,9 @@
 	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
 
 	// "Skip to results" (WCAG 2.4.1): at x-large the facet rail comes before the results, a tab stop
-	// per value. The link is the first focusable in the page and goes to the list's active row, or to
-	// the region itself while there is no list (the empty state, a skeleton, an error).
+	// per value. The link is the first focusable in the page content (after the shell's skip link and
+	// navigation) and goes to the list's active row, or to the region itself while there is no list
+	// (the empty state, a skeleton, an error).
 	function skipToResults(event: MouseEvent) {
 		event.preventDefault();
 		const region = document.getElementById('results');
