@@ -5,10 +5,12 @@
 	import ArrowDown from '~icons/ph/arrow-down-bold';
 	import ArrowUp from '~icons/ph/arrow-up-bold';
 	import History from '~icons/ph/clock-counter-clockwise-bold';
+	import Warning from '~icons/ph/warning-bold';
 	import { m } from '$lib/paraglide/messages.js';
-	import { CategoryBar } from '$lib/charts';
+	import CategoryBar from '$lib/charts/CategoryBar.svelte';
 	import { formatBytes, formatCount, formatShare } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { showBidi } from '$lib/util/bidi';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import type { SearchHit } from './discover.svelte';
@@ -21,8 +23,11 @@
 	let { hit, density }: Props = $props();
 
 	const locale = $derived(currentLocale());
-	const title = $derived(hit.title ?? hit.name);
-	const rawName = $derived(hit.title !== null && hit.title !== hit.name ? hit.name : null);
+	// Torrent names are untrusted text: bidirectional controls show as markers (§20).
+	const title = $derived(showBidi(hit.title ?? hit.name));
+	const rawName = $derived(
+		hit.title !== null && hit.title !== hit.name ? showBidi(hit.name) : null
+	);
 	const via = $derived(
 		hit.resolved_via === null
 			? null
@@ -55,7 +60,9 @@
 			{#if hit.seeders === null}
 				<span role="img" aria-label={m.never_scraped()} data-testid="{id}-never-scraped">—</span>
 			{:else}
-				<span data-testid="{id}-seeders">{formatCount(hit.seeders, locale)}</span>
+				<span data-testid="{id}-seeders"
+					>{hit.seeders_approx ? m.estimate() : ''}{formatCount(hit.seeders, locale)}</span
+				>
 			{/if}
 			<span class="sr-only">{m.leechers()}: </span><ArrowDown class="dsc-icon" aria-hidden="true" />
 			{#if hit.leechers === null}
@@ -63,7 +70,14 @@
 					>—</span
 				>
 			{:else}
-				<span data-testid="{id}-leechers">{formatCount(hit.leechers, locale)}</span>
+				<span data-testid="{id}-leechers"
+					>{hit.seeders_approx ? m.estimate() : ''}{formatCount(hit.leechers, locale)}</span
+				>
+			{/if}
+			{#if hit.swarm_suspect}
+				<Warning class="dsc-icon" aria-hidden="true" />
+				{#if density === 'comfortable'}<span data-testid="{id}-suspect">{m.swarm_suspect()}</span>
+				{:else}<span class="sr-only" data-testid="{id}-suspect">{m.swarm_suspect()}</span>{/if}
 			{/if}
 		</span>
 		{#if density === 'comfortable'}

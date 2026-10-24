@@ -1,9 +1,8 @@
 // The composition bar's inputs from a row's server-sent shares. Nothing is computed here: the
 // shares are the server's whole percents, and "dominant" is the largest of them.
-import type { Group } from '$lib/charts';
+import { GROUP_ORDER, type Group } from '$lib/charts/shared';
 import { m } from '$lib/paraglide/messages.js';
 import type { components } from '$lib/api/schema';
-import { GROUP_ORDER } from '$lib/charts';
 
 type Share = components['schemas']['CompositionShare'];
 

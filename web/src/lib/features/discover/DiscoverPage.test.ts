@@ -369,6 +369,29 @@ describe('rows', () => {
 		).toBeTruthy();
 	});
 
+	it('shows bidirectional controls in a torrent name as markers', async () => {
+		handler = () =>
+			response({
+				newest: newest({ hits: [hit(1, { title: null, name: 'invoice\u202Efdp.exe' })] })
+			});
+		mount();
+		expect((await screen.findByTestId(`discover-row-${hash(1)}-title`)).textContent).toBe(
+			'invoice<U+202E>fdp.exe'
+		);
+	});
+
+	it('shows ≈ for estimated swarm counts and the suspect label with an icon and text', async () => {
+		handler = () =>
+			response({
+				newest: newest({ hits: [hit(1, { seeders_approx: true, swarm_suspect: true })] })
+			});
+		mount();
+		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe('≈12');
+		expect(screen.getByTestId(`discover-row-${hash(1)}-suspect`).textContent).toBe(
+			'Suspect seeders'
+		);
+	});
+
 	it('marks a backfill discovery', async () => {
 		handler = () => response({ newest: newest({ hits: [hit(1, { flags: ['backfill'] })] }) });
 		mount();
@@ -460,8 +483,8 @@ describe('keyboard', () => {
 		const mine = () => keys.list().filter((c) => c.scope === 'discover');
 		expect(mine().map((c) => [c.id, c.keys])).toEqual(
 			expect.arrayContaining([
-				['list.next', ['j']],
-				['list.previous', ['k']]
+				['results.next', ['j']],
+				['results.previous', ['k']]
 			])
 		);
 		view.unmount();
