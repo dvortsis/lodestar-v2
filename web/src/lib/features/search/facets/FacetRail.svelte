@@ -18,6 +18,7 @@
 		clearField,
 		dateOf,
 		fieldOf,
+		fixedValues,
 		rangeOf,
 		setDate,
 		setRange,
@@ -106,6 +107,11 @@
 		const field = fieldOf(name);
 		if (field) onchange(toggleValue(ast, field, v, how));
 	}
+	const NONE: ReadonlySet<string> = new Set();
+	function fixedOf(name: string) {
+		const field = fieldOf(name);
+		return field ? fixedValues(ast, field) : NONE;
+	}
 	function clear(name: string) {
 		const field = fieldOf(name);
 		if (field) onchange(clearField(ast, field));
@@ -144,6 +150,7 @@
 			more={more.has(name)}
 			onmore={name === 'ext' ? (on) => onmore(name, on) : undefined}
 			excludable={!FLAGS.has(name)}
+			fixed={fixedOf(name)}
 			onvalue={(v, how) => value(name, v, how)}
 			onclear={() => clear(name)}
 		/>

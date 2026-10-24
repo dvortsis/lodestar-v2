@@ -38,7 +38,11 @@ export function createFacets() {
 	let inflightKey: string | null = null;
 	const slot = latest();
 
+	/** A lease the server refused: sent as null from then on, until the results bring a new one. */
+	let deadLease: string | null = null;
+
 	async function run(q: FacetsQuery, force: boolean) {
+		if (q.lease !== null && q.lease === deadLease) q = { ...q, lease: null };
 		if (q.ast === null || q.ast.op === 'all') {
 			slot.cancel();
 			data = null;
@@ -75,6 +79,7 @@ export function createFacets() {
 			// index serving now instead, rather than failing on every Retry.
 			if (q.lease !== null && (err.code === 'cursor_expired' || err.code === 'bad_cursor')) {
 				if (inflightKey === key) inflightKey = null;
+				deadLease = q.lease;
 				return run({ ...q, lease: null }, true);
 			}
 			settledKey = key;

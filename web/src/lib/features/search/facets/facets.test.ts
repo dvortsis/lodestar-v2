@@ -108,4 +108,18 @@ describe('a stale lease', () => {
 			expect(f.loading).toBe(false);
 		}
 	);
+
+	it('is not asked again: a reload or Retry sends none until a new lease comes', async () => {
+		post.mockReset();
+		post
+			.mockRejectedValueOnce(new ApiError(410, 'cursor_expired', 'gone'))
+			.mockResolvedValue(response({ total: 7 }));
+		const f = createFacets();
+		await f.load(query());
+		await f.load(query('lantern', { limits: { ext: 100 } })); // the same lease, new limits
+		await f.retry();
+		expect(post.mock.calls.map((c) => c[1].body.lease)).toEqual(['L1', null, null, null]);
+		await f.load(query('lantern', { lease: 'L2' }));
+		expect(post.mock.calls.at(-1)![1].body.lease).toBe('L2');
+	});
 });

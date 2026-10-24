@@ -5,6 +5,7 @@ import {
 	clearField,
 	dateOf,
 	fieldOf,
+	fixedValues,
 	owns,
 	rangeOf,
 	selection,
@@ -75,10 +76,32 @@ describe('toggleValue', () => {
 		expect(toggleValue(ex, RES, '480p', 'exclude')).toEqual(and(word('lantern'), res('1080p')));
 	});
 
-	it('merges several own clauses (an OR, two leaves) into one', () => {
+	it('rewrites only the first positive own clause: a second one is an AND, not an OR', () => {
+		// (1080p | 720p) AND 2160p: dropping 720p leaves 1080p AND 2160p, never 1080p OR 2160p.
 		const q = and(or(res('1080p'), res('720p')), word('x'), res('2160p'));
 		expect(selection(q, RES)).toEqual({ include: ['1080p', '720p', '2160p'], exclude: [] });
-		expect(toggleValue(q, RES, '720p')).toEqual(and(res('1080p', '2160p'), word('x')));
+		expect(toggleValue(q, RES, '720p')).toEqual(and(res('1080p'), word('x'), res('2160p')));
+		expect(fixedValues(q, RES)).toEqual(new Set(['2160p']));
+		// lang:en lang:fr (both) plus de: en or de, and still fr.
+		const both = and(res('en'), res('fr'));
+		expect(toggleValue(both, RES, 'de')).toEqual(and(res('en', 'de'), res('fr')));
+	});
+
+	it('merges negations: -a -b is -(a|b)', () => {
+		const q = and(not(res('480p')), word('x'), not(res('576p')));
+		expect(toggleValue(q, RES, '720p', 'exclude')).toEqual(
+			and(not(res('480p', '576p', '720p')), word('x'))
+		);
+		expect(fixedValues(q, RES)).toEqual(new Set());
+	});
+
+	it('names the values only the query text can change', () => {
+		expect(fixedValues(and(word('x'), not(and(res('a'), res('b')))), RES)).toEqual(
+			new Set(['a', 'b'])
+		);
+		expect(fixedValues(or(res('a'), not(res('b'))), RES)).toEqual(new Set(['a', 'b']));
+		expect(fixedValues(and(res('a'), not(res('b'))), RES)).toEqual(new Set());
+		expect(fixedValues(or(res('a'), ext('mkv')), RES)).toEqual(new Set()); // not the facet's
 	});
 
 	it('leaves mixed clauses alone: they belong to no facet', () => {
@@ -239,7 +262,27 @@ describe('toggleValue over random queries (seeded)', () => {
 	const tops = (a: Ast) => (a.op === 'and' ? a.of : a.op === 'all' ? [] : [a]);
 	const plain = (n: Ast) =>
 		n.op === 'tag' || (n.op === 'or' && n.of.every((c) => c.op === 'tag' && c.key === 'res'));
-	const rewritable = (n: Ast) => owns(n, RES) && (plain(n) || (n.op === 'not' && plain(n.of)));
+	// What a toggle may rewrite: the first positive plain own clause, and every negated one.
+	const rewrittenOf = (a: Ast) => {
+		const first = tops(a).find((n) => owns(n, RES) && plain(n));
+		return tops(a).filter((n) => n === first || (owns(n, RES) && n.op === 'not' && plain(n.of)));
+	};
+
+	// The query as a predicate over a torrent: its res values and its extensions (free text holds).
+	type Doc = { res: Set<string>; ext: Set<string> };
+	const holds = (n: Ast, d: Doc): boolean => {
+		if (n.op === 'and') return n.of.every((c) => holds(c, d));
+		if (n.op === 'or') return n.of.some((c) => holds(c, d));
+		if (n.op === 'not') return !holds(n.of, d);
+		if (n.op === 'tag') return n.any.some((v) => d.res.has(v));
+		if (n.op === 'ext') return n.any.some((v) => d.ext.has(v));
+		return true;
+	};
+	const subsets = <T>(xs: T[]): T[][] =>
+		xs.reduce<T[][]>((acc, x) => acc.concat(acc.map((s) => [...s, x])), [[]]);
+	const DOCS: Doc[] = subsets(VALUES).flatMap((r) =>
+		subsets(['mkv', 'mp4']).map((e) => ({ res: new Set(r), ext: new Set(e) }))
+	);
 
 	for (let seed = 1; seed <= 300; seed++) {
 		it(`seed ${seed}`, () => {
@@ -249,11 +292,10 @@ describe('toggleValue over random queries (seeded)', () => {
 			const how = r() < 0.5 ? 'include' : 'exclude';
 			const next = toggleValue(q, RES, value, how);
 			// Everything the toggle may not rewrite is still there, in order.
-			expect(tops(next).filter((n) => !rewritable(n))).toEqual(
-				tops(q).filter((n) => !rewritable(n))
-			);
-			// At most two rewritable clauses remain, and the value is where the toggle put it.
-			const own = tops(next).filter(rewritable);
+			const kept = (a: Ast) => tops(a).filter((n) => !rewrittenOf(a).includes(n));
+			expect(kept(next)).toEqual(kept(q));
+			// At most two rewritten clauses remain, and the value is where the toggle put it.
+			const own = rewrittenOf(next);
 			expect(own.length).toBeLessThanOrEqual(2);
 			const sel = { include: [] as string[], exclude: [] as string[] };
 			for (const n of own) {
@@ -262,11 +304,18 @@ describe('toggleValue over random queries (seeded)', () => {
 				sel.exclude.push(...s.exclude);
 			}
 			const before = { include: [] as string[], exclude: [] as string[] };
-			for (const n of tops(q).filter(rewritable)) {
+			for (const n of rewrittenOf(q)) {
 				const s = selection(n, RES);
 				before.include.push(...s.include);
 				before.exclude.push(...s.exclude);
 			}
+			// The meaning: only torrents with the clicked value can change. Except when the selected
+			// list starts or ends (from none to one value, or back): adding or dropping that clause is
+			// what selecting the first value, or un-selecting the last, means.
+			const flipped = (before.include.length === 0) !== (sel.include.length === 0);
+			if (!flipped)
+				for (const d of DOCS.filter((d) => !d.res.has(value)))
+					expect(holds(next, d), JSON.stringify([...d.res, ...d.ext])).toBe(holds(q, d));
 			const was = how === 'include' ? before.include : before.exclude;
 			const now = how === 'include' ? sel.include : sel.exclude;
 			const other = how === 'include' ? sel.exclude : sel.include;
@@ -277,7 +326,7 @@ describe('toggleValue over random queries (seeded)', () => {
 			if (!otherBefore.includes(value)) {
 				const back = toggleValue(next, RES, value, how);
 				const again = new Set<string>();
-				for (const n of tops(back).filter(rewritable)) {
+				for (const n of rewrittenOf(back)) {
 					const s = selection(n, RES);
 					(how === 'include' ? s.include : s.exclude).forEach((v) => again.add(v));
 				}

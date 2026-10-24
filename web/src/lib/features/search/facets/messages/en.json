@@ -57,5 +57,6 @@
 	"search_facets_close": "Close filters",
 	"search_facets_error_body": "The results are fine; only the counts didn't load.",
 	"search_facets_year": "Release year",
-	"search_facets_count_one": "1 torrent"
+	"search_facets_count_one": "1 torrent",
+	"search_facets_fixed": "Set by your query: edit it in the search box."
 }

@@ -76,6 +76,17 @@
 		void live.load({ ast, sort, hidden, lease: results.lease, limits });
 	});
 
+	// What a click edits: the newest query, never the rows' (`shown` changes only when /search
+	// answers, so two quick clicks, or a click after a new query failed, would edit a stale one).
+	// The edit handed to W5 counts until W5 adopts it (its `ast` changes once the server printed it
+	// back), then W5's parsed query; the rows' query only while W5 has none (a parse error).
+	let pending = $state.raw<Ast | null>(null);
+	$effect(() => {
+		void search.ast;
+		pending = null;
+	});
+	const base = $derived(pending ?? search.ast ?? shown?.[0] ?? null);
+
 	// The bottom sheet's staged query and its own counts (no lease: it isn't a shown query).
 	let staged = $state.raw<Ast | null>(null);
 	const preview = createFacets();
@@ -93,18 +104,21 @@
 		void preview.load({ ast: staged, sort, hidden, lease: null, limits });
 	});
 	const view = $derived(staging ? (preview.data ?? live.data) : live.data);
-	const viewAst = $derived(staging ? staged : (shown?.[0] ?? null));
+	const viewAst = $derived(staging ? staged : base);
 
 	function apply(next: Ast) {
 		ensureSearchPath();
-		void search.setAst(next);
+		pending = next;
+		search.setAst(next).catch(() => {
+			if (pending === next) pending = null; // W5 kept its query: edit that one
+		});
 	}
 	function change(next: Ast) {
 		if (mode === 'bottom') staged = next;
 		else apply(next);
 	}
 	async function openSheet() {
-		staged = shown?.[0] ?? null;
+		staged = base;
 		void preview.load({ ast: null, sort: '', hidden: false, lease: null }); // forget the last session's
 		Sheet ??= (await import('$lib/ui/overlays/Sheet.svelte')).default;
 		open = true;

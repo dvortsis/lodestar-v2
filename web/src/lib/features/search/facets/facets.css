@@ -73,8 +73,11 @@
 	color: var(--color-muted-text);
 	cursor: pointer;
 }
-.fr-icon-button:hover {
+.fr-icon-button:hover:enabled {
 	background: var(--color-hover);
+}
+.fr-icon-button:disabled {
+	cursor: default;
 }
 .fr-icon-button[aria-pressed='true'] {
 	color: var(--color-error);
