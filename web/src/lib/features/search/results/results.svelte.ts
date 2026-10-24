@@ -227,6 +227,7 @@ export function createResults() {
 			notices = [];
 			error = null;
 			cursor = null;
+			lease = null;
 			moreError = null;
 			shownKey = null;
 			expired = false;

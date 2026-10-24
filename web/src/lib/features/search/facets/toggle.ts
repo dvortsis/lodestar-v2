@@ -136,7 +136,8 @@ export function toggleValue(
 		const on = sel.include.length === 1 && sel.include[0] === want && sel.exclude.length === 0;
 		return replace(ast, mine, on ? [] : [leaf(field, [want])]);
 	}
-	const [these, other] = how === 'include' ? [sel.include, sel.exclude] : [sel.exclude, sel.include];
+	const [these, other] =
+		how === 'include' ? [sel.include, sel.exclude] : [sel.exclude, sel.include];
 	const had = these.includes(value);
 	const nextMine = had ? these.filter((v) => v !== value) : [...these, value];
 	const nextOther = other.filter((v) => v !== value);
