@@ -25,9 +25,13 @@ pub mod check;
 #[cfg(unix)]
 pub mod control;
 #[cfg(unix)]
+pub mod download;
+#[cfg(unix)]
 pub mod engine;
 #[cfg(unix)]
 pub mod history;
+#[cfg(unix)]
+pub mod install;
 #[cfg(unix)]
 pub mod journal;
 #[cfg(unix)]
