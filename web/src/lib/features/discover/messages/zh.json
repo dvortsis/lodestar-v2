@@ -14,13 +14,6 @@
 	"discover_resolved": "最近解析",
 	"discover_resolved_how": "名称无法说明内容、但 Lodestar 刚刚识别出的种子。",
 	"discover_truncated": "匹配的结果多于此处列出的。",
-	"discover_not_classified": "尚未分类",
-	"discover_trackers_of": "{reporting} / {checked}",
-	"discover_trackers_reporting": "{checked} 个 Tracker 中有 {reporting} 个报告",
-	"discover_resolved_via_files": "通过文件解析",
-	"discover_resolved_via_folder": "通过文件夹解析",
-	"discover_resolved_via_structure": "通过结构解析",
-	"discover_resolved_via_other": "通过{method}解析",
 	"discover_unavailable_search_disabled": "搜索已关闭，因此无法列出。",
 	"discover_unavailable_search_disabled_action": "开启搜索",
 	"discover_unavailable_no_title": "没有解析标题的种子无法在此列出。",
@@ -49,7 +42,5 @@
 	"discover_retry": "重试",
 	"discover_newest_unit": "个种子",
 	"discover_key_next": "下一个种子",
-	"discover_key_previous": "上一个种子",
-	"discover_files_one": "{count} 个文件",
-	"discover_files_other": "{count} 个文件"
+	"discover_key_previous": "上一个种子"
 }

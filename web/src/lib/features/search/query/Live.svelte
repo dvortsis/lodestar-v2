@@ -10,6 +10,7 @@
 	import { search, type Ast } from '$lib/state/search.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import Chip from '$lib/ui/labels/Chip.svelte';
 	import { chipClauses, rootWithout, topLevel, withoutFilters, type Clause } from './clauses';
 	import { attach, type Editor } from './editor';
 	import { ensureSearchPath } from './path';
@@ -219,5 +220,18 @@
 		onremovehidden={removeHidden}
 		onclear={clearAll}
 	/>
+{:else if clauses.length || hidden}
+	<!-- The strip's first line, held while its chunk loads (a pasted link with filters): the results
+	     below don't move when it arrives (§10.1, no layout shift). An unseen, inert chip and "Clear
+	     all", so the height is the strip's own, a coarse pointer's 44 px targets included. -->
+	<div
+		class="flex flex-wrap items-center gap-2 opacity-0"
+		aria-hidden="true"
+		inert
+		data-testid="filter-strip-reserve"
+	>
+		<Chip onremove={() => {}} removeLabel=""><span>&nbsp;</span></Chip>
+		<Button variant="quiet" dense>{m.search_filters_clear_all()}</Button>
+	</div>
 {/if}
 <p class="sr-only" aria-live="polite">{said}</p>

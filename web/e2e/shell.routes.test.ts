@@ -1,6 +1,7 @@
 // The app shell (architecture §10.3, §10.13, §10.19): navigation and its responsive collapse, the
 // status pill, the command palette, the full-page states and the 401 hand-off. Keyboard-only flows
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
+import type { Route } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
 import { interact } from './support/interact';
@@ -344,8 +345,10 @@ test.describe('full-page states', () => {
 		page,
 		go
 	}) => {
-		await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
-		await page.route('**/api/v1/auth', (route) => route.abort('connectionrefused'));
+		// Nothing answers: the stream, the probe, and the REST calls an engaged page makes (any REST
+		// success proves the server is there, and the search results ask for /stats).
+		const dead = (route: Route) => route.abort('connectionrefused');
+		await page.route('**/api/v1/**', dead);
 		await go('/search');
 		await engage(page);
 		await expect(
@@ -355,7 +358,7 @@ test.describe('full-page states', () => {
 		// The top bar stays, so the person can still see where they are.
 		await expect(page.getByRole('banner')).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
-		await page.unroute('**/api/v1/events*');
+		await page.unroute('**/api/v1/**', dead);
 		await liveEvents(page);
 		await page.getByRole('button', { name: 'Try again' }).click();
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
@@ -498,8 +501,8 @@ for (const [name, themeId, colorMode] of [
 		});
 
 		test('the unreachable page', async ({ page, go }) => {
-			await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
-			await page.route('**/api/v1/auth', (route) => route.abort('connectionrefused'));
+			// Nothing answers (see "a server that never answers" above).
+			await page.route('**/api/v1/**', (route) => route.abort('connectionrefused'));
 			await go('/search');
 			await engage(page);
 			await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeVisible();
