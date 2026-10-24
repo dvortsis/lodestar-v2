@@ -47,6 +47,13 @@
 		parsedAsked = true;
 		void import('./parsed/Parsed.svelte').then((mod) => (Parsed = mod.default));
 	}
+	// The full page has no fold to scroll to: its sections load at once, so it settles to one layout.
+	$effect(() => {
+		if (mode === 'page' && detail) {
+			loadContents();
+			loadParsed();
+		}
+	});
 	$effect(() => {
 		if (error && !ErrorState)
 			void import('./ErrorState.svelte').then((mod) => (ErrorState = mod.default));
