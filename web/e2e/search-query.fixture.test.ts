@@ -24,7 +24,7 @@ test.afterAll(() => page?.context().close());
 
 const bar = (page: Page) => page.getByRole('combobox', { name: 'Search torrents' });
 
-test('lantern type:movie is highlighted, parses and becomes the URL query', async () => {
+test('lantern type:movie is highlighted, gets a Type chip, and removing it leaves ?q=lantern', async () => {
 	await page.goto('/search');
 	await bar(page).click();
 	await page.keyboard.type('lantern type:movie');
@@ -34,6 +34,12 @@ test('lantern type:movie is highlighted, parses and becomes the URL query', asyn
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern type:movie');
 	await expect(bar(page)).not.toHaveAttribute('aria-invalid');
 	await expect(page.getByRole('alert')).toHaveCount(0);
+	const chip = page.getByRole('button', { name: 'Remove filter: Type: Movie' });
+	await expect(chip).toBeVisible();
+	await chip.click();
+	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern');
+	await expect(bar(page)).toHaveText('lantern');
+	await expect(chip).toHaveCount(0);
 });
 
 test('seeders:>=1 parses now that swarm health has landed (#48)', async () => {
@@ -44,6 +50,9 @@ test('seeders:>=1 parses now that swarm health has landed (#48)', async () => {
 	await page.keyboard.press('Enter');
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('seeders:>=1');
 	await expect(bar(page)).not.toHaveAttribute('aria-invalid');
+	await expect(
+		page.getByRole('button', { name: 'Remove filter: Seeders: at least 1' })
+	).toBeVisible();
 });
 
 test('sig: shows the server’s "not available yet" message, marked in the bar', async () => {
