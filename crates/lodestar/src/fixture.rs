@@ -305,7 +305,10 @@ mod imp {
                     crate::logging::events::FIXTURE_FAILED,
                     error = lodestar_log::Error::kind("fixture")
                 );
-                eprintln!("{}", lodestar_log::url::scrub_text(&e));
+                eprintln!(
+                    "lodestar serve --fixture: {}",
+                    lodestar_log::url::scrub_text(&e)
+                );
                 ExitCode::FAILURE
             }
         }

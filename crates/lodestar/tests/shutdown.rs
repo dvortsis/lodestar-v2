@@ -219,10 +219,18 @@ fn a_stalled_download_cannot_hold_the_shutdown() {
     // More than the socket buffers on both ends can hold, so the
     // download can't finish into the kernel's buffers.
     let mut s = Server::start(48);
+    // Opening the log file queues the seeded file for compression, and
+    // the listing then names only the `.gz`. Wait for it and download
+    // that name, which streams inflated: the same 48 MiB.
+    let gz = s.dir.path().join("logs").join(format!("{ROTATED}.gz"));
+    let plain = s.dir.path().join("logs").join(ROTATED);
+    wait_for(30, "the seeded file to be compressed", || {
+        gz.exists() && !plain.exists()
+    });
     let mut stalled = TcpStream::connect(("127.0.0.1", s.port)).unwrap();
     write!(
         stalled,
-        "GET /api/v1/logs/files/{ROTATED}?redact=false HTTP/1.0\r\nHost: localhost\r\nCookie: {}\r\n\r\n",
+        "GET /api/v1/logs/files/{ROTATED}.gz?redact=false HTTP/1.0\r\nHost: localhost\r\nCookie: {}\r\n\r\n",
         s.cookie
     )
     .unwrap();
@@ -253,6 +261,11 @@ fn a_stalled_download_cannot_hold_the_shutdown() {
     let (status, took) = s.terminate();
     let stderr = s.stderr.lock().unwrap().clone();
     assert!(status.success(), "exit {status:?} after {took:?}: {stderr}");
+    // It waited the bound (10 s), and not much more.
+    assert!(
+        took >= Duration::from_secs(9) && took < Duration::from_secs(25),
+        "the shutdown took {took:?}"
+    );
     let file = s.file();
     let forced = at(&file, "app.shutdown_forced").unwrap_or_else(|| panic!("{stderr}"));
     let stop = at(&file, "app.stop").unwrap_or_else(|| panic!("{stderr}"));

@@ -555,7 +555,7 @@ lodestar_log::catalogue! {
         id: "windows.ports_low",
         component: System,
         level: Warn,
-        message: "Windows has too few ports left for outgoing connections; fetches may fail and other programs may lose network access",
+        message: "Windows has too few ports left for outgoing connections; fetches may fail and other programs may lose network access. To fix it, run `netsh int <family> set dynamicport tcp start=<fix_start> num=<fix_count>` in a Command Prompt opened as administrator, then check `netsh int <family> show excludedportrange protocol=tcp` (Hyper-V and WinNAT reserve ports); or lower the crawler's intensity or max_sockets. fix_count=0: no range is large enough, so lower them",
         fields: { family: Label, available: Size, excluded: Size, needed: Size, max_sockets: Size, fix_start: Size, fix_count: Size },
     }
     /// The dynamic port range is wide enough.
@@ -770,7 +770,7 @@ lodestar_log::catalogue! {
         id: "app.stopping",
         component: System,
         level: Info,
-        message: "Shutting down: saving the queue and DHT state",
+        message: "shutting down: saving the queue and DHT state",
         fields: {},
     }
     /// The swarm-stats snapshot couldn't be saved; the next start rebuilds

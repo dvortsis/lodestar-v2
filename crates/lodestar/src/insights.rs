@@ -305,7 +305,11 @@ async fn run(
                 .await?;
                 match r {
                     Ok(()) => insights.bump(),
-                    Err(e) => lodestar_log::log_event!(crate::logging::events::INSIGHTS_STEP_FAILED, step = "coverage", error = lodestar_log::Error::new(&e)),
+                    Err(e) => lodestar_log::log_event!(
+                        crate::logging::events::INSIGHTS_STEP_FAILED,
+                        step = "coverage",
+                        error = lodestar_log::Error::new(&e)
+                    ),
                 }
                 if let Some(w) = watermark(&follow) {
                     store = record(insights, store, w, now).await?;
