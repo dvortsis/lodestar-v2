@@ -44,6 +44,19 @@ fn create_private(dir: &Path) -> io::Result<()> {
         let _ = fs::remove_dir(dir);
         return Err(e);
     }
+    // Until the ACL changed, whoever may write to the data folder could
+    // plant an entry in the new folder (it keeps its own ACL) or swap it
+    // for a link: it must still be an empty real folder.
+    let real = fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir());
+    let empty = fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none());
+    let planted = !(real && empty);
+    if planted {
+        let _ = fs::remove_dir(dir);
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the new logs folder changed before its access was restricted",
+        ));
+    }
     Ok(())
 }
 
