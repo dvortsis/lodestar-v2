@@ -1635,7 +1635,8 @@
   "usage_pause": "2026-10-24T03:31Z runner: paused in-flight non-v0.5 work at safe points to conserve usage: B-update 5/5, S-settings-1, M-settings-form-3, X-sleeps next part, B-log1b 4b. Finishing only open PRs #140, #163, #165, #166. Lean reviews (resume reviewer for fix rounds). Owner may lift.",
   "notify_owner_on": "DONE: G-v05 pass notified 09:10Z. Freeze still owner-held.",
   "merged_168": "subscriptions client panic fix merged ef236b19",
-  "merged_170": "macOS supervisor tests fixed, merged bbe95fc3 07:58Z; watch main CI on it (log-delete flake may still hit macOS)"
+  "merged_170": "macOS supervisor tests fixed, merged bbe95fc3 07:58Z; watch main CI on it (log-delete flake may still hit macOS)",
+  "v050": "Owner (typed in runner session 2026-10-24 ~12:45Z): \"Yes, tag as .5\". Version bump PR #172 merged 2e97defe. Tag push v0.5.0 refused (HTTP 403 from git proxy) - owner must push the tag; then approve the release environment; draft release then publish."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
