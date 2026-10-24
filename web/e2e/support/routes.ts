@@ -1,5 +1,6 @@
 import { HASH, mockTorrent } from '../detail.fixtures';
 import type { OpenApiMock } from '../mock/openapi-mock';
+import { discoverResponse, showAdultSettings } from '../../src/lib/features/discover/testing';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -32,7 +33,15 @@ export const ROUTES: RouteCase[] = [
 		// The bare page parses nothing; an interaction with a query in the bar would.
 		mock: (m) => m.on('parseQuery', { ast: { op: 'all' }, canonical: '' })
 	},
-	{ name: 'discover', path: '/discover' },
+	{
+		name: 'discover',
+		path: '/discover',
+		heading: 'Discover',
+		mock: (m) => {
+			m.on('getDiscover', discoverResponse());
+			m.on('getSettings', showAdultSettings(false));
+		}
+	},
 	{
 		name: 'alerts',
 		path: '/alerts',

@@ -81,8 +81,29 @@ test('Enter on a destination navigates, marks it current and moves focus to main
 test('Ctrl+K opens the palette, typing filters, Enter runs, and the page changes', async ({
 	page,
 	go,
-	kbd
+	kbd,
+	mock
 }) => {
+	mock.on('getDiscover', {
+		newest: {
+			hits: [],
+			limit: 50,
+			next_cursor: null,
+			notices: [],
+			offset: 0,
+			total: 0,
+			total_approx: false,
+			type: null
+		},
+		rising: { hits: [], reason: 'needs_swarm_history', status: 'unavailable', truncated: false },
+		recently_resolved: {
+			hits: [],
+			reason: 'needs_resolution_history',
+			status: 'unavailable',
+			truncated: false
+		}
+	});
+	mock.on('getSettings', { fields: {}, restart_required: [], revision: 1, section: 'content' });
 	await go('/search');
 	await ready(page);
 	await openPaletteWithKey(page, () => kbd.press('Control+k'));
