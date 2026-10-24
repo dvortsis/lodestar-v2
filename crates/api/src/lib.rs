@@ -42,6 +42,7 @@ pub mod log_events;
 pub mod logs;
 pub mod openapi;
 pub mod ops;
+mod request_log;
 mod saved;
 mod search;
 pub mod settings;
@@ -127,5 +128,6 @@ pub fn router(state: ApiState) -> Router {
         // session guard, and this doesn't replace it.
         .method_not_allowed_fallback(error::wrong_method)
         .fallback(error::no_route)
+        .layer(axum::middleware::from_fn(request_log::log))
         .with_state(state)
 }

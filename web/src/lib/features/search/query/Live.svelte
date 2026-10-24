@@ -1,18 +1,20 @@
 <script lang="ts">
 	// The query bar's lazy part (QueryBar loads it on the first interaction or a `q` in the URL):
-	// the editor, the search state, the parse-error line and the "couldn't check" banner. The URL
-	// is the state (§10.3): every write goes through W5, after `ensureSearchPath()`.
+	// the editor, the search state, the parse-error line, the "couldn't check" banner and the
+	// active-filter strip (itself lazy until there is a chip). The URL is the state (§10.3): every
+	// write goes through W5, after `ensureSearchPath()`.
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import IconError from '~icons/ph/warning-circle';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
-	import { search } from '$lib/state/search.svelte';
+	import { search, type Ast } from '$lib/state/search.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import { chipClauses, rootWithout, topLevel, withoutFilters, type Clause } from './clauses';
 	import { attach, type Editor } from './editor';
 	import { ensureSearchPath } from './path';
 	import { errorRange } from './spans';
-	import type { SearchState } from './types';
+	import type { SearchState, SyntaxComponent } from './types';
 
 	interface Props {
 		el: HTMLElement;
@@ -100,8 +102,92 @@
 		else el.removeAttribute('aria-invalid');
 	});
 
+	// The strip explains the results, which still show the last query that parsed: keep its AST
+	// while an error is showing (W5 clears `ast` on an error).
+	let shown = $state.raw<Ast | null>(null);
+	$effect(() => {
+		const ast = s.ast;
+		if (ast) shown = ast;
+		else if (!s.parseError && !s.parsing) shown = null;
+	});
+	const clauses = $derived(chipClauses(shown));
+	const hidden = $derived(s.hidden);
+
+	let Strip = $state<typeof import('./FilterStrip.svelte').default>();
+	$effect(() => {
+		if ((clauses.length || hidden) && !Strip)
+			void import('./FilterStrip.svelte').then((mod) => (Strip = mod.default));
+	});
+
+	// Polite announcements ("Removed filter: …"). Cleared first so a repeat is read again.
+	let said = $state('');
+	function announce(text: string) {
+		said = '';
+		requestAnimationFrame(() => (said = text));
+	}
+
+	/** A removal in flight: the next one builds on it, so quick removals in a row all land. */
+	let pending: { ast: Ast; labels: string[] } | null = null;
+
+	const removed = (labels: string[]) =>
+		labels.map((label) => m.search_filters_removed({ label })).join(' ');
+
+	async function remove(clause: Clause) {
+		const base = pending?.ast ?? shown;
+		if (!base) return;
+		// By identity: the clause may have moved (an earlier removal) or gone (a new query).
+		const index = topLevel(base).indexOf(clause.node);
+		if (index < 0) return;
+		const sent = rootWithout(base, index);
+		const labels = [...(pending?.labels ?? []), clause.label.text];
+		pending = { ast: sent, labels };
+		ensureSearchPath();
+		try {
+			await s.setAst(sent);
+		} finally {
+			if (pending?.ast === sent) pending = null;
+		}
+		// Superseded by a newer removal, which carries this label and announces it.
+		if (s.ast === sent) announce(removed(labels));
+	}
+
+	async function removeHidden(label: string) {
+		ensureSearchPath();
+		await s.setHidden(false);
+		announce(m.search_filters_removed({ label }));
+	}
+
+	async function clearAll() {
+		ensureSearchPath();
+		const base = pending?.ast ?? shown;
+		if (base && clauses.length) {
+			// One history entry for both: the filters and `hidden`.
+			const sent = withoutFilters(base);
+			pending = { ast: sent, labels: [] };
+			try {
+				await s.setAst(sent, s.hidden ? { hidden: false } : {});
+			} finally {
+				if (pending?.ast === sent) pending = null;
+			}
+			if (s.ast !== sent) return; // superseded
+		} else if (s.hidden) {
+			await s.setHidden(false);
+		}
+		announce(m.search_filters_cleared());
+	}
+
+	export function tryQuery(query: string) {
+		setText(query);
+		submit();
+		editor?.focusEnd();
+	}
+
 	export function focusEnd() {
 		editor?.focusEnd();
+	}
+
+	export async function loadSyntax(): Promise<SyntaxComponent> {
+		return (await import('./SyntaxPopover.svelte')).default;
 	}
 </script>
 
@@ -124,3 +210,14 @@
 		{/snippet}
 	</Banner>
 {/if}
+{#if Strip && (clauses.length || hidden)}
+	<Strip
+		{clauses}
+		{hidden}
+		{el}
+		onremove={remove}
+		onremovehidden={removeHidden}
+		onclear={clearAll}
+	/>
+{/if}
+<p class="sr-only" aria-live="polite">{said}</p>

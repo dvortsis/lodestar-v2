@@ -1,4 +1,4 @@
-// The search page's query bar, highlighter and error states (S-search-1;
+// The search page's query bar, highlighter, error states and active-filter strip (S-search-1;
 // architecture §10.4, §10.13, §10.15). The server's parser is mocked by a tiny stand-in that knows
 // `res:`, `ext:` and words. Name ends in `routes.test.ts` so the `core` project runs it.
 import type { Page, Request } from '@playwright/test';
@@ -22,6 +22,21 @@ const toAst = (q: string): Ast => {
 	return of.length === 0 ? { op: 'all' } : of.length === 1 ? of[0]! : { op: 'and', of };
 };
 
+const print = (ast: Ast): string => {
+	const tops = ast.op === 'and' ? ast.of : ast.op === 'all' ? [] : [ast];
+	return tops
+		.map((n) =>
+			n.op === 'word'
+				? n.word
+				: n.op === 'tag'
+					? `res:${n.any[0]}`
+					: n.op === 'ext'
+						? `ext:${n.any[0]}`
+						: ''
+		)
+		.join(' ');
+};
+
 /** The parser stand-in: an unclosed quote is a syntax error spanning the quote to the end. */
 function parser(mock: OpenApiMock) {
 	mock.on('parseQuery', (request: Request) => {
@@ -43,6 +58,18 @@ function parser(mock: OpenApiMock) {
 		}
 		return { ast: toAst(q), canonical: q.trim().replace(/\s+/g, ' ') };
 	});
+	mock.on('searchPost', (request: Request) => ({
+		canonical: print((request.postDataJSON() as { ast: Ast }).ast),
+		hits: [],
+		limit: 1,
+		next_cursor: null,
+		notices: [],
+		offset: 0,
+		stemmed: false,
+		took_ms: 1,
+		total: 0,
+		total_approx: false
+	}));
 }
 
 /** The URL's path and `q` (the `go` fixture adds `density`, which every write keeps). */
@@ -54,6 +81,9 @@ const expectQuery = (page: Page, q: string | null, hidden: string | null = null)
 	expect.poll(() => at(page)).toEqual({ path: '/search', q, hidden });
 
 const editor = (page: Page) => page.getByRole('combobox', { name: 'Search torrents' });
+const strip = (page: Page) => page.getByRole('group', { name: 'Active filters' });
+const removeChip = (page: Page, label: string) =>
+	page.getByRole('button', { name: `Remove filter: ${label}` });
 
 test.beforeEach(({ mock }) => parser(mock));
 
@@ -154,6 +184,70 @@ test('Enter pushes the search; back and forward walk them', async ({ page, go })
 	await expect(editor(page).locator('.qt-field')).toHaveText('res:');
 });
 
+test('chips render from the server AST; removing one goes through the server', async ({
+	page,
+	go,
+	mock
+}) => {
+	await go('/search?q=lantern+res%3A1080p+ext%3Amkv');
+	await expect(strip(page)).toBeVisible();
+	await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+	await expect(removeChip(page, 'Extension: .mkv')).toBeVisible();
+	await expect(page.getByRole('button', { name: /lantern/ })).toHaveCount(0); // free text
+	await removeChip(page, 'Resolution: 1080p').click();
+	await expectQuery(page, 'lantern ext:mkv');
+	const sent = mock.calls('searchPost').at(-1)!.postDataJSON() as { ast: Ast; limit: number };
+	expect(sent.ast).toEqual(toAst('lantern ext:mkv'));
+	expect(sent.limit).toBe(1);
+	await expect(editor(page)).toHaveText('lantern ext:mkv');
+	await expect(removeChip(page, 'Resolution: 1080p')).toHaveCount(0);
+	await expect(page.locator('[aria-live="polite"]').last()).toHaveText(
+		'Removed filter: Resolution: 1080p'
+	);
+
+	// Back and forward walk the searches.
+	await page.goBack();
+	await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+	await expect(editor(page)).toHaveText('lantern res:1080p ext:mkv');
+	await page.goForward();
+	await expect(removeChip(page, 'Resolution: 1080p')).toHaveCount(0);
+	await expect(editor(page)).toHaveText('lantern ext:mkv');
+});
+
+test('Clear all keeps the free text, in one step Back undoes', async ({ page, go }) => {
+	await go('/search?q=lantern+res%3A1080p&hidden=1');
+	await page.getByRole('button', { name: 'Clear all' }).click();
+	await expectQuery(page, 'lantern');
+	await expect(strip(page)).toHaveCount(0);
+	await expect(editor(page)).toBeFocused();
+	// One history entry: Back restores both the filter and `hidden=1`.
+	await page.goBack();
+	await expectQuery(page, 'lantern res:1080p', '1');
+	await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+	await expect(removeChip(page, 'Including: Hidden by filters')).toBeVisible();
+});
+
+test('the hidden=1 chip', async ({ page, go }) => {
+	await go('/search?hidden=1');
+	const chip = removeChip(page, 'Including: Hidden by filters');
+	await expect(chip).toBeVisible();
+	await chip.click();
+	await expectQuery(page, null);
+	await expect(chip).toHaveCount(0);
+});
+
+test('the Syntax popover tries an example', async ({ page, go }) => {
+	await go('/search');
+	await page.getByRole('button', { name: 'Syntax' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Search syntax' });
+	await expect(dialog.getByRole('button', { name: /^Try / })).toHaveCount(8);
+	await dialog.getByRole('button', { name: 'Try big buck bunny res:1080p' }).click();
+	await expect(dialog).toBeHidden();
+	await expectQuery(page, 'big buck bunny res:1080p');
+	await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+	await expect(editor(page)).toBeFocused();
+});
+
 test('below large the bar stays at the top while the page scrolls', async ({ page, go }) => {
 	await page.setViewportSize({ width: 390, height: 700 });
 	await go('/search?q=res%3A1080p');
@@ -213,16 +307,30 @@ for (const [name, themeId, colorMode] of [
 	test.describe(`axe, ${name}`, () => {
 		test.use({ themeId, colorMode });
 		for (const width of [1366, 390]) {
-			test(`a highlighted query at ${width} px`, async ({ page, go }) => {
+			test(`a highlighted query and its chips at ${width} px`, async ({ page, go }) => {
 				await page.setViewportSize({ width, height: 800 });
-				await go('/search?q=lantern+res%3A1080p+ext%3Amkv');
+				await go('/search?q=lantern+res%3A1080p+ext%3Amkv&hidden=1');
 				await expect(editor(page).locator('.qt-field')).toHaveCount(2);
+				await expect(removeChip(page, 'Extension: .mkv')).toBeVisible();
 				await expectNoA11yViolations(page);
 			});
-			test(`a parse error at ${width} px`, async ({ page, go }) => {
+			test(`the open Syntax popover at ${width} px`, async ({ page, go }) => {
 				await page.setViewportSize({ width, height: 800 });
-				await go('/search?q=big+%22buck');
+				await go('/search');
+				await page.getByRole('button', { name: 'Syntax' }).click();
+				await expect(page.getByRole('dialog', { name: 'Search syntax' })).toBeVisible();
+				await expectNoA11yViolations(page);
+			});
+			test(`a parse error, with the last good chips, at ${width} px`, async ({ page, go }) => {
+				await page.setViewportSize({ width, height: 800 });
+				await go('/search?q=res%3A1080p');
+				await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible();
+				await editor(page).click();
+				await page.keyboard.press('End');
+				await page.keyboard.type(' big "buck');
+				await page.keyboard.press('Enter');
 				await expect(editor(page)).toHaveAttribute('aria-invalid', 'true');
+				await expect(removeChip(page, 'Resolution: 1080p')).toBeVisible(); // still explains the results
 				await expectNoA11yViolations(page);
 			});
 		}

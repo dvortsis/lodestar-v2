@@ -255,16 +255,15 @@ impl Services {
         // The way back in after a proxy change locks you out (§12).
         let proxy_env = std::env::var(lodestar_api::auth::PROXY_AUTH_ENV).ok();
         if auth.apply_proxy_override(proxy_env.as_deref()) {
-            tracing::warn!(
-                "{} is set: trusted-proxy sign-in is off for this run",
-                lodestar_api::auth::PROXY_AUTH_ENV
-            );
+            lodestar_log::log_event!(lodestar_api::auth::log_events::AUTH_PROXY_FORCED_OFF);
         }
         if let Some(token) = auth.setup_token() {
-            // §12: whoever can read the logs claims the instance.
-            tracing::warn!(
-                "first run: open {} and enter setup token {token} to create the admin password",
-                ops::ui_address(config.http.bind)
+            // §12: whoever can read the logs claims the instance. The
+            // console shows the token right after the message.
+            lodestar_log::log_event!(
+                crate::logging::events::AUTH_SETUP_TOKEN,
+                token = lodestar_log::SetupToken(&token),
+                address = lodestar_log::Listen(config.http.bind)
             );
         }
         let filter = pipeline_config.filter.clone();

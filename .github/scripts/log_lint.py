@@ -45,9 +45,6 @@ from pathlib import Path
 # Files whose plain `tracing` lines B-log1b converts (open PRs touched them
 # when B-log1 ran). Remove a file when it's converted; never add one.
 NOT_YET_SWEPT = [
-    "crates/api/src/auth.rs",
-    "crates/api/src/auth/guard.rs",
-    "crates/api/src/auth/http.rs",
     "crates/filter/src/lists.rs",
     "crates/lodestar/src/fixture.rs",
     "crates/lodestar/src/insights.rs",

@@ -5,12 +5,12 @@
 	// search state and the strip (`Live.svelte`), which then pick up whatever was typed.
 	// No route stylesheet either (the 20 KB CSS budget had 0.18 KB left): first-paint geometry is
 	// built from emitted utilities and token variables; everything else is in Live's stylesheet.
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
-	import { FOCUS_RING } from '$lib/ui/classes';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import { m } from '$lib/paraglide/messages.js';
 	import { onFirstInteraction } from './engaged';
-	import type { LiveApi, SearchState } from './types';
+	import type { LiveApi, SearchState, SyntaxComponent } from './types';
 
 	interface Props {
 		/** W5's search state; tests pass `createSearchState(nav)`. Defaults to `search`. */
@@ -27,6 +27,8 @@
 	let empty = $state(true);
 	let Live = $state<typeof import('./Live.svelte').default>();
 	let live = $state<LiveApi>();
+	let Syntax = $state<SyntaxComponent>();
+	let syntaxOpen = $state(false);
 	/** Enter pressed before the editor loaded: submitted once it has. */
 	let pendingSubmit = false;
 	/** An IME composition is open (tracked from first paint, for an editor that loads mid-way). */
@@ -40,10 +42,13 @@
 
 	onMount(() => onFirstInteraction(engage));
 
-	// A query in the URL needs its text and its checks now: a pasted link, back.
+	// A query (or `hidden`) in the URL needs its text, checks and chips now: a pasted link, back.
+	// `hidden` reads as W5's `readUrl` does ("1" or "true"); importing it would put W5 on the
+	// first load.
 	$effect(() => {
 		const p = page.url.searchParams;
-		if (p.get('q')) void engage();
+		const hidden = p.get('hidden');
+		if (p.get('q') || hidden === '1' || hidden === 'true') void engage();
 	});
 
 	/** `/` (search.focus): focus with the caret at the end. */
@@ -55,9 +60,36 @@
 		getSelection()?.collapse(el, el.childNodes.length);
 	}
 
-	/** The editor's Esc: an open popup closes first (S-search-4's listbox will). */
+	/** The lazy part, once mounted. */
+	async function ready(): Promise<LiveApi | undefined> {
+		await engage();
+		await tick();
+		return live;
+	}
+
+	async function openSyntax(event: MouseEvent) {
+		const button = event.currentTarget as HTMLElement;
+		let loaded: SyntaxComponent | undefined;
+		try {
+			loaded = await (await ready())?.loadSyntax();
+		} catch {
+			return; // the chunk didn't load: the button stays, and a press tries again
+		}
+		// Open only if the user is still at the button: a slow load mustn't pull focus from typing.
+		const still = document.activeElement === button || document.activeElement === document.body;
+		Syntax = loaded;
+		if (still) syntaxOpen = true;
+	}
+
+	async function tryQuery(query: string) {
+		(await ready())?.tryQuery(query);
+	}
+
+	/** The editor's Esc: an open popover closes first (S-search-4 adds its listbox here). */
 	function onescape() {
-		return false;
+		if (!syntaxOpen) return false;
+		syntaxOpen = false;
+		return true;
 	}
 </script>
 
@@ -106,6 +138,16 @@
 				></span
 			>
 		</div>
+		{#if Syntax}
+			<Syntax bind:open={syntaxOpen} ontry={tryQuery} />
+		{:else}
+			<button
+				type="button"
+				class="btn btn-ghost {FOCUS_RING} {TARGET_MIN}"
+				aria-haspopup="dialog"
+				onclick={(e) => void openSyntax(e)}>{m.search_query_syntax()}</button
+			>
+		{/if}
 	</div>
 	{#if Live && el}
 		<Live

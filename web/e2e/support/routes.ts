@@ -1,3 +1,4 @@
+import { HASH, mockTorrent } from '../detail.fixtures';
 import type { OpenApiMock } from '../mock/openapi-mock';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 
@@ -135,5 +136,10 @@ export const ROUTES: RouteCase[] = [
 	},
 	{ name: 'welcome', path: '/welcome', key: true },
 	{ name: 'settings', path: '/settings/general', key: true },
-	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
+	{
+		name: 'torrent',
+		path: `/t/${HASH}`,
+		key: true,
+		mock: (m) => mockTorrent(m)
+	}
 ];
