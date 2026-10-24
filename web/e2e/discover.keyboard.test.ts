@@ -28,6 +28,19 @@ test('Tab to the tabs, Enter on one, j and k through the rows, Enter opens the t
 	});
 	// The torrent page is not this slice's: whatever it asks for is refused, not left unmocked.
 	await page.route('**/api/v1/torrents/**', (route) => route.abort());
+	// The torrent page opens over Search, which loads its own (empty) results.
+	mock.on('searchGet', {
+		canonical: '',
+		hits: [],
+		limit: 50,
+		next_cursor: null,
+		notices: [],
+		offset: 0,
+		stemmed: false,
+		took_ms: 1,
+		total: 0,
+		total_approx: false
+	});
 
 	await go('/discover');
 	await expect(page.getByTestId(`discover-row-${hash(1)}`)).toBeVisible();
