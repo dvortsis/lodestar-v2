@@ -269,7 +269,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-24T02:08Z assigned to S-search-1's session (runner decision: context reuse); brief first (shared row replacing HitRow/AlertHitRow within Discover 42.8/45 & Alert 43.2/45, facet rail, all states, c/ManualMagnet, nested messages, split plan) | 2026-10-24T02:16Z brief approved (2a rows/states/keys/nested msgs + Alerts/Discover row swap; 2b facet rail). Decisions: 2a swaps HitRow (or 2b if #140 not merged); +N/h only from newly-searchable metric else drop; cold-start <1M searchable unless \u00a710.4 says; badges 5; 84 px file-clause lists"
+      "notes": "2026-10-24T02:08Z assigned to S-search-1's session (runner decision: context reuse); brief first (shared row replacing HitRow/AlertHitRow within Discover 42.8/45 & Alert 43.2/45, facet rail, all states, c/ManualMagnet, nested messages, split plan) | 2026-10-24T02:16Z brief approved (2a rows/states/keys/nested msgs + Alerts/Discover row swap; 2b facet rail). Decisions: 2a swaps HitRow (or 2b if #140 not merged); +N/h only from newly-searchable metric else drop; cold-start <1M searchable unless \u00a710.4 says; badges 5; 84 px file-clause lists | 2026-10-24T02:46Z 2a sizes: results lazy 45.1 total / 37.6 beyond Live -> limit 41.5 via beyond() option; Alert 44.36 with lazy alerts/commands; report lhci /search?q=lantern (info)"
     },
     "S-search-3": {
       "status": "pending",
