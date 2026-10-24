@@ -112,8 +112,13 @@ test('/ focuses the bar again from elsewhere on the page, with the caret at the 
 	const bar = page.getByRole('combobox', { name: 'Search torrents' });
 	await expect(bar).toHaveText('bunny');
 	await kbd.tabTo(page.getByRole('link', { name: 'Discover' })); // focus elsewhere on the page
-	await kbd.press('/');
-	await expect(bar).toBeFocused();
+	// The Tab is the first interaction: the shell's key registry attaches a moment after it, and
+	// nothing on the page marks that. So press `/` until it reaches the registry (a press before
+	// does nothing on a link), and never again once the bar has focus.
+	await expect(async () => {
+		if (!(await bar.evaluate((el) => el === document.activeElement))) await kbd.press('/');
+		await expect(bar).toBeFocused({ timeout: 1_000 });
+	}).toPass({ timeout: 10_000 });
 	await page.keyboard.type('x');
 	await expect(bar).toHaveText('bunnyx');
 });
