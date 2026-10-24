@@ -549,7 +549,13 @@ fn one_supervisor_per_folder_and_the_status_passes_through() {
     assert_eq!(status, 1);
     // HUP, USR1 and USR2 are forwarded; the child doesn't handle them,
     // so its status (128 + n) is the supervisor's.
-    for (sig, n) in [("HUP", 1), ("USR1", 10), ("USR2", 12)] {
+    // USR1 and USR2 are numbered per platform (10/12 on Linux, 30/31 on
+    // macOS and the BSDs).
+    #[cfg(target_os = "linux")]
+    let (usr1, usr2) = (10, 12);
+    #[cfg(not(target_os = "linux"))]
+    let (usr1, usr2) = (30, 31);
+    for (sig, n) in [("HUP", 1), ("USR1", usr1), ("USR2", usr2)] {
         let mut r = env.start(&o);
         wait_until("it didn't start", LONG, || env.healthy());
         let pid = r.child.id().to_string();
