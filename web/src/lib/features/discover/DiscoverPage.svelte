@@ -77,7 +77,7 @@
 		const n = d.newest;
 		if (!n) return '';
 		return n.total_approx
-			? `${m.estimate()} ${formatCompact(n.total, locale)}`
+			? formatCompact({ value: n.total, approx: true }, locale)
 			: formatCount(n.total, locale);
 	});
 	const adultHidden = $derived(d.newest?.notices.includes('adult_hidden') ?? false);
@@ -217,7 +217,7 @@
 					{/if}
 					<a
 						class="dsc-see-all {FOCUS_RING}"
-						href={resolve(searchHref(type, search) as Route)}
+						href={resolve(searchHref(tab ?? null, search) as Route)}
 						data-testid="discover-see-all">{m.discover_see_all()}</a
 					>
 				</header>
@@ -282,7 +282,7 @@
 					{:else}
 						<EmptyState
 							title={m.discover_empty_tab_title({ type: lowerLabel })}
-							text={m.discover_empty_tab_text({ type: lowerLabel })}
+							text={m.discover_empty_tab_text()}
 						>
 							{#snippet action()}
 								<a href={resolve(tabHref(null, search) as Route)} class={linkButton}

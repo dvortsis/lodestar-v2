@@ -222,7 +222,7 @@ test.describe('states', () => {
 			})
 		);
 		await go('/discover');
-		await expect(page.getByTestId('discover-newest-total')).toHaveText('≈ 2.4M');
+		await expect(page.getByTestId('discover-newest-total')).toHaveText('≈\u00A02.4M');
 		await expect(page.getByTestId(`discover-row-${hash(1)}-never-scraped`)).toHaveAccessibleName(
 			'Never scraped'
 		);
@@ -350,13 +350,27 @@ for (const [themeId, colorMode] of [
 test.describe('the first-load reveal', () => {
 	test('the first rows animate, 80 ms apart, once', async ({ page, go, mock }) => {
 		serve(mock);
+		// Record the delays the moment the reveal rows exist: the marker is removed after the window.
+		await page.addInitScript(() => {
+			const seen = () => {
+				const els = [...document.querySelectorAll('.dsc-reveal')];
+				if (els.length && !(window as { __reveal?: string[] }).__reveal) {
+					(window as { __reveal?: string[] }).__reveal = els.map(
+						(el) => getComputedStyle(el, '::after').animationDelay
+					);
+				}
+			};
+			new MutationObserver(seen).observe(document, { childList: true, subtree: true });
+		});
 		await go('/discover');
-		const animated = page.locator('.dsc-reveal');
-		await expect(animated.first()).toBeVisible();
-		expect(await animated.count()).toBeLessThanOrEqual(8);
-		const delays = await animated.evaluateAll((els) =>
-			els.map((el) => getComputedStyle(el, '::after').animationDelay)
-		);
+		await expect(page.getByTestId(`discover-row-${hash(1)}`)).toBeVisible();
+		await expect
+			.poll(() => page.evaluate(() => (window as { __reveal?: string[] }).__reveal ?? null), {
+				timeout: 10_000
+			})
+			.not.toBeNull();
+		const delays = (await page.evaluate(() => (window as { __reveal?: string[] }).__reveal))!;
+		expect(delays.length).toBeLessThanOrEqual(8);
 		expect(delays[0]).toBe('0s');
 		expect(delays[1]).toBe('0.08s');
 		// Nothing is withheld: the rows are focusable from the start.
