@@ -263,13 +263,13 @@
       "catch_ups": 0
     },
     "S-search-2": {
-      "status": "running",
+      "status": "in_review",
       "model": "opus (continues S-search-1 session)",
       "session": "session_015U1ernRx1MK1knzFVYDnee",
-      "pr": null,
+      "pr": 167,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-24T02:08Z assigned to S-search-1's session (runner decision: context reuse); brief first (shared row replacing HitRow/AlertHitRow within Discover 42.8/45 & Alert 43.2/45, facet rail, all states, c/ManualMagnet, nested messages, split plan) | 2026-10-24T02:16Z brief approved (2a rows/states/keys/nested msgs + Alerts/Discover row swap; 2b facet rail). Decisions: 2a swaps HitRow (or 2b if #140 not merged); +N/h only from newly-searchable metric else drop; cold-start <1M searchable unless \u00a710.4 says; badges 5; 84 px file-clause lists | 2026-10-24T02:46Z 2a sizes: results lazy 45.1 total / 37.6 beyond Live -> limit 41.5 via beyond() option; Alert 44.36 with lazy alerts/commands; report lhci /search?q=lantern (info)"
+      "notes": "2026-10-24T02:08Z assigned to S-search-1's session (runner decision: context reuse); brief first (shared row replacing HitRow/AlertHitRow within Discover 42.8/45 & Alert 43.2/45, facet rail, all states, c/ManualMagnet, nested messages, split plan) | 2026-10-24T02:16Z brief approved (2a rows/states/keys/nested msgs + Alerts/Discover row swap; 2b facet rail). Decisions: 2a swaps HitRow (or 2b if #140 not merged); +N/h only from newly-searchable metric else drop; cold-start <1M searchable unless \u00a710.4 says; badges 5; 84 px file-clause lists | 2026-10-24T02:46Z 2a sizes: results lazy 45.1 total / 37.6 beyond Live -> limit 41.5 via beyond() option; Alert 44.36 with lazy alerts/commands; report lhci /search?q=lantern (info) | 2026-10-24T05:08Z #167 2a (400c601, +3.1k incl Discover+Alerts swap): Discover 44.81/45, Alert 44.45/45, results lazy 31.29/34.5 (beyond), bare lhci 96,322; /search?q mobile LCP 3.6s (preload trial for panel); runner review running; 2b local"
     },
     "S-search-3": {
       "status": "pending",
@@ -1538,7 +1538,8 @@
     "paraglide-per-locale": "2026-10-23T23:37Z idea: Paraglide 2.29 experimentalStaticLocale per-locale builds (en/zh) would drop the other locale's strings from every message module (every route). Needs Rust embed/serve per locale (cookie/Accept-Language). Evaluate as a perf slice after M5 web lands; owner-visible (binary size).",
     "bidi-search-rows": "2026-10-23T23:37Z after #139: apply lib/util/bidi.ts to search result rows (S-search-1/2)",
     "docs-operations-firstrun": "2026-10-24T02:00Z docs/operations.md:86 first-run example stale (setup token line now shows http://<this host's address>:PORT/); for docs follow-up",
-    "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d"
+    "canary-port-race": "2026-10-24T02:46Z log_canary free_port() race (run_2 409, run_4 429) hit #157 -> B-log1b fix PR fix/canary-port-race (bind :0, read bound addr) | 2026-10-24T03:35Z #165 merged a53d55d",
+    "subscriptions-expect": "2026-10-24T05:08Z subscriptions.rs:135 expect panic (client build) seen in serve --fixture -> runner fix PR fix/subscriptions-client-panic (log filters.subscriptions_client_failed, stop task)"
   },
   "blocked_on_owner": [],
   "launches_today": 32,
