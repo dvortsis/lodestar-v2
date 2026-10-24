@@ -52,8 +52,8 @@ pub enum Channel {
 }
 
 impl Channel {
-    /// The update crate's channel (the engine's, part 4).
-    #[allow(dead_code)]
+    /// The update crate's channel (the engine's, Unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub fn update(self) -> lodestar_update::Channel {
         match self {
             Channel::Stable => lodestar_update::Channel::Stable,

@@ -124,7 +124,7 @@
 		</section>
 		<!-- Slots for the Swarm, Related and Notes & labels sections (follow-ups), in story order. -->
 	{:else if !error}
-		<div aria-busy="true" aria-label={m.detail_loading()}>
+		<div role="status" aria-busy="true" aria-label={m.detail_loading()}>
 			<Skeleton lines={6} />
 		</div>
 	{/if}

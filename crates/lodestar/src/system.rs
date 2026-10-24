@@ -50,7 +50,13 @@ pub struct System {
     pub sizes: Arc<info::Sizes>,
     /// Whether the DHT runs in this process.
     pub dht: bool,
+    /// The update engine's row: whether updates are on and the last
+    /// completed check; `None` without an engine.
+    pub updates: Option<UpdatesRow>,
 }
+
+/// What `/system`'s Updates row reads from the update engine.
+pub type UpdatesRow = Arc<dyn Fn() -> (bool, Option<i64>) + Send + Sync>;
 
 impl std::fmt::Debug for System {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -153,8 +159,7 @@ impl System {
                 subscriptions.and_then(|(_, at)| at),
             ),
             // Download clients and notification channels aren't stored
-            // yet; the update engine (B-update), companions and workers
-            // (v0.6) come later.
+            // yet; companions and workers come in v0.6.
             row(
                 ConnectionKind::Integrations,
                 "integrations",
@@ -162,7 +167,16 @@ impl System {
                 None,
                 None,
             ),
-            row(ConnectionKind::Updates, "updates", None, None, None),
+            {
+                let updates = self.updates.as_ref().map(|f| f());
+                row(
+                    ConnectionKind::Updates,
+                    "updates",
+                    updates.map(|(on, _)| on_off(on)),
+                    None,
+                    updates.and_then(|(_, at)| at).map(|t| t.max(0) as u64),
+                )
+            },
             row(ConnectionKind::Companions, "companions", None, None, None),
             row(ConnectionKind::Workers, "workers", None, None, None),
         ]
@@ -179,6 +193,7 @@ impl System {
         settings: &Arc<Registry>,
         control: Arc<Mutex<Store>>,
         events: &Arc<EventHub>,
+        updates: Option<UpdatesRow>,
     ) -> Arc<dyn SystemApi> {
         let restart = Restart::global().clone();
         let address = Arc::new(Address::new(
@@ -202,6 +217,7 @@ impl System {
             restart,
             sizes: Arc::new(info::Sizes::new(config.data_dir.clone())),
             dht: config.dht.enabled,
+            updates,
         })
     }
 }
