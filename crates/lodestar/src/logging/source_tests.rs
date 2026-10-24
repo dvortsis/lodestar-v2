@@ -175,19 +175,12 @@ fn the_setup_token_never_enters_the_ring_or_history() {
         event: &events::AUTH_SETUP_TOKEN::EVENT,
         fields: &fields,
     });
-    rt.record_untyped(&format::Untyped {
-        level: Level::Warn,
-        target: "lodestar::services".into(),
-        component: "system",
-        message: "first run: open x and enter setup token TOKEN-EFGH-5678 to create".into(),
-        fields: vec![],
-    });
     assert!(
-        console.text().contains("TOKEN-ABCD-1234"),
-        "the console has it"
+        console.text().contains("setup token TOKEN-ABCD-1234"),
+        "the console has it, right after the message"
     );
     assert!(
-        file_text(dir.path()).contains("TOKEN-EFGH-5678"),
+        file_text(dir.path()).contains("TOKEN-ABCD-1234"),
         "the file has it"
     );
     let dump = format!("{:?}", rt.ring().snapshot());
@@ -197,7 +190,16 @@ fn the_setup_token_never_enters_the_ring_or_history() {
     let text = serde_json::to_string(&page).unwrap();
     assert!(!text.contains("TOKEN-"), "{text}");
     assert!(text.contains("[redacted]"));
-    // Past the ring: from the file, still redacted.
+    // An older file's plain start-up line (before B-log1b typed it).
+    let file = dir.path().join("logs").join(file::CURRENT);
+    let old = r#"{"ts":"2026-10-01T00:00:00.000Z","level":"warn","component":"system","target":"lodestar::services","msg":"first run: open x and enter setup token TOKEN-EFGH-5678 to create","fields":{}}"#;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    std::io::Write::write_all(&mut f, format!("{old}\n").as_bytes()).unwrap();
+    drop(f);
+    // Past the ring: from the file, both redacted.
     let (rt2, _) = runtime(&section(dir.path(), |_| {}), Some(1), true);
     rt2.record_untyped(&format::Untyped {
         level: Level::Warn,
@@ -211,7 +213,7 @@ fn the_setup_token_never_enters_the_ring_or_history() {
         .unwrap();
     let text = serde_json::to_string(&page).unwrap();
     assert!(
-        !text.contains("TOKEN-") && text.contains("[redacted]"),
+        !text.contains("TOKEN-") && text.matches("[redacted]").count() >= 2,
         "{text}"
     );
 }

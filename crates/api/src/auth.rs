@@ -23,6 +23,7 @@
 mod guard;
 mod http;
 mod limit;
+pub mod log_events;
 pub mod proxy;
 
 pub use guard::{Access, feed_token, key_or_session};
@@ -165,10 +166,7 @@ impl Auth {
         // A hand-edited section that doesn't check out loads as off: the
         // safe side, and the server still starts.
         let proxy = Proxy::compile(file.proxy).unwrap_or_else(|e| {
-            tracing::warn!(
-                "auth.json: the trusted-proxy settings are invalid ({}); proxy auth is off",
-                e.field
-            );
+            lodestar_log::log_event!(log_events::AUTH_PROXY_SETTINGS_INVALID, field = e.field);
             Proxy::default()
         });
         Ok(Auth {
@@ -210,7 +208,7 @@ impl Auth {
         } else {
             // Someone locked out typed `false` or `0`: say why nothing
             // changed rather than leave them guessing.
-            tracing::warn!("{PROXY_AUTH_ENV} is set but not to `off`, so it changes nothing");
+            lodestar_log::log_event!(log_events::AUTH_PROXY_OVERRIDE_IGNORED);
         }
         off
     }
@@ -232,18 +230,20 @@ impl Auth {
     /// the previous value calls this directly.
     pub fn set_proxy(&self, config: ProxyConfig) -> Result<ProxyConfig, SetProxyError> {
         let proxy = Proxy::compile(config).map_err(SetProxyError::Invalid)?;
-        if proxy.config.enabled && proxy.has_wide_range() {
-            tracing::warn!(
-                "trusted-proxy auth trusts a range wider than /16 (IPv6 /48): every host in it can sign in"
-            );
-        }
+        let wide = proxy.config.enabled && proxy.has_wide_range();
         let mut state = self.state.write().expect("auth lock");
         let previous = std::mem::replace(&mut state.proxy, proxy);
         if let Err(e) = self.save(&state) {
             state.proxy = previous;
             return Err(SetProxyError::Storage(e));
         }
-        Ok(state.proxy.config.clone())
+        let saved = state.proxy.config.clone();
+        drop(state);
+        // Once it applies, and outside the lock.
+        if wide {
+            lodestar_log::log_event!(log_events::AUTH_PROXY_WIDE_RANGE);
+        }
+        Ok(saved)
     }
 
     /// Whether the trusted-proxy user header signs this request in (see
@@ -280,69 +280,85 @@ impl Auth {
 
     /// Claims the instance; returns a session cookie header value.
     pub fn setup(&self, ip: IpAddr, token: &str, password: &str) -> Result<String, AuthError> {
-        self.allow(ip)?;
-        let mut pending = self.setup_token.lock().expect("token lock");
-        let Some(expected) = pending.as_deref() else {
-            return Err(AuthError::SetupDone);
-        };
-        let normalized = token.trim().to_uppercase();
-        if !constant_time_eq(normalized.as_bytes(), expected.as_bytes()) {
-            return Err(AuthError::BadToken);
-        }
-        check_strength(password)?;
-        let encoded = hash_password(password);
-        let mut state = self.state.write().expect("auth lock");
-        state.key = random::<32>();
-        state.password = Some(encoded);
-        self.save(&state)?;
-        *pending = None;
-        Ok(self.cookie(&state.key))
+        let result = (|| -> Result<String, AuthError> {
+            self.allow(ip)?;
+            let mut pending = self.setup_token.lock().expect("token lock");
+            let Some(expected) = pending.as_deref() else {
+                return Err(AuthError::SetupDone);
+            };
+            let normalized = token.trim().to_uppercase();
+            if !constant_time_eq(normalized.as_bytes(), expected.as_bytes()) {
+                return Err(AuthError::BadToken);
+            }
+            check_strength(password)?;
+            let encoded = hash_password(password);
+            let mut state = self.state.write().expect("auth lock");
+            state.key = random::<32>();
+            state.password = Some(encoded);
+            self.save(&state)?;
+            *pending = None;
+            Ok(self.cookie(&state.key))
+        })();
+        log_events::checked(ip, log_events::Check::Setup, &result);
+        result
     }
 
     /// Checks the password; returns a session cookie header value.
     pub fn login(&self, ip: IpAddr, password: &str) -> Result<String, AuthError> {
-        self.allow(ip)?;
-        let state = self.state.read().expect("auth lock");
-        let Some(stored) = &state.password else {
-            return Err(AuthError::NotSetUp);
-        };
-        if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
-            return Err(AuthError::BadPassword);
-        }
-        Ok(self.cookie(&state.key))
+        let result = (|| -> Result<String, AuthError> {
+            self.allow(ip)?;
+            let state = self.state.read().expect("auth lock");
+            let Some(stored) = &state.password else {
+                return Err(AuthError::NotSetUp);
+            };
+            if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
+                return Err(AuthError::BadPassword);
+            }
+            Ok(self.cookie(&state.key))
+        })();
+        log_events::checked(ip, log_events::Check::SignIn, &result);
+        result
     }
 
     /// Checks the password again for one confirmed change (§20.11): asked
     /// every time, never remembered, rate-limited like a login. Routes
     /// call [`require_fresh_password`], which also answers a missing one.
     pub fn confirm(&self, ip: IpAddr, password: &str) -> Result<(), AuthError> {
-        self.allow(ip)?;
-        let state = self.state.read().expect("auth lock");
-        let Some(stored) = &state.password else {
-            return Err(AuthError::NotSetUp);
-        };
-        if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
-            return Err(AuthError::BadPassword);
-        }
-        Ok(())
+        let result = (|| -> Result<(), AuthError> {
+            self.allow(ip)?;
+            let state = self.state.read().expect("auth lock");
+            let Some(stored) = &state.password else {
+                return Err(AuthError::NotSetUp);
+            };
+            if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
+                return Err(AuthError::BadPassword);
+            }
+            Ok(())
+        })();
+        log_events::checked(ip, log_events::Check::Confirm, &result);
+        result
     }
 
     /// Sets a new password and ends every other session.
     pub fn change_password(&self, ip: IpAddr, old: &str, new: &str) -> Result<String, AuthError> {
-        self.allow(ip)?;
-        let mut state = self.state.write().expect("auth lock");
-        let ok = state
-            .password
-            .as_deref()
-            .is_some_and(|p| old.len() <= MAX_PASSWORD_BYTES && verify_password(p, old));
-        if !ok {
-            return Err(AuthError::BadPassword);
-        }
-        check_strength(new)?;
-        state.password = Some(hash_password(new));
-        state.key = random::<32>();
-        self.save(&state)?;
-        Ok(self.cookie(&state.key))
+        let result = (|| -> Result<String, AuthError> {
+            self.allow(ip)?;
+            let mut state = self.state.write().expect("auth lock");
+            let ok = state
+                .password
+                .as_deref()
+                .is_some_and(|p| old.len() <= MAX_PASSWORD_BYTES && verify_password(p, old));
+            if !ok {
+                return Err(AuthError::BadPassword);
+            }
+            check_strength(new)?;
+            state.password = Some(hash_password(new));
+            state.key = random::<32>();
+            self.save(&state)?;
+            Ok(self.cookie(&state.key))
+        })();
+        log_events::checked(ip, log_events::Check::PasswordChange, &result);
+        result
     }
 
     /// Ends every session but the caller's: rotates the session key and
@@ -754,6 +770,46 @@ mod tests {
         let auth = Auth::load(&path, false).unwrap();
         assert!(!auth.proxy().enabled, "refused on load: off");
         assert!(auth.login(IP, "correct horse battery").is_ok());
+    }
+
+    /// The proxy settings' warnings: a section that loads as off, an
+    /// override that isn't `off`, and a wide range once it's saved. Each
+    /// event fires only here, so its counter says it was logged.
+    #[test]
+    fn proxy_warnings_are_logged() {
+        use log_events::{
+            AUTH_PROXY_OVERRIDE_IGNORED, AUTH_PROXY_SETTINGS_INVALID, AUTH_PROXY_WIDE_RANGE,
+        };
+        let count = |e: &lodestar_log::Event| e.count();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let key = "ab".repeat(32);
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"password":null,"session_key":"{key}","proxy":{{"enabled":true,"trusted":["0.0.0.0/0"]}}}}"#
+            ),
+        )
+        .unwrap();
+        let before = count(&AUTH_PROXY_SETTINGS_INVALID::EVENT);
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(count(&AUTH_PROXY_SETTINGS_INVALID::EVENT) > before);
+
+        let before = count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT);
+        assert!(!auth.apply_proxy_override(Some("false")));
+        assert!(count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT) > before);
+        let before = count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT);
+        assert!(auth.apply_proxy_override(Some("OFF")));
+        assert_eq!(count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT), before);
+
+        let before = count(&AUTH_PROXY_WIDE_RANGE::EVENT);
+        auth.set_proxy(ProxyConfig {
+            enabled: true,
+            trusted: vec!["10.0.0.0/8".into()],
+            ..ProxyConfig::default()
+        })
+        .unwrap();
+        assert!(count(&AUTH_PROXY_WIDE_RANGE::EVENT) > before);
     }
 
     #[test]
