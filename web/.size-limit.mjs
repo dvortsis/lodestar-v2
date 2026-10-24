@@ -191,12 +191,26 @@ const facetsLazy = [
 		FACETS.flatMap((k) => ownChunk(k, facetsOnDemand, false, [...engagedSearch, ...resultsLazy]))
 	)
 ];
+// The results toolbar (S-search-3): loads with the results and shows once there is a query.
+// Save search's dialog (the alerts', with Bits UI's overlay code) loads on the first press.
+const TOOLBAR = [
+	'src/lib/features/search/toolbar/ResultsToolbar.svelte',
+	'src/lib/features/search/toolbar/toolbar.css'
+];
+const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/];
+const toolbarLazy = [
+	...new Set(
+		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))
+	)
+];
 
 // Never pass by measuring nothing: a renamed or moved file must fail here, not drop the entry.
 if (Object.keys(manifest).length && !resultsLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Search results (lazy): no chunk found for ResultsPanel.svelte in the manifest');
 if (Object.keys(manifest).length && !facetsLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Facet rail (lazy): no chunk found for the facet rail in the manifest');
+if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
+	throw new Error('Results toolbar (lazy): no chunk found for the toolbar in the manifest');
 
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
@@ -262,6 +276,7 @@ export default [
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
+	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '28.5 KB'),
 	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.4 KB'),
 	entry(

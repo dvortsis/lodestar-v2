@@ -50,5 +50,7 @@
 	"search_results_error_query": "Lodestar couldn't run this search. Change the query, then try again.",
 	"search_results_announce_one": "1 torrent",
 	"search_results_announce_other": "{count} torrents",
-	"search_results_announce_about": "About {count} torrents"
+	"search_results_announce_about": "About {count} torrents",
+	"search_results_load_more": "Load more torrents",
+	"search_results_end": "End of the results"
 }

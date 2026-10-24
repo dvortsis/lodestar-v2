@@ -1,6 +1,6 @@
 # features/search
 
-The search screen (architecture §10.4). The page shell is `routes/search/+page.svelte`. Decisions: `docs/decisions/2026-10-23-S-search-1.md` (the bar), `2026-10-23-S-search-1-part2.md` (the strip and the Syntax popover), `2026-10-24-S-search-2a.md` (the results list) and `2026-10-24-S-search-2b.md` (the facet rail).
+The search screen (architecture §10.4). The page shell is `routes/search/+page.svelte`. Decisions: `docs/decisions/2026-10-23-S-search-1.md` (the bar), `2026-10-23-S-search-1-part2.md` (the strip and the Syntax popover), `2026-10-24-S-search-2a.md` (the results list), `2026-10-24-S-search-2b.md` (the facet rail) and `2026-10-24-S-search-3.md` (the toolbar and paging).
 
 ## Who owns what
 
@@ -10,13 +10,15 @@ The search screen (architecture §10.4). The page shell is `routes/search/+page.
 | `messages/{en,zh}.json`             | all search | One catalogue for the search family; each slice appends keys under its own sub-prefix              |
 | `routes/search/+page.svelte`        | S-search-1 | The page shell; later slices get named mount lines in it                                           |
 | `results/` (list), `facets/` (rail) | S-search-2 | Mounted in `#results` and `#search-rail`; see `results/README.md` and `facets/README.md`           |
-| results toolbar                     | S-search-3 | Mounted at the top of `#results`                                                                   |
+| `toolbar/`                          | S-search-3 | The results toolbar, mounted at the top of `#results`; see `toolbar/README.md`                     |
 | listbox (autocomplete)              | S-search-4 | Attaches to the editor (see "The editor" below)                                                    |
 | `features/detail/DetailHost.svelte` | S-detail   | Rendered in `#search-drawer` from a lazy glob                                                      |
 
 **Message sub-prefixes:** `search_page_*`, `search_query_*` and `search_filters_*` belong to S-search-1. Later slices use their own (`search_results_*`, `search_facets_*`, `search_toolbar_*`, …). Glossary terms come from the shared keys (`m.hidden_by_filters()`), never copies.
 
 ## Page regions
+
+The first focusable item in the page content (after the shell's skip link and navigation) is **Skip to results** (S-search-3), visible on focus: it moves focus to the list's active row, or to `#results` while there is no list, past the bar and the facet rail.
 
 Under the heading, the `<search>` landmark holds the bar, its message line and the active-filter strip. Below it, a grid with three regions (§10.15 tracks: one column below `x-large`, rail + results at `x-large`, rail + results + drawer from `xx-large`):
 
