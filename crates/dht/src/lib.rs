@@ -8,6 +8,7 @@
 pub mod bep33;
 pub mod compact;
 pub mod krpc;
+pub mod log_events;
 pub mod node;
 pub mod routing;
 pub mod secure_id;

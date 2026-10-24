@@ -1576,6 +1576,7 @@ name = "lodestar-dht"
 version = "0.0.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-log",
  "lodestar-metainfo",
  "proptest",
  "rand 0.10.3",
@@ -1648,6 +1649,7 @@ name = "lodestar-peer-wire"
 version = "0.0.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-log",
  "lodestar-metainfo",
  "lodestar-peer-wire",
  "lodestar-utp",
