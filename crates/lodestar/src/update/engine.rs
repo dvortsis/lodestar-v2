@@ -39,7 +39,7 @@ use tokio::sync::watch;
 
 use super::check::{self, CheckError, Fetch};
 use super::layout::Bin;
-use super::log_events::{UPDATE_AVAILABLE, UPDATE_CHECK_FAILED};
+use super::log_events::{UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_OVERLAY_UNREADABLE};
 use super::policy::{self, Block, Reason};
 use super::window::{When, Window};
 use super::{history, pending, trust_file};
@@ -49,6 +49,9 @@ use crate::settings::updates::{Mode, Updates};
 const EVERY: Duration = Duration::from_secs(6 * 3600);
 /// Between manual checks.
 const MANUAL_EVERY: Duration = Duration::from_secs(60);
+/// The longest the schedule sleeps before it looks at the clock again,
+/// so a clock that's corrected while it sleeps is noticed.
+const MAX_SLEEP: Duration = Duration::from_secs(15 * 60);
 pub const UPDATER_FILE: &str = "updater.json";
 
 /// `updater.json`.
@@ -195,10 +198,15 @@ impl Engine {
                         if r.is_err() { return; }
                         continue;
                     }
-                    () = sleep(wait) => {}
+                    () = sleep(wait.map(|w| w.min(MAX_SLEEP))) => {}
                 }
-                if engine.scheduled_on() && engine.until_scheduled().is_some_and(|d| d.is_zero()) {
-                    let _ = engine.run_check().await;
+                if engine.due() {
+                    // Still due once the lock is ours: a manual check may
+                    // have run while this one waited for it.
+                    let one = engine.inner.checking.lock().await;
+                    if engine.due() {
+                        let _ = engine.run_check_holding(one).await;
+                    }
                 }
             }
         })
@@ -216,7 +224,18 @@ impl Engine {
         }
         let now = (self.inner.clock)();
         let next = self.updater().next_check_at.unwrap_or(now);
+        // Further away than one interval can be (a clock that ran ahead
+        // and was corrected, a board that booted at 1970): due now, or
+        // the schedule would sleep until then.
+        if next > now.saturating_add(EVERY.as_secs() as i64 + 3600) {
+            return Some(Duration::ZERO);
+        }
         Some(Duration::from_secs(next.saturating_sub(now).max(0) as u64))
+    }
+
+    /// A scheduled check is due now.
+    fn due(&self) -> bool {
+        self.until_scheduled().is_some_and(|d| d.is_zero())
     }
 
     fn updater(&self) -> Updater {
@@ -248,6 +267,7 @@ impl Engine {
     }
 
     /// One check: fetch, verify, advance `trust.json`, keep the result.
+    #[cfg(test)]
     async fn run_check(&self) -> Result<(), &'static str> {
         let one = self.inner.checking.lock().await;
         self.run_check_holding(one).await
@@ -279,9 +299,14 @@ impl Engine {
                     .releases
                     .first()
                     .map(|a| a.version.to_string());
-                if let Some(v) = newest {
-                    log_event!(UPDATE_AVAILABLE);
-                    self.publish(UpdatesState::Available, Some(v), None);
+                // Every check ends with an event, so the screen never stays
+                // on "checking".
+                match newest {
+                    Some(v) => {
+                        log_event!(UPDATE_AVAILABLE);
+                        self.publish(UpdatesState::Available, Some(v), None);
+                    }
+                    None => self.publish(UpdatesState::Checked, None, None),
                 }
             }
             Err(code) => {
@@ -312,6 +337,7 @@ impl Engine {
             let mut f = lock(&self.inner.found);
             f.checked = None;
             f.notices.clear();
+            f.trust_damaged = false;
             return Ok(());
         };
         let embedded = (self.inner.keys)().map_err(lodestar_update::Error::code)?;
@@ -322,11 +348,20 @@ impl Engine {
             // only from an overlay verified against the embedded keys
             // (signature, binary hash and size), so a planted directory
             // can't raise a mark and freeze updates.
+            // An overlay whose signer was revoked since, or whose manifest
+            // is dated more than a day ahead, gives no mark either.
+            let ahead = (now.max(0) as u64).saturating_add(lodestar_update::MAX_AHEAD);
             let marks: Vec<_> = bin
-                .overlays()
+                .overlays_skipping(|e| {
+                    log_event!(
+                        UPDATE_OVERLAY_UNREADABLE,
+                        error = lodestar_log::Error::io(e)
+                    );
+                })
                 .unwrap_or_default()
                 .iter()
                 .filter_map(|v| super::overlay::verify(&bin, v).ok())
+                .filter(|v| !v.overlay.revoked_later && v.overlay.mark.timestamp <= ahead)
                 .map(|v| v.overlay.mark)
                 .collect();
             let loaded = trust_file::load(bin.dir(), &embedded, &marks);
@@ -365,27 +400,31 @@ impl Engine {
         }
     }
 
-    fn skipped(&self) -> Vec<String> {
+    /// The skipped versions; `None` when `skipped` can't be read, which
+    /// blocks automatic installs rather than forgetting a skip.
+    fn skipped(&self) -> Option<Vec<String>> {
         #[derive(Deserialize)]
         struct Skip {
             version: String,
         }
-        self.inner
-            .bin
-            .as_ref()
-            .and_then(|b| b.read::<Vec<Skip>>("skipped").ok().flatten())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| s.version)
-            .collect()
+        let Some(bin) = &self.inner.bin else {
+            return Some(vec![]);
+        };
+        let list = bin.read::<Vec<Skip>>("skipped").ok()?.unwrap_or_default();
+        Some(list.into_iter().map(|s| s.version).collect())
     }
 
     /// Why this installation can't install itself (part 4 installs
     /// nothing, so `not_built_yet` when nothing else stops it).
-    fn incapable(&self, settings: &Updates, trust_damaged: bool) -> Reason {
+    fn incapable(&self, settings: &Updates, trust_damaged: bool, skipped_ok: bool) -> Reason {
         let ctx = &self.inner.ctx;
         if !ctx.supervised {
             return Reason::NotSupervised;
+        }
+        // Named before the rest: a broken file is a fault to fix, and it
+        // blocks automatic installs rather than forgetting a skip.
+        if !skipped_ok {
+            return Reason::SkippedUnreadable;
         }
         if crate::system::info::channel() == lodestar_api::system::Channel::Dev {
             return Reason::DevBuild;
@@ -399,8 +438,11 @@ impl Engine {
         let Some(bin) = &self.inner.bin else {
             return Reason::NotWritable;
         };
-        if noexec(bin.dir()) {
-            return Reason::Noexec;
+        match noexec(bin.dir()) {
+            Some(true) => return Reason::Noexec,
+            // Not known isn't "not noexec".
+            None => return Reason::NoexecUnknown,
+            Some(false) => {}
         }
         if rustix::fs::access(bin.dir(), rustix::fs::Access::WRITE_OK).is_err() {
             return Reason::NotWritable;
@@ -433,11 +475,12 @@ impl Engine {
             Some(When::Opens(at)) => at,
         };
         let skipped = self.skipped();
-        let incapable = Some(self.incapable(settings, found.trust_damaged));
+        let incapable = Some(self.incapable(settings, found.trust_damaged, skipped.is_some()));
+        let skipped = skipped.unwrap_or_default();
         policy::plan(&policy::Inputs {
             settings,
             releases: &c.manifest.releases,
-            current: c.current,
+            current: current(c, now),
             running: &self.inner.ctx.running,
             skipped: &skipped,
             paused_until: self.updater().paused_until,
@@ -455,7 +498,7 @@ impl Engine {
         let updater = self.updater();
         let plan = self.plan(&settings, now);
         let found = lock(&self.inner.found);
-        let reason = self.incapable(&settings, found.trust_damaged);
+        let reason = self.incapable(&settings, found.trust_damaged, self.skipped().is_some());
         let running_release = found.checked.as_ref().and_then(|c| {
             c.manifest
                 .releases
@@ -467,7 +510,7 @@ impl Engine {
         if found.trust_damaged {
             notices.push(Notice::TrustDamaged.code().to_string());
         }
-        if found.checked.as_ref().is_some_and(|c| !c.current) {
+        if found.checked.as_ref().is_some_and(|c| !current(c, now)) {
             notices.push("manifest_lapsed".into());
         }
         let history = self.history();
@@ -596,7 +639,8 @@ impl Engine {
             one
         };
         let _ = self.run_check_holding(one).await;
-        Ok(self.status())
+        let e = self.clone();
+        Ok(blocking(move || e.status()).await)
     }
 
     pub fn skip(&self, version: &str) -> Result<UpdatesStatus, UpdatesError> {
@@ -613,7 +657,7 @@ impl Engine {
             .inner
             .bin
             .as_ref()
-            .ok_or_else(|| UpdatesError::Internal("no bin".into()))?;
+            .ok_or(UpdatesError::BinUnavailable)?;
         pending::skip(bin, version, "user").map_err(|e| UpdatesError::Internal(e.to_string()))?;
         Ok(self.status())
     }
@@ -724,17 +768,34 @@ fn outcome_name(o: history::Outcome) -> &'static str {
     }
 }
 
-/// Whether `dir` is on a `noexec` mount. rustix has `ST_NOEXEC` only on
-/// Linux, the one shipped Unix target; elsewhere (macOS, a developer's
-/// machine) it isn't checked.
+/// Whether a check's result still counts now: current when it was
+/// checked, and its manifest (or freshness) not expired since. A kept
+/// result lapses on its own while later checks fail.
+fn current(c: &Checked, now: i64) -> bool {
+    c.current && (now.max(0) as u64) < c.expires
+}
+
+/// Runs `f` on the blocking pool (file I/O under `<data>/bin`).
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
+/// Whether `dir` is on a `noexec` mount; `None` when `statvfs` fails.
+/// rustix has `ST_NOEXEC` only on Linux, the one shipped Unix target;
+/// elsewhere (macOS, a developer's machine) it isn't checked.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn noexec(dir: &std::path::Path) -> bool {
-    rustix::fs::statvfs(dir).is_ok_and(|s| s.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC))
+fn noexec(dir: &std::path::Path) -> Option<bool> {
+    rustix::fs::statvfs(dir)
+        .ok()
+        .map(|s| s.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn noexec(_dir: &std::path::Path) -> bool {
-    false
+fn noexec(_dir: &std::path::Path) -> Option<bool> {
+    Some(false)
 }
 
 /// A random minute within the hour after the 6 hours.
@@ -760,8 +821,11 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl UpdatesApi for Engine {
+    // Each reads files under `<data>/bin` (and `statvfs`): off the
+    // async workers.
     fn status(&self) -> BoxFuture<'_, UpdatesStatus> {
-        Box::pin(async move { Engine::status(self) })
+        let e = self.clone();
+        Box::pin(blocking(move || e.status()))
     }
 
     fn check(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
@@ -769,15 +833,18 @@ impl UpdatesApi for Engine {
     }
 
     fn skip(&self, version: String) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
-        Box::pin(async move { Engine::skip(self, &version) })
+        let e = self.clone();
+        Box::pin(blocking(move || e.skip(&version)))
     }
 
     fn pause(&self, days: u32) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
-        Box::pin(async move { Ok(Engine::pause(self, days)) })
+        let e = self.clone();
+        Box::pin(async move { Ok(blocking(move || e.pause(days)).await) })
     }
 
     fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
-        Box::pin(async move { Engine::clear_history(self) })
+        let e = self.clone();
+        Box::pin(blocking(move || e.clear_history()))
     }
 }
 
@@ -799,6 +866,8 @@ mod tests {
         trust: Arc<TestTrust>,
         settings: watch::Sender<Updates>,
         events: Arc<Mutex<Vec<UpdatesEvent>>>,
+        /// The engine's clock (Unix seconds); starts at [`NOW`].
+        clock: Arc<std::sync::atomic::AtomicI64>,
         engine: Engine,
     }
 
@@ -819,6 +888,8 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
         let keys = trust.clone();
+        let clock = Arc::new(std::sync::atomic::AtomicI64::new(NOW));
+        let time = clock.clone();
         let engine = Engine::with(
             Context {
                 data_dir: data.unwrap_or_else(|| dir.path().to_path_buf()),
@@ -832,7 +903,7 @@ mod tests {
             Arc::new(move |e| lock(&sink).push(e)),
             fake.clone(),
             (jiff::tz::TimeZone::UTC, "UTC".into()),
-            Box::new(|| NOW),
+            Box::new(move || time.load(std::sync::atomic::Ordering::Relaxed)),
             Box::new(move || Ok(keys.embedded(vec![]))),
         );
         Env {
@@ -841,6 +912,7 @@ mod tests {
             trust,
             settings,
             events,
+            clock,
             engine,
         }
     }
@@ -852,6 +924,10 @@ mod tests {
             let body = bytes(&manifest(Channel::Stable, ts as u64, version, b"binary"));
             let signed = key.unwrap_or(&self.trust.release).signed(&body);
             self.fake.serve(STABLE, 200, None, &envelope(&signed, None));
+        }
+
+        fn set_clock(&self, t: i64) {
+            self.clock.store(t, std::sync::atomic::Ordering::Relaxed);
         }
 
         fn trust_mark(&self) -> Option<u64> {
@@ -1049,6 +1125,94 @@ mod tests {
         assert_eq!(s.status.error.as_deref(), Some("bin_unavailable"));
     }
 
+    /// A good check's result lapses at its manifest's expiry even while
+    /// every later check fails: `manifest_lapsed`, and nothing is current.
+    #[tokio::test]
+    async fn a_kept_result_lapses_at_its_expiry() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let s = e.engine.status();
+        assert!(
+            !s.notices.iter().any(|n| n == "manifest_lapsed"),
+            "{:?}",
+            s.notices
+        );
+        assert!(
+            !s.releases[0]
+                .blocked_by
+                .iter()
+                .any(|b| b.code == "not_current"),
+            "{:?}",
+            s.releases[0].blocked_by
+        );
+        // The refetches fail from here on; the manifest expires 7 days in.
+        e.fake.serve(STABLE, 500, None, b"");
+        e.set_clock(NOW + 8 * 86_400);
+        assert!(e.engine.run_check().await.is_err());
+        let s = e.engine.status();
+        assert_eq!(s.status.state, CheckState::Failed);
+        assert!(
+            s.notices.iter().any(|n| n == "manifest_lapsed"),
+            "{:?}",
+            s.notices
+        );
+        assert!(
+            s.releases[0]
+                .blocked_by
+                .iter()
+                .any(|b| b.code == "not_current"),
+            "{:?}",
+            s.releases[0].blocked_by
+        );
+    }
+
+    /// The clock jumps both ways: a next check left far ahead by a clock
+    /// that ran fast (or an engine that started at 1970) is due now, and
+    /// one left behind by a clock that jumped forward is due too.
+    #[tokio::test]
+    async fn the_schedule_survives_the_clock_jumping() {
+        let e = env(Mode::Notify);
+        // A clock 334 days fast schedules the next check then.
+        e.set_clock(NOW + 334 * 86_400);
+        e.engine.run_check().await.unwrap();
+        e.set_clock(NOW);
+        assert_eq!(
+            e.engine.until_scheduled(),
+            Some(Duration::ZERO),
+            "corrected: due now"
+        );
+        e.engine.run_check().await.unwrap();
+        let wait = e.engine.until_scheduled().unwrap();
+        assert!(
+            wait >= EVERY && wait <= EVERY + Duration::from_secs(3600),
+            "{wait:?}"
+        );
+        // A board that booted at 1970 sees a 2026 schedule as far ahead.
+        e.set_clock(0);
+        assert_eq!(e.engine.until_scheduled(), Some(Duration::ZERO));
+        // Forward past the next check: due.
+        e.set_clock(NOW + 30 * 86_400);
+        assert_eq!(e.engine.until_scheduled(), Some(Duration::ZERO));
+    }
+
+    /// An unreadable `skipped` blocks automatic installs instead of
+    /// forgetting a skip.
+    #[tokio::test]
+    async fn an_unreadable_skip_list_blocks_installs() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        assert_ne!(
+            e.engine.status().capability.reason.as_deref(),
+            Some("skipped_unreadable")
+        );
+        std::fs::write(e.dir.path().join("bin").join("skipped"), b"not json").unwrap();
+        let s = e.engine.status();
+        assert_eq!(s.capability.reason.as_deref(), Some("skipped_unreadable"));
+        assert!(!s.releases[0].eligible);
+    }
+
     #[tokio::test]
     async fn a_damaged_trust_file_blocks_installs_and_is_never_overwritten() {
         let e = env(Mode::Auto);
@@ -1073,7 +1237,11 @@ mod tests {
         assert_eq!(e.engine.run_check().await, Ok(()));
         let s = e.engine.status();
         assert_eq!((s.status.state, s.releases.len()), (CheckState::Ok, 0));
-        assert_eq!(e.states(), [UpdatesState::Checking]);
+        assert_eq!(
+            e.states(),
+            [UpdatesState::Checking, UpdatesState::Checked],
+            "every check ends with an event"
+        );
     }
 
     #[tokio::test]

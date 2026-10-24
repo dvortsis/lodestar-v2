@@ -250,9 +250,26 @@ pub fn skip(bin: &Bin, version: &str, reason: &str) -> io::Result<()> {
         version: version.to_string(),
         reason: reason.to_string(),
     });
+    trim(&mut skipped);
+    bin.write("skipped", &skipped)
+}
+
+/// Keeps at most [`MAX_SKIPPED`]: the oldest `user` skips go first, so a
+/// version the supervisor refused (it failed, or needs manual steps)
+/// stays refused.
+fn trim(skipped: &mut Vec<Skip>) {
+    let mut over = skipped.len().saturating_sub(MAX_SKIPPED);
+    // Never the entry just added (the last).
+    let newest = skipped.len().saturating_sub(1);
+    let mut i = 0;
+    skipped.retain(|s| {
+        let drop = over > 0 && i < newest && s.reason == "user";
+        over -= usize::from(drop);
+        i += 1;
+        !drop
+    });
     let over = skipped.len().saturating_sub(MAX_SKIPPED);
     skipped.drain(..over);
-    bin.write("skipped", &skipped)
 }
 
 /// A newer image makes the entries at or below its version moot: they
@@ -363,6 +380,27 @@ mod tests {
             judge(false, None, "r", &at(0, 900_000), &L),
             Verdict::Passed
         );
+    }
+
+    /// At the cap, the oldest `user` skip goes before any version the
+    /// supervisor refused.
+    #[test]
+    fn the_cap_evicts_user_skips_first() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        skip(&bin, "0.1.0", "failed").unwrap();
+        skip(&bin, "0.2.0", "user").unwrap();
+        for i in 3..=MAX_SKIPPED {
+            skip(&bin, &format!("0.{i}.0"), "failed").unwrap();
+        }
+        skip(&bin, "0.99.0", "failed").unwrap();
+        let all: Vec<Skip> = bin.read("skipped").unwrap().unwrap();
+        assert_eq!(all.len(), MAX_SKIPPED);
+        assert!(
+            all.iter().all(|s| s.reason == "failed"),
+            "the user skip went"
+        );
+        assert_eq!(all[0].version, "0.1.0", "the oldest refusal stays");
     }
 
     #[test]

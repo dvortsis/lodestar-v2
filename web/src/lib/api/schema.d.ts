@@ -7319,7 +7319,7 @@ export interface components {
          * @description Where the update engine is (§12.2).
          * @enum {string}
          */
-        UpdatesState: "checking" | "available" | "downloading" | "verifying" | "waiting_window" | "installing" | "restarting" | "checking_health" | "done" | "rolled_back" | "failed";
+        UpdatesState: "checking" | "checked" | "available" | "downloading" | "verifying" | "waiting_window" | "installing" | "restarting" | "checking_health" | "done" | "rolled_back" | "failed";
         /** @description `GET /updates`. */
         UpdatesStatus: {
             capability: components["schemas"]["Capability"];
@@ -11235,7 +11235,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            /** @description `updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -60,6 +60,8 @@ pub enum UpdatesError {
     UnknownVersion,
     /// Updates aren't available in this process.
     Unavailable(UpdatesUnavailable),
+    /// `<data>/bin` can't be opened, so nothing can be written there.
+    BinUnavailable,
     /// A value the route doesn't take; the message says which.
     Invalid {
         field: &'static str,
@@ -86,6 +88,11 @@ impl From<UpdatesError> for ApiError {
                 StatusCode::CONFLICT,
                 "updates_unavailable",
                 format!("Updates aren't available here ({}).", why.code()),
+            ),
+            UpdatesError::BinUnavailable => ApiError::new(
+                StatusCode::CONFLICT,
+                "bin_unavailable",
+                "Lodestar can't write its update files (the bin folder in its data folder).",
             ),
             UpdatesError::Invalid { field, message } => {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_value", message)
@@ -190,7 +197,7 @@ pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Respo
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
-        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]

@@ -6082,7 +6082,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "description": "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
             "content": {
               "application/json": {
                 "schema": {
@@ -18285,6 +18285,7 @@
         "description": "Where the update engine is (§12.2).",
         "enum": [
           "checking",
+          "checked",
           "available",
           "downloading",
           "verifying",
@@ -18365,7 +18366,7 @@
               },
               {
                 "$ref": "#/components/schemas/UpdatesUnavailable",
-                "description": "Why updates aren't available at all; null otherwise."
+                "description": "Why updates aren't available at all; null otherwise. When it's\nset, only `running.version` and this field mean anything: the\npolicy shows the defaults, and there are no releases, history or\nrollback."
               }
             ]
           }
