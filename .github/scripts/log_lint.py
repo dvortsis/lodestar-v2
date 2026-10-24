@@ -45,16 +45,6 @@ from pathlib import Path
 # Files whose plain `tracing` lines B-log1b converts (open PRs touched them
 # when B-log1 ran). Remove a file when it's converted; never add one.
 NOT_YET_SWEPT = [
-    "crates/filter/src/lists.rs",
-    "crates/lodestar/src/fixture.rs",
-    "crates/lodestar/src/insights.rs",
-    "crates/lodestar/src/main.rs",
-    "crates/lodestar/src/services.rs",
-    "crates/lodestar/src/system/address.rs",
-    "crates/lodestar/src/system/restart.rs",
-    "crates/lodestar/src/windows/ports.rs",
-    "crates/lodestar/src/windows/priority.rs",
-    "crates/lodestar/src/windows/service.rs",
     "crates/pipeline/src/control.rs",
     "crates/pipeline/src/dht.rs",
     "crates/pipeline/src/lib.rs",

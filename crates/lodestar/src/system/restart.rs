@@ -157,7 +157,8 @@ impl Restart {
     /// asking once.
     pub fn request(&self) {
         if !self.requested.swap(true, Ordering::SeqCst) {
-            tracing::info!("restart requested: shutting down, then starting again");
+            // Required: a log must say why the process went away.
+            lodestar_log::log_event!(crate::logging::events::APP_RESTART);
         }
         self.notify.notify_waiters();
     }
@@ -201,7 +202,10 @@ pub fn reexec() -> std::io::Error {
         Ok(exe) => program(exe, |p| p.is_file()),
         Err(e) => return e,
     };
-    tracing::info!("restarting: {}", exe.display());
+    lodestar_log::log_event!(
+        crate::logging::events::APP_REEXEC,
+        path = lodestar_log::Path::new(&exe)
+    );
     std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .exec()
