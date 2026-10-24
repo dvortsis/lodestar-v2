@@ -148,14 +148,27 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
+        Server::start_with(None)
+    }
+
+    /// With `dht`, the DHT runs on that loopback UDP port, bootstrapping
+    /// from nowhere: it only hears what a test sends it.
+    fn start_with(dht: Option<u16>) -> Server {
         let dir = tempfile::tempdir().unwrap();
         let hash = seed(dir.path());
+        if let Some(p) = dht {
+            std::fs::write(
+                dir.path().join("config.toml"),
+                format!("[dht]\nbind = [\"127.0.0.1:{p}\"]\nbootstrap = []\n"),
+            )
+            .unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .env_remove("LODESTAR_LOG")
             .env("LODESTAR_DATA_DIR", dir.path())
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-            .env("LODESTAR_DHT_PORT", "0")
-            .env("LODESTAR_DHT_ENABLED", "false")
+            .env("LODESTAR_DHT_PORT", dht.unwrap_or(0).to_string())
+            .env("LODESTAR_DHT_ENABLED", dht.is_some().to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -795,6 +808,75 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         absent(&after_off, &mine, &format!("{kind} after it's off"));
     }
     s.stop();
+}
+
+/// A KRPC `get_peers` for `hash`, from a node id of its own.
+fn get_peers(hash: &[u8; 20]) -> Vec<u8> {
+    let mut m = b"d1:ad2:id20:".to_vec();
+    m.extend_from_slice(&[0x42; 20]);
+    m.extend_from_slice(b"9:info_hash20:");
+    m.extend_from_slice(hash);
+    m.extend_from_slice(b"e1:q9:get_peers1:t2:aa1:y1:qe");
+    m
+}
+
+/// Run 2's positive control for hashes: a `get_peers` sent to the DHT is
+/// harvested (`dht.key_harvested`, Trace, on with every event), and the
+/// key's hex is in the file only while the hash kind is on, never on the
+/// console.
+#[test]
+fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
+    let dht = {
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let s = Server::start_with(Some(dht));
+    s.every_event_on();
+    let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    // Sends the query until a new harvest line is in the file.
+    let harvest = |hash: [u8; 20]| {
+        let before = lines_of(&s.file(), "dht.key_harvested").len();
+        let start = Instant::now();
+        loop {
+            client
+                .send_to(&get_peers(&hash), ("127.0.0.1", dht))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            if lines_of(&s.file(), "dht.key_harvested").len() > before {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "no harvest line: {}",
+                s.console()
+            );
+        }
+    };
+    // Each phase is judged by its own lines: the pipeline's later lookup
+    // for a key logs it again (source `lookup`) under whatever the kind is
+    // by then.
+    let keys = [[0xa1; 20], [0xb2; 20], [0xc3; 20]];
+    let hexes: Vec<String> = keys.iter().map(|k| hex(k)).collect();
+    let mark = s.mark();
+    harvest(keys[0]);
+    let (_, private) = s.since(mark);
+    s.logging(&format!(r#"{{"kinds":{{"hash":{}}}}}"#, now() + 600));
+    let mark = s.mark();
+    harvest(keys[1]);
+    let (_, on) = s.since(mark);
+    s.logging(r#"{"kinds":{}}"#);
+    let mark = s.mark();
+    harvest(keys[2]);
+    let (_, off_again) = s.since(mark);
+    let (console, _) = s.stop();
+    absent(&[("file", &private)], &hexes, "Private");
+    assert!(on.contains(&hexes[1]), "the hash kind on: {on}");
+    absent(&[("file", &off_again)], &hexes, "the hash kind off again");
+    absent(
+        &[("console", &console)],
+        &hexes,
+        "the console stays Private",
+    );
 }
 
 #[test]

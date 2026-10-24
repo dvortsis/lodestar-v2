@@ -1685,7 +1685,6 @@ dependencies = [
  "proptest",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1712,7 +1711,6 @@ dependencies = [
  "tantivy",
  "tantivy-fst",
  "tempfile",
- "tracing",
  "unicode-normalization",
 ]
 

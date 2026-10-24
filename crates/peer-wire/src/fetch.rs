@@ -147,13 +147,21 @@ pub async fn fetch(
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
     let r = fetch_any(addr, info_hash, opts).await;
-    // A blocklisted address is never contacted: not a failed fetch.
-    if let Err(e) = &r
-        && !matches!(e, Error::Denied)
-    {
-        crate::log_events::count(e.kind());
+    // Counted here only, once per fetch, whichever transports it tried.
+    if let Some(kind) = counted(&r) {
+        crate::log_events::count(kind);
     }
     r
+}
+
+/// What a fetch's result counts as in `fetch.failed_summary`: a failure's
+/// kind, or nothing for a success or a blocklisted address (never
+/// contacted).
+fn counted(r: &Result<Fetched, Error>) -> Option<crate::FailureKind> {
+    match r {
+        Err(Error::Denied) | Ok(_) => None,
+        Err(e) => Some(e.kind()),
+    }
 }
 
 /// [`fetch`], over uTP first and TCP as the fallback when allowed.
@@ -514,6 +522,23 @@ impl Assembly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fetch counts once, by its final result: a success or a
+    /// blocklisted address doesn't count, any other failure does by its
+    /// kind. Only `fetch` counts (not each transport's try), so a uTP
+    /// failure before a TCP success counts nothing.
+    #[test]
+    fn a_fetch_counts_by_its_final_result() {
+        assert_eq!(counted(&Err(Error::Denied)), None);
+        assert_eq!(
+            counted(&Err(Error::Timeout)),
+            Some(crate::FailureKind::TimedOut)
+        );
+        assert_eq!(
+            counted(&Err(Error::Rejected)),
+            Some(crate::FailureKind::Refused)
+        );
+    }
 
     #[tokio::test]
     async fn outbound_sockets_abort_on_windows_only() {

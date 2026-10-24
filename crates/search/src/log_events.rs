@@ -155,11 +155,13 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
     /// A torrent's stored enrichment can't be decoded; it's indexed
-    /// without it.
+    /// without it. A line per document: a rebuild over a store of bad
+    /// records would write one each, so it's `Trace`.
     ENRICHMENT_UNREADABLE {
         id: "search.enrichment_unreadable",
         component: Search,
-        level: Debug,
+        level: Trace,
+        default_on: false,
         message: "A torrent's enrichment is unreadable; indexed without it",
         fields: { torrent_id: Size },
     }
