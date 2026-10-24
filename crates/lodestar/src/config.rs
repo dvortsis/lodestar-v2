@@ -10,8 +10,11 @@ use std::time::Duration;
 use lodestar_dht::node::{self as dht, HarvestConfig, Intensity};
 use lodestar_peer_wire::{Encryption, FetchOptions};
 use lodestar_pipeline::PipelineConfig;
+use lodestar_pipeline::health::HealthConfig;
+use lodestar_search::RankWeights;
 use lodestar_sources::PoolConfig;
 use lodestar_store::StoreConfig;
+use lodestar_tracker_scrape::TrackerUrl;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,9 +33,12 @@ pub struct Config {
     pub fetch: Fetch,
     pub store: Store,
     pub search: Search,
+    pub scrape: Scrape,
+    pub ranking: Ranking,
     pub content: Content,
     pub blocklist: Blocklist,
     pub subscriptions: Subscriptions,
+    pub updates: Updates,
 }
 
 impl Default for Config {
@@ -46,9 +52,12 @@ impl Default for Config {
             fetch: Fetch::default(),
             store: Store::default(),
             search: Search::default(),
+            scrape: Scrape::default(),
+            ranking: Ranking::default(),
             content: Content::default(),
             blocklist: Blocklist::default(),
             subscriptions: Subscriptions::default(),
+            updates: Updates::default(),
         }
     }
 }
@@ -93,6 +102,16 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_DHT_ENABLED",
     "LODESTAR_SECURE_COOKIES",
     "LODESTAR_SHOW_ADULT",
+    "LODESTAR_UPDATES",
+    "LODESTAR_UPDATES_LEVEL",
+    "LODESTAR_UPDATES_SECURITY_FIXES",
+    "LODESTAR_UPDATES_CHANNEL",
+    "LODESTAR_UPDATES_WAIT_DAYS",
+    "LODESTAR_UPDATES_WINDOW",
+    "LODESTAR_UPDATES_ALLOW_REINDEX",
+    "LODESTAR_UPDATES_NOTIFY_BEFORE",
+    "LODESTAR_UPDATES_NOTIFY_AFTER",
+    "LODESTAR_UPDATES_NOTIFY_FAILURE",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -228,6 +247,124 @@ impl Default for Search {
     }
 }
 
+/// Public UDP trackers that answer scrapes and have stayed up for years.
+/// Scraping announces nothing, so our address never enters a swarm (§6).
+pub const DEFAULT_TRACKERS: &[&str] = &[
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://explodie.org:6969/announce",
+    "udp://tracker.theoks.net:6969/announce",
+    "udp://opentracker.io:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://tracker.tiny-vps.com:6969/announce",
+];
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Scrape {
+    /// Keep seeders and trackers-reporting fresh (§15).
+    pub enabled: bool,
+    /// Announce URLs (udp, http or https) to scrape.
+    pub trackers: Vec<String>,
+    /// BEP 33 DHT scrapes for new, viewed and rediscovered torrents.
+    pub dht: bool,
+    /// Seconds between requests to one UDP tracker; unset follows the
+    /// DHT intensity (Low 5, Balanced 2, Aggressive 1).
+    pub interval_secs: Option<u64>,
+    /// Seconds between requests to one HTTP tracker; unset is three
+    /// times the UDP interval.
+    pub http_interval_secs: Option<u64>,
+}
+
+impl Default for Scrape {
+    fn default() -> Self {
+        Scrape {
+            enabled: true,
+            trackers: DEFAULT_TRACKERS.iter().map(|s| s.to_string()).collect(),
+            dht: true,
+            interval_secs: None,
+            http_interval_secs: None,
+        }
+    }
+}
+
+/// Relevance priors (§8): each multiplies the text score, so text stays
+/// first and these order near-ties. `?explain=1` shows their effect.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ranking {
+    /// `1 + seeders · ln(1 + s)`.
+    pub seeders: f32,
+    /// Seeders assumed before a torrent's first scrape.
+    pub unscraped_seeders: u32,
+    /// Freshness never drops a score below this share.
+    pub freshness_floor: f32,
+    pub freshness_half_life_days: f32,
+    /// `1 + trackers · min(t, cap) / cap`.
+    pub trackers: f32,
+    pub trackers_cap: u32,
+    pub unscraped_trackers: u32,
+    /// `1 − junk · score / 100`.
+    pub junk: f32,
+    /// The multiplier for a swarm flagged as fake seeding.
+    pub suspect: f32,
+}
+
+impl Default for Ranking {
+    fn default() -> Self {
+        let w = RankWeights::default();
+        Ranking {
+            seeders: w.seeders,
+            unscraped_seeders: w.unscraped_seeders,
+            freshness_floor: w.freshness_floor,
+            freshness_half_life_days: w.freshness_half_life_days,
+            trackers: w.trackers,
+            trackers_cap: w.trackers_cap,
+            unscraped_trackers: w.unscraped_trackers,
+            junk: w.junk,
+            suspect: 0.2,
+        }
+    }
+}
+
+impl Ranking {
+    /// Refuses a weight that isn't a finite number: TOML takes `nan` and
+    /// `inf`, and clamping passes NaN through, which would make every
+    /// relevance score NaN.
+    fn check(&self) -> Result<(), ConfigError> {
+        let fields = [
+            ("seeders", self.seeders),
+            ("freshness_floor", self.freshness_floor),
+            ("freshness_half_life_days", self.freshness_half_life_days),
+            ("trackers", self.trackers),
+            ("junk", self.junk),
+            ("suspect", self.suspect),
+        ];
+        match fields.iter().find(|(_, v)| !v.is_finite()) {
+            Some((name, _)) => Err(ConfigError(format!(
+                "ranking.{name} must be a finite number"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    pub fn weights(&self) -> RankWeights {
+        RankWeights {
+            seeders: self.seeders.max(0.0),
+            unscraped_seeders: self.unscraped_seeders,
+            freshness_floor: self.freshness_floor.clamp(0.0, 1.0),
+            freshness_half_life_days: self.freshness_half_life_days.max(0.1),
+            trackers: self.trackers.max(0.0),
+            trackers_cap: self.trackers_cap.max(1),
+            unscraped_trackers: self.unscraped_trackers,
+            junk: self.junk.clamp(0.0, 1.0),
+        }
+    }
+}
+
 /// What's shown (§20.9). Set here or in `LODESTAR_SHOW_ADULT`, Adult is
 /// shown without the app's 18+ confirmation: whoever edits the server's
 /// configuration has decided.
@@ -236,6 +373,105 @@ impl Default for Search {
 pub struct Content {
     /// Show adult content in search (off by default).
     pub show_adult: bool,
+}
+
+/// Self-updates (§12.2, owner §2.13): off until chosen. The settings
+/// section `updates` shows and saves the same keys.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    pub mode: UpdateMode,
+    pub level: UpdateLevel,
+    pub security_fixes: SecurityFixes,
+    pub channel: UpdateChannel,
+    /// Days a release waits after its date before it installs (0–14).
+    pub wait_days: u32,
+    /// The install window, local time, `HH:MM-HH:MM` (may wrap midnight).
+    pub window: String,
+    /// Install releases that rebuild the search index.
+    pub allow_reindex: bool,
+    pub notify_before: bool,
+    pub notify_after: bool,
+    pub notify_failure: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Updates {
+            mode: UpdateMode::Off,
+            level: UpdateLevel::Fixes,
+            security_fixes: SecurityFixes::Auto,
+            channel: UpdateChannel::Stable,
+            wait_days: 3,
+            window: "03:00-05:00".into(),
+            allow_reindex: true,
+            notify_before: false,
+            notify_after: true,
+            notify_failure: true,
+        }
+    }
+}
+
+impl Updates {
+    /// The checks a value from the file or the environment must pass
+    /// (the settings section repeats them for the app's own).
+    pub fn check(&self) -> Result<(), ConfigError> {
+        if self.wait_days > 14 {
+            return Err(ConfigError(format!(
+                "updates.wait_days: {} is more than 14",
+                self.wait_days
+            )));
+        }
+        crate::update::window::Window::parse(&self.window)
+            .map_err(|e| ConfigError(format!("updates.window: {e}")))?;
+        if self.mode == UpdateMode::Image {
+            crate::settings::updates::image_ok(crate::system::info::deployment_here().kind)
+                .map_err(|e| ConfigError(format!("updates.mode: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+/// `off` (the default), `notify` (check and notify), `auto` (install
+/// automatically) or `image` (the container image updates it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateMode {
+    #[default]
+    Off,
+    Notify,
+    Auto,
+    Image,
+}
+
+/// Which releases install automatically: fixes ≤ features ≤ all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateLevel {
+    #[default]
+    Fixes,
+    Features,
+    All,
+}
+
+/// "Always install security fixes": `auto` is on under `auto`, off
+/// under `notify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecurityFixes {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+    Nightly,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -382,6 +618,11 @@ impl Config {
         if let Some(v) = env("LODESTAR_DHT_ENABLED") {
             config.dht.enabled = v.parse().map_err(|_| parse("LODESTAR_DHT_ENABLED", &v))?;
         }
+        if let Some(v) = env("LODESTAR_SCRAPE_ENABLED") {
+            config.scrape.enabled = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_SCRAPE_ENABLED", &v))?;
+        }
         if let Some(v) = env("LODESTAR_SECURE_COOKIES") {
             config.http.secure_cookies = v
                 .parse()
@@ -390,6 +631,9 @@ impl Config {
         if let Some(v) = env("LODESTAR_SHOW_ADULT") {
             config.content.show_adult = v.parse().map_err(|_| parse("LODESTAR_SHOW_ADULT", &v))?;
         }
+        config.updates_from_env(&env)?;
+        config.ranking.check()?;
+        config.updates.check()?;
         Ok(config)
     }
 
@@ -462,6 +706,58 @@ impl Config {
     }
 }
 
+impl Config {
+    /// The `LODESTAR_UPDATES*` variables.
+    fn updates_from_env(
+        &mut self,
+        env: &impl Fn(&str) -> Option<String>,
+    ) -> Result<(), ConfigError> {
+        fn word<T: serde::de::DeserializeOwned>(name: &str, v: &str) -> Result<T, ConfigError> {
+            toml::Value::String(v.to_string())
+                .try_into()
+                .map_err(|_| ConfigError(format!("{name}: can't parse {v:?}")))
+        }
+        fn flag(name: &str, v: &str) -> Result<bool, ConfigError> {
+            v.parse()
+                .map_err(|_| ConfigError(format!("{name}: can't parse {v:?}")))
+        }
+        let u = &mut self.updates;
+        if let Some(v) = env("LODESTAR_UPDATES") {
+            u.mode = word("LODESTAR_UPDATES", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_LEVEL") {
+            u.level = word("LODESTAR_UPDATES_LEVEL", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_SECURITY_FIXES") {
+            u.security_fixes = word("LODESTAR_UPDATES_SECURITY_FIXES", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_CHANNEL") {
+            u.channel = word("LODESTAR_UPDATES_CHANNEL", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_WAIT_DAYS") {
+            u.wait_days = v.parse().map_err(|_| {
+                ConfigError(format!("LODESTAR_UPDATES_WAIT_DAYS: can't parse {v:?}"))
+            })?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_WINDOW") {
+            u.window = v;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_ALLOW_REINDEX") {
+            u.allow_reindex = flag("LODESTAR_UPDATES_ALLOW_REINDEX", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_BEFORE") {
+            u.notify_before = flag("LODESTAR_UPDATES_NOTIFY_BEFORE", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_AFTER") {
+            u.notify_after = flag("LODESTAR_UPDATES_NOTIFY_AFTER", &v)?;
+        }
+        if let Some(v) = env("LODESTAR_UPDATES_NOTIFY_FAILURE") {
+            u.notify_failure = flag("LODESTAR_UPDATES_NOTIFY_FAILURE", &v)?;
+        }
+        Ok(())
+    }
+}
+
 /// A `blocklist.files` path, as written, and its hashes.
 pub type BlocklistFile = (String, Vec<[u8; 20]>);
 
@@ -479,6 +775,63 @@ impl Config {
             out.push((path.display().to_string(), hashes.into_iter().collect()));
         }
         Ok(out)
+    }
+}
+
+impl Config {
+    /// The scrape scheduler's settings and trackers, or `None` when
+    /// scraping is off. Tracker URLs that name the same tracker count
+    /// once; a URL that can't be scraped is an error, so typos surface.
+    pub fn health_config(&self) -> Result<Option<(HealthConfig, Vec<TrackerUrl>)>, ConfigError> {
+        if !self.scrape.enabled {
+            return Ok(None);
+        }
+        let mut trackers: Vec<TrackerUrl> = Vec::new();
+        // Errors name the entry by position: an HTTP tracker URL may carry
+        // a passkey, and errors end up in logs.
+        for (i, raw) in self.scrape.trackers.iter().enumerate() {
+            let entry = i + 1;
+            let url = TrackerUrl::parse(raw)
+                .map_err(|e| ConfigError(format!("scrape.trackers entry {entry}: {e}")))?;
+            if url.scheme() != lodestar_tracker_scrape::Scheme::Udp && url.scrape_url().is_none() {
+                return Err(ConfigError(format!(
+                    "scrape.trackers entry {entry}: an HTTP tracker URL must end in /announce \
+                     (BEP 48) to be scraped"
+                )));
+            }
+            if !trackers.iter().any(|t| t.as_str() == url.as_str()) {
+                trackers.push(url);
+            }
+        }
+        let interval = Duration::from_secs(self.scrape.interval_secs.unwrap_or(
+            match self.dht.intensity {
+                IntensityName::Low => 5,
+                IntensityName::Balanced => 2,
+                IntensityName::Aggressive => 1,
+            },
+        ))
+        .max(Duration::from_secs(1));
+        let http_interval = self
+            .scrape
+            .http_interval_secs
+            .map_or(interval * 3, Duration::from_secs)
+            .max(Duration::from_secs(1));
+        // Scrapes leave from the crawler's address, so they take the same
+        // route (and VPN) as the DHT (§5).
+        let bind = self
+            .dht
+            .bind
+            .iter()
+            .find(|a| a.is_ipv4() && !a.ip().is_unspecified())
+            .map(|a| SocketAddr::new(a.ip(), 0));
+        let mut cfg = HealthConfig {
+            interval,
+            http_interval,
+            dht: self.scrape.dht && self.dht.enabled,
+            ..HealthConfig::default()
+        };
+        cfg.udp.bind = bind;
+        Ok(Some((cfg, trackers)))
     }
 }
 
@@ -599,6 +952,71 @@ mod tests {
     }
 
     #[test]
+    fn updates_come_from_the_file_and_the_environment() {
+        assert_eq!(
+            Config::load(None, no_env).unwrap().updates,
+            Updates::default()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[updates]\nmode = \"notify\"\nlevel = \"features\"\nwindow = \"23:00-01:00\"\nwait_days = 5\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert_eq!(
+            (
+                c.updates.mode,
+                c.updates.level,
+                c.updates.wait_days,
+                c.updates.window.as_str()
+            ),
+            (UpdateMode::Notify, UpdateLevel::Features, 5, "23:00-01:00")
+        );
+        let env = |k: &str| match k {
+            "LODESTAR_UPDATES" => Some("auto".to_string()),
+            "LODESTAR_UPDATES_CHANNEL" => Some("beta".to_string()),
+            "LODESTAR_UPDATES_SECURITY_FIXES" => Some("off".to_string()),
+            "LODESTAR_UPDATES_WAIT_DAYS" => Some("0".to_string()),
+            "LODESTAR_UPDATES_NOTIFY_AFTER" => Some("false".to_string()),
+            _ => None,
+        };
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(
+            (
+                c.updates.mode,
+                c.updates.channel,
+                c.updates.security_fixes,
+                c.updates.wait_days
+            ),
+            (UpdateMode::Auto, UpdateChannel::Beta, SecurityFixes::Off, 0)
+        );
+        assert!(!c.updates.notify_after);
+        assert!(c.layers.in_env("LODESTAR_UPDATES"));
+    }
+
+    #[test]
+    fn bad_update_values_are_errors() {
+        for (var, value) in [
+            ("LODESTAR_UPDATES", "sometimes"),
+            ("LODESTAR_UPDATES_LEVEL", "everything"),
+            ("LODESTAR_UPDATES_WAIT_DAYS", "15"),
+            ("LODESTAR_UPDATES_WAIT_DAYS", "-1"),
+            ("LODESTAR_UPDATES_WINDOW", "03:00-03:00"),
+            ("LODESTAR_UPDATES_WINDOW", "3am"),
+            ("LODESTAR_UPDATES_ALLOW_REINDEX", "yes"),
+        ] {
+            let env = |k: &str| (k == var).then(|| value.to_string());
+            assert!(Config::load(None, env).is_err(), "{var}={value}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[updates]\nwait_days = 30\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+    }
+
+    #[test]
     fn typos_and_bad_values_are_errors() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -618,5 +1036,71 @@ mod tests {
         assert!(set.contains(&parse_hex20("abcdef0123456789abcdef0123456789abcdef01").unwrap()));
         assert_eq!(parse_blocklist("zz\n", &mut set), Err(1));
         assert_eq!(parse_blocklist("\n\nabcd", &mut set), Err(3));
+    }
+
+    #[test]
+    fn scrape_settings() {
+        let c = Config::load(None, no_env).unwrap();
+        let (h, trackers) = c.health_config().unwrap().unwrap();
+        assert_eq!(trackers.len(), DEFAULT_TRACKERS.len());
+        assert_eq!(h.interval, Duration::from_secs(2));
+        assert_eq!(h.http_interval, Duration::from_secs(6));
+        assert!(h.dht);
+        assert_eq!(h.udp.bind, None, "unspecified DHT bind: any address");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [dht]
+            intensity = "low"
+            bind = ["10.8.0.2:6881"]
+            [scrape]
+            trackers = ["udp://a.example:1/announce", "udp://A.example:1", "http://b.example/announce"]
+            "#,
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        let (h, trackers) = c.health_config().unwrap().unwrap();
+        assert_eq!(trackers.len(), 2, "the same tracker counts once");
+        assert_eq!(h.interval, Duration::from_secs(5));
+        assert_eq!(h.udp.bind, Some("10.8.0.2:0".parse().unwrap()));
+
+        std::fs::write(&path, "[scrape]\ntrackers = [\"wss://x.example\"]\n").unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert!(c.health_config().is_err());
+        std::fs::write(
+            &path,
+            "[scrape]\ntrackers = [\"udp://a.example:1\", \"https://t.example/secret123/x\"]\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        let e = c.health_config().unwrap_err().to_string();
+        assert!(e.contains("entry 2") && !e.contains("secret123"), "{e}");
+
+        let off = |k: &str| (k == "LODESTAR_SCRAPE_ENABLED").then(|| "false".to_string());
+        let c = Config::load(None, off).unwrap();
+        assert!(c.health_config().unwrap().is_none());
+    }
+
+    #[test]
+    fn ranking_weights() {
+        let c = Config::load(None, no_env).unwrap();
+        assert_eq!(c.ranking.weights(), RankWeights::default());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ranking]\nseeders = 0.5\nfreshness_floor = 3.0\n").unwrap();
+        let w = Config::load(Some(&path), no_env).unwrap().ranking.weights();
+        assert_eq!(w.seeders, 0.5);
+        assert_eq!(w.freshness_floor, 1.0, "clamped");
+        std::fs::write(&path, "[ranking]\nseeder = 0.5\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        for bad in ["seeders = nan", "junk = inf", "suspect = -inf"] {
+            std::fs::write(&path, format!("[ranking]\n{bad}\n")).unwrap();
+            let e = Config::load(Some(&path), no_env).unwrap_err();
+            let field = bad.split(' ').next().unwrap();
+            assert!(e.0.contains(&format!("ranking.{field}")), "{bad}: {e}");
+        }
     }
 }

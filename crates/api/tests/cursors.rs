@@ -90,6 +90,8 @@ fn fixture(n: usize) -> Fixture {
             settings: None,
             ops: None,
             user_data: None,
+            hot: None,
+            events: None,
             adult: Default::default(),
             insights: None,
         }),

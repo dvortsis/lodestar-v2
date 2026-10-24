@@ -53,9 +53,34 @@ pub fn folder(opened: Option<PathBuf>, configured: &Path) -> Result<Folder, &'st
             return Err("not_private");
         }
     }
+    #[cfg(windows)]
+    if !windows_private(configured) {
+        return Err("not_private");
+    }
     Ok(Folder {
         dir: configured.to_path_buf(),
     })
+}
+
+/// Whether a configured folder's owner and DACL keep it private
+/// (`windows::acl::log_folder`), cached per folder for the run: the check
+/// starts PowerShell. Never changes the folder.
+#[cfg(windows)]
+fn windows_private(dir: &Path) -> bool {
+    use std::collections::HashMap as Map;
+    use std::sync::Mutex;
+    static CHECKED: Mutex<Option<Map<PathBuf, bool>>> = Mutex::new(None);
+    let lock = || CHECKED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&private) = lock().as_ref().and_then(|m| m.get(dir)) {
+        return private;
+    }
+    // Checked outside the lock: a slow `Get-Acl` (a network share) holds
+    // up only its own request.
+    let private = crate::windows::acl::log_folder(dir).is_ok();
+    lock()
+        .get_or_insert_with(Map::new)
+        .insert(dir.to_path_buf(), private);
+    private
 }
 
 /// `index.json`, read as untrusted input.
@@ -385,6 +410,60 @@ impl Iterator for Lines {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configured folder another account owns isn't read, whatever its
+    /// index says (Windows: by its owner and DACL, checked once a run).
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_owned_by_another_account_is_refused() {
+        // Setting another owner takes an administrator (CI is one).
+        if std::env::var_os("CI").is_none() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::env::var_os("SystemRoot").unwrap();
+        let icacls = |dir: &Path, args: &[&str]| {
+            let out =
+                std::process::Command::new(Path::new(&root).join("System32").join("icacls.exe"))
+                    .arg(dir)
+                    .args(args)
+                    .output()
+                    .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        };
+        // A runner's temp folder may let Users read: made private first.
+        let mine = tmp.path().join("mine");
+        std::fs::create_dir(&mine).unwrap();
+        let own = crate::windows::acl::process_sid().expect("whoami");
+        let grant = format!("*{own}:(OI)(CI)F");
+        icacls(
+            &mine,
+            &[
+                "/inheritance:r",
+                "/grant:r",
+                "*S-1-5-18:(OI)(CI)F",
+                "*S-1-5-32-544:(OI)(CI)F",
+                &grant,
+            ],
+        );
+        assert_eq!(crate::windows::acl::log_folder(&mine), Ok(()));
+        assert!(folder(None, &mine).is_ok());
+        let theirs = tmp.path().join("theirs");
+        std::fs::create_dir(&theirs).unwrap();
+        std::fs::write(
+            theirs.join("index.json"),
+            r#"{"files":{},"restricted":true}"#,
+        )
+        .unwrap();
+        icacls(&theirs, &["/setowner", "*S-1-5-32-545"]);
+        assert_eq!(folder(None, &theirs), Err("not_private"));
+        // Checked once a run: the answer is cached.
+        assert_eq!(folder(None, &theirs), Err("not_private"));
+    }
 
     #[test]
     fn a_file_being_compressed_is_listed_once() {

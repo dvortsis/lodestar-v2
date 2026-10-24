@@ -45,6 +45,7 @@ jobs:
       bench: ${{ steps.c.outputs.bench }}
       filter: ${{ steps.c.outputs.filter }}
       importer: ${{ steps.c.outputs.importer }}
+      log_bench: ${{ steps.c.outputs.log_bench }}
       fuzz: ${{ steps.c.outputs.fuzz }}
     steps:
       - uses: actions/checkout@v4
@@ -189,6 +190,22 @@ jobs:
       # (§20.8). The test is ignored in debug runs.
       - run: cargo test --release -p lodestar-filter --test props -- --ignored --nocapture budget
 
+  log-bench:
+    name: logging hot path (B-log1b)
+    needs: changes
+    if: needs.changes.outputs.log_bench == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # An event that's off costs at most 5 ns, and 8 threads on adjacent
+      # events at most twice that; prints (c), (d) and the default_on
+      # verdicts (crates/lodestar/src/logging/bench.rs).
+      - env:
+          LODESTAR_LOG_BENCH_GATE: "1"
+        run: cargo test --release -p lodestar --bin lodestar logging::bench -- --ignored --nocapture --test-threads=1
+
   importer:
     name: bitmagnet importer (PostgreSQL)
     needs: changes
@@ -241,9 +258,12 @@ jobs:
   # a skipped job counts as passing. The performance budgets (size, search
   # latency, filter) stay out of it: they can be red on main for hardware
   # reasons, and the runner judges those under owner-decisions §2.18.
+  # log-bench is the exception the runner approved (B-log1b): its gates take
+  # the best of several runs and compare like with like (the same threads on
+  # isolated events), so a shared runner's noise doesn't fail it.
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, relevance, importer, fuzz]
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The app frame (§10.3): the skip link, the main landmark, the connection states and, once the
 	// page has painted, the chrome around it. Only this frame is on the critical path; the top bar,
-	// event stream, palette and toaster (`Chrome.svelte`) load after first paint into a slot that
+	// event stream, palette and toaster (`Chrome.svelte`) load on the first interaction into a slot that
 	// already has the bar's height, so nothing shifts (§10.1: LCP, CLS). The skip link and the
 	// connection states are plain markup here, so they work before the chrome arrives and when the
 	// server (and so every lazy chunk) is gone. The page is rendered once, here, and never remounted.
@@ -96,23 +96,51 @@
 	});
 
 	onMount(() => {
-		// After the first frame, so the request never competes with the page's first paint.
-		let timer: ReturnType<typeof setTimeout>;
-		const frame = requestAnimationFrame(() => {
-			timer = setTimeout(
-				() =>
-					void import('./Chrome.svelte').then(async (mod) => {
-						want = focusKey(document.activeElement) ?? want;
-						Chrome = mod.default;
-						await tick();
-						regain(false);
-					})
-			);
+		// The 401 redirect starts with the app, before any interaction: a signed-out visitor whose
+		// first request fails goes to sign-in (or first-run setup) without touching the page. M-auth's
+		// hook owns W5's single `onLoginRequired` slot.
+		let gone = false;
+		let uninstall: (() => void) | undefined;
+		void import('$lib/features/auth/session.svelte').then((auth) => {
+			if (!gone) uninstall = auth.installAuthHandlers();
 		});
 		return () => {
-			cancelAnimationFrame(frame);
-			clearTimeout(timer);
+			gone = true;
+			uninstall?.();
 		};
+	});
+
+	// The chrome (full top bar, palette, toaster, stream) waits for the first interaction, or
+	// CHROME_AFTER_MS, so the bare page's load never fetches it (§10.1: the 102,400-byte budget;
+	// docs/decisions/2026-10-23-S-search-1.md). Until then the static bar from app.html, with its
+	// real links, stays in the slot. Focus on <body> is not an interaction: kit puts it there.
+	const ENGAGED = ['pointerdown', 'keydown', 'touchstart', 'focusin'] as const;
+	const CHROME_AFTER_MS = 30_000;
+	onMount(() => {
+		const stop = () => {
+			clearTimeout(timer);
+			for (const e of ENGAGED) removeEventListener(e, go, true);
+		};
+		const go = (e?: Event) => {
+			if (e?.type === 'focusin' && e.target === document.body) return;
+			stop();
+			// A tap on the static menu button (inert until now) opens the real one once it exists.
+			const menu =
+				e?.type !== 'keydown' &&
+				e?.target instanceof Element &&
+				!!e.target.closest('#boot-header .x-large\\:hidden');
+			void import('./Chrome.svelte').then(async (mod) => {
+				want = focusKey(document.activeElement) ?? want;
+				Chrome = mod.default;
+				await tick();
+				regain(false);
+				const button = document.getElementById('menu-button');
+				if (menu && button?.getAttribute('aria-expanded') === 'false') button.click();
+			});
+		};
+		const timer = setTimeout(go, CHROME_AFTER_MS);
+		for (const e of ENGAGED) addEventListener(e, go, { capture: true, passive: true });
+		return stop;
 	});
 
 	function skip(e: MouseEvent) {
@@ -129,7 +157,7 @@
 		>{m.shell_skip_to_content()}</a
 	>
 	{#if Chrome}
-		<Chrome {bare} {replay} />
+		<Chrome {bare} {replay} engaged />
 	{:else if !bare}
 		<!-- Holds the top bar's place (1 px border + 56 px) until it arrives. -->
 		<div bind:this={slot}>

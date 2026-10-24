@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { comboFromEvent, normalizeCombo } from './combo';
 import { formatCombo } from './display';
 import { filterCommands } from './filter';
+import { DEFAULT_KEYS } from './defaults';
 import { createKeys, type Conflict } from './registry.svelte';
 
 const ev = (key: string, init: KeyboardEventInit = {}, target?: Element) => {
@@ -63,7 +66,7 @@ describe('registry', () => {
 
 	it('prevents default only when a command ran', () => {
 		const { keys } = make();
-		keys.register({ id: 'list.next', title: 'Next', run: () => {} });
+		keys.register({ id: 'results.next', title: 'Next', run: () => {} });
 		const hit = ev('j');
 		const miss = ev('q');
 		keys.handle(hit);
@@ -135,7 +138,7 @@ describe('registry', () => {
 	it('does not run the bare-letter command for Shift+letter', () => {
 		const { keys } = make();
 		const run = vi.fn();
-		keys.register({ id: 'list.next', title: 'Next', run });
+		keys.register({ id: 'results.next', title: 'Next', run });
 		expect(keys.handle(ev('J', { shiftKey: true }))).toBe(false);
 		expect(keys.handle(ev('j'))).toBe(true);
 		expect(run).toHaveBeenCalledOnce();
@@ -225,7 +228,7 @@ describe('registry', () => {
 	it('never fires a single-key shortcut while typing', () => {
 		const { keys } = make();
 		const run = vi.fn();
-		keys.register({ id: 'list.next', title: 'Next', allowInInput: true, run });
+		keys.register({ id: 'results.next', title: 'Next', allowInInput: true, run });
 		for (const target of [
 			el('input', { type: 'text' }),
 			el('input'),
@@ -266,7 +269,7 @@ describe('registry', () => {
 	it('ignores composing and already-handled events, and single keys inside dialogs', () => {
 		const { keys } = make();
 		const run = vi.fn();
-		keys.register({ id: 'list.next', title: 'Next', run });
+		keys.register({ id: 'results.next', title: 'Next', run });
 		keys.register({ id: 'palette.open', title: 'P', run: () => {} });
 		expect(keys.handle(ev('j', { isComposing: true }))).toBe(false);
 		const handled = ev('j');
@@ -281,7 +284,7 @@ describe('registry', () => {
 
 	it('turns single-key shortcuts off, and keeps modifier combos', () => {
 		const { keys } = make();
-		keys.register({ id: 'list.next', title: 'Next', run: () => {} });
+		keys.register({ id: 'results.next', title: 'Next', run: () => {} });
 		keys.register({ id: 'palette.open', title: 'P', run: () => {} });
 		keys.setSingleKeys(false);
 		expect(keys.singleKeys).toBe(false);
@@ -294,12 +297,12 @@ describe('registry', () => {
 	it('remaps a command and restores its default', () => {
 		const { keys } = make();
 		const run = vi.fn();
-		keys.register({ id: 'magnet.copy', title: 'Copy magnet', run });
-		keys.remap('magnet.copy', ['y']);
+		keys.register({ id: 'detail.copy_magnet', title: 'Copy magnet', run });
+		keys.remap('detail.copy_magnet', ['y']);
 		expect(keys.handle(ev('c'))).toBe(false);
 		expect(keys.handle(ev('y'))).toBe(true);
 		expect(keys.list()[0]!.keys).toEqual(['y']);
-		keys.remap('magnet.copy', null);
+		keys.remap('detail.copy_magnet', null);
 		expect(keys.handle(ev('c'))).toBe(true);
 	});
 
@@ -314,7 +317,7 @@ describe('registry', () => {
 			when: () => on,
 			run: () => {}
 		});
-		keys.register({ id: 'row.select', title: 'Select row', palette: false, run: () => {} });
+		keys.register({ id: 'results.select', title: 'Select row', palette: false, run: () => {} });
 		const [a, b] = keys.list();
 		expect(a).toMatchObject({
 			title: 'Go to Alerts',
@@ -332,7 +335,7 @@ describe('registry', () => {
 	it('attach listens on the target and detaches', () => {
 		const { keys } = make();
 		const run = vi.fn();
-		keys.register({ id: 'list.next', title: 'Next', run });
+		keys.register({ id: 'results.next', title: 'Next', run });
 		const detach = keys.attach(document);
 		document.body.dispatchEvent(ev('j'));
 		detach();
@@ -373,5 +376,23 @@ describe('filterCommands', () => {
 		expect(titles('saved')).toEqual(['Go to Alerts']);
 		expect(titles('torrent')).toEqual(['Copy magnet']);
 		expect(titles('appearance')).toEqual(['Switch to dark theme']);
+	});
+});
+
+describe('default map', () => {
+	it("matches the server's persisted shortcut ids and keys", () => {
+		// crates/lodestar/src/settings/preferences.rs `DEFAULT_SHORTCUTS` is the contract: a drift on
+		// either side fails here.
+		const rust = readFileSync(
+			resolve(process.cwd(), '../crates/lodestar/src/settings/preferences.rs'),
+			'utf8'
+		);
+		const block = /DEFAULT_SHORTCUTS: &\[\(&str, &str\)\] = &\[([\s\S]*?)\];/.exec(rust)?.[1] ?? '';
+		const server = [...block.matchAll(/\("([^"]+)", "([^"]+)"\)/g)].map((m) => [m[1], m[2]]);
+		const web = Object.entries(DEFAULT_KEYS)
+			.filter(([, combos]) => combos.length === 1 && [...combos[0]!].length === 1)
+			.map(([id, combos]) => [id, combos[0]]);
+		expect(server).toHaveLength(8);
+		expect(web).toEqual(server);
 	});
 });

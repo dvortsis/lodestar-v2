@@ -61,6 +61,7 @@ fn every_field_has_its_form_hints() {
     let formats = [
         "socket-addr",
         "log-filter",
+        "time-range",
         "int32",
         "int64",
         "uint16",
