@@ -64,6 +64,30 @@ for (const [themeId, colorMode] of [
 	});
 }
 
+test('the loading state is axe-clean, and so is the page once it loads', async ({
+	page,
+	go,
+	mock
+}) => {
+	// Hold the torrent until axe has seen the loading state (smoke runs could catch it by chance).
+	let release!: () => void;
+	const held = new Promise<void>((r) => (release = r));
+	mockTorrent(mock);
+	mock.on('getTorrent', async () => {
+		await held;
+		return detail();
+	});
+	await go(`/t/${HASH}`);
+	const loading = page.getByRole('status', { name: 'Loading torrent…' });
+	await expect(loading).toHaveAttribute('aria-busy', 'true');
+	await expectNoA11yViolations(page);
+	release();
+	await expect(page.getByRole('heading', { level: 1, name: 'Show' })).toBeVisible();
+	await expect(loading).toHaveCount(0);
+	await settled(page);
+	await expectNoA11yViolations(page);
+});
+
 test('looks the hit up by hash on a direct load', async ({ page, go, mock }) => {
 	mockTorrent(mock);
 	await go(`/t/${HASH}`);
