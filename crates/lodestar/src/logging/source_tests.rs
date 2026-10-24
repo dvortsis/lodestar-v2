@@ -737,12 +737,18 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
     };
     // Wait for two rotations rather than a fixed time: a slow runner may
     // not have written 300 lines in any set sleep.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // A loaded machine (the whole workspace's tests at once) can need more
+    // than 10 s: without the rotations nothing is there to delete.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while lines.load(std::sync::atomic::Ordering::Relaxed) < 600
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(
+        lines.load(std::sync::atomic::Ordering::Relaxed) >= 600,
+        "the writer didn't rotate twice within 30 s"
+    );
     let src = logs(rt);
     let done = src.delete(LogFilesWhich::All).unwrap();
     assert!(done.deleted >= 1, "{done:?}");

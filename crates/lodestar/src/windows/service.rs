@@ -362,18 +362,22 @@ mod scm {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        runtime.block_on(async {
+        let served = runtime.block_on(async {
             let mut early = stop.clone();
             // A stop while the store opens ends the start: the open's
-            // blocking work finishes as the runtime drops, and SQLite
-            // needs nothing more.
+            // blocking work may be cut off after `RUNTIME_GRACE` as the
+            // runtime shuts down. It's crash-safe (each migration is one
+            // transaction, and runs again at the next start).
             let services = tokio::select! {
                 s = Services::start(config) => s?,
                 () = stopped(&mut early) => return Ok(()),
             };
             let mut stop = stop;
             services.run(async move { stopped(&mut stop).await }).await
-        })
+        });
+        // A blocking task still running can't keep the SCM waiting.
+        runtime.shutdown_timeout(crate::services::RUNTIME_GRACE);
+        served
     }
 
     /// Resolves once a stop is requested.
