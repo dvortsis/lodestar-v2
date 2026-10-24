@@ -1105,8 +1105,8 @@ mod tests {
                 "id: {id}\nevent: settings\ndata: {{\"revision\":3,\"section\":\"crawler\"}}\n\n"
             )
         );
-        // Six topics now; the `u8` set has room for two more.
-        assert_eq!(all().count_ones(), 6);
+        // Seven topics now; the `u8` set has room for one more.
+        assert_eq!(all().count_ones(), 7);
     }
 
     #[tokio::test]

@@ -1,6 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { BARREL, findStrays, routeNodes, svelteBarrel } from './first-load.mjs';
+import {
+	BARREL,
+	findStrays,
+	preloadedJs,
+	routeNodes,
+	routePreloads,
+	svelteBarrel
+} from './first-load.mjs';
 
 const transform = async (code: string, id = '/app/src/Comp.svelte') => {
 	const plugin = svelteBarrel();
@@ -107,5 +114,31 @@ describe('routeNodes', () => {
 		const nested = 'export const dictionary = {\n\t\t"/search": [11,[2,~3],[4]],\n\t};';
 		expect(routeNodes(nested, '/search')).toEqual([0, 1, 11, 2, 3, 4]);
 		expect(() => routeNodes(app, '/nope')).toThrow(/not in the generated app\.js/);
+	});
+});
+
+describe('routePreloads', () => {
+	const deps = ['_app/immutable/chunks/a.js', '_app/immutable/assets/a.css'];
+	it("keeps only CSS for kit's entry, so the route table doesn't list every route's chunks", () => {
+		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/entry/app.Bx1.js' })).toEqual([
+			'_app/immutable/assets/a.css'
+		]);
+	});
+	it('leaves every other dynamic import as Vite has it', () => {
+		expect(routePreloads('n.js', deps, { hostId: '_app/immutable/nodes/4.Cq2.js' })).toEqual(deps);
+	});
+});
+
+describe('preloadedJs', () => {
+	it("lists the JS in a built entry's preload map", () => {
+		const app =
+			'const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["../nodes/0.a.js","../assets/0.b.css"])))=>i.map(i=>d[i]);';
+		expect(preloadedJs(app)).toEqual(['../nodes/0.a.js']);
+	});
+	it('is empty for a CSS-only map, or no map', () => {
+		expect(
+			preloadedJs('const __vite__mapDeps=(i,m,d=(m.f||(m.f=["../assets/0.b.css"])))=>0;')
+		).toEqual([]);
+		expect(preloadedJs('import "x";')).toEqual([]);
 	});
 });
