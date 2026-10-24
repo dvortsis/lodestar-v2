@@ -137,8 +137,10 @@ export default [
 	entry('Mono font (lazy)', monoFonts, '25 KB'),
 	// Route budgets (runner decision, owner's §10.1 headroom rules): each route's own JS + CSS.
 	// Measured 25.96 KB with its lazy chunks (the screen, both layouts, labels, formatters, and the
-	// Svelte runtime only this route uses since #132 moved it out of /search's first load).
-	entry('Compare route (own JS + CSS)', own('/compare'), '28 KB'),
+	// Svelte runtime only this route uses since #132 moved it out of /search's first load); 28.06 KB
+	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
+	// messages). Limit: measured + 10%.
+	entry('Compare route (own JS + CSS)', own('/compare'), '31 KB'),
 	entry('Discover route (own JS + CSS)', own('/discover'), '15 KB'),
 	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
