@@ -99,5 +99,20 @@
 	"search_filters_any_of": "Any of: {clauses}",
 	"search_filters_all_of": "All of: {clauses}",
 	"search_filters_everything": "Everything",
-	"search_filters_unknown": "Filter"
+	"search_filters_unknown": "Filter",
+	"search_toolbar_count_one": "1 result",
+	"search_toolbar_count_other": "{count} results",
+	"search_toolbar_count_about": "≈ {count} results",
+	"search_toolbar_sort": "Sort",
+	"search_toolbar_sort_relevance": "Relevance",
+	"search_toolbar_sort_newest": "Newest discovered",
+	"search_toolbar_sort_oldest": "Oldest discovered",
+	"search_toolbar_sort_largest": "Largest",
+	"search_toolbar_sort_smallest": "Smallest",
+	"search_toolbar_sort_most_files": "Most files",
+	"search_toolbar_sort_fewest_files": "Fewest files",
+	"search_toolbar_density": "Density",
+	"search_toolbar_comfortable": "Comfortable",
+	"search_toolbar_compact": "Compact",
+	"search_toolbar_save": "Save search"
 }

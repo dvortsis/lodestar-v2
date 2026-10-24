@@ -5,7 +5,7 @@
 	//   the last good rows, as the strip keeps the last good chips.
 	// - j/k move through the rows (scope `search`); `c` and `o` act on the focused row through
 	//   S-detail's `setCommandTarget`; Enter or a click opens the drawer.
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { api, type ApiError } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
@@ -158,6 +158,23 @@
 
 	/** j/k: the next or previous row becomes active (and takes focus unless the drawer is open). */
 	let list = $state<{ move: (delta: number) => void; moveTo: (index: number) => void }>();
+
+	// The sentinel's fallback for the keyboard and AT: a visible "Load more". Focus stays on it while
+	// a page loads (`loading` keeps it focusable). When it goes (the last page, an error) or comes
+	// back (Retry), focus moves to what replaced it: checked before the DOM changes, while the old
+	// control still has it.
+	let foot = $state<HTMLElement>();
+	$effect.pre(() => {
+		void results.hasMore;
+		if (!foot?.contains(document.activeElement)) return;
+		void tick().then(() =>
+			foot
+				?.querySelector<HTMLElement>(
+					'[data-results-more], [data-results-end], [data-results-retry]'
+				)
+				?.focus()
+		);
+	});
 	function move(by: 1 | -1) {
 		const n = results.hits.length;
 		if (!n) return;
@@ -448,14 +465,32 @@
 					{/snippet}
 				</VirtualList>
 			</div>
-			{#if results.moreError}
-				<Banner kind="error" class="rp-banner">
-					{m.search_results_more_error()}
-					{#snippet action()}
-						<Button dense onclick={() => void results.retry()}>{m.search_query_retry()}</Button>
-					{/snippet}
-				</Banner>
-			{/if}
+			<div bind:this={foot}>
+				<div class="rp-foot">
+					{#if results.hasMore}
+						<Button
+							dense
+							data-results-more
+							loading={results.loadingMore}
+							onclick={() => void results.loadMore()}>{m.search_results_load_more()}</Button
+						>
+					{:else if !results.moreError}
+						<p class="rp-end" tabindex="-1" data-results-end data-testid="results-end">
+							{m.search_results_end()}
+						</p>
+					{/if}
+				</div>
+				{#if results.moreError}
+					<Banner kind="error" class="rp-banner">
+						{m.search_results_more_error()}
+						{#snippet action()}
+							<Button dense data-results-retry onclick={() => void results.retry()}
+								>{m.search_query_retry()}</Button
+							>
+						{/snippet}
+					</Banner>
+				{/if}
+			</div>
 		{/if}
 	{/if}
 </section>
