@@ -365,8 +365,9 @@ mod scm {
         let served = runtime.block_on(async {
             let mut early = stop.clone();
             // A stop while the store opens ends the start: the open's
-            // blocking work finishes as the runtime drops, and SQLite
-            // needs nothing more.
+            // blocking work may be cut off after `RUNTIME_GRACE` as the
+            // runtime shuts down. It's crash-safe (each migration is one
+            // transaction, and runs again at the next start).
             let services = tokio::select! {
                 s = Services::start(config) => s?,
                 () = stopped(&mut early) => return Ok(()),
