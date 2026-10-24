@@ -1624,7 +1624,7 @@
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
     "m4-done": "satisfied 035ca7f",
-    "main_red": "2026-10-24T01:25Z main web size red since #139 (Compare 28.06>28) -> runner #160 (31 KB, measured+10%). macOS tests/supervisor failed on 004e710 (#156 merge): 7 tests 'no child started (after 120 s)' - watching 54c7dd2 run",
+    "main_red": "2026-10-24T01:25Z main web size red since #139 (Compare 28.06>28) -> runner #160 (31 KB, measured+10%). macOS tests/supervisor failed on 004e710 (#156 merge): 7 tests 'no child started (after 120 s)' - watching 54c7dd2 run | 2026-10-24T01:35Z #160 merged f3b9d23 (web size fixed)",
     "csp_test": "2026-10-23T21:53Z runner PR #153: CSP test expected 2 inline scripts, boot-nav made 3 (only with real web/build; prod CSP derived, unaffected) | 2026-10-23T22:47Z #153 merged 21cff90"
   },
   "registered_sessions": {},
