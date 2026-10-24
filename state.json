@@ -1533,7 +1533,7 @@
       "to": "follow-up slices"
     },
     "E-M6-windows-updates": "E-M6 owns Windows update check+notify+install (update-helper); reuse list in B-update brief item 10 + decisions file",
-    "search-live-windows-os5": "2026-10-23T22:15Z seen on #149 94ac8c1 test(windows): search live::tests::each_commit_reports_once_with_its_count_and_watermark \u2014 indexer error 'Access is denied (os error 5)' during commit (Windows file-sharing on segment files). Likely real Windows runtime issue (tantivy delete while mmapped/AV); owner: E-M6 Windows runtime (mmap delete-retry) unless it recurs before \u2014 then runner opens an Opus fix slice. Count: 1 | 2026-10-24T02:57Z 2nd occurrence on #157 be248c5 -> fix PR assigned to B-update session (fix/search-live-windows-os5, Opus)",
+    "search-live-windows-os5": "2026-10-23T22:15Z seen on #149 94ac8c1 test(windows): search live::tests::each_commit_reports_once_with_its_count_and_watermark \u2014 indexer error 'Access is denied (os error 5)' during commit (Windows file-sharing on segment files). Likely real Windows runtime issue (tantivy delete while mmapped/AV); owner: E-M6 Windows runtime (mmap delete-retry) unless it recurs before \u2014 then runner opens an Opus fix slice. Count: 1 | 2026-10-24T02:57Z 2nd occurrence on #157 be248c5 -> fix PR assigned to B-update session (fix/search-live-windows-os5, Opus) | 2026-10-24T03:22Z #166 Retrying<MmapDirectory> (atomic_write retry on Win 5/32) runner-approved; merge on green",
     "lhci-trend": "2026-10-23T23:17Z /search Lighthouse bytes rising per route merged: 93.7k(#132)->94.8k(#138)->97.6k(#139 branch) vs 102,400 owner limit; /search JS 39.5->41.1 KB (route table/preload map + vendor). Assign trimming (route-table size, preload map) to S-search-2 before more routes land",
     "paraglide-per-locale": "2026-10-23T23:37Z idea: Paraglide 2.29 experimentalStaticLocale per-locale builds (en/zh) would drop the other locale's strings from every message module (every route). Needs Rust embed/serve per locale (cookie/Accept-Language). Evaluate as a perf slice after M5 web lands; owner-visible (binary size).",
     "bidi-search-rows": "2026-10-23T23:37Z after #139: apply lib/util/bidi.ts to search result rows (S-search-1/2)",
@@ -1641,7 +1641,8 @@
     "reason": "2 catch-ups (logs_catalog.txt, services.rs collisions)",
     "held": [
       "#163 (B-log1b) waits until #157 lands, then merges main"
-    ]
+    ],
+    "plan": "2026-10-24T03:22Z after #165 and #166 merge: B-update merges main into #157 once, push, merge on green; then #163 catches up"
   },
   "landing_order_web": [
     "S-compare",
