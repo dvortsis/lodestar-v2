@@ -12,6 +12,7 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/dvortsis/lodestar-v2"
 
 [workspace.dependencies]
+lodestar-network-policy = { path = "crates/network-policy" }
 lodestar-bencode = { path = "crates/bencode" }
 lodestar-metainfo = { path = "crates/metainfo" }
 lodestar-store = { path = "crates/store" }

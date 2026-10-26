@@ -52,6 +52,7 @@ async fn client() -> UtpSocket {
 
 fn utp_opts(utp: UtpSocket, encryption: Encryption) -> FetchOptions {
     FetchOptions {
+        allow_private: true,
         timeout: Duration::from_secs(5),
         encryption,
         transport: Transport::Utp,
@@ -98,6 +99,7 @@ async fn fetches_plaintext_and_encrypted_over_utp() {
     for (accept, mode, encrypted) in cases {
         let peer = &peers.iter().find(|(a, _)| *a == accept).expect("a peer").1;
         let o = FetchOptions {
+            allow_private: true,
             stats: stats.clone(),
             ..opts(mode)
         };
@@ -125,6 +127,7 @@ async fn hostile_peers_fail_the_same_way_over_utp() {
         async move {
             let peer = FakePeer::spawn_utp(vec![seed], Accept::Both, behavior, vec![]).await;
             let o = FetchOptions {
+                allow_private: true,
                 timeout: Duration::from_secs(3),
                 ..utp_opts(utp, Encryption::Prefer)
             };
@@ -194,6 +197,7 @@ async fn falls_back_to_tcp_when_utp_goes_unanswered() {
     // A TCP-only peer: nothing answers uTP on its port.
     let (peer, _silent) = tcp_only_peer(seed).await;
     let o = FetchOptions {
+        allow_private: true,
         fallback_to_tcp: true,
         utp_fallback_after: Duration::from_millis(300),
         ..utp_opts(client().await, Encryption::Prefer)
@@ -209,6 +213,7 @@ async fn falls_back_to_tcp_when_utp_goes_unanswered() {
 
     // Without the fallback the fetch fails as a timeout.
     let o = FetchOptions {
+        allow_private: true,
         fallback_to_tcp: false,
         connect_timeout: Duration::from_millis(300),
         ..o
@@ -220,6 +225,7 @@ async fn falls_back_to_tcp_when_utp_goes_unanswered() {
 
     // uTP asked for but no socket: TCP when allowed, an error otherwise.
     let o = FetchOptions {
+        allow_private: true,
         utp: None,
         fallback_to_tcp: true,
         stats: Arc::new(FetchStats::default()),
@@ -228,6 +234,7 @@ async fn falls_back_to_tcp_when_utp_goes_unanswered() {
     fetch(peer.addr(), hash, &o).await.unwrap();
     assert_eq!(o.stats.attempts(Transport::Utp), 0);
     let o = FetchOptions {
+        allow_private: true,
         fallback_to_tcp: false,
         ..o
     };
@@ -242,9 +249,11 @@ async fn default_options_stay_on_tcp() {
     let seed = Seed::v1(info_dict(500));
     let hash = InfoHash(seed.info_hash);
     let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
-    let o = FetchOptions::default();
+    let mut o = FetchOptions::default();
     assert_eq!(o.transport, Transport::Tcp);
     assert!(o.utp.is_none());
+    assert!(!o.allow_private);
+    o.allow_private = true; // This test dials an isolated loopback fixture.
     fetch(peer.addr(), hash, &o).await.unwrap();
     assert_eq!(o.stats.attempts(Transport::Tcp), 1);
     assert_eq!(o.stats.successes(Transport::Tcp), 1);
@@ -318,6 +327,7 @@ async fn fetches_over_a_lossy_link() {
         let peer =
             FakePeer::spawn_utp(vec![seed.clone()], Accept::Both, Behavior::Honest, vec![]).await;
         let o = FetchOptions {
+            allow_private: true,
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
             ..utp_opts(utp.clone(), mode)

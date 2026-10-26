@@ -7,6 +7,16 @@
 
 lodestar_log::catalogue! {
     "lodestar-dht";
+    /// Socket buffer requests and kernel readback, per bound socket. Zero
+    /// grants with read errors mean unknown, not a zero-sized buffer.
+    /// `send_requested=0` means the existing system default is retained.
+    SOCKET_BUFFERS {
+        id: "dht.socket_buffers",
+        component: Dht,
+        level: Info,
+        message: "DHT socket buffers",
+        fields: { receive_requested: Size, send_requested: Size, receive: Size, send: Size, set_errors: Size, read_errors: Size },
+    }
     /// A key reached the harvest: from samples, someone's `get_peers`, an
     /// announce, or a lookup this node ran (`source`).
     KEY_HARVESTED {

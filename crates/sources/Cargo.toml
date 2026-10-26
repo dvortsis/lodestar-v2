@@ -9,6 +9,7 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+lodestar-network-policy.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-store.workspace = true

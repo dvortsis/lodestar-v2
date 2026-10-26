@@ -1,6 +1,6 @@
 //! The node's event loop. See the module docs in `node/mod.rs`.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -47,7 +47,9 @@ const SEEN_CAPACITY: usize = 1_000_000;
 const RECENT_SAMPLES: usize = 20;
 /// Concurrent get_peers lookups, and how many requests may wait.
 const MAX_GET_PEERS: usize = 32;
-const MAX_GET_PEERS_QUEUE: usize = 10_000;
+const MAX_GET_PEERS_QUEUE: usize = MAX_GET_PEERS;
+const LOOKUP_DEADLINE: Duration = Duration::from_secs(25);
+const MAX_PEER_QUERIES: usize = 64;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
 const SAMPLE_SHARE: f64 = 0.5;
@@ -65,7 +67,7 @@ const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 /// Below this frontier size, refill it and explore a random region.
 const LOW_FRONTIER: usize = 64;
 /// Backoff for a sample query that timed out (may be transient).
-const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(30 * 60);
+const SAMPLE_TIMEOUT_BACKOFF: Duration = sampler::MAX_INTERVAL;
 /// IPs we sent to (queries, replies, errors), remembered so a query from
 /// them isn't counted as unsolicited. One generation lasts at least ~3
 /// minutes at Aggressive even if every packet went to a new IP (1000
@@ -307,16 +309,26 @@ struct Family {
     ipv6: bool,
 }
 
+struct PeerRequest {
+    hash: InfoHash,
+    reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
+    remaining: usize,
+    inflight: usize,
+    sent: usize,
+    peers: HashSet<SocketAddr>,
+    started: Instant,
+}
+
 struct Actor {
     cfg: Config,
     families: Vec<Family>,
     ids: Vec<NodeId>,
     external: ExternalIp,
     tokens: Tokens,
-    pending: HashMap<u16, Pending>,
+    pending: HashMap<u64, Pending>,
     /// Queries in flight per address, for cheap "already asked?" checks.
     pending_addrs: HashMap<SocketAddr, u32>,
-    next_tid: u16,
+    next_tid: u64,
     lookups: HashMap<u32, Lookup>,
     next_lookup: u32,
     query_rate: TokenBucket,
@@ -334,7 +346,9 @@ struct Actor {
     peer_store: PeerStore,
     sampler: Sampler,
     recent: VecDeque<InfoHash>,
-    get_peers_queue: VecDeque<InfoHash>,
+    get_peers_queue: VecDeque<(InfoHash, Option<oneshot::Sender<Vec<SocketAddr>>>)>,
+    peer_requests: HashMap<u32, PeerRequest>,
+    next_request: u32,
     active_get_peers: usize,
     scrape_queue: VecDeque<(InfoHash, oneshot::Sender<Option<DhtEstimate>>)>,
     active_scrapes: usize,
@@ -343,7 +357,6 @@ struct Actor {
     scrape_rate: TokenBucket,
     /// Scrape lookups that ran out of query budget, to drive next tick.
     stalled: Vec<u32>,
-    last_prune: Instant,
     /// When `dht.harvest_summary` was last written, and the counters then
     /// (sample, get_peers, announce, lookups, dropped).
     last_summary: (Instant, [u64; 5]),
@@ -363,67 +376,24 @@ pub(crate) async fn run(
     harvest: Option<mpsc::Sender<Harvest>>,
 ) -> Result<(), StateError> {
     let now = Instant::now();
-    let mut rng = StdRng::from_rng(&mut rand::rng());
+    let rng = StdRng::from_rng(&mut rand::rng());
     let saved = match &cfg.state_path {
         Some(path) => State::load(path).unwrap_or_default(),
         None => None,
     };
-    let ids = initial_ids(&cfg, saved.as_ref(), &mut rng);
     let (recv, sockets): (Vec<UdpSocket>, Vec<StdUdpSocket>) = sockets.into_iter().unzip();
     let local_addrs = recv.iter().filter_map(|s| s.local_addr().ok()).collect();
-    let families = sockets
-        .iter()
-        .map(|s| {
-            let ipv6 = s.local_addr().map(|a| a.is_ipv6()).unwrap_or(false);
-            Family {
-                table: RoutingTable::new(ids[0], ipv6),
-                ipv6,
-            }
-        })
-        .collect();
     let bootstrap = resolve(&cfg.bootstrap).await;
-    let mut actor = Actor {
-        tokens: Tokens::new(now, &mut rng),
-        query_rate: query_bucket(cfg.intensity, now),
-        reply_rate: reply_bucket(cfg.intensity, now),
-        families,
-        ids,
-        external: ExternalIp {
-            current: saved.as_ref().and_then(|s| s.external_ip),
-            ..ExternalIp::default()
-        },
-        pending: HashMap::new(),
-        pending_addrs: HashMap::new(),
-        next_tid: rng.random(),
-        lookups: HashMap::new(),
-        next_lookup: 0,
-        stats,
-        rng,
-        epoch: now,
-        bootstrap,
-        last_bootstrap: None,
-        last_save: now,
-        out: Vec::with_capacity(1500),
-        local_addrs,
-        harvest,
-        seen: SeenFilter::new(SEEN_CAPACITY, 0.01),
-        peer_store: PeerStore::default(),
-        sampler: Sampler::default(),
-        recent: VecDeque::with_capacity(RECENT_SAMPLES),
-        get_peers_queue: VecDeque::new(),
-        active_get_peers: 0,
-        scrape_queue: VecDeque::new(),
-        active_scrapes: 0,
-        scrape_waiters: HashMap::new(),
-        scrape_rate: scrape_bucket(cfg.intensity, now),
-        stalled: Vec::new(),
-        last_prune: now,
-        last_summary: (now, [0; 5]),
-        contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
-        unsolicited_from: UnsolicitedFrom::default(),
-        paused: cfg.paused,
+    let mut actor = Actor::new(
         cfg,
-    };
+        stats,
+        local_addrs,
+        saved.as_ref(),
+        bootstrap,
+        harvest,
+        now,
+        rng,
+    );
     actor.start_bootstrap(&sockets, saved.map(|s| s.nodes).unwrap_or_default());
 
     let mut tick = tokio::time::interval(actor.cfg.tick);
@@ -432,23 +402,26 @@ pub(crate) async fn run(
     let mut buf1 = vec![0u8; 65_536];
     loop {
         tokio::select! {
+            biased;
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     break;
                 }
             }
-            Some(cmd) = commands.recv() => actor.on_command(cmd),
-            r = recv[0].recv_from(&mut buf0) => {
-                if let Ok((n, from)) = r {
-                    actor.on_packet(&sockets, 0, &buf0[..n], from);
-                }
-            }
-            r = recv_second(&recv, &mut buf1), if recv.len() > 1 => {
-                if let Ok((n, from)) = r {
-                    actor.on_packet(&sockets, 1, &buf1[..n], from);
-                }
-            }
             _ = tick.tick() => actor.maintain(&sockets),
+            Some(cmd) = commands.recv() => actor.on_command(cmd),
+            (family, r) = async {
+                // Maintenance has priority, but neither socket does.
+                tokio::select! {
+                    r = recv[0].recv_from(&mut buf0) => (0, r),
+                    r = recv_second(&recv, &mut buf1), if recv.len() > 1 => (1, r),
+                }
+            } => {
+                if let Ok((n, from)) = r {
+                    let buf = if family == 0 { &buf0 } else { &buf1 };
+                    actor.on_packet(&sockets, family, &buf[..n], from);
+                }
+            }
         }
     }
     actor.save()
@@ -498,7 +471,77 @@ async fn resolve(hosts: &[String]) -> Vec<SocketAddr> {
     out
 }
 
+fn endpoint_allowed(cfg: &Config, addr: SocketAddr) -> bool {
+    let addr = lodestar_network_policy::normalize(addr);
+    lodestar_network_policy::allows(addr, cfg.allow_private)
+        && !cfg.deny.as_ref().is_some_and(|d| d.denies(addr.ip()))
+}
+
 impl Actor {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        cfg: Config,
+        stats: Arc<Stats>,
+        local_addrs: Vec<SocketAddr>,
+        saved: Option<&State>,
+        bootstrap: Vec<SocketAddr>,
+        harvest: Option<mpsc::Sender<Harvest>>,
+        now: Instant,
+        mut rng: StdRng,
+    ) -> Self {
+        let ids = initial_ids(&cfg, saved, &mut rng);
+        let families = local_addrs
+            .iter()
+            .map(|addr| Family {
+                table: RoutingTable::new(ids[0], addr.is_ipv6()),
+                ipv6: addr.is_ipv6(),
+            })
+            .collect();
+        Self {
+            tokens: Tokens::new(now, &mut rng),
+            query_rate: query_bucket(cfg.intensity, now),
+            reply_rate: reply_bucket(cfg.intensity, now),
+            families,
+            ids,
+            external: ExternalIp {
+                current: saved.and_then(|s| s.external_ip),
+                ..ExternalIp::default()
+            },
+            pending: HashMap::new(),
+            pending_addrs: HashMap::new(),
+            next_tid: rng.random(),
+            lookups: HashMap::new(),
+            next_lookup: 0,
+            stats,
+            rng,
+            epoch: now,
+            bootstrap,
+            last_bootstrap: None,
+            last_save: now,
+            out: Vec::with_capacity(1500),
+            local_addrs,
+            harvest,
+            seen: SeenFilter::new(SEEN_CAPACITY, 0.01),
+            peer_store: PeerStore::default(),
+            sampler: Sampler::default(),
+            recent: VecDeque::with_capacity(RECENT_SAMPLES),
+            get_peers_queue: VecDeque::new(),
+            peer_requests: HashMap::new(),
+            next_request: 0,
+            active_get_peers: 0,
+            scrape_queue: VecDeque::new(),
+            active_scrapes: 0,
+            scrape_waiters: HashMap::new(),
+            scrape_rate: scrape_bucket(cfg.intensity, now),
+            stalled: Vec::new(),
+            last_summary: (now, [0; 5]),
+            contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
+            unsolicited_from: UnsolicitedFrom::default(),
+            paused: cfg.paused,
+            cfg,
+        }
+    }
+
     fn now_secs(&self) -> u64 {
         self.epoch.elapsed().as_secs()
     }
@@ -548,6 +591,14 @@ impl Actor {
                 if paused {
                     // Waiting callers hear "no estimate" now rather than
                     // after the pause.
+                    self.get_peers_queue.retain_mut(|(_, reply)| {
+                        if let Some(reply) = reply.take() {
+                            let _ = reply.send(Vec::new());
+                            false
+                        } else {
+                            true
+                        }
+                    });
                     for (_, reply) in self.scrape_queue.drain(..) {
                         let _ = reply.send(None);
                     }
@@ -563,8 +614,25 @@ impl Actor {
                 self.scrape_rate = scrape_bucket(intensity, now);
             }
             Command::GetPeers(hash) => {
-                if self.get_peers_queue.len() < MAX_GET_PEERS_QUEUE {
-                    self.get_peers_queue.push_back(hash);
+                if self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS_QUEUE {
+                    self.get_peers_queue.push_back((hash, None));
+                }
+            }
+            Command::RequestPeers(hash, admit) => {
+                self.get_peers_queue
+                    .retain(|(_, reply)| reply.as_ref().is_none_or(|r| !r.is_closed()));
+                if !admit.is_closed()
+                    && !self.paused
+                    && self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS
+                {
+                    let (tx, rx) = oneshot::channel();
+                    if admit.send(Some(rx)).is_ok() {
+                        Stats::inc(&self.stats.peer_admitted);
+                        self.get_peers_queue.push_back((hash, Some(tx)));
+                    }
+                } else {
+                    Stats::inc(&self.stats.peer_rejected);
+                    let _ = admit.send(None);
                 }
             }
             Command::Scrape(hash, reply) => {
@@ -656,10 +724,10 @@ impl Actor {
         family: usize,
         to: SocketAddr,
         msg: &Message<'_>,
-    ) -> bool {
+    ) -> Sent {
         if self.cfg.deny.as_ref().is_some_and(|d| d.denies(to.ip())) {
             Stats::inc(&self.stats.denied);
-            return false;
+            return Sent::Failed;
         }
         self.out.clear();
         msg.encode_into(&mut self.out);
@@ -671,11 +739,12 @@ impl Actor {
                 // proving anything about our port. Renewed each time: a
                 // node we talk to all the time never ages out.
                 self.contacted.remember(&contact_key(to.ip()));
-                true
+                Sent::Yes
             }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Sent::Throttled,
             Err(_) => {
                 Stats::inc(&self.stats.send_errors);
-                false
+                Sent::Failed
             }
         }
     }
@@ -703,6 +772,11 @@ impl Actor {
         method: Method<'_>,
         purpose: Purpose,
     ) -> Sent {
+        let to = lodestar_network_policy::normalize(to);
+        if !endpoint_allowed(&self.cfg, to) || self.families[family].ipv6 != to.is_ipv6() {
+            Stats::inc(&self.stats.denied);
+            return Sent::Failed;
+        }
         let now = Instant::now();
         if self.pending.len() >= self.cfg.intensity.max_outstanding()
             || !self.query_rate.try_take(now)
@@ -710,12 +784,15 @@ impl Actor {
             Stats::inc(&self.stats.throttled);
             return Sent::Throttled;
         }
-        let tid = loop {
-            self.next_tid = self.next_tid.wrapping_add(1);
-            if !self.pending.contains_key(&self.next_tid) {
-                break self.next_tid;
-            }
+        // Never reuse a wire token in this process, even after success.
+        let Some(tid) = self.next_tid.checked_add(1) else {
+            return Sent::Throttled;
         };
+        self.next_tid = tid;
+        if matches!(purpose, Purpose::Sample) && !self.sampler.reserve(to, tid, now) {
+            Stats::inc(&self.stats.sample_deferred);
+            return Sent::Throttled;
+        }
         let tid_bytes = tid.to_be_bytes();
         let id = match node {
             Some(n) => self.id_for(&n),
@@ -728,8 +805,12 @@ impl Actor {
             read_only: self.cfg.read_only,
             body: Body::Query(Query { id, method }),
         };
-        if !self.send(sockets, family, to, &msg) {
-            return Sent::Failed;
+        let sent = self.send(sockets, family, to, &msg);
+        if sent != Sent::Yes {
+            if matches!(purpose, Purpose::Sample) {
+                self.sampler.abort(to, tid);
+            }
+            return sent;
         }
         Stats::inc(&self.stats.queries_out);
         *self.pending_addrs.entry(to).or_default() += 1;
@@ -746,8 +827,18 @@ impl Actor {
         Sent::Yes
     }
 
-    fn take_pending(&mut self, tid: u16) -> Pending {
+    fn take_pending(&mut self, tid: u64) -> Pending {
         let p = self.pending.remove(&tid).expect("caller checked the tid");
+        if let Purpose::Lookup(lid) = p.purpose {
+            if let Some(r) = self
+                .lookups
+                .get(&lid)
+                .and_then(|l| l.owner)
+                .and_then(|o| self.peer_requests.get_mut(&o))
+            {
+                r.inflight = r.inflight.saturating_sub(1);
+            }
+        }
         if let std::collections::hash_map::Entry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
             *e.get_mut() -= 1;
             if *e.get() == 0 {
@@ -929,7 +1020,7 @@ impl Actor {
                 nodes6: CompactNodes::v6(&v6).unwrap_or_default(),
                 interval: Some(SAMPLE_INTERVAL),
                 num: Some(self.recent.len() as u32),
-                samples: krpc::Samples::new(&samples).unwrap_or_default(),
+                samples: Some(krpc::Samples::new(&samples).unwrap_or_default()),
                 ..Response::default()
             }),
             Method::Unknown(_) => Body::Error(ErrorBody {
@@ -980,7 +1071,7 @@ impl Actor {
         r: Option<&Response<'_>>,
         from: SocketAddr,
     ) {
-        let Ok(tid) = <[u8; 2]>::try_from(msg.transaction_id).map(u16::from_be_bytes) else {
+        let Ok(tid) = <[u8; 8]>::try_from(msg.transaction_id).map(u64::from_be_bytes) else {
             return;
         };
         let Some(pending) = self.pending.get(&tid) else {
@@ -1036,7 +1127,9 @@ impl Actor {
                 r.nodes
             };
             for n in nodes.iter() {
-                if !Actor::is_self(&self.ids, &self.local_addrs, &n) {
+                if endpoint_allowed(&self.cfg, n.addr)
+                    && !Actor::is_self(&self.ids, &self.local_addrs, &n)
+                {
                     self.sampler.offer(n, now_i);
                 }
             }
@@ -1048,8 +1141,8 @@ impl Actor {
                 (Some(r), true) => {
                     // A reply without any BEP 51 field means "not supported".
                     let supported =
-                        !r.samples.is_empty() || r.interval.is_some() || r.num.is_some();
-                    for h in r.samples.iter() {
+                        r.samples.is_some() && r.interval.is_some_and(|i| i <= SAMPLE_INTERVAL);
+                    for h in r.samples.iter().flat_map(|s| s.iter()) {
                         self.harvest_hash(h, Source::Sample, Vec::new());
                     }
                     let wait = if supported {
@@ -1057,12 +1150,14 @@ impl Actor {
                     } else {
                         sampler::UNSUPPORTED_BACKOFF
                     };
-                    self.sampler.sampled(from, wait, now_i);
+                    if !self.sampler.complete(from, tid, wait, now_i) {
+                        Stats::inc(&self.stats.sample_stale);
+                    }
                 }
                 _ => {
                     Stats::inc(&self.stats.sample_failures);
                     self.sampler
-                        .sampled(from, sampler::UNSUPPORTED_BACKOFF, now_i);
+                        .complete(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
                 }
             }
             return;
@@ -1082,17 +1177,38 @@ impl Actor {
                     r.nodes
                 };
                 let (ids, local) = (&self.ids, &self.local_addrs);
-                let others = nodes.iter().filter(|n| !Actor::is_self(ids, local, n));
+                let cfg = &self.cfg;
+                let ipv6 = self.families[lookup.family].ipv6;
+                let others = nodes
+                    .iter()
+                    .map(|mut n| {
+                        n.addr = lodestar_network_policy::normalize(n.addr);
+                        n
+                    })
+                    .filter(|n| {
+                        n.addr.is_ipv6() == ipv6
+                            && endpoint_allowed(cfg, n.addr)
+                            && !Actor::is_self(ids, local, n)
+                    });
+                let mut unique = HashSet::new();
+                let peers: Vec<_> = r
+                    .values
+                    .iter()
+                    .copied()
+                    .map(lodestar_network_policy::normalize)
+                    .filter(|p| endpoint_allowed(cfg, *p) && unique.insert(*p))
+                    .take(64)
+                    .collect();
                 match pending.id {
                     Some(id) => {
                         if lookup.scrape {
                             lookup.record_blooms(&id, r.seeds_bloom, r.peers_bloom);
                         }
-                        lookup.on_response(&id, others, &r.values);
+                        lookup.on_response(&id, others, &peers);
                     }
                     None => {
                         lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
-                        lookup.on_response(&r.id, others, &r.values);
+                        lookup.on_response(&r.id, others, &peers);
                     }
                 }
             }
@@ -1125,10 +1241,45 @@ impl Actor {
         }
     }
 
-    /// Starts a get_peers lookup for a hash the pipeline asked about.
-    fn start_get_peers(&mut self, sockets: &[StdUdpSocket], hash: InfoHash) {
+    fn start_peer_request(
+        &mut self,
+        sockets: &[StdUdpSocket],
+        hash: InfoHash,
+        reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
+    ) {
+        if reply.as_ref().is_some_and(|r| r.is_closed()) {
+            return;
+        }
+        let owner = self.next_request;
+        self.next_request = self.next_request.wrapping_add(1);
+        while self.peer_requests.contains_key(&self.next_request) || self.next_request == owner {
+            self.next_request = self.next_request.wrapping_add(1);
+        }
         self.active_get_peers += 1;
-        self.start_lookup(sockets, 0, NodeId(hash.0), &[], &[], Some(hash));
+        self.peer_requests.insert(
+            owner,
+            PeerRequest {
+                hash,
+                reply,
+                remaining: self.families.len(),
+                inflight: 0,
+                sent: 0,
+                peers: HashSet::new(),
+                started: Instant::now(),
+            },
+        );
+        for family in 0..self.families.len() {
+            self.start_lookup_as(
+                sockets,
+                family,
+                NodeId(hash.0),
+                &[],
+                &[],
+                Some(hash),
+                false,
+                Some(owner),
+            );
+        }
     }
 
     /// Starts a BEP 33 scrape lookup; `reply` gets the estimate when it
@@ -1143,7 +1294,7 @@ impl Actor {
         // A hash-bearing lookup always starts, under the next id; the
         // waiter is in place before the first drive, which may finish it.
         self.scrape_waiters.insert(self.next_lookup, reply);
-        self.start_lookup_as(sockets, 0, NodeId(hash.0), &[], &[], Some(hash), true);
+        self.start_lookup_as(sockets, 0, NodeId(hash.0), &[], &[], Some(hash), true, None);
     }
 
     /// Answers a finished (or timed-out) scrape lookup with its counts.
@@ -1166,8 +1317,9 @@ impl Actor {
     /// Lookups that aren't for a hash: bootstrap, refresh, exploration.
     fn maintenance_lookups(&self) -> usize {
         self.lookups
-            .len()
-            .saturating_sub(self.active_get_peers + self.active_scrapes)
+            .values()
+            .filter(|l| l.info_hash.is_none())
+            .count()
     }
 
     /// Starts a lookup (find_node, or get_peers when `info_hash` is set)
@@ -1182,7 +1334,9 @@ impl Actor {
         seeds: &[SocketAddr],
         info_hash: Option<InfoHash>,
     ) {
-        self.start_lookup_as(sockets, family, target, known, seeds, info_hash, false);
+        self.start_lookup_as(
+            sockets, family, target, known, seeds, info_hash, false, None,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1195,23 +1349,32 @@ impl Actor {
         seeds: &[SocketAddr],
         info_hash: Option<InfoHash>,
         scrape: bool,
+        owner: Option<u32>,
     ) {
         if info_hash.is_none() && self.maintenance_lookups() >= MAX_LOOKUPS {
             return;
         }
         let lid = self.next_lookup;
         self.next_lookup = self.next_lookup.wrapping_add(1);
+        while self.lookups.contains_key(&self.next_lookup) || self.next_lookup == lid {
+            self.next_lookup = self.next_lookup.wrapping_add(1);
+        }
         let mut lookup = Lookup::new(target, family);
         lookup.info_hash = info_hash;
         lookup.scrape = scrape;
+        lookup.owner = owner;
         for n in self.families[family]
             .table
             .closest(&target, 16, self.now_secs())
         {
-            lookup.add(n);
+            if endpoint_allowed(&self.cfg, n.addr) {
+                lookup.add(n);
+            }
         }
         for n in known {
-            if !Actor::is_self(&self.ids, &self.local_addrs, n) {
+            if endpoint_allowed(&self.cfg, n.addr)
+                && !Actor::is_self(&self.ids, &self.local_addrs, n)
+            {
                 lookup.add(*n);
             }
         }
@@ -1237,7 +1400,36 @@ impl Actor {
         self.drive_lookup(sockets, lid);
     }
 
+    /// Check every continuation, including response-driven ones, before dispatch.
+    fn finish_if_due(&mut self, lid: u32, now: Instant) -> bool {
+        let Some(l) = self.lookups.get(&lid) else {
+            return true;
+        };
+        let request = l.owner.and_then(|o| self.peer_requests.get(&o));
+        let expired = now.duration_since(l.started)
+            >= if l.scrape {
+                SCRAPE_DEADLINE
+            } else {
+                LOOKUP_DEADLINE
+            }
+            || request.is_some_and(|r| now.duration_since(r.started) >= LOOKUP_DEADLINE);
+        let cancelled = request.is_some_and(|r| r.reply.as_ref().is_some_and(|s| s.is_closed()))
+            || self.scrape_waiters.get(&lid).is_some_and(|s| s.is_closed());
+        if expired || cancelled {
+            if expired {
+                Stats::inc(&self.stats.lookup_deadlines);
+            }
+            self.finish_lookup(lid);
+            true
+        } else {
+            false
+        }
+    }
+
     fn drive_lookup(&mut self, sockets: &[StdUdpSocket], lid: u32) {
+        if self.finish_if_due(lid, Instant::now()) {
+            return;
+        }
         let Some(lookup) = self.lookups.get_mut(&lid) else {
             return;
         };
@@ -1247,7 +1439,19 @@ impl Actor {
             lookup.info_hash,
             lookup.scrape,
         );
-        let next = lookup.next();
+        let owner = lookup.owner;
+        let slots = owner
+            .and_then(|o| self.peer_requests.get(&o))
+            .map_or(3, |r| {
+                if r.reply.as_ref().is_some_and(|s| s.is_closed()) {
+                    0
+                } else {
+                    3usize
+                        .saturating_sub(r.inflight)
+                        .min(MAX_PEER_QUERIES.saturating_sub(r.sent))
+                }
+            });
+        let next = lookup.next_limit(slots);
         let mut throttled = false;
         for n in next {
             if throttled {
@@ -1281,28 +1485,78 @@ impl Actor {
                 continue;
             };
             match sent {
-                Sent::Yes => {}
+                Sent::Yes => {
+                    if let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o)) {
+                        r.inflight += 1;
+                        r.sent += 1;
+                    }
+                }
                 // A scrape's budget was paid when it started, so running
                 // short of queries delays it rather than spoiling it.
-                Sent::Throttled if scrape => {
+                Sent::Throttled => {
                     l.retry_later(&n.id);
                     throttled = true;
                     if !self.stalled.contains(&lid) {
                         self.stalled.push(lid);
                     }
                 }
-                Sent::Throttled | Sent::Failed => l.on_failure(&n.id),
+                Sent::Failed => l.on_failure(&n.id),
             }
         }
-        if self.lookups.get(&lid).is_some_and(Lookup::is_done) {
-            let done = self.lookups.remove(&lid).expect("checked above");
-            if done.scrape {
-                self.finish_scrape(lid, &done);
-            } else if let Some(hash) = done.info_hash {
+        let exhausted = owner
+            .and_then(|o| self.peer_requests.get(&o))
+            .is_some_and(|r| r.sent >= MAX_PEER_QUERIES && r.inflight == 0);
+        if exhausted || self.lookups.get(&lid).is_some_and(Lookup::is_done) {
+            self.finish_lookup(lid);
+        } else if !self.stalled.contains(&lid) {
+            // Also covers immediate send failure with fresh candidates but
+            // no pending RPC to trigger another drive.
+            self.stalled.push(lid);
+        }
+    }
+
+    fn finish_lookup(&mut self, lid: u32) {
+        // Settle RPC ownership before removing the lookup that identifies it.
+        let tids: Vec<_> = self
+            .pending
+            .iter()
+            .filter_map(|(t, p)| {
+                matches!(p.purpose, Purpose::Lookup(id) if id == lid).then_some(*t)
+            })
+            .collect();
+        for t in tids {
+            self.take_pending(t);
+        }
+        self.stalled.retain(|id| *id != lid);
+        let Some(done) = self.lookups.remove(&lid) else {
+            return;
+        };
+        if done.scrape {
+            self.finish_scrape(lid, &done);
+        } else if let Some(owner) = done.owner {
+            let Some(r) = self.peer_requests.get_mut(&owner) else {
+                return;
+            };
+            for p in done.peers {
+                if r.peers.len() < 64 {
+                    r.peers.insert(p);
+                }
+            }
+            r.remaining -= 1;
+            if r.remaining == 0 {
+                let r = self.peer_requests.remove(&owner).expect("present");
                 self.active_get_peers -= 1;
-                let mut peers: Vec<SocketAddr> = done.peers.into_iter().collect();
+                let mut peers: Vec<_> = r.peers.into_iter().collect();
                 peers.sort_unstable();
-                self.harvest_hash(hash, Source::Lookup, peers);
+                if let Some(reply) = r.reply {
+                    if reply.is_closed() {
+                        Stats::inc(&self.stats.peer_cancelled);
+                    }
+                    Stats::inc(&self.stats.lookups_completed);
+                    let _ = reply.send(peers);
+                } else {
+                    self.harvest_hash(r.hash, Source::Lookup, peers);
+                }
             }
         }
     }
@@ -1334,7 +1588,7 @@ impl Actor {
 
         // Timeouts.
         let timeout = self.cfg.query_timeout;
-        let expired: Vec<u16> = self
+        let expired: Vec<u64> = self
             .pending
             .iter()
             .filter(|(_, p)| now_i.duration_since(p.sent) >= timeout)
@@ -1349,7 +1603,8 @@ impl Actor {
             }
             if let Purpose::Sample = p.purpose {
                 Stats::inc(&self.stats.sample_failures);
-                self.sampler.sampled(p.to, SAMPLE_TIMEOUT_BACKOFF, now_i);
+                self.sampler
+                    .complete(p.to, tid, SAMPLE_TIMEOUT_BACKOFF, now_i);
             }
             if let Purpose::Lookup(lid) = p.purpose {
                 if let Some(l) = self.lookups.get_mut(&lid) {
@@ -1392,19 +1647,24 @@ impl Actor {
         }
 
         self.peer_store.expire(now_i);
-        if now_i.duration_since(self.last_prune) >= Duration::from_secs(60) {
-            self.sampler.prune(now_i);
-            self.last_prune = now_i;
-        }
+        self.sampler.prune(now_i);
+        self.stats
+            .sample_inflight
+            .store(self.sampler.inflight() as u64, Ordering::Relaxed);
+        self.stats
+            .sample_cooling
+            .store(self.sampler.cooling() as u64, Ordering::Relaxed);
         if now_i.duration_since(self.last_summary.0) >= crate::log_events::SUMMARY_EVERY {
             self.summarize(now_i);
         }
         while !self.paused && self.active_get_peers < MAX_GET_PEERS {
-            let Some(hash) = self.get_peers_queue.pop_front() else {
+            let Some((hash, reply)) = self.get_peers_queue.pop_front() else {
                 break;
             };
-            self.start_get_peers(sockets, hash);
+            self.start_peer_request(sockets, hash, reply);
         }
+        self.get_peers_queue
+            .retain(|(_, r)| r.as_ref().is_none_or(|r| !r.is_closed()));
         self.scrape_tick(sockets, now_i);
         if self.cfg.harvest.sample && !self.paused {
             self.sample_tick(sockets, now_i);
@@ -1426,6 +1686,26 @@ impl Actor {
             let _ = self.save();
         }
 
+        self.stats
+            .peer_active
+            .store(self.active_get_peers as u64, Ordering::Relaxed);
+        self.stats
+            .peer_queued
+            .store(self.get_peers_queue.len() as u64, Ordering::Relaxed);
+        self.stats
+            .lookup_scheduled
+            .store(self.stalled.len() as u64, Ordering::Relaxed);
+        self.stats
+            .sample_frontier
+            .store(self.sampler.frontier_len() as u64, Ordering::Relaxed);
+        self.stats.sample_suppression_seconds.store(
+            self.cfg
+                .sample_start_delay
+                .unwrap_or(sampler::MAX_INTERVAL + self.cfg.query_timeout)
+                .saturating_sub(now_i.duration_since(self.epoch))
+                .as_secs(),
+            Ordering::Relaxed,
+        );
         let nodes: usize = self.families.iter().map(|f| f.table.len()).sum();
         self.stats
             .routing_nodes
@@ -1439,18 +1719,12 @@ impl Actor {
     /// queries, answer the ones past their deadline with what they have,
     /// and start queued scrapes as the budget allows.
     fn scrape_tick(&mut self, sockets: &[StdUdpSocket], now_i: Instant) {
+        let ids: Vec<_> = self.lookups.keys().copied().collect();
+        for lid in ids {
+            self.finish_if_due(lid, now_i);
+        }
         for lid in std::mem::take(&mut self.stalled) {
             self.drive_lookup(sockets, lid);
-        }
-        let late: Vec<u32> = self
-            .lookups
-            .iter()
-            .filter(|(_, l)| l.scrape && now_i.duration_since(l.started) >= SCRAPE_DEADLINE)
-            .map(|(lid, _)| *lid)
-            .collect();
-        for lid in late {
-            let lookup = self.lookups.remove(&lid).expect("listed above");
-            self.finish_scrape(lid, &lookup);
         }
         while !self.paused && self.active_scrapes < MAX_SCRAPES {
             // A caller that stopped waiting doesn't cost a lookup.
@@ -1474,12 +1748,26 @@ impl Actor {
     /// frontier from the routing tables and exploring a random region of
     /// the keyspace when it runs low.
     fn sample_tick(&mut self, sockets: &[StdUdpSocket], now_i: Instant) {
+        if now_i.duration_since(self.epoch)
+            < self
+                .cfg
+                .sample_start_delay
+                .unwrap_or(sampler::MAX_INTERVAL + self.cfg.query_timeout)
+        {
+            return;
+        }
+        if self.sampler.saturated() {
+            Stats::inc(&self.stats.sample_deferred);
+            return;
+        }
         if self.sampler.frontier_len() < LOW_FRONTIER {
             for f in 0..self.families.len() {
                 let entries: Vec<NodeInfo> =
                     self.families[f].table.entries().map(|e| e.info).collect();
                 for n in entries {
-                    self.sampler.offer(n, now_i);
+                    if endpoint_allowed(&self.cfg, n.addr) {
+                        self.sampler.offer(n, now_i);
+                    }
                 }
                 let target = NodeId(self.rng.random());
                 self.start_lookup(sockets, f, target, &[], &[], None);
@@ -1507,11 +1795,14 @@ impl Actor {
                 target: NodeId(self.rng.random()),
                 want: Want::default(),
             };
-            if !self.query(sockets, f, n.addr, Some(n.id), method, Purpose::Sample) {
-                self.sampler.offer(n, now_i);
-                break;
+            match self.try_query(sockets, f, n.addr, Some(n.id), method, Purpose::Sample) {
+                Sent::Yes => Stats::inc(&self.stats.samples_sent),
+                Sent::Throttled => {
+                    self.sampler.offer(n, now_i);
+                    break;
+                }
+                Sent::Failed => {}
             }
-            Stats::inc(&self.stats.samples_sent);
         }
     }
 
@@ -1549,6 +1840,231 @@ fn source_label(s: Source) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture() -> (Actor, Vec<StdUdpSocket>) {
+        let socket = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let addr = socket.local_addr().unwrap();
+        let cfg = Config {
+            bind: vec![addr],
+            bootstrap: vec![],
+            allow_private: true,
+            sample_start_delay: Some(Duration::ZERO),
+            ..Default::default()
+        };
+        let actor = Actor::new(
+            cfg,
+            Arc::new(Stats::default()),
+            vec![addr],
+            None,
+            vec![],
+            None,
+            Instant::now(),
+            StdRng::seed_from_u64(3),
+        );
+        (actor, vec![socket])
+    }
+
+    fn candidate(addr: SocketAddr) -> NodeInfo {
+        NodeInfo {
+            id: NodeId([42; 20]),
+            addr,
+        }
+    }
+
+    #[test]
+    fn sample_saturation_preserves_lookup_service_and_stale_wire_replies_are_ignored() {
+        let (mut a, sockets) = fixture();
+        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        a.sampler = Sampler::with_capacity(1);
+        assert!(a.sampler.reserve(remote, 0, Instant::now()));
+        assert!(
+            a.sampler
+                .complete(remote, 0, sampler::MAX_INTERVAL, Instant::now())
+        );
+        assert!(a.sampler.saturated());
+        a.families[0]
+            .table
+            .insert(candidate(remote), Contact::Response, 0);
+        let (tx, mut rx) = oneshot::channel();
+        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx));
+        assert_eq!(a.pending.len(), 1);
+        let tid = *a.pending.keys().next().unwrap();
+        let tid_bytes = tid.to_be_bytes();
+        let response = Response {
+            id: candidate(remote).id,
+            values: vec![remote],
+            ..Default::default()
+        };
+        let msg = Message {
+            transaction_id: &tid_bytes,
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Response(response.clone()),
+        };
+        a.on_response(
+            &sockets,
+            0,
+            &msg,
+            Some(&response),
+            "127.0.0.2:65530".parse().unwrap(),
+        );
+        assert_eq!(a.pending.len(), 1, "wrong endpoint cannot settle work");
+        a.on_response(&sockets, 0, &msg, Some(&response), remote);
+        assert_eq!(rx.try_recv().unwrap(), vec![remote]);
+        a.on_response(&sockets, 0, &msg, Some(&response), remote);
+        assert_eq!(a.stats.snapshot().lookups_completed, 1);
+        assert_eq!(a.active_get_peers, 0);
+        assert!(a.pending_addrs.is_empty());
+        assert_eq!(a.sampler.cooling(), 1);
+    }
+
+    #[test]
+    fn rejected_and_cancelled_admission_releases_every_slot() {
+        let (mut a, sockets) = fixture();
+        let mut held = Vec::new();
+        for _ in 0..MAX_GET_PEERS {
+            let (tx, mut rx) = oneshot::channel();
+            a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+            held.push(rx.try_recv().unwrap().unwrap());
+        }
+        let (tx, mut rx) = oneshot::channel();
+        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+        assert!(rx.try_recv().unwrap().is_none());
+        drop(held);
+        a.maintain(&sockets);
+        assert!(a.get_peers_queue.is_empty());
+        assert!(a.peer_requests.is_empty());
+        assert!(a.pending.is_empty());
+        assert_eq!(a.active_get_peers, 0);
+    }
+
+    #[test]
+    fn throttled_and_failed_lookups_have_a_continuation_and_deadline() {
+        let (mut a, sockets) = fixture();
+        a.query_rate.tokens = 0.0;
+        a.query_rate.rate = 0.0;
+        let candidates: Vec<_> = (1..=10)
+            .map(|i| NodeInfo {
+                id: NodeId([i; 20]),
+                addr: "127.0.0.1:65530".parse().unwrap(),
+            })
+            .collect();
+        a.start_lookup(&sockets, 0, NodeId([4; 20]), &candidates, &[], None);
+        let lid = *a.lookups.keys().next().unwrap();
+        assert!(a.pending.is_empty());
+        assert!(a.stalled.contains(&lid));
+        // Exercise permanent failure after admission (e.g. a live deny update).
+        a.query_rate.tokens = 10.0;
+        a.cfg.deny = Some(super::super::Deny(Arc::new(|_| true)));
+        a.drive_lookup(&sockets, lid);
+        assert!(a.lookups.contains_key(&lid));
+        assert!(
+            a.stalled.contains(&lid),
+            "fresh candidates survive a whole failed batch"
+        );
+        for _ in 0..4 {
+            a.drive_lookup(&sockets, lid);
+        }
+        assert!(!a.lookups.contains_key(&lid));
+        assert!(!a.stalled.contains(&lid));
+        a.cfg.deny = None;
+        a.query_rate.tokens = 0.0;
+        a.start_lookup(
+            &sockets,
+            0,
+            NodeId([4; 20]),
+            &[candidate("127.0.0.1:65530".parse().unwrap())],
+            &[],
+            None,
+        );
+        for l in a.lookups.values_mut() {
+            l.started -= LOOKUP_DEADLINE;
+        }
+        a.scrape_tick(&sockets, Instant::now());
+        assert!(a.lookups.is_empty());
+        assert!(a.pending_addrs.is_empty());
+    }
+
+    #[test]
+    fn dual_stack_cancellation_cleans_shared_rpc_ownership() {
+        let (mut a, mut sockets) = fixture();
+        let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+        v6.set_nonblocking(true).unwrap();
+        sockets.push(v6);
+        a.families.push(Family {
+            table: RoutingTable::new(a.ids[0], true),
+            ipv6: true,
+        });
+        for (family, addr) in ["127.0.0.1:65530", "[::1]:65530"].into_iter().enumerate() {
+            a.families[family]
+                .table
+                .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
+        }
+        let (tx, rx) = oneshot::channel();
+        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx));
+        assert_eq!(a.active_get_peers, 1);
+        assert_eq!(a.lookups.len(), 2);
+        assert_eq!(a.pending.len(), 2);
+        for l in a.lookups.values_mut() {
+            l.add(NodeInfo {
+                id: NodeId([43; 20]),
+                addr: if l.family == 0 {
+                    "127.0.0.1:65530".parse().unwrap()
+                } else {
+                    "[::1]:65530".parse().unwrap()
+                },
+            });
+        }
+        for lid in a.lookups.keys().copied().collect::<Vec<_>>() {
+            a.drive_lookup(&sockets, lid);
+        }
+        assert_eq!(
+            a.pending.len(),
+            3,
+            "family legs share one concurrency budget"
+        );
+        assert!(a.peer_requests.values().all(|r| r.inflight <= 3));
+        drop(rx);
+        a.scrape_tick(&sockets, Instant::now());
+        assert!(a.pending.is_empty());
+        assert!(a.pending_addrs.is_empty());
+        assert!(a.lookups.is_empty());
+        assert!(a.stalled.is_empty());
+        assert!(a.peer_requests.is_empty());
+        assert_eq!(a.active_get_peers, 0);
+    }
+
+    #[test]
+    fn sample_restart_suppression_and_wire_exhaustion_do_not_block_replies() {
+        let (mut a, sockets) = fixture();
+        let peer = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let to = peer.local_addr().unwrap();
+        a.sampler.offer(candidate(to), Instant::now());
+        a.cfg.sample_start_delay = None;
+        a.sample_tick(&sockets, Instant::now());
+        assert_eq!(a.sampler.frontier_len(), 1);
+        assert!(a.pending.is_empty());
+        a.next_tid = u64::MAX;
+        assert_eq!(
+            a.try_query(&sockets, 0, to, None, Method::Ping, Purpose::Ping),
+            Sent::Throttled
+        );
+        assert!(a.pending.is_empty());
+        let msg = Message {
+            transaction_id: b"reply",
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Response(Response {
+                id: a.ids[0],
+                ..Default::default()
+            }),
+        };
+        assert_eq!(a.send(&sockets, 0, to, &msg), Sent::Yes);
+        assert_eq!(a.stats.snapshot().packets_out, 1);
+    }
 
     #[test]
     fn external_ip_needs_a_quorum_of_distinct_reporters() {

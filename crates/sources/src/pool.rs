@@ -29,10 +29,14 @@ use tokio::task::{Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 
 use crate::funnel::{Funnel, Loss, Stage};
-use crate::plugin::{BoxFuture, Discovery, Shutdown};
+use crate::plugin::{BoxFuture, Discovery, PeerRequest, Shutdown};
 
 /// Fetches one key from one peer.
 pub trait Fetcher: Send + Sync + 'static {
+    fn allows(&self, _peer: SocketAddr) -> bool {
+        true
+    }
+
     fn fetch(
         &self,
         peer: SocketAddr,
@@ -45,6 +49,10 @@ pub trait Fetcher: Send + Sync + 'static {
 pub struct PeerWireFetcher(pub FetchOptions);
 
 impl Fetcher for PeerWireFetcher {
+    fn allows(&self, peer: SocketAddr) -> bool {
+        self.0.allows(peer)
+    }
+
     fn fetch(
         &self,
         peer: SocketAddr,
@@ -73,6 +81,7 @@ pub struct PoolConfig {
     /// How long a lookup may take to produce peers.
     pub lookup_wait: Duration,
     /// Wait before the second lookup; quadrupled for each later one.
+    /// A minimum 1 ms delay prevents zero-duration rejection retry loops.
     pub retry_backoff: Duration,
     /// Lookups per key before it's given up as lost.
     pub max_attempts: u16,
@@ -221,7 +230,7 @@ impl std::fmt::Debug for PoolHandle {
 pub struct PoolIo {
     pub discoveries: mpsc::Receiver<Discovery>,
     /// Peer-finder plugins' request channels.
-    pub peer_finders: Vec<mpsc::Sender<InfoHash>>,
+    pub peer_finders: Vec<mpsc::Sender<PeerRequest>>,
     pub out: mpsc::Sender<FetchedKey>,
     pub funnel: Arc<dyn Funnel>,
     pub shutdown: Shutdown,
@@ -263,6 +272,7 @@ pub fn spawn(
         admitted: VecDeque::new(),
         lookup_backlog: VecDeque::new(),
         lookups: 0,
+        requests: HashMap::new(),
         per_ip: HashMap::new(),
         tasks: JoinSet::new(),
         task_keys: HashMap::new(),
@@ -330,11 +340,22 @@ struct SourceQueue {
     in_rotation: bool,
 }
 
+enum FinderReply {
+    Admission(oneshot::Receiver<Option<oneshot::Receiver<Vec<SocketAddr>>>>),
+    Completion(oneshot::Receiver<Vec<SocketAddr>>),
+}
+
+struct Request {
+    generation: u32,
+    accepted: bool,
+    replies: Vec<FinderReply>,
+}
+
 struct Pool {
     cfg: PoolConfig,
     fetcher: Arc<dyn Fetcher>,
     funnel: Arc<dyn Funnel>,
-    finders: Vec<mpsc::Sender<InfoHash>>,
+    finders: Vec<mpsc::Sender<PeerRequest>>,
     out: mpsc::Sender<FetchedKey>,
     stats: Arc<PoolStats>,
     entries: HashMap<InfoHash, Entry>,
@@ -348,6 +369,7 @@ struct Pool {
     admitted: VecDeque<InfoHash>,
     lookup_backlog: VecDeque<InfoHash>,
     lookups: usize,
+    requests: HashMap<InfoHash, Request>,
     per_ip: HashMap<IpAddr, usize>,
     tasks: JoinSet<Result<Fetched, FailureKind>>,
     /// What each fetch task is fetching, so even a panicked task is
@@ -364,6 +386,8 @@ impl Pool {
         mut cmds: mpsc::Receiver<Cmd>,
         mut shutdown: Shutdown,
     ) -> Vec<QueuedKey> {
+        let mut replies = tokio::time::interval(Duration::from_millis(25));
+        replies.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             self.dispatch();
             self.publish_stats();
@@ -382,7 +406,12 @@ impl Pool {
                         self.on_result(key, peer, result).await;
                     }
                 }
+                _ = replies.tick(), if !self.requests.is_empty() => self.poll_replies(),
                 Some(cmd) = cmds.recv() => self.on_cmd(cmd),
+                _ = sleep_until(wake.unwrap_or_else(Instant::now)), if wake.is_some() => {
+                    self.poll_replies();
+                    self.on_timers();
+                }
                 Some(d) = discoveries.recv() => {
                     self.on_discovery(d);
                     // Take what's already waiting before dispatching again.
@@ -393,9 +422,7 @@ impl Pool {
                         }
                     }
                 }
-                _ = sleep_until(wake.unwrap_or_else(Instant::now)), if wake.is_some() => {
-                    self.on_timers();
-                }
+
             }
         }
         self.tasks.abort_all();
@@ -438,6 +465,7 @@ impl Pool {
     }
 
     fn on_discovery(&mut self, d: Discovery) {
+        self.poll_request(d.found.key);
         let key = d.found.key;
         // Peers for a key the pool has finished with (fetched, lost) are
         // late; they don't make it new again.
@@ -498,6 +526,13 @@ impl Pool {
             self.request_peers(key);
         } else {
             self.add_peers(key, &d.found.peers);
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|e| e.state == State::Backoff)
+            {
+                self.request_peers(key);
+            }
         }
     }
 
@@ -535,12 +570,19 @@ impl Pool {
             return;
         };
         let before = e.peers.len();
-        for p in peers {
+        for p in peers
+            .iter()
+            .copied()
+            .map(lodestar_network_policy::normalize)
+        {
+            if !self.fetcher.allows(p) {
+                continue;
+            }
             if e.peers.len() >= cap {
                 break;
             }
-            if !e.peers.contains(p) {
-                e.peers.push(*p);
+            if !e.peers.contains(&p) {
+                e.peers.push(p);
             }
         }
         if e.peers.len() == before {
@@ -555,6 +597,7 @@ impl Pool {
             State::Ready | State::Fetching => {}
             State::Lookup => {
                 self.lookups -= 1;
+                self.requests.remove(&key);
                 self.make_ready(key);
             }
             State::LookupQueued | State::Backoff => self.make_ready(key),
@@ -614,19 +657,112 @@ impl Pool {
             }
             return;
         }
-        e.attempts += 1;
         e.state = State::Lookup;
         let generation = e.generation;
-        // Private keys never go to public peer finding (§18.7, BEP 27);
-        // they wait for peers from their own source instead.
+        // Private keys wait for their own source; no public request is made.
+        let mut replies = Vec::new();
         if !e.private {
-            for f in &self.finders {
-                let _ = f.try_send(key);
+            for finder in &self.finders {
+                let (admit, rx) = oneshot::channel();
+                if finder.try_send(PeerRequest { key, admit }).is_ok() {
+                    replies.push(FinderReply::Admission(rx));
+                }
             }
         }
+        if replies.is_empty() {
+            e.state = State::Backoff;
+            self.schedule(
+                Instant::now() + self.cfg.retry_backoff.max(Duration::from_secs(1)),
+                key,
+                generation,
+            );
+            return;
+        }
+        self.requests.insert(
+            key,
+            Request {
+                generation,
+                accepted: false,
+                replies,
+            },
+        );
         self.lookups += 1;
         let at = Instant::now() + self.cfg.lookup_wait;
         self.schedule(at, key, generation);
+    }
+
+    /// Poll only the bounded set of owned requests; no task per discovery.
+    fn poll_replies(&mut self) {
+        let keys: Vec<_> = self.requests.keys().copied().collect();
+        for key in keys {
+            self.poll_request(key);
+        }
+    }
+
+    fn poll_request(&mut self, key: InfoHash) {
+        use tokio::sync::oneshot::error::TryRecvError;
+        let Some(mut request) = self.requests.remove(&key) else {
+            return;
+        };
+        if !self
+            .entries
+            .get(&key)
+            .is_some_and(|e| e.state == State::Lookup && e.generation == request.generation)
+        {
+            return;
+        }
+        let mut waiting = Vec::new();
+        let mut peers = Vec::new();
+        let mut unique = HashSet::new();
+        for mut reply in request.replies {
+            if let FinderReply::Admission(rx) = &mut reply {
+                match rx.try_recv() {
+                    Ok(Some(done)) => {
+                        if !request.accepted {
+                            self.entries.get_mut(&key).expect("present").attempts += 1;
+                            request.accepted = true;
+                        }
+                        reply = FinderReply::Completion(done);
+                    }
+                    Err(TryRecvError::Empty) => {
+                        waiting.push(reply);
+                        continue;
+                    }
+                    Ok(None) | Err(TryRecvError::Closed) => continue,
+                }
+            }
+            if let FinderReply::Completion(rx) = &mut reply {
+                match rx.try_recv() {
+                    Ok(found) => {
+                        for p in found.into_iter().map(lodestar_network_policy::normalize) {
+                            if peers.len() >= self.cfg.max_peers_per_key {
+                                break;
+                            }
+                            if self.fetcher.allows(p) && unique.insert(p) {
+                                peers.push(p);
+                            }
+                        }
+                    }
+                    Err(TryRecvError::Empty) => waiting.push(reply),
+                    Err(TryRecvError::Closed) => {}
+                }
+            }
+        }
+        request.replies = waiting;
+        let finished = request.replies.is_empty();
+        self.requests.insert(key, request);
+        self.add_peers(key, &peers);
+        if finished
+            && self
+                .entries
+                .get(&key)
+                .is_some_and(|e| e.state == State::Lookup)
+        {
+            self.requests.remove(&key);
+            self.lookups -= 1;
+            self.entries.get_mut(&key).expect("present").state = State::Backoff;
+            self.back_off(key);
+        }
     }
 
     fn schedule(&mut self, at: Instant, key: InfoHash, generation: u32) {
@@ -652,6 +788,7 @@ impl Pool {
                 State::Lookup => {
                     // No peers turned up in time.
                     self.lookups -= 1;
+                    self.requests.remove(&key);
                     e.state = State::Backoff;
                     self.back_off(key);
                 }
@@ -673,8 +810,9 @@ impl Pool {
         e.state = State::Backoff;
         e.generation = e.generation.wrapping_add(1);
         let generation = e.generation;
-        let delay =
-            base.saturating_mul(4u32.saturating_pow(u32::from(e.attempts.saturating_sub(1))));
+        let delay = base
+            .max(Duration::from_millis(1))
+            .saturating_mul(4u32.saturating_pow(u32::from(e.attempts.saturating_sub(1))));
         self.schedule(Instant::now() + delay, key, generation);
     }
 
@@ -875,6 +1013,7 @@ impl Pool {
     fn lose(&mut self, key: InfoHash, loss: Loss) {
         let e = self.entries.remove(&key).expect("present");
         if e.state == State::Lookup {
+            self.requests.remove(&key);
             self.lookups -= 1;
         }
         self.lose_untracked(&key, e.cohort, e.source, loss);
@@ -896,7 +1035,7 @@ impl Pool {
                 strategy: e.strategy,
                 priority: u8::from(e.interest),
                 // The attempt in progress doesn't count as used.
-                attempts: if e.state == State::Lookup {
+                attempts: if self.requests.get(key).is_some_and(|r| r.accepted) {
                     e.attempts.saturating_sub(1)
                 } else {
                     e.attempts

@@ -36,6 +36,7 @@ fn info_dict(size: usize) -> Vec<u8> {
 
 fn opts(encryption: Encryption) -> FetchOptions {
     FetchOptions {
+        allow_private: true,
         timeout: Duration::from_secs(3),
         encryption,
         ..FetchOptions::default()
@@ -49,6 +50,24 @@ fn fetch_future_is_send() {
     let o = opts(Encryption::Prefer);
     let f = fetch("127.0.0.1:1".parse().unwrap(), InfoHash([0; 20]), &o);
     assert_send(&f);
+}
+
+#[tokio::test]
+async fn public_fetch_defaults_reject_local_and_mapped_destinations_before_dial() {
+    let opts = FetchOptions::default();
+    for addr in [
+        "127.0.0.1:80",
+        "[::ffff:127.0.0.1]:80",
+        "[::1]:80",
+        "10.1.2.3:80",
+        "1.1.1.1:0",
+    ] {
+        assert!(matches!(
+            fetch(addr.parse().unwrap(), InfoHash([1; 20]), &opts).await,
+            Err(Error::Denied)
+        ));
+    }
+    assert_eq!(opts.stats.attempts(lodestar_peer_wire::Transport::Tcp), 0);
 }
 
 #[tokio::test]

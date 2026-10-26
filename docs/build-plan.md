@@ -3,6 +3,8 @@
 > Written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
 
 ## Context
+
+**Crawler follow-up (2026-10-25):** [CR-0 and the subsequent crawler sequence](plan/dht-crawler-implementation-plan-2026-10-25.md) consolidate the post-v0.5 architecture review. CR-0 covers sampler/restart correctness, endpoint checks, diagnostics and reliable lookup ownership; the repaired baseline follows before yield experiments. This adds a cross-cutting correctness prerequisite without renumbering P0–P4 or making packaging depend on an experiment. See [CR-0 decisions](decisions/2026-10-25-CR-0.md).
 M0–M3 are merged: the crawler with MSE fetch, store schema v3, the Tantivy torrent and file indexes, the query language, enrichment and the worker boundary. There's also a minimal API (setup, login, parse, search with offset paging, detail, files) and a 211-line status page.
 
 M4 is being built **in other sessions**. Merged so far:

@@ -60,6 +60,8 @@ pub struct FetchOptions {
     pub stats: Arc<FetchStats>,
     /// Addresses never connected to, over any transport: subscribed IP blocklists (§20.13).
     pub deny: Option<Deny>,
+    /// Explicit opt-in for isolated/local workflows. Public discovery leaves false.
+    pub allow_private: bool,
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -98,7 +100,17 @@ impl Default for FetchOptions {
             utp: None,
             stats: Arc::new(FetchStats::default()),
             deny: None,
+            allow_private: false,
         }
+    }
+}
+
+impl FetchOptions {
+    /// Apply before retaining peers and again immediately before a dial.
+    pub fn allows(&self, addr: SocketAddr) -> bool {
+        let addr = lodestar_network_policy::normalize(addr);
+        lodestar_network_policy::allows(addr, self.allow_private)
+            && !self.deny.as_ref().is_some_and(|d| d.denies(addr.ip()))
     }
 }
 
@@ -150,7 +162,8 @@ async fn fetch_any(
     info_hash: InfoHash,
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
-    if opts.deny.as_ref().is_some_and(|d| d.denies(addr.ip())) {
+    let addr = lodestar_network_policy::normalize(addr);
+    if !opts.allows(addr) {
         return Err(Error::Denied);
     }
     let deadline = Instant::now() + opts.timeout;
@@ -231,6 +244,9 @@ async fn attempt(
     encrypted: bool,
     connected: &AtomicBool,
 ) -> Result<Fetched, Error> {
+    if !opts.allows(addr) {
+        return Err(Error::Denied);
+    }
     let timed_out = || {
         opts.stats.connect_timed_out(transport);
         Error::Timeout

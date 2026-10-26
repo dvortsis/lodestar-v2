@@ -10,11 +10,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lodestar_metainfo::InfoHash;
 use lodestar_store::SourceId;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::manifest::Manifest;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A bounded peer lookup. `Some` acknowledges ownership; `None` rejects
+/// without consuming an attempt. Dropping either receiver cancels work.
+#[derive(Debug)]
+pub struct PeerRequest {
+    pub key: InfoHash,
+    pub admit: oneshot::Sender<Option<oneshot::Receiver<Vec<SocketAddr>>>>,
+}
 
 /// A source of keys (and, later, claims, name hints and enrichment).
 ///
@@ -47,11 +55,10 @@ pub struct SourceCtx {
     /// Keys the fetch pool wants peers for. Set only for plugins of kind
     /// [`PeerFinder`](crate::Kind::PeerFinder); never carries a
     /// `private_source` key.
-    pub peer_requests: Option<mpsc::Receiver<InfoHash>>,
-    /// Where peer finders send what they found for those requests: straight
-    /// to the fetch pool, skipping the have-filter (the pool asked because
-    /// it wants the key, even one that's stored with an incomplete file
-    /// list).
+    pub peer_requests: Option<mpsc::Receiver<PeerRequest>>,
+    /// Optional unsolicited peer updates, bypassing the have-filter. Owned
+    /// requests return their terminal batch through `PeerRequest::admit`,
+    /// never through this lossy emitter.
     pub peer_replies: Option<Emitter>,
     pub shutdown: Shutdown,
 }

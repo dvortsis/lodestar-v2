@@ -1578,6 +1578,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "proptest",
  "rand 0.10.3",
  "sha1",
@@ -1645,12 +1646,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-network-policy"
+version = "0.5.0"
+
+[[package]]
 name = "lodestar-peer-wire"
 version = "0.5.0"
 dependencies = [
  "lodestar-bencode",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-utp",
  "num-bigint",
@@ -1715,6 +1721,7 @@ name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-store",
  "tokio",
