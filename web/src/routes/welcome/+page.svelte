@@ -1,1 +1,5 @@
-<h1>Welcome</h1>
+<script lang="ts">
+	import WelcomePage from '$lib/features/auth/WelcomePage.svelte';
+</script>
+
+<WelcomePage />

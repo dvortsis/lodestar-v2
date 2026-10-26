@@ -40,5 +40,10 @@
 	"auth_error_rate_limited_countdown": "Try again in {seconds} s.",
 	"auth_error_unlocked": "You can try again now.",
 	"auth_error_network": "Lodestar isn't responding. Check that it's running, then try again.",
-	"auth_error_server": "Something went wrong on the server. Try again; if it keeps happening, check Lodestar's log."
+	"auth_error_server": "Something went wrong on the server. Try again; if it keeps happening, check Lodestar's log.",
+	"auth_welcome_title": "Setup complete",
+	"auth_welcome_lead": "Lodestar is ready. Start searching, or review your settings.",
+	"auth_welcome_search": "Go to Search",
+	"auth_welcome_settings": "Review settings",
+	"auth_welcome_retry": "Retry"
 }

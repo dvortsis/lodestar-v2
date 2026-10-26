@@ -4,7 +4,10 @@ import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/ov
 
 test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock, kbd }) => {
 	mock.on('getAuthStatus', { logged_in: false, setup_required: true });
-	mock.on('setup', { ok: true });
+	mock.on('setup', () => {
+		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		return { ok: true };
+	});
 	await go('/setup');
 	await kbd.tabTo(page.getByLabel('Setup token'));
 	await page.keyboard.type('ab12cd34ef567890');
@@ -16,6 +19,11 @@ test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock
 	await page.keyboard.type('correct horse battery');
 	await kbd.press('Enter');
 	await expect(page).toHaveURL(/\/welcome/);
+	await expect(page.getByRole('heading', { name: 'Setup complete' })).toBeFocused();
+	await kbd.press('Tab');
+	await expect(page.getByRole('link', { name: 'Go to Search' })).toBeFocused();
+	await kbd.press('Tab');
+	await expect(page.getByRole('link', { name: 'Review settings' })).toBeFocused();
 	expect(mock.calls('setup')[0]!.postDataJSON()).toEqual({
 		token: 'AB12-CD34-EF56-7890',
 		password: 'correct horse battery'

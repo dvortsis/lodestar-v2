@@ -1,3 +1,8 @@
 {
-	"$schema": "https://inlang.com/schema/inlang-message-format"
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"auth_welcome_title": "设置完成",
+	"auth_welcome_lead": "Lodestar 已准备就绪。开始搜索，或查看您的设置。",
+	"auth_welcome_search": "前往搜索",
+	"auth_welcome_settings": "查看设置",
+	"auth_welcome_retry": "重试"
 }

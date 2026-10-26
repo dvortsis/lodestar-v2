@@ -11,3 +11,9 @@ The active collector, executable, configuration, data, network settings and port
 - Prepared regressions: close/reopen, failed revalidation, content events from other tabs, resync, session sign-out, invalidation during detail/hit/prefetch requests, navigation to another hash and cancellation races.
 - Executed: formatting and syntax checks of changed frontend files using the already installed local tools, plus `git diff --check`. These are lightweight source checks, not executed regression tests or semantic type checks.
 - Deferred until actual collector completion: targeted unit/auth/browser regressions, frontend checks, full unit tests, production build, size budgets and applicable keyboard/reduced-motion/desktop/mobile browser coverage. No slice is accepted as validated yet.
+
+## PW-2: setup completion — prepared, validation pending
+
+- Changes: welcome route, `features/auth/WelcomePage.svelte` and its tests, English/Chinese auth messages, setup browser fixtures and welcome browser regressions.
+- Reuses the auth frame and existing controls. A fresh `/auth` check gates success on direct visits and refresh; setup-required and signed-out visitors redirect, and an unreachable server offers Retry. Search and Settings are normal links, with no settings writes. The ready heading receives focus only while focus is unclaimed.
+- Executed: changed-file formatting, TypeScript syntax checks, in-memory Svelte compilation and diff checks. Prepared unit and desktop/mobile browser checks cover authentication, actions, refresh and keyboard order. Test execution, visual review, updated Linux welcome snapshots and the full frontend gates remain deferred until the collector completes.
