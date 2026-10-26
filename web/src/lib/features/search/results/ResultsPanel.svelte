@@ -57,10 +57,11 @@
 	// (in flight, or a syntax error): no new load, so the last good rows stay.
 	$effect(() => {
 		const q: ResultsQuery = {
-			ast: search.q ? search.ast : null,
+			ast: search.q ? search.ast : search.browse ? { op: 'all' } : null,
 			sort: search.sort,
 			hidden: search.hidden,
-			exact: search.exact
+			exact: search.exact,
+			browse: search.browse
 		};
 		if (search.q && !search.ast) return;
 		void results.load(q);
@@ -247,6 +248,7 @@
 	}
 	async function clearFilters() {
 		ensureSearchPath();
+		if (search.browse) return search.reset();
 		await search.setAst(withoutFilters(search.ast), search.hidden ? { hidden: false } : {});
 	}
 

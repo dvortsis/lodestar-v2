@@ -65,6 +65,7 @@ export function tabHref(type: string | null, search: URLSearchParams): string {
 export function searchHref(type: string | null, search: URLSearchParams): string {
 	const next = new URLSearchParams();
 	if (type !== null) next.set('q', `type:${type}`);
+	else next.set('browse', '1');
 	next.set('sort', '-discovered');
 	const density = search.get('density');
 	if (density) next.set('density', density);

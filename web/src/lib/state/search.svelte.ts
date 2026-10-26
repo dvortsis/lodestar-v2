@@ -20,7 +20,13 @@ export const DEFAULT_SORT = 'relevance';
 export const PARSE_DEBOUNCE_MS = 200;
 const SORT = /^(relevance|[+-]?(discovered|size|files))$/;
 
-export type UrlState = { q: string; sort: string; hidden: boolean; exact: boolean };
+export type UrlState = {
+	q: string;
+	sort: string;
+	hidden: boolean;
+	exact: boolean;
+	browse?: boolean;
+};
 
 const flag = (v: string | null) => v === '1' || v === 'true';
 
@@ -31,7 +37,8 @@ export function readUrl(params: URLSearchParams): UrlState {
 		q: params.get('q') ?? '',
 		sort: SORT.test(sort) ? sort : DEFAULT_SORT,
 		hidden: flag(params.get('hidden')),
-		exact: flag(params.get('exact'))
+		exact: flag(params.get('exact')),
+		browse: params.get('browse') === '1'
 	};
 }
 
@@ -46,6 +53,7 @@ export function writeUrl(base: URL, s: UrlState): string {
 	set('sort', s.sort === DEFAULT_SORT ? null : s.sort);
 	set('hidden', s.hidden ? '1' : null);
 	set('exact', s.exact ? '1' : null);
+	set('browse', s.browse ? '1' : null);
 	return u.pathname + u.search + u.hash;
 }
 
@@ -133,6 +141,9 @@ export function createSearchState(nav: Nav = kitNav) {
 		get exact() {
 			return url().exact;
 		},
+		get browse() {
+			return url().browse === true;
+		},
 
 		/** Typing: updates the draft; after the debounce parses it and replaces the URL entry. */
 		setText(t: string) {
@@ -208,7 +219,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			ast = null;
 			parseError = null;
 			parsing = false;
-			await commit('', true, { sort: DEFAULT_SORT, hidden: false, exact: false });
+			await commit('', true, { sort: DEFAULT_SORT, hidden: false, exact: false, browse: false });
 		},
 
 		async setSort(sort: string) {

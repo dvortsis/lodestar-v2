@@ -1,4 +1,4 @@
-import { body, expect, hits, row, server } from './search-results.fixtures';
+import { body, expect, hits, row, rowOf, server } from './search-results.fixtures';
 import { test } from './support/test';
 
 for (const width of [390, 1366]) {
@@ -14,12 +14,12 @@ for (const width of [390, 1366]) {
 		await expect(page.getByTestId('drawer')).toBeVisible();
 		await page.goBack();
 		await expect(page.getByTestId('drawer')).toHaveCount(0);
-		await expect(row(page, 1)).toBeFocused();
+		await expect(rowOf(page, 1)).toBeFocused();
 		await page.goForward();
 		await expect(page.getByTestId('drawer')).toBeVisible();
-			await page.getByTestId('drawer').getByRole('button', { name: 'Close details' }).click();
+		await page.getByTestId('drawer').getByRole('button', { name: 'Close details' }).click();
 		await expect(page.getByTestId('drawer')).toHaveCount(0);
-		await expect(row(page, 1)).toBeFocused();
+		await expect(rowOf(page, 1)).toBeFocused();
 	});
 }
 
@@ -29,7 +29,7 @@ test('Back falls back to Search if the invoking row is gone', async ({ page, go,
 	await row(page, 1).click();
 	await expect(page.getByTestId('drawer')).toBeVisible();
 	// Model a virtualized or removed result; do not replace it with another focus target.
-	await row(page, 1).evaluate((el) => el.remove());
+	await rowOf(page, 1).evaluate((el) => el.remove());
 	await page.goBack();
 	await expect(page.getByTestId('drawer')).toHaveCount(0);
 	await expect(page.getByTestId('query-editor')).toBeFocused();
