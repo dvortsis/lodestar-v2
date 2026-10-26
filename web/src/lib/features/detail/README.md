@@ -24,6 +24,8 @@ const loaders = import.meta.glob('$lib/features/detail/DetailHost.svelte');
 
 `detail.copy_magnet` (`c`) and `detail.open_magnet` (`o`) are registered here, once, by `registerDetailCommands()`. Don't register them again.
 
+Every detail open revalidates `GET /torrents/{hash}` before showing either cached detail or the associated search hit. Content-settings events, event resynchronization and session transitions clear the caches and cancel requests. Mounted details revalidate on visibility changes; sign-out clears them without another request. Request and visibility generations prevent late responses from restoring cleared metadata. Hash-based magnet actions also revalidate. Prefetch retains the 50-entry, one-minute cache but never authorizes display.
+
 ## Files
 
 - `open.ts`, `commands.ts`, `magnet.ts`, `cache.ts`: the API above, the keys, copy/open magnet, the hit and detail caches.

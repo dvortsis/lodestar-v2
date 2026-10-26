@@ -58,12 +58,12 @@ describe('copyMagnet', () => {
 		expect(toasts.items[0]!.kind).toBe('error');
 	});
 
-	it('fetches the magnet for a hash (a row without a drawer), once', async () => {
+	it('revalidates the magnet for each hash action (a row without a drawer)', async () => {
 		get.mockResolvedValue(detail(MAGNET));
 		copyText.mockResolvedValue('copied');
 		await copyMagnet({ hash: HASH });
 		await copyMagnet({ hash: HASH });
-		expect(get).toHaveBeenCalledTimes(1);
+		expect(get).toHaveBeenCalledTimes(2);
 		expect(copyText).toHaveBeenLastCalledWith(MAGNET);
 	});
 

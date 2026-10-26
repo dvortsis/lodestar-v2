@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchHit, TorrentDetail } from './cache';
+vi.mock('./visibility', () => ({ watchDetailVisibility: vi.fn() }));
 
 const pushState = vi.fn();
 const replaceState = vi.fn();
@@ -110,6 +111,28 @@ describe('closeDetail', () => {
 });
 
 describe('prefetchDetail', () => {
+	it('invalidation cancels a timer and a late prefetch cannot restore its cache', async () => {
+		prefetchDetail(H1);
+		clearDetailCaches();
+		await vi.advanceTimersByTimeAsync(150);
+		expect(get).not.toHaveBeenCalled();
+		let finish!: (value: TorrentDetail) => void;
+		let signal!: AbortSignal;
+		get.mockImplementation((_p, o) => {
+			signal = o.signal;
+			return new Promise((resolve) => {
+				finish = resolve;
+			});
+		});
+		prefetchDetail(H1);
+		await vi.advanceTimersByTimeAsync(150);
+		clearDetailCaches();
+		expect(signal.aborted).toBe(true);
+		finish(detail(H1));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(cachedDetail(H1)).toBeUndefined();
+	});
+
 	it('fetches after 150 ms idle into the cache', async () => {
 		get.mockResolvedValue(detail(H1));
 		prefetchDetail(H1);

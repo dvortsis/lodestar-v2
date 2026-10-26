@@ -8,6 +8,8 @@ const nav = vi.hoisted(() => ({
 vi.mock('./nav', () => nav);
 
 import { api } from '$lib/api/client';
+import { cacheDetail, cachedDetail, onDetailInvalidated } from '$lib/features/detail/cache';
+import { HASH, torrentDetail } from '$lib/features/detail/fixtures';
 import { currentSession, installAuthHandlers, logout, setSession } from './session.svelte';
 
 const json = (status: number, body: unknown) =>
@@ -73,6 +75,18 @@ describe('installAuthHandlers', () => {
 });
 
 describe('logout', () => {
+	it('invalidates detail state without revalidation on sign-out', () => {
+		cacheDetail(HASH, torrentDetail());
+		const invalidated = vi.fn();
+		const off = onDetailInvalidated(invalidated);
+		setSession('signed_out');
+		expect(cachedDetail(HASH)).toBeUndefined();
+		expect(invalidated).toHaveBeenCalledWith(false);
+		setSession('signed_out');
+		expect(invalidated).toHaveBeenCalledTimes(1);
+		off();
+	});
+
 	it('posts JSON to /logout, then goes to sign-in', async () => {
 		const fetch = vi.fn(async () => json(200, { ok: true }));
 		vi.stubGlobal('fetch', fetch);

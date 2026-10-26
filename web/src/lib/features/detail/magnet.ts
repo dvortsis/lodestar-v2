@@ -1,11 +1,11 @@
 // Copy and open the magnet link (§10.16 `c` and `o`). Magnets come from the detail body, the only
 // place the server sends one; the scheme is checked before anything uses it as a URL.
-import { api } from '$lib/api/client';
+import { abortError, api } from '$lib/api/client';
 import { copyText } from '$lib/util/clipboard';
 import { isMagnet } from '$lib/util/magnet';
 import { toast } from '$lib/ui/feedback/toasts.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { cacheDetail, cachedDetail } from './cache';
+import { cacheDetail, detailGeneration, forgetDetail, onDetailInvalidated } from './cache';
 import { manual } from './manual.svelte';
 
 let manualMounted = false;
@@ -20,10 +20,20 @@ async function showManual(magnet: string) {
 }
 
 export async function magnetFor(hash: string): Promise<string | null> {
-	const cached = cachedDetail(hash);
-	const detail = cached ?? (await api.get('/torrents/{hash}', { path: { hash } }));
-	if (!cached) cacheDetail(hash, detail);
-	return isMagnet(detail.magnet) ? detail.magnet : null;
+	const generation = detailGeneration();
+	const ctl = new AbortController();
+	const off = onDetailInvalidated(() => ctl.abort());
+	try {
+		const detail = await api.get('/torrents/{hash}', { path: { hash }, signal: ctl.signal });
+		if (ctl.signal.aborted || generation !== detailGeneration()) throw abortError();
+		cacheDetail(hash, detail);
+		return isMagnet(detail.magnet) ? detail.magnet : null;
+	} catch (e) {
+		if (generation === detailGeneration()) forgetDetail(hash);
+		throw e;
+	} finally {
+		off();
+	}
 }
 
 /** Copy `magnet` (or the one for `hash`). Toasts on success; on failure opens the manual field. */
