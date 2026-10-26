@@ -70,8 +70,20 @@ state in `/var/lib/lodestar`, runs at lower CPU and I/O priority, and allows
 8192 open files (400 metadata sockets at the default intensity, plus
 headroom).
 
-Release tarballs are **(planned)**. Until then, build with
-`cargo build --release -p lodestar`.
+For release tarball packaging, see [the Linux package guide](../packaging/linux/README.md).
+To build from source, install Node.js 22 or newer and the project's Rust toolchain.
+From the repository root, build the frontend before Rust embeds it:
+
+```sh
+cd web
+npm ci
+npm run build
+cd ..
+cargo build --release -p lodestar
+```
+
+Without `web/build`, the Rust build embeds a stub page instead of the application UI.
+Rebuild the frontend and then the binary to include the full UI.
 
 ### Windows **(planned)**
 An MSI that installs a Windows Service (data in `%ProgramData%\Lodestar`,

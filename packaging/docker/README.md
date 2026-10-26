@@ -15,7 +15,7 @@ Then open <http://localhost:8090> and enter the token to create the admin
 password. Or with plain `docker`:
 
 ```sh
-docker run -d --name lodestar --restart unless-stopped \
+docker run -d --name lodestar --restart unless-stopped --stop-timeout=60 \
   -p 8090:8090 -p 6881:6881/udp -p 6881:6881/tcp \
   -v lodestar-data:/data \
   ghcr.io/dvortsis/lodestar-v2:latest

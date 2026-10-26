@@ -6,8 +6,11 @@ folder, so you can delete it to remove Lodestar.
 
 To start: double-click "Start Lodestar.cmd". Your browser opens the web page
 at http://localhost:8090/. The first-run setup token is printed in the black
-window; paste it into the page to create your password. Close the window to
-stop Lodestar.
+window; paste it into the page to create your password.
+
+To stop: press Ctrl+C in that window and wait for shutdown to finish before
+closing it. This lets Lodestar save its database and index. If the launcher
+continues, it prints "Lodestar stopped." before its final prompt.
 
 Unpack the zip inside your own user folder (for example Documents), not at the top of a drive
 or on a shared drive: other people on this PC could otherwise read your data. Your data is in the

@@ -30,3 +30,11 @@ The active collector, executable, configuration, data, network settings and port
 - Browsing retains density, paging, sorting, filters and facet leases. Clear all/reset removes browsing and returns to the empty Search landing. Back/Forward reads the URL state.
 - Prepared unit/browser regressions cover All and typed links, match-all paging/facets, sorting/filtering, invalid/direct queries, query precedence, reset and history. Corrected the history test's focus assertion to target the focusable row wrapper.
 - Executed: changed-file formatting, TypeScript syntax checks, in-memory Svelte compilation and diff checks. Regression execution, frontend/type checks, budgets and browser/theme coverage remain deferred.
+
+## PW-4: installation and shutdown docs — source checks passed
+
+- Changes: operations and Linux build instructions now run `npm ci` then `npm run build` under Node.js 22+ before Rust, and explain the missing-UI stub. Standalone Docker uses `--stop-timeout=60`. Portable Windows guidance tells users to press Ctrl+C and wait for shutdown before closing the window.
+- The Unraid guide/reference describe optional custom `LODESTAR_LOG` (default `info`) instead of a template field. Refreshed setup facts and regenerated the source-backed Advanced View illustration with only actual fields. Verified and corrected the discovery scanner's unresolved multiline Windows firewall attributes against WiX source.
+- Executed: documentation-skill preflights; guide sync/check; **LINT: 1,156 checks, 0 failed, 0 warnings**; all three Unraid template validators; diff checks. Reviewed the rendered four-field SVG (one image, no clipping). BRAND: Lodestar, existing `brand/brand.json`.
+- General `lint_material` reports 27 format failures and two warnings on operations/Linux/Docker documentation, exactly reproduced on the unchanged support-commit versions. These concern existing front matter, heading case, a placeholder and terminology, not the scoped corrections. This separate lint gate is not green; no broad document reformat is claimed.
+- Deferred: packaged-UI build/smoke checks on fresh fixture data and ports after actual collector completion. No launcher or container was executed during this work.
