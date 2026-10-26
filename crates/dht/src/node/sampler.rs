@@ -220,4 +220,27 @@ mod tests {
             assert_eq!(s.inflight(), 1);
         }
     }
+
+    #[test]
+    fn repeated_reuse_and_stale_completion_cannot_shorten_new_cooldown() {
+        let mut s = Sampler::with_capacity(1);
+        let start = Instant::now();
+        let addr = n(1).addr;
+        for token in 1..=100u64 {
+            let now = start + MAX_INTERVAL * (token - 1) as u32;
+            // Reserve directly at expiry, before the maintenance prune. This
+            // must retire the old expiry index without freeing the new owner.
+            assert!(s.reserve(addr, token, now));
+            assert!(!s.complete(addr, token - 1, MIN_INTERVAL, now));
+            assert!(!s.abort(addr, token - 1));
+            s.prune(now);
+            assert_eq!((s.known(), s.inflight(), s.cooling()), (1, 1, 0));
+            assert!(s.complete(addr, token, MAX_INTERVAL, now));
+            s.prune(now + MIN_INTERVAL);
+            assert_eq!((s.known(), s.inflight(), s.cooling()), (1, 0, 1));
+            assert!(!s.reserve(addr, token + 1, now + MIN_INTERVAL));
+        }
+        s.prune(start + MAX_INTERVAL * 100);
+        assert_eq!((s.known(), s.inflight(), s.cooling()), (0, 0, 0));
+    }
 }

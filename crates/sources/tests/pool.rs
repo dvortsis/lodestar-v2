@@ -295,6 +295,60 @@ async fn admission_rejection_empty_completion_and_cancellation_are_owned() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn multiple_finders_share_one_attempt_and_all_cancel_on_timeout() {
+    let (disc, discoveries) = mpsc::channel(16);
+    let (finder_a, mut requests_a) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+    let (finder_b, mut requests_b) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+    let (out, _results) = mpsc::channel(16);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        config(),
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder_a, finder_b],
+            out,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        vec![],
+    );
+    disc.send(found(0, 58, vec![])).await.unwrap();
+    let a = tokio::time::timeout(Duration::from_secs(10), requests_a.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let b = tokio::time::timeout(Duration::from_secs(10), requests_b.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((a.key, b.key), (key(58), key(58)));
+    let (mut done_a, rx_a) = tokio::sync::oneshot::channel();
+    let (mut done_b, rx_b) = tokio::sync::oneshot::channel();
+    a.admit.send(Some(rx_a)).unwrap();
+    b.admit.send(Some(rx_b)).unwrap();
+    // Persistence snapshots deliberately exclude the in-progress attempt.
+    // Its single charge becomes visible once both finder receivers time out.
+    assert_eq!(handle.snapshot().await[0].attempts, 0);
+    assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 1);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        done_a.closed().await;
+        done_b.closed().await;
+    })
+    .await
+    .unwrap();
+    assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 0);
+    assert_eq!(handle.snapshot().await[0].attempts, 1);
+    assert!(done_a.send(vec![peer(1, 1)]).is_err());
+    assert!(done_b.send(vec![peer(2, 2)]).is_err());
+    stop.send(true).unwrap();
+    let queued = task.await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].attempts, 1);
+}
+
+#[tokio::test(start_paused = true)]
 async fn fetches_with_the_next_peer_and_records_the_funnel() {
     let mut h = Harness::start(config(), &[], vec![]);
     h.script(peer(1, 1), 100, Err(FailureKind::Refused));

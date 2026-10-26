@@ -1872,6 +1872,161 @@ mod tests {
         }
     }
 
+    fn reply(a: &mut Actor, sockets: &[StdUdpSocket], tid: u64, peers: Vec<SocketAddr>) {
+        let pending = &a.pending[&tid];
+        let (family, addr, id) = (pending.family, pending.to, pending.id.unwrap());
+        deliver_reply(a, sockets, tid, family, addr, id, peers);
+    }
+
+    fn deliver_reply(
+        a: &mut Actor,
+        sockets: &[StdUdpSocket],
+        tid: u64,
+        family: usize,
+        addr: SocketAddr,
+        id: NodeId,
+        peers: Vec<SocketAddr>,
+    ) {
+        let bytes = tid.to_be_bytes();
+        let response = Response {
+            id,
+            values: peers,
+            ..Default::default()
+        };
+        let msg = Message {
+            transaction_id: &bytes,
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Response(response.clone()),
+        };
+        a.on_response(sockets, family, &msg, Some(&response), addr);
+    }
+
+    fn assert_peer_ownership_drained(a: &Actor) {
+        assert!(a.pending.is_empty());
+        assert!(a.pending_addrs.is_empty());
+        assert!(a.lookups.is_empty());
+        assert!(a.stalled.is_empty());
+        assert!(a.peer_requests.is_empty());
+        assert_eq!(a.active_get_peers, 0);
+    }
+
+    #[test]
+    fn cancelled_same_hash_retry_ignores_the_old_wire_response() {
+        let (mut a, sockets) = fixture();
+        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        a.families[0]
+            .table
+            .insert(candidate(remote), Contact::Response, 0);
+        let hash = InfoHash([9; 20]);
+        let (tx, rx) = oneshot::channel();
+        a.start_peer_request(&sockets, hash, Some(tx));
+        let old_tid = *a.pending.keys().next().unwrap();
+        drop(rx);
+        a.scrape_tick(&sockets, Instant::now());
+        assert_peer_ownership_drained(&a);
+        let (tx, mut rx) = oneshot::channel();
+        a.start_peer_request(&sockets, hash, Some(tx));
+        let new_tid = *a.pending.keys().next().unwrap();
+        assert_ne!(old_tid, new_tid);
+        deliver_reply(
+            &mut a,
+            &sockets,
+            old_tid,
+            0,
+            remote,
+            candidate(remote).id,
+            vec![remote],
+        );
+        assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        assert!(a.pending.contains_key(&new_tid));
+        reply(&mut a, &sockets, new_tid, vec![]);
+        assert_eq!(rx.try_recv().unwrap(), Vec::<SocketAddr>::new());
+        assert_peer_ownership_drained(&a);
+        assert_eq!(a.stats.snapshot().peer_cancelled, 1);
+        assert_eq!(a.stats.snapshot().lookups_completed, 2);
+    }
+
+    #[test]
+    fn dual_stack_completion_and_deadline_drain_both_family_orders() {
+        for v6_first in [false, true] {
+            let (mut a, mut sockets) = fixture();
+            let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+            v6.set_nonblocking(true).unwrap();
+            sockets.push(v6);
+            a.families.push(Family {
+                table: RoutingTable::new(a.ids[0], true),
+                ipv6: true,
+            });
+            if v6_first {
+                a.families.swap(0, 1);
+                sockets.swap(0, 1);
+            }
+            for family in &mut a.families {
+                let addr = if family.ipv6 {
+                    "[::1]:65530"
+                } else {
+                    "127.0.0.1:65530"
+                };
+                family
+                    .table
+                    .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
+            }
+            let peer: SocketAddr = "127.0.0.1:60000".parse().unwrap();
+            let (tx, mut rx) = oneshot::channel();
+            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx));
+            let tids: Vec<_> = a.pending.keys().copied().collect();
+            assert_eq!(tids.len(), 2);
+            reply(&mut a, &sockets, tids[0], vec![peer]);
+            assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+            assert_eq!(a.active_get_peers, 1);
+            reply(&mut a, &sockets, tids[1], vec![peer]);
+            assert_eq!(
+                rx.try_recv().unwrap(),
+                vec![peer],
+                "deduplicated across legs"
+            );
+            assert_peer_ownership_drained(&a);
+            assert_eq!(a.stats.snapshot().lookups_completed, 1);
+
+            let (tx, mut rx) = oneshot::channel();
+            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx));
+            assert_eq!(a.pending.len(), 2);
+            for request in a.peer_requests.values_mut() {
+                request.started -= LOOKUP_DEADLINE;
+            }
+            a.scrape_tick(&sockets, Instant::now());
+            assert!(rx.try_recv().unwrap().is_empty());
+            assert_peer_ownership_drained(&a);
+            a.scrape_tick(&sockets, Instant::now());
+            assert_eq!(
+                a.stats.snapshot().lookups_completed,
+                2,
+                "one terminal result per request"
+            );
+        }
+    }
+
+    #[test]
+    fn abandoned_admission_and_pause_leave_no_queued_ownership() {
+        let (mut a, sockets) = fixture();
+        let (tx, rx) = oneshot::channel();
+        drop(rx);
+        a.on_command(Command::RequestPeers(InfoHash([12; 20]), tx));
+        assert!(a.get_peers_queue.is_empty());
+        assert_eq!(a.stats.snapshot().peer_admitted, 0);
+        let (tx, mut rx) = oneshot::channel();
+        a.on_command(Command::RequestPeers(InfoHash([12; 20]), tx));
+        let mut done = rx.try_recv().unwrap().unwrap();
+        assert_eq!(a.get_peers_queue.len(), 1);
+        a.on_command(Command::SetPaused(true));
+        assert!(done.try_recv().unwrap().is_empty());
+        assert!(a.get_peers_queue.is_empty());
+        a.maintain(&sockets);
+        assert_peer_ownership_drained(&a);
+    }
+
     #[test]
     fn sample_saturation_preserves_lookup_service_and_stale_wire_replies_are_ignored() {
         let (mut a, sockets) = fixture();

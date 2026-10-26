@@ -98,6 +98,7 @@ impl Default for Updates {
     }
 }
 
+#[cfg(any(unix, test))]
 impl Updates {
     /// Whether security fixes install automatically, as `security_fixes`
     /// and `mode` together have it.
