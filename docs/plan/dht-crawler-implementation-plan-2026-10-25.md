@@ -3,7 +3,7 @@
 > Date: 2026-10-25 (America/Denver). Source inspection: `ad0ec5a84555b8b36e7ae94ed515b84ad6d46e02`.
 > Owner authorized consolidation and CR-0 implementation. Later experiments remain proposals.
 > Scope: incremental correctness, metadata conversion, fair recovery and measured tuning; no rewrite, database replacement, new worker framework or external dependencies.
-> Updated 2026-10-26: §13 records the agreed product work during the soak. These tasks are planned, not implemented; crawler experiment gates remain unchanged.
+> Updated 2026-10-26: §13 product source and regression tests are prepared in `work/soak-product`; full validation awaits collector completion. Crawler experiment gates remain unchanged.
 
 ## 0. Authority and boundaries
 
@@ -176,14 +176,14 @@ Update architecture §§5/6/7/18.4/19.5 only where implemented, build-plan along
 
 ## 13. Product work during the soak
 
-The owner selected product fixes and a small setup completion screen rather than a full onboarding wizard. The following four slices are documented for later implementation. Their identifiers are local task labels, not new crawler phases. No database migration, new dependency, backend API change or crawler tuning is planned.
+The owner selected product fixes and a small setup completion screen rather than a full onboarding wizard. The four slices below are prepared in the isolated product worktree; see the [execution record](2026-10-26-soak-product-execution.md) for changed files and executed/deferred checks. Their identifiers are local task labels, not new crawler phases. No database migration, new dependency, backend API change or crawler tuning is included.
 
 | Task | Priority / order | Deliverable | Status |
 |---|---|---|---|
-| PW-1 | 1 | Detail-cache visibility and stale-response protection | Planned |
-| PW-2 | 2 | Setup completion screen with Search and Settings actions | Planned |
-| PW-3 | 3 | Browser Back focus restoration and Discover All browsing | Planned |
-| PW-4 | 4 | Accurate build, shutdown and Unraid logging instructions | Planned |
+| PW-1 | 1 | Detail-cache visibility and stale-response protection | Prepared; regression execution deferred |
+| PW-2 | 2 | Setup completion screen with Search and Settings actions | Prepared; browser/build gates deferred |
+| PW-3 | 3 | Browser Back focus restoration and Discover All browsing | Prepared; regression execution deferred |
+| PW-4 | 4 | Accurate build, shutdown and Unraid logging instructions | Source/doc checks passed; package smoke deferred; existing material-lint failures recorded |
 
 ### PW-1: detail-cache visibility
 

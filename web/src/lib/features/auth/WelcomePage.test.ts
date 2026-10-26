@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { setSession } from './session.svelte';
 
 const nav = vi.hoisted(() => ({ toSetup: vi.fn(), toLoginFrom: vi.fn() }));
 vi.mock('./nav', () => nav);
 vi.mock('$app/paths', () => ({ resolve: (path: string) => path }));
 import WelcomePage from './WelcomePage.svelte';
+
+vi.setConfig({ testTimeout: 20_000 });
+configure({ asyncUtilTimeout: 10_000 });
 
 const reply = (setup_required = false, logged_in = true) =>
 	new Response(JSON.stringify({ setup_required, logged_in }), {

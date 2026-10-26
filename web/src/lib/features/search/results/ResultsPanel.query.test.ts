@@ -16,6 +16,7 @@ vi.mock('$app/navigation', () => ({ goto: vi.fn(), replaceState: vi.fn(), pushSt
 vi.mock('$lib/state/search.svelte', () => ({
 	search: {
 		q: 'lantern',
+		queryReady: true,
 		ast: { op: 'word', field: 'any', word: 'lantern' },
 		sort: 'relevance',
 		hidden: false,

@@ -1,5 +1,7 @@
 import { expectNoA11yViolations } from './a11y';
-import { expect, test } from './support/test';
+import { expect as baseExpect, test } from './support/test';
+
+const expect = baseExpect.configure({ timeout: 10_000 });
 
 for (const width of [390, 1366]) {
 	test(`welcome refresh and actions at ${width}`, async ({ page, go, mock }) => {

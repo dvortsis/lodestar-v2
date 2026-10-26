@@ -96,6 +96,23 @@ describe('URL contract', () => {
 });
 
 describe('search state', () => {
+	it('never authorizes a prior match-all AST for a new URL query before parsing', async () => {
+		const f = fakeNav('http://x/search?browse=1');
+		const s = createSearchState(f.nav);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toEqual(all);
+		expect(s.queryReady).toBe(true);
+		f.visit('http://x/search?browse=1&q=bad+(');
+		// The URL has changed but the query effect has not run yet.
+		expect(s.ast).toEqual(all);
+		expect(s.queryReady).toBe(false);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.queryReady).toBe(false);
+		expect(s.ast).toBeNull();
+	});
+
 	it('preserves explicit browsing through sort/filter edits and removes it on reset', async () => {
 		const f = fakeNav('http://x/search?browse=1&sort=-discovered&density=compact');
 		const s = createSearchState(f.nav);
