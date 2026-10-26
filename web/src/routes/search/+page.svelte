@@ -116,7 +116,7 @@
 		</div>
 		<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 		<div id="search-drawer">
-			{#if Host && drawerOpen}<Host />{/if}
+			{#if Host}<Host />{/if}
 		</div>
 	</div>
 </div>

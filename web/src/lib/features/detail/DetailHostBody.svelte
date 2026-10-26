@@ -2,7 +2,7 @@
 	// The drawer the search page mounts (§10.5, §10.15). It shows while `page.state.detail` is set
 	// and places itself: in flow from xx-large up, an overlay at x-large and large, and a full
 	// screen view with Back below large. The browser's Back (popstate) clears the state and closes it.
-	import { onMount, untrack } from 'svelte';
+	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -53,6 +53,21 @@
 	let wasOpen = false;
 	let everOpened = false;
 	let openedWith = '';
+	let container: HTMLDivElement;
+	let gone = false;
+	let closure = 0;
+	const focusTarget = () => {
+		const target = returnFocusTarget();
+		return target?.isConnected
+			? target
+			: document.querySelector<HTMLElement>('[data-testid="query-editor"]');
+	};
+	onDestroy(() => {
+		gone = true;
+		model.destroy();
+		setDrawerTarget(null);
+		markClosed();
+	});
 
 	onMount(() => {
 		// The key commands load after mount; they pull in the magnet code only when one runs.
@@ -68,13 +83,12 @@
 		lists.forEach(([, l]) => l.addEventListener('change', update));
 		return () => {
 			lists.forEach(([, l]) => l.removeEventListener('change', update));
-			model.destroy();
-			setDrawerTarget(null);
 		};
 	});
 
 	$effect(() => {
 		if (hash) {
+			closure++;
 			untrack(() => {
 				if (!wasOpen) {
 					// Reopened: a fresh Drawer (the first one is already fresh).
@@ -93,11 +107,14 @@
 			// Closed by the browser's Back: focus has nowhere to be, so it goes back to the invoker.
 			if (wasOpen) {
 				wasOpen = false;
-				queueMicrotask(() => {
-					if (document.activeElement === document.body || !document.activeElement) {
-						const target = returnFocusTarget();
-						if (target?.isConnected) target.focus();
-					}
+				const closed = ++closure;
+				void tick().then(() => {
+					if (gone || closed !== closure) return;
+					const active = document.activeElement;
+					// The outgoing drawer can still be mounted for its transition. Restore now
+					// if it owns focus; leave any control the user chose outside it alone.
+					if (!active || active === document.body || container?.contains(active))
+						focusTarget()?.focus();
 				});
 			}
 		}
@@ -116,7 +133,7 @@
 	// In flow: the width the viewer chose. Overlays use their tokens; full screen takes the container.
 	// Back and "Back to Search" close like the drawer's own X: focus returns to the invoker.
 	function back() {
-		const target = returnFocusTarget();
+		const target = focusTarget();
 		closeDetail();
 		if (target?.isConnected) target.focus();
 	}
@@ -132,7 +149,7 @@
 	);
 </script>
 
-<div class="ls-detail-host" data-mode={mode}>
+<div bind:this={container} class="ls-detail-host" data-mode={mode}>
 	{#key session}
 		<Drawer
 			{open}
@@ -144,7 +161,7 @@
 			maxWidth={mode === 'full' ? 100_000 : undefined}
 			onWidthChange={mode === 'inline' ? saveWidth : undefined}
 			onClose={closeDetail}
-			returnFocus={returnFocusTarget}
+			returnFocus={focusTarget}
 		>
 			{#snippet actions()}<DetailActions detail={model.detail} />{/snippet}
 			{#if mode === 'full'}

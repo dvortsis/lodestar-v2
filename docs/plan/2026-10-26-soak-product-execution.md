@@ -17,3 +17,9 @@ The active collector, executable, configuration, data, network settings and port
 - Changes: welcome route, `features/auth/WelcomePage.svelte` and its tests, English/Chinese auth messages, setup browser fixtures and welcome browser regressions.
 - Reuses the auth frame and existing controls. A fresh `/auth` check gates success on direct visits and refresh; setup-required and signed-out visitors redirect, and an unreachable server offers Retry. Search and Settings are normal links, with no settings writes. The ready heading receives focus only while focus is unclaimed.
 - Executed: changed-file formatting, TypeScript syntax checks, in-memory Svelte compilation and diff checks. Prepared unit and desktop/mobile browser checks cover authentication, actions, refresh and keyboard order. Test execution, visual review, updated Linux welcome snapshots and the full frontend gates remain deferred until the collector completes.
+
+## PW-3a: detail history focus — prepared, validation pending
+
+- Search retains the lazy detail host after its first open. The host observes shallow Back/Forward closure, restores a connected invoker or the query editor, and leaves focus chosen outside the drawer alone. Cleanup runs on route exit, including cancellation of queued focus restoration.
+- Prepared browser checks cover Back/Forward, explicit close, removed invokers, focus already outside the drawer, full-page navigation and reload at desktop/mobile widths.
+- Executed: formatting, TypeScript syntax checks, in-memory Svelte compilation and diff checks. Browser execution and the full frontend gates remain deferred.
