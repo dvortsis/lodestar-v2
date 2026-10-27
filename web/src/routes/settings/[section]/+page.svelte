@@ -1,1 +1,5 @@
-<h1>Settings</h1>
+<script lang="ts">
+	import UnavailablePage from '$lib/features/shell/UnavailablePage.svelte';
+</script>
+
+<UnavailablePage kind="settings" />

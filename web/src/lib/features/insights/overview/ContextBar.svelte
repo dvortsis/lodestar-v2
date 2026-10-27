@@ -17,6 +17,7 @@
 	import type { CrawlerAction, CrawlerStatus, Intensity } from './state.svelte';
 
 	interface Props {
+		height?: number;
 		query: InsightsQuery;
 		/** `range.tz` and `updated_at` of the loaded overview. */
 		tz: string;
@@ -34,6 +35,7 @@
 		onintensity: (level: Intensity) => void;
 	}
 	let {
+		height = $bindable(0),
 		query,
 		tz,
 		updatedAt,
@@ -133,7 +135,7 @@
 	};
 </script>
 
-<div class="ins-bar" data-testid="insights-bar">
+<div bind:clientHeight={height} class="ins-bar" data-testid="insights-bar">
 	<div class="ins-row">
 		<SegmentedControl
 			options={ranges}

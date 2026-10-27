@@ -26,6 +26,7 @@
 	import './insights.css';
 
 	const insights = createInsights();
+	let contextHeight = $state(0);
 	const locale = $derived(currentLocale());
 	const params = $derived(page.url.searchParams);
 	const query = $derived(parseQuery(params));
@@ -142,10 +143,11 @@
 </script>
 
 <Hatch />
-<div class="ins-page" data-testid="insights-page">
+<div class="ins-page" data-testid="insights-page" style:--ins-context-height="{contextHeight}px">
 	<h1 class="sr-only">{m.insights_overview_title()}</h1>
 
 	<ContextBar
+		bind:height={contextHeight}
 		{query}
 		tz={overview?.range.tz ?? 'UTC'}
 		updatedAt={overview?.updated_at}

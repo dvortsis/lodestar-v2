@@ -8,9 +8,10 @@
 	interface Props {
 		detail: TorrentDetail;
 		hit: SearchHit | null;
+		level?: number;
 	}
-	let { detail, hit }: Props = $props();
+	let { detail, hit, level = 3 }: Props = $props();
 </script>
 
-<Composition composition={hit?.composition} />
+<Composition composition={hit?.composition} level={level + 1} />
 <FileTree {detail} matched={hit?.matched_files ?? []} />

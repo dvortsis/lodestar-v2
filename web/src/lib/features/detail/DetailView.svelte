@@ -104,7 +104,7 @@
 				{m.detail_section_contents()}
 			</div>
 			{#if Contents}
-				<Contents {detail} {hit} />
+				<Contents {detail} {hit} {level} />
 			{:else}
 				<div aria-busy="true"><Skeleton class="ls-detail-tree" /></div>
 			{/if}

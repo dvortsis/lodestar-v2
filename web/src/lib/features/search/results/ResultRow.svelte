@@ -145,7 +145,7 @@
 					{/if}
 				</span>
 			{/if}
-			<span class="rr-fact" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
+			<span class="rr-fact rr-size" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
 			{#if comfortable}
 				<span class="rr-fact" data-testid="{id}-files"
 					>{(hit.files === 1 ? m.search_results_files_one : m.search_results_files_other)({
@@ -153,7 +153,7 @@
 					})}</span
 				>
 			{/if}
-			<span class="rr-fact" data-testid="{id}-swarm">
+			<span class="rr-fact rr-swarm" data-testid="{id}-swarm">
 				<span class="sr-only">{m.seeders()}: </span><ArrowUp class="rr-icon" aria-hidden="true" />
 				{#if hit.seeders === null}
 					<span role="img" aria-label={m.never_scraped()} data-testid="{id}-never-scraped">—</span>
@@ -163,21 +163,23 @@
 					>
 				{/if}
 				{#if comfortable}
-					<span class="sr-only">{m.leechers()}: </span><ArrowDown
-						class="rr-icon"
-						aria-hidden="true"
-					/>
-					{#if hit.leechers === null}
-						<span
-							role="img"
-							aria-label={m.never_scraped()}
-							data-testid="{id}-leechers-never-scraped">—</span
-						>
-					{:else}
-						<span data-testid="{id}-leechers"
-							>{formatCount({ value: hit.leechers, approx: hit.seeders_approx }, locale)}</span
-						>
-					{/if}
+					<span class="rr-leechers">
+						<span class="sr-only">{m.leechers()}: </span><ArrowDown
+							class="rr-icon"
+							aria-hidden="true"
+						/>
+						{#if hit.leechers === null}
+							<span
+								role="img"
+								aria-label={m.never_scraped()}
+								data-testid="{id}-leechers-never-scraped">—</span
+							>
+						{:else}
+							<span data-testid="{id}-leechers"
+								>{formatCount({ value: hit.leechers, approx: hit.seeders_approx }, locale)}</span
+							>
+						{/if}
+					</span>
 				{/if}
 				{#if hit.swarm_suspect}
 					<span class="rr-fact" title={m.swarm_suspect()}>

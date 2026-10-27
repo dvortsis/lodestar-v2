@@ -12,6 +12,7 @@
 	import DetailActions from './DetailActions.svelte';
 	import DetailView from './DetailView.svelte';
 	import { setDrawerTarget } from './target';
+	import { coverBackground } from './fullscreen';
 	import { DetailModel } from './model.svelte';
 	import { closeDetail, markClosed, returnFocusTarget } from './open';
 	import './detail.css';
@@ -24,7 +25,10 @@
 		overlay: '(min-width: 1024px)',
 		narrow: '(min-width: 640px)'
 	};
-	let mode = $state<Mode>('inline');
+	let mode = $state<Mode>('overlay');
+	let gridWidth = $state(0);
+	let gridOverhead = $state(0);
+	let viewportMode = $state<Mode>('overlay');
 
 	function readWidth(): number | undefined {
 		try {
@@ -77,13 +81,48 @@
 			([name, q]) => [name, matchMedia(q)] as const
 		);
 		const update = () => {
-			mode = lists.find(([, l]) => l.matches)?.[0] ?? 'full';
+			viewportMode = lists.find(([, l]) => l.matches)?.[0] ?? 'full';
 		};
+		const searchGrid = container.closest<HTMLElement>('.search-grid');
+		const grid = searchGrid ?? container.parentElement;
+		const measure = () => {
+			if (!grid) return;
+			const style = getComputedStyle(grid);
+			gridWidth = grid.clientWidth;
+			gridOverhead =
+				parseFloat(style.paddingLeft) +
+				parseFloat(style.paddingRight) +
+				(searchGrid ? 2 : 1) * (parseFloat(style.columnGap) || 0) +
+				(searchGrid ? tokenPx('--rail-width', 264) : 0) +
+				tokenPx('--results-min-width', 560);
+		};
+		const observer = new ResizeObserver(measure);
+		if (grid) observer.observe(grid);
+		measure();
 		update();
 		lists.forEach(([, l]) => l.addEventListener('change', update));
 		return () => {
+			observer.disconnect();
 			lists.forEach(([, l]) => l.removeEventListener('change', update));
 		};
+	});
+
+	$effect(() => {
+		const chosen = Math.min(
+			tokenPx('--drawer-max-width', 640),
+			Math.max(tokenPx('--drawer-min-width', 480), stored ?? tokenPx('--drawer-overlay-width', 560))
+		);
+		mode =
+			viewportMode === 'inline' && gridWidth < gridOverhead + chosen ? 'overlay' : viewportMode;
+	});
+
+	$effect(() => {
+		if (!open || mode !== 'full' || !container) return;
+		const restore = coverBackground(container);
+		// Resizing an already open desktop drawer must move hidden focus into it too.
+		if (!container.contains(document.activeElement))
+			container.querySelector<HTMLElement>('h2[tabindex]')?.focus();
+		return restore;
 	});
 
 	$effect(() => {
