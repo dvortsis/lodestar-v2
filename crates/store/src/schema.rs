@@ -22,7 +22,24 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (9, V9),
     (10, V10),
     (11, V11),
+    (12, V12),
 ];
+
+/// Deletion evidence outlives expiring/released fetch holds. Hash identity
+/// also survives rollback histories where local numeric ids can differ.
+const V12: &str = "
+CREATE TABLE snapshot_deletions (
+    hash BLOB PRIMARY KEY CHECK (length(hash) = 20)
+) STRICT, WITHOUT ROWID;
+-- Preserve extant evidence before the first expiry/release on this version.
+INSERT OR IGNORE INTO snapshot_deletions SELECT hash FROM quarantine;
+INSERT OR IGNORE INTO snapshot_deletions SELECT hash FROM tombstones;
+CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
+    INSERT OR IGNORE INTO snapshot_deletions (hash) VALUES (old.info_hash);
+    INSERT OR IGNORE INTO snapshot_deletions (hash)
+        SELECT substr(old.info_hash_v2, 1, 20) WHERE old.info_hash_v2 IS NOT NULL;
+END;
+";
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///

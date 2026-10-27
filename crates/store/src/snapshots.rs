@@ -20,8 +20,8 @@
 //!   holds become tombstones, as live), sealed names the live store no
 //!   longer holds, filter hits past their retention, and torrents the live
 //!   store has deleted since the snapshot was taken (by hash: every
-//!   deletion leaves the hash in `cs_hashes`, `tombstones` or
-//!   `quarantine`). A snapshot of a schema this build doesn't know is left
+//!   deletion records its hash in `snapshot_deletions`, independently
+//!   of temporary fetch holds). A snapshot of a schema this build doesn't know is left
 //!   alone, with a warning.
 //!
 //! Writes use `secure_delete` and the WAL, then a TRUNCATE checkpoint and
@@ -224,7 +224,7 @@ pub(crate) struct Plan {
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 11;
+    pub(crate) const KNOWN_THROUGH: i64 = 12;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -232,7 +232,7 @@ impl Plan {
     /// |---|---|---|---|
     /// | 1–3 | purged | absent | absent |
     /// | 4–9 | purged | purged | absent |
-    /// | 10–11 | purged | purged | purged |
+    /// | 10–12 | purged | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -336,6 +336,8 @@ impl Marks {
 
 /// What the live store holds, read once per tick.
 struct Live {
+    /// Durable deletion evidence, independent of released/expired holds.
+    deleted: Vec<[u8; 20]>,
     /// Quarantined hashes that still have a sealed name.
     sealed: HashSet<[u8; 20]>,
     /// Hashes you confirmed or reported as CS-1: looked up in every pass,
@@ -363,6 +365,11 @@ const USER_TABLES: [&str; 3] = ["api_keys", "saved_searches", "collections"];
 impl Live {
     /// Holds recorded before `since` (other than `reported`) aren't read.
     fn read(conn: &Connection, since: i64) -> rusqlite::Result<Live> {
+        let deleted = conn
+            .prepare("SELECT hash FROM snapshot_deletions")?
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+            .map(|h| h.and_then(|h| h.try_into().map_err(|_| rusqlite::Error::InvalidQuery)))
+            .collect::<rusqlite::Result<Vec<[u8; 20]>>>()?;
         let hash = |h: Vec<u8>| <[u8; 20]>::try_from(h).ok();
         let mut sealed = HashSet::new();
         let mut stmt = conn.prepare("SELECT hash FROM quarantine WHERE sealed IS NOT NULL")?;
@@ -416,6 +423,7 @@ impl Live {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<HashMap<i64, i64>>>()?;
         Ok(Live {
+            deleted,
             sealed,
             reported,
             held,
@@ -476,6 +484,15 @@ impl Store {
             .map(|s| self.snapshot_marks.since(s, now).0)
             .min()
         else {
+            // Only discard evidence if every snapshot is absent or expired
+            // successfully. A failed unlink still needs this journal.
+            if report.warnings.is_empty()
+                && let Err(e) = self.conn.execute("DELETE FROM snapshot_deletions", [])
+            {
+                report
+                    .warnings
+                    .push(format!("clearing snapshot deletion evidence failed: {e}"));
+            }
             return report;
         };
         let live = match Live::read(&self.conn, since) {
@@ -490,7 +507,10 @@ impl Store {
         for snap in keep {
             let (since, full) = self.snapshot_marks.since(&snap, now);
             match purge_one(&snap, &live, since, now, hits_before) {
-                Ok(Outcome::Skipped(why)) => report.warnings.push(why),
+                Ok(Outcome::Skipped(why)) => {
+                    report.warnings.push(why);
+                    continue;
+                }
                 Ok(Outcome::Unchanged) => {}
                 Ok(Outcome::Purged(n)) => {
                     report.torrents += n.torrents;
@@ -519,6 +539,26 @@ impl Store {
                     full_at,
                 },
             );
+        }
+        // Acknowledge only the hashes this pass saw, after ALL snapshots have
+        // succeeded. Concurrent deletions must remain for the next pass.
+        if report.warnings.is_empty() {
+            let acknowledged = (|| -> rusqlite::Result<()> {
+                let tx = self.conn.transaction()?;
+                {
+                    let mut delete =
+                        tx.prepare_cached("DELETE FROM snapshot_deletions WHERE hash = ?1")?;
+                    for hash in &live.deleted {
+                        delete.execute([&hash[..]])?;
+                    }
+                }
+                tx.commit()
+            })();
+            if let Err(e) = acknowledged {
+                report.warnings.push(format!(
+                    "acknowledging snapshot deletion evidence failed: {e}"
+                ));
+            }
         }
         report
     }
@@ -649,6 +689,9 @@ fn purge_one(
     // its modification time touched).
     let mut ids = BTreeSet::new();
     if plan.torrents {
+        for hash in &live.deleted {
+            ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*hash)))?);
+        }
         let recent = live.held.iter().filter(|(_, at)| *at >= since);
         for h in live.reported.iter().chain(recent.map(|(h, _)| h)) {
             ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*h)))?);
@@ -952,6 +995,81 @@ mod tests {
         }
         assert_eq!(Plan::for_version(0), None);
         assert_eq!(Plan::for_version(latest + 1), None);
+    }
+
+    #[test]
+    fn deletion_evidence_survives_expiry_release_restart_and_failed_snapshot() {
+        for release in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut store, db) = live(dir.path());
+            let hash = [41; 20];
+            insert_torrent(store.connection(), 1, hash, "purged ordinary quarantine");
+            insert_torrent(store.connection(), 2, [42; 20], "keep this torrent");
+            let snap = take(&store, &db, 12, T);
+            quarantine(store.connection(), hash, "U-1", b"sealed", T + 30 * DAY);
+            store.delete_torrents(&[hash]).unwrap();
+            if release {
+                store.release(&hash).unwrap();
+            }
+            store.purge_filter(T + 31 * DAY, 0).unwrap();
+            assert!(store.quarantined(10).unwrap().is_empty());
+
+            // A failed pass must not acknowledge the durable evidence.
+            let locked = Connection::open(&snap).unwrap();
+            locked.execute_batch("BEGIN EXCLUSIVE").unwrap();
+            assert!(!store.purge_snapshots(T + 31 * DAY, 0).warnings.is_empty());
+            locked.execute_batch("ROLLBACK").unwrap();
+            drop(locked);
+            drop(store);
+            let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+            let report = store.purge_snapshots(T + 32 * DAY, 0);
+            assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+            assert_eq!(report.torrents, 1);
+            assert!(!contains(&snap, b"purged ordinary quarantine"));
+            assert!(contains(&snap, b"keep this torrent"));
+            let pending: i64 = store
+                .connection()
+                .query_row("SELECT count(*) FROM snapshot_deletions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(pending, 0);
+            quick_check(&snap);
+        }
+    }
+
+    #[test]
+    fn journal_matches_hashes_across_different_snapshot_ids_and_old_schemas() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let hash = [51; 20];
+        insert_torrent(store.connection(), 7, hash, "live copy");
+        let snap = crate::schema::snapshot_path(&db, 2);
+        let conn = fixture(&snap, 1);
+        insert_torrent(&conn, 99, hash, "older copy");
+        insert_torrent(&conn, 7, [52; 20], "different history");
+        drop(conn);
+        set_modified(&snap, T).unwrap();
+        store.delete_torrents(&[hash]).unwrap();
+        let report = store.purge_snapshots(T + DAY, 0);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(report.torrents, 1);
+        assert!(!contains(&snap, b"older copy"));
+        assert!(contains(&snap, b"different history"));
+    }
+
+    #[test]
+    fn rolled_back_delete_does_not_create_snapshot_obligation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = live(dir.path());
+        insert_torrent(store.connection(), 1, [61; 20], "retained");
+        store
+            .connection()
+            .execute_batch("BEGIN; DELETE FROM torrents; ROLLBACK;")
+            .unwrap();
+        let n: i64 = store
+            .connection()
+            .query_row("SELECT count(*) FROM snapshot_deletions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     /// The brief's first test: a sealed name in a snapshot taken before
