@@ -422,24 +422,93 @@ impl IdSet {
     }
 }
 
-/// Entries before the cache is emptied.
+/// Independent retained file-id cache budget, not the result/lease budget.
+const CACHE_BYTES: usize = 8 << 20;
 const CACHE_ENTRIES: usize = 4096;
-
-/// One file-index segment's torrent ids for a clause. A segment only
-/// changes by deletions, so an entry holds until its deletions change; a
-/// near-real-time commit adds a small segment and only that is searched
-/// (the same scheme as the browse cache, §8).
-/// (clause, segment, deleted documents in it).
 type CacheKey = (String, SegmentId, u32);
 
+struct CacheEntry {
+    ids: Arc<Vec<u64>>,
+    bytes: usize,
+    used: u64,
+}
+
 #[derive(Default)]
+struct CacheState {
+    map: HashMap<CacheKey, CacheEntry>,
+    bytes: usize,
+    clock: u64,
+}
+
+impl CacheState {
+    fn retained_bytes(&self) -> usize {
+        // Charge bucket capacity conservatively (including control bytes and
+        // alignment), plus String/Vec capacities and the Arc allocation.
+        self.bytes + self.map.capacity() * (std::mem::size_of::<(CacheKey, CacheEntry)>() + 16) * 2
+    }
+}
+
 pub(crate) struct FileSetCache {
-    map: Mutex<HashMap<CacheKey, Arc<Vec<u64>>>>,
+    state: Mutex<CacheState>,
+    budget: usize,
+}
+
+impl Default for FileSetCache {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(CacheState::default()),
+            budget: CACHE_BYTES,
+        }
+    }
 }
 
 impl FileSetCache {
     pub fn clear(&self) {
-        self.map.lock().expect("cache lock").clear();
+        *self.state.lock().expect("cache lock") = CacheState::default();
+    }
+
+    fn get(&self, key: &CacheKey) -> Option<Arc<Vec<u64>>> {
+        let mut state = self.state.lock().expect("cache lock");
+        state.clock = state.clock.saturating_add(1);
+        let used = state.clock;
+        let entry = state.map.get_mut(key)?;
+        entry.used = used;
+        Some(entry.ids.clone())
+    }
+
+    fn insert(&self, key: CacheKey, ids: Arc<Vec<u64>>) {
+        let bytes = key
+            .0
+            .capacity()
+            .saturating_add(ids.capacity().saturating_mul(std::mem::size_of::<u64>()))
+            .saturating_add(std::mem::size_of::<Vec<u64>>() + 2 * std::mem::size_of::<usize>());
+        if bytes > self.budget {
+            return;
+        }
+        let mut state = self.state.lock().expect("cache lock");
+        state.clock = state.clock.saturating_add(1);
+        let used = state.clock;
+        if let Some(old) = state.map.remove(&key) {
+            state.bytes -= old.bytes;
+        }
+        state.bytes += bytes;
+        state.map.insert(key, CacheEntry { ids, bytes, used });
+        while state.map.len() > CACHE_ENTRIES || state.retained_bytes() > self.budget {
+            let Some(key) = state
+                .map
+                .iter()
+                .min_by_key(|(_, v)| v.used)
+                .map(|(k, _)| k.clone())
+            else {
+                *state = CacheState::default();
+                break;
+            };
+            let old = state.map.remove(&key).expect("present cache entry");
+            state.bytes -= old.bytes;
+            if state.map.is_empty() {
+                *state = CacheState::default();
+            }
+        }
     }
 }
 
@@ -449,13 +518,16 @@ pub(crate) fn torrent_ids(
     query: &dyn Query,
     key: &str,
     cache: &FileSetCache,
-) -> tantivy::Result<IdSet> {
+    cancel: &crate::CancelToken,
+) -> crate::index::Result<IdSet> {
+    cancel.check()?;
     let mut weight: Option<Box<dyn Weight>> = None;
     let mut parts = Vec::new();
     for seg in searcher.segment_readers() {
+        cancel.check()?;
         let k = (key.to_owned(), seg.segment_id(), seg.num_deleted_docs());
-        if let Some(hit) = cache.map.lock().expect("cache lock").get(&k) {
-            parts.push(hit.clone());
+        if let Some(hit) = cache.get(&k) {
+            parts.push(hit);
             continue;
         }
         let w = match &mut weight {
@@ -467,7 +539,12 @@ pub(crate) fn torrent_ids(
         let mut ids = Vec::new();
         let mut scorer = w.scorer(seg, 1.0)?;
         let mut doc = scorer.doc();
+        let mut visited = 0u32;
         while doc != TERMINATED {
+            if visited.is_multiple_of(crate::cancel::CHECK_EVERY) {
+                cancel.check()?;
+            }
+            visited = visited.wrapping_add(1);
             if alive.is_none_or(|a| a.is_alive(doc)) {
                 // A torrent's files are added together, so repeats are
                 // mostly adjacent.
@@ -477,14 +554,13 @@ pub(crate) fn torrent_ids(
             }
             doc = scorer.advance();
         }
+        cancel.check()?;
         ids.sort_unstable();
+        cancel.check()?;
         ids.dedup();
+        cancel.check()?;
         let ids = Arc::new(ids);
-        let mut map = cache.map.lock().expect("cache lock");
-        if map.len() >= CACHE_ENTRIES {
-            map.clear();
-        }
-        map.insert(k, ids.clone());
+        cache.insert(k, ids.clone());
         parts.push(ids);
     }
     Ok(IdSet {
@@ -678,5 +754,100 @@ mod tests {
         assert!(!ok("res:1080p"));
         assert!(!ok("title:x"));
         assert!(!ok("files:>2"));
+    }
+}
+
+#[cfg(test)]
+mod cache_regressions {
+    use super::*;
+
+    fn key(n: usize) -> CacheKey {
+        (format!("clause-{n}"), SegmentId::generate_random(), 0)
+    }
+
+    #[test]
+    fn retained_capacity_is_bounded_and_oversized_results_still_belong_to_caller() {
+        let cache = FileSetCache {
+            state: Mutex::new(CacheState::default()),
+            budget: 4096,
+        };
+        for n in 0..100 {
+            let mut ids = Vec::with_capacity(128);
+            ids.push(n as u64);
+            cache.insert(key(n), Arc::new(ids));
+            assert!(cache.state.lock().unwrap().retained_bytes() <= cache.budget);
+        }
+        let large = Arc::new(vec![1; 1024]);
+        let k = key(101);
+        cache.insert(k.clone(), large.clone());
+        assert!(cache.get(&k).is_none());
+        assert_eq!(large.len(), 1024);
+        cache.clear();
+        assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
+    }
+
+    #[test]
+    fn hits_refresh_recency_and_replacement_does_not_double_charge() {
+        let cache = FileSetCache {
+            state: Mutex::new(CacheState::default()),
+            // Two 1 KiB vectors and table overhead fit; three vectors do not.
+            budget: 3072,
+        };
+        let a = key(1);
+        let b = key(2);
+        let c = key(3);
+        let value = || Arc::new(vec![0; 128]);
+        cache.insert(a.clone(), value());
+        cache.insert(b.clone(), value());
+        let bytes = cache.state.lock().unwrap().retained_bytes();
+        cache.insert(b.clone(), value());
+        assert_eq!(cache.state.lock().unwrap().retained_bytes(), bytes);
+        assert!(cache.get(&a).is_some());
+        cache.insert(c.clone(), value());
+        assert!(cache.get(&a).is_some());
+        assert!(cache.get(&b).is_none());
+        assert!(cache.get(&c).is_some());
+    }
+
+    #[test]
+    fn cancellation_during_enumeration_stops_before_scanning_every_file() {
+        use std::sync::atomic::Ordering;
+        let mut builder = Schema::builder();
+        let torrent = builder.add_u64_field("torrent", FAST);
+        let index = tantivy::Index::create_in_ram(builder.build());
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        for id in 0..10_000u64 {
+            let mut doc = TantivyDocument::new();
+            doc.add_u64(torrent, id);
+            writer.add_document(doc).unwrap();
+        }
+        writer.commit().unwrap();
+        let reader = index.reader().unwrap();
+        let token = crate::CancelToken::new();
+        let (query, visits) = crate::testing::tripwire(100, &token);
+        let cache = FileSetCache::default();
+        let result = torrent_ids(
+            &reader.searcher(),
+            query.query.as_ref(),
+            "cold",
+            &cache,
+            &token,
+        );
+        assert!(matches!(result, Err(crate::index::Error::Cancelled)));
+        assert!(visits.load(Ordering::Relaxed) <= crate::cancel::CHECK_EVERY as usize);
+        assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
+    }
+
+    #[test]
+    fn cancelled_file_scan_does_not_build_or_cache_a_scorer() {
+        let (index, _) = crate::testing::index_with(10, 1);
+        let token = crate::CancelToken::new();
+        token.cancel();
+        let cache = FileSetCache::default();
+        let result = torrent_ids(&index.searcher(), &AllQuery, "cold", &cache, &token);
+        assert!(matches!(result, Err(crate::index::Error::Cancelled)));
+        assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
     }
 }

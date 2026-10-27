@@ -944,6 +944,19 @@ impl SearchIndex {
     }
 
     pub(crate) fn compile(&self, node: &Node, now: i64, utc_offset: i32, stems: bool) -> Compiled {
+        self.compile_cancelled(node, now, utc_offset, stems, &crate::CancelToken::new())
+            .expect("uncancelled compilation preserves file-query fallback")
+    }
+
+    pub(crate) fn compile_cancelled(
+        &self,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        stems: bool,
+        cancel: &crate::CancelToken,
+    ) -> Result<Compiled> {
+        cancel.check()?;
         // `file:(…)` clauses run on the file index first.
         let mut clauses = Vec::new();
         compile::file_clauses(node, &mut clauses);
@@ -951,15 +964,25 @@ impl SearchIndex {
         let files_searcher = self.files.reader.searcher();
         for of in &clauses {
             let key = format!("{of:?}");
+            cancel.check()?;
             let ids = match files::compile(of, &self.files.fields) {
-                Some(q) => files::torrent_ids(&files_searcher, q.as_ref(), &key, &self.files.cache)
-                    .unwrap_or_else(|_| {
+                Some(q) => match files::torrent_ids(
+                    &files_searcher,
+                    q.as_ref(),
+                    &key,
+                    &self.files.cache,
+                    cancel,
+                ) {
+                    Ok(ids) => ids,
+                    Err(e @ (Error::Cancelled | Error::OutOfTime)) => return Err(e),
+                    Err(_) => {
                         lodestar_log::log_event!(
                             crate::log_events::FILE_SEARCH_FAILED,
                             error = lodestar_log::Error::kind("tantivy")
                         );
                         files::IdSet::default()
-                    }),
+                    }
+                },
                 None => files::IdSet::default(),
             };
             sets.insert(key, Arc::new(ids));
@@ -994,7 +1017,8 @@ impl SearchIndex {
         if compile::has_time_of_day(node) {
             key.push_str(&format!("@tz{utc_offset}"));
         }
-        Compiled {
+        cancel.check()?;
+        Ok(Compiled {
             query,
             filters,
             boosts,
@@ -1002,7 +1026,7 @@ impl SearchIndex {
             now,
             reads_hot: compile::reads_hot(node),
             hot: self.hot.clone(),
-        }
+        })
     }
 
     /// Empties the browse cache (for benchmarks).

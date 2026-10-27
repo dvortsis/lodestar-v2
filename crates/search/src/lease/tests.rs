@@ -501,3 +501,21 @@ fn relevance_with_hot_columns_reranks_and_explains() {
     let page = l.page(Start::Offset(0), 10, &CancelToken::new()).unwrap();
     assert!(page.explain.is_empty());
 }
+
+#[test]
+fn cold_file_compilation_preserves_cancellation_and_deadline_errors() {
+    let (index, _) = index_with(10, 1);
+    let index = Arc::new(index);
+    let node = crate::parse("file:(size:>0)").unwrap();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        Lease::new(index.clone(), &node, NOW, Sort::Relevance, &cancel),
+        Err(Error::Cancelled)
+    ));
+    let expired = CancelToken::new().with_budget(Duration::ZERO);
+    assert!(matches!(
+        Lease::new(index, &node, NOW, Sort::Relevance, &expired),
+        Err(Error::OutOfTime)
+    ));
+}

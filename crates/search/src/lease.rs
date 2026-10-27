@@ -131,12 +131,11 @@ impl Lease {
         cancel: &CancelToken,
     ) -> Result<Lease> {
         let searcher = index.searcher();
-        let exact = index.query_at(node, now, utc_offset);
+        let exact = index.compile_cancelled(node, now, utc_offset, false, cancel)?;
         let mut total = count::total(&searcher, &exact, cancel)?;
         let (mut compiled, mut stemmed) = (exact, false);
-        if total.value < STEM_FALLBACK_BELOW
-            && let Some(wide) = index.query_stemmed(node, now, utc_offset)
-        {
+        if total.value < STEM_FALLBACK_BELOW && crate::compile::has_stem_alternative(node) {
+            let wide = index.compile_cancelled(node, now, utc_offset, true, cancel)?;
             let wider = count::total(&searcher, &wide, cancel)?;
             if wider.value > total.value {
                 (compiled, stemmed, total) = (wide, true, wider);
