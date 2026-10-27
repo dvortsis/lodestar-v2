@@ -229,3 +229,15 @@ Replace the placeholder `web/src/routes/welcome/+page.svelte` with a short setup
 - Record each slice's changed files, executed/deferred checks and remaining limitations before marking it complete. CR-1 and later crawler experiments retain their existing gates regardless of product-task progress.
 
 References: [BEP 5](https://www.bittorrent.org/beps/bep_0005.html), [BEP 33](https://www.bittorrent.org/beps/bep_0033.html), [BEP 42](https://www.bittorrent.org/beps/bep_0042.html), [BEP 51](https://www.bittorrent.org/beps/bep_0051.html), project authority documents and 2026-10-24 soak/research reports.
+
+
+## 14. Authorized unblocked follow-ups (2026-10-26)
+
+The owner authorized completing the unblocked follow-ups proposed during the soak. Source and regression cases are prepared on `work/soak-followups`, based on product-preparation commit `07421c3c`, in `target/worktrees/soak-followups`:
+
+- Snapshot retention: a separate V12 deletion journal survives temporary quarantine expiry/release and failed cleanup. This is an explicit extension beyond §13's frontend-only scope; no live schema is migrated.
+- Search: a bounded retained file-ID cache and cancellation during cold compilation, including facet recompilation.
+- UI: measured drawer fit, fullscreen background focus isolation, measured Insights jump offsets, narrow-row fact priority, heading/landmark corrections, complete short-list sizing, and explicit unfinished-destination states.
+- A dependency-ordered post-soak validation and release checklist.
+
+See [execution and validation sequence](2026-10-26-soak-followups.md) and the retention/search/UI decision notes linked there. These changes have source-level checks only; full Rust, frontend, browser, scale and packaged-UI acceptance remain pending. The §13 live-run isolation and actual-collector-completion gate remain unchanged. No push, merge, deployment or crawler restart is included.
