@@ -1152,7 +1152,8 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
     conn.prepare_cached(
         "UPDATE torrents SET size = ?2, piece_len = ?3, piece_count = ?4, file_count = ?5,
              info_size = ?6, flags = ?7, metadata_at = ?8,
-             info_hash_v2 = coalesce(info_hash_v2, ?9)
+             info_hash_v2 = coalesce(info_hash_v2, ?9),
+             name = ?10, name_raw = ?11, name_enc = ?12
          WHERE id = ?1",
     )?
     .execute(params![
@@ -1170,6 +1171,9 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
             | (flags_now & t.extra_flags & flags::PRIVATE_SOURCE),
         t.metadata_at,
         p.info_hash_v2.as_ref().map(|h| &h.0[..]),
+        p.name,
+        p.name_raw.as_ref().map(|(raw, _)| &raw[..]),
+        p.name_raw.as_ref().map(|(_, enc)| *enc),
     ])?;
     conn.prepare_cached(
         "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)
@@ -1188,6 +1192,13 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
              ON CONFLICT (torrent_id) DO UPDATE SET data = excluded.data",
         )?
         .execute(params![id, extra])?;
+    }
+    if let Some(raw) = &p.raw {
+        conn.prepare_cached(
+            "INSERT INTO torrent_raw (torrent_id, data) VALUES (?1, ?2)
+             ON CONFLICT (torrent_id) DO UPDATE SET data = excluded.data",
+        )?
+        .execute(params![id, raw])?;
     }
     if let Some(e) = &p.enrichment {
         write_enrichment(conn, id, e)?;
