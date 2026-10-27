@@ -11,7 +11,7 @@ Worktree: `target/worktrees/soak-followups`; branch: `work/soak-followups`; base
 | UI | Drawer fit/fullscreen background, Insights offsets, mobile facts, headings/landmarks, short lists, explicit unavailable destinations | Changed-file formatting, TypeScript syntax, Svelte compilation, source ESLint | Type checks, unit/browser/axe/visual tests, build and size budgets |
 | Validation | Gate, commands, fixtures and release dependencies below | Commands checked against package scripts and repository standards | Execution after actual collector completion |
 
-The previous PW-1–PW-4 work is inherited. Its status remains [prepared with deferred validation](2026-10-26-soak-product-execution.md). The six findings in the old backend review are not all this task's scope: this follow-up addresses snapshot retention and file-query memory/cancellation; partial-import name/archive and updater-persistence findings remain separate. CR-1 and later crawler experiments remain gated on baseline review.
+The previous PW-1–PW-4 work is inherited. Its status remains [prepared with deferred validation](2026-10-26-soak-product-execution.md). This first follow-up addresses snapshot retention and file-query memory/cancellation. The owner subsequently authorized the partial-import name/archive and updater-persistence findings, plus documentation lint cleanup; see the [additional execution record](2026-10-26-soak-final-findings.md). CR-1 and later crawler experiments remain gated on baseline review.
 
 Decision records: [retention](../decisions/2026-10-26-soak-retention.md), [search](../decisions/2026-10-26-soak-search.md), and [UI](../decisions/2026-10-26-soak-ui.md).
 
@@ -71,7 +71,7 @@ Use the repository's preinstalled browser and [harness conventions](../../web/e2
 
 For packaged-UI smoke, build the frontend before the Rust binary. Use a fresh directory under this worktree's `target/fixtures/`, an unused loopback HTTP port (for example 8485 after checking availability), and disable DHT/scraping with the documented environment variables. Do not point smoke tests at the soak data or start a second crawler. Verify the embedded UI, setup completion, Search/Settings links and Ctrl+C shutdown, then stop the fixture process. Restore task-specific environment overrides afterward.
 
-Run the inherited PW-4 documentation sync/lint and template checks. The prior 27 material-format failures are recorded baseline debt; do not claim that separate gate is green without fixing or explicitly dispositioning it. Search memory/latency benchmarks and release-scale gates remain required where applicable; fixtures do not prove ten-million-torrent budgets.
+Run the inherited PW-4 documentation sync/lint and template checks. The prior 27 material-format failures were resolved in the [additional authorized cleanup](2026-10-26-soak-final-findings.md); rerun the gates after any subsequent document changes. Search memory/latency benchmarks and release-scale gates remain required where applicable; fixtures do not prove ten-million-torrent budgets.
 
 ## Review and publication
 

@@ -241,3 +241,7 @@ The owner authorized completing the unblocked follow-ups proposed during the soa
 - A dependency-ordered post-soak validation and release checklist.
 
 See [execution and validation sequence](2026-10-26-soak-followups.md) and the retention/search/UI decision notes linked there. These changes have source-level checks only; full Rust, frontend, browser, scale and packaged-UI acceptance remain pending. The §13 live-run isolation and actual-collector-completion gate remain unchanged. No push, merge, deployment or crawler restart is included.
+
+## 15. Additional authorized findings (2026-10-26)
+
+The owner subsequently authorized fixing the remaining partial-import name/archive defects, updater persistence ordering, and the 27 material lint failures/two warnings. These are prepared above the §14 commits in the same isolated worktree. The documentation gates now pass; new Rust regression execution, including the Unix-only updater test, remains deferred. See the [additional execution record](2026-10-26-soak-final-findings.md) for scope, decisions and post-soak commands. CR-1 and the live-run restrictions are unchanged.

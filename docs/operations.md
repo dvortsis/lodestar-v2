@@ -1,11 +1,18 @@
-# Operations guide (draft)
+---
+format: user-guide
+title: Operations Guide
+audience: Lodestar operators who can install an app and need setup guidance
+sources: docs/architecture.md; docs/owner-decisions.md; crates/lodestar/src; packaging; docs/user
+---
+
+# Operations Guide
 
 How to install, run and look after Lodestar. It follows `docs/architecture.md`
 §11 and §12. **Status labels:** anything marked **(planned)** is designed but
 not built yet; don't rely on it. Unmarked statements describe the code on
 `main` today.
 
-## 1. What exists today
+## 1. What Exists Today
 
 | Area | Today | Planned |
 |---|---|---|
@@ -28,7 +35,7 @@ Environment variables the binary reads today:
 
 Everything else is in `config.toml` (`--config <path>`, or
 `$LODESTAR_DATA_DIR/config.toml`). Unknown keys are rejected. The variables
-override the file.
+take precedence over the file: when both set a value, Lodestar uses the variable.
 
 In Docker, `PUID` and `PGID` choose the user Lodestar runs as. The default,
 65532, is the safe choice; the Unraid template uses 99 and 100 (`nobody` and
@@ -90,7 +97,7 @@ An MSI that installs a Windows Service (data in `%ProgramData%\Lodestar`,
 below-normal priority, firewall rules for the DHT port) and a portable zip.
 Nothing is published yet.
 
-## 3. First run
+## 3. First Run
 
 1. Start Lodestar and open `http://<host>:8090/`.
 2. On a fresh data directory it prints a one-time **setup token** to the log
@@ -157,7 +164,7 @@ network gets slow or drops connections. Start at `low`, raise the intensity
 step by step, and watch the router's connection count. The VPN variant avoids
 this on the home side because the tunnel carries the load.
 
-## 5. Unraid storage
+## 5. Unraid Storage
 
 - **Put `/data` on a pool, not the array and not `/mnt/user`.** Use
   `/mnt/cache/appdata/lodestar` or the name of your pool
@@ -174,7 +181,7 @@ this on the home side because the tunnel carries the load.
   everything lives under `/data` and the two optional mappings are not used
   yet.)**
 
-## 6. Data directory
+## 6. Data Directory
 
 Today, under `LODESTAR_DATA_DIR`:
 
@@ -193,7 +200,7 @@ snapshots them to `hot/*.col`; after a crash they're rebuilt from the
 database at the next start (§9). `cold.db` and the `data/hot`/`data/cold`
 split are **planned**.
 
-## 7. Upgrades and backups
+## 7. Upgrades and Backups
 
 - **Upgrade today:** stop Lodestar, replace the binary (or pull the new image
   tag once images exist), start it. Before upgrading, copy the whole data
@@ -202,7 +209,8 @@ split are **planned**.
   database's layout (a schema migration), it first saves a copy beside it:
   `lodestar.pre-v<N>.db`. To go back, stop Lodestar and run
   `lodestar rollback`. It lists the snapshots, with each one's age and the
-  date it will be deleted. Then run `lodestar rollback <name>` to restore one.
+  date it will be deleted. Then run `lodestar rollback <snapshot-filename>` to restore one.
+  Replace `<snapshot-filename>` with the filename printed in that list.
   - **Snapshots are deleted 90 days after they are taken.** That is the
     window to roll back an upgrade. For a longer-term copy, make a backup
     (below) and keep it somewhere safe.
@@ -262,7 +270,7 @@ planned and not in the binary yet**, so check the path yourself.
 **Lost the setup token.** While no admin exists, every start prints a new
 token, so restart the service and read the log again.
 
-## 9. Swarm health
+## 9. Swarm Health
 
 Swarm health is how Lodestar learns whether a torrent is alive: how many seeders and leechers it has, how many times it has completed, and how many trackers know about it. The numbers drive the seeders and trackers filters, the seeders and trackers sorts, and the ranking penalty for suspect swarms (architecture §3, §6, §15).
 
@@ -319,7 +327,7 @@ dht = true
 # http_interval_secs = 6
 ```
 
-- `enabled = false` turns off all scraping, tracker and DHT. The environment variable `LODESTAR_SCRAPE_ENABLED` overrides it.
+- `enabled = false` turns off all scraping, tracker and DHT. If set, the environment variable `LODESTAR_SCRAPE_ENABLED` takes precedence over it.
 - `dht = false` keeps tracker scraping and drops the BEP 33 estimates.
 - `trackers` accepts UDP (BEP 15) and HTTP or HTTPS (BEP 48) URLs.
   - Unknown keys in `[scrape]` are startup errors, so typos surface.

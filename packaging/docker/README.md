@@ -1,3 +1,10 @@
+---
+format: user-guide
+title: Docker
+audience: Lodestar operators who can install an app and need container setup guidance
+sources: packaging/docker/Dockerfile; docker-compose.yml; crates/lodestar/src; .github/workflows/release.yml; packaging/unraid
+---
+
 # Docker
 
 One image, `ghcr.io/dvortsis/lodestar-v2`: a static musl `lodestar` (with the
@@ -75,12 +82,12 @@ compose project a network with `enable_ipv6: true` and an IPv6 subnet. With
 | `LODESTAR_ALLOW_ROOT`  |                   | Leave unset. `1` allows running as root, which is unsafe. |
 | `TZ`                   |                   | Accepted, but log timestamps are UTC today. |
 
-Settings can also go in `/data/config.toml`; environment variables override
-it. Because the image sets `LODESTAR_HTTP_BIND`, it overrides `[http] bind` in
+Settings can also go in `/data/config.toml`; environment variables take precedence
+when both set a value. Because the image sets `LODESTAR_HTTP_BIND`, it replaces `[http] bind` in
 `config.toml`: change the web port with the variable (and the port mapping),
 not in the file.
 
-## Volume, user and permissions
+## Volume, User and Permissions
 
 `/data` is the only folder Lodestar keeps. Everything in it survives updates;
 everything else in the container is thrown away when it's rebuilt.
@@ -168,7 +175,7 @@ instead, or fix the folder's owner as above.
 Keep `/data` on local SSD/NVMe storage; the index does random I/O and the
 database is SQLite. Avoid network shares and FUSE filesystems.
 
-## Data layout
+## Data Layout
 
 What the code writes under `/data` today:
 
@@ -189,7 +196,7 @@ database, which can take longer than Docker's default 10 s. Keep that (or
 `docker stop --time 60`) if you run it another way. The Unraid templates pass
 `--stop-timeout=60` in Extra Parameters for the same reason.
 
-## Health check
+## Health Check
 
 `HEALTHCHECK` runs `/lodestar healthcheck` (exec form, no shell) every 30 s.
 It doesn't need root: like the server, it switches to `PUID`/`PGID` first
