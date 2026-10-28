@@ -92,3 +92,16 @@ The read needed sandbox escalation and succeeded; no Docker state was changed.
 Docker remains an active background storage owner and must be stopped before
 the native launch gate can pass. Repeat free-space/size observations after that
 handover; do not interpret these point-in-time lengths as a measured growth rate.
+
+At 19:32 UTC on October 28, the approved graceful Docker handover completed.
+The CLI was located under the user's `AppData/Local/Programs/DockerDesktop`
+installation, rather than the system-wide default. The local engine had no
+running containers; its sole listed Lodestar container had exited with code 0
+about 40 hours earlier. A second empty-workload check preceded the non-forced
+Desktop stop. No container, volume, log or disk image was removed or restarted.
+Process/listener checks afterward show no Docker backend or Lodestar process
+and no owner of HTTP 8484/UDP 6881. C: free space was 124,831,092,736 bytes at
+19:32:39 UTC and 124,831,588,352 bytes at 20:34:39 UTC (net 495,616 bytes more
+free over 62 minutes). This quiet interval does not predict future growth;
+the independent collector reserves and the same-host build restrictions remain.
+The final packaging build's storage is separately bounded and must be rechecked.

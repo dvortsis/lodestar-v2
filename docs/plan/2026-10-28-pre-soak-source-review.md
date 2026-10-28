@@ -48,3 +48,41 @@ Docker is still running. Current disk inventory does not prove the historical
 exhaustion cause or a background growth rate. These remain operational launch
 checks. Unix updater and pinned Linux visual acceptance remain explicit platform
 gates; Windows test selection cannot satisfy them.
+
+## Final-build follow-up
+
+The clean-source package attempt at `ce59c3e3` correctly stopped when the rebuilt
+Alert page exceeded its 45 KB budget by 14 bytes. No release binary or manifest
+was published. Its private logs remain under `target/launch-candidate-r17`.
+Grouping channel icons separately made the result worse (45.22 KB); that change
+was removed. The retained change shares the existing Badge/Banner status icon,
+ink and border maps, preserving their classes, roles, labels and behavior. It
+removes duplicated component-local maps without changing any bundle limit.
+Focused component and browser validation, followed by a new committed package,
+are required before final acceptance of this follow-up.
+
+The local Docker CLI was located beside the observed backend in the user's
+DockerDesktop installation. An explicit local named-pipe query found zero
+running containers and the older Lodestar container exited cleanly. The workload
+check was repeated immediately before `docker desktop stop --timeout 60`, which
+completed successfully without force. Subsequent process/listener observations
+show no Docker backend, no native Lodestar, and free HTTP 8484/UDP 6881. The
+container, volumes and old evidence were preserved. A standard-location/PATH
+check in the existing Ubuntu environment found no Cargo, Rust compiler or Node;
+the Unix updater and pinned Linux visual gates remain unexecuted release gates.
+
+The retained status-map change passes 128 targeted script/component/Alerts tests;
+after sharing border classes too, both primitive suites pass all 28 cases.
+The r20 production build passes every unchanged budget (Alert 44.92 KB/45 KB,
+detail deferred 33.80 KB/33.9 KB). All 67 boot/error/Alerts Windows browser cases
+pass, including keyboard and light/dark accessibility checks. The managed
+preview closed normally. Documentation sync and all 1,156 lint checks pass;
+all three Unraid template validators pass. These do not stand in for Linux pixels.
+
+The original interrupted evidence was rechecked against its private manifest:
+1,565 readable files match; two protected logs initially failed sandbox reads,
+then both byte lengths and SHA256 hashes matched with approved read access.
+Thus all 1,567 preserved files match. The initial incomplete check remains in
+`target/original-evidence-recheck-r20.json`; the two supplemental comparisons are
+in `target/original-evidence-protected-hashes-r20.json`. No original file was
+opened through a writable application connection or changed by these checks.
