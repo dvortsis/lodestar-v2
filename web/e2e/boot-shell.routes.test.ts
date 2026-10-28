@@ -145,17 +145,42 @@ test.describe('where the static shell must not show', () => {
 });
 
 async function cumulativeShift(page: Page) {
+	await test.info().attach('layout-shift-sources', {
+		body: JSON.stringify(
+			await page.evaluate(() => (window as unknown as { __shifts: unknown[] }).__shifts),
+			null,
+			2
+		),
+		contentType: 'application/json'
+	});
 	return page.evaluate(() => (window as unknown as { __cls: number }).__cls);
 }
 async function watchShift(page: Page) {
 	await page.addInitScript(() => {
-		(window as unknown as { __cls: number }).__cls = 0;
+		const state = window as unknown as { __cls: number; __shifts: unknown[] };
+		state.__cls = 0;
+		state.__shifts = [];
 		new PerformanceObserver((list) => {
 			for (const e of list.getEntries() as unknown as {
 				value: number;
+				startTime: number;
 				hadRecentInput: boolean;
+				sources: { node?: Element; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[];
 			}[]) {
-				if (!e.hadRecentInput) (window as unknown as { __cls: number }).__cls += e.value;
+				if (!e.hadRecentInput) {
+					state.__cls += e.value;
+					state.__shifts.push({
+						value: e.value,
+						startTime: e.startTime,
+						sources: e.sources.map((source) => ({
+							tag: source.node?.nodeName,
+							id: source.node?.id,
+							className: source.node?.className,
+							previous: source.previousRect.toJSON(),
+							current: source.currentRect.toJSON()
+						}))
+					});
+				}
 			}
 		}).observe({ type: 'layout-shift', buffered: true });
 	});
@@ -171,16 +196,88 @@ test('adds no layout shift: CLS stays 0 across the swap', async ({ page, go }) =
 
 test('no layout shift on the sign-in and setup screens, where the shell is dropped', async ({
 	page,
-	go
+	go,
+	mock
 }) => {
 	await watchShift(page);
 	for (const path of ['/login', '/setup', '/welcome']) {
+		// Measure each intended screen, not an auth redirect to another screen.
+		mock.on('getAuthStatus', {
+			logged_in: path === '/welcome',
+			setup_required: path === '/setup'
+		});
 		await go(path);
 		await expect(page.getByRole('main')).toBeVisible();
 		await page.waitForLoadState('networkidle');
+		expect(new URL(page.url()).pathname).toBe(path);
+		expect(await cumulativeShift(page), path).toBeLessThan(0.001);
 	}
-	expect(await cumulativeShift(page)).toBeLessThan(0.001);
 });
+
+for (const path of ['/login', '/setup']) {
+	test(`a delayed auth check reserves the form without exposing its controls at ${path}`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		let finish!: (value: { logged_in: boolean; setup_required: boolean }) => void;
+		const status = new Promise<{ logged_in: boolean; setup_required: boolean }>((resolve) => {
+			finish = resolve;
+		});
+		mock.on('getAuthStatus', () => status);
+		await watchShift(page);
+		await go(path);
+		await expect(page.getByRole('status')).toContainText('Checking');
+		await expect(page.locator('main [inert] form')).toHaveCount(1);
+		await expect(page.locator('main input:not([hidden])').first()).toBeHidden();
+		finish({ logged_in: false, setup_required: path === '/setup' });
+		await expect(page.locator('main input:not([hidden])').first()).toBeVisible();
+		await expect(page.locator('main [inert]')).toHaveCount(0);
+		await page.waitForLoadState('networkidle');
+		expect(await cumulativeShift(page)).toBeLessThan(0.001);
+	});
+}
+
+for (const width of [1280, 390, 320]) {
+	test(`setup keeps its layout when the font arrives after the form at ${width}px`, async ({
+		page,
+		mock
+	}) => {
+		await page.setViewportSize({ width, height: 844 });
+		mock.on('getAuthStatus', { logged_in: false, setup_required: true });
+		let releaseFont!: () => void;
+		let blockedFonts = 0;
+		const fontReady = new Promise<void>((resolve) => (releaseFont = resolve));
+		await page.route('**/fonts/*.woff2', async (route) => {
+			blockedFonts++;
+			await fontReady;
+			await route.continue();
+		});
+		await watchShift(page);
+		const painted = () =>
+			page.evaluate(
+				() =>
+					new Promise<void>((resolve) =>
+						requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+					)
+			);
+		try {
+			// A font request intentionally remains pending; the load event cannot be our gate.
+			await page.goto('/setup', { waitUntil: 'domcontentloaded' });
+			await expect(page.locator('main input:not([hidden])').first()).toBeVisible({
+				timeout: 10_000
+			});
+			await expect.poll(() => blockedFonts, { timeout: 10_000 }).toBeGreaterThan(0);
+			await painted();
+			releaseFont();
+			await page.evaluate(() => document.fonts.ready);
+			await painted();
+			expect(await cumulativeShift(page)).toBeLessThan(0.001);
+		} finally {
+			releaseFont();
+		}
+	});
+}
 
 test.describe('another language', () => {
 	test.use({ locale: 'zh-CN' });

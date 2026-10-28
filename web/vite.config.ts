@@ -8,6 +8,8 @@ import { licenses } from './scripts/licenses.ts';
 import {
 	chunkGraph,
 	firstLoadGraph,
+	statusIconsGroup,
+	keysGroup,
 	routePreloads,
 	stripPreloadsOf,
 	svelteBarrel,
@@ -22,7 +24,13 @@ export default defineConfig({
 	// The search route's first load carries only what it uses (scripts/first-load.mjs, §10.1),
 	// and no route's preload list rides along in the route table.
 	build: {
-		rolldownOptions: { output: { codeSplitting: { groups: [vendorGroup()] } } },
+		rolldownOptions: {
+			output: {
+				codeSplitting: {
+					groups: [vendorGroup(), statusIconsGroup(), keysGroup()]
+				}
+			}
+		},
 		modulePreload: { resolveDependencies: routePreloads }
 	},
 	plugins: [
@@ -38,7 +46,7 @@ export default defineConfig({
 		chunkGraph(),
 		svelteBarrel(),
 		firstLoadGraph(),
-		stripPreloadsOf(/\/src\/routes\/(search\/\+page|\+layout)\.svelte$/),
+		stripPreloadsOf(/\/src\/routes\/(search\/\+page|\+layout|\+error)\.svelte$/),
 		Icons({ compiler: 'svelte' })
 	],
 	resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,

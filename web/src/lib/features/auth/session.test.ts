@@ -30,6 +30,28 @@ afterEach(() => {
 });
 
 describe('installAuthHandlers', () => {
+	it('does not repeat in-flight detail work when the initial session is confirmed', async () => {
+		setSession('unknown');
+		const invalidated = vi.fn();
+		const off = onDetailInvalidated(invalidated);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => json(200, { ok: true }))
+		);
+		try {
+			await api.get('/filters');
+			expect(currentSession()).toBe('signed_in');
+			expect(invalidated).not.toHaveBeenCalled();
+			setSession('signed_out');
+			expect(invalidated).toHaveBeenLastCalledWith(false);
+			await api.post('/login', { body: { password: 'x' } });
+			expect(invalidated).toHaveBeenLastCalledWith(true);
+			expect(invalidated).toHaveBeenCalledTimes(2);
+		} finally {
+			off();
+		}
+	});
+
 	it('sends an expired session to sign-in with the current URL as next', async () => {
 		vi.stubGlobal(
 			'fetch',

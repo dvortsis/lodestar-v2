@@ -1,0 +1,4 @@
+# Frontend tools and committed generated assets use LF on every host.
+/web/** text=auto eol=lf
+# These textual originals are verified byte-for-byte against SHA256SUMS.txt.
+/brand/source/** text=auto eol=lf

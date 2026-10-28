@@ -489,7 +489,7 @@ describe('buildDocument', () => {
 		]);
 	});
 
-	it('refuses real symlinks on disk', () => {
+	it('refuses real symlinks on disk', (context) => {
 		const tmp = mkdtempSync(join(tmpdir(), 'licenses-fs-'));
 		try {
 			const pkgDir = join(tmp, 'node_modules', 'evil').replace(/\\/g, '/');
@@ -497,7 +497,15 @@ describe('buildDocument', () => {
 			writeFileSync(join(tmp, 'secret.txt'), 'token=secret\n');
 			writeFileSync(join(pkgDir, 'package.json'), pkg('evil', '1.0.0', { license: 'MIT' }));
 			writeFileSync(join(pkgDir, 'LICENSE'), 'MIT text\n');
-			symlinkSync(join(tmp, 'secret.txt'), join(pkgDir, 'LICENSE-LINK'));
+			try {
+				symlinkSync(join(tmp, 'secret.txt'), join(pkgDir, 'LICENSE-LINK'));
+			} catch (error) {
+				if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+					context.skip('File symlink creation requires Windows privilege; retained as a Unix gate');
+					return;
+				}
+				throw error;
+			}
 			expect(nodeFs.files(pkgDir).sort()).toEqual(['LICENSE', 'package.json']);
 			expect(nodeFs.isFile(`${pkgDir}/LICENSE-LINK`)).toBe(false);
 			expect(nodeFs.isFile(`${pkgDir}/LICENSE`)).toBe(true);

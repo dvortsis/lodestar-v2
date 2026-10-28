@@ -1,5 +1,7 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"auth_setup_lead": "验证访问权限，然后设置密码。",
+	"auth_token_help": "从启动日志中粘贴 {format} 格式的令牌，或粘贴包含令牌的整行日志。",
 	"auth_welcome_title": "设置完成",
 	"auth_welcome_lead": "Lodestar 已准备就绪。开始搜索，或查看您的设置。",
 	"auth_welcome_search": "前往搜索",

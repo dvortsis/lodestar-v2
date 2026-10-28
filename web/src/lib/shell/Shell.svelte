@@ -10,7 +10,7 @@
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { isBareRoute } from './chrome';
-	import { shell } from './shell.svelte';
+	import { shell } from './shell-state.svelte';
 	import { statusRef } from './status-ref.svelte';
 
 	let { children }: { children: Snippet } = $props();

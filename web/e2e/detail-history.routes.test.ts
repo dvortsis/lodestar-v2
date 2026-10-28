@@ -57,6 +57,14 @@ test('leaving Search opens full-page detail and does not restore the old invoker
 	await page.getByTestId('detail-open-full').click();
 	await expect(page.getByTestId('detail-view')).toHaveAttribute('data-mode', 'page');
 	await expect(page.getByTestId('query-editor')).toHaveCount(0);
+	// Reload loses the Search seed; detail now obtains its hit by hash.
+	mock.on('searchGet', (request) => {
+		const query = new URL(request.url()).searchParams;
+		expect(query.get('q')).toBe(`hash:${hits(1)[0]!.hash}`);
+		expect(query.get('limit')).toBe('1');
+		return body(hits(1));
+	});
 	await page.reload();
 	await expect(page.getByTestId('detail-view')).toHaveAttribute('data-mode', 'page');
+	await expect.poll(() => mock.calls('searchGet').length, { timeout: 10_000 }).toBe(1);
 });

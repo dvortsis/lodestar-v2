@@ -20,11 +20,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseAst } from 'vite';
+import { normalizePath, parseAst } from 'vite';
 
 const require = createRequire(import.meta.url);
 const SVELTE = dirname(require.resolve('svelte/package.json'));
-export const BARREL = join(SVELTE, 'src/internal/client/index.js');
+export const BARREL = normalizePath(join(SVELTE, 'src/internal/client/index.js'));
 
 /** @typedef {{ file: string, name: string }} Origin */
 /** @typedef {{ chunks: Record<string, { modules: string[] }>, modules: Record<string, { imports: string[] }> }} Graph */
@@ -40,7 +40,7 @@ function exportMap(file) {
 		if (node.type === 'ExportAllDeclaration') throw new Error(`svelte-barrel: export * in ${file}`);
 		if (node.type !== 'ExportNamedDeclaration') continue;
 		if (!node.source) throw new Error(`svelte-barrel: local export in ${file}`);
-		const from = resolve(dirname(file), node.source.value);
+		const from = normalizePath(resolve(dirname(file), node.source.value));
 		for (const s of node.specifiers)
 			map.set(nameOf(s.exported), { file: from, name: nameOf(s.local) });
 	}
@@ -69,7 +69,7 @@ function walk(node, parent, visit) {
 }
 
 /** @param {string} id */
-const clean = (id) => id.split('?')[0];
+const clean = (id) => normalizePath(id.slice(0, id.indexOf('?') < 0 ? id.length : id.indexOf('?')));
 
 /** @returns {import('vite').Plugin} */
 export function svelteBarrel() {
@@ -225,6 +225,26 @@ export const vendorGroup = () => ({
 	priority: 10
 });
 
+// Badge and Banner both import these four status icons. Keep the icon family
+// together instead of paying separate requests and compression for each icon.
+// Anything needed by initial search remains in its existing first-load group.
+export const statusIconsGroup = () => ({
+	name: 'status-icons',
+	/** @param {string} id */
+	test: (id) =>
+		!firstLoad.has(id) && /^~icons\/ph\/(info|check-circle|warning|x-circle)\.svelte$/.test(id),
+	priority: 5
+});
+
+// Command registration needs the registry and combo parser together. The
+// deferred keyboard family is shared by result navigation and detail commands.
+export const keysGroup = () => ({
+	name: 'keys',
+	/** @param {string} id */
+	test: (id) => !firstLoad.has(id) && id.includes('/src/lib/keys/'),
+	priority: 5
+});
+
 // ---- route preloads --------------------------------------------------------------------------
 
 /**
@@ -234,10 +254,10 @@ export const vendorGroup = () => ({
  * a node, or the page paints unstyled); a node's JS imports load when the node does, and kit
  * starts that on hover or touch (`data-sveltekit-preload-data`), before the navigation.
  *
- * `/search`'s own node gets the same rule (S-search-2): its list of the results panel's chunks
- * was in the first load too, and grew with every chunk the panel uses. Only that node: another
- * route's lazy parts keep their preloads, since only `/search` has the first-load budget. The
- * node is found by `stripPreloadsOf` (its file name is hashed).
+ * `/search`'s own node, the root layout and the root error node get the same rule: their lists
+ * of deferred chunks ride in the first load too, and grow with every chunk their lazy views
+ * use. Other route nodes keep their preloads. `stripPreloadsOf` identifies these first-load
+ * nodes by source module before their hashed file names are written into preload maps.
  * @param {string} _file
  * @param {string[]} deps
  * @param {{ hostId: string }} ctx

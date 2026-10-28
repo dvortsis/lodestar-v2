@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { logos, scenes } from '../src/lib/brand/scenes.generated.ts';
 import {
@@ -19,7 +20,7 @@ import {
 	verifyPack
 } from './assets.ts';
 
-const source = new URL('../../brand/source/', import.meta.url).pathname;
+const source = fileURLToPath(new URL('../../brand/source/', import.meta.url));
 const read = (rel: string) => readFileSync(join(source, rel), 'utf8');
 
 const dirs: string[] = [];
