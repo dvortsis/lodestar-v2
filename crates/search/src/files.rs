@@ -541,7 +541,7 @@ pub(crate) fn torrent_ids(
         let mut doc = scorer.doc();
         let mut visited = 0u32;
         while doc != TERMINATED {
-            if visited.is_multiple_of(crate::cancel::CHECK_EVERY) {
+            if visited % crate::cancel::CHECK_EVERY == 0 {
                 cancel.check()?;
             }
             visited = visited.wrapping_add(1);

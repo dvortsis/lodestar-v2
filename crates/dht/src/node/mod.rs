@@ -226,6 +226,13 @@ pub struct Stats {
     /// Owned peer requests admitted.
     pub peer_admitted: AtomicU64,
     pub peer_rejected: AtomicU64,
+    pub peer_rejected_capacity: AtomicU64,
+    pub peer_rejected_paused: AtomicU64,
+    pub peer_rejected_caller_closed: AtomicU64,
+    pub peer_ack_failed: AtomicU64,
+    pub peer_command_full: AtomicU64,
+    pub peer_command_closed: AtomicU64,
+
     pub peer_cancelled: AtomicU64,
     pub peer_active: AtomicU64,
     pub peer_queued: AtomicU64,
@@ -281,6 +288,13 @@ impl Stats {
             sample_stale: g(&self.sample_stale),
             peer_admitted: g(&self.peer_admitted),
             peer_rejected: g(&self.peer_rejected),
+            peer_rejected_capacity: g(&self.peer_rejected_capacity),
+            peer_rejected_paused: g(&self.peer_rejected_paused),
+            peer_rejected_caller_closed: g(&self.peer_rejected_caller_closed),
+            peer_ack_failed: g(&self.peer_ack_failed),
+            peer_command_full: g(&self.peer_command_full),
+            peer_command_closed: g(&self.peer_command_closed),
+
             peer_cancelled: g(&self.peer_cancelled),
             peer_active: g(&self.peer_active),
             peer_queued: g(&self.peer_queued),
@@ -327,6 +341,13 @@ pub struct StatsSnapshot {
     pub sample_stale: u64,
     pub peer_admitted: u64,
     pub peer_rejected: u64,
+    pub peer_rejected_capacity: u64,
+    pub peer_rejected_paused: u64,
+    pub peer_rejected_caller_closed: u64,
+    pub peer_ack_failed: u64,
+    pub peer_command_full: u64,
+    pub peer_command_closed: u64,
+
     pub peer_cancelled: u64,
     pub peer_active: u64,
     pub peer_queued: u64,
@@ -428,6 +449,7 @@ pub struct DhtEstimate {
 /// A cloneable handle for peer finding, scraping and node controls.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
+    stats: Arc<Stats>,
     commands: mpsc::Sender<Command>,
 }
 
@@ -437,9 +459,17 @@ impl NodeHandle {
     /// `true` means enqueued only; `Some` on the admission channel owns work.
     /// Dropping the returned terminal receiver cancels all family legs.
     pub fn request_peers(&self, hash: InfoHash, admit: PeerAdmission) -> bool {
-        self.commands
-            .try_send(Command::RequestPeers(hash, admit))
-            .is_ok()
+        match self.commands.try_send(Command::RequestPeers(hash, admit)) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                Stats::inc(&self.stats.peer_command_full);
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Stats::inc(&self.stats.peer_command_closed);
+                false
+            }
+        }
     }
 
     /// Estimates a swarm's seeds and peers from the BEP 33 filters of the
@@ -582,6 +612,7 @@ impl Node {
     /// A handle that can outlive borrows of the node, for scrapes.
     pub fn handle(&self) -> NodeHandle {
         NodeHandle {
+            stats: self.stats.clone(),
             commands: self.commands.clone(),
         }
     }

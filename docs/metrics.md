@@ -639,3 +639,24 @@ These Prometheus series are aggregate, without endpoint/hash labels. Gauges refl
 | `dht_lookup_deadlines_total` | Lookup legs terminated at their deadline, including maintenance/scrapes. |
 
 `dht_lookups_completed_total` includes terminal owned requests, including empty results and active cancellation; it is not a metadata-yield counter. The typed `dht.socket_buffers` startup event reports the existing 4 MiB receive-buffer request, `send_requested=0` (retain the system default), kernel readback for both buffers, and set/read errors per socket. Zero readback with `read_errors > 0` means unknown. OS accounting may differ; do not infer packet drops from grants. Kernel drop counts remain unavailable unless separately collected. The six-hour startup suppression must be excluded from a steady-state sample-yield comparison and reported separately.
+
+
+## Hardened baseline diagnostics (October 27)
+
+See [the diagnostic boundary contract](decisions/2026-10-27-soak-diagnostics.md).
+New metrics preserve the existing scheduling and attempt definitions:
+
+| Metric | Meaning |
+| --- | --- |
+| `dht_peer_rejection_reasons_total{reason}` | Exclusive `caller_closed`, `paused`, `capacity` partition of actor rejection |
+| `dht_peer_ack_failed_total` | Ownership acknowledgment lost before queue insertion |
+| `dht_peer_command_full_total`, `dht_peer_command_closed_total` | Handoff failed before actor admission |
+| `fetch_finder_full_total`, `fetch_finder_closed_total` | Pool-to-finder handoff failures |
+| `fetch_lookup_unaccepted_total` | Request finishes/times out without observed accepted ownership, including no finder channel |
+| `fetch_retry_unaccepted_total` | Repeated entry-lifetime request with zero accepted attempts |
+| `fetch_evicted_service_total{stage}` | Furthest known service: `unaccepted`, `lookup`, `peers`, `fetch` |
+
+These are event counts, not unique hashes, network attempts or cohort conversion.
+No endpoint/hash/query labels are introduced. Restored entries lack historical
+peer/fetch flags; do not interpret eviction categories as complete cross-restart
+history. All absent measurements remain unknown.
