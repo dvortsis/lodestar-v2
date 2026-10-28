@@ -6,6 +6,10 @@ This ledger supersedes historical statements that the October 26 soak is running
 No subsequent soak has started. No push, merge, deployment or Docker restart is
 part of the current execution. The original evidence is preserved.
 
+October 28: **applicable Windows pre-soak preparation complete**. See the
+[requirement audit and frozen package](2026-10-28-pre-soak-completion.md).
+No public run has started. Refresh dynamic environment checks at actual launch.
+
 ## Pre-soak work
 
 | IDs | Status | Evidence / remaining work |
@@ -13,16 +17,16 @@ part of the current execution. The original evidence is preserved.
 | PRE-01–03 | Checks passed | [Incident](../soak/2026-10-27-interrupted-cr0.md); complete private manifest hashes 1,567 files; copied DB/WAL/SHM passes integrity and foreign-key checks |
 | PRE-04 | Investigation recorded | C: recovered approximately 141 GiB before this work; application logs under 1 MiB; source of historic disk growth not established |
 | PRE-05–06 | Inventoried; storage procedure specified | [Workspace and storage record](2026-10-27-build-storage.md); root plus four worktrees preserved; bounded Cargo output; no cleanup performed |
-| PRE-07–09 | Harness checks passed; final package pending | Disk reserves, log cap, frozen inputs, protected shutdown, healthy endpoint, schema/provenance; Docker/process/port preflight and minimum durations enforced; final source review recorded; clean-commit package command added |
+| PRE-07–09 | Windows preparation passed | Disk reserves, log cap, protected shutdown, endpoint and provenance; final reviewed source `744b84d6`, frozen r21 package and production preflight verified |
 | PRE-10 | Checks passed | Analyzer missing-result handling, freshness, fixed-enum breakdowns, hourly deltas, disk history, per-metric coverage and confirmed shutdown; 24 Python regressions |
 | PRE-11–13 | Checks passed on Windows | [Counter contracts](../decisions/2026-10-27-soak-diagnostics.md); actor tests and 19 pool cases including full/closed finder channels, eviction before service/after fetch, rediscovery versus retry; entry size 72 bytes unchanged; isolated added counter median 4.23 ns/event |
 | PRE-14–17 | Windows checks passed | Full workspace: 2,120 passed, no failures; 17 swarm migration cases passed after correcting the V4 fixture. Clippy caught and fixed a minimum-Rust-version violation in cancellation polling |
 | PRE-18 | Cross-platform release gate retained | Existing Ubuntu checked again October 28: cargo/rustc/node absent from PATH and standard user/system locations; native Windows excludes updater engine; no zero-selected-test pass claimed |
 | PRE-19–22 | Windows checks passed | 124 frontend files, 2,311 passing tests, one Windows file-symlink privilege skip. 503 browser core/keyboard cases pass, 11 skips; 185 auth/result-row tests rerun after latest fixes; semantic/lint and e2e type checks pass |
-| PRE-23 | Windows checks passed | October 28 corrected r16 build and all unchanged bundle budgets pass; 29 resolver tests, full check, E2E types and 30 focused browser cases pass; refreshed release packaging smoke passes |
+| PRE-23 | Windows checks passed | Final r21 frontend/release package passes all unchanged budgets and smoke; final full check, 67 browser cases, docs sync/1,156 lint checks and three template validators pass |
 | PRE-24 | Checks passed | 21 production-loop rehearsals with fake process/HTTP/clock/disk and injected write/cleanup failures; atomic replacement injections; 28 analyzer/preservation cases |
-| PRE-25 | Checks passed for r16 candidate | Frozen UI hash matches; fresh offline fixture health/metrics/no UDP checks pass; Ctrl+C confirmed exit 0 in 1.55 seconds. Prior r14 evidence and executable preserved |
-| PRE-26 | Final package pending | Final source review recorded; Docker gracefully stopped after checking empty workload; ports free and storage stable; source-qualified package preparation pending; public crawler remains stopped |
+| PRE-25 | Checks passed for source-qualified r21 | Frozen UI hash matches; fresh offline fixture health/metrics/no UDP checks pass; Ctrl+C confirmed exit 0 in 1.30 seconds. Prior candidates and failed evidence preserved |
+| PRE-26 | Ready for separately authorized launch | Source review/package/configuration recorded; Docker stopped, ports free, 116.2 GiB reserve; original hashes reverified; repeat environment preflight at launch. Public crawler remains stopped |
 
 ## Verification rules
 
@@ -225,7 +229,7 @@ measurement coverage and no unexplained gap over three minutes, stable identity,
 no resets/cap violations/stalls/writer failures, confirmed clean shutdown and
 successful final publication. Throughput is descriptive, not a 720/hour gate.
 
-The next soak is not launch-ready until applicable checks and review pass. Full
+The final r21 candidate passes the applicable Windows preparation gates. Full
 Linux visual/updater, Docker/Unraid, fuzz and scale gates remain explicit release
 requirements. No automatic restart, cleanup, performance tuning or suppression
 bypass. Docker was gracefully stopped on October 28 after verifying no running

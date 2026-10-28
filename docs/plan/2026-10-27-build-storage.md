@@ -14,13 +14,15 @@ old evidence and less than 1 MiB application logs do not explain it.
 | `target/worktrees/soak-followups` | `work/soak-followups` | `5e1a53c06abec4fa7be420d84a2be6052c656b11` |
 | `target/worktrees/soak-settings` | `work/soak-settings` | `5e1a53c06abec4fa7be420d84a2be6052c656b11` |
 
-Baseline implementation is uncommitted in `soak-followups`; separate Settings
-source preparation is uncommitted in `soak-settings`. Its dependency install reused
+The table records original checkout bases. Baseline preparation is now committed
+through build source `744b84d6` in `soak-followups`; separate Settings source
+preparation is uncommitted in `soak-settings`. Its dependency install reused
 the existing bounded npm cache. Root plan changes
 and untracked review material remain untouched. The inherited support/product
 stack is already included; do not cherry-pick it again. Heads identify checkout
-bases, not the source of the current built candidate. Before final freeze, record
-the committed source identity and executable/UI/collector hashes together.
+bases, not the source of the current built candidate. The final r21 package records
+committed source identity and executable/UI/collector hashes together; see the
+[completion audit](2026-10-28-pre-soak-completion.md).
 
 ## Build storage policy
 
