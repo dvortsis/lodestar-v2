@@ -5,6 +5,9 @@
 > Scope: incremental correctness, metadata conversion, fair recovery and measured tuning; no rewrite, database replacement, new worker framework or external dependencies.
 > Updated 2026-10-26: §13 product source and regression tests are prepared in `work/soak-product`; full validation awaits collector completion. Crawler experiment gates remain unchanged.
 
+> Current execution: [October 27 hardened-baseline ledger](2026-10-27-baseline-execution.md).
+> The October 26 run was interrupted by disk exhaustion; historical launch/progress entries below are not current run status.
+
 ## 0. Authority and boundaries
 
 Owner decisions take precedence over architecture, contract docs and build plan. Record refinements in `docs/decisions/`; architecture §16 is closed. Preserve Rust/Tokio single-owner actors, bounded channels, source DRR, coordinator leases/fencing, SQLite WAL single writer, compressed complete file trees, Tantivy, Svelte 5, consent, privacy, content filtering and owner budgets.
