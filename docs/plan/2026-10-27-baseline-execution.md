@@ -3,12 +3,19 @@
 Owner authorization: October 27, 2026. Integration branch `work/soak-followups`,
 starting at `5e1a53c0`, including the support and prepared product/follow-up stack.
 This ledger supersedes historical statements that the October 26 soak is running.
-No subsequent soak has started. No push, merge, deployment or Docker restart is
-part of the current execution. The original evidence is preserved.
+The owner separately authorized the next native soak on October 28 ("Ok. Go.").
+The network-capable run started at 18:23 MDT; see the
+[launch record](../soak/2026-10-28-native-cr0-launch.md), including the preserved
+two-minute offline-sandbox startup attempt.
+The owner authorized publication of all pending changes on October 29. Branch
+publication does not imply merge or acceptance. The original evidence is preserved.
 
 October 28: **applicable Windows pre-soak preparation complete**. See the
 [requirement audit and frozen package](2026-10-28-pre-soak-completion.md).
-No public run has started. Refresh dynamic environment checks at actual launch.
+Dynamic environment checks passed again at launch. The public run is collecting
+baseline evidence; baseline acceptance remains pending. See the
+[October 29 checkpoint](../soak/2026-10-29-native-cr0-checkpoint.md) for the
+16-hour results and owner-confirmed external download behind the disk-space drop.
 
 ## Pre-soak work
 
@@ -26,7 +33,7 @@ No public run has started. Refresh dynamic environment checks at actual launch.
 | PRE-23 | Windows checks passed | Final r21 frontend/release package passes all unchanged budgets and smoke; final full check, 67 browser cases, docs sync/1,156 lint checks and three template validators pass |
 | PRE-24 | Checks passed | 21 production-loop rehearsals with fake process/HTTP/clock/disk and injected write/cleanup failures; atomic replacement injections; 28 analyzer/preservation cases |
 | PRE-25 | Checks passed for source-qualified r21 | Frozen UI hash matches; fresh offline fixture health/metrics/no UDP checks pass; Ctrl+C confirmed exit 0 in 1.30 seconds. Prior candidates and failed evidence preserved |
-| PRE-26 | Ready for separately authorized launch | Source review/package/configuration recorded; Docker stopped, ports free, 116.2 GiB reserve; original hashes reverified; repeat environment preflight at launch. Public crawler remains stopped |
+| PRE-26 | Launch gates passed; authorized run started | Frozen r21 hashes and launch review verified again; Docker stopped, ports free, approximately 116 GiB reserve. Network-capable native run started October 28 at 18:23 MDT; initial health/metrics/UI and DHT replies verified. Offline-sandbox attempt stopped cleanly and preserved separately. Acceptance awaits the complete measured run and review |
 
 ## Verification rules
 
@@ -131,14 +138,14 @@ is the authorized queue, in priority order, with its required deliverable.
 
 | ID | Deliverable | Current state |
 | --- | --- | --- |
-| DUR-01 | Aggregate checkpoints: startup, suppression end, baseline start, measured 1/4/8/16/24h | Waiting for next run |
+| DUR-01 | Aggregate checkpoints: startup, suppression end, baseline start, measured 1/4/8/16/24h | October 29 checkpoint preserves all samples through 16.13 baseline hours and hourly diagnostics; 24-hour endpoint/shutdown pending |
 | DUR-02 | Admission churn causal model and deterministic reproduction | [Model and three replay cases checked](2026-10-27-crawler-experiment-protocol.md); next-run causal attribution pending |
 | DUR-03 | Bounded admission/backpressure candidate specification | Candidate constraints specified; ownership design pending DUR-02 |
 | DUR-04 | Saturation/recovery/pause/cancel/drain fixtures | Pending DUR-03 |
 | DUR-05 | Streaming ownership and terminal-completion specification | [Specified](2026-10-27-streaming-and-hints.md); candidate bounds require review |
 | DUR-06 | Responder hint TTL, rate units, guards and fallback specification | [Specified](2026-10-27-streaming-and-hints.md); candidate bounds require review |
 | DUR-07 | Streaming/hint race and full-channel fixtures | [Scenarios specified](2026-10-27-streaming-and-hints.md); executable fixture source pending |
-| DUR-08 | Retention/service analysis including cold work | Waiting for diagnostics |
+| DUR-08 | Retention/service analysis including cold work | October 29 baseline: 98.90% of 2,209,749 evictions precede accepted lookup; aggregate stage evidence preserved, unique-hash/cohort fairness remains unproved |
 | DUR-09 | Admission, retention and socket fairness specification | Pending DUR-08 |
 | DUR-10 | Durable partial-upgrade producer and writer outcome specification | [Specified](2026-10-27-durable-partial-upgrades.md); service/retry parameters and concrete lease mapping remain gates |
 | DUR-11 | 100,001-row and crash/saturation/provenance upgrade fixtures | [Scenarios specified](2026-10-27-durable-partial-upgrades.md); executable fixture source pending |
