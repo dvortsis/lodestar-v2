@@ -3,6 +3,7 @@
 > Date: 2026-10-25 (America/Denver). Source inspection: `ad0ec5a84555b8b36e7ae94ed515b84ad6d46e02`.
 > Owner authorized consolidation and CR-0 implementation. Later experiments remain proposals.
 > Scope: incremental correctness, metadata conversion, fair recovery and measured tuning; no rewrite, database replacement, new worker framework or external dependencies.
+> Updated 2026-10-26: §13 records the agreed product work during the soak. These tasks are planned, not implemented; crawler experiment gates remain unchanged.
 
 ## 0. Authority and boundaries
 
@@ -46,6 +47,8 @@ Verify current HEAD before each slice. Prior soak evidence is in `docs/soak/2026
 | P4/v0.6 | Worker coordination and safe responder handover | Existing roadmap |
 
 CR-0 means CR-0a/b/c, not the later optimizations. Keep reviewable commits/PRs. Do not renumber existing roadmap phases or block packaging on experiments. This task does not merge, deploy or alter a running soak.
+
+Independent product work during the baseline wait is tracked in [§13](#13-product-work-during-the-soak). It does not advance CR-1 or change the baseline configuration.
 
 ## 3. CR-0a: sampler and protocol
 
@@ -156,11 +159,73 @@ Update architecture §§5/6/7/18.4/19.5 only where implemented, build-plan along
 
 ## 12. Execution record
 
+### CR-0 implementation validation (2026-10-25)
+
 - Owner authorized consolidation and CR-0 on 2026-10-25. Branch `fix/dht-cr0`, source `ad0ec5a8`. Prior untracked review/soak files are not implementation changes.
 - Implemented CR-0a/b/c: reserved sampler ownership with bounded expiry, six-hour-plus-timeout restart suppression, absent/empty samples, non-reused eight-byte session transactions, shared public endpoint policy, socket readback diagnostics, reliable acknowledged/cancellable peer requests, lookup deadlines/continuations, and shared dual-stack limits. Maintenance precedes packet service; socket receive selection remains unbiased between families.
 - Updated architecture/build-plan/metrics and [the CR-0 decision record](../decisions/2026-10-25-CR-0.md). The new internal policy crate and diagnostic event are registered in the application's logging targets/catalog fixture.
 - Validation passed on Windows: `cargo test --workspace --offline -j 4 --quiet --no-fail-fast` (2,105 passed, zero failed, 16 ignored, including doctests); `cargo fmt --all --check`; `git diff --check`; and strict all-target Clippy for `lodestar-dht`, `lodestar-network-policy`, `lodestar-peer-wire`, `lodestar-sources`, and `lodestar-pipeline`. The initial workspace run caught the missing logging target/catalog registrations; both were corrected before the successful rerun.
 - `cargo clippy --workspace --all-targets --offline -j 4 -- -D warnings` fails on existing Windows-only dead-code diagnostics for `from` and `closed` in `crates/cluster/tests/transport.rs:469,476` (present at the source HEAD and untouched here). The full workspace lint gate is therefore not green. The application build also reports the existing missing `web/build` stub-page warning; this Rust validation is not a packaged-UI validation.
 - Not executed: fuzzing, Linux/Docker/VPN/Unraid validation, scale gates or the post-suppression 24h soak. No deployment or live speedup is claimed; later slices remain unimplemented.
+
+### Subsequent support work and soak launch (2026-10-26)
+
+- CR-0 binary commit: `43d054df962098812023fc5d95df139813a429df`. The owner authorized stopping the Docker crawler and starting the isolated native Windows soak. Sampling suppression ended at 13:48:47 MDT on 2026-10-26. At the 14:04:54 MDT status sample, the run was healthy and in warmup; the measured baseline had not started. This is launch/progress evidence, not soak acceptance.
+- Support work is complete in local commit `80d7e198` on `work/cr0-soak-tools`: a read-only aggregate analyzer, five lifecycle regressions and Windows-only lint cleanup. Its recorded validation passed 2,110 Rust tests (16 ignored), 16 Python tests, workspace all-target Clippy, formatting and diff checks. This supersedes the lint limitation above for the support checkout only; it does not change the running binary. The packaged-UI, Linux, fuzzing, scale and soak gates remain outstanding.
+- The support checkout is `target/worktrees/cr0-soak-tools`; its validation record is `docs/soak/2026-10-26-support-tools.md` in that checkout. Live run state is in `target/soak/cr0-2026-10-25-43d054df/status.json`. Use actual collector completion rather than the estimated finish time to release deferred validation work.
+
+## 13. Product work during the soak
+
+The owner selected product fixes and a small setup completion screen rather than a full onboarding wizard. The following four slices are documented for later implementation. Their identifiers are local task labels, not new crawler phases. No database migration, new dependency, backend API change or crawler tuning is planned.
+
+| Task | Priority / order | Deliverable | Status |
+|---|---|---|---|
+| PW-1 | 1 | Detail-cache visibility and stale-response protection | Planned |
+| PW-2 | 2 | Setup completion screen with Search and Settings actions | Planned |
+| PW-3 | 3 | Browser Back focus restoration and Discover All browsing | Planned |
+| PW-4 | 4 | Accurate build, shutdown and Unraid logging instructions | Planned |
+
+### PW-1: detail-cache visibility
+
+**Problem:** cached detail and search-hit metadata can remain visible after content visibility changes. Cache presence is not authorization to display metadata.
+
+- Revalidate `/torrents/{hash}` on every detail open before exposing cached identifying metadata. Gate associated search-hit metadata on the same successful validation.
+- Invalidate caches and clear/revalidate mounted detail on content-settings events, event resynchronization and session changes. Preserve existing bounded cache sizes and expiry rules.
+- Cancel in-flight model and prefetch requests. Use generation checks so late responses cannot restore cleared data even if cancellation races with completion. Purge affected entries on hidden/not-found/authentication failures; failed revalidation must not reveal cached content.
+- Keep the change within the detail model/cache/prefetch lifecycle and existing settings/session event plumbing. Broader Search/Discover visibility redesign is outside this slice.
+
+**Acceptance:** regressions cover close/reopen, visibility changes in another tab, visibility resync, logout, request failure and delayed responses after invalidation or navigation to another hash. No cached title or detail is displayed before successful revalidation, and stale requests cannot repopulate invalidated state.
+
+### PW-2: setup completion screen
+
+Replace the placeholder `web/src/routes/welcome/+page.svelte` with a short setup-success message, primary **Go to Search** action to `/search`, and secondary **Review settings** action to `/settings`. Reuse existing components, tokens and navigation conventions; provide English and Chinese messages. Use existing authentication checks to handle refresh/direct visits without falsely showing setup success to a signed-out or setup-required visitor.
+
+**Acceptance:** successful setup reaches a usable page; both actions navigate correctly; keyboard order, visible focus and page focus work on desktop/mobile. Refresh and direct visits follow authentication state. The screen performs no settings writes and changes no defaults or consent. A full onboarding wizard is outside this task.
+
+### PW-3: search and detail navigation
+
+- Keep the detail host lazily loaded, then mounted for the Search page's lifetime so it observes drawer closure on browser Back. Restore focus to the connected invoking result, or the search input if that result disappeared; do not steal focus from a control the user already focused. Preserve cleanup on route exit and direct full-page detail behavior.
+- Add frontend URL parameter `browse=1` to Discover's **All → See all** destination. Empty-query browsing uses the existing match-all search AST; explicitly typed queries take precedence, and parse errors never fall back to match-all. Typed-category links keep their existing queries.
+- Load results immediately for explicit browsing. Include browse state in request identity and keep results, facets, pagination and sorting consistent. Preserve density; Clear/reset removes browse mode and restores the normal empty Search landing page. Browser Back/Forward restores URL-driven state.
+
+**Acceptance:** browser regressions cover drawer Back/Forward, explicit close, removed invokers, route exit, direct detail visits and focus restoration. Search tests cover All and typed-category links, browse pagination/filtering/sorting, query precedence, invalid queries, Clear/reset and history navigation. The only new external interface is the frontend URL parameter; search HTTP contracts remain unchanged.
+
+### PW-4: installation and shutdown documentation
+
+- In `docs/operations.md` and `packaging/linux/README.md`, document frontend installation/build (`npm ci`, then `npm run build` in `web/`, with the declared Node prerequisite) before Rust builds that embed the UI. Preserve platform-specific Rust flags and make the missing-frontend stub limitation explicit.
+- Add `--stop-timeout=60` to the standalone Docker example in `packaging/docker/README.md`, matching the existing Compose/template grace period.
+- Correct the portable Windows README and launcher guidance: press Ctrl+C, wait for shutdown to finish, then close the window. No new console-event handling is included.
+- Correct the Unraid guide's claimed Log level field: document an optional custom `LODESTAR_LOG` variable and its default instead of adding a template field. Keep setup facts and related guide references consistent with the actual templates.
+
+**Acceptance:** commands match package scripts and templates, documentation lint/sync checks pass, and shutdown instructions match implemented behavior. Follow the project's user-documentation skills when editing those materials. Any packaged-UI smoke test uses a fresh fixture after the soak, never the live data or ports.
+
+### Execution boundaries and validation
+
+- Start product implementation from support commit `80d7e198` in a separate worktree/branch, outside the live evidence directory. Keep one reviewable commit per slice; split PW-3 further if useful. Check current source and concurrent work before implementation. This documentation update does not start implementation or publish changes.
+- During warmup and the measured baseline, prepare source, tests and documentation with lightweight checks. Defer dependency installation, heavy builds, browser suites, fuzzing and benchmarks on this host until the collector has actually finished. Record deferred checks explicitly; prepared code is not validated completion.
+- After the soak, run targeted cache/navigation/auth regressions, then required frontend checks, unit tests, build, size budgets and applicable browser suites. Include keyboard, reduced-motion and desktop/mobile coverage for affected flows, using existing themes and synthetic fixtures. Run documentation lint/sync checks for PW-4 and Rust gates if implementation expands into Rust. Do not weaken the repository's pre-push requirements.
+- Keep the active executable, collector, configuration, data, network settings and ports unchanged. Never clean the root `target/` tree: it contains live evidence and the support checkout. Use separate fixture data and ports for later runtime checks.
+- Keep the original Docker crawler stopped throughout the soak. Its restart restriction remains at least six hours plus four seconds after the actual native crawler stop; no automatic restart is part of these tasks.
+- Record each slice's changed files, executed/deferred checks and remaining limitations before marking it complete. CR-1 and later crawler experiments retain their existing gates regardless of product-task progress.
 
 References: [BEP 5](https://www.bittorrent.org/beps/bep_0005.html), [BEP 33](https://www.bittorrent.org/beps/bep_0033.html), [BEP 42](https://www.bittorrent.org/beps/bep_0042.html), [BEP 51](https://www.bittorrent.org/beps/bep_0051.html), project authority documents and 2026-10-24 soak/research reports.

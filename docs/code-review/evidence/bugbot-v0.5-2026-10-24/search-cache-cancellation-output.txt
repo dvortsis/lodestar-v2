@@ -1,0 +1,5 @@
+100 cancelled cold file queries over10000 torrents: retained=13123004 bytes; clear_cache released=13115692 bytes
+
+thread 'main' (48352) panicked at C:\Users\dvort\AppData\Local\Temp\lodestar-bugbot-eaf08ff1c8a840a19845c51c470f0602\search_probe.rs:26:2:
+cancelled searches retained over8MiB of hidden file-set caches
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

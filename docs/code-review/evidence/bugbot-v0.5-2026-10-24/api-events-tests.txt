@@ -1,0 +1,28 @@
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.52s
+     Running unittests src\lib.rs (target\release\deps\lodestar_api-8891c7b75f81e6cb.exe)
+
+running 22 tests
+test auth::log_events::tests::every_error_has_a_fixed_reason ... ok
+test dto::events::tests::topic_names_round_trip_and_match_serde ... ok
+test auth::log_events::tests::checks_log_their_outcome ... ok
+test events::tests::hidden_adult_alone_sends_nothing ... ok
+test dto::events::tests::the_frame_name_and_data_match_the_tagged_schema ... ok
+test events::tests::hub_sources_default_to_adult_hidden ... ok
+test events::tests::settings_saves_reach_only_settings_subscribers ... ok
+test events::tests::ids_are_epoch_and_sequence ... ok
+test events::tests::events_made_while_adult_was_shown_are_withheld_once_hidden ... ok
+test events::tests::a_lagging_client_resyncs_and_stays_bounded ... ok
+test events::tests::alerts_made_while_adult_was_shown_are_withheld_once_hidden ... ok
+test events::tests::caps_hold_and_slots_come_back ... ok
+test events::tests::topics_parse_strictly ... ok
+test events::tests::a_take_counts_under_the_visibility_of_its_moment ... ok
+test events::tests::topics_come_once_and_echo_at_most_64_chars ... ok
+test events::tests::a_thousand_cycles_leave_nothing_held ... ok
+test events::tests::replay_is_exact_and_filtered ... ok
+test events::tests::unusable_ids_resync_then_go_live ... ok
+test log_events::tests::details_never_name_items ... ok
+test events::tests::the_commit_sink_never_waits_and_coalesces ... ok
+test events::tests::delivery_is_ordered_unique_and_gaps_are_announced ... ok
+test events::tests::the_hub_leaves_hidden_adult_out_of_torrents_events ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 131 filtered out; finished in 0.21s

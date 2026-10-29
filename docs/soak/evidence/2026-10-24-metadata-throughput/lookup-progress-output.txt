@@ -1,0 +1,4 @@
+initial_batch=3
+in_flight=0 extra_in_flight=0 fresh_candidates=13
+is_done=false
+manual_second_drive_batch=3
