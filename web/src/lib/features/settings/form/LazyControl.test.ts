@@ -91,7 +91,7 @@ describe('a control loaded on demand', { timeout: 20_000 }, () => {
 		show('crawler.timeout_secs');
 		show('crawler.intensity'); // ChoiceControl came with the radio group above
 		expect(document.querySelectorAll('[data-placeholder]')).toHaveLength(1);
-		const input = await screen.findByLabelText('timeout_secs', {}, { timeout: 10_000 });
+		const input = await screen.findByLabelText('Fetch timeout', {}, { timeout: 10_000 });
 		await fireEvent.input(input, { target: { value: '30' } });
 		expect(form.field('crawler.timeout_secs').value).toBe(30);
 		await until(() => expect(screen.getByRole('radio', { name: 'balanced' })).toBeTruthy());

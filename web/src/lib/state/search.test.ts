@@ -28,6 +28,30 @@ function fakeNav(start = 'http://x/search') {
 	};
 }
 
+it('cancels a pending draft and an in-flight answer without navigating after unmount', async () => {
+	const { nav, calls } = fakeNav();
+	const state = createSearchState(nav);
+	state.setText('abandoned');
+	state.cancelPending();
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(fetchMock).not.toHaveBeenCalled();
+	expect(calls).toEqual([]);
+	let finish!: (response: Response) => void;
+	fetchMock.mockImplementation(
+		() =>
+			new Promise<Response>((resolve) => {
+				finish = resolve;
+			})
+	);
+	state.setText('late');
+	const submitted = state.submit();
+	state.cancelPending();
+	finish(json({ ast: word('late'), canonical: 'late' }));
+	await submitted;
+	expect(calls).toEqual([]);
+	expect(state.parsing).toBe(false);
+});
+
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	vi.useFakeTimers();

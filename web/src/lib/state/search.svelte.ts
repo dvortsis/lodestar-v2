@@ -119,6 +119,13 @@ export function createSearchState(nav: Nav = kitNav) {
 	}
 
 	return {
+		/** Stop pending work when the query editor leaves; the state can be mounted again. */
+		cancelPending() {
+			clearTimeout(timer);
+			slot.cancel();
+			parsing = false;
+			written = undefined;
+		},
 		get text() {
 			return text;
 		},

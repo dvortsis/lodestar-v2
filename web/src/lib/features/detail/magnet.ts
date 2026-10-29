@@ -8,15 +8,12 @@ import { m } from '$lib/paraglide/messages.js';
 import { cacheDetail, detailGeneration, forgetDetail, onDetailInvalidated } from './cache';
 import { manual } from './manual.svelte';
 
-let manualMounted = false;
-
 /** Show the manual field, mounting it once on demand (the `c` key can run with no drawer open). */
-async function showManual(magnet: string) {
+async function showManual(magnet: string, generation: number) {
+	const mod = await import('./manual-mount');
+	if (generation !== detailGeneration()) return;
 	manual.magnet = magnet;
-	if (manualMounted) return;
-	manualMounted = true;
-	const [{ mount }, mod] = await Promise.all([import('svelte'), import('./ManualMagnet.svelte')]);
-	mount(mod.default, { target: document.body });
+	mod.mountManual();
 }
 
 export async function magnetFor(hash: string): Promise<string | null> {
@@ -38,6 +35,7 @@ export async function magnetFor(hash: string): Promise<string | null> {
 
 /** Copy `magnet` (or the one for `hash`). Toasts on success; on failure opens the manual field. */
 export async function copyMagnet(source: { magnet: string } | { hash: string }) {
+	const generation = detailGeneration();
 	let magnet: string | null = null;
 	try {
 		magnet =
@@ -49,24 +47,28 @@ export async function copyMagnet(source: { magnet: string } | { hash: string }) 
 	} catch {
 		magnet = null;
 	}
+	if (generation !== detailGeneration()) return 'failed' as const;
 	if (!magnet) {
 		toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
 		return 'failed' as const;
 	}
 	const result = await copyText(magnet);
+	if (generation !== detailGeneration()) return 'failed' as const;
 	if (result === 'copied') toast.push({ kind: 'success', text: m.detail_magnet_copied() });
-	else await showManual(magnet);
+	else await showManual(magnet, generation);
 	return result;
 }
 
 /** Hand the magnet to the system's torrent client by following it as a link. */
 export async function openMagnet(source: { magnet: string } | { hash: string }) {
+	const generation = detailGeneration();
 	let magnet: string | null = null;
 	try {
 		magnet = 'magnet' in source ? source.magnet : await magnetFor(source.hash);
 	} catch {
 		magnet = null;
 	}
+	if (generation !== detailGeneration()) return false;
 	if (!isMagnet(magnet)) {
 		toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
 		return false;

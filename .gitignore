@@ -7,3 +7,8 @@
 *.db-wal
 *.db-shm
 __pycache__/
+
+# Local validation output and machine-specific browser launch adapters.
+/settings-*.log
+/soak-followups/target/
+/web/playwright.*.local.ts

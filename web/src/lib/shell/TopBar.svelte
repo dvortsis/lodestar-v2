@@ -12,7 +12,7 @@
 	import Compass from './Compass.svelte';
 	import Glyph from './Glyph.svelte';
 	import { DESTINATIONS, isActive, withDensity, type Route } from './nav';
-	import { shell } from './shell.svelte';
+	import { shell } from './shell-state.svelte';
 	import { statusRef } from './status-ref.svelte';
 
 	let navOpen = $state(false);

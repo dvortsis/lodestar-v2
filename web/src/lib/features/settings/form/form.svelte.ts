@@ -178,7 +178,9 @@ export class Engine implements SettingsForm {
 	previewErrors = $state.raw<Record<string, string>>({});
 	formErrors = $state.raw<string[]>([]);
 	preview = $state.raw<SettingsPreview | null>(null);
-	restartPending = $state.raw<FieldKey[]>([]);
+	readonly restartPending = $derived(
+		this.specs.filter((s) => this.sections[s.section]?.restart.includes(s.name)).map((s) => s.key)
+	);
 	savedRecently = $state.raw<Record<string, 'live' | 'restart'>>({});
 	undoUntil = $state<number | null>(null);
 	undoSkipsSecrets = $state(false);

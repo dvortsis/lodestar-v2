@@ -52,8 +52,9 @@ test('browse paging uses the same AST and explicit queries take precedence', asy
 	);
 	await go('/search?browse=1');
 	await expect(row(page, 1)).toBeVisible();
-	await page.locator('[data-results-more]').scrollIntoViewIfNeeded();
-	// The intersection sentinel can page before its keyboard fallback is activated.
+	// The button is outside the virtual scroller; scrolling it into view does not
+	// reveal the list's sentinel. Exercise its explicit paging action.
+	await page.getByRole('button', { name: 'Load more torrents' }).click();
 	await expect.poll(() => resultsCalls(mock).some((r) => r.cursor === 'browse-next')).toBe(true);
 	expect(resultsCalls(mock).every((r) => r.ast.op === 'all')).toBe(true);
 	await go('/search?browse=1&q=type:movie');

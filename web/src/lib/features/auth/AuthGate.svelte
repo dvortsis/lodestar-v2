@@ -29,8 +29,15 @@
 	});
 </script>
 
-{#if ready}
-	{@render children()}
-{:else}
-	<p role="status" class="text-body text-muted-text">{m.auth_checking()}</p>
-{/if}
+<!-- Reserve the actual form's size while checking; no estimated heights that
+     break with translated text. Hidden/inert controls cannot receive input. -->
+<div class="relative">
+	<div class:invisible={!ready} inert={!ready}>
+		{@render children()}
+	</div>
+	{#if !ready}
+		<p role="status" class="absolute top-0 left-0 text-body text-muted-text">
+			{m.auth_checking()}
+		</p>
+	{/if}
+</div>

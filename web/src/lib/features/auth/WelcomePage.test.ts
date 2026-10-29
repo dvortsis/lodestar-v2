@@ -40,7 +40,7 @@ it('checks authentication before showing setup success and focuses its heading',
 		'/settings'
 	);
 	expect(fetch).toHaveBeenCalledTimes(1);
-	expect(fetch.mock.calls[0][0]).toBe('/api/v1/auth');
+	expect(fetch.mock.calls[0]![0]).toBe('/api/v1/auth');
 });
 
 it.each([true, false])(

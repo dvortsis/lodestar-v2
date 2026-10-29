@@ -18,12 +18,14 @@ describe('settingText', () => {
 	});
 
 	it('resolves a settings message through the map, and returns undefined for a missing one', () => {
-		// S-settings-1 adds the real keys; stand one in.
+		// A stand-in must restore the real catalogue entry for subsequent tests.
+		const original = MESSAGES.settings_crawler_intensity_label;
 		MESSAGES.settings_crawler_intensity_label = () => 'Intensity';
 		try {
 			expect(settingText('settings.crawler.intensity.label')).toBe('Intensity');
 		} finally {
-			delete MESSAGES.settings_crawler_intensity_label;
+			if (original) MESSAGES.settings_crawler_intensity_label = original;
+			else delete MESSAGES.settings_crawler_intensity_label;
 		}
 		expect(settingText('settings.crawler.no_such_field.label')).toBeUndefined();
 		// The engine's own strings aren't server keys.
