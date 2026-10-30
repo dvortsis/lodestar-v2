@@ -15,8 +15,12 @@ export function currentSession(): SessionStatus {
 
 /** Records what a request showed about the session (the forms and the hooks below call it). */
 export function setSession(status: SessionStatus): void {
-	if (session.status === status) return;
+	const previous = session.status;
+	if (previous === status) return;
 	session.status = status;
+	// `unknown` to `signed_in` is the first answer, not a change of identity: whatever is cached or
+	// in flight was fetched under this same session, so revalidating would only repeat it.
+	if (previous === 'unknown' && status === 'signed_in') return;
 	clearDetailCaches(status === 'signed_in');
 }
 

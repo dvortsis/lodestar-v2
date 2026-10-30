@@ -113,6 +113,16 @@ describe('search state', () => {
 		expect(s.ast).toBeNull();
 	});
 
+	it('treats a non-canonical deep link as ready once its own text has parsed', async () => {
+		const f = fakeNav('http://x/search?q=Lantern');
+		const s = createSearchState(f.nav);
+		expect(s.queryReady).toBe(false);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toEqual(word('Lantern'));
+		expect(s.queryReady).toBe(true);
+	});
+
 	it('preserves explicit browsing through sort/filter edits and removes it on reset', async () => {
 		const f = fakeNav('http://x/search?browse=1&sort=-discovered&density=compact');
 		const s = createSearchState(f.nav);

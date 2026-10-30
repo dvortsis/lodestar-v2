@@ -33,8 +33,8 @@ describe('the facets store', () => {
 		const f = createFacets();
 		const q = { ...query(), ast: { op: 'all' } as Ast, browse: true };
 		await f.load(q);
-		expect(post.mock.calls[0][1].body).toMatchObject({ ast: { op: 'all' }, lease: 'L1' });
-		expect(post.mock.calls[0][1].body).not.toHaveProperty('browse');
+		expect(post.mock.calls[0]![1].body).toMatchObject({ ast: { op: 'all' }, lease: 'L1' });
+		expect(post.mock.calls[0]![1].body).not.toHaveProperty('browse');
 		expect(f.data).not.toBeNull();
 		await f.load({ ...q, browse: false });
 		expect(f.data).toBeNull();
