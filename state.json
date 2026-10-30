@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:23Z",
+ "updated_at": "2026-10-30T20:28Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2186,7 +2186,8 @@
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
-  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)"
+  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
+  "#236 optional doc nits to carry in a runner PR: decisions heading '(#TBD)' -> #236; note the re-bless also wrote CR-ADM/#232 zero counters; 'on the final attempt' -> 'the last fetch failure before the pool gave the key up' (gate.rs doc, metrics.md, decisions file)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2289,7 +2290,8 @@
   "2026-10-30T20:12Z #235 review MERGE at 446fbc2d; merge on green ci-ok. #236 CR-gate-hash-mismatch opened (4cf0ff6b; a8706e82 heading fix held locally); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #237. At merge, flag the owner (\u00a72.19): failed_verification now counts hash mismatches only.",
   "2026-10-30T20:20Z safety check-in: every listed item done (#232 #233 #234 #217 merged; hash-mismatch is #236). rc.2 Release run 41110604990 succeeded; draft release 429407881. Recorded artifact zip digests; per-file hashes blocked by network policy (blob host denied), asked the owner.",
   "2026-10-30T20:16Z #237 review MERGE at cbd81a42 (let-chain temporaries and operand order verified); merge on green ci-ok after #235.",
-  "2026-10-30T20:23Z merged #235 canary UDP port (ccff4000)."
+  "2026-10-30T20:23Z merged #235 canary UDP port (ccff4000).",
+  "2026-10-30T20:28Z #236 review MERGE at 4cf0ff6b (3 optional doc nits, carried by the runner); merge on green, then flag the owner (\u00a72.19) and archive the author."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
