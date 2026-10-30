@@ -1351,11 +1351,12 @@
    "pr": 203
   },
   "CR-SIM": {
-   "status": "running",
+   "status": "review",
    "session": "session_01MMjhnBMY2USbbsRFJsaFtR",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f) | 2026-10-30T07:41Z ready 565ab43 on land/L5; held until v0.5.1 cut + CR-0f (runner condition) | 2026-10-30T12:25Z told: hold lifted (cut + CR-0f); merge main, open PR"
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f) | 2026-10-30T07:41Z ready 565ab43 on land/L5; held until v0.5.1 cut + CR-0f (runner condition) | 2026-10-30T12:25Z told: hold lifted (cut + CR-0f); merge main, open PR | 2026-10-30T13:22Z PR #209 (e641fd3, ~2.65k lines); fresh Opus review session_01MMjhnBAAQTxGWFEukySNxw; CI production-config clippy/test + cargo-tree guard to go in this PR",
+   "pr": 209
   },
   "CR-gate-metrics": {
    "status": "merged",
@@ -1439,7 +1440,8 @@
    "attempt": 1,
    "pr": 206,
    "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both | 2026-10-30T12:50Z review: #206 MERGE (merge on green CI); #201 FIX FIRST (material lint 4 failed: word limit, RELEASE_ACTION x3; draft markers; updater hold wording; SHOTLIST); sent to D-v051 | 2026-10-30T13:20Z merged #206 -> release/v0.5.1 head 8b67f269 (with #201); dispatched ci.yml (all incl. macOS), e2e.yml (all-themes, no update_snapshots), release.yml; Web has no dispatch: covered by #206 PR run (only web/ change: openapi.json)",
-   "review_session": "session_01MMjhnCfFuShScq5SLixE9d"
+   "review_session": "session_01MMjhnCfFuShScq5SLixE9d",
+   "review_session_done": true
   },
   "IMP-1": {
    "status": "running",
