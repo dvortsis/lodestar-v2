@@ -1,0 +1,33 @@
+Do not push, comment, merge or edit anything on GitHub. Just report back.
+
+**Read first:**
+- CLAUDE.md
+- runner/standards.md (the bar)
+- docs/owner-decisions.md
+- the slice brief, via `git -C /home/user/lodestar-v2 fetch origin runner-state && git -C /home/user/lodestar-v2 show origin/runner-state:briefs/<ID>.md`
+- the PR body, via `curl -s https://api.github.com/repos/dvortsis/lodestar-v2/pulls/<N>`
+- the spec sections the brief cites
+
+Review the full diff (`git diff origin/main...origin/<BRANCH>`) for:
+- correctness against the brief and spec;
+- tests that actually exercise the claims;
+- security, where the PR touches untrusted input, auth or content safety;
+- scope: files outside the brief's Own list need justifying;
+- the owner's decisions;
+- the PR-size rule.
+
+**Build and check** in a worktree at /tmp/claude-0/-home-user-lodestar-v2/5bc338cd-3b83-5f81-a00f-2f3f5b6527f2/scratchpad/rv-<ID>, created from origin/<BRANCH> after a fetch:
+- `git merge-base --is-ancestor origin/main HEAD` (say whether main must be merged and whether a trial merge is clean)
+- CI on the head: `curl -s "https://api.github.com/repos/dvortsis/lodestar-v2/commits/<sha>/check-runs?per_page=50"`, filtering non-success (a `skipped` conclusion counts as passing: CI skips the jobs a PR's files don't need). A red `filter budget (§20.8)` is known runner-speed noise.
+
+**Constraints:**
+- Disk is a fixed allowance. For Rust, use your own target dir: `CARGO_TARGET_DIR=/tmp/claude-0/-home-user-lodestar-v2/5bc338cd-3b83-5f81-a00f-2f3f5b6527f2/scratchpad/rv-<ID>-target CARGO_INCREMENTAL=0`. Never share one with another reviewer: fixture paths collide. The disk allowance is small (about 14 GB free, shared by every reviewer), so also set `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`, don't run `cargo test --workspace` locally (CI runs it; run the affected crates' tests instead), and delete your target dir as soon as you're done. When done, remove your worktree (`git -C /home/user/lodestar-v2 worktree remove --force <path>`) and your target dir.
+- Never use pkill with a pattern that could match other runs or your own shell.
+
+**Report:**
+- a verdict, MERGE or FIX;
+- blocking findings with file:line, a concrete failure scenario and the fix;
+- important findings, then polish.
+
+Keep it concise.
+- Playwright: web/playwright.config.ts serves on port 4173 with reuseExistingServer outside CI, and other reviewers share this machine. Copy the config to a scratch file with a unique port (`--strictPort`) and reuseExistingServer:false, and run `npx playwright test -c <that file>`. Never commit it.
