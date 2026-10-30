@@ -31,9 +31,10 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
 /// touched, valid hashes too incomplete to be torrents, and the quality
 /// of imported rows. Additive only.
 ///
-/// - A torrent with no `import_quality` row was fetched from the network:
-///   verified and complete. Existing imports get a row with verification
-///   unknown, and nothing is scheduled for them.
+/// - `import_quality` holds what an import or a verified upgrade decided.
+///   Without a row, the state is read from `flags` and `info_size`
+///   (`import::Quality`): existing imports read as unknown with no
+///   migration pass, and nothing is scheduled for them.
 /// - Candidates never hold an empty name or a zero size. One whose hash is
 ///   tombstoned, quarantined or added to the floor's hash list is deleted,
 ///   and its hash journalled so snapshots lose it too; one whose hash
@@ -97,8 +98,12 @@ CREATE TABLE import_membership (
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX import_membership_job ON import_membership (job);
 
+-- A rowid table: names run to 4 KiB, too big for WITHOUT ROWID. One row
+-- per torrent identity, as in `torrents`: the primary hash, and the
+-- truncated v2 hash unique too.
 CREATE TABLE import_candidates (
-    hash      BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    id        INTEGER PRIMARY KEY,
+    hash      BLOB NOT NULL UNIQUE CHECK (length(hash) = 20),
     hash_v2   BLOB CHECK (hash_v2 IS NULL OR length(hash_v2) = 32),
     job       INTEGER NOT NULL REFERENCES import_jobs (id) ON DELETE CASCADE,
     name      BLOB CHECK (name IS NULL OR length(name) BETWEEN 1 AND 4096),
@@ -107,9 +112,9 @@ CREATE TABLE import_candidates (
     privacy   INTEGER NOT NULL CHECK (privacy BETWEEN 0 AND 2),
     source_at INTEGER,
     at        INTEGER NOT NULL
-) STRICT, WITHOUT ROWID;
+) STRICT;
 CREATE INDEX import_candidates_job ON import_candidates (job);
-CREATE INDEX import_candidates_v2 ON import_candidates (substr(hash_v2, 1, 20))
+CREATE UNIQUE INDEX import_candidates_v2 ON import_candidates (substr(hash_v2, 1, 20))
     WHERE hash_v2 IS NOT NULL;
 
 CREATE TABLE import_quality (
@@ -122,13 +127,9 @@ CREATE TABLE import_quality (
     privacy      INTEGER NOT NULL CHECK (privacy BETWEEN 0 AND 2),
     repair       INTEGER NOT NULL CHECK (repair >= 0),
     source_at    INTEGER,
-    imported_at  INTEGER NOT NULL
+    -- NULL when the row was written by something other than an import.
+    imported_at  INTEGER
 ) STRICT;
-INSERT INTO import_quality
-    (torrent_id, completeness, verification, privacy, repair, source_at, imported_at)
-    SELECT id, CASE WHEN flags & 128 != 0 THEN 1 ELSE 0 END, 0,
-        CASE WHEN flags & 1 != 0 THEN 2 ELSE 0 END, 0, NULL, unixepoch()
-    FROM torrents WHERE flags & 32 != 0;
 
 CREATE TRIGGER import_candidate_tombstoned AFTER INSERT ON tombstones BEGIN
     INSERT INTO snapshot_deletions (hash, at)
@@ -166,7 +167,12 @@ END;
 CREATE TRIGGER import_candidate_stored AFTER INSERT ON torrents BEGIN
     DELETE FROM import_candidates WHERE hash = new.info_hash;
     DELETE FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.info_hash;
+    DELETE FROM import_candidates
         WHERE new.info_hash_v2 IS NOT NULL AND hash = substr(new.info_hash_v2, 1, 20);
+    DELETE FROM import_candidates
+        WHERE new.info_hash_v2 IS NOT NULL AND hash_v2 IS NOT NULL
+          AND substr(hash_v2, 1, 20) = substr(new.info_hash_v2, 1, 20);
 END;
 ";
 
@@ -880,6 +886,10 @@ fn repair_v12(conn: &mut Connection) -> Result<()> {
 
 /// For read-only connections: the schema must be exactly this build's.
 pub(crate) fn check_current(conn: &Connection) -> Result<()> {
+    check_current_with(conn, MIGRATIONS.last().map_or(0, |(v, _)| *v))
+}
+
+fn check_current_with(conn: &Connection, latest: i64) -> Result<()> {
     let current: i64 = conn
         .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
             r.get::<_, Option<i64>>(0)
@@ -887,7 +897,6 @@ pub(crate) fn check_current(conn: &Connection) -> Result<()> {
         .optional()?
         .flatten()
         .unwrap_or(0);
-    let latest = MIGRATIONS.last().map_or(0, |(v, _)| *v);
     if current > latest {
         return Err(Error::SchemaTooNew {
             found: current,
@@ -1377,43 +1386,40 @@ mod tests {
         }
     }
 
-    /// V13 on a V12 store: each existing import gets a quality row with
-    /// verification unknown (completeness partial only where the file
-    /// list was flagged partial, privacy private only where the info dict
-    /// said so), the crawler's rows get none, and nothing is queued or
-    /// re-indexed.
+    /// V13 on a V12 store writes no quality rows (no pass over
+    /// `torrents`): each existing import reads as unknown (partial only
+    /// where its file list was flagged partial, private only where its
+    /// info dict said so), one whose info dict was fetched and verified
+    /// since (`info_size` > 0) reads as verified, the crawler's rows read
+    /// as verified, and nothing is queued or re-indexed.
     #[test]
-    fn v13_marks_existing_imports_unknown_and_schedules_nothing() {
+    fn v13_reads_existing_imports_as_unknown_and_schedules_nothing() {
+        use crate::import::{Completeness as C, Privacy as P, Verification as V, quality};
         let mut conn = Connection::open_in_memory().unwrap();
         migrate_with(&mut conn, None, &MIGRATIONS[..12]).unwrap();
-        for (id, flags) in [(1, 0), (2, 32 | 128 | 1), (3, 32)] {
+        for (id, flags, info_size) in [(1, 1, 90), (2, 32 | 128 | 1, 0), (3, 32, 0), (4, 32, 90)] {
             conn.execute(
                 "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
                      file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
-                 VALUES (?1, ?2, 'x', 1, 1, 1, 1, 1, ?3, 0, 0, 0)",
-                rusqlite::params![id, vec![id as u8; 20], flags],
+                 VALUES (?1, ?2, 'x', 1, 1, 1, 1, ?4, ?3, 0, 0, 0)",
+                rusqlite::params![id, vec![id as u8; 20], flags, info_size],
             )
             .unwrap();
         }
         migrate_with(&mut conn, None, MIGRATIONS).unwrap();
-        let rows: Vec<(i64, i64, i64, i64, i64)> = conn
-            .prepare(
-                "SELECT torrent_id, completeness, verification, privacy, repair
-                 FROM import_quality ORDER BY torrent_id",
-            )
-            .unwrap()
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        assert_eq!(rows, [(2, 1, 0, 2, 0), (3, 0, 0, 0, 0)]);
+        let read = |id| {
+            let q = quality(&conn, id).unwrap().unwrap();
+            (q.completeness, q.verification, q.privacy)
+        };
+        assert_eq!(read(1), (C::ReportedComplete, V::Verified, P::Private));
+        assert_eq!(read(2), (C::Partial, V::Unknown, P::Private));
+        assert_eq!(read(3), (C::Unknown, V::Unknown, P::Unknown));
+        assert_eq!(read(4), (C::ReportedComplete, V::Verified, P::Public));
         for table in [
+            "import_quality",
             "fetch_queue",
             "reindex_log",
             "import_jobs",
-            "import_candidates",
         ] {
             let n: i64 = conn
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
@@ -1461,6 +1467,17 @@ mod tests {
             std::fs::read(&path).unwrap() == bytes,
             "the file is unchanged"
         );
+        // v0.5.1's read-only connections refuse it too.
+        let reader =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert!(matches!(
+            check_current_with(&reader, 12),
+            Err(Error::SchemaTooNew {
+                found: 13,
+                supported: 12
+            })
+        ));
+        drop(reader);
     }
 
     /// A crash mid-`VACUUM INTO` leaves only a `.tmp`, never a file under

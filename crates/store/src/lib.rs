@@ -1245,7 +1245,7 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
         )?
         .execute([id])?;
     }
-    import::verified_upgrade(conn, id, p.flags & flags::PRIVATE != 0)?;
+    import::verified_upgrade(conn, id, private || p.flags & flags::PRIVATE != 0)?;
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;
     Ok(())

@@ -129,6 +129,12 @@ fn job(store: &Store, id: i64) -> ImportJob {
     store.import_job(id).unwrap().unwrap()
 }
 
+/// A torrent's quality as `(completeness, verification, privacy, repair)`.
+fn quality(store: &Store, id: i64) -> Option<(Completeness, Verification, Privacy, i64)> {
+    let q = store.import_quality(id).unwrap()?;
+    Some((q.completeness, q.verification, q.privacy, q.repair))
+}
+
 fn count(store: &Store, sql: &str) -> i64 {
     store.connection().query_row(sql, [], |r| r.get(0)).unwrap()
 }
@@ -197,7 +203,7 @@ fn a_batch_commits_records_counters_and_cursor_together() {
     );
     assert_eq!(row.sources, 1 << src.get());
     assert_eq!(
-        store.import_quality(ia).unwrap(),
+        quality(&store, ia),
         Some((
             Completeness::ReportedComplete,
             Verification::Unverified,
@@ -647,7 +653,12 @@ fn a_verified_row_only_gains_provenance() {
         },
         "only the source bit changes; PRIVATE_SOURCE stays"
     );
-    assert_eq!(store.import_quality(id).unwrap(), None, "still verified");
+    assert_eq!(
+        quality(&store, id).map(|q| q.1),
+        Some(Verification::Verified),
+        "still verified"
+    );
+    assert_eq!(count(&store, "SELECT count(*) FROM import_quality"), 0);
     assert_eq!(count(&store, "SELECT count(*) FROM reindex_log"), 0);
 }
 
@@ -688,10 +699,7 @@ fn private_is_sticky() {
     };
     assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 0);
     for id in [ia, ib] {
-        assert_eq!(
-            store.import_quality(id).unwrap().unwrap().2,
-            Privacy::Private
-        );
+        assert_eq!(quality(&store, id).unwrap().2, Privacy::Private);
         assert_ne!(
             store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE,
             0
@@ -708,10 +716,7 @@ fn private_is_sticky() {
             .commit_import_batch(&batch(j.id, 3, src, &[torrent(&a, Privacy::Public)]))
             .unwrap(),
     );
-    assert_eq!(
-        store.import_quality(ia).unwrap().unwrap().2,
-        Privacy::Private
-    );
+    assert_eq!(quality(&store, ia).unwrap().2, Privacy::Private);
 }
 
 #[test]
@@ -756,7 +761,7 @@ fn a_verified_fetch_upgrades_a_partial_import_and_keeps_it_private() {
         })
         .unwrap();
     assert_eq!(
-        store.import_quality(id).unwrap(),
+        quality(&store, id),
         Some((
             Completeness::ReportedComplete,
             Verification::Verified,
@@ -966,17 +971,235 @@ fn a_backup_copy_holds_the_jobs_and_resumes() {
     assert_eq!(job(&restored, j.id).counters.new, 2);
 }
 
+/// The legacy importer (`Store::write` with `IMPORTED`, `info_size` 0)
+/// still writes after V13: its rows read as unknown, a private import
+/// claim sticks, and a verified fetch writes the row out as verified, so
+/// a later private claim can't flag it.
+#[test]
+fn legacy_imports_read_as_unknown_until_verified() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let mut legacy = info("Alpha");
+    legacy.info_size = 0;
+    let id = store
+        .insert(&[NewTorrent {
+            info: &legacy,
+            raw_info: None,
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap()[0]
+        .id();
+    assert_eq!(
+        quality(&store, id),
+        Some((
+            Completeness::Partial,
+            Verification::Unknown,
+            Privacy::Unknown,
+            0
+        ))
+    );
+    assert_eq!(count(&store, "SELECT count(*) FROM import_quality"), 0);
+
+    let j = reading(&mut store, b"ds-1");
+    let a = prepared(&store, "Alpha");
+    store
+        .commit_import_batch(&batch(j.id, 1, src, &[torrent(&a, Privacy::Private)]))
+        .unwrap();
+    assert_eq!(quality(&store, id).unwrap().2, Privacy::Private);
+    assert_ne!(
+        store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE,
+        0
+    );
+
+    // A verified fetch: written out as verified, private kept.
+    let fetched = prepared(&store, "Alpha");
+    store
+        .write(&WriteBatch {
+            prepared: &[PreparedTorrent {
+                torrent: &fetched,
+                discovered_at: T,
+                metadata_at: T,
+                extra_flags: 0,
+                source: DHT,
+                verified: true,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        quality(&store, id),
+        Some((
+            Completeness::ReportedComplete,
+            Verification::Verified,
+            Privacy::Private,
+            0
+        ))
+    );
+
+    // A public legacy import upgraded the same way can't be flagged
+    // private by a later import.
+    let mut beta = info("Beta");
+    beta.info_size = 0;
+    let ib = store
+        .insert(&[NewTorrent {
+            info: &beta,
+            raw_info: None,
+            discovered_at: T,
+            metadata_at: T,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            source: src,
+        }])
+        .unwrap()[0]
+        .id();
+    let fetched = prepared(&store, "Beta");
+    store
+        .write(&WriteBatch {
+            prepared: &[PreparedTorrent {
+                torrent: &fetched,
+                discovered_at: T,
+                metadata_at: T,
+                extra_flags: 0,
+                source: DHT,
+                verified: true,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    store
+        .commit_import_batch(&batch(j.id, 2, src, &[torrent(&fetched, Privacy::Private)]))
+        .unwrap();
+    assert_eq!(
+        quality(&store, ib).map(|q| (q.1, q.2)),
+        Some((Verification::Verified, Privacy::Public))
+    );
+    assert_eq!(
+        store.torrent(ib).unwrap().unwrap().flags & flags::PRIVATE,
+        0
+    );
+}
+
+#[test]
+fn a_batch_must_come_from_the_jobs_adapter() {
+    let mut store = mem();
+    source(&mut store);
+    let other = store.register_source("magnetico", "1", T).unwrap();
+    let j = reading(&mut store, b"ds-1");
+    let a = prepared(&store, "Alpha");
+    assert!(matches!(
+        store.commit_import_batch(&batch(j.id, 1, other, &[torrent(&a, Privacy::Public)])),
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(store.count().unwrap(), 0);
+    assert_eq!(job(&store, j.id).seq, 0);
+}
+
+#[test]
+fn the_schema_refuses_a_secret_as_a_credential() {
+    let store = mem();
+    store
+        .connection()
+        .execute_batch(
+            "INSERT INTO import_sources (id, adapter, dataset, schema_sig)
+                 VALUES (1, 'bitmagnet', x'01', x'02');",
+        )
+        .unwrap();
+    for credential in ["postgres://u:pw@db/bm", "Has Spaces", ""] {
+        assert!(
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO import_jobs (source, adapter_ver, contract_ver, phase, control,
+                         options, credential, created_at, updated_at)
+                     VALUES (1, 1, 1, 0, 0, x'', ?1, 0, 0)",
+                    [credential],
+                )
+                .is_err(),
+            "{credential}"
+        );
+    }
+}
+
+/// A candidate stored as a torrent later doesn't count as an issue, and
+/// a hybrid candidate and a pure v2 one under the same truncated v2 hash
+/// are one candidate.
+#[test]
+fn promoted_candidates_are_no_issue_and_v2_candidates_are_one() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let j = reading(&mut store, b"ds-1");
+    let a = prepared(&store, "Alpha");
+    let v2 = lodestar_metainfo::InfoHashV2([6; 32]);
+    let hybrid = ImportRecord::Candidate(ImportCandidate {
+        hash_v2: Some(v2),
+        ..match candidate([5; 20], Some(b"Hybrid"), None) {
+            ImportRecord::Candidate(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    let pure_v2 = ImportRecord::Candidate(ImportCandidate {
+        hash_v2: Some(v2),
+        ..match candidate(v2.truncated().0, None, Some(9)) {
+            ImportRecord::Candidate(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    store
+        .commit_import_batch(&batch(
+            j.id,
+            1,
+            src,
+            &[
+                candidate(a.info_hash.0, Some(b"Alpha"), None),
+                hybrid,
+                pure_v2,
+            ],
+        ))
+        .unwrap();
+    let filled: (Vec<u8>, Vec<u8>, i64) = store
+        .connection()
+        .query_row(
+            "SELECT hash, name, size FROM import_candidates WHERE hash_v2 IS NOT NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        filled,
+        (vec![5; 20], b"Hybrid".to_vec(), 9),
+        "one candidate, filled"
+    );
+    assert_eq!(job(&store, j.id).open_candidates, 2);
+    // The v2 candidate is held; Alpha's is stored as a torrent.
+    hold(&mut store, v2.truncated().0, Held::Tombstone);
+    store
+        .commit_import_batch(&batch(j.id, 2, src, &[torrent(&a, Privacy::Public)]))
+        .unwrap();
+    let j = job(&store, j.id);
+    assert_eq!((j.open_candidates, j.counters.candidates), (0, 3));
+    let j = store
+        .set_import_phase(j.id, j.revision, Phase::Indexing, T)
+        .unwrap();
+    let j = store
+        .set_import_phase(j.id, j.revision, Phase::Complete, T)
+        .unwrap();
+    assert_eq!(j.phase, Phase::Complete, "no candidate is left waiting");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
     /// Random batches over a small set of hashes, each submitted once or
-    /// more (replays), some refused while paused: counters stay
-    /// conserved, a replay never moves them, and what's stored matches
-    /// what was committed.
+    /// more (replays), some refused while paused, with some hashes held
+    /// and candidates under torrents' own hashes: counters stay
+    /// conserved, a replay never moves them, held hashes are never
+    /// stored, and what's stored matches what was committed.
     #[test]
     fn counters_are_conserved_under_replay(
         batches in proptest::collection::vec(
-            (proptest::collection::vec((0u8..12, 0u8..4), 0..8), 1usize..3, any::<bool>()),
+            (proptest::collection::vec((0u8..12, 0u8..5), 0..8), 1usize..3, any::<bool>()),
             1..10,
         ),
     ) {
@@ -984,6 +1207,10 @@ proptest! {
         let src = source(&mut store);
         let j = reading(&mut store, b"ds-1");
         let names: Vec<Prepared> = (0..12).map(|i| prepared(&store, &format!("Item {i}"))).collect();
+        // Items 10 and 11 are held, and candidate 111 is on the floor.
+        hold(&mut store, names[10].info_hash.0, Held::Tombstone);
+        hold(&mut store, names[11].info_hash.0, Held::Quarantine);
+        store.add_cs_hashes(&[[111; 20]], 1, T).unwrap();
         let mut seq = 0;
         let mut revision = j.revision;
         for (records, sends, pause_first) in &batches {
@@ -992,6 +1219,9 @@ proptest! {
                 .map(|&(n, kind)| match kind {
                     0 | 1 => torrent(&names[n as usize], Privacy::Unknown),
                     2 => candidate([100 + n; 20], Some(b"c"), None),
+                    // A candidate under a torrent's hash: one that's
+                    // stored merges, one that isn't waits until it is.
+                    3 => candidate(names[n as usize].info_hash.0, None, Some(5)),
                     _ => ImportRecord::Invalid,
                 })
                 .collect();
@@ -1016,6 +1246,17 @@ proptest! {
         }
         let c = job(&store, j.id).counters;
         prop_assert_eq!(c.new as i64, count(&store, "SELECT count(*) FROM torrents"));
+        for held in [&names[10], &names[11]] {
+            prop_assert_eq!(store.find(&held.info_hash).unwrap(), None);
+        }
+        prop_assert_eq!(
+            count(
+                &store,
+                "SELECT count(*) FROM import_candidates c JOIN torrents t ON t.info_hash = c.hash"
+            ),
+            0,
+            "a stored torrent has no candidate"
+        );
         prop_assert_eq!(
             count(&store, "SELECT count(*) FROM import_membership") as u64,
             c.new,

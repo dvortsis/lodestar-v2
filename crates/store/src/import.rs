@@ -175,6 +175,23 @@ pub mod repair {
     pub const ALL: i64 = MISSING_NAME | MISSING_SIZE | MISSING_FILES | INCONSISTENT_FILES;
 }
 
+/// A torrent's three independent states plus privacy.
+///
+/// Read through [`Store::import_quality`]: a row in `import_quality` wins;
+/// without one, a torrent not flagged [`flags::IMPORTED`] was fetched from
+/// the network (verified, complete, private only if its info dict says
+/// so), and an imported one is a legacy import whose metadata is unknown,
+/// except that a positive `info_size` shows a fetched and verified info
+/// dict replaced it (the legacy importer always wrote 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Quality {
+    pub completeness: Completeness,
+    pub verification: Verification,
+    pub privacy: Privacy,
+    /// [`repair`] bits.
+    pub repair: i64,
+}
+
 /// A job's persisted counters. Parent records obey
 /// [`ImportCounters::conserved`]; `files_dropped`, `partial` and
 /// `source_bytes` are outside the sum.
@@ -235,6 +252,9 @@ pub struct ImportJob {
     pub position: Vec<u8>,
     /// The highest torrent id this job inserted.
     pub max_new_id: i64,
+    /// This job's candidates still waiting (not stored, held or
+    /// promoted since).
+    pub open_candidates: u64,
     /// Bumped by every phase or control change, not by batches.
     pub revision: i64,
     pub created_at: i64,
@@ -376,7 +396,8 @@ pub struct ImportBatch<'a> {
     pub seq: u64,
     /// Where the adapter resumes after this batch.
     pub position: &'a [u8],
-    /// The adapter's registered source.
+    /// The adapter's registered source: its plugin id must be the job's
+    /// adapter name.
     pub source: SourceId,
     pub source_bytes: u64,
     pub at: i64,
@@ -456,7 +477,8 @@ const JOB_SELECT: &str = "SELECT j.id, s.adapter, j.adapter_ver, j.contract_ver,
          s.schema_sig, j.phase, j.control, j.reason, j.options, j.credential,
          j.read, j.new, j.merged, j.candidates, j.filtered, j.quarantined, j.invalid,
          j.files_dropped, j.partial, j.source_bytes, c.seq, c.position, j.max_new_id,
-         j.revision, j.created_at, j.updated_at, j.finished_at
+         j.revision, j.created_at, j.updated_at, j.finished_at,
+         (SELECT count(*) FROM import_candidates WHERE job = j.id)
      FROM import_jobs j JOIN import_sources s ON s.id = j.source
      JOIN import_cursors c ON c.job = j.id";
 
@@ -494,6 +516,7 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<ImportJob> {
         created_at: r.get(25)?,
         updated_at: r.get(26)?,
         finished_at: r.get(27)?,
+        open_candidates: n(28)?,
     })
 }
 
@@ -645,7 +668,8 @@ impl Store {
 
     /// Moves a running job forward. [`Phase::Complete`] is only reached
     /// from [`Phase::Indexing`], and is stored as
-    /// [`Phase::CompleteWithIssues`] when the counters show issues.
+    /// [`Phase::CompleteWithIssues`] when it has invalid records, dropped
+    /// file rows or candidates still waiting.
     pub fn set_import_phase(
         &mut self,
         id: i64,
@@ -666,7 +690,7 @@ impl Store {
                 }
                 Phase::Complete => {
                     let c = &job.counters;
-                    if c.invalid > 0 || c.files_dropped > 0 || c.candidates > 0 {
+                    if c.invalid > 0 || c.files_dropped > 0 || job.open_candidates > 0 {
                         Phase::CompleteWithIssues
                     } else {
                         Phase::Complete
@@ -834,6 +858,13 @@ impl Store {
         {
             return Err(Error::ImportNotRunning);
         }
+        let plugin: Option<String> = tx
+            .prepare_cached("SELECT plugin FROM sources WHERE id = ?1")?
+            .query_row([batch.source.get()], |r| r.get(0))
+            .optional()?;
+        if plugin.as_deref() != Some(job.adapter.as_str()) {
+            return Err(Error::Invalid("the batch's source isn't the job's adapter"));
+        }
         let mut c = ImportCounters {
             read: batch.records.len() as u64,
             source_bytes: batch.source_bytes,
@@ -929,28 +960,92 @@ impl Store {
         })
     }
 
-    /// An imported torrent's quality: `(completeness, verification,
-    /// privacy, repair bits)`, or `None` for a network-fetched one.
-    pub fn import_quality(
-        &self,
-        id: i64,
-    ) -> Result<Option<(Completeness, Verification, Privacy, i64)>> {
-        Ok(self
-            .conn
-            .prepare_cached(
-                "SELECT completeness, verification, privacy, repair FROM import_quality
-                 WHERE torrent_id = ?1",
-            )?
-            .query_row([id], |r| {
-                Ok((
-                    Completeness::from_code(r.get(0)?).unwrap_or(Completeness::Unknown),
-                    Verification::from_code(r.get(1)?).unwrap_or(Verification::Unknown),
-                    Privacy::from_code(r.get(2)?).unwrap_or(Privacy::Unknown),
-                    r.get(3)?,
-                ))
-            })
-            .optional()?)
+    /// A stored torrent's [`Quality`], by the rule [`Quality`] states;
+    /// `None` when it isn't stored.
+    pub fn import_quality(&self, id: i64) -> Result<Option<Quality>> {
+        quality(&self.conn, id)
     }
+}
+
+/// See [`Quality`] for the rule.
+pub(crate) fn quality(conn: &Connection, id: i64) -> Result<Option<Quality>> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT t.flags, t.info_size, q.completeness, q.verification, q.privacy, q.repair
+             FROM torrents t LEFT JOIN import_quality q ON q.torrent_id = t.id
+             WHERE t.id = ?1",
+        )?
+        .query_row([id], |r| {
+            let (flags, info_size): (i64, i64) = (r.get(0)?, r.get(1)?);
+            if let Some(c) = r.get::<_, Option<i64>>(2)? {
+                return Ok(Quality {
+                    completeness: Completeness::from_code(c).unwrap_or(Completeness::Unknown),
+                    verification: Verification::from_code(r.get(3)?)
+                        .unwrap_or(Verification::Unknown),
+                    privacy: Privacy::from_code(r.get(4)?).unwrap_or(Privacy::Unknown),
+                    repair: r.get(5)?,
+                });
+            }
+            let private = flags & flags::PRIVATE != 0;
+            let verified = flags & flags::IMPORTED == 0 || info_size > 0;
+            Ok(if verified {
+                Quality {
+                    completeness: Completeness::ReportedComplete,
+                    verification: Verification::Verified,
+                    privacy: if private {
+                        Privacy::Private
+                    } else {
+                        Privacy::Public
+                    },
+                    repair: 0,
+                }
+            } else {
+                Quality {
+                    completeness: if flags & flags::FILES_PARTIAL != 0 {
+                        Completeness::Partial
+                    } else {
+                        Completeness::Unknown
+                    },
+                    verification: Verification::Unknown,
+                    privacy: if private {
+                        Privacy::Private
+                    } else {
+                        Privacy::Unknown
+                    },
+                    repair: 0,
+                }
+            })
+        })
+        .optional()?)
+}
+
+/// Writes a torrent's quality row, replacing any. `source_at` and
+/// `imported_at` are kept when the row exists.
+fn write_quality(
+    conn: &Connection,
+    id: i64,
+    q: &Quality,
+    source_at: Option<i64>,
+    imported_at: Option<i64>,
+) -> Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO import_quality (torrent_id, completeness, verification, privacy, repair,
+             source_at, imported_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (torrent_id) DO UPDATE SET completeness = excluded.completeness,
+             verification = excluded.verification, privacy = excluded.privacy,
+             repair = excluded.repair",
+    )?
+    .execute(params![
+        id,
+        q.completeness.code(),
+        q.verification.code(),
+        q.privacy.code(),
+        q.repair & repair::ALL,
+        source_at,
+        imported_at
+    ])?;
+    Ok(())
 }
 
 /// Whether a swarm hash is already held: a tombstone or the floor's hash
@@ -980,9 +1075,8 @@ fn held_outcome(held: Held) -> RecordOutcome {
 }
 
 /// A stored torrent seen in an import: it gains the adapter's source bit
-/// and the job's membership. A verified row (no quality row, or
-/// `verified`) changes nothing else; an unverified one may become private,
-/// never public.
+/// and the job's membership. A verified row changes nothing else; any
+/// other may become private, never public.
 fn merge(tx: &Transaction<'_>, id: i64, batch: &ImportBatch<'_>, privacy: Privacy) -> Result<()> {
     add_sources(tx, id, batch.source.bit() as u64)?;
     tx.prepare_cached(
@@ -990,23 +1084,17 @@ fn merge(tx: &Transaction<'_>, id: i64, batch: &ImportBatch<'_>, privacy: Privac
          ON CONFLICT DO NOTHING",
     )?
     .execute(params![id, batch.job])?;
-    let stored: Option<(i64, i64)> = tx
-        .prepare_cached("SELECT verification, privacy FROM import_quality WHERE torrent_id = ?1")?
-        .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    let Some((verification, was)) = stored else {
+    let Some(q) = quality(tx, id)? else {
         return Ok(());
     };
-    if verification == Verification::Verified.code() {
+    if q.verification == Verification::Verified {
         return Ok(());
     }
-    let was = Privacy::from_code(was).unwrap_or(Privacy::Unknown);
-    let now = was.merge(privacy);
-    if now == was {
+    let now = q.privacy.merge(privacy);
+    if now == q.privacy {
         return Ok(());
     }
-    tx.prepare_cached("UPDATE import_quality SET privacy = ?2 WHERE torrent_id = ?1")?
-        .execute(params![id, now.code()])?;
+    write_quality(tx, id, &Quality { privacy: now, ..q }, None, None)?;
     if now == Privacy::Private {
         let marked = tx
             .prepare_cached(
@@ -1150,19 +1238,83 @@ fn commit_candidate(
         .size
         .filter(|s| *s > 0)
         .and_then(|s| i64::try_from(s).ok());
+    // One candidate per torrent identity, as in `torrents`: a record
+    // under any of a stored candidate's swarm hashes fills that one.
+    let existing = {
+        let mut stmt = tx.prepare_cached(
+            "SELECT id FROM import_candidates WHERE hash = ?1
+             UNION ALL
+             SELECT id FROM import_candidates
+             WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1
+             LIMIT 1",
+        )?;
+        let mut found = None;
+        for h in &hashes {
+            found = stmt
+                .query_row([&h.0[..]], |r| r.get::<_, i64>(0))
+                .optional()?;
+            if found.is_some() {
+                break;
+            }
+        }
+        found
+    };
+    let row = match existing {
+        Some(row) => {
+            tx.prepare_cached(
+                "UPDATE import_candidates SET
+                     hash_v2 = coalesce(hash_v2, ?2),
+                     name = coalesce(name, ?3),
+                     size = coalesce(size, ?4),
+                     privacy = CASE
+                         WHEN privacy = 2 OR ?5 = 2 THEN 2
+                         WHEN privacy = 0 OR ?5 = 0 THEN 0
+                         ELSE 1 END,
+                     source_at = coalesce(source_at, ?6)
+                 WHERE id = ?1",
+            )?
+            .execute(params![
+                row,
+                cand.hash_v2.as_ref().map(|h| &h.0[..]),
+                name,
+                size,
+                cand.privacy.code(),
+                cand.source_at,
+            ])?;
+            row
+        }
+        None => {
+            insert_candidate(tx, batch, cand, name, size)?;
+            tx.last_insert_rowid()
+        }
+    };
+    // What's missing follows what's stored; a candidate never holds files.
+    tx.prepare_cached(
+        "UPDATE import_candidates SET missing = ?2
+             | CASE WHEN name IS NULL THEN ?3 ELSE 0 END
+             | CASE WHEN size IS NULL THEN ?4 ELSE 0 END
+         WHERE id = ?1",
+    )?
+    .execute(params![
+        row,
+        repair::MISSING_FILES,
+        repair::MISSING_NAME,
+        repair::MISSING_SIZE
+    ])?;
+    Ok(RecordOutcome::Candidate)
+}
+
+fn insert_candidate(
+    tx: &Transaction<'_>,
+    batch: &ImportBatch<'_>,
+    cand: &ImportCandidate<'_>,
+    name: Option<&[u8]>,
+    size: Option<i64>,
+) -> Result<()> {
     tx.prepare_cached(
         "INSERT INTO import_candidates
              (hash, hash_v2, job, name, size, missing, privacy, source_at, at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, ?7, ?8)
-         ON CONFLICT (hash) DO UPDATE SET
-             hash_v2 = coalesce(hash_v2, excluded.hash_v2),
-             name = coalesce(name, excluded.name),
-             size = coalesce(size, excluded.size),
-             privacy = CASE
-                 WHEN privacy = 2 OR excluded.privacy = 2 THEN 2
-                 WHEN privacy = 0 OR excluded.privacy = 0 THEN 0
-                 ELSE 1 END,
-             source_at = coalesce(source_at, excluded.source_at)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, ?7, ?8)",
     )?
     .execute(params![
         &cand.hash.0[..],
@@ -1185,50 +1337,31 @@ fn commit_candidate(
                 0
             },
     ])?;
-    // What's missing follows what's stored; a candidate never holds files.
-    tx.prepare_cached(
-        "UPDATE import_candidates SET missing = ?2
-             | CASE WHEN name IS NULL THEN ?3 ELSE 0 END
-             | CASE WHEN size IS NULL THEN ?4 ELSE 0 END
-         WHERE hash = ?1",
-    )?
-    .execute(params![
-        &cand.hash.0[..],
-        repair::MISSING_FILES,
-        repair::MISSING_NAME,
-        repair::MISSING_SIZE
-    ])?;
-    Ok(RecordOutcome::Candidate)
+    Ok(())
 }
 
-/// Whether an imported row's privacy is private (sticky across a verified
-/// upgrade).
+/// Whether a torrent's privacy is private, by [`quality`]'s rule (sticky
+/// across a verified upgrade).
 pub(crate) fn sticky_private(conn: &Connection, id: i64) -> Result<bool> {
-    Ok(conn
-        .prepare_cached("SELECT privacy FROM import_quality WHERE torrent_id = ?1")?
-        .query_row([id], |r| r.get::<_, i64>(0))
-        .optional()?
-        == Some(Privacy::Private.code()))
+    Ok(quality(conn, id)?.is_some_and(|q| q.privacy == Privacy::Private))
 }
 
 /// A partial import whose info dict was fetched and verified: its quality
-/// becomes verified and complete, the repair reasons the fetch resolved
-/// are cleared, and a private info dict makes it private (never public).
+/// is written out as verified and complete, so it never depends on the
+/// read rule again, with no repair reasons left. It's private when it was
+/// or the info dict says so (`private`), else public.
 pub(crate) fn verified_upgrade(conn: &Connection, id: i64, private: bool) -> Result<()> {
-    conn.prepare_cached(
-        "UPDATE import_quality SET verification = ?2, completeness = ?3, repair = repair & ~?4,
-             privacy = CASE WHEN ?5 THEN ?6 ELSE privacy END
-         WHERE torrent_id = ?1",
-    )?
-    .execute(params![
-        id,
-        Verification::Verified.code(),
-        Completeness::ReportedComplete.code(),
-        repair::ALL,
-        private,
-        Privacy::Private.code()
-    ])?;
-    Ok(())
+    let q = Quality {
+        completeness: Completeness::ReportedComplete,
+        verification: Verification::Verified,
+        privacy: if private {
+            Privacy::Private
+        } else {
+            Privacy::Public
+        },
+        repair: 0,
+    };
+    write_quality(conn, id, &q, None, None)
 }
 
 #[cfg(test)]
