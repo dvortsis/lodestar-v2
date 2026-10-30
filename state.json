@@ -1215,27 +1215,27 @@
    "status": "review",
    "branch": "land/L3",
    "head": "07421c3c",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:00Z pre-review FIX: B1 non-canonical URL q never loads results (search.svelte.ts queryReady); B2 svelte-check 4 errors; I1 prefetch doubles requests; I2 LODESTAR_LOG docs. Content safety OK. Fix session L3-fix (Sonnet) session_01MMjhn8QbzhGq77rN39rjKe pushing to land/L3; after it, re-check L4-L7 merge cleanly. | 2026-10-30T06:35Z PR #183 opened (base main); retarget to main after the range below merges",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:00Z pre-review FIX: B1 non-canonical URL q never loads results (search.svelte.ts queryReady); B2 svelte-check 4 errors; I1 prefetch doubles requests; I2 LODESTAR_LOG docs. Content safety OK. Fix session L3-fix (Sonnet) session_01MMjhn8QbzhGq77rN39rjKe pushing to land/L3; after it, re-check L4-L7 merge cleanly. | 2026-10-30T06:35Z PR #183 opened (base main); retarget to main after the range below merges | 2026-10-30T06:54Z combined into #184 (land/L5 dcff7b99 = L5 + land/L3 6dc5514a + land/L4 467a10c4 + main); retargeted to main, full-ci, CI/Release/E2E dispatched",
    "pr": 183
   },
   "L4": {
    "status": "pending",
    "branch": "land/L4",
    "head": "5e1a53c0",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z runner fix 66152cee on land/L4: v4 fixture drops V12 objects; is_multiple_of -> % (MSRV). Same fixes already in L5. | 2026-10-30T06:09Z pre-review FIX: B1 V12 tests; I1 V12 format (at column, 90d cap, taken_at match, unknown-schema skip no longer pins); P1/P4/P5/I5. L4-fix (Opus) session_01MMjhnAGcLJmNZKL55ZSjqC on land/L4. After push: F-updater merges land/L4 again; check L5-L7 merge. | 2026-10-30T06:41Z L4-fix pushed d4a7aac (V12 at column, 91d cap, tests w/ mutants, trigger bench +2.7us/row). I-2: soak build 744b84d6 contains old V12 -> asked for idempotent repair at open (add at, date rows now), no new version."
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z runner fix 66152cee on land/L4: v4 fixture drops V12 objects; is_multiple_of -> % (MSRV). Same fixes already in L5. | 2026-10-30T06:09Z pre-review FIX: B1 V12 tests; I1 V12 format (at column, 90d cap, taken_at match, unknown-schema skip no longer pins); P1/P4/P5/I5. L4-fix (Opus) session_01MMjhnAGcLJmNZKL55ZSjqC on land/L4. After push: F-updater merges land/L4 again; check L5-L7 merge. | 2026-10-30T06:41Z L4-fix pushed d4a7aac (V12 at column, 91d cap, tests w/ mutants, trigger bench +2.7us/row). I-2: soak build 744b84d6 contains old V12 -> asked for idempotent repair at open (add at, date rows now), no new version. | 2026-10-30T06:54Z combined into #184 (land/L5 dcff7b99 = L5 + land/L3 6dc5514a + land/L4 467a10c4 + main); retargeted to main, full-ci, CI/Release/E2E dispatched"
   },
   "L5": {
    "status": "review",
    "branch": "land/L5",
    "head": "e41f0cf3",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures). | 2026-10-30T06:35Z PR #184 opened (base land/L4); retarget to main after the range below merges | 2026-10-30T06:36Z when retargeting #184 to main: merge main into land/L5, resolve .gitattributes add/add as the union of 4 rules",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures). | 2026-10-30T06:35Z PR #184 opened (base land/L4); retarget to main after the range below merges | 2026-10-30T06:36Z when retargeting #184 to main: merge main into land/L5, resolve .gitattributes add/add as the union of 4 rules | 2026-10-30T06:54Z combined into #184 (land/L5 dcff7b99 = L5 + land/L3 6dc5514a + land/L4 467a10c4 + main); retargeted to main, full-ci, CI/Release/E2E dispatched",
    "pr": 184
   },
   "L6": {
    "status": "review",
    "branch": "land/L6",
    "head": "d63799fc",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:24Z pre-review FIX -> runner 210426ad (owner quote 'Ok. Go.' removed; PIDs redacted in md; zip kept for manifest hashes). Size 6.57 MB (zip 6.08 MB, per-minute .prom predates policy; state in PR). | 2026-10-30T06:35Z PR #185 opened (base land/L5); retarget to main after the range below merges",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:24Z pre-review FIX -> runner 210426ad (owner quote 'Ok. Go.' removed; PIDs redacted in md; zip kept for manifest hashes). Size 6.57 MB (zip 6.08 MB, per-minute .prom predates policy; state in PR). | 2026-10-30T06:35Z PR #185 opened (base land/L5); retarget to main after the range below merges | 2026-10-30T06:54Z #185 base land/L5 stays; retarget to main after #184 merges",
    "pr": 185
   },
   "F-updater": {
