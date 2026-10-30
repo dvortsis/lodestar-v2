@@ -1029,6 +1029,7 @@ fn purge_one(
         // unseals the merged rows as the store's own tick would.
         if let Some(live) = holds {
             carry_holds(&tx, live)?;
+            carry_lists(&tx, live)?;
         }
         let mut quarantine = 0;
         if plan.filter {
@@ -1165,6 +1166,130 @@ fn carry_holds(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
             floor[0], floor[1], floor[2], ADULT_HOLD, hash, rule, sealed, at, expires_at
         ])?;
     }
+    // A hash both tombstoned and quarantined (released since the snapshot,
+    // fetched again and dropped, say) would be released from the running
+    // filter when the quarantine expires: the tombstone is the stronger
+    // hold, so the quarantine and its sealed name go. An adult hold stays:
+    // its expiry turns into a tombstone, never a release.
+    tx.execute(
+        "DELETE FROM quarantine WHERE substr(rule, -length(?1)) != ?1
+             AND hash IN (SELECT hash FROM tombstones)",
+        [ADULT_HOLD],
+    )?;
+    Ok(())
+}
+
+/// Merges the blocklist subscriptions of `live` into a rollback's copy, by
+/// URL, so a list subscribed to since the snapshot (a floor-marked one
+/// above all, whose entries are locked) isn't dropped by the rollback.
+/// Only strengthens: a list only the copy has stays, a list both have
+/// keeps the copy's data (its next refresh is due) but is floor-marked or
+/// switched on if either is, and a list only `live` has is added with its
+/// data. Its pending floor removals come along under the copy's id: they
+/// stay blocked until settled in the app.
+///
+/// A copy before V6 has no subscription tables: the entries of `live`'s
+/// floor-marked content lists, applied and pending removal, are added to
+/// it as imported CS-1 entries instead, so they stay blocked.
+fn carry_lists(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
+    if !has_table(live, "subscriptions")? {
+        return Ok(());
+    }
+    let pending_key = |id: i64| format!("floor.pending:list:{id}");
+    let setting = |c: &Connection, key: &str| -> rusqlite::Result<Vec<u8>> {
+        Ok(
+            c.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .unwrap_or_default(),
+        )
+    };
+    if !has_table(tx, "subscriptions")? {
+        let mut add = tx.prepare(
+            "INSERT INTO cs_hashes (hash, origin, added_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (hash) DO NOTHING",
+        )?;
+        let mut stmt = live.prepare(
+            "SELECT s.id, s.updated_at, d.data FROM subscriptions s
+             LEFT JOIN subscription_data d ON d.sub_id = s.id AND d.pending = 0
+             WHERE s.floor != 0 AND s.kind = 0",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let (id, at, data): (i64, Option<i64>, Option<Vec<u8>>) =
+                (r.get(0)?, r.get(1)?, r.get(2)?);
+            let mut hashes = data.unwrap_or_default();
+            hashes.extend(setting(live, &pending_key(id))?);
+            for h in hashes.chunks_exact(20) {
+                add.execute(params![h, IMPORTED, at.unwrap_or(0)])?;
+            }
+        }
+        return Ok(());
+    }
+    let mut stmt = live.prepare(
+        "SELECT id, url, name, kind, format, action, floor, enabled, interval_secs, etag,
+             last_modified, checked_at, updated_at, entries, status, error
+         FROM subscriptions",
+    )?;
+    let mut data =
+        live.prepare("SELECT pending, entries, data FROM subscription_data WHERE sub_id = ?1")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let live_id: i64 = r.get(0)?;
+        let url: String = r.get(1)?;
+        let (floor, enabled): (i64, i64) = (r.get(6)?, r.get(7)?);
+        let held: Option<i64> = tx
+            .query_row("SELECT id FROM subscriptions WHERE url = ?1", [&url], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let id = match held {
+            Some(id) => {
+                tx.execute(
+                    "UPDATE subscriptions SET floor = max(floor, ?2), enabled = max(enabled, ?3)
+                     WHERE id = ?1",
+                    params![id, floor, enabled],
+                )?;
+                id
+            }
+            None => {
+                let cols: Vec<rusqlite::types::Value> =
+                    (1..16).map(|i| r.get(i)).collect::<rusqlite::Result<_>>()?;
+                tx.execute(
+                    "INSERT INTO subscriptions (url, name, kind, format, action, floor, enabled,
+                         interval_secs, etag, last_modified, checked_at, updated_at, entries,
+                         status, error)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    rusqlite::params_from_iter(cols),
+                )?;
+                let id = tx.last_insert_rowid();
+                let mut parts = data.query([live_id])?;
+                while let Some(d) = parts.next()? {
+                    let (pending, entries, blob): (i64, i64, Vec<u8>) =
+                        (d.get(0)?, d.get(1)?, d.get(2)?);
+                    tx.execute(
+                        "INSERT INTO subscription_data (sub_id, pending, entries, data)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![id, pending, entries, blob],
+                    )?;
+                }
+                id
+            }
+        };
+        // Packed 20-byte hashes, read as a set: a repeat is harmless.
+        let carried = setting(live, &pending_key(live_id))?;
+        if !carried.is_empty() {
+            let key = pending_key(id);
+            let mut value = setting(tx, &key)?;
+            value.extend(carried);
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -1180,7 +1305,7 @@ fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
 }
 
 /// Applies the store's deletions to `staged`, a copy of a snapshot that
-/// `lodestar rollback` is about to put in place of the store `live` (BB-1
+/// `lodestar rollback` is about to put in place of `store` (BB-1
 /// for rollback, `docs/decisions`): the purge the writer's tick would
 /// apply to the snapshot, matching **every** journal and hold row by
 /// hash, whenever it was recorded. The tick's window (from a day before
@@ -1189,21 +1314,23 @@ fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
 /// without keeping its time); the cost is that a torrent deleted and
 /// fetched again since goes too, to be fetched again.
 ///
-/// In the same transaction, `live`'s whole journal is merged into the
+/// In the same transaction, `store`'s whole journal is merged into the
 /// copy's own, so the restored store goes on purging the other snapshots,
-/// and its holds into the copy's ([`carry_holds`]), so it goes on
-/// refusing what they hold. The copy ends as one file, with no WAL beside
+/// and its holds and blocklist subscriptions into the copy's
+/// ([`carry_holds`], [`carry_lists`]), so it goes on refusing what they
+/// hold. The copy ends as one file, with no WAL beside
 /// it.
 ///
 /// `Ok(None)` when the copy holds a schema this build can't purge: then
 /// it mustn't be restored.
 pub fn purge_for_restore(
-    live: &Connection,
+    store: &Connection,
     staged: &Path,
     now: i64,
 ) -> crate::Result<Option<usize>> {
+    // Every row: a large imported list makes this slow, which a one-off
+    // rollback can afford.
     let since = i64::MIN;
-    let store = live;
     let live = Live::read(store, since)?;
     let snap = Snapshot {
         path: staged.to_path_buf(),
@@ -1635,6 +1762,11 @@ mod tests {
         tomb(12, "CS-4", T + DAY);
         quarantine(c, [13; 20], "CS-2a", b"sealed-requeued", T + 40 * DAY);
         quarantine(c, [15; 20], "CS-2a", b"sealed-plain", T + 40 * DAY);
+        // The copy's is later (rolling forward): it stays.
+        tomb(17, "CS-4", T + DAY);
+        quarantine(c, [18; 20], "CS-2a", b"sealed-live18", T + 10 * DAY);
+        // Tombstoned here, quarantined in the copy: the tombstone wins.
+        tomb(19, "CS-3", T + DAY);
         // Expired: carried, then turned into a tombstone as live.
         quarantine(c, [16; 20], "CS-9+adult", b"sealed-expired", T);
         store.add_cs_hashes(&[[1; 20]], 1, T + DAY).unwrap();
@@ -1663,6 +1795,9 @@ mod tests {
                 tomb(14, "CS-3", T - DAY);
                 quarantine(&conn, [13; 20], "CS-2a", b"sealed-old", T + 5 * DAY);
                 quarantine(&conn, [15; 20], "CS-9+adult", b"sealed-adult", T + 5 * DAY);
+                tomb(17, "CS-3", T + 5 * DAY);
+                quarantine(&conn, [18; 20], "CS-2a", b"sealed-copy18", T + 40 * DAY);
+                quarantine(&conn, [19; 20], "CS-2a", b"sealed-copy19", T + 40 * DAY);
                 for (h, origin) in [(7u8, 2i64), (8, 1)] {
                     conn.execute(
                         "INSERT INTO cs_hashes (hash, origin, added_at) VALUES (?1, ?2, ?3)",
@@ -1701,6 +1836,8 @@ mod tests {
                     format!("h12 CS-3+adult {}", d(-1)),
                     format!("h14 CS-3 {}", d(-1)),
                     format!("h16 CS-9+adult {}", d(-30)),
+                    format!("h17 CS-3 {}", d(5)),
+                    format!("h19 CS-3 {}", d(1)),
                 ],
                 "v{version}"
             );
@@ -1713,10 +1850,90 @@ mod tests {
                     format!("h4 CS-2a sealed-new-name {}", d(30)),
                     format!("h13 CS-2a sealed-requeued {}", d(40)),
                     format!("h15 CS-9+adult sealed-adult {}", d(5)),
+                    format!("h18 CS-2a sealed-copy18 {}", d(40)),
                 ],
                 "v{version}"
             );
             assert!(!contains(&copy, b"sealed-expired"), "v{version}");
+            assert!(!contains(&copy, b"sealed-copy19"), "v{version}");
+        }
+    }
+
+    /// A rollback's copy keeps the lists subscribed to since the
+    /// snapshot, a floor-marked one's pending removals under the copy's
+    /// id, and a floor mark set since; a copy before V6 gets the floor
+    /// lists' entries as imported CS-1 entries instead.
+    #[test]
+    fn purge_for_restore_carries_the_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _db) = live(dir.path());
+        let c = store.connection();
+        let subscribe = |c: &Connection, url: &str, floor: i64| -> i64 {
+            c.execute(
+                "INSERT INTO subscriptions (url, name, kind, action, floor, interval_secs,
+                     updated_at)
+                 VALUES (?1, ?1, 0, 4, ?2, 3600, ?3)",
+                params![url, floor, T],
+            )
+            .unwrap();
+            c.last_insert_rowid()
+        };
+        let both = subscribe(c, "https://both.example/list", 1);
+        let new = subscribe(c, "https://new.example/list", 1);
+        c.execute(
+            "INSERT INTO subscription_data (sub_id, pending, entries, data) VALUES (?1, 0, 1, ?2)",
+            params![new, &[20u8; 20][..]],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+            params![format!("floor.pending:list:{new}"), &[21u8; 20][..]],
+        )
+        .unwrap();
+        assert_eq!((both, new), (1, 2));
+
+        for version in [4, 6, Plan::KNOWN_THROUGH] {
+            let copy = dir.path().join(format!("lists-v{version}.tmp"));
+            let conn = fixture(&copy, version);
+            if version >= 6 {
+                subscribe(&conn, "https://both.example/list", 0);
+                subscribe(&conn, "https://old.example/list", 0);
+            }
+            drop(conn);
+            purge_for_restore(store.connection(), &copy, T + DAY).unwrap();
+            if version < 6 {
+                assert_eq!(
+                    rows(&copy, "SELECT hash, origin FROM cs_hashes ORDER BY hash"),
+                    ["h20 2", "h21 2"],
+                    "v{version}"
+                );
+                continue;
+            }
+            assert_eq!(
+                rows(
+                    &copy,
+                    "SELECT id, url, floor FROM subscriptions ORDER BY id"
+                ),
+                [
+                    "1 https://both.example/list 1",
+                    "2 https://old.example/list 0",
+                    "3 https://new.example/list 1",
+                ],
+                "v{version}"
+            );
+            assert_eq!(
+                rows(&copy, "SELECT sub_id, pending, data FROM subscription_data"),
+                ["3 0 h20"],
+                "v{version}"
+            );
+            assert_eq!(
+                rows(
+                    &copy,
+                    "SELECT key, value FROM settings WHERE key LIKE 'floor.%'"
+                ),
+                ["floor.pending:list:3 h21"],
+                "v{version}"
+            );
         }
     }
 
