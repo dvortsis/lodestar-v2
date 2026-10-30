@@ -31,6 +31,15 @@ use tokio::time::{Instant, sleep_until};
 use crate::funnel::{Funnel, Loss, Stage};
 use crate::plugin::{BoxFuture, Discovery, PeerRequest, Shutdown};
 
+/// The owned-request map, the one map whose iteration order reaches
+/// scheduling (`poll_replies`). Production keeps the randomly keyed std hash
+/// table; the `testing` feature swaps in a B-tree so the crawler simulator
+/// (`tests/sim`) repeats across runs, platforms and toolchains.
+#[cfg(not(feature = "testing"))]
+type RequestMap = HashMap<InfoHash, Request>;
+#[cfg(feature = "testing")]
+type RequestMap = std::collections::BTreeMap<InfoHash, Request>;
+
 /// Fetches one key from one peer.
 pub trait Fetcher: Send + Sync + 'static {
     fn allows(&self, _peer: SocketAddr) -> bool {
@@ -279,7 +288,7 @@ pub fn spawn(
         admitted: VecDeque::new(),
         lookup_backlog: VecDeque::new(),
         lookups: 0,
-        requests: HashMap::new(),
+        requests: RequestMap::default(),
         per_ip: HashMap::new(),
         tasks: JoinSet::new(),
         task_keys: HashMap::new(),
@@ -383,7 +392,7 @@ struct Pool {
     admitted: VecDeque<InfoHash>,
     lookup_backlog: VecDeque<InfoHash>,
     lookups: usize,
-    requests: HashMap<InfoHash, Request>,
+    requests: RequestMap,
     per_ip: HashMap<IpAddr, usize>,
     tasks: JoinSet<Result<Fetched, FailureKind>>,
     /// What each fetch task is fetching, so even a panicked task is

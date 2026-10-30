@@ -6,7 +6,7 @@ exclude = ["fuzz"]
 [workspace.package]
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/dvortsis/lodestar-v2"
@@ -39,6 +39,12 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
+# Temporary (runner, CR-0d): raising rust-version to 1.89 switched these
+# style lints on across ~60 files. A mechanical cleanup slice runs
+# `cargo clippy --fix` and removes the allows.
+chunks_exact_to_as_chunks = "allow"
+collapsible_if = "allow"
+manual_is_multiple_of = "allow"
 
 [profile.release]
 debug = "line-tables-only"

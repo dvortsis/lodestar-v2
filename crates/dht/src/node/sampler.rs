@@ -2,14 +2,18 @@
 //! An indexed expiry set has exactly one record per cooldown: no stale heap
 //! records, compaction pauses, or per-packet scans of the address map.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
+
+use super::transport::{Map, Set};
 
 use crate::compact::NodeInfo;
 
 const MAX_FRONTIER: usize = 20_000;
-const MAX_KNOWN: usize = 200_000;
+const MAX_KNOWN: usize = crate::restart::MAX_ENTRIES;
 const RECLAIM_PER_TICK: usize = 1024;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(60);
@@ -23,20 +27,20 @@ enum State {
 
 #[derive(Debug)]
 pub(crate) struct Sampler {
-    states: HashMap<SocketAddr, State>,
+    states: Map<SocketAddr, State>,
     expiry: BTreeSet<(Instant, u64, SocketAddr)>,
     frontier: VecDeque<NodeInfo>,
-    queued: HashSet<SocketAddr>,
+    queued: Set<SocketAddr>,
     capacity: usize,
 }
 
 impl Default for Sampler {
     fn default() -> Self {
         Self {
-            states: HashMap::new(),
+            states: Map::default(),
             expiry: BTreeSet::new(),
             frontier: VecDeque::new(),
-            queued: HashSet::new(),
+            queued: Set::default(),
             capacity: MAX_KNOWN,
         }
     }
