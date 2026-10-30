@@ -614,8 +614,9 @@ pub struct Doc<'a> {
     /// Each file's own name.
     file_names: OnceCell<Vec<Text>>,
     titles: OnceCell<Vec<Text>>,
-    /// The name and each path in the core's tokens, for keyword entries.
-    normalized: OnceCell<Vec<Vec<crate::normalize::Token>>>,
+    /// The name and each path in the core's tokens, for keyword entries:
+    /// all in one buffer, with where each text ends.
+    normalized: OnceCell<(Vec<crate::normalize::Token>, Vec<usize>)>,
     enrichment: OnceCell<Option<DocEnrichment>>,
     keys: OnceCell<DocKeys>,
     /// The rule set's NEAR terms, whose nearness the keys record.
@@ -786,23 +787,26 @@ impl<'a> Doc<'a> {
     }
 
     /// The name, then each path, in the core's tokens.
-    pub(crate) fn normalized(&self) -> &[Vec<crate::normalize::Token>] {
-        self.normalized.get_or_init(|| {
-            let text = |t: &str| {
-                let mut out = Vec::new();
-                crate::normalize::tokens(t, &mut out);
-                out
-            };
-            std::iter::once(text(self.item.name))
-                .chain(
-                    self.item
-                        .files
-                        .iter()
-                        .take(crate::MAX_FILES)
-                        .map(|f| text(&f.path.join("/"))),
-                )
-                .collect()
-        })
+    pub(crate) fn normalized(&self) -> impl Iterator<Item = &[crate::normalize::Token]> {
+        let (tokens, ends) = self.normalized.get_or_init(|| {
+            let mut tokens = Vec::new();
+            crate::normalize::tokens(self.item.name, &mut tokens);
+            let mut ends = vec![tokens.len()];
+            crate::normalize::paths(
+                self.item
+                    .files
+                    .iter()
+                    .take(crate::MAX_FILES)
+                    .map(|f| &f.path[..]),
+                &mut tokens,
+                &mut ends,
+            );
+            (tokens, ends)
+        });
+        std::iter::once(0)
+            .chain(ends.iter().copied())
+            .zip(ends)
+            .map(|(from, to)| &tokens[from..*to])
     }
 
     fn enrichment(&self) -> Option<&DocEnrichment> {

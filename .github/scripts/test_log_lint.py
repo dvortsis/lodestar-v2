@@ -302,6 +302,11 @@ class Paths(unittest.TestCase):
         self.assertEqual(log_lint.against_base(own, log_lint.NOT_YET_SWEPT, log_lint.EXEMPT), [])
         for form in ["NOT_YET_SWEPT = []", "NOT_YET_SWEPT: list[str] = []"]:
             self.assertEqual(log_lint.listed_in(form), [], form)
+        # Declared without a value: unreadable, so the base check fails closed.
+        self.assertIsNone(log_lint.listed_in("NOT_YET_SWEPT: list[str]"))
+        self.assertNotEqual(
+            log_lint.against_base("NOT_YET_SWEPT: list[str]\nEXEMPT = {}\n", [], {}), []
+        )
 
     def test_exempt_may_not_grow_against_the_base(self):
         base = 'NOT_YET_SWEPT = []\nEXEMPT = {("a.rs", "tracing"): "why"}\n'

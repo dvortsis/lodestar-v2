@@ -148,14 +148,27 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
+        Server::start_with(None)
+    }
+
+    /// With `dht`, the DHT runs on that loopback UDP port, bootstrapping
+    /// from nowhere: it only hears what a test sends it.
+    fn start_with(dht: Option<u16>) -> Server {
         let dir = tempfile::tempdir().unwrap();
         let hash = seed(dir.path());
+        if let Some(p) = dht {
+            std::fs::write(
+                dir.path().join("config.toml"),
+                format!("[dht]\nbind = [\"127.0.0.1:{p}\"]\nbootstrap = []\n"),
+            )
+            .unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .env_remove("LODESTAR_LOG")
             .env("LODESTAR_DATA_DIR", dir.path())
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-            .env("LODESTAR_DHT_PORT", "0")
-            .env("LODESTAR_DHT_ENABLED", "false")
+            .env("LODESTAR_DHT_PORT", dht.unwrap_or(0).to_string())
+            .env("LODESTAR_DHT_ENABLED", dht.is_some().to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -235,9 +248,14 @@ impl Server {
             body.len()
         )
         .ok()?;
-        let mut out = String::new();
-        c.read_to_string(&mut out).ok()?;
-        Some(out)
+        // What arrived, even if the read then fails: a server that answers
+        // before reading a request's body and closes can reset the
+        // connection, and macOS then fails the read after the answer.
+        let mut out = Vec::new();
+        if c.read_to_end(&mut out).is_err() && out.is_empty() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out).into_owned())
     }
 
     fn get(&self, path: &str) -> Option<String> {
@@ -264,10 +282,24 @@ impl Server {
 
     /// `PATCH /settings/logging`, which must succeed.
     fn logging(&self, body: &str) {
+        // `follow` applies it on its own task, then logs `logging.kind_switched` for each kind
+        // it switched and `logging.applied` when the verbosity or data label changed (neither
+        // is skipped for the changes these tests make): wait for a new one of either.
+        let events = |file: &str| {
+            file.matches("\"event\":\"logging.kind_switched\"").count()
+                + file.matches("\"event\":\"logging.applied\"").count()
+        };
+        let before = events(&self.file());
         let r = self.send("PATCH", "/api/v1/settings/logging", body);
         assert!(r.starts_with("HTTP/1.0 200"), "{body}: {r}");
-        // `follow` applies it on its own task.
-        std::thread::sleep(Duration::from_millis(300));
+        let start = Instant::now();
+        while events(&self.file()) == before {
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "{body}: the change was never logged as applied"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Every event on: each one turned on against the preset.
@@ -296,6 +328,26 @@ impl Server {
 
     fn console(&self) -> String {
         self.stderr.lock().unwrap().clone()
+    }
+
+    /// Waits until neither output has grown for three reads 100 ms apart,
+    /// so lines written on other tasks have landed before an absence is
+    /// asserted. Fails if they are still growing after 15 s.
+    fn settle(&self) {
+        let start = Instant::now();
+        let (mut last, mut quiet) = (self.mark(), 0);
+        while quiet < 3 {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = self.mark();
+            quiet = if now == last { quiet + 1 } else { 0 };
+            last = now;
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "the logs kept growing: console {} bytes, file {} bytes",
+                now.0,
+                now.1
+            );
+        }
     }
 
     /// Where each output is now, to read only what comes after.
@@ -360,7 +412,8 @@ impl Server {
             .args(["-TERM", &self.child.id().to_string()])
             .status();
         let _ = self.child.wait();
-        std::thread::sleep(Duration::from_millis(100));
+        // The reader thread drains what the child left in the pipe.
+        self.settle();
         (self.console(), self.file())
     }
 }
@@ -395,6 +448,7 @@ impl Stream {
                 std::thread::sleep(Duration::from_millis(20));
             }
             drop(out);
+            // Retry pacing while the earlier stream's slot is released.
             std::thread::sleep(Duration::from_millis(300));
         }
     }
@@ -432,6 +486,35 @@ impl Stream {
 
     fn text(&self) -> String {
         self.text.lock().unwrap().clone()
+    }
+
+    /// Waits up to 15 s for `needle` to appear in the text from byte `from`.
+    fn wait_for(&self, from: usize, needle: &str) {
+        let start = Instant::now();
+        while !self.text().get(from..).is_some_and(|t| t.contains(needle)) {
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "no {needle:?} in the stream: {}",
+                self.text().get(from..).unwrap_or_default()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Waits until the text has not grown for three reads 100 ms apart.
+    fn settle(&self) {
+        let start = Instant::now();
+        let (mut last, mut quiet) = (self.text().len(), 0);
+        while quiet < 3 {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = self.text().len();
+            quiet = if now == last { quiet + 1 } else { 0 };
+            last = now;
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "the stream kept growing: {now} bytes"
+            );
+        }
     }
 
     fn last_id(&self) -> Option<String> {
@@ -661,7 +744,7 @@ fn run_1_private_shows_no_fixture_identifier() {
     let stream = Stream::open(&s, "", None);
     let mark = s.mark();
     s.exercise(1, true);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
     let (console, file) = s.since(mark);
     let mut needles: Vec<String> = identifiers(&s.hash).into_iter().map(|(_, v)| v).collect();
     needles.extend([PASSKEY.to_string(), SEALED_NAME.to_string()]);
@@ -671,14 +754,11 @@ fn run_1_private_shows_no_fixture_identifier() {
     drop(stream);
     s.exercise(2, false);
     let again = Stream::open(&s, "", Some(&last));
-    std::thread::sleep(Duration::from_millis(500));
+    again.wait_for(0, "filters.rule_set_updated");
+    again.settle();
     assert!(!again.text().contains("event: resync"), "{}", again.text());
-    assert!(
-        again.text().contains("filters.rule_set_updated"),
-        "it caught up"
-    );
     let replay = Stream::open(&s, &format!("?after={first}"), None);
-    std::thread::sleep(Duration::from_millis(300));
+    replay.settle();
     let api = s.api(&replay);
     absent(&api.all(), &needles, "Private, through the API");
     absent(
@@ -735,7 +815,7 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         let mark = s.mark();
         let stream_mark = open.text().len();
         s.exercise(10 + n as u32, n == 0);
-        std::thread::sleep(Duration::from_millis(300));
+        s.settle();
         let (console, file) = s.since(mark);
         let others: Vec<String> = ids
             .iter()
@@ -757,6 +837,8 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         // The API shows at most this kind while it's on, and redacted
         // downloads none at all.
         let replay = Stream::open(&s, "", None);
+        replay.settle();
+        open.settle();
         let api = s.api(&replay);
         let stream_now = open.text()[stream_mark..].to_string();
         // (The unredacted downloads hold what earlier kinds wrote.)
@@ -777,7 +859,7 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         let start = Instant::now();
         while !open.text()[before_off..].contains("event: purge") {
             assert!(
-                start.elapsed() < Duration::from_secs(5),
+                start.elapsed() < Duration::from_secs(15),
                 "{kind}: no purge frame"
             );
             std::thread::sleep(Duration::from_millis(50));
@@ -789,12 +871,140 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
             &first.map_or(String::new(), |f| format!("?after={f}")),
             None,
         );
-        std::thread::sleep(Duration::from_millis(300));
+        replay.settle();
         let api = s.api(&replay);
         let after_off: Vec<(&str, &str)> = api.redacted().into_iter().collect();
         absent(&after_off, &mine, &format!("{kind} after it's off"));
     }
     s.stop();
+}
+
+/// A KRPC `get_peers` for `hash`, from a node id of its own.
+fn get_peers(hash: &[u8; 20]) -> Vec<u8> {
+    let mut m = b"d1:ad2:id20:".to_vec();
+    m.extend_from_slice(&[0x42; 20]);
+    m.extend_from_slice(b"9:info_hash20:");
+    m.extend_from_slice(hash);
+    m.extend_from_slice(b"e1:q9:get_peers1:t2:aa1:y1:qe");
+    m
+}
+
+/// The file's `dht.key_harvested` lines from a `get_peers` (not the
+/// pipeline's later `lookup` lines for the same key).
+fn get_peers_lines(file: &str) -> Vec<&str> {
+    lines_of(file, "dht.key_harvested")
+        .into_iter()
+        .filter(|l| l.contains(r#""value":"get_peers""#))
+        .collect()
+}
+
+/// Run 2's positive control for hashes: a `get_peers` sent to the DHT is
+/// harvested (`dht.key_harvested`, Trace, on with every event), and the
+/// key's hex is in the file only while the hash kind is on, never on the
+/// console.
+#[test]
+fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
+    // A free port to hand the DHT: if another test takes it first, the
+    // DHT can't bind and the wait below says so.
+    let dht = {
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let s = Server::start_with(Some(dht));
+    let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    // Waits for the condition on the file's new lines, failing after 30 s.
+    let wait = |mark: (usize, usize), what: &str, ok: &dyn Fn(&str) -> bool| {
+        let start = Instant::now();
+        loop {
+            let (_, file) = s.since(mark);
+            if ok(&file) {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "{what} (DHT on 127.0.0.1:{dht}): {}",
+                s.console()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    // Sends the query until this key's own `get_peers` line is in the
+    // file, and returns the phase's lines. Resends of a key are dropped as
+    // seen, so the wait is for the first line.
+    let harvest = |hash: [u8; 20]| {
+        let mark = s.mark();
+        let start = Instant::now();
+        loop {
+            client
+                .send_to(&get_peers(&hash), ("127.0.0.1", dht))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            let (_, file) = s.since(mark);
+            if !get_peers_lines(&file).is_empty() {
+                return file;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "no get_peers harvest (DHT on 127.0.0.1:{dht}): {}",
+                s.console()
+            );
+        }
+    };
+    // Switches the hash kind and waits until the runtime says it switched
+    // (`logging.kind_switched`), never for a fixed time.
+    let switch = |body: &str, state: &str| {
+        let mark = s.mark();
+        s.logging(body);
+        wait(
+            mark,
+            &format!("the hash kind never switched {state}"),
+            &|file| {
+                lines_of(file, "logging.kind_switched").iter().any(|l| {
+                    l.contains(r#""value":"hash""#) && l.contains(&format!(r#""value":"{state}""#))
+                })
+            },
+        );
+    };
+    // `dht.key_harvested` is Trace and off by default, and a key's resends
+    // are dropped as seen before anything is logged: every event must be
+    // on before the first query, so wait until the runtime says it applied
+    // Everything.
+    let mark = s.mark();
+    s.every_event_on();
+    wait(mark, "every event never applied", &|file| {
+        lines_of(file, "logging.applied")
+            .iter()
+            .any(|l| l.contains(r#""value":"everything""#))
+    });
+    // Each phase is judged by its own lines: the pipeline's later lookup
+    // for a key logs it again (source `lookup`) under whatever the kind is
+    // by then.
+    let keys = [[0xa1; 20], [0xb2; 20], [0xc3; 20]];
+    let hexes: Vec<String> = keys.iter().map(|k| hex(k)).collect();
+    let private = harvest(keys[0]);
+    switch(&format!(r#"{{"kinds":{{"hash":{}}}}}"#, now() + 600), "on");
+    let on = harvest(keys[1]);
+    switch(r#"{"kinds":{}}"#, "off");
+    let off_again = harvest(keys[2]);
+    let (console, _) = s.stop();
+    // The off phases did harvest their key, as a reference.
+    for (phase, file) in [("Private", &private), ("off again", &off_again)] {
+        assert!(
+            get_peers_lines(file).iter().any(|l| l.contains("ref:")),
+            "{phase}: {file}"
+        );
+    }
+    absent(&[("file", &private)], &hexes, "Private");
+    assert!(
+        get_peers_lines(&on).iter().any(|l| l.contains(&hexes[1])),
+        "the hash kind on: {on}"
+    );
+    absent(&[("file", &off_again)], &hexes, "the hash kind off again");
+    absent(
+        &[("console", &console)],
+        &hexes,
+        "the console stays Private",
+    );
 }
 
 #[test]
@@ -805,7 +1015,8 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     // Off: no detail.
     let mark = s.mark();
     s.exercise(20, true);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
+    open.settle();
     let (console, file) = s.since(mark);
     absent(
         &[
@@ -821,13 +1032,13 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     s.logging(&format!(r#"{{"change_details_until":{}}}"#, now() + 4));
     let mark = s.mark();
     s.exercise(21, false);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
+    open.wait_for(0, "canaryterm21");
     let (console, file) = s.since(mark);
     assert!(
         file.contains("\"event\":\"filters.change_detail\"") && file.contains("canaryterm21"),
         "{file}"
     );
-    assert!(open.text().contains("canaryterm21"), "the live log has it");
     assert!(s.history().contains("canaryterm21"), "history has it");
     absent(
         &[("console", &console)],
@@ -847,10 +1058,24 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     // later changes aren't recorded.
     let before_off = open.text().len();
     let first = open.first_id().unwrap();
-    std::thread::sleep(Duration::from_secs(5));
+    // The window (`now() + 4`, whole seconds) runs out on its own: wait until the runtime logs
+    // the switch to "expired" for the filter-changes kind, whenever that is.
+    let start = Instant::now();
+    while !lines_of(&s.file(), "logging.kind_switched")
+        .iter()
+        .any(|l| l.contains("filter_changes") && l.contains("expired"))
+    {
+        let file = s.file();
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "the opt-in never expired; the file ends: {}",
+            file.get(file.len().saturating_sub(2000)..).unwrap_or(&file)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let mark = s.mark();
     s.exercise(22, false);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
     let (console, file) = s.since(mark);
     absent(
         &[("console", &console), ("file", &file)],
@@ -858,14 +1083,10 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
         "expired",
     );
     // Gone from history and from a new stream; the open one was told.
-    assert!(
-        open.text()[before_off..].contains("event: purge")
-            && open.text()[before_off..].contains("filter_changes"),
-        "{}",
-        &open.text()[before_off..]
-    );
+    open.wait_for(before_off, "event: purge");
+    open.wait_for(before_off, "filter_changes");
     let replay = Stream::open(&s, &format!("?after={first}"), None);
-    std::thread::sleep(Duration::from_millis(300));
+    replay.settle();
     let api = s.api(&replay);
     absent(
         &api.redacted(),
@@ -929,7 +1150,8 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
     let cookie_2 = s.cookie.clone();
     let open = Stream::open(&s, "", None);
     s.exercise(31, false);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
+    open.settle();
     let token = s.token.clone();
     let h = hex(&s.hash);
     let api = s.api(&open);
@@ -1056,7 +1278,10 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
             format!("{method} {path}?apikey={key} HTTP/1.0{json}"),
             format!("{method} {path}?token={token} HTTP/1.0{json}"),
         ] {
-            let r = s.request(&head, r#"{"which":"all"}"#).unwrap();
+            // No body: the guard refuses before reading one, and a body left
+            // unread makes the server's close a reset (macOS then loses
+            // the answer).
+            let r = s.request(&head, "").unwrap();
             assert!(r.starts_with("HTTP/1.0 401"), "{head}: {r}");
             assert!(r.contains("login_required"), "{r}");
         }
@@ -1120,7 +1345,8 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
     let open = Stream::open(&s, "", None);
     s.exercise(40, false);
     let cookie_now = s.cookie.clone();
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
+    open.settle();
     let api = s.api(&open);
     let (console, file) = s.stop();
     let mut outputs = vec![("console", console.as_str()), ("file", file.as_str())];

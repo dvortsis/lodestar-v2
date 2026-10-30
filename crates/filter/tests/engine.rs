@@ -84,16 +84,16 @@ fn overrides_pass_the_core_and_neutralize_only_their_word() {
     let mut e = engine();
     let name = "Series rolea lexa";
     assert_eq!(rule(&e, name, VIDEO), Some(RuleRef::Core(CoreRule::Cs4a)));
-    e.overrides = vec![keyword("series", Strength::Override)];
+    e.overrides = vec![keyword("series", Strength::Override)].into();
     assert_eq!(rule(&e, name, VIDEO), None);
     // Scoped to adult: no longer covers this video.
     e.overrides[0].scope = Some(parse("type:adult").unwrap());
     assert_eq!(rule(&e, name, VIDEO), Some(RuleRef::Core(CoreRule::Cs4a)));
     // Neutralize: the word stops counting, other evidence still does.
-    e.overrides = vec![keyword("lexa", Strength::Neutralize)];
+    e.overrides = vec![keyword("lexa", Strength::Neutralize)].into();
     assert_eq!(rule(&e, name, VIDEO), None);
     let with_age = "Series 15yo lexa rolea";
-    e.overrides = vec![keyword("rolea", Strength::Neutralize)];
+    e.overrides = vec![keyword("rolea", Strength::Neutralize)].into();
     assert_eq!(
         rule(&e, with_age, VIDEO),
         Some(RuleRef::Core(CoreRule::Cs2a))
@@ -102,12 +102,14 @@ fn overrides_pass_the_core_and_neutralize_only_their_word() {
     e.overrides = vec![Override {
         expires_at: Some(500),
         ..keyword("series", Strength::Override)
-    }];
+    }]
+    .into();
     assert_eq!(rule(&e, name, VIDEO), Some(RuleRef::Core(CoreRule::Cs4a)));
     e.overrides = vec![Override {
         shadow_until: Some(2000),
         ..keyword("series", Strength::Override)
-    }];
+    }]
+    .into();
     let v = judge(&e, name, VIDEO, 1000);
     assert_eq!(
         v.decision.map(|d| d.rule),
