@@ -1,0 +1,2 @@
+500
+{"error":{"code":"updates_not_saved","message":"Lodestar couldn't save this change, so it may not survive a restart. Check that its data folder has free space and can be written, then try again."}}

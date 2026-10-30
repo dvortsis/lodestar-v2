@@ -221,6 +221,8 @@ pub fn read(bin: &Bin) -> io::Result<Option<Pending>> {
     }
 }
 
+/// The skip list's file.
+pub const SKIPPED: &str = "skipped";
 /// The most `skipped` keeps (oldest dropped first).
 pub const MAX_SKIPPED: usize = 64;
 
@@ -237,7 +239,18 @@ pub fn is_skipped(bin: &Bin, version: &str) -> io::Result<bool> {
 /// a `user` one). An unreadable `skipped` is an error, not a fresh list,
 /// so no earlier entry is lost.
 pub fn skip(bin: &Bin, version: &str, reason: &str) -> io::Result<()> {
-    let mut skipped: Vec<Skip> = bin.read("skipped")?.unwrap_or_default();
+    skip_with(bin, version, reason, |list| bin.write(SKIPPED, list))
+}
+
+/// [`skip`], writing the new list with `write` (the updater's
+/// acknowledged write).
+pub fn skip_with(
+    bin: &Bin,
+    version: &str,
+    reason: &str,
+    write: impl FnOnce(&Vec<Skip>) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut skipped: Vec<Skip> = bin.read(SKIPPED)?.unwrap_or_default();
     let refusing = |s: &Skip| s.reason == "failed" || s.reason == "manual";
     if skipped
         .iter()
@@ -251,7 +264,7 @@ pub fn skip(bin: &Bin, version: &str, reason: &str) -> io::Result<()> {
         reason: reason.to_string(),
     });
     trim(&mut skipped);
-    bin.write("skipped", &skipped)
+    write(&skipped)
 }
 
 /// Keeps at most [`MAX_SKIPPED`]: the oldest `user` skips go first, so a

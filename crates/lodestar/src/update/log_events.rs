@@ -38,6 +38,36 @@ lodestar_log::catalogue! {
         message: "The update check failed",
         fields: { error: Label },
     }
+    /// An updater state file (`updater.json`, `skipped`, `history.json`)
+    /// couldn't be saved durably, so the change wasn't acknowledged
+    /// (DUR-26). `file` is its name, never a path.
+    UPDATE_STATE_UNSAVED {
+        id: "update.state_unsaved",
+        component: System,
+        level: Warn,
+        message: "An update setting couldn't be saved",
+        fields: { file: Label, error: Error },
+    }
+    /// `updater.json` was there but couldn't be read at start, so any
+    /// pause in it is unknown: automatic installs are held, and nothing
+    /// writes over it until a pause or resume is saved (DUR-26).
+    UPDATE_STATE_UNREADABLE {
+        id: "update.state_unreadable",
+        component: System,
+        level: Warn,
+        message: "The update settings couldn't be read; automatic updates are held",
+        fields: { error: Error },
+    }
+    /// The filesystem under `<data>/bin` can't fsync a folder (some FUSE
+    /// mounts, such as Unraid's `/mnt/user`): updater changes are saved by
+    /// rename without it. Logged once per run, without a path.
+    UPDATE_DIR_SYNC_UNSUPPORTED {
+        id: "update.dir_sync_unsupported",
+        component: System,
+        level: Warn,
+        message: "The update folder's filesystem can't flush folders; saving without it",
+        fields: {},
+    }
     /// An entry in `<data>/bin` couldn't be read while the update check
     /// gathered the installed versions' trust; it's skipped.
     UPDATE_OVERLAY_UNREADABLE {
