@@ -120,14 +120,14 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
         in_probation,
         beat: Arc::new(Mutex::new(None)),
     };
-    if child.in_probation {
-        if let Err(e) = child.mark_migrating(fault) {
-            log_event!(
-                UPDATE_MIGRATION_UNRECORDED,
-                error = lodestar_log::Error::io(&e)
-            );
-            return Err(format!("recording the store upgrade (migration.json): {e}"));
-        }
+    if child.in_probation
+        && let Err(e) = child.mark_migrating(fault)
+    {
+        log_event!(
+            UPDATE_MIGRATION_UNRECORDED,
+            error = lodestar_log::Error::io(&e)
+        );
+        return Err(format!("recording the store upgrade (migration.json): {e}"));
     }
     Ok(CHILD.get_or_init(|| child))
 }
@@ -247,11 +247,11 @@ impl Child {
                 }
                 last = Instant::now();
                 with_probation(|| {
-                    if let Ok(Some(mut p)) = bin.read::<Probation>("probation.json") {
-                        if p.phase == Phase::Migrating {
-                            p.at = crate::unix_now().max(0) as u64;
-                            let _ = bin.write("probation.json", &p);
-                        }
+                    if let Ok(Some(mut p)) = bin.read::<Probation>("probation.json")
+                        && p.phase == Phase::Migrating
+                    {
+                        p.at = crate::unix_now().max(0) as u64;
+                        let _ = bin.write("probation.json", &p);
                     }
                 });
             }

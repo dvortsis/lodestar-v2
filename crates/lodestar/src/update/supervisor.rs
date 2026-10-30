@@ -754,14 +754,13 @@ impl Supervisor {
     /// Records the time spent starting in `pending` (now that no child
     /// runs).
     fn settle_time(&self, ended: Ended, pending: Option<&Pending>, starting: Duration) -> Ended {
-        if let (Some(p), false) = (pending, ended.passed) {
-            if let Ok(Some(mut now)) = pending::read(&self.bin) {
-                if now.version == p.version {
-                    let ms = u64::try_from(starting.as_millis()).unwrap_or(u64::MAX);
-                    now.used_ms = now.used_ms.saturating_add(ms);
-                    let _ = self.bin.write("pending", &now);
-                }
-            }
+        if let (Some(p), false) = (pending, ended.passed)
+            && let Ok(Some(mut now)) = pending::read(&self.bin)
+            && now.version == p.version
+        {
+            let ms = u64::try_from(starting.as_millis()).unwrap_or(u64::MAX);
+            now.used_ms = now.used_ms.saturating_add(ms);
+            let _ = self.bin.write("pending", &now);
         }
         ended
     }

@@ -175,11 +175,11 @@ impl Signals {
             if w == "hentai" {
                 self.strong = self.strong.max(HENTAI);
             }
-            if let Some(&t) = TERMS.iter().find(|&&t| t == w) {
-                if !self.terms.contains(&t) {
-                    self.terms.push(t);
-                    self.support = self.support.saturating_add(TERM);
-                }
+            if let Some(&t) = TERMS.iter().find(|&&t| t == w)
+                && !self.terms.contains(&t)
+            {
+                self.terms.push(t);
+                self.support = self.support.saturating_add(TERM);
             }
             self.counter |= COUNTERS.contains(&w);
             self.vr |= VR.contains(&w);

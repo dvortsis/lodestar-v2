@@ -145,7 +145,7 @@ pub struct Samples<'a>(&'a [u8]);
 
 impl<'a> Samples<'a> {
     pub fn new(raw: &'a [u8]) -> Option<Samples<'a>> {
-        (raw.len() % 20 == 0).then_some(Samples(raw))
+        raw.len().is_multiple_of(20).then_some(Samples(raw))
     }
 
     pub fn raw(&self) -> &'a [u8] {

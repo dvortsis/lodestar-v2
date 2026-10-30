@@ -89,17 +89,21 @@ pub struct CompactNodes<'a> {
 
 impl<'a> CompactNodes<'a> {
     pub fn v4(raw: &'a [u8]) -> Option<CompactNodes<'a>> {
-        (raw.len() % NODE_V4_LEN == 0).then_some(CompactNodes {
-            raw,
-            entry: NODE_V4_LEN,
-        })
+        raw.len()
+            .is_multiple_of(NODE_V4_LEN)
+            .then_some(CompactNodes {
+                raw,
+                entry: NODE_V4_LEN,
+            })
     }
 
     pub fn v6(raw: &'a [u8]) -> Option<CompactNodes<'a>> {
-        (raw.len() % NODE_V6_LEN == 0).then_some(CompactNodes {
-            raw,
-            entry: NODE_V6_LEN,
-        })
+        raw.len()
+            .is_multiple_of(NODE_V6_LEN)
+            .then_some(CompactNodes {
+                raw,
+                entry: NODE_V6_LEN,
+            })
     }
 
     pub fn raw(&self) -> &'a [u8] {
