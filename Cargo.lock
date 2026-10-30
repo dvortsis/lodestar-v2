@@ -1735,6 +1735,9 @@ version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
  "lodestar-store",
+ "proptest",
+ "rusqlite",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-postgres",
