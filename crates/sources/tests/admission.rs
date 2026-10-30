@@ -884,9 +884,9 @@ async fn a_partial_refusal_holds_the_finder_that_refused() {
     };
     send(1).await;
     let (a0, a1) = (next(&mut r0).await, next(&mut r1).await);
+    // Finder 1 refuses first, and the pool sees it while finder 0 is still
+    // silent; only then does finder 0 accept.
     let refused_at = Instant::now();
-    let (_done, rx) = oneshot::channel::<Vec<SocketAddr>>();
-    a0.admit.send(Some(rx)).unwrap();
     a1.admit.send(None).unwrap();
     drop(a1.permit);
     let s = handle.stats();
@@ -895,7 +895,17 @@ async fn a_partial_refusal_holds_the_finder_that_refused() {
         assert!(Instant::now() < deadline, "no hold for the refusing finder");
         sleep(Duration::from_millis(1)).await;
     }
+    let (_done, rx) = oneshot::channel::<Vec<SocketAddr>>();
+    a0.admit.send(Some(rx)).unwrap();
+    // A repeat sighting polls A's admission: the fence for the acceptance.
+    send(1).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while load(&s.duplicates) == 0 {
+        assert!(Instant::now() < deadline, "the repeat sighting");
+        sleep(Duration::from_millis(1)).await;
+    }
     assert_eq!(load(&s.admission_refusals[0]), 0, "A was accepted");
+    assert_eq!(load(&s.admission_holds), 1, "held once");
     send(2).await;
     let b = next(&mut r1).await;
     assert_eq!(b.key, key(2));
