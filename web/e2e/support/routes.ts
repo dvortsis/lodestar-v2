@@ -143,7 +143,14 @@ export const ROUTES: RouteCase[] = [
 		heading: 'Set up Lodestar',
 		mock: (m) => m.on('getAuthStatus', { logged_in: false, setup_required: true })
 	},
-	{ name: 'welcome', path: '/welcome', key: true },
+	{
+		name: 'welcome',
+		path: '/welcome',
+		heading: 'Setup complete',
+		key: true,
+		// Signed in with setup done, or the page redirects to sign-in (or setup) instead.
+		mock: (m) => m.on('getAuthStatus', { logged_in: true, setup_required: false })
+	},
 	{ name: 'settings', path: '/settings/general', key: true },
 	{
 		name: 'torrent',
