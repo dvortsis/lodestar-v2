@@ -1282,11 +1282,12 @@
    "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk) | 2026-10-30T08:00Z local reviewer stopped (disk); fresh review moved to cloud session session_01MMjhnBvsF5kreeXyjjL3kB | 2026-10-30T08:21Z fresh review MERGE (0B/0I/2P). Merge blocked by conflict with main fafe2f89 (likely logs_catalog golden); author told to merge main + regenerate | 2026-10-30T08:41Z 95207bf4 conflict resolved (logs_catalog re-blessed); CI running | 2026-10-30T08:54Z #190 merged 476689c9 (A2-1 release blocker closed)"
   },
   "CR-COL": {
-   "status": "ready-waiting-L5",
+   "status": "review",
    "session": "session_01MMjhnAXqNdYeYYFdttw8Zo",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR"
+   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww",
+   "pr": 197
   },
   "CR-0f": {
    "status": "running",
@@ -1390,10 +1391,11 @@
    "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values"
   },
   "F-filters-xcpu": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
-   "notes": "2026-10-30T07:47Z queued: main filter-budget red = runner-type variance (mixed set 50.4us ref on Xeon 8573C @0.81x calib vs 39.3us EPYC 9V45). Speed the shared mixed path first; calibration method change only within \u00a72.20 (typical hardware; 50us unchanged), record+flag. Then hold the neutralized case. | 2026-10-30T08:41Z launched; carries #192 review polish (decisions heading/wording, with_tokenizer comment) | 2026-10-30T09:29Z speed: mixed 458k->437k, neutralized 487k->436k instr/judgment. Gate method OK: per-CPU-model factors (engine mixed time vs 7763 at same code), provenance per entry, provisional if n<3, raw+factor printed, >20% calib divergence warns, table changes need decisions entry; hold neutralized.",
-   "session": "session_01MMjhnBFWdSTVf9zY1qSeMu"
+   "notes": "2026-10-30T07:47Z queued: main filter-budget red = runner-type variance (mixed set 50.4us ref on Xeon 8573C @0.81x calib vs 39.3us EPYC 9V45). Speed the shared mixed path first; calibration method change only within \u00a72.20 (typical hardware; 50us unchanged), record+flag. Then hold the neutralized case. | 2026-10-30T08:41Z launched; carries #192 review polish (decisions heading/wording, with_tokenizer comment) | 2026-10-30T09:29Z speed: mixed 458k->437k, neutralized 487k->436k instr/judgment. Gate method OK: per-CPU-model factors (engine mixed time vs 7763 at same code), provenance per entry, provisional if n<3, raw+factor printed, >20% calib divergence warns, table changes need decisions entry; hold neutralized. | 2026-10-30T10:17Z #196 fresh review MERGE (120k differential 0 mismatches). Asked one push: ::warning:: annotations, patterns_with debug_assert, factor-provenance wording, 8573C re-derive tracking.",
+   "session": "session_01MMjhnBFWdSTVf9zY1qSeMu",
+   "pr": 196
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1992,7 +1994,8 @@
  },
  "followups": [
   "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
-  "2026-10-30T08:41Z UI polish: welcome page h1 (tabindex -1, focused on load) shows a focus ring wider than the text with a notch; consider :focus-visible handling for programmatic focus"
+  "2026-10-30T08:41Z UI polish: welcome page h1 (tabindex -1, focused on load) shows a focus ring wider than the text with a notch; consider :focus-visible handling for programmatic focus",
+  "2026-10-30T10:17Z Re-derive the Xeon 8573C filter-budget factor (n=1, provisional) once 2 more 8573C jobs exist; record in a decisions entry (job 123999363098 = 39.6us raw mixed at #196 code)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
