@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T18:35Z",
+ "updated_at": "2026-10-30T18:55Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2158,7 +2158,6 @@
   "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
   "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)",
   "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision)",
-  "CR-0f counter contract: get_peers_queue.retain (dht actor.rs ~634) drops admitted requests whose caller closed while queued without counting them (admitted - completed - cancelled - active = 13 in CR-SIM admission-pressure); count them (e.g. as cancelled) and document",
   "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
   "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
   "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
@@ -2248,7 +2247,8 @@
   "2026-10-30T18:11Z merged #225 IMP-2 (c15a5112) on green ci-ok at a1890137; author and reviewer sessions archived.",
   "2026-10-30T18:30Z opened #230 fix/logging-nits (runner-owned: rotated_name max N+1, wait messages); review by session_01MMjhn984M3k3UJXUCsEYPX (#221's reviewer, idle). #221 author told to remove .update-snapshots marker.",
   "2026-10-30T18:25Z #227 new head 9c99b688: runner delta check OK (config.rs both sides kept; ci.yml requires >=1 passing privdrop test); merge on green ci-ok. #229 X-flake-supervisor-switch runner review CHANGES (drain spins once stderr disconnects). #221 head ad3895ad sent to reviewer.",
-  "2026-10-30T18:35Z #231 fix/cr-adm-polish runner review CHANGES: partial-refusal holds miss refusals seen in an earlier poll (refused/unacknowledged are per-poll locals); author session_01MMjhnA3oPv1oEebqrwfFcm."
+  "2026-10-30T18:35Z #231 fix/cr-adm-polish runner review CHANGES: partial-refusal holds miss refusals seen in an earlier poll (refused/unacknowledged are per-poll locals); author session_01MMjhnA3oPv1oEebqrwfFcm.",
+  "2026-10-30T18:55Z opened #232 fix/dht-queued-cancel-count (runner-owned: dht_peer_queued_dropped_total{reason}, CR-SIM conservation, admission-pressure golden +2 lines); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #230/#221."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
 }
