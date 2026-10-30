@@ -325,10 +325,10 @@ mod imp {
             crate::logging::events::FIXTURE_MODE,
             path = lodestar_log::Path::new(dir)
         );
-        if let Found::Fixture { anchor } = *found {
-            if crate::unix_now() > anchor + STABLE_SECS {
-                lodestar_log::log_event!(crate::logging::events::FIXTURE_STALE);
-            }
+        if let Found::Fixture { anchor } = *found
+            && crate::unix_now() > anchor + STABLE_SECS
+        {
+            lodestar_log::log_event!(crate::logging::events::FIXTURE_STALE);
         }
         if *found == Found::Empty {
             let anchor = data::anchor(crate::unix_now());

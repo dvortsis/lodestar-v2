@@ -410,10 +410,10 @@ fn history_joins_the_ring_and_the_files_without_gap_or_duplicate() {
     // Small rotations: the cap is a MiB, so rotate by hand as we go.
     for n in 0..300 {
         line(rt, n, "x");
-        if n % 70 == 69 {
-            if let FileState::Open(sink) = &mut *lock(&rt.file) {
-                sink.rotate().unwrap();
-            }
+        if n % 70 == 69
+            && let FileState::Open(sink) = &mut *lock(&rt.file)
+        {
+            sink.rotate().unwrap();
         }
     }
     let src = logs(rt);
@@ -733,10 +733,10 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
             let mut n = 0;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 line(rt, n, "x");
-                if n % 300 == 299 {
-                    if let FileState::Open(sink) = &mut *lock(&rt.file) {
-                        let _ = sink.rotate();
-                    }
+                if n % 300 == 299
+                    && let FileState::Open(sink) = &mut *lock(&rt.file)
+                {
+                    let _ = sink.rotate();
                 }
                 n += 1;
                 lines.store(n, std::sync::atomic::Ordering::Relaxed);

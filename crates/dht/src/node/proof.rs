@@ -248,10 +248,10 @@ impl Proof {
         stats: &Stats,
         sampler: &mut Sampler,
     ) {
-        if let Phase::Locking { next, backoff } = self.phase {
-            if now >= next {
-                self.try_lock(now, backoff, ids, stats);
-            }
+        if let Phase::Locking { next, backoff } = self.phase
+            && now >= next
+        {
+            self.try_lock(now, backoff, ids, stats);
         }
         if let Some(rx) = &self.job {
             match rx.try_recv() {
@@ -330,17 +330,17 @@ impl Proof {
                 // from a filesystem that had locks must not stay clean (§2.2).
                 let data_dir = self.data_dir.clone();
                 run_blocking(self.inline_io(), move || {
-                    if let Found::Ok(m) = restart::read_marker(&data_dir) {
-                        if !matches!(m.state, MarkerState::Off) {
-                            let off = Marker {
-                                state: MarkerState::Off,
-                                ..m
-                            };
-                            let _ = restart::overwrite_in_place(
-                                &data_dir.join(restart::MARKER_FILE),
-                                &off.encode(),
-                            );
-                        }
+                    if let Found::Ok(m) = restart::read_marker(&data_dir)
+                        && !matches!(m.state, MarkerState::Off)
+                    {
+                        let off = Marker {
+                            state: MarkerState::Off,
+                            ..m
+                        };
+                        let _ = restart::overwrite_in_place(
+                            &data_dir.join(restart::MARKER_FILE),
+                            &off.encode(),
+                        );
                     }
                 });
             }
@@ -413,20 +413,20 @@ impl Proof {
             (Mode::On, Decision::Suppress(_)) => Some(started.start + self.horizon),
             _ => Some(started.start + self.delay),
         };
-        if let (Some(cfg), Some(run)) = (&self.cfg, &started.run) {
-            if matches!(self.mode, Mode::On) {
-                // Orphan cleanup reads paths named in witness files, which
-                // can hang: after S4, and never in the way (§1.4).
-                if let Some(wdir) = cfg.witness_dir.clone() {
-                    let (keep, path, now_ms) = (run.dir_id, started.path.clone(), {
-                        restart::floor_ms(cfg.clock.wall())
-                    });
-                    let lock = self.lock.clone();
-                    run_blocking(self.inline_io(), move || {
-                        let _ = restart::prune_witnesses(&wdir, &keep, &path, now_ms);
-                        drop(lock);
-                    });
-                }
+        if let (Some(cfg), Some(run)) = (&self.cfg, &started.run)
+            && matches!(self.mode, Mode::On)
+        {
+            // Orphan cleanup reads paths named in witness files, which
+            // can hang: after S4, and never in the way (§1.4).
+            if let Some(wdir) = cfg.witness_dir.clone() {
+                let (keep, path, now_ms) = (run.dir_id, started.path.clone(), {
+                    restart::floor_ms(cfg.clock.wall())
+                });
+                let lock = self.lock.clone();
+                run_blocking(self.inline_io(), move || {
+                    let _ = restart::prune_witnesses(&wdir, &keep, &path, now_ms);
+                    drop(lock);
+                });
             }
         }
         self.started = Some(started);
@@ -517,15 +517,15 @@ impl Proof {
     /// finished just now isn't lost.
     fn drain(&mut self, stats: &Stats) {
         let now = Instant::now();
-        if let Some(rx) = self.job.take() {
-            if let Ok(started) = rx.recv_timeout(DRAIN) {
-                self.land(started, stats);
-            }
+        if let Some(rx) = self.job.take()
+            && let Ok(started) = rx.recv_timeout(DRAIN)
+        {
+            self.land(started, stats);
         }
-        if let Some(rx) = self.retrying.take() {
-            if let Ok(r) = rx.recv_timeout(DRAIN) {
-                self.retried(r, now, stats);
-            }
+        if let Some(rx) = self.retrying.take()
+            && let Ok(r) = rx.recv_timeout(DRAIN)
+        {
+            self.retried(r, now, stats);
         }
     }
 
@@ -561,12 +561,11 @@ impl Proof {
         sampler.seal_in_flight(clock.mono() + self.horizon);
         // A witness bump that failed while the marker landed: once more, or
         // the next start reads `generation` (it would still be safe).
-        if !started.witness_ok {
-            if let Some((path, w)) = started.pending.as_ref().and_then(|p| p.witness.as_ref()) {
-                if let Err(e) = restart::overwrite_in_place(path, &w.encode()) {
-                    fail(stats, PersistStep::Witness, e.kind());
-                }
-            }
+        if !started.witness_ok
+            && let Some((path, w)) = started.pending.as_ref().and_then(|p| p.witness.as_ref())
+            && let Err(e) = restart::overwrite_in_place(path, &w.encode())
+        {
+            fail(stats, PersistStep::Witness, e.kind());
         }
         let at = |step: PersistStep| move |e: io::Error| (step, e.kind());
         let result = (|| {

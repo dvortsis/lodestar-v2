@@ -951,15 +951,14 @@ impl Actor {
         if self.seed_tids.remove(&tid) {
             self.end_seed_round_if_done();
         }
-        if let Purpose::Lookup(lid) = p.purpose {
-            if let Some(r) = self
+        if let Purpose::Lookup(lid) = p.purpose
+            && let Some(r) = self
                 .lookups
                 .get(&lid)
                 .and_then(|l| l.owner)
                 .and_then(|o| self.peer_requests.get_mut(&o))
-            {
-                r.inflight = r.inflight.saturating_sub(1);
-            }
+        {
+            r.inflight = r.inflight.saturating_sub(1);
         }
         if let MapEntry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
             *e.get_mut() -= 1;
@@ -1794,14 +1793,14 @@ impl Actor {
                 self.sampler
                     .complete(p.to, tid, SAMPLE_TIMEOUT_BACKOFF, now_i);
             }
-            if let Purpose::Lookup(lid) = p.purpose {
-                if let Some(l) = self.lookups.get_mut(&lid) {
-                    match p.id {
-                        Some(id) => l.on_failure(&id),
-                        None => l.extra_in_flight = l.extra_in_flight.saturating_sub(1),
-                    }
-                    touched.push(lid);
+            if let Purpose::Lookup(lid) = p.purpose
+                && let Some(l) = self.lookups.get_mut(&lid)
+            {
+                match p.id {
+                    Some(id) => l.on_failure(&id),
+                    None => l.extra_in_flight = l.extra_in_flight.saturating_sub(1),
                 }
+                touched.push(lid);
             }
         }
         for lid in touched {

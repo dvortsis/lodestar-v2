@@ -39,12 +39,10 @@ missing_debug_implementations = "warn"
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
-# Temporary (runner, CR-0d): raising rust-version to 1.89 switched these
-# style lints on across ~60 files. A mechanical cleanup slice runs
-# `cargo clippy --fix` and removes the allows.
+# Temporary (runner, CR-0d): raising rust-version to 1.89 switched this
+# style lint on. Its fixes need clippy 1.99 or later; the cleanup slice
+# removed the other two allows.
 chunks_exact_to_as_chunks = "allow"
-collapsible_if = "allow"
-manual_is_multiple_of = "allow"
 
 [profile.release]
 debug = "line-tables-only"

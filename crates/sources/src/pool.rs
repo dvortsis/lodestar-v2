@@ -1406,10 +1406,10 @@ impl Pool {
         if self.cfg.recent == 0 {
             return;
         }
-        if self.recent_order.len() >= self.cfg.recent {
-            if let Some(old) = self.recent_order.pop_front() {
-                self.recent.remove(&old);
-            }
+        if self.recent_order.len() >= self.cfg.recent
+            && let Some(old) = self.recent_order.pop_front()
+        {
+            self.recent.remove(&old);
         }
         self.recent.insert(key);
         self.recent_order.push_back(key);

@@ -192,12 +192,12 @@ impl Server {
         let start = Instant::now();
         let token = loop {
             let text = stderr.lock().unwrap().clone();
-            if let Some(rest) = text.split("setup token ").nth(1) {
-                if let Some(t) = rest.split_whitespace().next() {
-                    if text.contains('\n') && rest.contains('\n') {
-                        break t.to_string();
-                    }
-                }
+            if let Some(rest) = text.split("setup token ").nth(1)
+                && let Some(t) = rest.split_whitespace().next()
+                && text.contains('\n')
+                && rest.contains('\n')
+            {
+                break t.to_string();
             }
             assert!(
                 start.elapsed() < Duration::from_secs(30),

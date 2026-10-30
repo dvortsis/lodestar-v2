@@ -642,11 +642,11 @@ impl FileSink {
     pub fn write(&mut self, line: &str, flags: Flags) -> Result<Option<io::Error>, WriteError> {
         let len = line.len() as u64 + 1;
         let mut rotation = None;
-        if self.due(len) {
-            if let Err(e) = self.rotate() {
-                self.retry_at = Some(Instant::now() + ROTATION_RETRY);
-                rotation = Some(e);
-            }
+        if self.due(len)
+            && let Err(e) = self.rotate()
+        {
+            self.retry_at = Some(Instant::now() + ROTATION_RETRY);
+            rotation = Some(e);
         }
         // A rotation that keeps failing mustn't let one file grow past the
         // folder's cap: lines stop until a rotation succeeds.

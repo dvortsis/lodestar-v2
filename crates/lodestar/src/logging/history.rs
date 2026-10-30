@@ -268,10 +268,10 @@ pub fn page_capped(
         let mut name = listed[idx].name.clone();
         // A rotated file from before `since` holds nothing newer than it,
         // and neither does any older one.
-        if let (Some(since), Some(at)) = (q.since, name.rotated_at()) {
-            if parse_rfc3339(&at).is_some_and(|t| t < since) {
-                break;
-            }
+        if let (Some(since), Some(at)) = (q.since, name.rotated_at())
+            && parse_rfc3339(&at).is_some_and(|t| t < since)
+        {
+            break;
         }
         let opened = files::open_listed(dir, &name);
         let Ok((opened_as, mut f)) = opened else {

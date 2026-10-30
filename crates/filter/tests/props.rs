@@ -125,11 +125,11 @@ fn torrents(n: usize) -> Vec<(String, Vec<FileInfo>)> {
                 "FLAC",
             ]);
             let group = r.word().to_uppercase();
-            if r.next() % 3 == 0 {
+            if r.next().is_multiple_of(3) {
                 let year = 1960 + r.next() % 65;
                 let name = format!("{title}.{year}.{res}.{src}.{audio}.{codec}-{group}");
                 let mut files = vec![FileInfo::new(vec![format!("{name}.mkv")], 4 << 30)];
-                if r.next() % 2 == 0 {
+                if r.next().is_multiple_of(2) {
                     files.push(FileInfo::new(
                         vec!["Sample".into(), "sample.mkv".into()],
                         50 << 20,
@@ -141,7 +141,7 @@ fn torrents(n: usize) -> Vec<(String, Vec<FileInfo>)> {
                 let season = 1 + r.next() % 12;
                 let name = format!("{title}.S{season:02}.{res}.{src}.{audio}.{codec}-{group}");
                 let episodes = [6u64, 10, 13, 22, 30][r.next() as usize % 5];
-                let subs = r.next() % 2 == 0;
+                let subs = r.next().is_multiple_of(2);
                 let mut files = Vec::new();
                 for e in 1..=episodes {
                     let ep = format!(
@@ -312,7 +312,11 @@ impl Shape {
             // apart.
             Shape::Near => {
                 let (a, b) = FAR[i / 7 % FAR.len()];
-                let (a, b) = if i / 3 % 2 == 0 { (a, b) } else { (b, a) };
+                let (a, b) = if (i / 3).is_multiple_of(2) {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
                 format!("{a} NEAR/{} {b}", 1 + i / 11 % 2)
             }
             Shape::Negation => format!("{} -mkv", common(i)),
@@ -320,7 +324,7 @@ impl Shape {
             // them away: half five letters (one edit), half eight (two).
             Shape::Fuzzy => {
                 let letters = b"rstnlhdcm";
-                let n = if i % 2 == 0 { 5 } else { 8 };
+                let n = if i.is_multiple_of(2) { 5 } else { 8 };
                 let mut x = i as u64 * 0x9e37_79b9_7f4a_7c15 + 1;
                 let word: String = (0..n)
                     .map(|_| {
