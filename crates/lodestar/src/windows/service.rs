@@ -108,10 +108,10 @@ pub fn within(inner: &Path, outer: &Path) -> bool {
     i == o || i.starts_with(&format!("{o}\\"))
 }
 
-/// A real path is verbatim (`\\?\C:\…`); one that doesn't exist yet isn't,
-/// so the prefix goes before comparing.
+/// A real path is verbatim (`\\?\C:\…`), so the prefix goes before
+/// comparing.
 fn norm(p: &Path) -> String {
-    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let p = real(p);
     let s = p.to_string_lossy().replace('/', "\\");
     let s = match s.strip_prefix(r"\\?\") {
         Some(rest) => match rest.strip_prefix(r"UNC\") {
@@ -121,6 +121,27 @@ fn norm(p: &Path) -> String {
         None => s,
     };
     s.trim_end_matches('\\').to_lowercase()
+}
+
+/// `p` through its nearest existing folder's real path, with the rest
+/// appended: a folder not created yet (the witness) then compares with one
+/// that exists (the data folder), whatever 8.3 names or links lead there.
+fn real(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = p;
+    loop {
+        if let Ok(mut r) = std::fs::canonicalize(at) {
+            r.extend(rest.iter().rev());
+            return r;
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
 }
 
 /// Whether two paths name the same folder, as Windows compares them: the
@@ -676,6 +697,23 @@ mod tests {
             None
         );
         assert_eq!(c.dht.restart_witness_dir, before);
+    }
+
+    /// A folder not created yet is compared through its nearest existing
+    /// parent's real path, as the one that exists is: an 8.3 name
+    /// (`RUNNER~1`) on Windows, which the test above meets on CI, and a
+    /// link here.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_folder_compares_with_an_existing_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let other = tmp.path().join("other");
+        std::os::unix::fs::symlink(&data, &other).unwrap();
+        let w = other.join("Lodestar-witness").join("deeper");
+        assert!(within(&w, &data), "through the link");
+        assert!(!within(&tmp.path().join("data-witness"), &data));
     }
 
     #[test]
