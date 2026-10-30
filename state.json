@@ -1335,11 +1335,12 @@
    "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses."
   },
   "F-status": {
-   "status": "running",
+   "status": "review",
    "session": "session_01MMjhnCnk7norhoKvDiTbRW",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing) | 2026-10-30T10:25Z told: merge main (post-L6) and open PR"
+   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing) | 2026-10-30T10:25Z told: merge main (post-L6) and open PR | 2026-10-30T10:36Z #202 59459b1; E2E dispatched (all-themes); fresh review session_01MMjhnCMt8fzJhXkNzQtmEc",
+   "pr": 202
   },
   "IMP-0": {
    "status": "running",
