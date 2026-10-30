@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:12Z",
+ "updated_at": "2026-10-30T20:20Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2286,12 +2286,24 @@
   "2026-10-30T19:51Z merged #234 cli test port (f3f66bd6). Opened #235 fix/canary-udp-port (test_port probes UDP too; log_canary uses it); review by session_01MMjhn984M3k3UJXUCsEYPX. #233 still in CI.",
   "2026-10-30T19:55Z merged #233 CR-0d-2b-2 (5b0cd88c): ci-ok, Web, Playwright core, Lighthouse and smoke all green at 6dd24177. CR-0d complete; session archived. Open now: #235 (runner, canary UDP port) in review; CR-gate-hash-mismatch coding.",
   "2026-10-30T20:05Z opened #237 fix/clippy-msrv-2b (collapsible_if and manual_is_multiple_of fixed workspace-wide; two allows removed; chunks_exact_to_as_chunks stays); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #235.",
-  "2026-10-30T20:12Z #235 review MERGE at 446fbc2d; merge on green ci-ok. #236 CR-gate-hash-mismatch opened (4cf0ff6b; a8706e82 heading fix held locally); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #237. At merge, flag the owner (\u00a72.19): failed_verification now counts hash mismatches only."
+  "2026-10-30T20:12Z #235 review MERGE at 446fbc2d; merge on green ci-ok. #236 CR-gate-hash-mismatch opened (4cf0ff6b; a8706e82 heading fix held locally); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #237. At merge, flag the owner (\u00a72.19): failed_verification now counts hash mismatches only.",
+  "2026-10-30T20:20Z safety check-in: every listed item done (#232 #233 #234 #217 merged; hash-mismatch is #236). rc.2 Release run 41110604990 succeeded; draft release 429407881. Recorded artifact zip digests; per-file hashes blocked by network policy (blob host denied), asked the owner."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
   "v0.5.1-rc.1": "rejected by owner (run 41062406135)",
   "v0.5.1-rc.2": "gate candidate, tag at 6be95525, Release run 41110604990",
-  "gate_candidate": "v0.5.1-rc.2"
+  "gate_candidate": "v0.5.1-rc.2",
+  "v0.5.1-rc.2_artifacts": {
+   "release_run": "41110604990 success at 6be95525 (19:23Z), release env approved by owner",
+   "draft_release": "id 429407881 'Lodestar 0.5.1-rc.2' (draft, prerelease); its SHA256SUMS asset holds the per-file hashes",
+   "artifact_zip_digests": {
+    "package-linux-x86_64 (13003173665)": "sha256:b1cdf231199d3b768f5a4ee41e31e2f4b4916f2eda2759636697b52f68e3f6eb",
+    "package-linux-aarch64 (13004575289)": "sha256:717ce8f661fe958911ddc6120bdc04f813fd5f891b8c7a0bc9b25da5bf87d672",
+    "package-windows (13005076777)": "sha256:56d9422f295cda36c97989fe8abe35d51c5cf03401ea61a5855033624881c6dd"
+   },
+   "per_file_hashes": "NOT recorded by the runner: the environment's network policy denies productionresultssa19.blob.core.windows.net (artifact downloads). Owner: copy SHA256SUMS from the draft release into notes/v051-owner-steps.md, or allow that host.",
+   "package_artifacts_expire": "2026-11-13 (the draft release keeps its assets)"
+  }
  }
 }
