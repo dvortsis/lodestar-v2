@@ -223,9 +223,12 @@ fn queues(local: u16, remote: u16) -> Option<(u64, u64)> {
 }
 
 /// Linux only: the test waits, through `/proc/net/tcp`, until the client's
-/// receive queue stops growing, so the server is really blocked writing
-/// when the signal comes. Without that, closing the logs source can end
-/// the download first, and nothing would hold the shutdown.
+/// receive queue stops growing and the server's send queue holds data, so
+/// the server is blocked writing when the signal comes. Whether hyper has
+/// stopped reading the body by then (forced after the bound) or not (the
+/// download ends as the logs close) isn't visible, so either path passes
+/// and the failure says which was taken; `services::bounded_tests` holds
+/// the forced path itself.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_stalled_download_cannot_hold_the_shutdown() {
@@ -268,18 +271,36 @@ fn a_stalled_download_cannot_hold_the_shutdown() {
     let (status, took) = s.terminate();
     let stderr = s.stderr.lock().unwrap().clone();
     assert!(status.success(), "exit {status:?} after {took:?}: {stderr}");
-    // It waited the bound (10 s), and not much more.
+    // The property, every run: the stalled client didn't hold the
+    // shutdown past the bound (10 s) and a margin.
     assert!(
-        took >= Duration::from_secs(9) && took < Duration::from_secs(25),
-        "the shutdown took {took:?}"
+        took < Duration::from_secs(25),
+        "the shutdown took {took:?}: {stderr}"
     );
+    // Then which of the two valid paths it took. Forced: the server was
+    // blocked writing, so the bound dropped the connection (the forcing
+    // itself is held every run by `services::bounded_tests`). Or ended by
+    // close: hyper still had room in its own buffer, so it was still
+    // reading the body, which `logs.close()` ends, and the connection
+    // closed by itself. The test can't see hyper's buffer to choose.
     let file = s.file();
-    let forced = at(&file, "app.shutdown_forced").unwrap_or_else(|| panic!("{stderr}"));
     let stop = at(&file, "app.stop").unwrap_or_else(|| panic!("{stderr}"));
-    assert!(
-        forced < stop,
-        "the forced shutdown comes before the stop line"
-    );
+    match at(&file, "app.shutdown_forced") {
+        Some(forced) => {
+            assert!(
+                took >= Duration::from_secs(9),
+                "forced path, but it took only {took:?}"
+            );
+            assert!(
+                forced < stop,
+                "forced path: the forced shutdown comes before the stop line"
+            );
+        }
+        None => assert!(
+            took < Duration::from_secs(9),
+            "closed path (no app.shutdown_forced), but it took {took:?}: {stderr}"
+        ),
+    }
     assert!(
         at(&file, "app.stopped_cleanly").is_some(),
         "the state was saved: {stderr}"

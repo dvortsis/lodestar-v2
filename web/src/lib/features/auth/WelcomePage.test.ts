@@ -62,7 +62,10 @@ it('offers retry after an auth failure without claiming success', async () => {
 	vi.stubGlobal('fetch', fetch);
 	render(WelcomePage);
 	await screen.findByRole('alert');
-	expect(screen.queryByText('Setup complete')).toBeNull();
+	expect(screen.getByRole('heading', { level: 1, name: 'Checking this instance…' })).toBeTruthy();
+	await waitFor(() =>
+		expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Retry' }))
+	);
 	await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 	await screen.findByRole('heading', { name: 'Setup complete' });
 });

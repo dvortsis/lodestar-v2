@@ -35,14 +35,14 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
 ## 5.3 Browse Discover and Insights
 <!-- index: Discover; Insights; crawler health -->
 
-**Discover** lists the newest torrents indexed across all categories or within a single tab such as **Movies**, **TV** or **Music**.
+**Discover** lists the newest torrents indexed across all categories or within a single tab such as **Movie**, **TV** or **Music**.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/discover-dark.png">
   <img src="images/discover-light.png" alt="Lodestar Discover screen showing category tabs and newest indexed torrents"></picture>
 *Figure 5.3: The Discover screen showing recently indexed torrents grouped by category.*
 
-**Insights** shows the live health of the five-stage pipeline: **Discover**, **Fetch**, **Index**, **Storage** and **Refresh**, followed by searchable totals and attention notices.
+**Insights** shows the live health of the five-stage pipeline: **Discover**, **Fetch**, **Understand**, **Index** and **Serve**, followed by searchable totals and attention notices.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/insights-dark.png">

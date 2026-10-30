@@ -1,0 +1,9 @@
+version: V1
+name: "电视剧合集" (GBK)
+path encoding: GBK
+total size: 3
+piece count: 1
+warnings: []
+file: "第一集 高清中文字幕.mkv" size=1 attrs=""
+file: "第二集 高清中文字幕.mkv" size=1 attrs=""
+file: "第三集 高清中文字幕.mkv" size=1 attrs=""

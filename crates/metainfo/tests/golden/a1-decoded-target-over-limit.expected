@@ -1,0 +1,9 @@
+version: V1
+name: "µçÊÓ¾çºÏ¼¯" (windows-1252)
+path encoding: UTF-8
+total size: 2
+piece count: 1
+warnings: []
+file: "한국어" size=1 attrs=""
+file: "µÚ¶þ¼¯ ¸ßÇåÖÐÎÄ×ÖÄ»" size=1 attrs=""
+file: "×îÐÂÒ»¼¯" size=0 attrs="l"

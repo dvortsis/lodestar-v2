@@ -814,21 +814,16 @@ impl Core {
 
     fn patterns(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
         thread_local! {
-            // Kept per thread: its word plans and buffers carry over
-            // between torrents.
-            static TOKENIZER: std::cell::RefCell<(Tokenizer, Scratch)> = Default::default();
+            // Kept per thread: its buffers carry over between torrents.
+            static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
         }
-        TOKENIZER.with(|t| match t.try_borrow_mut() {
-            Ok(mut t) => {
-                let (tok, scratch) = &mut *t;
-                self.patterns_with(tok, scratch, item, neutral)
-            }
-            Err(_) => self.patterns_with(
-                &mut Tokenizer::default(),
-                &mut Scratch::default(),
-                item,
-                neutral,
-            ),
+        // The thread's tokenizer, whose word plans keyword entries' pass
+        // over the same torrent just made (`normalize::with_tokenizer`).
+        normalize::with_tokenizer(|tok| {
+            SCRATCH.with(|s| match s.try_borrow_mut() {
+                Ok(mut scratch) => self.patterns_with(tok, &mut scratch, item, neutral),
+                Err(_) => self.patterns_with(tok, &mut Scratch::default(), item, neutral),
+            })
         })
     }
 

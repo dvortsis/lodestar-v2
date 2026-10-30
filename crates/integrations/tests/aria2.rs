@@ -15,7 +15,7 @@ use lodestar_integrations::{
     Selection, TorrentFile,
 };
 use serde_json::{Value, json};
-use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes, refused_addr};
 
 const SECRET: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
@@ -379,15 +379,8 @@ async fn mismatched_ids_and_bad_answers_are_protocol_errors() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
-    let a2 = Aria2::new(
-        &format!("http://127.0.0.1:{port}/jsonrpc"),
-        Some(Secret::new(SECRET)),
-    )
-    .unwrap();
+    let (_held, addr) = refused_addr();
+    let a2 = Aria2::new(&format!("http://{addr}/jsonrpc"), Some(Secret::new(SECRET))).unwrap();
     assert_eq!(a2.test().await.unwrap_err(), ClientError::Unreachable);
 }
 

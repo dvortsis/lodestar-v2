@@ -23,6 +23,7 @@ pub mod query;
 mod rebuild;
 mod retry_dir;
 pub mod schema;
+mod seek_guard;
 mod sorted;
 mod stem;
 pub mod suggest;

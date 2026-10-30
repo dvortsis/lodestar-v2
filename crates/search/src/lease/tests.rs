@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use proptest::prelude::*;
 
 use super::*;
-use crate::testing::{append, delete, hot_index, index_with, slow, tripwire};
+use crate::testing::{append, append_files, delete, hot_index, index_with, slow, tripwire};
 
 const NOW: i64 = 1_700_000_100;
 
@@ -502,6 +502,7 @@ fn relevance_with_hot_columns_reranks_and_explains() {
     assert!(page.explain.is_empty());
 }
 
+/// The checks before any file scan: a stopped token fails the lease.
 #[test]
 fn cold_file_compilation_preserves_cancellation_and_deadline_errors() {
     let (index, _) = index_with(10, 1);
@@ -518,4 +519,43 @@ fn cold_file_compilation_preserves_cancellation_and_deadline_errors() {
         Lease::new(index, &node, NOW, Sort::Relevance, &expired),
         Err(Error::OutOfTime)
     ));
+}
+
+/// A file scan cancelled partway fails the compile with `Cancelled`, not
+/// a logged failure and an empty file set, and leaves nothing cached: the same clause
+/// compiled again finds every torrent.
+#[test]
+fn a_file_scan_cancelled_partway_fails_the_compile_and_caches_nothing() {
+    let (index, _) = index_with(10, 1);
+    // Past the scan's first periodic check, so the cancel lands mid-segment.
+    let per = u64::from(crate::cancel::CHECK_EVERY);
+    append_files(&index, 1..11, per);
+    let node = crate::parse("file:(size:>0)").unwrap();
+    let cancel = CancelToken::new();
+    let (trip, visits) = tripwire(100, &cancel);
+    // Taken by the scan below; a compile that stopped before its file
+    // clause would leave it for the next one on this thread.
+    crate::testing::FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+    // Process-wide: no other test reaches the failure arm, and a stray
+    // count could only fail this test, never pass it.
+    let failed = &crate::log_events::FILE_SEARCH_FAILED::EVENT;
+    let failures = failed.count();
+    assert!(matches!(
+        index.compile_cancelled(&node, NOW, 0, false, &cancel),
+        Err(Error::Cancelled)
+    ));
+    let seen = visits.load(std::sync::atomic::Ordering::Relaxed);
+    assert!((100..=per as usize).contains(&seen), "{seen} files visited");
+    // A cancel isn't a failed file search: it isn't logged as one, nor
+    // replaced by an empty set (the arm under test).
+    assert_eq!(failed.count(), failures);
+
+    // The same clause (so the same cache key), now scanning every file.
+    crate::testing::FILE_QUERY.with(|q| *q.borrow_mut() = Some(Box::new(tantivy::query::AllQuery)));
+    let fresh = CancelToken::new();
+    let compiled = index
+        .compile_cancelled(&node, NOW, 0, false, &fresh)
+        .unwrap();
+    let total = crate::count::total(&index.searcher(), &compiled, &fresh).unwrap();
+    assert_eq!(total.value, 10);
 }
