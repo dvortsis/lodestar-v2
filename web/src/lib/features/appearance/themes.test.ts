@@ -86,6 +86,26 @@ describe('applyTheme', () => {
 	});
 });
 
+describe('applyTheme ordering', () => {
+	it('lets the latest choice win when an older fetch resolves last', async () => {
+		let release!: () => void;
+		vi.mocked(fetch).mockImplementationOnce(
+			() =>
+				new Promise((r) => (release = () => r({ ok: true, json: async () => file } as Response)))
+		);
+		vi.resetModules();
+		const fresh = await import('./themes');
+		const slow = fresh.applyTheme({ ...DEFAULTS, theme: 'nord' });
+		await fresh.applyTheme({ ...DEFAULTS, theme: 'riverstone' });
+		release();
+		await slow;
+		expect(document.documentElement.dataset.theme).toBe('riverstone-light');
+		expect(JSON.parse(localStorage.getItem(THEME_CACHE)!).light).toEqual({
+			id: 'riverstone-light'
+		});
+	});
+});
+
 describe('loadThemes', () => {
 	it('retries after a failure', async () => {
 		vi.resetModules();

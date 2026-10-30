@@ -20,7 +20,7 @@ Settings → Preferences → Appearance (§10.10.8, §10.18). Items marked **(§
   - On a device that lacks that custom theme the screen shows Riverstone and a note that custom themes are kept per browser and move with export and import.
   - It fits the pre-paint contract: the chosen theme's compiled variables are cached in `lodestar.theme` as `{mode, light: {id, vars}, dark: {id, vars}}`.
   - Approved by the runner (2026-10-30).
-- **The picker has no "Light-first / Dark-first" filters (§2.19; the runner flags this to the owner).** Every family has both modes, so the filters would sort on nothing. All, Accessibility, Originals, Community and Custom are kept.
+- **The Light-first / Dark-first picker filters are deferred (§2.19; an owner flag in the PR).** They mean a family's original mode (Dracula, Nord and Tokyo Night are dark-first; the rest light-first), and nothing records that: it needs an origin-mode field in `web/themes/*.json`. All, Accessibility, Originals, Community and Custom are kept.
 - **Stored custom themes are untrusted input.** `readCustom` keeps only entries with a `custom-…-light|dark` id, hex values and the token names they were saved against; a theme saved against other token names is treated as missing (Riverstone plus the note) rather than painting colours onto the wrong properties.
 - **The contrast table's row labels are the compiler's English labels** (`themes-core.ts`); translating them waits for a label-key pass over the compiler.
 - **The custom theme editor uses the build's compiler.** `web/scripts/themes.ts` was split into `themes-core.ts` (schema, `derive`, `evaluate`, the gates; no `node:` imports, nothing runs at load) and `themes.ts` (the driver, which re-exports the core). It is a mechanical move: the generated `themes.json`, `critical.css`, `prepaint.js` and `app.html` are byte-identical before and after, and `scripts/themes.test.ts` passes unchanged. Approved by the runner (2026-10-30; the file is outside this slice's `owns`). The editor imports the core only in its on-demand chunk.
@@ -33,6 +33,7 @@ No limit was raised. The measured sizes are in the PR. `.size-limit.mjs` marks t
 
 ## Not in this slice
 
+- **The start-up hook is deferred (§2.19; an owner flag in the PR).** Until the shell applies the saved `preferences` at start-up, a new browser or device shows Riverstone (the pre-paint script reads only `localStorage`) until the user opens Appearance. That falls short of §10.18's "follows the account across devices". The runner is queuing the shell hook as an immediate follow-up slice.
 - **The "Change theme" command-palette action** (§10.18) needs the shell's command registry; it follows as a small shell change.
 - **Applying the saved preferences when the app starts on a device that never opened Appearance** needs a start-up hook in the shell (like `startShortcuts()`). The pre-paint script already applies a cached theme and mode. The shell can call `applyTheme` and `applyLook` from `features/appearance/prefs.ts` and `themes.ts` after fetching `preferences`.
 - **Result rows and illustrations read `data-density` and `data-illustrations`** from `<html>` once their slices opt in; today the rows still take density from their own prop.

@@ -93,7 +93,11 @@ const vars = (keys: string[], t: ThemeEntry) =>
  * Applies the family the preferences choose for the current mode, and caches both modes for the
  * pre-paint script. Riverstone needs no file (it is in the critical CSS).
  */
+/** Bumped by every call: a call that finds a newer one after its fetch leaves the page alone. */
+let generation = 0;
+
 export async function applyTheme(p: Appearance): Promise<{ missing: string[] }> {
+	const mine = ++generation;
 	const root = document.documentElement;
 	const dark = prefersDark(p.mode);
 	const cache: Record<string, unknown> = { mode: p.mode };
@@ -101,6 +105,7 @@ export async function applyTheme(p: Appearance): Promise<{ missing: string[] }> 
 	let all: ThemesFile | undefined;
 	const needs = [familyFor(p, false), familyFor(p, true)].some((f) => f !== 'riverstone');
 	if (needs) all = await loadThemes();
+	if (mine !== generation) return { missing: [] };
 	const pool = [...(all?.themes ?? []), ...readCustom()].filter((x) => usable(x, all?.keys ?? []));
 	const keys = all?.keys ?? [];
 	for (const mode of MODES) {
