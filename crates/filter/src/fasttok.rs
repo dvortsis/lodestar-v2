@@ -164,13 +164,14 @@ pub(crate) fn tokens(text: &str) -> Text {
                 buf.push_str(&"++"[..pluses]);
             });
         }
-        if let Some(&(ns, ne)) = atoms.get(k + 1) {
-            if ns == e + 1 && joins(word, b[e], &b[ns..ne]) {
-                out.push(first, TokKind::Compound, |buf| {
-                    lower(buf, word);
-                    lower(buf, &b[ns..ne]);
-                });
-            }
+        if let Some(&(ns, ne)) = atoms.get(k + 1)
+            && ns == e + 1
+            && joins(word, b[e], &b[ns..ne])
+        {
+            out.push(first, TokKind::Compound, |buf| {
+                lower(buf, word);
+                lower(buf, &b[ns..ne]);
+            });
         }
     }
     out

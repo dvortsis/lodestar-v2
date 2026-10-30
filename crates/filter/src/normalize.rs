@@ -445,10 +445,10 @@ fn make_plan(plan: &mut Plan, plain: &mut String, swapped: &mut String) {
     }
     plan.advance = pos;
     let mut letters = plain.chars();
-    if let (Some(c), None) = (letters.next(), letters.next()) {
-        if c.is_alphabetic() {
-            plan.letter = Some(c);
-        }
+    if let (Some(c), None) = (letters.next(), letters.next())
+        && c.is_alphabetic()
+    {
+        plan.letter = Some(c);
     }
 }
 

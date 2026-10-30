@@ -176,10 +176,10 @@ fn facts<'a>(row: &TorrentRow, class: &'a Classification, now: i64) -> Facts<'a>
 /// hybrid, the truncated v2 hash.
 fn row_hashes(row: &TorrentRow) -> Vec<[u8; 20]> {
     let mut out = vec![row.info_hash.0];
-    if let Some(t) = row.info_hash_v2.map(|h| h.truncated()) {
-        if t != row.info_hash {
-            out.push(t.0);
-        }
+    if let Some(t) = row.info_hash_v2.map(|h| h.truncated())
+        && t != row.info_hash
+    {
+        out.push(t.0);
     }
     out
 }

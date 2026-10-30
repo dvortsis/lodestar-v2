@@ -290,10 +290,10 @@ impl Store {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut ids = Vec::new();
         for h in hashes {
-            if let Some(id) = crate::find_any(&tx, std::iter::once(InfoHash(*h)))? {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+            if let Some(id) = crate::find_any(&tx, std::iter::once(InfoHash(*h)))?
+                && !ids.contains(&id)
+            {
+                ids.push(id);
             }
         }
         {

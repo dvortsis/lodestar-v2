@@ -45,6 +45,17 @@ pub struct Report {
     pub stored: u64,
     /// Metadata stored per minute after warmup: what screening compares.
     pub steady_stored: f64,
+    pub pool: PoolEnd,
+}
+
+/// Pool counters at the measurement boundary, for screening reports.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PoolEnd {
+    pub lookup_unaccepted: u64,
+    /// Furthest service before eviction: unaccepted, lookup, peers, fetch.
+    pub evicted_service: [u64; 4],
+    /// Coordinated admission (CR-ADM): waits, grants, refusals, holds.
+    pub admission: [u64; 4],
 }
 
 #[derive(Default, Clone, Copy)]
@@ -121,7 +132,7 @@ async fn glue(
             _ = stop.changed() => break,
             req = requests.recv(), if requests_open => match req {
                 Some(r) => {
-                    node.request_peers(r.key, r.admit);
+                    node.request_peers_with(r.key, r.admit, r.permit);
                 }
                 None => requests_open = false,
             },
@@ -267,6 +278,18 @@ pub async fn run(s: &Scenario) -> Report {
     let dht_final = node.stats();
     let pool_final = pool.stats();
     let stored_at_end = stored.load(Ordering::Relaxed);
+    let l = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    let sum = |a: &[std::sync::atomic::AtomicU64]| a.iter().map(l).sum::<u64>();
+    let pool_end = PoolEnd {
+        lookup_unaccepted: l(&pool_final.lookup_unaccepted),
+        evicted_service: std::array::from_fn(|i| l(&pool_final.evicted_service[i])),
+        admission: [
+            sum(&pool_final.admission_waits),
+            pool_final.admission_grants.iter().map(|g| sum(g)).sum(),
+            sum(&pool_final.admission_refusals),
+            l(&pool_final.admission_holds),
+        ],
+    };
     let mut text = header(s, live, held, distinct);
     write_minutes(&mut text, &minutes);
     write_totals(&mut text, &dht_final, pool_final, &funnel);
@@ -302,6 +325,7 @@ pub async fn run(s: &Scenario) -> Report {
         net: net_stats,
         stored: stored_at_end,
         steady_stored: steady(&minutes, |m| m.stored),
+        pool: pool_end,
     }
 }
 
@@ -555,6 +579,27 @@ fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &Funne
         .map(|(n, c)| format!("{n}={}", l(c)))
         .collect();
     let _ = writeln!(t, "evicted_service: {}", service.join(" "));
+    // Coordinated admission (CR-ADM). One counter a line, so with the
+    // switch off they're new zero counters the goldens ignore.
+    let sum = |a: &[std::sync::atomic::AtomicU64]| a.iter().map(l).sum::<u64>();
+    for (name, v) in [
+        ("admission_waits", sum(&p.admission_waits)),
+        ("admission_wait_cancelled", sum(&p.admission_wait_cancelled)),
+        ("admission_wakeups", l(&p.admission_wakeups)),
+        (
+            "admission_grants",
+            p.admission_grants.iter().map(|g| sum(g)).sum(),
+        ),
+        ("admission_refusals", sum(&p.admission_refusals)),
+        ("admission_holds", l(&p.admission_holds)),
+        ("admission_permit_returns", sum(&p.admission_permit_returns)),
+        (
+            "dht_permit_returns",
+            d.peer_permit_returns.iter().sum::<u64>(),
+        ),
+    ] {
+        let _ = writeln!(t, "{name}={v}");
+    }
     let stages = [
         Stage::Harvested,
         Stage::PeerFound,

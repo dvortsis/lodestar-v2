@@ -176,7 +176,7 @@ jobs:
           unit=$(cargo test -p lodestar --bin lodestar --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "lodestar" and (.target.kind | index("bin"))) | .executable')
           sudo "$unit" privdrop::tests::linux --test-threads=1 --nocapture 2>&1 | tee privdrop-unit.log
-          if grep -q skipping privdrop-unit.log || ! grep -q "test result: ok" privdrop-unit.log; then
+          if grep -q skipping privdrop-unit.log || ! grep -qE "test result: ok\. [1-9]" privdrop-unit.log; then
             echo "::error::the root-only privdrop unit tests skipped or failed"; exit 1
           fi
           # The maintenance commands drop root too (tests/cli.rs).

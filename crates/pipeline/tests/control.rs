@@ -306,6 +306,18 @@ async fn until(what: &str, mut done: impl FnMut() -> bool) {
 /// `apply_paused` is what rules the race out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resume_sends_no_lookup_to_a_still_paused_dht() {
+    resume_reaches_a_running_dht(false).await;
+}
+
+/// The same with coordinated admission (CR-ADM): the paused pool's keys
+/// wait for permits instead, and resuming still asks only a running DHT,
+/// so no permitted request is refused as paused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_coordinated_resume_sends_no_lookup_to_a_still_paused_dht() {
+    resume_reaches_a_running_dht(true).await;
+}
+
+async fn resume_reaches_a_running_dht(coordinated: bool) {
     use lodestar_pipeline::DhtSource;
     use lodestar_sources::{Found, PoolConfig};
     const KEYS: u8 = 16;
@@ -336,6 +348,8 @@ async fn a_resume_sends_no_lookup_to_a_still_paused_dht() {
         pool: PoolConfig {
             lookup_wait: std::time::Duration::from_secs(600),
             retry_backoff: std::time::Duration::from_secs(3600),
+            coordinated_admission: coordinated,
+            finder_capacity: lodestar_dht::node::PEER_REQUEST_CAPACITY,
             ..PoolConfig::default()
         },
         ..PipelineConfig::default()
@@ -366,7 +380,12 @@ async fn a_resume_sends_no_lookup_to_a_still_paused_dht() {
     }
     let pool = pipeline.pool_stats();
     until("the paused pool holds every lookup", || {
-        pool.lookup_backlog.load(Ordering::Relaxed) == u64::from(KEYS)
+        let held = if coordinated {
+            &pool.admission_waiters
+        } else {
+            &pool.lookup_backlog
+        };
+        held.load(Ordering::Relaxed) == u64::from(KEYS)
     })
     .await;
     assert!(control.set_paused(false).await);
@@ -379,5 +398,9 @@ async fn a_resume_sends_no_lookup_to_a_still_paused_dht() {
     let s = dht.stats().unwrap();
     assert_eq!(s.peer_rejected_paused, 0, "a lookup reached a paused DHT");
     assert_eq!(pool.lookup_unaccepted.load(Ordering::Relaxed), 0);
+    assert_eq!(pool.admission_refusals[0].load(Ordering::Relaxed), 0);
+    if coordinated {
+        assert_eq!(s.peer_rejected, 0, "a permitted request was refused");
+    }
     pipeline.shutdown().await.unwrap();
 }

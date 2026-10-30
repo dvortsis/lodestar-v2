@@ -30,7 +30,7 @@ pub fn encode_match(m: &Match) -> (u8, Vec<u8>) {
 pub fn decode_match(kind: u8, value: &[u8]) -> Option<Match> {
     let text = || std::str::from_utf8(value).ok();
     Some(match kind {
-        KIND_HASHES if value.len() % 20 == 0 && !value.is_empty() => Match::Hashes(
+        KIND_HASHES if value.len().is_multiple_of(20) && !value.is_empty() => Match::Hashes(
             value
                 .chunks_exact(20)
                 .map(|c| c.try_into().expect("20 bytes"))

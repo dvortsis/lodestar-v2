@@ -176,6 +176,10 @@ pub struct Dht {
     /// means the platform default ([`default_witness_dir`]), where there is
     /// one.
     pub restart_witness_dir: Option<PathBuf>,
+    /// CR-ADM: the fetch pool asks the DHT for peers only with one of its
+    /// 32 request permits, and queues for one otherwise. Off by default
+    /// (docs/decisions/2026-10-30-CR-ADM.md); not in the Settings UI.
+    pub coordinated_admission: bool,
 }
 
 impl Default for Dht {
@@ -192,6 +196,7 @@ impl Default for Dht {
             read_only: d.read_only,
             safe_restart: false,
             restart_witness_dir: None,
+            coordinated_admission: false,
         }
     }
 }
@@ -651,6 +656,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_SAFE_RESTART", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_COORDINATED_ADMISSION") {
+            config.dht.coordinated_admission = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_COORDINATED_ADMISSION", &v))?;
+        }
         // Packaging sets this (the Docker image, the systemd unit).
         if let Some(v) = env("LODESTAR_DHT_WITNESS_DIR").filter(|v| !v.is_empty()) {
             config.dht.restart_witness_dir = Some(PathBuf::from(v));
@@ -741,6 +751,8 @@ impl Config {
         Ok(PipelineConfig {
             pool: PoolConfig {
                 max_sockets: sockets,
+                coordinated_admission: self.dht.coordinated_admission,
+                finder_capacity: dht::PEER_REQUEST_CAPACITY,
                 ..PoolConfig::default()
             },
             fetch,
@@ -1204,6 +1216,28 @@ mod tests {
             Some(PathBuf::from("/var/lib/lodestar-witness"))
         );
         assert!(c.layers.in_env("LODESTAR_DHT_WITNESS_DIR"));
+    }
+
+    #[test]
+    fn coordinated_admission_is_off_unless_asked_for() {
+        let pool = |c: &Config| c.pipeline_config().unwrap().pool;
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.coordinated_admission);
+        assert!(!pool(&c).coordinated_admission);
+        let env = |k: &str| (k == "LODESTAR_DHT_COORDINATED_ADMISSION").then(|| "true".to_string());
+        let on = pool(&Config::load(None, env).unwrap());
+        assert!(on.coordinated_admission);
+        assert_eq!(on.finder_capacity, dht::PEER_REQUEST_CAPACITY);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\ncoordinated_admission = true\n").unwrap();
+        assert!(pool(&Config::load(Some(&path), no_env).unwrap()).coordinated_admission);
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_COORDINATED_ADMISSION").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
     }
 
     #[test]
