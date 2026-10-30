@@ -5625,6 +5625,26 @@ export interface components {
             /** Format: int64 */
             size: number;
         };
+        /**
+         * @description Why the DHT holds back its samples after a start (CR-0d): an unclean
+         *     restart, the restart proof switched off, or a restart record it can't
+         *     write.
+         */
+        SamplingBlocked: {
+            /**
+             * @description `dht_sample_suppression_reason`'s label (`docs/metrics.md`), such
+             *     as `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`;
+             *     `starting` before the DHT's first report.
+             */
+            reason: string;
+            /**
+             * Format: int64
+             * @description Seconds until sampling may begin; null before the DHT's first
+             *     report. For `locked` and `invalidate_failed` it's a lower bound:
+             *     sampling also waits until the restart record can be written.
+             */
+            remaining_s: number | null;
+        };
         /** @description `POST /saved-searches`. */
         SavedSearchCreate: {
             /** @description Alert in the app about new hits. */
@@ -6622,6 +6642,10 @@ export interface components {
          *       "index_lag_s": 2,
          *       "paused": false,
          *       "queue_depth": 15410,
+         *       "sampling_blocked": {
+         *         "reason": "first_start",
+         *         "remaining_s": 20940
+         *       },
          *       "searchable_torrents": 2410388,
          *       "stored_torrents": 2410391,
          *       "updated_at": 1792681200,
@@ -6664,6 +6688,7 @@ export interface components {
              * @description Keys queued or in flight in the fetch pool.
              */
             queue_depth: number;
+            sampling_blocked: null | components["schemas"]["SamplingBlocked"];
             /**
              * Format: int64
              * @description Documents in the search index; null when search is off.

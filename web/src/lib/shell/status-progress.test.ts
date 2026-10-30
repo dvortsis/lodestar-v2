@@ -134,6 +134,48 @@ describe('pill progress states', () => {
 		expect(pill(progress({ uptimeS: 600 })).kind).toBe('crawling');
 	});
 
+	describe('the server says whether sampling is held back (sampling_blocked)', () => {
+		const quiet = { ingestPerHour: 0, fetchedPerHour: 0 };
+		const held = (reason: string, remaining_s: number | null = 600) => ({
+			sampling: { reason, remaining_s }
+		});
+
+		it('held back: starting, whatever the uptime says', () => {
+			for (const uptimeS of [30, DAY]) {
+				const s = pill(progress({ ...quiet, uptimeS, ...held('dirty') }));
+				expect(s.kind).toBe('starting');
+				expect(s.reason).toBeUndefined();
+			}
+			// Before the DHT's first report.
+			expect(pill(progress({ ...quiet, uptimeS: 5, ...held('starting', null) })).kind).toBe(
+				'starting'
+			);
+			// Its quiet reasons are what holding back looks like, not a stall.
+			const s = pill(progress({ ...held('off'), reasons: ['writer_stalled'], uptimeS: DAY }));
+			expect(s.kind).toBe('starting');
+		});
+
+		it('a restart record it cannot write says so, and is never a stall', () => {
+			for (const reason of ['locked', 'invalidate_failed']) {
+				expect(pill(progress({ ...quiet, uptimeS: 2 * DAY, ...held(reason) }))).toMatchObject({
+					kind: 'starting',
+					reason: 'restart_record'
+				});
+			}
+		});
+
+		it('sampling (a resumed restart): a young crawler with nothing stored is stalled', () => {
+			const s = pill(progress({ reasons: ['writer_stalled'], uptimeS: 600, sampling: null }));
+			expect(s).toMatchObject({ kind: 'stalled', reason: 'writer_stalled' });
+			expect(pill(progress({ uptimeS: 600, sampling: null })).kind).toBe('crawling');
+		});
+
+		it('unknown: falls back to the uptime bound', () => {
+			const s = pill(progress({ ...quiet, uptimeS: 600, sampling: undefined }));
+			expect(s.kind).toBe('starting');
+		});
+	});
+
 	it('paused wins over a zero rate', () => {
 		const s = pill(progress({ ingestPerHour: 0, fetchedPerHour: 0 }), crawler({ paused: true }));
 		expect(s.kind).toBe('paused');
@@ -168,6 +210,15 @@ describe('StatusPill progress states', () => {
 		expect(screen.getByTestId('status-pill-text').textContent).toBe('Starting');
 		expect(screen.getByTestId('status-pill-announce').textContent).toContain(
 			'sampling resumes after up to 6 h'
+		);
+	});
+
+	it('starting on the restart record: says what sampling waits for', () => {
+		render(StatusPill, { state: { kind: 'starting', ...none, reason: 'restart_record' } });
+		const link = screen.getByTestId('status-pill');
+		expect(link.getAttribute('data-reason')).toBe('restart_record');
+		expect(screen.getByTestId('status-pill-announce').textContent).toContain(
+			'save its restart record'
 		);
 	});
 
@@ -230,6 +281,16 @@ describe('progress source', () => {
 		const p = await createProgressSource()();
 		expect(overviewCalls()).toBe(0);
 		expect(p).toMatchObject({ fetchedPerHour: 1200, ingestPerHour: null, uptimeS: DAY });
+	});
+
+	it('passes sampling_blocked through, and leaves it unknown without /stats', async () => {
+		const blocked = { reason: 'dirty', remaining_s: 600 };
+		route(stats({ sampling_blocked: blocked }), overview());
+		expect(await createProgressSource()()).toMatchObject({ sampling: blocked });
+		route(stats({ sampling_blocked: null }), overview());
+		expect(await createProgressSource()()).toMatchObject({ sampling: null });
+		route(new Error('down'), overview());
+		expect((await createProgressSource()())?.sampling).toBeUndefined();
 	});
 
 	it('asks at once when fetching is 0 or the index lags, and maps the reasons', async () => {

@@ -24,8 +24,12 @@ export type PillKind =
 /** Why the pill says "Stalled": the API's own reason, or `no_progress` (nothing stored for a window). */
 export type StallReason = 'writer_stalled' | 'cohort_stalled' | 'index_lag' | 'no_progress';
 
+/** Why the pill says "Starting" when it isn't the usual wait: the restart record can't be written. */
+export type StartReason = 'restart_record';
+
 /** What the progress facts add to the pill (`progress.ts` decides); null = nothing to add. */
-export type ProgressOverlay = { kind: 'starting' | 'stalled'; reason?: StallReason } | null;
+export type ProgressOverlay =
+	{ kind: 'starting'; reason?: StartReason } | { kind: 'stalled'; reason: StallReason } | null;
 
 export interface PillState {
 	kind: PillKind;
@@ -34,8 +38,8 @@ export interface PillState {
 	/** Rebuild progress; null outside a rebuild. */
 	done: number | null;
 	total: number | null;
-	/** Set when `kind` is `stalled`. */
-	reason?: StallReason;
+	/** Set when `kind` is `stalled`, and when `starting` is held up by the restart record. */
+	reason?: StallReason | StartReason;
 }
 
 const REBUILDING = new Set<RebuildSnapshot['phase']>(['building', 'finishing', 'swapping']);

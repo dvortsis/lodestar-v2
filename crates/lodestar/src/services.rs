@@ -351,13 +351,16 @@ impl Services {
                 insights_stopped,
             )
         };
-        let ops = Arc::new(ops::Ops::new(
-            crawl,
-            settings.subscribe(),
-            pipeline.monitor(),
-            search_state.clone(),
-            config.data_dir.clone(),
-        ));
+        let ops = Arc::new(
+            ops::Ops::new(
+                crawl,
+                settings.subscribe(),
+                pipeline.monitor(),
+                search_state.clone(),
+                config.data_dir.clone(),
+            )
+            .with_dht(dht_stats.clone()),
+        );
         let monitor = pipeline.monitor();
         let api = lodestar_api::ApiState {
             auth,

@@ -53,7 +53,10 @@
 	// States that carry an explanation: a tooltip on the link and a polite announcement (the
 	// words alone say "Stalled"; this says what it means and where to look).
 	const help: Partial<Record<PillKind, () => string>> = {
-		starting: () => m.shell_status_starting_help(),
+		starting: () =>
+			state.reason === 'restart_record'
+				? m.shell_status_record_help()
+				: m.shell_status_starting_help(),
 		stalled: () =>
 			state.reason === 'index_lag' ? m.shell_status_lag_help() : m.shell_status_stalled_help()
 	};

@@ -797,3 +797,33 @@ fn dir_size_counts_nested_files() {
     assert_eq!(dir_size(dir.path()), Some(15));
     assert_eq!(dir_size(&dir.path().join("missing")), None);
 }
+
+#[test]
+fn sampling_blocked_follows_the_dht_report() {
+    use lodestar_dht::restart::Reason;
+    // Before the first report: starting, time unknown.
+    assert_eq!(
+        sampling_blocked(None),
+        Some(SamplingBlocked {
+            reason: "starting".into(),
+            remaining_s: None
+        })
+    );
+    let report = |seconds, reason| StatsSnapshot {
+        sample_suppression_seconds: seconds,
+        sample_suppression_reason: reason,
+        ..StatsSnapshot::default()
+    };
+    for reason in [Reason::Off, Reason::Dirty, Reason::InvalidateFailed] {
+        assert_eq!(
+            sampling_blocked(Some(report(21_540, reason))),
+            Some(SamplingBlocked {
+                reason: reason.as_str().into(),
+                remaining_s: Some(21_540)
+            })
+        );
+    }
+    // Sampling: a resumed run, or a suppression that has run out.
+    assert_eq!(sampling_blocked(Some(report(0, Reason::Resumed))), None);
+    assert_eq!(sampling_blocked(Some(report(0, Reason::Dirty))), None);
+}
