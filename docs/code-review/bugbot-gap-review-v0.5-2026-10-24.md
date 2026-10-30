@@ -4,6 +4,8 @@ Date: 2026-10-24 (America/Denver)\
 Reviewed commit: `ad0ec5a84555b8b36e7ae94ed515b84ad6d46e02`\
 Branch: `docs/ui-ux-audit-2026-10-24`
 
+> **Status, 2026-10-30:** fixed in the owner's soak follow-ups (landing range L4); DUR-26 is F-updater. This review is the 2026-10-24 record.
+
 **Six new findings: two high, four medium.** Five were reproduced through compiled production APIs; the sixth is a source-verified Unix updater interleaving whose runtime was not exercised on Windows. All remain open. No application fixes, commits, pushes or GitHub comments were made.
 
 Used the installed `review-bugbot` skill with exactly one read-only reviewer subagent and independent parent verification. This environment exposes a generic reviewer subagent, not a separate native Bugbot service. The review is a Bugbot-workflow source audit, not an external Bugbot service result.

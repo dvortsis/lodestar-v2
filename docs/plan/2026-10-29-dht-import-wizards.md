@@ -2,6 +2,8 @@
 
 Date: October 29, 2026. Status: **specified; no implementation or compatibility acceptance yet**.
 
+> **Scope now (owner-decisions §2.25; `docs/decisions/2026-10-30-master-plan.md`, "Imports", 2026-10-30):** a CLI import of the Magnetico SQLite database (read-only) and of Bitmagnet through a restored, isolated PostgreSQL 16, staged through 1M and 10M pilots to a measured 50M gate before the full corpus. **Deferred:** the SQL/ZIP dump parser, the other crawler families, uploads (the owner decides first), MongoDB/MySQL, the wizard, and recovery until CR-3. The rest of this document is the later design; where it differs, the master plan governs.
+
 ## 1. Product outcome and scope
 
 Create source-specific import wizards over one durable migration engine. A user

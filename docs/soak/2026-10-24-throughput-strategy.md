@@ -8,7 +8,7 @@ This records the brainstorming following the [soak investigation](2026-10-24-v0.
 
 [Bitmagnet's FAQ](https://bitmagnet.io/faq.html) reports 100–1,000 torrents/minute depending on resources, network and configuration. Lodestar's observed average was approximately 0.38/minute, a nominal 260–2,600-fold gap. This is context, not a controlled comparison or an independent verification of Bitmagnet's claim.
 
-Proposed milestones: 100 verified metadata records/minute sustained as an initial qualification target, 1,000/minute as a stretch target. These are suggested engineering targets, not new owner-approved budgets or achievable-yield guarantees. Final acceptance should require matching or exceeding a pinned comparator under equivalent conditions.
+Proposed milestones: 100 verified metadata records/minute sustained as an initial qualification target, 1,000/minute as a stretch target. These were suggested engineering targets when written; the owner has since adopted 100/min as the crawler gate and 1,000/min as the stretch target (owner-decisions §2.25). Neither is an achievable-yield guarantee. Final acceptance should require matching or exceeding a pinned comparator under equivalent conditions.
 
 ## Prioritized proposals
 

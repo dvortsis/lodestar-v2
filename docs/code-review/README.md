@@ -2,6 +2,8 @@
 
 ## 2026-10-24
 
+> **Status, 2026-10-30:** the Bugbot findings and the UI audit fixes listed below landed with the owner's soak follow-ups (landing range L4: the snapshot deletion journal, the file-cache budget, cold-compile cancellation, the verified partial-import upgrade, updater ordering and the audit fixes). DUR-26 (updater write errors) is F-updater. These entries are the 2026-10-24 record.
+
 - [Supplied throughput strategy: Lodestar gap analysis](../soak/2026-10-24-strategy-gap-analysis.md): existing foundations, critical peer-resolution gaps and recommendations that conflict with product goals or need correction.
 - [Modern DHT research](../soak/2026-10-24-modern-dht-research.md): primary-source implementation comparisons, protocol opportunities and benchmark limitations.
 - [Metadata throughput strategy](../soak/2026-10-24-throughput-strategy.md): prioritized optimization proposals and a controlled validation plan.
