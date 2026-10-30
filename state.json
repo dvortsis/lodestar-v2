@@ -1128,7 +1128,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 2,
-   "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4 | 2026-10-23T19:05:20Z launched (opus, auto mode) | 2026-10-23T19:15:17Z asked to fix crates/log test-static race flake in PR 1 | 2026-10-23T21:02Z #148 part 1/3 (f842922) combined fresh+security review running | 2026-10-23T21:20Z #148 review FIX: Windows ACL aliases (LA) -> folder Shared; catalogue test path sep; bench gate (b) -> absolute 2x OFF_GATE_NS (runner decision 4); encoded-URL userinfo + IPv6 scrub_text; log-bench into ci-ok | 2026-10-23T21:53Z #148 fixes bc45f5a runner-checked (SDDL alias full_sid fail-closed, path join, bench (b) absolute, encoded/IPv6 scrub); merge on green | 2026-10-23T22:24Z #148 (1/3) merged 7bdbaa9; part 2 next (log-bench into ci-ok) | 2026-10-23T22:24Z re-split to 4: 2a auth/api.request/setup token (+log-bench in ci-ok; fresh+security), 2b lodestar crate+shutdown+windows, 4/4 pipeline/search/DHT/fetch \u2014 accepted | 2026-10-23T23:26Z #156 (2a/4, auth+api.request+setup token, ~1,250) 7de59ee; runner fresh+security review running | 2026-10-23T23:39Z #156 review MERGE; required pre-merge: guard.rs read_only refusal logged before limiter (log flood) + polish | 2026-10-24T00:18Z #156 (2a) merged 004e710; 2b push next | 2026-10-24T00:51Z #158 (2b: lodestar sweep, 10 s bounded shutdown, Windows service log) d61ada6 ~1,370; runner review running | 2026-10-24T01:02Z #158 review MERGE (on green Windows). Runner \u00a72.19: keep 10 s bound + Unraid --stop-timeout=60 (runner PR); restore URL form in text output. Part 4 carries: URL form, Windows logs folder ACL lock-on-create, runtime shutdown_timeout, stall check tx_queue, polish | 2026-10-24T01:17Z #158 (2b) merged 539673f; #159 unraid stop-timeout merged 54c7dd2; 2c (review follow-ups) next, then part 4 | 2026-10-24T02:00Z #162 (2c follow-ups) merged 15484f1; part 4 next | 2026-10-24T02:14Z #163 part 4/4 (pipeline/search/DHT/fetch sweep, 118ccc6) runner review running; canary positive-control gap flagged | 2026-10-24T02:32Z #163 review MERGE (on Windows green/cite utp fix). Follow-ups 4b: canary Hash positive control via local KRPC get_peers, enrichment_unreadable->Trace, Summary padding + tests; utp port-pair fix PR assigned (fix/utp-port-pair) | 2026-10-24T02:46Z #164 utp port-pair fix up; canary port race fix assigned | 2026-10-24T03:04Z #164 utp port-pair fix merged c7b9d71 | 2026-10-24T03:14Z #165 canary port race fix up | 2026-10-24T03:23Z lane clear: #163 catch-up then merge | 2026-10-24T04:07Z #163 (4/4) merged 8ee5286 after merged-tree verify (search 133, canary 5). Slice core done; 4b deferred (local/B-log1b-4b) until owner lifts freeze"
+   "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4 | 2026-10-23T19:05:20Z launched (opus, auto mode) | 2026-10-23T19:15:17Z asked to fix crates/log test-static race flake in PR 1 | 2026-10-23T21:02Z #148 part 1/3 (f842922) combined fresh+security review running | 2026-10-23T21:20Z #148 review FIX: Windows ACL aliases (LA) -> folder Shared; catalogue test path sep; bench gate (b) -> absolute 2x OFF_GATE_NS (runner decision 4); encoded-URL userinfo + IPv6 scrub_text; log-bench into ci-ok | 2026-10-23T21:53Z #148 fixes bc45f5a runner-checked (SDDL alias full_sid fail-closed, path join, bench (b) absolute, encoded/IPv6 scrub); merge on green | 2026-10-23T22:24Z #148 (1/3) merged 7bdbaa9; part 2 next (log-bench into ci-ok) | 2026-10-23T22:24Z re-split to 4: 2a auth/api.request/setup token (+log-bench in ci-ok; fresh+security), 2b lodestar crate+shutdown+windows, 4/4 pipeline/search/DHT/fetch \u2014 accepted | 2026-10-23T23:26Z #156 (2a/4, auth+api.request+setup token, ~1,250) 7de59ee; runner fresh+security review running | 2026-10-23T23:39Z #156 review MERGE; required pre-merge: guard.rs read_only refusal logged before limiter (log flood) + polish | 2026-10-24T00:18Z #156 (2a) merged 004e710; 2b push next | 2026-10-24T00:51Z #158 (2b: lodestar sweep, 10 s bounded shutdown, Windows service log) d61ada6 ~1,370; runner review running | 2026-10-24T01:02Z #158 review MERGE (on green Windows). Runner \u00a72.19: keep 10 s bound + Unraid --stop-timeout=60 (runner PR); restore URL form in text output. Part 4 carries: URL form, Windows logs folder ACL lock-on-create, runtime shutdown_timeout, stall check tx_queue, polish | 2026-10-24T01:17Z #158 (2b) merged 539673f; #159 unraid stop-timeout merged 54c7dd2; 2c (review follow-ups) next, then part 4 | 2026-10-24T02:00Z #162 (2c follow-ups) merged 15484f1; part 4 next | 2026-10-24T02:14Z #163 part 4/4 (pipeline/search/DHT/fetch sweep, 118ccc6) runner review running; canary positive-control gap flagged | 2026-10-24T02:32Z #163 review MERGE (on Windows green/cite utp fix). Follow-ups 4b: canary Hash positive control via local KRPC get_peers, enrichment_unreadable->Trace, Summary padding + tests; utp port-pair fix PR assigned (fix/utp-port-pair) | 2026-10-24T02:46Z #164 utp port-pair fix up; canary port race fix assigned | 2026-10-24T03:04Z #164 utp port-pair fix merged c7b9d71 | 2026-10-24T03:14Z #165 canary port race fix up | 2026-10-24T03:23Z lane clear: #163 catch-up then merge | 2026-10-24T04:07Z #163 (4/4) merged 8ee5286 after merged-tree verify (search 133, canary 5). Slice core done; 4b deferred (local/B-log1b-4b) until owner lifts freeze | 2026-10-30T06:30Z old session told to port 72aaed6b onto new main as port/B-log1b-4b"
   },
   "M4": {
    "status": "merged",
@@ -1270,13 +1270,13 @@
    "pr": 181
   },
   "F-auth-lock": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnA9YgN5pKpBLqeFsYr",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so."
+   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main"
   },
   "CR-COL": {
    "status": "ready-waiting-L5",
@@ -1332,6 +1332,13 @@
    "model": "sonnet",
    "attempt": 1,
    "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6"
+  },
+  "IMP-0": {
+   "status": "running",
+   "session": "session_01MMjhn95fzNhDro9AJeDYin",
+   "model": "opus",
+   "attempt": 1,
+   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1820,7 +1827,7 @@
   "next_branch": "2026-10-30T05:37Z deleted origin/next (main == 058d9937 lineage)",
   "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051.",
   "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z",
-  "cap_note": "2026-10-30T06:09Z working sessions briefly 5 (X-ci-health, CR-0f, X-sleeps, L3-fix, L4-fix); L-lane fixes are tier 1; X-sleeps lowest. Others idle waiting (F-updater, CR-COL, F-filters, F-metainfo).",
+  "cap_note": "2026-10-30T06:30Z owner goal 'keep building until fully blocked' (usage reset): running beyond the plan's 4-slot cap; ~10 sessions active/idle. Flag to owner.",
   "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f"
  },
  "ext": {
