@@ -115,19 +115,26 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Holds a [`refused_addr`] port: the two ends of a connection to it.
+pub struct Held(std::net::TcpStream, std::net::TcpStream);
+
 /// A loopback address where connecting is refused, for as long as the
-/// returned socket lives. The socket is bound but never listens, so
-/// nothing answers, and no other test's server can be given the port
-/// meanwhile. (Binding a listener and dropping it frees the port, and a
-/// server another test starts in parallel can take it and answer.)
-pub fn refused_addr() -> (tokio::net::TcpSocket, std::net::SocketAddr) {
-    let socket = tokio::net::TcpSocket::new_v4().unwrap();
-    // Without SO_REUSEADDR no other socket can bind the port, even one
-    // that sets it (as tokio's listeners do on Unix).
-    assert!(!socket.reuseaddr().unwrap());
-    socket.bind(([127, 0, 0, 1], 0).into()).unwrap();
-    let addr = socket.local_addr().unwrap();
-    (socket, addr)
+/// returned [`Held`] lives.
+///
+/// The port's listener is closed, so a new connection is refused at
+/// once on every OS. A connection accepted on it stays open, so the OS
+/// counts the port as in use and never gives it to another socket bound
+/// to port 0, which is how every [`ReplayServer`] binds. (Dropping the
+/// listener alone freed the port: a server another test started could be
+/// given it, answer, and lose a scripted reply its own test needed. A
+/// socket that is bound but doesn't listen holds the port too, but macOS
+/// leaves a connection to it unanswered until the client times out.)
+pub fn refused_addr() -> (Held, std::net::SocketAddr) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let client = std::net::TcpStream::connect(addr).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    (Held(client, server), addr)
 }
 
 #[derive(Default)]
