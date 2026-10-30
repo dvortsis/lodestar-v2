@@ -17,7 +17,7 @@ Write `docs/decisions/<date>-CR-ADM.md` specifying, from the current pool/finder
 2. **Bounds:** the maximum number of waiters, the wakeup and coalescing rule, and bounded interactive bursts plus a fair background queue. New arrivals get no indefinite advantage over retained waiters.
 3. **Who returns permission at every terminal boundary:** timeout, completion, fetch success, eviction, cancellation (waiting or admitted), pause/resume, a closed finder, shutdown and drain. No leaked or duplicate credit. A late acknowledgment from an old generation can't attach to a new entry with the same hash.
 4. **Waiting is not an attempt:** cancellation while waiting uses no network attempt and removes its waiter. Retries stay distinguishable from arrivals. No spin loop, no permanent back-off after recovery, no permit kept after eviction.
-5. **The pause-order race reported by CR-0f:** `crates/pipeline/src/control.rs` pauses the pool before the DHT and resumes in the same order over separate channels, so one key can wait a refusal back-off. Resolve it inside this design.
+5. **The pause-order race reported by CR-0f is already fixed** in CR-0f (#200): on resume the DHT is un-paused before the pool. Keep that order, and make sure your permission design doesn't reintroduce refusals on resume.
 6. **Metrics:** new counters for waits, wakeups, grants, refusals by reason and permit returns by boundary, kept apart from the existing counters, which keep their meaning. Specify the `docs/metrics.md` text.
 7. **The switch:** its name, default (off), the config/settings surface (no UI in this slice), and the exact behaviour when off, which is today's, byte for byte in the CR-SIM goldens.
 
