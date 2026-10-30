@@ -110,3 +110,10 @@ path = "fuzz_targets/update.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "dht_restart"
+path = "fuzz_targets/dht_restart.rs"
+test = false
+doc = false
+bench = false

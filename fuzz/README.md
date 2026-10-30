@@ -18,6 +18,7 @@ cargo +nightly fuzz run metainfo -- -max_total_time=300
 | `release` | No panics in the release-name parser. Parses are deterministic, and reported groups and versions are text from the name. |
 | `lists` | No panics in blocklist decoding, format detection and the hash and IP parsers; IP sets round-trip through their stored encoding. The content filter's normalizer and core never panic on the same text as a name and file list, and the verdict agrees with the full hit list. |
 | `utp` | No panics in the uTP packet parser, and parsed packets round-trip. A connection fed hostile packets and local events keeps its buffers bounded and only sends packets that parse. |
+| `dht_restart` | No panics in CR-0d's snapshot, marker and witness decoders. Whatever decodes is canonical (re-encodes to the same bytes), and validation and seeding of a decoded snapshot never panic. |
 | `update` | No panics in the update envelope, manifest, key statement, freshness, minisign and trust-state parsers, or in `verify::check` against a fixed test trust (also on bodies the fuzzer's bytes become once signed with a test key). A document that verifies re-verifies identically, as a refetch on the state it produced, and that state reloads. |
 
 `seeds/<target>/` holds hand-made inputs a target should start from, such as the BEP 47 padding, symlink and mixed `path.utf-8` shapes for `metainfo` and their blobs for `filetree`. Pass the folder after the corpus so libFuzzer reads it but writes new finds to the (ignored) corpus:
