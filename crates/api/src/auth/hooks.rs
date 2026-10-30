@@ -3,7 +3,7 @@
 //! test can hold a save mid-way, and a switch that fails the directory
 //! fsync. Unit tests only; nothing here exists in a release build.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
 /// Where a change has got to.
@@ -22,6 +22,8 @@ pub(super) struct Hooks {
     hook: Mutex<Option<Hook>>,
     /// Fail every directory fsync.
     pub(super) fail_dir_sync: AtomicBool,
+    /// How many directory-fsync warnings this instance logged.
+    pub(super) dir_sync_warnings: AtomicU32,
 }
 
 impl std::fmt::Debug for Hooks {

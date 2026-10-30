@@ -205,7 +205,11 @@ fn a_failed_directory_fsync_warns_once() {
     let cookie = header(&auth.rotate_sessions().unwrap());
     auth.rotate_sessions().unwrap();
     auth.set_proxy(ProxyConfig::default()).unwrap();
-    assert_eq!(event.count(), before + 1, "one warning for three saves");
+    // This instance's own tally: the event's counter is shared by the
+    // whole test binary, so it can only show the warning went out.
+    let warnings = auth.disk.hooks.dir_sync_warnings.load(Ordering::Relaxed);
+    assert_eq!(warnings, 1, "one warning for three saves");
+    assert!(event.count() > before, "logged through the catalogue");
     assert!(!auth.verify(&cookie), "the saves applied");
     let restarted = Auth::load(&dir.path().join("auth.json"), false).unwrap();
     assert!(restarted.login(next_ip(), OLD).is_ok());

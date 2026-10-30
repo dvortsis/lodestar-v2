@@ -334,8 +334,8 @@ impl Auth {
             self.save(&next)?;
             // Spent only once the password is saved: after a failed save
             // the instance is still unclaimed, and the token still works.
-            // Spent and published together, so nobody sees the instance
-            // claimed with its token still pending.
+            // Spent and published together: `needs_setup` turns false
+            // only once `setup_token` already reads `None`.
             let mut pending = self.setup_token.lock().expect("token lock");
             self.publish(next);
             *pending = None;
@@ -780,11 +780,14 @@ struct Disk {
 }
 
 impl Disk {
-    /// Flushes `dir`, best effort. A failure is logged once per run: it
+    /// Flushes `dir`, best effort. A failure is logged once per instance
+    /// (one per run in production): it
     /// would repeat on every save, and the save itself succeeded.
     fn sync_dir(&self, dir: &Path) {
         if self.dir_sync(dir).is_err() && !self.dir_sync_warned.swap(true, Ordering::Relaxed) {
             lodestar_log::log_event!(log_events::AUTH_DIR_SYNC_FAILED);
+            #[cfg(test)]
+            self.hooks.dir_sync_warnings.fetch_add(1, Ordering::Relaxed);
         }
     }
 
