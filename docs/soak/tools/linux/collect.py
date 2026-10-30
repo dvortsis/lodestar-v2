@@ -739,6 +739,10 @@ class Collector:
                                    "volumes": self.volumes_now},
             "stop_instance_at_end": bool(a.stop),
         }
+        # The preset sets the analyzer's outstanding-RPC limit. Recorded only
+        # as the operator states it; absent, the analyzer flags its fallback.
+        if a.intensity is not None:
+            settings["intensity"] = a.intensity
         parsed = urllib.parse.urlsplit(a.url)
         network = dict(inst.network(), http_host_class=host_class(parsed.hostname), http_port=parsed.port,
                        proxy_configured=bool(os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
@@ -1032,6 +1036,8 @@ def build_parser():
     p.add_argument("--leg", choices=("main", "gluetun"), default="main",
                    help="gluetun: the 2 h gluetun leg (needs --require-gluetun; baseline minimum 2 h)")
     p.add_argument("--require-gluetun", action="store_true", help="Refuse to start unless gluetun is the network parent")
+    p.add_argument("--intensity", choices=("low", "balanced", "aggressive"),
+                   help="The intensity preset Lodestar runs at, recorded in run.json for the analyzer")
     p.add_argument("--user-timezone", default="America/Denver")
     p.add_argument("--tick-seconds", type=float, default=1.0, help=argparse.SUPPRESS)
     return p
