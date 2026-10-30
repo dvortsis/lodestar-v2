@@ -660,3 +660,20 @@ These are event counts, not unique hashes, network attempts or cohort conversion
 No endpoint/hash/query labels are introduced. Restored entries lack historical
 peer/fetch flags; do not interpret eviction categories as complete cross-restart
 history. All absent measurements remain unknown.
+
+
+## Crawler gate (CR-gate-metrics, 2026-10-30)
+
+The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.
+
+**The gate's numerator is `searchable_new_total{origin="network"}`:** verified per minute is `rate(lodestar_searchable_new_total{origin="network"}[1m]) * 60`. `metadata_new_verified_total` is the stored stage of the same records, for diagnosing index lag; it isn't the gate.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `metadata_new_verified_total{origin}` | counter | New rows the writer committed (`Inserted::New`), once per key. `origin` is `network` today; `import` and `recovery` are reserved and not rendered until they're counted. |
+| `searchable_new_total{origin}` | counter | Of those, records an index commit has reached (its watermark ≥ the row's id), once per key. A record can be counted one index commit late (see the decision). Stays 0 with search off. |
+| `metadata_excluded_total{reason}` | counter | Outcomes that never count towards the gate, by `reason`. Once per key: `already_stored` (fetched and verified, but the store had it: refetched imports, have-filter misses; once per key except for the stale-lease race the decision describes), `filtered` (a drop rule, or the floor's hash list in prepare), `quarantined`, `invalid_metainfo` (hashed to the key but not usable metainfo), `failed_verification` (invalid: a hash mismatch, or a protocol or handshake violation, on the final attempt; the pool's terminal `Loss::Invalid`. A key whose last failure was something else is in `fetch_lost_total` under that reason), `store_failed` (its transaction failed). Event counts, possibly several per key: `rediscovered` (each sighting of a stored torrent, not fetched) and `duplicate` (a result under a lease no longer current; the current holder's result is counted on its own). |
+| `discovery_to_searchable_seconds` | histogram | Whole seconds from the key's first sighting in this run (the lease's discovery time; for a key restored from the fetch queue, this run's start) to the index commit that made it searchable. Buckets `le`: 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, `+Inf`. `_count` equals the `+Inf` bucket. |
+| `discovery_to_searchable_dropped_total` | counter | Latency measurements lost to a full bound: the writer's 4,096-entry hand-off or the 65,536-entry wait queue (oldest evicted). The record still counts in `searchable_new_total`, without a latency, once an index commit passes the highest id dropped. |
+
+Imports, recovery and every excluded reason are separate series, so a stricter filter moves `filtered` or `quarantined`, never the numerator. Rows a rule only hides, demotes or flags are stored and indexed, so they count (see the decision). Keys lost for other reasons (no peers, time-outs) are in `fetch_lost_total{reason}`. Like the other `/metrics` series, these are process-lifetime and carry no hash or endpoint labels.
