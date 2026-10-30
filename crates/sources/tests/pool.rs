@@ -948,3 +948,68 @@ async fn a_pool_can_start_paused() {
     assert_eq!(h.drain_lookups(), vec![key(9)]);
     h.stop().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_timer_cannot_expire_a_rediscovered_keys_lookup() {
+    // A's first lifetime leaves its lookup timer behind when B evicts it.
+    // A found again is a new entry; the old timer, due first, must not
+    // expire the new lifetime's lookup.
+    let (disc, discoveries) = mpsc::channel(16);
+    let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(4);
+    let (out, _results) = mpsc::channel(16);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        PoolConfig {
+            max_pending: 1,
+            ..config()
+        },
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder],
+            out,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        vec![],
+    );
+    let t0 = Instant::now();
+    let mut accept = async |n: u32| {
+        let request = requests.recv().await.unwrap();
+        assert_eq!(request.key, key(n));
+        let (done, rx) = tokio::sync::oneshot::channel::<Vec<SocketAddr>>();
+        request.admit.send(Some(rx)).unwrap();
+        done
+    };
+    disc.send(found(0, 1, vec![])).await.unwrap();
+    let mut first = accept(1).await;
+    disc.send(found(0, 2, vec![])).await.unwrap();
+    let mut second = accept(2).await;
+    tokio::time::timeout(Duration::from_secs(10), first.closed())
+        .await
+        .expect("B evicts A");
+    sleep(Duration::from_secs(5)).await;
+    disc.send(found(0, 1, vec![])).await.unwrap();
+    let mut again = accept(1).await;
+    tokio::time::timeout(Duration::from_secs(10), second.closed())
+        .await
+        .expect("A evicts B");
+    // Past the first lifetime's `lookup_wait` (10 s from t0).
+    tokio::time::sleep_until(t0 + Duration::from_millis(10_500)).await;
+    assert!(
+        !again.is_closed(),
+        "the first lifetime's timer expired the new lookup"
+    );
+    assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 1);
+    assert_eq!(handle.stats().lookup_unaccepted.load(Ordering::Relaxed), 0);
+    // Its own `lookup_wait`, 10 s from t0 + 5 s, still ends it.
+    tokio::time::timeout(Duration::from_secs(10), again.closed())
+        .await
+        .expect("its own timer ends it");
+    assert!(Instant::now() >= t0 + Duration::from_secs(15));
+    assert_eq!(handle.stats().lost_count(Loss::Evicted), 2);
+    stop.send(true).unwrap();
+    let saved = task.await.unwrap();
+    assert_eq!(saved.len(), 1);
+}
