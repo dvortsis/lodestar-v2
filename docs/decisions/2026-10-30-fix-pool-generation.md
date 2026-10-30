@@ -1,4 +1,4 @@
-# fix/pool-generation decisions (PR pending)
+# fix/pool-generation decisions (#223)
 
 - **Entry generations are pool-wide, so a stale timer can't expire a replacement entry's lookup (runner, 2026-10-30, from the CR-ADM design review).**
   - *The defect.* Each pool entry's `generation` started at 0 and was bumped per entry. A key evicted with a timer still queued, then found again, came back as a new entry counting from 0. The replacement reached the same generation as the old timer, and when that timer fired early it expired the new lookup. The lookup's receivers dropped, so the actor cancelled work that was still useful, and the key backed off.
