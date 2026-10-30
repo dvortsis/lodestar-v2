@@ -349,6 +349,12 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Tests wait for conditions, never fixed sleeps.** A flake is fixed once, where it is, not re-run onto the next PR.
     - **Sessions don't stall unseen:** long-running sessions run in Auto, the coordination tools are pre-approved in `.claude/settings.json`, and the runner notifies the owner at once when a session waits on a permission prompt.
     - The rules are in `CLAUDE.md` ("Multi-session work"), `runner/README.md`, `runner/standards.md` and the `steward` skill. The thresholds were picked under §2.19, so the owner can veto them, and are recorded in `docs/decisions/2026-10-23-multi-session.md`.
+25. **After the CR-0 soak: history, release, crawler target, import scale, runner** (owner, 2026-10-30, build-runner session, answering the runner's questions while approving the master-plan update). The plan is `docs/build-plan.md` §0. The details the runner chose are in `docs/decisions/2026-10-30-master-plan.md`.
+    - **The rewritten history replaces `main`.** The owner force-pushes it, since Claude can't and shouldn't. The owner's local branches (`fix/dht-cr0`, `work/soak-*`) already sit on it. The runner moves the paused slice branches over as patches.
+    - **No v0.5.0 release.** That commit isn't tagged. The first public release is **v0.5.1**. It ships once CR-0, the soak fixes and the open security and content-safety fixes are merged and the CR-0 soak is accepted.
+    - **Crawler throughput gate:** at least **100 verified torrents per minute**, sustained. The stretch target is **1,000 per minute**. Final parity is checked against a pinned bitmagnet run on the same host. This gates the v0.6 tag. The exact measurement rules are refinements the owner confirms before the first acceptance analysis (§0.6 of the build plan).
+    - **Import scale, staged to the full corpus:** pilots run at 1M and then 10M torrents within the §1.6 budgets. Then a measured **50M scale gate** runs, and its new numbers come to the owner for approval before the owner's full Magnetico and Bitmagnet corpus (about 40–50M unique torrents) is imported.
+    - **The runner restarts** with this approval. The v0.5-only freeze is lifted for the work listed in the build plan's §0. All of it runs in cloud sessions, never on the soak PC.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
