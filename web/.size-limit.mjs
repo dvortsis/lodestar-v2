@@ -3,7 +3,7 @@
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
 import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
-import { routeFiles } from './scripts/size-entries.mjs';
+import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
 
@@ -139,7 +139,10 @@ const settingsOnDemand = [
 	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
 	/features\/settings\/form\/ConfirmDialog\.svelte$/
 ];
-const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
+const settingsLazy = requireMeasuredJs(
+	'Settings controls (on demand)',
+	onDemandOf('/settings/[section]', settingsOnDemand)
+);
 
 // What another route can still add to /search's first load (runner, 2026-10-24):
 // - The route table: one import and one dictionary entry per route, about 27 B gzipped. The budget
@@ -254,9 +257,15 @@ export default [
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
+	entry('Settings overview (own JS + CSS)', own('/settings'), '45 KB'),
+	entry(
+		'Settings section (own JS + CSS)',
+		own('/settings/[section]', { onDemand: settingsOnDemand }),
+		'45 KB'
+	),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
-	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
-	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '38 KB')] : []),
+	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
+	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry(
 		'Alert dialogs (on demand)',
 		[

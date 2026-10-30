@@ -371,9 +371,6 @@ export function applyResponse(
 	}
 	e.sections = next;
 	e.savedRecently = recent;
-	e.restartPending = e.specs
-		.filter((s) => e.sections[s.section]?.restart.includes(s.name))
-		.map((s) => s.key);
 	return restart;
 }
 
@@ -565,9 +562,6 @@ export async function undo(e: Engine): Promise<SaveResult> {
 		}
 		applyResponse(e, r.batch, r.values);
 		endUndo(e);
-		e.restartPending = e.specs
-			.filter((s) => e.sections[s.section]?.restart.includes(s.name))
-			.map((s) => s.key);
 		e.status = 'ready';
 		announce(e, m.settings_form_announce_undone());
 		e.schedulePreview();

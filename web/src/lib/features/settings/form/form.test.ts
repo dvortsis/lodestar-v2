@@ -85,6 +85,22 @@ afterEach(() => {
 const patches = () => server.requests('PATCH', '/settings');
 
 describe('loading', () => {
+	it('reports existing restart requirements on load, resync and remote changes', async () => {
+		server.sections.get('crawler')!.restart_required = ['timeout_secs', 'unknown_field'];
+		const reopened = open({ id: 'restart-reopened' });
+		await flush();
+		expect(reopened.restartPending).toEqual(['crawler.timeout_secs']);
+		server.sections.get('crawler')!.restart_required = [];
+		server.change('crawler', {});
+		await reopened.resync();
+		expect(reopened.restartPending).toEqual([]);
+		server.sections.get('crawler')!.restart_required = ['timeout_secs'];
+		const revision = server.change('crawler', {});
+		reopened.received({ section: 'crawler', revision });
+		await flush();
+		expect(reopened.restartPending).toEqual(['crawler.timeout_secs']);
+	});
+
 	it('fetches each section once and shows its values', () => {
 		expect(form.status).toBe('ready');
 		expect(server.calls.filter((c) => c.method === 'GET').map((c) => c.path)).toEqual([
