@@ -1408,6 +1408,11 @@
     "CR-COL"
    ],
    "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done."
+  },
+  "T-v051-gaps": {
+   "status": "running",
+   "model": "opus",
+   "notes": "2026-10-30T10:37Z launched: targeted tests for delta items B2 (snapshot metadata() failure blocks ack) and E1 (setup guard, only if seam exists)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
