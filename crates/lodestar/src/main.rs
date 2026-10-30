@@ -17,6 +17,7 @@ mod percolator;
 mod privdrop;
 mod services;
 mod settings;
+mod storage;
 mod subscriptions;
 mod system;
 #[cfg(test)]

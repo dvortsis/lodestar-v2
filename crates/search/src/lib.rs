@@ -47,7 +47,7 @@ pub use facets::{
 pub use filter::{in_time, minute_of_day};
 pub use handle::SearchHandle;
 pub use index::{
-    CatchUp, Compiled, Error, Hit, Indexer, Penalty, RankWeights, Result, Results,
+    CacheUsage, CatchUp, Compiled, Error, Hit, Indexer, Penalty, RankWeights, Result, Results,
     STEM_FALLBACK_BELOW, ScoreParts, SearchIndex, Sort, index_dir,
 };
 pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
