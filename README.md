@@ -118,7 +118,7 @@ See [Chapter 2](docs/user/02-install-lodestar-on-unraid-and-docker.md) for the U
 - **Search query syntax:** [`docs/query-language.md`](docs/query-language.md)
 - **Operations and environment variables:** [`docs/operations.md`](docs/operations.md)
 - **System architecture:** [`docs/architecture.md`](docs/architecture.md)
-- **Release notes (v0.5.0):** [`docs/releases/v0.5.0.md`](docs/releases/v0.5.0.md)
+- **Release notes (v0.5.1):** [`docs/releases/v0.5.1.md`](docs/releases/v0.5.1.md)
 - **Brand assets and checksums:** [`brand/source/`](brand/source/) (`SHA256SUMS.txt`)
 
 ## Licence
