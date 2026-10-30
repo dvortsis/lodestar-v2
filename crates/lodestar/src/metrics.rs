@@ -185,6 +185,91 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             get(&p.evicted_service[i]),
         );
     }
+    // Coordinated admission (CR-ADM): all zero with the switch off.
+    let labelled =
+        |o: &mut Out, name: &str, help: &str, rows: &[(&str, &std::sync::atomic::AtomicU64)]| {
+            o.family(name, "counter", help);
+            for (labels, value) in rows {
+                o.value(name, labels, get(value));
+            }
+        };
+    let kinds = ["arrival", "retry", "requeue"];
+    labelled(
+        &mut o,
+        "fetch_admission_waits_total",
+        "Keys due a lookup that queued for a permit.",
+        &[
+            ("kind=\"arrival\"", &p.admission_waits[0]),
+            ("kind=\"retry\"", &p.admission_waits[1]),
+            ("kind=\"requeue\"", &p.admission_waits[2]),
+        ],
+    );
+    labelled(
+        &mut o,
+        "fetch_admission_wait_cancelled_total",
+        "Waiters that left without a request; no network attempt.",
+        &[
+            ("reason=\"evicted\"", &p.admission_wait_cancelled[0]),
+            ("reason=\"peers\"", &p.admission_wait_cancelled[1]),
+        ],
+    );
+    o.one(
+        "fetch_admission_wakeups_total",
+        "counter",
+        "Times a returned permit woke the pool.",
+        get(&p.admission_wakeups),
+    );
+    o.family(
+        "fetch_admission_grants_total",
+        "counter",
+        "Requests granted finder permits.",
+    );
+    for (k, kind) in kinds.iter().enumerate() {
+        for (c, class) in ["interactive", "background"].iter().enumerate() {
+            o.value(
+                "fetch_admission_grants_total",
+                &format!("kind=\"{kind}\",class=\"{class}\""),
+                get(&p.admission_grants[k][c]),
+            );
+        }
+    }
+    labelled(
+        &mut o,
+        "fetch_admission_refusals_total",
+        "Permitted requests not accepted; no attempt or back-off used.",
+        &[
+            ("reason=\"refused\"", &p.admission_refusals[0]),
+            ("reason=\"unacknowledged\"", &p.admission_refusals[1]),
+        ],
+    );
+    o.one(
+        "fetch_admission_holds_total",
+        "counter",
+        "One-second finder holds after a refusal.",
+        get(&p.admission_holds),
+    );
+    labelled(
+        &mut o,
+        "fetch_admission_permit_returns_total",
+        "Permits returned in the pool.",
+        &[
+            ("boundary=\"finder_full\"", &p.admission_permit_returns[0]),
+            ("boundary=\"finder_closed\"", &p.admission_permit_returns[1]),
+            ("boundary=\"unused\"", &p.admission_permit_returns[2]),
+        ],
+    );
+    o.one(
+        "fetch_admission_waiters",
+        "gauge",
+        "Keys waiting for a lookup.",
+        get(&p.admission_waiters),
+    );
+    o.one(
+        "fetch_admission_permits_in_use",
+        "gauge",
+        "Finder permits held by requests.",
+        get(&p.admission_permits_in_use),
+    );
     // Attempts and successes per transport; the success family replaces
     // the pool's unlabelled count (see `write_prometheus` for how the two
     // can differ). The uTP socket's own
@@ -454,6 +539,18 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
                 "counter",
                 "Pre-ownership delivery failure; not an accepted attempt.",
                 value,
+            );
+        }
+        o.family(
+            "dht_peer_permit_returns_total",
+            "counter",
+            "Admission permits returned in the DHT actor, by boundary.",
+        );
+        for (i, why) in lodestar_dht::node::PermitReturn::ALL.iter().enumerate() {
+            o.value(
+                "dht_peer_permit_returns_total",
+                &format!("boundary=\"{}\"", why.as_str()),
+                d.peer_permit_returns[i],
             );
         }
         o.one(

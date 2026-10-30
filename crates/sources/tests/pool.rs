@@ -217,6 +217,7 @@ async fn finder_channel_failures_do_not_consume_attempts() {
             .try_send(lodestar_sources::PeerRequest {
                 key: key(99),
                 admit,
+                permit: None,
             })
             .unwrap();
         let _requests = if closed {
