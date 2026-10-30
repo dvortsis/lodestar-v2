@@ -1361,7 +1361,7 @@
    "session": "session_01MMjhnABUWdrF5PzgVK6oqa",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #199 6eaf198; fresh review session_01MMjhnBqFeP1XhFeu33jRDv",
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #199 6eaf198; fresh review session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T10:41Z review FIX FIRST: failed_verification wording (Invalid incl. handshake/protocol), services wiring test, startup-window clause, already_stored wording. One push requested.",
    "pr": 199
   },
   "D-v051": {
@@ -2029,7 +2029,8 @@
   "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
   "2026-10-30T08:41Z UI polish: welcome page h1 (tabindex -1, focused on load) shows a focus ring wider than the text with a notch; consider :focus-visible handling for programmatic focus",
   "2026-10-30T10:17Z Re-derive the Xeon 8573C filter-budget factor (n=1, provisional) once 2 more 8573C jobs exist; record in a decisions entry (job 123999363098 = 39.6us raw mixed at #196 code)",
-  "2026-10-30T10:41Z F-updater: scheduler reads the updater std::Mutex from async (until_scheduled) and can block a tokio worker for an fsync; move the read into blocking or publish a snapshot (pre-existing)"
+  "2026-10-30T10:41Z F-updater: scheduler reads the updater std::Mutex from async (until_scheduled) and can block a tokio worker for an fsync; move the read into blocking or publish a snapshot (pre-existing)",
+  "2026-10-30T10:41Z CR-gate-metrics: carry HashMismatch separately through the pool terminal loss so failed_verification means hash mismatch only (peer-wire/sources change)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
