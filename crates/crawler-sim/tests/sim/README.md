@@ -15,8 +15,8 @@ wires them, in tokio's paused clock, against:
   success, slow success, refusal, timeout or unreachable.
 
 Ten simulated minutes take one to five seconds of wall time. The restart
-scenario (6 h 26 min of leg 1, mostly idle, plus an hour of leg 2) takes
-about ten.
+scenario (6 h 20 min of leg 1, mostly idle, a 2 min gap and an hour of
+leg 2) takes about ten.
 
 ## Run
 
@@ -75,13 +75,15 @@ The run asserts, and the report's last sections show:
   That's a lower bound on the real deadline, so any earlier leg-2 sample
   is a violation.
 - **Sampling resumes at once** for everything else: the first leg-2 sample
-  comes within a minute, and the report gives how soon each expiring
-  obligation's node was sampled again (median and max).
+  comes within a minute, every node already free at the restart is
+  sampled again, and so is every node whose obligation expires during
+  leg 2. The report gives how soon after expiry (median and max).
 - **The counters add up:** `restart_obligations_restored` = `pending` +
   `honoured`; `restored` ≥ the restrictions the network's record says were
   still live at the restart (equal in the golden); and each leg's
-  `samples_sent` equals the samples the network saw, answered, errored and
-  unanswered. The proof's `sample_suppression_reason` is `resumed`.
+  `samples_sent` equals the samples in the network's record (`Net::asks`),
+  and `sample_failures` equals its errors and unanswered samples less those
+  still in flight at the stop (sealed, not failed; printed as `sealed=`). The proof's `sample_suppression_reason` is `resumed`.
 - **The restart cost:** metadata stored in the first hour after the safe
   restart, against leg 1's first hour of a fresh 6 h suppression (zero:
   the simulated network sends no queries, so there are no passive
@@ -89,7 +91,11 @@ The run asserts, and the report's last sections show:
 
 The negative control (`restart_without_safe_restart_suppresses_in_full`)
 turns `safe_restart` off for leg 2: the reason is `off`, nothing is
-restored, and no node is sampled in the suppression window.
+restored, the suppression is the full 6 h window, and no node is sampled
+in it.
+
+The report's `# scripted network` tallies cover both legs; the per-minute
+rows and the totals are leg 2's.
 
 The first minutes are warmup: the first BEP 51 sweep and the lock-step
 retries of its rejected keys. The report's `steady` line averages the

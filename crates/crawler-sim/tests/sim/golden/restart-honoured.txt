@@ -9,7 +9,7 @@ pool: sockets=400 per_ip=2 max_pending=200000 max_lookups=256 lookup_wait=30s re
 
 # leg 1: a first start with dht.safe_restart on, sampling 20 min after its suppression
 suppression=21604s samples_in_suppression=0 first_sample_at=21604s reason_at_stop=first_start stored=952 stored_first_hour=0
-samples: sent=2989 answered=1941 errors=657 unanswered=391 sample_failures=1047 sample_stale=0
+samples: sent=2989 answered=1941 errors=657 unanswered=391 sample_failures=1047 sealed=1 sample_stale=0
 
 # leg 2: 120s later, dht.safe_restart on
 
@@ -138,13 +138,14 @@ funnel: Harvested=2647 PeerFound=1937 Fetched=1742 Lost=0
 queries=211744 ping=1489 find_node=64338 get_peers=139531 sample=6386 other=0
 to_dead=23850 to_unknown=0 lost=7445 rate_limited=344 errors=919 unsupported=648 sample_early=0 replies=180105 values_replies=23863
 discoveries_dropped=0 pool_queue_at_end=15926
+# (the network's tallies cover both legs; `sample` leaves out the samples sent while stopping)
 
 # restart: leg 2 against leg 1's restrictions
 reason=resumed restart_obligations_restored=1991 restart_obligations_pending=1048 restart_obligations_refused=646575 restart_obligations_honoured=943
 leg1_nodes_sampled=2000 restricted_at_restart=1991 expired_at_restart=9 expired_resampled=9
 expiring_in_leg2=943 resampled_after_expiry=943 delay_after_expiry_s median=11 max=316
 sampled_before_expiry=0 fresh_nodes_sampled=0 first_sample_after_start=2s
-samples: sent=3399 answered=3239 errors=15 unanswered=145 sample_failures=159 sample_stale=0
+samples: sent=3399 answered=3239 errors=15 unanswered=145 sample_failures=159 sealed=1 sample_stale=0
 restart_cost: stored in the first 60 min, fresh start=0 leg 2=1742
 
 outcome_log events=45567 fnv64=c2c66c4d57be5b2e

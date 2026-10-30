@@ -245,7 +245,13 @@ fn restart_without_safe_restart_suppresses_in_full() {
         r.text
     );
     assert_eq!(r.dht.samples_sent, 0, "{}", r.text);
-    assert!(r.dht.sample_suppression_seconds > 0, "{}", r.text);
+    // The full window: 6 h plus the query timeout from leg 2's start, less
+    // the leg's 10 min.
+    assert!(
+        r.dht.sample_suppression_seconds >= 6 * 3600 + 4 - 600,
+        "{}",
+        r.text
+    );
     assert_eq!(r.dht.restart_obligations_restored, 0, "{}", r.text);
 }
 

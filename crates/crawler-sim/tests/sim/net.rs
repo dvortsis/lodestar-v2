@@ -90,6 +90,17 @@ pub struct SampleAsk {
     seq: u64,
 }
 
+impl SampleAsk {
+    pub fn new(to: SocketAddr, sent: Instant, reply: Option<(Instant, Option<u32>)>) -> SampleAsk {
+        SampleAsk {
+            to,
+            sent,
+            reply,
+            seq: 0,
+        }
+    }
+}
+
 /// A reply on its way: (due, tie-break, bytes, from).
 type InFlight = Reverse<(Instant, u64, Vec<u8>, SocketAddr)>;
 
@@ -555,6 +566,28 @@ mod tests {
                 assert!(xor(&n.nodes[j].id.0, &target) > worst);
             }
         }
+    }
+
+    /// A cut forgets only the replies still on their way.
+    #[tokio::test(start_paused = true)]
+    async fn a_cut_drops_only_replies_in_flight() {
+        let mut n = net();
+        let now = Instant::now();
+        let to = n.nodes[0].addr;
+        for (seq, due) in [(1, now), (2, now + Duration::from_secs(1))] {
+            n.asks.push(SampleAsk {
+                seq,
+                ..SampleAsk::new(to, now, Some((due, Some(300))))
+            });
+        }
+        n.asks.push(SampleAsk::new(to, now, None));
+        // Reply 1 was delivered; reply 2 is still in the heap.
+        n.heap
+            .push(Reverse((now + Duration::from_secs(1), 2, Vec::new(), to)));
+        n.cut();
+        assert!(n.heap.is_empty());
+        let replies: Vec<bool> = n.asks.iter().map(|a| a.reply.is_some()).collect();
+        assert_eq!(replies, [true, false, false]);
     }
 
     /// Samples rotate through what a node holds once per interval, and

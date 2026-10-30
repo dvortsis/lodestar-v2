@@ -86,23 +86,57 @@ impl Drop for Dirs {
 /// when no reply reached the node before the stop, the ceiling from the
 /// send (a timeout cools from later than that; a sealed sample from the
 /// stop). A lower bound on the real deadline in every case, so a sample
-/// before it is always a violation.
+/// before it is always a violation. A reply due at the stop instant may not
+/// have been read, but then the sample was sealed to the stop plus the
+/// ceiling, which is later than `at + wait` anyway.
 fn earliest_resample(ask: &SampleAsk, stop: Instant) -> Instant {
-    let unanswered = ask.sent + COOLDOWN_CEILING;
     match ask.reply {
         Some((at, interval)) if at <= stop => {
-            let wait = interval.map_or(COOLDOWN_CEILING, |s| {
+            at + interval.map_or(COOLDOWN_CEILING, |s| {
                 Duration::from_secs(s.into()).clamp(COOLDOWN_FLOOR, COOLDOWN_CEILING)
-            });
-            // A reply due at the stop instant may or may not have been read.
-            if at == stop {
-                (at + wait).min(unanswered)
-            } else {
-                at + wait
-            }
+            })
         }
-        _ => unanswered,
+        _ => ask.sent + COOLDOWN_CEILING,
     }
+}
+
+/// Leg-2 samples sent before their node's earliest allowed re-sample.
+fn sampled_early<'a>(
+    earliest: &HashMap<SocketAddr, Instant>,
+    asks: &'a [SampleAsk],
+) -> Vec<&'a SampleAsk> {
+    asks.iter()
+        .filter(|a| earliest.get(&a.to).is_some_and(|due| a.sent < *due))
+        .collect()
+}
+
+/// Ties the actor's `sample_failures` to the network's record: every error
+/// and unanswered sample is a failure (an error reply, or a timeout),
+/// except those still in flight at the stop, which are sealed instead.
+/// Those can only be samples sent within a query timeout plus a tick of
+/// the stop that got no reply by then. Returns how many were sealed.
+fn sealed_at_stop(
+    c: &Asks,
+    sample_failures: u64,
+    asks: &[SampleAsk],
+    stop: Instant,
+    window: Duration,
+) -> u64 {
+    let failed = c.errors + c.unanswered;
+    assert!(
+        sample_failures <= failed,
+        "sample_failures {sample_failures} > errors + unanswered {failed}"
+    );
+    let flying = asks
+        .iter()
+        .filter(|a| a.sent + window > stop && a.reply.is_none_or(|(at, _)| at > stop))
+        .count() as u64;
+    let sealed = failed - sample_failures;
+    assert!(
+        sealed <= flying,
+        "{sealed} unanswered samples neither failed nor in flight at the stop ({flying})"
+    );
+    sealed
 }
 
 /// Leg-wide sample counts, from the network's record.
@@ -173,6 +207,8 @@ pub async fn run(
     sleep_until(start + suppression + Duration::from_secs(u64::from(r.leg1_minutes) * 60)).await;
     let stop = Instant::now();
     let one = leg.stop().await;
+    // Load-bearing: `Net::drain` stamps the samples sent while stopping
+    // with the time it runs, and the bounds treat that as their send time.
     assert_eq!(
         Instant::now(),
         stop,
@@ -186,6 +222,8 @@ pub async fn run(
     net.cut();
     let leg1 = net.asks.len();
     let c1 = count(&net.asks, stop);
+    let in_flight = dht.query_timeout + dht.tick;
+    let sealed1 = sealed_at_stop(&c1, one.dht.sample_failures, &net.asks, stop, in_flight);
     assert_eq!(
         c1.sent, one.dht.samples_sent,
         "leg 1: network saw every sample"
@@ -242,7 +280,7 @@ pub async fn run(
     );
     let _ = writeln!(
         text,
-        "samples: sent={} answered={} errors={} unanswered={} sample_failures={} sample_stale={}",
+        "samples: sent={} answered={} errors={} unanswered={} sample_failures={} sealed={sealed1} sample_stale={}",
         c1.sent,
         c1.answered,
         c1.errors,
@@ -269,6 +307,10 @@ pub async fn run(
         one.dropped + two.dropped,
         two.queued.len(),
     );
+    let _ = writeln!(
+        text,
+        "# (the network's tallies cover both legs; `sample` leaves out the samples sent while stopping)"
+    );
 
     // What leg 2's samples show against what leg 1 left.
     let mut earliest: HashMap<SocketAddr, Instant> = HashMap::new();
@@ -276,7 +318,9 @@ pub async fn run(
         earliest.insert(a.to, earliest_resample(a, stop));
     }
     let asks2 = &net.asks[leg1..];
-    let c2 = count(asks2, Instant::now());
+    let stop2 = Instant::now();
+    let c2 = count(asks2, stop2);
+    let sealed2 = sealed_at_stop(&c2, two.dht.sample_failures, asks2, stop2, in_flight);
     assert_eq!(
         c2.sent, two.dht.samples_sent,
         "leg 2: network saw every sample"
@@ -285,9 +329,8 @@ pub async fn run(
     for a in asks2 {
         first2.entry(a.to).or_insert(a.sent);
     }
-    let early: Vec<String> = asks2
-        .iter()
-        .filter(|a| earliest.get(&a.to).is_some_and(|due| a.sent < *due))
+    let early: Vec<String> = sampled_early(&earliest, asks2)
+        .into_iter()
         .take(5)
         .map(|a| {
             format!(
@@ -352,7 +395,7 @@ pub async fn run(
     );
     let _ = writeln!(
         text,
-        "samples: sent={} answered={} errors={} unanswered={} sample_failures={} sample_stale={}",
+        "samples: sent={} answered={} errors={} unanswered={} sample_failures={} sealed={sealed2} sample_stale={}",
         c2.sent,
         c2.answered,
         c2.errors,
@@ -382,6 +425,15 @@ pub async fn run(
             first_sample.is_some_and(|d| d <= Duration::from_secs(60)),
             "sampling didn't resume at once: {first_sample:?}"
         );
+        assert_eq!(
+            expired_resampled, expired_at_restart,
+            "nodes free at the restart were sampled again"
+        );
+        assert_eq!(
+            delays.len(),
+            due.len(),
+            "every obligation expiring in leg 2 was followed by a sample"
+        );
     } else {
         assert_eq!(d2.sample_suppression_reason, Reason::Off, "{text}");
         if end2 < start2 + suppression {
@@ -398,4 +450,117 @@ pub async fn run(
         run::steady(&minutes, |m| m.stored),
         pool_end,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(n: u8) -> SocketAddr {
+        SocketAddr::from(([24, 0, 0, n], 6881))
+    }
+
+    fn ask(n: u8, sent: Instant, reply: Option<(Instant, Option<u32>)>) -> SampleAsk {
+        SampleAsk::new(addr(n), sent, reply)
+    }
+
+    const S: fn(u64) -> Duration = Duration::from_secs;
+
+    /// Every case of the bound, as the sampler sets the real deadline.
+    #[test]
+    fn earliest_resample_follows_the_sampler() {
+        let t = Instant::now();
+        let stop = t + S(1_000);
+        let at = t + S(1);
+        // An interval below the floor, in range, and above the ceiling.
+        assert_eq!(
+            earliest_resample(&ask(1, t, Some((at, Some(10)))), stop),
+            at + S(60)
+        );
+        assert_eq!(
+            earliest_resample(&ask(1, t, Some((at, Some(900)))), stop),
+            at + S(900)
+        );
+        assert_eq!(
+            earliest_resample(&ask(1, t, Some((at, Some(30_000)))), stop),
+            at + S(6 * 3600)
+        );
+        // An error reply cools for the ceiling from its arrival.
+        assert_eq!(
+            earliest_resample(&ask(1, t, Some((at, None))), stop),
+            at + S(6 * 3600)
+        );
+        // No reply: the ceiling from the send.
+        assert_eq!(earliest_resample(&ask(1, t, None), stop), t + S(6 * 3600));
+        // A reply due at the stop counts; one due after it doesn't arrive.
+        assert_eq!(
+            earliest_resample(&ask(1, t, Some((stop, Some(900)))), stop),
+            stop + S(900)
+        );
+        assert_eq!(
+            earliest_resample(&ask(1, t, Some((stop + S(1), Some(900)))), stop),
+            t + S(6 * 3600)
+        );
+    }
+
+    /// The check catches a sample before the bound and passes one at it,
+    /// and ignores nodes leg 1 never sampled.
+    #[test]
+    fn a_sample_before_the_bound_is_caught() {
+        let t = Instant::now();
+        let stop = t + S(100);
+        let leg1 = [ask(1, t, Some((t + S(1), Some(900)))), ask(2, t, None)];
+        let earliest: HashMap<SocketAddr, Instant> = leg1
+            .iter()
+            .map(|a| (a.to, earliest_resample(a, stop)))
+            .collect();
+        let leg2 = [
+            ask(1, t + S(900), None),
+            ask(1, t + S(901), None),
+            ask(2, t + S(3600), None),
+            ask(3, t + S(200), None),
+        ];
+        let early: Vec<(SocketAddr, Instant)> = sampled_early(&earliest, &leg2)
+            .iter()
+            .map(|a| (a.to, a.sent))
+            .collect();
+        assert_eq!(early, [(addr(1), t + S(900)), (addr(2), t + S(3600))]);
+    }
+
+    /// Unanswered samples are failures, except those in flight at the stop.
+    #[test]
+    fn failures_balance_against_the_record() {
+        let t = Instant::now();
+        let stop = t + S(100);
+        let w = S(5);
+        let asks = [
+            ask(1, t, Some((t + S(1), Some(900)))),
+            ask(2, t, Some((t + S(1), None))),
+            ask(3, t, None),
+            ask(4, stop - S(1), None),
+            ask(5, stop - S(1), Some((stop + S(1), Some(900)))),
+        ];
+        let c = count(&asks, stop);
+        assert_eq!(
+            c,
+            Asks {
+                sent: 5,
+                answered: 1,
+                errors: 1,
+                unanswered: 3
+            }
+        );
+        assert_eq!(sealed_at_stop(&c, 2, &asks, stop, w), 2);
+        assert_eq!(sealed_at_stop(&c, 4, &asks, stop, w), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "neither failed nor in flight")]
+    fn a_missing_failure_is_caught() {
+        let t = Instant::now();
+        let stop = t + S(100);
+        let asks = [ask(1, t, None), ask(2, t, None)];
+        let c = count(&asks, stop);
+        sealed_at_stop(&c, 1, &asks, stop, S(5));
+    }
 }
