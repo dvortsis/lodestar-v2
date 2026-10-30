@@ -9,8 +9,9 @@
 //! per-tracker detail, history and the tracker list (§7, M4), and M5's
 //! user data, API keys and reporting tables (saved searches and alerts,
 //! user items, collections, searchable time per hour, the opt-in query
-//! log). A single [`Store`] owns the one writer connection; the
-//! pipeline's writer task drives it.
+//! log), and durable import jobs with their batch commit ([`import`]).
+//! A single [`Store`] owns the one writer connection; the pipeline's
+//! writer task drives it.
 
 mod api_keys;
 mod collections;
@@ -20,6 +21,7 @@ mod filter;
 mod floor;
 pub mod history;
 pub mod hot;
+pub mod import;
 mod insights;
 mod insights_days;
 mod reporting;
@@ -122,6 +124,11 @@ pub enum Error {
     /// A row the call names doesn't exist (say, adding an unknown torrent
     /// to a collection).
     NotFound(&'static str),
+    /// An import batch for a job that isn't running (paused, blocked,
+    /// finished, or not reading): nothing was written, and the batch is
+    /// sent again after the job resumes. Unlike a sequence gap, it isn't
+    /// a fault.
+    ImportNotRunning,
 }
 
 impl fmt::Display for Error {
@@ -138,6 +145,7 @@ impl fmt::Display for Error {
             Error::TooManySources => write!(f, "all {MAX_SOURCES} source ids are in use"),
             Error::Invalid(what) => write!(f, "invalid: {what}"),
             Error::NotFound(what) => write!(f, "not found: {what}"),
+            Error::ImportNotRunning => write!(f, "the import job isn't taking batches"),
         }
     }
 }
@@ -1053,6 +1061,28 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
         }
         return Ok(Inserted::Existing(id));
     }
+    let id = insert_new(
+        tx,
+        p,
+        p.flags | t.extra_flags,
+        t.discovered_at,
+        t.metadata_at,
+        t.source,
+    )?;
+    Ok(Inserted::New(id))
+}
+
+/// Inserts a new torrent's rows (`torrents`, files, extra, raw and
+/// enrichment) under the next shared id; `last_seen_at` starts at
+/// `discovered_at`.
+fn insert_new(
+    tx: &Connection,
+    p: &Prepared,
+    flags: i64,
+    discovered_at: i64,
+    metadata_at: i64,
+    source: SourceId,
+) -> Result<i64> {
     let id = sources::next_id(tx)?;
     tx.prepare_cached(
         "INSERT INTO torrents (id, info_hash, info_hash_v2, name, name_raw, name_enc,
@@ -1072,12 +1102,12 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
         to_i64(p.piece_count)?,
         to_i64(p.file_count)?,
         to_i64(p.info_size)?,
-        p.flags | t.extra_flags,
-        t.discovered_at,
-        t.metadata_at,
+        flags,
+        discovered_at,
+        metadata_at,
         id,
-        bit,
-        t.source.get(),
+        source.bit(),
+        source.get(),
     ])?;
     tx.prepare_cached(
         "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)",
@@ -1099,7 +1129,7 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
     if let Some(e) = &p.enrichment {
         write_enrichment(tx, id, e)?;
     }
-    Ok(Inserted::New(id))
+    Ok(id)
 }
 
 /// Writes enrichments of stored torrents and logs them for re-indexing;
@@ -1148,6 +1178,9 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
     if flags_now & flags::FILES_PARTIAL == 0 {
         return Ok(());
     }
+    // An import's private restriction is sticky (IMP-1): the fetched info
+    // dict can't clear it.
+    let private = import::sticky_private(conn, id)?;
     let keep = flags::IMPORTED | flags::BACKFILL;
     conn.prepare_cached(
         "UPDATE torrents SET size = ?2, piece_len = ?3, piece_count = ?4, file_count = ?5,
@@ -1168,7 +1201,8 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
         p.flags
             | (t.extra_flags & !flags::PRIVATE_SOURCE)
             | (flags_now & keep)
-            | (flags_now & t.extra_flags & flags::PRIVATE_SOURCE),
+            | (flags_now & t.extra_flags & flags::PRIVATE_SOURCE)
+            | if private { flags::PRIVATE } else { 0 },
         t.metadata_at,
         p.info_hash_v2.as_ref().map(|h| &h.0[..]),
         p.name,
@@ -1211,6 +1245,7 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
         )?
         .execute([id])?;
     }
+    import::verified_upgrade(conn, id, private || p.flags & flags::PRIVATE != 0)?;
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;
     Ok(())

@@ -81,7 +81,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     esac \
     && cargo zigbuild --locked --release -p lodestar --bin lodestar --no-default-features --features web --target "$triple" \
     && install -D "target/$triple/release/lodestar" /out/lodestar \
-    && mkdir -p /out/data
+    && mkdir -p /out/data \
+    && install -d -m 0700 /out/witness
 
 # ---- 3. Runtime ------------------------------------------------------------
 # distroless/static-debian12:nonroot, no shell. It starts as root (USER below)
@@ -107,10 +108,17 @@ COPY --from=build /out/lodestar /lodestar
 # so the default PUID/PGID start without a chown. (Bind mounts keep the host's
 # owner until the binary changes it.)
 COPY --from=build --chown=65532:65532 /out/data /data
+# The restart proof's witness (dht.safe_restart, CR-0d): in the container
+# layer, outside /data, so restoring a backup of /data can't roll it back.
+# The binary hands it to PUID:PGID like /data. Recreating the container
+# (every image update) loses it, so the first start after an update
+# waits out the full sampling suppression.
+COPY --from=build --chown=65532:65532 /out/witness /var/lib/lodestar-witness
 
 # 0.0.0.0 so the published port reaches it (config.rs: a SocketAddr);
 # `lodestar healthcheck` probes 127.0.0.1 at the same port.
 ENV LODESTAR_DATA_DIR=/data \
+    LODESTAR_DHT_WITNESS_DIR=/var/lib/lodestar-witness \
     LODESTAR_HTTP_BIND=0.0.0.0:8090
 
 # Root, so PUID/PGID can be applied; the binary drops it at once. `--user`

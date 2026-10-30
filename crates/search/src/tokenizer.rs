@@ -320,21 +320,22 @@ pub fn tokenize_into(text: &str, position: usize, out: &mut Vec<Tok>, max: usize
             );
         }
         // Joined to the next word by a single '.' or '-'.
-        if let Some(next) = atoms.get(k + 1) {
-            if !next.cjk && next.start == atom.end + 1 {
-                let sep = chars[atom.end].c;
-                let other = &chars[next.start..next.end];
-                if joins(word, sep, other) {
-                    let text = lower(word) + &lower(other);
-                    emit(
-                        out,
-                        text,
-                        from,
-                        other[other.len() - 1].to,
-                        first,
-                        TokKind::Compound,
-                    );
-                }
+        if let Some(next) = atoms.get(k + 1)
+            && !next.cjk
+            && next.start == atom.end + 1
+        {
+            let sep = chars[atom.end].c;
+            let other = &chars[next.start..next.end];
+            if joins(word, sep, other) {
+                let text = lower(word) + &lower(other);
+                emit(
+                    out,
+                    text,
+                    from,
+                    other[other.len() - 1].to,
+                    first,
+                    TokKind::Compound,
+                );
             }
         }
     }

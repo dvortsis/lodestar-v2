@@ -48,7 +48,7 @@ fn raw(i: usize) -> Vec<u8> {
         0 => {
             let n = format!("Movie.Title{i}.{year}{lang}.{res}.BluRay.x264-GRP{}", i % 5);
             let mut files = vec![(format!("{n}.mkv"), (1 << 30) + i as i64 * 7_000_000)];
-            if i % 8 == 0 {
+            if i.is_multiple_of(8) {
                 files.push((format!("{n}.nfo"), 2_000));
             }
             (n, files)

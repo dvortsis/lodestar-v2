@@ -641,6 +641,20 @@ These Prometheus series are aggregate, without endpoint/hash labels. Gauges refl
 `dht_lookups_completed_total` counts terminal owned requests, including empty results; a request whose caller cancelled it counts only in `dht_peer_cancelled_total` (CR-0f). It is not a metadata-yield counter. The typed `dht.socket_buffers` startup event reports the existing 4 MiB receive-buffer request, `send_requested=0` (retain the system default), kernel readback for both buffers, and set/read errors per socket. Zero readback with `read_errors > 0` means unknown. OS accounting may differ; do not infer packet drops from grants. Kernel drop counts remain unavailable unless separately collected. The six-hour startup suppression must be excluded from a steady-state sample-yield comparison and reported separately.
 
 
+## CR-0d restart proof (2026-10-30)
+
+With `dht.safe_restart` on, a clean restart can resume sampling at once instead of waiting six hours, honouring every restriction the last run recorded (`docs/decisions/2026-10-30-CR-0d.md`). These series say which happened and why. They are aggregate, with no endpoint labels.
+
+| Series | Meaning |
+|---|---|
+| `dht_sample_suppression_reason{reason}` | Gauge, 1 for this run's reason and 0 for the rest. `resumed` means the proof held. `off` means the switch is off or there's no data directory. Every other label means this run suppresses for the full window, or isn't sampling yet: `locked` (another process holds the data directory, or the filesystem has no locks), `first_start`, `corrupt`, `version`, `dirty` (the last run didn't stop cleanly), `off_run`, `data_dir`, `node_identity`, `foreign_run`, `snapshot_mismatch`, `no_witness`, `generation` (a restored backup), `horizon_changed`, `clock_backward`, `stale` (more than six hours since the last clean stop), `invalidate_failed` (a write the proof needs before sampling hadn't landed at start: nothing is sampled until it does, and then not before this run's start plus six hours). |
+| `dht_restart_obligations_restored` | Restrictions seeded from the last clean stop; 0 when this run didn't resume. |
+| `dht_restart_obligations_pending` | Restored restrictions still cooling. |
+| `dht_restart_obligations_refused_total`, `dht_restart_obligations_honoured_total` | Candidates a restored restriction turned away, and restored restrictions that expired unsampled. Monitoring only: the proof that restrictions are honoured is the wire-level test, not these counters. |
+| `dht_restart_persist_errors_total{step}` | Restart-proof write failures by step: `lock`, `witness`, `invalidate`, `state_bin`, `snapshot`, `marker`. Failures never make sampling less safe; they cost the next start its resume, or hold sampling until a retry lands. |
+
+`dht_sample_suppression_seconds` reads 0 from the start of a resumed run, unless a restored blanket gate still holds. While sampling is held with no known end (`locked`, `invalidate_failed`), it never reads 0. Typed events: `dht.restart_check` at start (mode, reason, the previous marker, generation, counts), `dht.restart_commit` at shutdown (ok, duration, entries) and `dht.restart_persist_failed` (Warn, step). A resumed run's sample yield isn't comparable with a suppressed run's first six hours: report the reason with any A/B window.
+
 ## Hardened baseline diagnostics (October 27)
 
 See [the diagnostic boundary contract](decisions/2026-10-27-soak-diagnostics.md).
@@ -662,6 +676,25 @@ peer/fetch flags; do not interpret eviction categories as complete cross-restart
 history. All absent measurements remain unknown.
 
 
+## Coordinated admission (CR-ADM, 2026-10-30)
+
+These series count only with `dht.coordinated_admission` on ([the decision](decisions/2026-10-30-CR-ADM.md)); with it off they're exported and stay 0. A permit is one logical peer request's slot at one finder, covering every address family; the DHT has 32. These are event counts, not unique hashes, network attempts or cohort conversion. The existing admission counters keep their meaning.
+
+| Series | Meaning |
+|---|---|
+| `fetch_admission_waits_total{kind}` | A key due a lookup that joined the permission queue instead of being granted at once. `kind` is `arrival` (a discovery or a restored key), `retry` (after back-off) or `requeue` (after a refusal, a lost acknowledgment or a pause drop). |
+| `fetch_admission_wait_cancelled_total{reason}` | Waiters that left without a request: `evicted`, or `peers` (peers arrived first). No network attempt is made. |
+| `fetch_admission_wakeups_total` | Times a permit returned while the pool was idle woke it. One wakeup can grant several waiters; a grant the pool makes on seeing a completion itself needs none. |
+| `fetch_admission_grants_total{kind,class}` | Requests granted permits, by `kind` as above and `class` `interactive` or `background`. |
+| `fetch_admission_refusals_total{reason}` | Requests that held permits but weren't accepted: `refused` (the actor answered no; its reason is in `dht_peer_rejection_reasons_total`) or `unacknowledged` (the handoff or acknowledgment was lost). Neither uses an attempt or a back-off. |
+| `fetch_admission_holds_total` | 1 s holds on a finder after a refusal. |
+| `fetch_admission_permit_returns_total{boundary}` | Permits returned in the pool: `finder_full` and `finder_closed` (granted, never delivered), and `unused` (never granted: kept back from a wakeup or a partial grant and given back on a hold, a pause, shutdown or an empty queue, or taken for a waiter that had run out of attempts). |
+| `dht_peer_permit_returns_total{boundary}` | Permits returned in the actor: `completed`, `cancelled_queued`, `cancelled_active`, `paused`, `refused`, `ack_failed`, `handoff_failed`, `shutdown`. |
+| `fetch_admission_waiters` | Gauge: keys waiting for a lookup now. |
+| `fetch_admission_permits_in_use` | Gauge: permits granted requests hold now, across finders. |
+
+With one finder (the DHT), `fetch_admission_grants_total` = `dht_peer_permit_returns_total` + `fetch_admission_permit_returns_total{boundary=~"finder_full|finder_closed"}` + `fetch_admission_permits_in_use`. A persistent gap means a leaked or duplicated permit; a brief one is a permit in transit between the pool and the actor. At shutdown, a request still in the DHT plugin's channel returns its permit without being counted.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.
@@ -677,3 +710,20 @@ The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes w
 | `discovery_to_searchable_dropped_total` | counter | Latency measurements lost to a full bound: the writer's 4,096-entry hand-off or the 65,536-entry wait queue (oldest evicted). The record still counts in `searchable_new_total`, without a latency, once an index commit passes the highest id dropped. |
 
 Imports, recovery and every excluded reason are separate series, so a stricter filter moves `filtered` or `quarantined`, never the numerator. Rows a rule only hides, demotes or flags are stored and indexed, so they count (see the decision). Keys lost for other reasons (no peers, time-outs) are in `fetch_lost_total{reason}`. Like the other `/metrics` series, these are process-lifetime and carry no hash or endpoint labels.
+
+## Storage and cache sizes (R-gauges, 2026-10-30)
+
+Added for the v0.5.1 Linux soak, so a memory or disk ramp can be explained (owner's ruling on #189). See [the decision](decisions/2026-10-30-R-gauges.md). The file sizes are sampled every 60 s by a background task; a scrape reads the last sample and never touches the disk. The have-filter and hot columns already have `have_bytes` and `hot_columns_bytes`.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `store_db_bytes` | gauge | Size of `lodestar.db`. |
+| `store_wal_bytes` | gauge | Size of `lodestar.db-wal`; 0 when there is none. |
+| `search_index_bytes` | gauge | Regular files under `data/index`: every index version and any rebuild in progress. 0 with search off. Symlinks aren't followed; the walk stops after 100,000 entries (an error). |
+| `storage_sampled_seconds` | gauge | Unix time of the last sample that read all three sizes; 0 before the first. A stale value means samples are failing. |
+| `storage_sample_errors_total` | counter | Sizes that couldn't be read, one per size per sample. Each keeps its last value. |
+| `search_file_cache_entries`, `search_file_cache_bytes` | gauge | `file:(…)` id sets the serving index caches, and the bytes they retain as the 8 MiB budget charges them. |
+| `search_browse_cache_entries`, `search_browse_cache_bytes` | gauge | Per-segment sorted tops the serving index caches (bounded at 4,096 entries), and their estimated bytes. |
+| `search_result_cache_entries{kind}`, `search_result_cache_bytes{kind}` | gauge | The result cache by `kind` (`search`, `facets`): entries and estimated bytes. |
+
+The cache series render only with search on. There is no server-side detail cache: the detail caches are in the browser. SQLite's page cache isn't reported (see the decision).

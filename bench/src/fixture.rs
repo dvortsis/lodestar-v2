@@ -2362,10 +2362,10 @@ fn write_user_data(
                 alerts[n].1 += k;
             }
         }
-        if run == 0 {
-            if let Some(last) = created.iter().map(|a| a.id).max() {
-                store.mark_alerts_read(None, last, at + 600)?;
-            }
+        if run == 0
+            && let Some(last) = created.iter().map(|a| a.id).max()
+        {
+            store.mark_alerts_read(None, last, at + 600)?;
         }
         lo = hi;
     }

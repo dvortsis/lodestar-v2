@@ -13,6 +13,7 @@
 mod actor;
 mod lookup;
 mod peers;
+mod proof;
 mod sampler;
 mod seen;
 #[cfg(feature = "testing")]
@@ -146,6 +147,39 @@ pub struct Config {
     /// Start paused (the crawler's pause, which persists): see
     /// [`NodeHandle::set_paused`].
     pub paused: bool,
+    /// CR-0d's crash-safe restart proof (`dht.safe_restart`): `None` keeps
+    /// the full suppression after every start. It needs `state_path` and
+    /// no `sample_start_delay` override; without them it acts as off.
+    pub restart: Option<RestartConfig>,
+}
+
+/// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
+#[derive(Debug, Clone)]
+pub struct RestartConfig {
+    /// Where the generation witness lives: outside the data directory.
+    /// `None`, or a directory that resolves inside it, means no witness,
+    /// so every start suppresses (`no_witness`).
+    pub witness_dir: Option<PathBuf>,
+    /// Test seam: the wall clock. Its `mono` must be tokio's
+    /// `Instant::now()`, the clock the sampler keeps; production uses
+    /// [`crate::restart::SystemClock`] ([`RestartConfig::new`]).
+    #[doc(hidden)]
+    pub clock: Arc<dyn crate::restart::Clock>,
+    /// Test seam: do the file work on the actor's thread instead of
+    /// tokio's blocking pool, for tests on a paused clock, where a pool
+    /// thread's progress isn't ordered with simulated time.
+    #[doc(hidden)]
+    pub inline_io: bool,
+}
+
+impl RestartConfig {
+    pub fn new(witness_dir: Option<PathBuf>) -> RestartConfig {
+        RestartConfig {
+            witness_dir,
+            clock: Arc::new(crate::restart::SystemClock),
+            inline_io: false,
+        }
+    }
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -181,6 +215,7 @@ impl Default for Config {
             deny: None,
             allow_private: false,
             paused: false,
+            restart: None,
         }
     }
 }
@@ -235,6 +270,8 @@ pub struct Stats {
     pub peer_ack_failed: AtomicU64,
     pub peer_command_full: AtomicU64,
     pub peer_command_closed: AtomicU64,
+    /// Admission permits (CR-ADM) returned, by [`PermitReturn`].
+    pub peer_permit_returns: [AtomicU64; PermitReturn::ALL.len()],
 
     pub peer_cancelled: AtomicU64,
     pub peer_active: AtomicU64,
@@ -243,6 +280,18 @@ pub struct Stats {
     pub lookup_deadlines: AtomicU64,
     pub sample_frontier: AtomicU64,
     pub sample_suppression_seconds: AtomicU64,
+    /// Gauge: why this run is or isn't sampling yet, as an index into
+    /// [`crate::restart::Reason::ALL`].
+    pub sample_suppression_reason: AtomicU64,
+    /// Gauges: restrictions restored at start, and those still cooling.
+    pub restart_obligations_restored: AtomicU64,
+    pub restart_obligations_pending: AtomicU64,
+    /// Candidates a restored restriction turned away, and restored
+    /// restrictions that expired unsampled. Monitoring only.
+    pub restart_obligations_refused: AtomicU64,
+    pub restart_obligations_honoured: AtomicU64,
+    /// Restart-proof I/O failures, by [`PersistStep`].
+    pub restart_persist_errors: [AtomicU64; PersistStep::ALL.len()],
     /// Sampling ticks/admissions deferred by capacity.
     pub sample_deferred: AtomicU64,
     /// BEP 33 scrapes asked for, answered, and refused because the queue
@@ -297,6 +346,7 @@ impl Stats {
             peer_ack_failed: g(&self.peer_ack_failed),
             peer_command_full: g(&self.peer_command_full),
             peer_command_closed: g(&self.peer_command_closed),
+            peer_permit_returns: std::array::from_fn(|i| g(&self.peer_permit_returns[i])),
 
             peer_cancelled: g(&self.peer_cancelled),
             peer_active: g(&self.peer_active),
@@ -305,12 +355,110 @@ impl Stats {
             lookup_deadlines: g(&self.lookup_deadlines),
             sample_frontier: g(&self.sample_frontier),
             sample_suppression_seconds: g(&self.sample_suppression_seconds),
+            sample_suppression_reason: crate::restart::Reason::ALL
+                .get(g(&self.sample_suppression_reason) as usize)
+                .copied()
+                .unwrap_or(crate::restart::Reason::Off),
+            restart_obligations_restored: g(&self.restart_obligations_restored),
+            restart_obligations_pending: g(&self.restart_obligations_pending),
+            restart_obligations_refused: g(&self.restart_obligations_refused),
+            restart_obligations_honoured: g(&self.restart_obligations_honoured),
+            restart_persist_errors: std::array::from_fn(|i| g(&self.restart_persist_errors[i])),
             sample_deferred: g(&self.sample_deferred),
             scrapes_requested: g(&self.scrapes_requested),
             scrapes_completed: g(&self.scrapes_completed),
             scrapes_dropped: g(&self.scrapes_dropped),
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
+        }
+    }
+}
+
+/// Where an admission permit (CR-ADM) went back to its finder's pool
+/// (`dht_peer_permit_returns_total{boundary}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermitReturn {
+    /// The last family leg finished and the caller had its answer.
+    Completed,
+    /// The caller dropped its receiver while the request was queued.
+    CancelledQueued,
+    /// The caller dropped its receiver while the request ran.
+    CancelledActive,
+    /// The pause dropped the queued request.
+    Paused,
+    /// Refused at admission: caller closed, paused or capacity.
+    Refused,
+    /// The admission acknowledgment couldn't be delivered.
+    AckFailed,
+    /// The command channel to the actor was full or closed.
+    HandoffFailed,
+    /// Still held when the actor stopped.
+    Shutdown,
+}
+
+impl PermitReturn {
+    pub const ALL: [PermitReturn; 8] = [
+        PermitReturn::Completed,
+        PermitReturn::CancelledQueued,
+        PermitReturn::CancelledActive,
+        PermitReturn::Paused,
+        PermitReturn::Refused,
+        PermitReturn::AckFailed,
+        PermitReturn::HandoffFailed,
+        PermitReturn::Shutdown,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermitReturn::Completed => "completed",
+            PermitReturn::CancelledQueued => "cancelled_queued",
+            PermitReturn::CancelledActive => "cancelled_active",
+            PermitReturn::Paused => "paused",
+            PermitReturn::Refused => "refused",
+            PermitReturn::AckFailed => "ack_failed",
+            PermitReturn::HandoffFailed => "handoff_failed",
+            PermitReturn::Shutdown => "shutdown",
+        }
+    }
+
+    /// Counts the return and drops the permit, if there is one.
+    pub(crate) fn release(self, stats: &Stats, permit: Option<PeerPermit>) {
+        if let Some(permit) = permit {
+            Stats::inc(&stats.peer_permit_returns[self as usize]);
+            drop(permit);
+        }
+    }
+}
+
+/// Where a restart-proof write failed (`dht_restart_persist_errors_total`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistStep {
+    Lock,
+    Witness,
+    Invalidate,
+    StateBin,
+    Snapshot,
+    Marker,
+}
+
+impl PersistStep {
+    pub const ALL: [PersistStep; 6] = [
+        PersistStep::Lock,
+        PersistStep::Witness,
+        PersistStep::Invalidate,
+        PersistStep::StateBin,
+        PersistStep::Snapshot,
+        PersistStep::Marker,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PersistStep::Lock => "lock",
+            PersistStep::Witness => "witness",
+            PersistStep::Invalidate => "invalidate",
+            PersistStep::StateBin => "state_bin",
+            PersistStep::Snapshot => "snapshot",
+            PersistStep::Marker => "marker",
         }
     }
 }
@@ -350,6 +498,8 @@ pub struct StatsSnapshot {
     pub peer_ack_failed: u64,
     pub peer_command_full: u64,
     pub peer_command_closed: u64,
+    /// By [`PermitReturn::ALL`].
+    pub peer_permit_returns: [u64; 8],
 
     pub peer_cancelled: u64,
     pub peer_active: u64,
@@ -358,6 +508,13 @@ pub struct StatsSnapshot {
     pub lookup_deadlines: u64,
     pub sample_frontier: u64,
     pub sample_suppression_seconds: u64,
+    pub sample_suppression_reason: crate::restart::Reason,
+    pub restart_obligations_restored: u64,
+    pub restart_obligations_pending: u64,
+    pub restart_obligations_refused: u64,
+    pub restart_obligations_honoured: u64,
+    /// By [`PersistStep::ALL`].
+    pub restart_persist_errors: [u64; 6],
     pub sample_deferred: u64,
     pub scrapes_requested: u64,
     pub scrapes_completed: u64,
@@ -426,7 +583,7 @@ pub struct ExternalVotes {
 pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
     GetPeers(InfoHash),
-    RequestPeers(InfoHash, PeerAdmission),
+    RequestPeers(InfoHash, PeerAdmission, Option<PeerPermit>),
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
     SetIntensity(Intensity),
     SetPaused(bool),
@@ -437,6 +594,14 @@ pub(crate) enum Command {
 pub type PeerResult = oneshot::Receiver<Vec<SocketAddr>>;
 /// `None` means backpressure/paused; it must not consume a network attempt.
 pub type PeerAdmission = oneshot::Sender<Option<PeerResult>>;
+/// One owned request's slot, under coordinated admission (CR-ADM). The
+/// caller's semaphore holds [`PEER_REQUEST_CAPACITY`] of them; the actor
+/// keeps the permit for as long as the request holds a slot, and dropping
+/// it gives the slot back.
+pub type PeerPermit = tokio::sync::OwnedSemaphorePermit;
+/// Owned peer requests the actor runs or queues at once, across families:
+/// one slot per logical request, however many family legs it runs.
+pub const PEER_REQUEST_CAPACITY: usize = 32;
 
 /// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -462,17 +627,34 @@ impl NodeHandle {
     /// `true` means enqueued only; `Some` on the admission channel owns work.
     /// Dropping the returned terminal receiver cancels all family legs.
     pub fn request_peers(&self, hash: InfoHash, admit: PeerAdmission) -> bool {
-        match self.commands.try_send(Command::RequestPeers(hash, admit)) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                Stats::inc(&self.stats.peer_command_full);
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                Stats::inc(&self.stats.peer_command_closed);
-                false
-            }
+        self.request_peers_with(hash, admit, None)
+    }
+
+    /// [`request_peers`](Self::request_peers) carrying the request's
+    /// admission permit. The actor holds it while the request holds a slot;
+    /// a failed handoff returns it here.
+    pub fn request_peers_with(
+        &self,
+        hash: InfoHash,
+        admit: PeerAdmission,
+        permit: Option<PeerPermit>,
+    ) -> bool {
+        let (counter, cmd) = match self
+            .commands
+            .try_send(Command::RequestPeers(hash, admit, permit))
+        {
+            Ok(()) => return true,
+            Err(mpsc::error::TrySendError::Full(cmd)) => (&self.stats.peer_command_full, cmd),
+            Err(mpsc::error::TrySendError::Closed(cmd)) => (&self.stats.peer_command_closed, cmd),
+        };
+        Stats::inc(counter);
+        if let Command::RequestPeers(_, admit, permit) = cmd {
+            // The caller sees the closed admission before the permit is
+            // back, as with a refusal.
+            drop(admit);
+            PermitReturn::HandoffFailed.release(&self.stats, permit);
         }
+        false
     }
 
     /// Estimates a swarm's seeds and peers from the BEP 33 filters of the

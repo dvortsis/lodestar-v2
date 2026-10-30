@@ -15,7 +15,7 @@ mod scenario;
 
 use std::path::PathBuf;
 
-use scenario::Scenario;
+use scenario::{Scenario, Switches};
 
 fn golden_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -297,6 +297,106 @@ fn noise_floor() {
             "noise {}: steady stored/min mean={mean:.1} min={min:.1} max={max:.1} spread={:.1}%",
             s.name,
             100.0 * (max - min) / mean.max(1.0)
+        );
+    }
+}
+
+/// CR-ADM's switch on the H2 baseline, one short seed: the actor stops
+/// refusing for capacity, and the run still conserves and stores.
+#[test]
+fn coordinated_admission_stops_capacity_refusals() {
+    let mut off = scenario::admission_pressure();
+    off.minutes = 4;
+    let on = Scenario {
+        switches: Switches {
+            coordinated_admission: true,
+        },
+        ..off.clone()
+    };
+    let (a, b) = (simulate(&off), simulate(&on));
+    assert!(a.dht.peer_rejected_capacity > 1_000, "{}", a.text);
+    assert_eq!(b.dht.peer_rejected_capacity, 0, "{}", b.text);
+    assert!(b.text.contains("coordinated_admission=true"));
+    assert!(b.pool.admission[1] > 0, "grants:\n{}", b.text);
+    assert!(b.stored > 0, "{}", b.text);
+    assert!(b.dht.peer_active + b.dht.peer_queued <= 32, "{}", b.text);
+}
+
+/// The CR-ADM screen: both arms on every `SCREEN_SEEDS` seed, per scenario,
+/// with what the brief asks the PR to report.
+/// `cargo test -p lodestar-sources --test sim coordinated_admission_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn coordinated_admission_screen() {
+    let mut production = scenario::admission_pressure();
+    production.name = "admission-pressure@defaults";
+    production.pool.max_pending = lodestar_sources::PoolConfig::default().max_pending;
+    production.pool.retry_backoff = lodestar_sources::PoolConfig::default().retry_backoff;
+    for off in [
+        scenario::admission_pressure(),
+        production,
+        scenario::healthy(),
+        scenario::high_latency(),
+    ] {
+        let on = Scenario {
+            switches: Switches {
+                coordinated_admission: true,
+            },
+            ..off.clone()
+        };
+        println!("\n## {}", off.name);
+        println!(
+            "seed | arm | actor rejected | pool unaccepted | admitted | completed | evicted (unserved/lookup/peers/fetch) | stored | steady/min"
+        );
+        let mut diffs = Vec::new();
+        let mut steady = [Vec::new(), Vec::new()];
+        for seed in SCREEN_SEEDS {
+            let mut row = [0.0; 2];
+            for (arm, s) in [(0, &off), (1, &on)] {
+                let mut s = s.clone();
+                s.seed = seed;
+                let r = simulate(&s);
+                let e = r.pool.evicted_service;
+                println!(
+                    "{seed} | {} | {} | {} | {} | {} | {}/{}/{}/{} | {} | {:.1}",
+                    ["off", "on"][arm],
+                    r.dht.peer_rejected,
+                    r.pool.lookup_unaccepted,
+                    r.dht.peer_admitted,
+                    r.dht.lookups_completed,
+                    e[0],
+                    e[1],
+                    e[2],
+                    e[3],
+                    r.stored,
+                    r.steady_stored
+                );
+                row[arm] = r.steady_stored;
+                steady[arm].push(r.steady_stored);
+            }
+            diffs.push(row[1] - row[0]);
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let spread = |v: &[f64]| {
+            let (lo, hi) = v
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                    (a.min(*x), b.max(*x))
+                });
+            100.0 * (hi - lo) / mean(v).max(1.0)
+        };
+        println!(
+            "steady stored/min: off mean {:.1} (spread {:.1}%), on mean {:.1} (spread {:.1}%), change {:+.1}%; sign test {:?}; diffs {:?}",
+            mean(&steady[0]),
+            spread(&steady[0]),
+            mean(&steady[1]),
+            spread(&steady[1]),
+            100.0 * (mean(&steady[1]) - mean(&steady[0])) / mean(&steady[0]).max(1.0),
+            sign_test(&diffs),
+            diffs
+                .iter()
+                .map(|d| (d * 10.0).round() / 10.0)
+                .collect::<Vec<_>>()
         );
     }
 }

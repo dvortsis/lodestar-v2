@@ -6,7 +6,7 @@ Lodestar's updates are signed with [minisign](https://jedisct1.github.io/minisig
 |---|---|---|---|
 | `lodestar-release.pub` | `02910813433E81E0` | Signs Stable and Beta manifests | In the GitHub Actions environment `release` as `RELEASE_SIGNING_KEY`, which only `v*` tags can use, with the owner as required reviewer; plus the owner's offline backup |
 | `lodestar-nightly.pub` | (to be generated) | Signs Nightly manifests; trusted only on the Nightly channel | In the environment `nightly` (main only) |
-| `lodestar-freshness.pub` | (to be generated) | Signs only freshness statements (channel, manifest hash, timestamp, expiry) for manifests already signed; never new content | In the environment `freshness`, used only by the scheduled weekly re-sign on main |
+| `lodestar-freshness.pub` | `FCA9AFC5C8D864FE` | Signs only freshness statements (channel, manifest hash, timestamp, expiry) for manifests already signed; never new content | In the environment `freshness` as `FRESHNESS_SIGNING_KEY`, used only by the scheduled weekly re-sign on main |
 | `lodestar-recovery.pub` | `67922DDF005FD310` | Signs **key changes** only, never releases | Offline only, password-protected, with the owner |
 
 ## Verifying a release by hand

@@ -814,10 +814,10 @@ impl ClusterServer {
         };
         self.finish(&mut link, reason).await;
         let mut fleet = lock(&self.fleet);
-        if let Some(state) = fleet.workers.get_mut(&peer.worker) {
-            if state.session.as_ref().is_some_and(|s| s.id == id) {
-                state.session = None;
-            }
+        if let Some(state) = fleet.workers.get_mut(&peer.worker)
+            && state.session.as_ref().is_some_and(|s| s.id == id)
+        {
+            state.session = None;
         }
     }
 

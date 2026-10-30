@@ -347,10 +347,10 @@ impl Deluge {
     /// already did.
     async fn relogin(&self, stale: &Secret) -> Result<Secret, ClientError> {
         let mut session = self.session.lock().await;
-        if let Some(current) = &*session {
-            if current.expose() != stale.expose() {
-                return Ok(current.clone());
-            }
+        if let Some(current) = &*session
+            && current.expose() != stale.expose()
+        {
+            return Ok(current.clone());
         }
         *session = None;
         let cookie = self.login().await?;

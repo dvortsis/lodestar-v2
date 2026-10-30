@@ -15,12 +15,14 @@ use lodestar_metainfo::InfoHash;
 
 use super::lookup::Lookup;
 use super::peers::PeerStore;
+use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
-    Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, Snapshot, Source, Stats,
+    Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, PeerPermit, PermitReturn,
+    Snapshot, Source, Stats,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -45,7 +47,7 @@ const SEEN_CAPACITY: usize = 1_000_000;
 /// Hashes we offer when sampled ourselves (BEP 51 allows about 20 per reply).
 const RECENT_SAMPLES: usize = 20;
 /// Concurrent get_peers lookups, and how many requests may wait.
-const MAX_GET_PEERS: usize = 32;
+const MAX_GET_PEERS: usize = super::PEER_REQUEST_CAPACITY;
 const MAX_GET_PEERS_QUEUE: usize = MAX_GET_PEERS;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(25);
 const MAX_PEER_QUERIES: usize = 64;
@@ -308,9 +310,19 @@ struct Family {
     ipv6: bool,
 }
 
+/// A queued lookup: its hash, the owned request's reply (none for a
+/// harvest-only lookup) and its admission permit (CR-ADM), if it has one.
+type QueuedLookup = (
+    InfoHash,
+    Option<oneshot::Sender<Vec<SocketAddr>>>,
+    Option<PeerPermit>,
+);
+
 struct PeerRequest {
     hash: InfoHash,
     reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
+    /// Held until the request gives its slot back (CR-ADM).
+    permit: Option<PeerPermit>,
     remaining: usize,
     inflight: usize,
     sent: usize,
@@ -354,7 +366,7 @@ struct Actor {
     peer_store: PeerStore,
     sampler: Sampler,
     recent: VecDeque<InfoHash>,
-    get_peers_queue: VecDeque<(InfoHash, Option<oneshot::Sender<Vec<SocketAddr>>>)>,
+    get_peers_queue: VecDeque<QueuedLookup>,
     peer_requests: Map<u32, PeerRequest>,
     next_request: u32,
     active_get_peers: usize,
@@ -373,6 +385,8 @@ struct Actor {
     unsolicited_from: UnsolicitedFrom,
     /// The crawler's pause: no sampling, lookups, scrapes or harvests.
     paused: bool,
+    /// CR-0d: when sampling may start, and the restart proof.
+    proof: Proof,
 }
 
 pub(crate) async fn run(
@@ -432,7 +446,16 @@ pub(crate) async fn run(
             }
         }
     }
-    actor.save()
+    // Requests still in the command channel hold permits too.
+    commands.close();
+    while let Ok(cmd) = commands.try_recv() {
+        if let Command::RequestPeers(_, admit, permit) = cmd {
+            drop(admit);
+            PermitReturn::Shutdown.release(&actor.stats, permit);
+        }
+    }
+    actor.release_permits();
+    actor.finish()
 }
 
 async fn recv_second(
@@ -555,6 +578,14 @@ impl Actor {
             contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
+            proof: Proof::new(
+                cfg.state_path.as_deref(),
+                cfg.restart.as_ref(),
+                cfg.sample_start_delay,
+                sampler::MAX_INTERVAL + cfg.query_timeout,
+                cfg.tick,
+                now,
+            ),
             cfg,
         }
     }
@@ -610,7 +641,15 @@ impl Actor {
                     // closed receiver tells the pool the work was cancelled,
                     // not attempted, so the pause costs no attempt. Running
                     // ones finish and still answer.
-                    self.get_peers_queue.retain(|(_, reply)| reply.is_none());
+                    let stats = &self.stats;
+                    self.get_peers_queue.retain_mut(|(_, reply, permit)| {
+                        let keep = reply.is_none();
+                        if !keep {
+                            drop(reply.take());
+                            PermitReturn::Paused.release(stats, permit.take());
+                        }
+                        keep
+                    });
                     for (_, reply) in self.scrape_queue.drain(..) {
                         let _ = reply.send(None);
                     }
@@ -627,12 +666,11 @@ impl Actor {
             }
             Command::GetPeers(hash) => {
                 if self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS_QUEUE {
-                    self.get_peers_queue.push_back((hash, None));
+                    self.get_peers_queue.push_back((hash, None, None));
                 }
             }
-            Command::RequestPeers(hash, admit) => {
-                self.get_peers_queue
-                    .retain(|(_, reply)| reply.as_ref().is_none_or(|r| !r.is_closed()));
+            Command::RequestPeers(hash, admit, permit) => {
+                self.drop_cancelled_queued();
                 if !admit.is_closed()
                     && !self.paused
                     && self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS
@@ -640,9 +678,10 @@ impl Actor {
                     let (tx, rx) = oneshot::channel();
                     if admit.send(Some(rx)).is_ok() {
                         Stats::inc(&self.stats.peer_admitted);
-                        self.get_peers_queue.push_back((hash, Some(tx)));
+                        self.get_peers_queue.push_back((hash, Some(tx), permit));
                     } else {
                         Stats::inc(&self.stats.peer_ack_failed);
+                        PermitReturn::AckFailed.release(&self.stats, permit);
                     }
                 } else {
                     Stats::inc(&self.stats.peer_rejected);
@@ -654,7 +693,10 @@ impl Actor {
                     } else {
                         Stats::inc(&self.stats.peer_rejected_capacity);
                     }
+                    // The refusal goes first: a caller woken by the returned
+                    // permit then already has it to read.
                     let _ = admit.send(None);
+                    PermitReturn::Refused.release(&self.stats, permit);
                 }
             }
             Command::Scrape(hash, reply) => {
@@ -859,7 +901,9 @@ impl Actor {
             return Err(Sent::Throttled);
         }
         // Never reuse a wire token in this process, even after success.
-        let Some(tid) = self.next_tid.checked_add(1) else {
+        // Wire tokens stay below the sampler's proof-token bit (CR-0d):
+        // exhaustion comes 2^63 tokens early, which never happens.
+        let Some(tid) = self.next_tid.checked_add(1).filter(|t| *t < 1 << 63) else {
             return Err(Sent::Throttled);
         };
         self.next_tid = tid;
@@ -1325,8 +1369,10 @@ impl Actor {
         sockets: &[SendSocket],
         hash: InfoHash,
         reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
+        permit: Option<PeerPermit>,
     ) {
         if reply.as_ref().is_some_and(|r| r.is_closed()) {
+            PermitReturn::CancelledQueued.release(&self.stats, permit);
             return;
         }
         let owner = self.next_request;
@@ -1340,6 +1386,7 @@ impl Actor {
             PeerRequest {
                 hash,
                 reply,
+                permit,
                 remaining: self.families.len(),
                 inflight: 0,
                 sent: 0,
@@ -1632,14 +1679,41 @@ impl Actor {
                     // A cancelled request isn't a completed lookup.
                     if reply.is_closed() {
                         Stats::inc(&self.stats.peer_cancelled);
+                        PermitReturn::CancelledActive.release(&self.stats, r.permit);
                     } else {
                         Stats::inc(&self.stats.lookups_completed);
+                        // The slot is free before the caller hears, so a
+                        // permit it gets back always finds room.
+                        PermitReturn::Completed.release(&self.stats, r.permit);
                         let _ = reply.send(peers);
                     }
                 } else {
                     self.harvest_hash(r.hash, Source::Lookup, peers);
                 }
             }
+        }
+    }
+
+    /// Drops queued owned requests whose caller has gone.
+    fn drop_cancelled_queued(&mut self) {
+        let stats = &self.stats;
+        self.get_peers_queue.retain_mut(|(_, reply, permit)| {
+            let keep = reply.as_ref().is_none_or(|r| !r.is_closed());
+            if !keep {
+                PermitReturn::CancelledQueued.release(stats, permit.take());
+            }
+            keep
+        });
+    }
+
+    /// At shutdown: hands back the admission permits queued and running
+    /// requests still hold, counted, before the requests themselves go.
+    fn release_permits(&mut self) {
+        for (_, _, permit) in &mut self.get_peers_queue {
+            PermitReturn::Shutdown.release(&self.stats, permit.take());
+        }
+        for r in self.peer_requests.values_mut() {
+            PermitReturn::Shutdown.release(&self.stats, r.permit.take());
         }
     }
 
@@ -1693,6 +1767,8 @@ impl Actor {
     fn maintain(&mut self, sockets: &[SendSocket]) {
         let now_i = Instant::now();
         let now = self.now_secs();
+        self.proof
+            .tick(now_i, &self.ids, &self.stats, &mut self.sampler);
 
         // Timeouts.
         let timeout = self.cfg.query_timeout;
@@ -1766,13 +1842,12 @@ impl Actor {
             self.summarize(now_i);
         }
         while !self.paused && self.active_get_peers < MAX_GET_PEERS {
-            let Some((hash, reply)) = self.get_peers_queue.pop_front() else {
+            let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
                 break;
             };
-            self.start_peer_request(sockets, hash, reply);
+            self.start_peer_request(sockets, hash, reply, permit);
         }
-        self.get_peers_queue
-            .retain(|(_, r)| r.as_ref().is_none_or(|r| !r.is_closed()));
+        self.drop_cancelled_queued();
         self.scrape_tick(sockets, now_i);
         if self.cfg.harvest.sample && !self.paused {
             self.sample_tick(sockets, now_i);
@@ -1788,6 +1863,7 @@ impl Actor {
         }
 
         if self.cfg.state_path.is_some()
+            && self.proof.may_save_state()
             && now_i.duration_since(self.last_save) >= self.cfg.save_every
         {
             self.last_save = now_i;
@@ -1806,14 +1882,9 @@ impl Actor {
         self.stats
             .sample_frontier
             .store(self.sampler.frontier_len() as u64, Ordering::Relaxed);
-        self.stats.sample_suppression_seconds.store(
-            self.cfg
-                .sample_start_delay
-                .unwrap_or(sampler::MAX_INTERVAL + self.cfg.query_timeout)
-                .saturating_sub(now_i.duration_since(self.epoch))
-                .as_secs(),
-            Ordering::Relaxed,
-        );
+        self.stats
+            .sample_suppression_seconds
+            .store(self.proof.suppression_seconds(now_i), Ordering::Relaxed);
         let nodes: usize = self.families.iter().map(|f| f.table.len()).sum();
         self.stats
             .routing_nodes
@@ -1856,12 +1927,8 @@ impl Actor {
     /// frontier from the routing tables and exploring a random region of
     /// the keyspace when it runs low.
     fn sample_tick(&mut self, sockets: &[SendSocket], now_i: Instant) {
-        if now_i.duration_since(self.epoch)
-            < self
-                .cfg
-                .sample_start_delay
-                .unwrap_or(sampler::MAX_INTERVAL + self.cfg.query_timeout)
-        {
+        // The suppression, or the restart proof's gate (CR-0d).
+        if !self.proof.may_sample(now_i) {
             return;
         }
         if self.sampler.saturated() {
@@ -1914,10 +1981,7 @@ impl Actor {
         }
     }
 
-    fn save(&self) -> Result<(), StateError> {
-        let Some(path) = &self.cfg.state_path else {
-            return Ok(());
-        };
+    fn state(&self) -> State {
         let now = self.now_secs();
         let nodes = self
             .families
@@ -1931,7 +1995,36 @@ impl Actor {
             external_ip: self.external.current,
             nodes,
         }
-        .save(path)
+    }
+
+    fn save(&self) -> Result<(), StateError> {
+        let Some(path) = &self.cfg.state_path else {
+            return Ok(());
+        };
+        self.state().save(path)
+    }
+
+    /// At shutdown, after the event loop: the restart proof's commit
+    /// (S8–S11, which saves `dht-state.bin` itself), or today's save.
+    fn finish(&mut self) -> Result<(), StateError> {
+        if let Some(path) = self.cfg.state_path.clone() {
+            let state = self.state();
+            if let Some(result) = self
+                .proof
+                .commit(&mut self.sampler, &state, &path, &self.stats)
+            {
+                // A failure is counted and logged, and leaves the marker
+                // dirty: the next start suppresses. It isn't a node error.
+                let _ = result;
+                return Ok(());
+            }
+            // An on-run that never got the lock leaves `dht-state.bin`
+            // to the run that holds it (§6.7).
+            if !self.proof.may_save_state() {
+                return Ok(());
+            }
+        }
+        self.save()
     }
 }
 
@@ -2030,13 +2123,13 @@ mod tests {
             .insert(candidate(remote), Contact::Response, 0);
         let hash = InfoHash([9; 20]);
         let (tx, rx) = oneshot::channel();
-        a.start_peer_request(&sockets, hash, Some(tx));
+        a.start_peer_request(&sockets, hash, Some(tx), None);
         let old_tid = *a.pending.keys().next().unwrap();
         drop(rx);
         a.scrape_tick(&sockets, Instant::now());
         assert_peer_ownership_drained(&a);
         let (tx, mut rx) = oneshot::channel();
-        a.start_peer_request(&sockets, hash, Some(tx));
+        a.start_peer_request(&sockets, hash, Some(tx), None);
         let new_tid = *a.pending.keys().next().unwrap();
         assert_ne!(old_tid, new_tid);
         deliver_reply(
@@ -2091,7 +2184,7 @@ mod tests {
             }
             let peer: SocketAddr = "127.0.0.1:60000".parse().unwrap();
             let (tx, mut rx) = oneshot::channel();
-            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx));
+            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx), None);
             let tids: Vec<_> = a.pending.keys().copied().collect();
             assert_eq!(tids.len(), 2);
             reply(&mut a, &sockets, tids[0], vec![peer]);
@@ -2107,7 +2200,7 @@ mod tests {
             assert_eq!(a.stats.snapshot().lookups_completed, 1);
 
             let (tx, mut rx) = oneshot::channel();
-            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx));
+            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx), None);
             assert_eq!(a.pending.len(), 2);
             for request in a.peer_requests.values_mut() {
                 request.started -= LOOKUP_DEADLINE;
@@ -2124,16 +2217,171 @@ mod tests {
         }
     }
 
+    fn returns(a: &Actor, why: PermitReturn) -> u64 {
+        a.stats.snapshot().peer_permit_returns[why as usize]
+    }
+
+    #[test]
+    fn admission_permits_return_once_at_every_boundary() {
+        use tokio::sync::Semaphore;
+        let (mut a, sockets) = fixture();
+        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        a.families[0]
+            .table
+            .insert(candidate(remote), Contact::Response, 0);
+        let sem = Arc::new(Semaphore::new(super::super::PEER_REQUEST_CAPACITY));
+        let mut granted = 0u64;
+        let mut permit = || {
+            granted += 1;
+            Some(sem.clone().try_acquire_owned().unwrap())
+        };
+        let admit = |a: &mut Actor, p| {
+            let (tx, mut rx) = oneshot::channel();
+            a.on_command(Command::RequestPeers(InfoHash([5; 20]), tx, p));
+            rx.try_recv().unwrap()
+        };
+
+        // Refused at admission, each precedence: caller closed, paused,
+        // capacity. The permit comes back just after the refusal is sent.
+        let (tx, rx) = oneshot::channel();
+        drop(rx);
+        a.on_command(Command::RequestPeers(InfoHash([5; 20]), tx, permit()));
+        a.on_command(Command::SetPaused(true));
+        assert!(admit(&mut a, permit()).is_none());
+        a.on_command(Command::SetPaused(false));
+        let unpermitted: Vec<_> = (0..MAX_GET_PEERS)
+            .map(|_| admit(&mut a, None).unwrap())
+            .collect();
+        assert!(admit(&mut a, permit()).is_none());
+        drop(unpermitted);
+        a.drop_cancelled_queued();
+        assert_eq!(returns(&a, PermitReturn::Refused), 3);
+        assert!(a.get_peers_queue.is_empty());
+
+        // Queued: the caller goes, then the pause drops the rest.
+        drop(admit(&mut a, permit()).unwrap());
+        let kept = admit(&mut a, permit()).unwrap();
+        assert_eq!(returns(&a, PermitReturn::CancelledQueued), 1);
+        a.on_command(Command::SetPaused(true));
+        assert_eq!(returns(&a, PermitReturn::Paused), 1);
+        drop(kept);
+        a.on_command(Command::SetPaused(false));
+
+        // Running: cancelled, completed, and cancelled before it started.
+        let (tx, rx) = oneshot::channel();
+        a.start_peer_request(&sockets, InfoHash([6; 20]), Some(tx), permit());
+        drop(rx);
+        a.scrape_tick(&sockets, Instant::now());
+        assert_eq!(returns(&a, PermitReturn::CancelledActive), 1);
+        assert_peer_ownership_drained(&a);
+        let (tx, mut rx) = oneshot::channel();
+        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx), permit());
+        assert_eq!(sem.available_permits(), MAX_GET_PEERS - 1);
+        let tid = *a.pending.keys().next().unwrap();
+        reply(&mut a, &sockets, tid, vec![]);
+        assert!(rx.try_recv().unwrap().is_empty());
+        assert_eq!(returns(&a, PermitReturn::Completed), 1);
+        let (tx, rx) = oneshot::channel();
+        drop(rx);
+        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx), permit());
+        assert_eq!(returns(&a, PermitReturn::CancelledQueued), 2);
+        assert_peer_ownership_drained(&a);
+
+        // Shutdown: one queued, one running.
+        let _queued = admit(&mut a, permit()).unwrap();
+        let (tx, _running) = oneshot::channel();
+        a.start_peer_request(&sockets, InfoHash([9; 20]), Some(tx), permit());
+        assert_eq!(sem.available_permits(), MAX_GET_PEERS - 2);
+        a.release_permits();
+        assert_eq!(returns(&a, PermitReturn::Shutdown), 2);
+
+        // A handoff that never reaches the actor returns it too.
+        let (commands, closed) = mpsc::channel(1);
+        drop(closed);
+        let handle = super::super::NodeHandle {
+            stats: a.stats.clone(),
+            commands,
+        };
+        let (tx, _rx) = oneshot::channel();
+        assert!(!handle.request_peers_with(InfoHash([1; 20]), tx, permit()));
+        assert_eq!(returns(&a, PermitReturn::HandoffFailed), 1);
+
+        // Every grant came back exactly once.
+        assert_eq!(sem.available_permits(), MAX_GET_PEERS);
+        let total: u64 = a.stats.snapshot().peer_permit_returns.iter().sum();
+        assert_eq!(total, granted);
+        // An acknowledgment fails only if the caller goes between the
+        // actor's closed check and its send, which a single thread can't
+        // arrange; the path is the two lines above `peer_ack_failed`.
+        assert_eq!(returns(&a, PermitReturn::AckFailed), 0);
+    }
+
+    #[test]
+    fn a_dual_stack_request_holds_one_permit_until_its_last_leg() {
+        use tokio::sync::Semaphore;
+        for v6_first in [false, true] {
+            let (mut a, mut sockets) = fixture();
+            // Skipped where the host has no IPv6.
+            let Ok(v6) = std::net::UdpSocket::bind("[::1]:0") else {
+                return;
+            };
+            v6.set_nonblocking(true).unwrap();
+            sockets.push(SendSocket::Udp(v6));
+            a.families.push(Family {
+                table: RoutingTable::new(a.ids[0], true),
+                ipv6: true,
+            });
+            if v6_first {
+                a.families.swap(0, 1);
+                sockets.swap(0, 1);
+            }
+            for family in &mut a.families {
+                let addr = if family.ipv6 {
+                    "[::1]:65530"
+                } else {
+                    "127.0.0.1:65530"
+                };
+                family
+                    .table
+                    .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
+            }
+            let sem = Arc::new(Semaphore::new(1));
+            let (tx, mut rx) = oneshot::channel();
+            let permit = sem.clone().try_acquire_owned().unwrap();
+            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx), Some(permit));
+            let tids: Vec<_> = a.pending.keys().copied().collect();
+            assert_eq!(tids.len(), 2, "both families accepted");
+            reply(&mut a, &sockets, tids[0], vec![]);
+            assert_eq!(sem.available_permits(), 0, "one leg left: still held");
+            reply(&mut a, &sockets, tids[1], vec![]);
+            assert!(rx.try_recv().unwrap().is_empty());
+            assert_eq!(sem.available_permits(), 1);
+            assert_eq!(returns(&a, PermitReturn::Completed), 1);
+
+            // Cancelled with both legs out: still one return.
+            let (tx, rx) = oneshot::channel();
+            let permit = sem.clone().try_acquire_owned().unwrap();
+            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx), Some(permit));
+            drop(rx);
+            a.scrape_tick(&sockets, Instant::now());
+            assert_peer_ownership_drained(&a);
+            assert_eq!(sem.available_permits(), 1);
+            assert_eq!(returns(&a, PermitReturn::CancelledActive), 1);
+            let total: u64 = a.stats.snapshot().peer_permit_returns.iter().sum();
+            assert_eq!(total, 2);
+        }
+    }
+
     #[test]
     fn abandoned_admission_and_pause_leave_no_queued_ownership() {
         let (mut a, sockets) = fixture();
         let (tx, rx) = oneshot::channel();
         drop(rx);
-        a.on_command(Command::RequestPeers(InfoHash([12; 20]), tx));
+        a.on_command(Command::RequestPeers(InfoHash([12; 20]), tx, None));
         assert!(a.get_peers_queue.is_empty());
         assert_eq!(a.stats.snapshot().peer_admitted, 0);
         let (tx, mut rx) = oneshot::channel();
-        a.on_command(Command::RequestPeers(InfoHash([12; 20]), tx));
+        a.on_command(Command::RequestPeers(InfoHash([12; 20]), tx, None));
         let mut done = rx.try_recv().unwrap().unwrap();
         assert_eq!(a.get_peers_queue.len(), 1);
         a.on_command(Command::SetPaused(true));
@@ -2408,7 +2656,7 @@ mod tests {
             .table
             .insert(candidate(remote), Contact::Response, 0);
         let (tx, mut rx) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx));
+        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx), None);
         assert_eq!(a.pending.len(), 1);
         let tid = *a.pending.keys().next().unwrap();
         let tid_bytes = tid.to_be_bytes();
@@ -2447,20 +2695,20 @@ mod tests {
         let mut held = Vec::new();
         for _ in 0..MAX_GET_PEERS {
             let (tx, mut rx) = oneshot::channel();
-            a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+            a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx, None));
             held.push(rx.try_recv().unwrap().unwrap());
         }
         let (tx, mut rx) = oneshot::channel();
-        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx, None));
         assert!(rx.try_recv().unwrap().is_none());
         assert_eq!(a.stats.snapshot().peer_rejected_capacity, 1);
         a.on_command(Command::SetPaused(true));
         let (tx, mut rx) = oneshot::channel();
-        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx, None));
         assert!(rx.try_recv().unwrap().is_none());
         let (tx, rx) = oneshot::channel();
         drop(rx);
-        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx, None));
         let stats = a.stats.snapshot();
         assert_eq!(stats.peer_rejected, 3);
         assert_eq!(stats.peer_rejected_paused, 1);
@@ -2540,7 +2788,7 @@ mod tests {
                 .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
         }
         let (tx, rx) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx));
+        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx), None);
         assert_eq!(a.active_get_peers, 1);
         assert_eq!(a.lookups.len(), 2);
         assert_eq!(a.pending.len(), 2);
@@ -2579,7 +2827,16 @@ mod tests {
         let peer = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = peer.local_addr().unwrap();
         a.sampler.offer(candidate(to), Instant::now());
+        // A production start: the full suppression, no restart proof.
         a.cfg.sample_start_delay = None;
+        a.proof = Proof::new(
+            None,
+            None,
+            None,
+            sampler::MAX_INTERVAL + a.cfg.query_timeout,
+            a.cfg.tick,
+            Instant::now(),
+        );
         a.sample_tick(&sockets, Instant::now());
         assert_eq!(a.sampler.frontier_len(), 1);
         assert!(a.pending.is_empty());
@@ -2758,5 +3015,257 @@ mod tests {
         assert!(b.try_take(t0));
         assert!(!b.try_take(t0 + Duration::from_secs(3)));
         assert!(b.try_take(t0 + Duration::from_secs(4)));
+    }
+}
+
+/// CR-0d at the wire: a run samples real peers with mixed intervals and
+/// stops cleanly; the next run resumes and, on a paused clock, no peer
+/// receives a `sample_infohashes` before its restored deadline (§6 item 6).
+#[cfg(test)]
+mod restart_wire {
+    use super::*;
+    use crate::restart::{Clock, Found};
+    use rand::SeedableRng;
+    use tokio::time::advance;
+
+    #[derive(Debug)]
+    struct SimClock {
+        base: Duration,
+        start: Instant,
+    }
+
+    impl Clock for SimClock {
+        fn wall(&self) -> Duration {
+            self.base + Instant::now().duration_since(self.start)
+        }
+        fn mono(&self) -> Instant {
+            Instant::now()
+        }
+    }
+
+    fn node(dir: &std::path::Path, clock: &Arc<SimClock>) -> (Actor, Vec<SendSocket>) {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let addr = socket.local_addr().unwrap();
+        let cfg = Config {
+            bind: vec![addr],
+            bootstrap: vec![],
+            allow_private: true,
+            state_path: Some(dir.join("data").join("dht-state.bin")),
+            restart: Some(super::super::RestartConfig {
+                witness_dir: Some(dir.join("witness")),
+                clock: clock.clone(),
+                inline_io: true,
+            }),
+            ..Default::default()
+        };
+        let actor = Actor::new(
+            cfg,
+            Arc::new(Stats::default()),
+            vec![addr],
+            None,
+            vec![],
+            None,
+            Instant::now(),
+            StdRng::seed_from_u64(3),
+        );
+        (actor, vec![SendSocket::Udp(socket)])
+    }
+
+    /// `sample_infohashes` datagrams each peer has received since last asked.
+    fn samples_received(peers: &[std::net::UdpSocket]) -> Vec<usize> {
+        let mut buf = [0u8; 2048];
+        peers
+            .iter()
+            .map(|p| {
+                let mut n = 0;
+                while let Ok((len, _)) = p.recv_from(&mut buf) {
+                    if let Ok(m) = crate::krpc::parse(&buf[..len])
+                        && let Body::Query(q) = m.body
+                        && matches!(q.method, Method::SampleInfohashes { .. })
+                    {
+                        n += 1;
+                    }
+                }
+                n
+            })
+            .collect()
+    }
+
+    /// One maintenance turn with every peer offered as a candidate.
+    fn turn(a: &mut Actor, sockets: &[SendSocket], peers: &[SocketAddr]) {
+        for p in peers {
+            a.sampler.offer(
+                NodeInfo {
+                    id: NodeId([42; 20]),
+                    addr: *p,
+                },
+                Instant::now(),
+            );
+        }
+        a.maintain(sockets);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_restored_peer_is_sampled_before_its_deadline() {
+        let root = std::env::temp_dir().join(format!("lodestar-wire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let clock = Arc::new(SimClock {
+            base: Duration::from_secs(1_700_000_000),
+            start: Instant::now(),
+        });
+        let peer_sockets: Vec<std::net::UdpSocket> = (0..40)
+            .map(|_| {
+                let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                s.set_nonblocking(true).unwrap();
+                s
+            })
+            .collect();
+        let peers: Vec<SocketAddr> = peer_sockets
+            .iter()
+            .map(|s| s.local_addr().unwrap())
+            .collect();
+
+        // Run 1: first start suppresses; after the window, sample every
+        // peer once and give each a different interval, 1 min to 6 h.
+        let (mut a, sockets) = node(&root, &clock);
+        turn(&mut a, &sockets, &peers);
+        assert!(samples_received(&peer_sockets).iter().all(|&n| n == 0));
+        advance(sampler::MAX_INTERVAL + a.cfg.query_timeout).await;
+        for _ in 0..20 {
+            turn(&mut a, &sockets, &peers);
+            advance(a.cfg.tick).await;
+        }
+        assert!(
+            samples_received(&peer_sockets).iter().all(|&n| n == 1),
+            "each sampled once"
+        );
+        let tids: Vec<(u64, SocketAddr)> = a
+            .pending
+            .iter()
+            .filter(|(_, p)| matches!(p.purpose, Purpose::Sample))
+            .map(|(t, p)| (*t, p.to))
+            .collect();
+        for (i, (tid, to)) in tids.into_iter().enumerate() {
+            // The last few stay in flight: they're sealed for the horizon.
+            if i >= peers.len() - 4 {
+                continue;
+            }
+            let wait = Duration::from_secs(60 + (i as u64) * 547);
+            a.take_pending(tid);
+            assert!(a.sampler.complete(to, tid, wait, Instant::now()));
+        }
+        // 960 more restrictions on addresses with no socket behind them,
+        // made as a run's own samples would be, for 1,000 in all (§6.6).
+        // Their sends are read from the actor's own pending queries.
+        let synthetic: Vec<SocketAddr> = (0..960u32)
+            .map(|i| SocketAddr::from(([127, 0, 3 + (i / 250) as u8, (i % 250) as u8 + 1], 7000)))
+            .collect();
+        for (i, s) in synthetic.iter().enumerate() {
+            let token = 1 << 40 | i as u64;
+            assert!(a.sampler.reserve(*s, token, Instant::now()));
+            let wait = Duration::from_secs(60 + (i as u64 * 22) % 21_500);
+            assert!(a.sampler.complete(*s, token, wait, Instant::now()));
+        }
+        let stop = Instant::now();
+        a.finish().unwrap();
+        // The truth: run 1's table at the stop, after S8 sealed what was
+        // still in flight. Some samples timed out during run 1 and cool
+        // for 6 h from their timeout; the rest have their interval.
+        let truth: Map<SocketAddr, Instant> = a.sampler.restrictions(stop).collect();
+        assert_eq!(
+            truth.len(),
+            peers.len() + synthetic.len(),
+            "1,000 restrictions"
+        );
+
+        // Run 2, a minute later: resumes, and the wire shows every
+        // restriction held to the instant.
+        advance(Duration::from_secs(60)).await;
+        let (mut b, sockets) = node(&root, &clock);
+        b.maintain(&sockets);
+        assert_eq!(b.proof.reason(), crate::restart::Reason::Resumed);
+        let sealed = stop + sampler::MAX_INTERVAL + b.cfg.query_timeout;
+        let deadline = |p: &SocketAddr| truth[p];
+        let mut first_seen: Map<SocketAddr, Instant> = Map::default();
+        let step = Duration::from_secs(30);
+        let end = sealed + Duration::from_secs(120);
+        let everyone: Vec<SocketAddr> = peers.iter().chain(&synthetic).copied().collect();
+        while Instant::now() < end {
+            turn(&mut b, &sockets, &everyone);
+            for p in b.pending.values() {
+                if matches!(p.purpose, Purpose::Sample) && synthetic.contains(&p.to) {
+                    first_seen.entry(p.to).or_insert(Instant::now());
+                }
+            }
+            // Answer nothing: timed-out samples back off, which only
+            // delays later ones.
+            for (i, n) in samples_received(&peer_sockets).into_iter().enumerate() {
+                if n > 0 {
+                    first_seen.entry(peers[i]).or_insert(Instant::now());
+                }
+            }
+            advance(step).await;
+        }
+        for p in &everyone {
+            let seen = first_seen.get(p).copied();
+            let due = deadline(p);
+            assert!(
+                seen.is_none_or(|t| t >= due),
+                "{p} sampled at {:?}, before its deadline {:?}",
+                seen.map(|t| t.duration_since(stop)),
+                due.duration_since(stop)
+            );
+            assert!(
+                seen.is_some(),
+                "{p} was never sampled again after its deadline"
+            );
+        }
+        let counts = b.sampler.restored_counts();
+        assert_eq!(counts.0, 0, "every restored restriction has expired");
+        assert!(counts.1 > 0, "restored restrictions turned candidates away");
+        // Those already over at the restart weren't seeded (one here).
+        let restored = b.stats.restart_obligations_restored.load(Ordering::Relaxed);
+        assert!(restored >= 990, "{restored}");
+        assert_eq!(counts.2, restored, "each restored one expired unsampled");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn marker_bytes(root: &std::path::Path) -> Vec<u8> {
+        std::fs::read(root.join("data").join(crate::restart::MARKER_FILE)).unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_run_invalidates_writes_nothing_more_and_commits() {
+        // §6.14: a start in the paused state still invalidates before any
+        // sample; ticks while paused write nothing; a shutdown while paused
+        // commits.
+        let root = std::env::temp_dir().join(format!("lodestar-pause-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let clock = Arc::new(SimClock {
+            base: Duration::from_secs(1_700_000_000),
+            start: Instant::now(),
+        });
+        let (mut a, sockets) = node(&root, &clock);
+        a.paused = true;
+        a.maintain(&sockets);
+        let Found::Ok(m) = crate::restart::read_marker(&root.join("data")) else {
+            panic!("the marker is written before any sample")
+        };
+        assert_eq!(m.state, crate::restart::MarkerState::Dirty);
+        let dirty = marker_bytes(&root);
+        for _ in 0..30 {
+            advance(Duration::from_secs(60)).await;
+            a.maintain(&sockets);
+        }
+        assert_eq!(marker_bytes(&root), dirty, "a pause writes nothing");
+        a.finish().unwrap();
+        let Found::Ok(m) = crate::restart::read_marker(&root.join("data")) else {
+            panic!()
+        };
+        assert!(matches!(m.state, crate::restart::MarkerState::Clean { .. }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -22,6 +22,13 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub struct PeerRequest {
     pub key: InfoHash,
     pub admit: oneshot::Sender<Option<oneshot::Receiver<Vec<SocketAddr>>>>,
+    /// Coordinated admission (CR-ADM): this request's slot at the finder.
+    /// A finder holds it for as long as the request holds a slot and
+    /// drops it to give the slot back. `None` when the switch is off.
+    /// Keep it after `admit`: fields drop in order, so a request dropped
+    /// whole closes its admission before its permit returns, and the pool
+    /// reads the closed admission before it can reuse the permit.
+    pub permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 /// A source of keys (and, later, claims, name hints and enrichment).

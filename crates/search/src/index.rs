@@ -115,6 +115,19 @@ pub fn index_dir(root: &Path) -> PathBuf {
     root.join(format!("v{SCHEMA_VERSION}-t{TOKENIZER_VERSION}"))
 }
 
+/// What a [`SearchIndex`]'s caches hold: the `file:(…)` id sets (an
+/// 8 MiB budget, `files.rs`) and the browse cache's segment tops
+/// (bounded in entries, `sorted.rs`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheUsage {
+    pub file_set_entries: u64,
+    /// Retained bytes, as the budget charges them.
+    pub file_set_bytes: u64,
+    pub browse_entries: u64,
+    /// Estimated: keys and tops at capacity, plus the map's slots.
+    pub browse_bytes: u64,
+}
+
 #[derive(Clone)]
 pub struct SearchIndex {
     index: Index,
@@ -535,11 +548,11 @@ pub(crate) fn rerank(
                 }
             }
             parts.score = parts.text;
-            if let (Some(p), Some((ids, junk))) = (priors, &columns) {
-                if let Some(id) = ids.first(addr.doc_id) {
-                    let junk = junk.as_ref().and_then(|j| j.first(addr.doc_id));
-                    p.apply(id, junk, parts);
-                }
+            if let (Some(p), Some((ids, junk))) = (priors, &columns)
+                && let Some(id) = ids.first(addr.doc_id)
+            {
+                let junk = junk.as_ref().and_then(|j| j.first(addr.doc_id));
+                p.apply(id, junk, parts);
             }
             i += 1;
         }
@@ -1040,6 +1053,18 @@ impl SearchIndex {
             reads_hot: compile::reads_hot(node),
             hot: self.hot.clone(),
         })
+    }
+
+    /// What this index's own caches hold, for `/metrics`.
+    pub fn cache_usage(&self) -> CacheUsage {
+        let (file_set_entries, file_set_bytes) = self.files.cache.usage();
+        let (browse_entries, browse_bytes) = self.cache.usage();
+        CacheUsage {
+            file_set_entries,
+            file_set_bytes,
+            browse_entries,
+            browse_bytes,
+        }
     }
 
     /// Empties the browse cache (for benchmarks).

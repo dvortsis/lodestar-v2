@@ -150,7 +150,8 @@ impl SourcePlugin for DhtSource {
                     }
                     req = next_request(&mut ctx.peer_requests), if requests_open => match req {
                         Some(request) => {
-                            node.handle().request_peers(request.key, request.admit);
+                            node.handle()
+                                .request_peers_with(request.key, request.admit, request.permit);
                         }
                         None => requests_open = false,
                     },
