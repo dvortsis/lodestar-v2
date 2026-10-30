@@ -432,16 +432,18 @@ struct EngineSpeed {
     /// The median over the model's jobs of the mixed set's raw time ÷ the
     /// calibration's, ÷ the same on the 7763 at the same code.
     skew: f64,
-    /// The `filter budget` jobs it's derived from (run IDs) and the code
-    /// they ran.
+    /// The `filter budget` jobs it's derived from (run IDs), when they
+    /// ran, and the code they ran.
     runs: &'static [u64],
+    dates: &'static str,
     code: &'static str,
 }
 
 impl EngineSpeed {
-    /// Derived from fewer than three jobs: re-derive it once more exist.
+    /// Derived from fewer than five jobs: the gate still holds it, warns,
+    /// and it's re-derived once more exist (runner, 2026-10-30).
     fn provisional(&self) -> bool {
-        self.runs.len() < 3
+        self.runs.len() < 5
     }
 }
 
@@ -484,7 +486,8 @@ const REFERENCE: EngineSpeed = EngineSpeed {
         41004752665,
         40845396409,
     ],
-    code: "2d5e761d..2b61d89d",
+    dates: "2026-10-29..30",
+    code: "2d5e761d..2b61d89d, before and after #196",
 };
 
 /// The mixed set's raw time ÷ the calibration's on the reference, at the
@@ -509,10 +512,13 @@ const REFERENCE_RATIO: f64 = 3.93;
 /// (`docs/decisions/2026-10-30-X-filter-budget-8573C.md`).
 ///
 /// To add a model, take its jobs' raw `mixed` µs ÷ `calibration:` µs and
-/// divide each by the reference's at the same code (the eras above); the
-/// skew is the median. Re-derive them all when the toolchain or the
-/// calibration changes: the test prints each job's ratio, and warns when
-/// a listed model's job is more than [`MODEL_DRIFT`] off its skew.
+/// divide each by the reference's median at the same code (the eras
+/// above, 4.09 and 3.93); the skew is the median over all its eligible
+/// jobs. Re-deriving uses the same formula over all eligible jobs, in a
+/// PR with its own decisions file. Re-derive them all when the toolchain
+/// or the calibration changes: the test prints each job's ratio, and
+/// warns when a listed model's job is more than [`MODEL_DRIFT`] off its
+/// skew.
 ///
 /// Adding or changing an entry needs a `docs/decisions/` entry giving the
 /// runs and the arithmetic (runner, 2026-10-30): the table never moves to
@@ -533,7 +539,8 @@ const ENGINE_SPEED: &[EngineSpeed] = &[
             41005580320,
             41005421892,
         ],
-        code: "e8f50d58..6c7bcef3",
+        dates: "2026-10-30",
+        code: "e8f50d58..6c7bcef3, before and after #196",
     },
     // 0.861-0.945.
     EngineSpeed {
@@ -554,7 +561,35 @@ const ENGINE_SPEED: &[EngineSpeed] = &[
             41006310085,
             40660530001,
         ],
-        code: "2d5e761d..f2ee0951",
+        dates: "2026-10-28..30",
+        code: "2d5e761d..f2ee0951, before and after #196",
+    },
+    // 0.905-0.934.
+    EngineSpeed {
+        model: "EPYC 9V74",
+        skew: 0.913,
+        runs: &[
+            41062154866,
+            41059977277,
+            41057808450,
+            41057663596,
+            41046740404,
+            41046258692,
+            41041114029,
+            41040381547,
+            41028659383,
+            41008473155,
+        ],
+        dates: "2026-10-30",
+        code: "926e0529..00da08a4, before and after #196",
+    },
+    // 1.022-1.110; provisional, from 3 jobs.
+    EngineSpeed {
+        model: "8370C",
+        skew: 1.034,
+        runs: &[41047639541, 41033584211, 41014261444],
+        dates: "2026-10-30",
+        code: "47fe54e0..5c88c659, before and after #196",
     },
 ];
 
@@ -562,6 +597,152 @@ const ENGINE_SPEED: &[EngineSpeed] = &[
 /// [`REFERENCE_RATIO`]) may stray from its model's before the test warns
 /// that the skew may need re-deriving. It only warns: the table decides.
 const MODEL_DRIFT: f64 = 0.20;
+
+/// How a job's times become reference-runner microseconds: each case's
+/// raw time ÷ `speed`.
+struct Scaling {
+    speed: f64,
+    /// Where `speed` came from, for each case's line.
+    how: String,
+    /// Lines for the log; `::warning::` ones show on the check.
+    notes: Vec<String>,
+}
+
+/// The scaling for a job on `cpu` (the CPU line's model name), from its
+/// fastest calibration pass and the mixed set's raw time, both in µs per
+/// torrent.
+fn scaling(cpu: &str, calib_us: f64, mixed: f64) -> Scaling {
+    // The mixed set's time ÷ the calibration's, printed on every job so a
+    // skew can be re-derived or checked from the log.
+    let ratio = mixed / calib_us;
+    let mut notes = vec![format!("mixed ÷ calibration: {ratio:.3}")];
+    if cpu.contains(REFERENCE.model) {
+        notes.push(format!(
+            "CPU {cpu}: the reference model, so its raw times decide"
+        ));
+        return Scaling {
+            speed: 1.0,
+            how: format!("the {}, raw", REFERENCE.model),
+            notes,
+        };
+    }
+    let Some(m) = ENGINE_SPEED.iter().find(|m| cpu.contains(m.model)) else {
+        let speed = calib_us * 1e3 / CALIB_REF_NS;
+        notes.push(format!(
+            "CPU {cpu}: not in ENGINE_SPEED, so scaling by the calibration"
+        ));
+        notes.push(format!(
+            "::warning::{cpu} isn't in ENGINE_SPEED: scaled by the calibration"
+        ));
+        return Scaling {
+            speed,
+            how: "the calibration".to_owned(),
+            notes,
+        };
+    };
+    let host = calib_us * 1e3 / CALIB_TYPICAL_NS;
+    let speed = host * m.skew;
+    let provisional = if m.provisional() { ", provisional" } else { "" };
+    notes.push(format!(
+        "CPU {cpu}: scaling by the calibration against a typical {}'s {:.2} µs ({host:.3}×), \
+         times the {}'s skew {:.3} from {} jobs, {}, {}{provisional}: {speed:.3}× the \
+         reference's time",
+        REFERENCE.model,
+        CALIB_TYPICAL_NS / 1e3,
+        m.model,
+        m.skew,
+        m.runs.len(),
+        m.dates,
+        m.code,
+    ));
+    let here = ratio / REFERENCE_RATIO;
+    notes.push(format!(
+        "this job's skew: {here:.3} (mixed ÷ calibration over the {}'s {REFERENCE_RATIO})",
+        REFERENCE.model
+    ));
+    if (here / m.skew - 1.0).abs() > MODEL_DRIFT {
+        notes.push(format!(
+            "::warning::this job's skew ({here:.3}) is more than {:.0}% off the {}'s ({:.3}): \
+             the skew, or REFERENCE_RATIO after an engine change, may need re-deriving \
+             (ENGINE_SPEED)",
+            MODEL_DRIFT * 100.0,
+            m.model,
+            m.skew
+        ));
+    }
+    if m.provisional() {
+        notes.push(format!(
+            "::warning::the {}'s skew is provisional, from {} job(s): re-derive it once more \
+             exist (ENGINE_SPEED)",
+            m.model,
+            m.runs.len()
+        ));
+    }
+    Scaling {
+        speed,
+        how: format!("the calibration × the {}'s skew{provisional}", m.model),
+        notes,
+    }
+}
+
+#[test]
+fn the_reference_reads_raw() {
+    let s = scaling("AMD EPYC 7763 64-Core Processor", 9.9, 43.3);
+    assert_eq!(s.speed, 1.0);
+    assert!(s.notes.iter().all(|n| !n.starts_with("::warning::")));
+}
+
+#[test]
+fn an_unlisted_model_scales_by_the_calibration() {
+    let s = scaling("AMD EPYC 9999 Processor", 8.56, 40.0);
+    assert!((s.speed - 0.8).abs() < 1e-9, "{}", s.speed);
+    assert_eq!(s.speed, 8.56e3 / CALIB_REF_NS);
+    assert!(s.notes.iter().any(|n| n.contains("isn't in ENGINE_SPEED")));
+}
+
+#[test]
+fn a_listed_model_scales_by_its_calibration_and_skew() {
+    // #210's job 124095631213: calibration 9.86 µs, mixed 43.4 µs.
+    // 9.86 ÷ 11.09 × 1.126 = 1.001115.
+    let s = scaling("INTEL(R) XEON(R) PLATINUM 8573C", 9.86, 43.4);
+    assert!((s.speed - 1.001115).abs() < 1e-6, "{}", s.speed);
+    assert!((48.0 / s.speed - 47.95).abs() < 0.01);
+    // Its skew (43.4 ÷ 9.86 ÷ 3.93 = 1.120) is within MODEL_DRIFT.
+    assert!(s.notes.iter().all(|n| !n.starts_with("::warning::")));
+}
+
+#[test]
+fn a_skew_off_by_more_than_model_drift_warns() {
+    let skew = ENGINE_SPEED
+        .iter()
+        .find(|m| m.model == "8573C")
+        .unwrap()
+        .skew;
+    // The mixed time that gives this job a skew `off` times the table's.
+    let warns = |off: f64| {
+        scaling(
+            "INTEL(R) XEON(R) PLATINUM 8573C",
+            10.0,
+            10.0 * REFERENCE_RATIO * skew * off,
+        )
+        .notes
+        .iter()
+        .any(|n| n.contains("% off the 8573C's"))
+    };
+    assert!(warns(1.0 + MODEL_DRIFT + 0.01));
+    assert!(warns(1.0 - MODEL_DRIFT - 0.01));
+    assert!(!warns(1.0 + MODEL_DRIFT - 0.01));
+    assert!(!warns(1.0 - MODEL_DRIFT + 0.01));
+    assert!(!warns(1.0));
+}
+
+#[test]
+fn a_provisional_skew_still_scales_and_warns() {
+    let m = ENGINE_SPEED.iter().find(|m| m.provisional()).unwrap();
+    let s = scaling(m.model, 10.0, 10.0 * REFERENCE_RATIO * m.skew);
+    assert!((s.speed - 10e3 / CALIB_TYPICAL_NS * m.skew).abs() < 1e-12);
+    assert!(s.notes.iter().any(|n| n.contains("provisional")));
+}
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
@@ -661,8 +842,6 @@ fn budget() {
         let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
         COMMON.iter().map(|w| hasher.hash_one(w)).collect()
     };
-    let reference = cpu.contains(REFERENCE.model);
-    let model = ENGINE_SPEED.iter().find(|m| cpu.contains(m.model));
     let calib = |i: usize| {
         let (name, files) = std::hint::black_box(&set[i]);
         std::hint::black_box(calibrate(name, files, &common));
@@ -806,72 +985,14 @@ fn budget() {
             "the runner took {calibrated:.2}× the reference's time to calibrate, outside \
              {SPEED:?}: the measurement can't be trusted"
         );
-        // The mixed set's time ÷ the calibration's, against the
-        // reference's, to re-derive or check a skew from this job's log.
         let mixed = cases
             .iter()
             .find(|(what, ..)| what.contains("mixed ("))
             .map_or(f64::NAN, |c| c.1);
-        let ratio = mixed / calib_us;
-        println!("mixed ÷ calibration: {ratio:.3}");
-        let (speed, how) = match model {
-            _ if reference => {
-                println!("CPU {cpu}: the reference model, so its raw times decide");
-                (1.0, format!("the {}, raw", REFERENCE.model))
-            }
-            Some(m) => {
-                let host = calib_us * 1e3 / CALIB_TYPICAL_NS;
-                let speed = host * m.skew;
-                println!(
-                    "CPU {cpu}: scaling by the calibration against a typical {}'s {:.2} µs \
-                     ({host:.3}×), times the {}'s skew {:.3} from {} jobs at {}{}: {speed:.3}× \
-                     the reference's time",
-                    REFERENCE.model,
-                    CALIB_TYPICAL_NS / 1e3,
-                    m.model,
-                    m.skew,
-                    m.runs.len(),
-                    m.code,
-                    if m.provisional() { ", provisional" } else { "" },
-                );
-                // Annotations (`::warning::`), so these show on the check,
-                // not only in its log. The skews' own jobs ranged up to 6%
-                // either side of them.
-                let here = ratio / REFERENCE_RATIO;
-                println!(
-                    "this job's skew: {here:.3} (mixed ÷ calibration over the {}'s {REFERENCE_RATIO})",
-                    REFERENCE.model
-                );
-                if (here / m.skew - 1.0).abs() > MODEL_DRIFT {
-                    println!(
-                        "::warning::this job's skew ({here:.3}) is more than {:.0}% off the {}'s \
-                         ({:.3}): the skew, or REFERENCE_RATIO after an engine change, may need \
-                         re-deriving (ENGINE_SPEED)",
-                        MODEL_DRIFT * 100.0,
-                        m.model,
-                        m.skew
-                    );
-                }
-                if m.provisional() {
-                    println!(
-                        "::warning::the {}'s skew is provisional, from {} job(s): re-derive it \
-                         once more exist (ENGINE_SPEED)",
-                        m.model,
-                        m.runs.len()
-                    );
-                }
-                let note = if m.provisional() { ", provisional" } else { "" };
-                (
-                    speed,
-                    format!("the calibration × the {}'s skew{note}", m.model),
-                )
-            }
-            None => {
-                println!("CPU {cpu}: not in ENGINE_SPEED, so scaling by the calibration");
-                println!("::warning::{cpu} isn't in ENGINE_SPEED: scaled by the calibration");
-                (calibrated, "the calibration".to_owned())
-            }
-        };
+        let Scaling { speed, how, notes } = scaling(&cpu, calib_us, mixed);
+        for note in notes {
+            println!("{note}");
+        }
         let mut over = Vec::new();
         for (what, raw, held) in cases {
             let per = raw / speed;
