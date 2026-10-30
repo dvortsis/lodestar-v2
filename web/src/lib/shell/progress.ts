@@ -5,10 +5,10 @@ import type { ProgressOverlay, StallReason } from './status';
 
 /**
  * The startup sampling suppression (docs/metrics.md `dht_sample_suppression_seconds`; the CR-0
- * decision): up to six hours after a start the crawler may legitimately store nothing. The API
+ * decision): up to six hours (plus the query timeout, covered by the extra minute) after a start the crawler may legitimately store nothing. The API
  * does not expose the remaining time, so the pill compares the API's `uptime_s` with this bound.
  */
-export const STARTUP_SUPPRESSION_S = 6 * 60 * 60;
+export const STARTUP_SUPPRESSION_S = 6 * 60 * 60 + 60;
 
 /**
  * `ingest_per_hour` is the last full UTC hour, which can start up to two hours back, so the
@@ -48,8 +48,11 @@ export function stallReason(p: ProgressSnapshot): StallReason | null {
 	const named = STALL_REASONS.find(
 		(r) => p.reasons.includes(r) && (!young || !QUIET_REASONS.includes(r))
 	);
-	if (named) return named;
-	return p.ingestPerHour === 0 && (p.uptimeS ?? 0) >= WINDOW_CLEAR_S ? 'no_progress' : null;
+	// A starved idle pipeline carries `writer_stalled` too (the writer skips empty commits), so the
+	// stored-rate verdict comes first or the idle rule would hide the very case it exists for.
+	const starved = p.ingestPerHour === 0 && (p.uptimeS ?? 0) >= WINDOW_CLEAR_S;
+	if (starved && (!named || named === 'writer_stalled')) return 'no_progress';
+	return named ?? null;
 }
 
 /** Under six hours up and either nothing flowing yet or the server's "nothing stored" reasons. */

@@ -100,6 +100,26 @@ describe('pill progress states', () => {
 		expect(pill(progress({ reasons: ['index_lag'] }), idle).kind).toBe('stalled');
 	});
 
+	it('a starved idle pipeline that also carries writer_stalled reads as no_progress, not idle', () => {
+		const idle = crawler({ fetch_active: 0, fetch_pending: 0 });
+		const s = pill(
+			progress({
+				ingestPerHour: 0,
+				fetchedPerHour: 0,
+				uptimeS: CLEAR_S,
+				reasons: ['writer_stalled']
+			}),
+			idle
+		);
+		expect(s).toMatchObject({ kind: 'stalled', reason: 'no_progress' });
+		// index_lag keeps its own wording even when nothing was stored.
+		const lag = pill(
+			progress({ ingestPerHour: 0, uptimeS: CLEAR_S, reasons: ['index_lag'] }),
+			idle
+		);
+		expect(lag).toMatchObject({ kind: 'stalled', reason: 'index_lag' });
+	});
+
 	it('starting: under six hours up with nothing flowing yet', () => {
 		const s = pill(
 			progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: STARTUP_SUPPRESSION_S - 1 })
