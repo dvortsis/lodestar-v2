@@ -1545,7 +1545,7 @@
       "model": "opus",
       "session": "session_01MMjhnCSUiGHzqBGRGbDTLj",
       "pr": null,
-      "notes": "brief briefs/F-rollback-holds.md (from the #241 review: holds plus O1/O2/O3); launch after #241 merges; high priority, content safety | 2026-10-30T23:26Z PR #245 head b36f2ebc; fresh Opus review (runner agent) running; owner flag \u00a72.19 at merge: subscriptions by URL, tombstone over non-adult quarantine, limits O2 / pre-V4 drops holds / filter settings revert"
+      "notes": "brief briefs/F-rollback-holds.md (from the #241 review: holds plus O1/O2/O3); launch after #241 merges; high priority, content safety | 2026-10-30T23:26Z PR #245 head b36f2ebc; fresh Opus review (runner agent) running; owner flag \u00a72.19 at merge: subscriptions by URL, tombstone over non-adult quarantine, limits O2 / pre-V4 drops holds / filter settings revert | 2026-10-30T23:40Z review CHANGES: B1 carry_lists keeps snapshot subscription_data (live_applied\\copy_applied -> floor.pending), B2 cs_sigs not carried. Runner: core_membership merged on-wins; no tombstone/quarantine collapse, fix purge_filter at root in this PR. Owner flag now: subscriptions by URL, recorded limits (O2, pre-V4, settings revert)"
     },
     "CR-1a-H": {
       "status": "running",
@@ -2227,7 +2227,6 @@
     "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
     "F-filters-packs LU-1: the lure-file junk reason (lodestar-classify keyword matches) still ignores Neutralize; fails safe, but \u00a720.5.5 says every pack rule (#240 decisions)",
     "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (\u00a710.18 lists them; deferred in #243, \u00a72.19 owner flag)",
-    "F-purge-tombstone (brief after #245 review confirms): Store::purge_filter reports an expired non-adult quarantine as released even when the hash is tombstoned, so the writer drops it from HeldSet until restart (#245 author)",
     "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
     "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)"
   ],
