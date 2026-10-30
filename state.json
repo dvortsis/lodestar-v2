@@ -1382,8 +1382,8 @@
       "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191. | 2026-10-30T08:41Z #193 merged 18c1f324; Windows NRT measurement pending | 2026-10-30T08:43Z Windows NRT measured (run 41024502148): store-to-searchable p50 2.14s max 2.19s (Linux 2.02s); commit-to-alert ~30ms both. 5.74s was test contention. No owner issue. Docs-only r2 decisions PR approved. | 2026-10-30T08:54Z #194 docs r2 merged 6efc2136"
     },
     "CR-0": {
-      "status": "awaiting-owner",
-      "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit) | 2026-10-30T07:17Z Opus acceptance review: ACCEPT-WITH-CONDITIONS. All hard gates pass; memory gate not met as worded (private +3.24\u00b11.14 MiB/h h>=1, h12-24 -0.69\u00b12.71). Analyzer e6622d9d lands with #184. Owner ruling requested on #189 (comment 6517206867); if accepting: full-res h12-24 private fit, upper CI <=1 MiB/h, plus peak private. -0.17 MB/h checkpoint figure withdrawn. | 2026-10-30T09:39Z heartbeat: evidence PR #189 merged 6e91eb06 (evidence only; acceptance awaits owner memory ruling)"
+      "status": "accepted",
+      "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit) | 2026-10-30T07:17Z Opus acceptance review: ACCEPT-WITH-CONDITIONS. All hard gates pass; memory gate not met as worded (private +3.24\u00b11.14 MiB/h h>=1, h12-24 -0.69\u00b12.71). Analyzer e6622d9d lands with #184. Owner ruling requested on #189 (comment 6517206867); if accepting: full-res h12-24 private fit, upper CI <=1 MiB/h, plus peak private. -0.17 MB/h checkpoint figure withdrawn. | 2026-10-30T09:39Z heartbeat: evidence PR #189 merged 6e91eb06 (evidence only; acceptance awaits owner memory ruling) | 2026-10-30T14:30Z ACCEPTED by owner (#189 13:05Z ruling, 13:20Z fit upper +0.32 MiB/h <= 2): memory pass final; #214 records it"
     },
     "L5-e2e": {
       "status": "merged-into-L5",
@@ -1489,6 +1489,13 @@
       "session": "session_01MMjhnBEKCAaLuqVT1phsxp",
       "pr": null,
       "notes": "owner #189 step 5; cherry-pick to release/v0.5.1 -> v0.5.1-rc.2"
+    },
+    "IMP-2": {
+      "status": "queued",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "notes": "brief written 2026-10-30T14:35Z; launch after #210 merges"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
