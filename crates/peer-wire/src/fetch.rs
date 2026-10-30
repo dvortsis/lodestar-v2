@@ -529,6 +529,14 @@ mod tests {
     /// failure before a TCP success counts nothing.
     #[test]
     fn a_fetch_counts_by_its_final_result() {
+        let fetched = Fetched {
+            info: Vec::new(),
+            v2: false,
+            encrypted: false,
+            pex: Vec::new(),
+            client: None,
+        };
+        assert_eq!(counted(&Ok(fetched)), None);
         assert_eq!(counted(&Err(Error::Denied)), None);
         assert_eq!(
             counted(&Err(Error::Timeout)),

@@ -820,12 +820,23 @@ fn get_peers(hash: &[u8; 20]) -> Vec<u8> {
     m
 }
 
+/// The file's `dht.key_harvested` lines from a `get_peers` (not the
+/// pipeline's later `lookup` lines for the same key).
+fn get_peers_lines(file: &str) -> Vec<&str> {
+    lines_of(file, "dht.key_harvested")
+        .into_iter()
+        .filter(|l| l.contains(r#""value":"get_peers""#))
+        .collect()
+}
+
 /// Run 2's positive control for hashes: a `get_peers` sent to the DHT is
 /// harvested (`dht.key_harvested`, Trace, on with every event), and the
 /// key's hex is in the file only while the hash kind is on, never on the
 /// console.
 #[test]
 fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
+    // A free port to hand the DHT: if another test takes it first, the
+    // DHT can't bind and the wait below says so.
     let dht = {
         let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         probe.local_addr().unwrap().port()
@@ -833,44 +844,82 @@ fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
     let s = Server::start_with(Some(dht));
     s.every_event_on();
     let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-    // Sends the query until a new harvest line is in the file.
+    // Waits for the condition on the file's new lines, failing after 30 s.
+    let wait = |mark: (usize, usize), what: &str, ok: &dyn Fn(&str) -> bool| {
+        let start = Instant::now();
+        loop {
+            let (_, file) = s.since(mark);
+            if ok(&file) {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "{what} (DHT on 127.0.0.1:{dht}): {}",
+                s.console()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    // Sends the query until this key's own `get_peers` line is in the
+    // file, and returns the phase's lines. Resends of a key are dropped as
+    // seen, so the wait is for the first line.
     let harvest = |hash: [u8; 20]| {
-        let before = lines_of(&s.file(), "dht.key_harvested").len();
+        let mark = s.mark();
         let start = Instant::now();
         loop {
             client
                 .send_to(&get_peers(&hash), ("127.0.0.1", dht))
                 .unwrap();
             std::thread::sleep(Duration::from_millis(200));
-            if lines_of(&s.file(), "dht.key_harvested").len() > before {
-                return;
+            let (_, file) = s.since(mark);
+            if !get_peers_lines(&file).is_empty() {
+                return file;
             }
             assert!(
                 start.elapsed() < Duration::from_secs(30),
-                "no harvest line: {}",
+                "no get_peers harvest (DHT on 127.0.0.1:{dht}): {}",
                 s.console()
             );
         }
+    };
+    // Switches the hash kind and waits until the runtime says it switched
+    // (`logging.kind_switched`), never for a fixed time.
+    let switch = |body: &str, state: &str| {
+        let mark = s.mark();
+        s.logging(body);
+        wait(
+            mark,
+            &format!("the hash kind never switched {state}"),
+            &|file| {
+                lines_of(file, "logging.kind_switched").iter().any(|l| {
+                    l.contains(r#""value":"hash""#) && l.contains(&format!(r#""value":"{state}""#))
+                })
+            },
+        );
     };
     // Each phase is judged by its own lines: the pipeline's later lookup
     // for a key logs it again (source `lookup`) under whatever the kind is
     // by then.
     let keys = [[0xa1; 20], [0xb2; 20], [0xc3; 20]];
     let hexes: Vec<String> = keys.iter().map(|k| hex(k)).collect();
-    let mark = s.mark();
-    harvest(keys[0]);
-    let (_, private) = s.since(mark);
-    s.logging(&format!(r#"{{"kinds":{{"hash":{}}}}}"#, now() + 600));
-    let mark = s.mark();
-    harvest(keys[1]);
-    let (_, on) = s.since(mark);
-    s.logging(r#"{"kinds":{}}"#);
-    let mark = s.mark();
-    harvest(keys[2]);
-    let (_, off_again) = s.since(mark);
+    let private = harvest(keys[0]);
+    switch(&format!(r#"{{"kinds":{{"hash":{}}}}}"#, now() + 600), "on");
+    let on = harvest(keys[1]);
+    switch(r#"{"kinds":{}}"#, "off");
+    let off_again = harvest(keys[2]);
     let (console, _) = s.stop();
+    // The off phases did harvest their key, as a reference.
+    for (phase, file) in [("Private", &private), ("off again", &off_again)] {
+        assert!(
+            get_peers_lines(file).iter().any(|l| l.contains("ref:")),
+            "{phase}: {file}"
+        );
+    }
     absent(&[("file", &private)], &hexes, "Private");
-    assert!(on.contains(&hexes[1]), "the hash kind on: {on}");
+    assert!(
+        get_peers_lines(&on).iter().any(|l| l.contains(&hexes[1])),
+        "the hash kind on: {on}"
+    );
     absent(&[("file", &off_again)], &hexes, "the hash kind off again");
     absent(
         &[("console", &console)],
