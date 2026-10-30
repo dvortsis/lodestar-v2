@@ -340,8 +340,10 @@ struct Actor {
     last_bootstrap: Option<Instant>,
     /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
     seed_tids: HashSet<u64>,
-    /// The current round's routers refused at send, and whether any answered.
+    /// The last bootstrap's routers refused (policy or socket) and throttled
+    /// at send, and whether any router answered this round.
     seed_refused: usize,
+    seed_throttled: usize,
     seed_answered: bool,
     /// The warning was written; re-armed when a router answers.
     seed_warned: bool,
@@ -530,6 +532,7 @@ impl Actor {
             last_bootstrap: None,
             seed_tids: HashSet::new(),
             seed_refused: 0,
+            seed_throttled: 0,
             seed_answered: false,
             seed_warned: false,
             last_save: now,
@@ -797,13 +800,16 @@ impl Actor {
             Stats::inc(&self.stats.denied);
             return Sent::Failed;
         }
-        self.dispatch_query(sockets, family, to, node, method, purpose)
+        match self.dispatch_query(sockets, family, to, node, method, purpose) {
+            Ok(_) => Sent::Yes,
+            Err(sent) => sent,
+        }
     }
 
-    /// A find_node to a resolved bootstrap router. Fake-ip DNS and NAT64
-    /// answer router names inside special ranges, so only these addresses
-    /// skip that check; the blocklist and the port, multicast and scope
-    /// checks still apply. Anything else gets the full policy.
+    /// A query to a resolved bootstrap router. Fake-ip DNS and DNS64 answer
+    /// public router names inside 198.18.0.0/15 and NAT64 prefixes, which
+    /// only these addresses may use; the blocklist and every other policy
+    /// check still apply. Anything else gets the full policy.
     fn query_seed(
         &mut self,
         sockets: &[StdUdpSocket],
@@ -822,15 +828,17 @@ impl Actor {
             Stats::inc(&self.stats.denied);
             return Sent::Failed;
         }
-        let sent = self.dispatch_query(sockets, family, to, None, method, Purpose::Lookup(lid));
-        if sent == Sent::Yes {
-            // `dispatch_query` used `next_tid` for this query.
-            self.seed_tids.insert(self.next_tid);
+        match self.dispatch_query(sockets, family, to, None, method, Purpose::Lookup(lid)) {
+            Ok(tid) => {
+                self.seed_tids.insert(tid);
+                Sent::Yes
+            }
+            Err(sent) => sent,
         }
-        sent
     }
 
-    /// Sends a query whose destination already passed a policy check.
+    /// Sends a query whose destination already passed a policy check, and
+    /// returns its transaction id.
     fn dispatch_query(
         &mut self,
         sockets: &[StdUdpSocket],
@@ -839,26 +847,26 @@ impl Actor {
         node: Option<NodeId>,
         method: Method<'_>,
         purpose: Purpose,
-    ) -> Sent {
+    ) -> Result<u64, Sent> {
         if self.families[family].ipv6 != to.is_ipv6() {
             Stats::inc(&self.stats.denied);
-            return Sent::Failed;
+            return Err(Sent::Failed);
         }
         let now = Instant::now();
         if self.pending.len() >= self.cfg.intensity.max_outstanding()
             || !self.query_rate.try_take(now)
         {
             Stats::inc(&self.stats.throttled);
-            return Sent::Throttled;
+            return Err(Sent::Throttled);
         }
         // Never reuse a wire token in this process, even after success.
         let Some(tid) = self.next_tid.checked_add(1) else {
-            return Sent::Throttled;
+            return Err(Sent::Throttled);
         };
         self.next_tid = tid;
         if matches!(purpose, Purpose::Sample) && !self.sampler.reserve(to, tid, now) {
             Stats::inc(&self.stats.sample_deferred);
-            return Sent::Throttled;
+            return Err(Sent::Throttled);
         }
         let tid_bytes = tid.to_be_bytes();
         let id = match node {
@@ -877,7 +885,7 @@ impl Actor {
             if matches!(purpose, Purpose::Sample) {
                 self.sampler.abort(to, tid);
             }
-            return sent;
+            return Err(sent);
         }
         Stats::inc(&self.stats.queries_out);
         *self.pending_addrs.entry(to).or_default() += 1;
@@ -891,7 +899,7 @@ impl Actor {
                 purpose,
             },
         );
-        Sent::Yes
+        Ok(tid)
     }
 
     fn take_pending(&mut self, tid: u64) -> Pending {
@@ -1457,23 +1465,23 @@ impl Actor {
             }
         }
         self.lookups.insert(lid, lookup);
+        // A router answers in the family it sees the query arrive in. Through
+        // NAT64 that's IPv4, so an IPv6 family asks for its own (BEP 32).
+        let ipv6 = self.families[family].ipv6;
+        let want = Want {
+            v4: !ipv6,
+            v6: ipv6,
+        };
         for addr in seeds {
-            let sent = self.query_seed(
-                sockets,
-                family,
-                *addr,
-                Method::FindNode {
-                    target,
-                    want: Want::default(),
-                },
-                lid,
-            );
-            if sent != Sent::Yes {
-                self.seed_refused += 1;
-            } else {
-                if let Some(l) = self.lookups.get_mut(&lid) {
-                    l.extra_in_flight += 1;
+            let method = Method::FindNode { target, want };
+            match self.query_seed(sockets, family, *addr, method, lid) {
+                Sent::Yes => {
+                    if let Some(l) = self.lookups.get_mut(&lid) {
+                        l.extra_in_flight += 1;
+                    }
                 }
+                Sent::Throttled => self.seed_throttled += 1,
+                Sent::Failed => self.seed_refused += 1,
             }
         }
         self.drive_lookup(sockets, lid);
@@ -1648,8 +1656,8 @@ impl Actor {
         if self.seed_tids.is_empty() {
             // A new round; one still in flight carries on.
             self.seed_answered = false;
-            self.seed_refused = 0;
         }
+        (self.seed_refused, self.seed_throttled) = (0, 0);
         for f in 0..self.families.len() {
             let ipv6 = self.families[f].ipv6;
             let known: Vec<NodeInfo> = saved
@@ -1684,7 +1692,8 @@ impl Actor {
             crate::log_events::BOOTSTRAP_UNREACHABLE,
             configured = self.cfg.bootstrap.len(),
             resolved = self.bootstrap.len(),
-            refused = self.seed_refused
+            refused = self.seed_refused,
+            throttled = self.seed_throttled
         );
     }
 
@@ -2168,23 +2177,18 @@ mod tests {
     }
 
     #[test]
-    fn fake_ip_and_nat64_seeds_pass_the_policy_learned_nodes_do_not() {
+    fn fake_ip_seeds_pass_the_policy_other_special_ranges_and_learned_nodes_do_not() {
         let fake_ip: SocketAddr = "198.18.0.7:6881".parse().unwrap();
-        let nat64: SocketAddr = "[64:ff9b::5db8:d822]:6881".parse().unwrap();
-        let (mut a, sockets) = public_fixture(vec![fake_ip, nat64]);
-        for seed in [fake_ip, nat64] {
-            assert!(!endpoint_allowed(&a.cfg, seed), "special range: {seed}");
-        }
+        let lan: SocketAddr = "10.0.0.1:6881".parse().unwrap();
+        let (mut a, sockets) = public_fixture(vec![fake_ip, lan]);
+        assert!(!endpoint_allowed(&a.cfg, fake_ip), "special range");
         a.start_bootstrap(&sockets, Vec::new());
-        // The fake-ip seed (on the only, IPv4, family) reached the socket:
-        // sent, or refused by this host's routes, never by the policy.
+        // The fake-ip seed reached the socket: sent, or refused by this
+        // host's routes, never by the policy. The LAN seed was refused.
         let s = a.stats.snapshot();
-        assert_eq!(s.denied, 0);
+        assert_eq!(s.denied, 1);
         assert_eq!(s.queries_out + s.send_errors, 1);
         // The same address learned from the network is refused.
-        let before = a.stats.snapshot().denied;
-        // (The bootstrap lookup may already be over; no lookup is needed.)
-        let lid = u32::MAX;
         assert!(!a.query(
             &sockets,
             0,
@@ -2193,64 +2197,122 @@ mod tests {
             Method::Ping,
             Purpose::Ping,
         ));
-        assert_eq!(a.stats.snapshot().denied, before + 1);
+        assert_eq!(a.stats.snapshot().denied, 2);
         // So is an unconfigured address sent as a seed.
         let other: SocketAddr = "198.18.0.8:6881".parse().unwrap();
         assert_eq!(
-            a.query_seed(&sockets, 0, other, Method::Ping, lid),
+            a.query_seed(&sockets, 0, other, Method::Ping, u32::MAX),
             Sent::Failed
         );
-        assert_eq!(a.stats.snapshot().denied, before + 2);
+        assert_eq!(a.stats.snapshot().denied, 3);
         // The blocklist still applies to seeds.
         let denied_ip = fake_ip.ip();
         a.cfg.deny = Some(super::super::Deny(Arc::new(move |ip| ip == denied_ip)));
         assert_eq!(
-            a.query_seed(&sockets, 0, fake_ip, Method::Ping, lid),
+            a.query_seed(&sockets, 0, fake_ip, Method::Ping, u32::MAX),
             Sent::Failed
         );
-        assert_eq!(a.stats.snapshot().denied, before + 3);
+        assert_eq!(a.stats.snapshot().denied, 4);
     }
 
     #[test]
-    fn a_special_range_router_bootstraps_and_its_learned_nodes_get_the_full_policy() {
-        // Loopback is a special range too, so a local router stands in for
-        // a fake-ip or NAT64 answer.
-        let router = StdUdpSocket::bind("127.0.0.1:0").unwrap();
-        router
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let router_addr = router.local_addr().unwrap();
-        let (mut a, sockets) = public_fixture(vec![router_addr]);
+    fn a_nat64_seed_passes_the_policy_and_asks_for_ipv6_nodes() {
+        let nat64: SocketAddr = "[64:ff9b::5db8:d822]:6881".parse().unwrap();
+        let (mut a, mut sockets) = public_fixture(vec![nat64]);
+        assert!(!endpoint_allowed(&a.cfg, nat64), "special range");
+        // An IPv6 family. Its socket is an IPv4 stand-in, so the send fails
+        // on every host, after the policy and with the packet encoded.
+        let stand_in = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        stand_in.set_nonblocking(true).unwrap();
+        sockets.push(stand_in);
+        a.families.push(Family {
+            table: RoutingTable::new(a.ids[0], true),
+            ipv6: true,
+        });
+        a.families.swap(0, 1);
+        sockets.swap(0, 1);
         a.start_bootstrap(&sockets, Vec::new());
-        let mut buf = [0u8; 1500];
-        let (n, _) = router.recv_from(&mut buf).expect("the router was queried");
-        let query = krpc::parse(&buf[..n]).unwrap();
-        assert!(matches!(
-            query.body,
-            Body::Query(Query {
-                method: Method::FindNode { .. },
-                ..
-            })
+        let s = a.stats.snapshot();
+        assert_eq!(s.denied, 0, "the NAT64 seed isn't refused by policy");
+        assert_eq!(s.send_errors, 1);
+        let query = krpc::parse(&a.out).unwrap();
+        let Body::Query(Query {
+            method: Method::FindNode { want, .. },
+            ..
+        }) = query.body
+        else {
+            panic!("a find_node: {query:?}");
+        };
+        assert_eq!(
+            want,
+            Want {
+                v4: false,
+                v6: true
+            }
+        );
+        // A NAT64 address learned from the network is still refused.
+        assert!(!a.query(
+            &sockets,
+            0,
+            nat64,
+            Some(NodeId([7; 20])),
+            Method::Ping,
+            Purpose::Ping,
         ));
-        let tid = u64::from_be_bytes(query.transaction_id.try_into().unwrap());
-        assert!(a.seed_tids.contains(&tid));
+        assert_eq!(a.stats.snapshot().denied, 1);
+    }
 
+    /// Stands in for a seed query the socket sent, so a test can deliver
+    /// the answer from an address it can't bind.
+    fn pretend_seed_sent(a: &mut Actor, to: SocketAddr) -> u64 {
+        let lid = a.next_lookup;
+        a.next_lookup += 1;
+        let mut lookup = Lookup::new(a.ids[0], 0);
+        lookup.extra_in_flight = 1;
+        a.lookups.insert(lid, lookup);
+        a.next_tid += 1;
+        let tid = a.next_tid;
+        a.pending.insert(
+            tid,
+            Pending {
+                to,
+                id: None,
+                sent: Instant::now(),
+                family: 0,
+                purpose: Purpose::Lookup(lid),
+            },
+        );
+        *a.pending_addrs.entry(to).or_default() += 1;
+        a.seed_tids.insert(tid);
+        tid
+    }
+
+    #[test]
+    fn a_fake_ip_router_bootstraps_and_its_learned_nodes_get_the_full_policy() {
+        let router: SocketAddr = "198.18.0.7:6881".parse().unwrap();
+        let (mut a, sockets) = public_fixture(vec![router]);
+        let tid = pretend_seed_sent(&mut a, router);
         let learned_fake_ip = NodeInfo {
             id: NodeId([0x31; 20]),
             addr: "198.18.1.1:6881".parse().unwrap(),
+        };
+        let learned_lan = NodeInfo {
+            id: NodeId([0x33; 20]),
+            addr: "192.168.1.9:6881".parse().unwrap(),
         };
         let learned_public = NodeInfo {
             id: NodeId([0x32; 20]),
             addr: "8.8.8.8:6881".parse().unwrap(),
         };
-        let raw = compact::encode_nodes(&[learned_fake_ip, learned_public], false);
+        let raw = compact::encode_nodes(&[learned_fake_ip, learned_lan, learned_public], false);
         let response = Response {
             id: NodeId([0x30; 20]),
             nodes: CompactNodes::v4(&raw).unwrap(),
             ..Default::default()
         };
+        let bytes = tid.to_be_bytes();
         let msg = Message {
-            transaction_id: query.transaction_id,
+            transaction_id: &bytes,
             version: None,
             ip: None,
             read_only: false,
@@ -2258,7 +2320,7 @@ mod tests {
         };
         let before = a.stats.snapshot();
         let frontier = a.sampler.frontier_len();
-        a.on_response(&sockets, 0, &msg, Some(&response), router_addr);
+        a.on_response(&sockets, 0, &msg, Some(&response), router);
         assert!(a.seed_answered && a.seed_tids.is_empty());
         // Only the public node is a sampling candidate or gets queried.
         assert_eq!(a.sampler.frontier_len(), frontier + 1);
@@ -2266,6 +2328,7 @@ mod tests {
         let tried = |s: &super::super::StatsSnapshot| s.queries_out + s.send_errors + s.denied;
         assert_eq!(tried(&after), tried(&before) + 1);
         assert!(!a.pending_addrs.contains_key(&learned_fake_ip.addr));
+        assert!(!a.pending_addrs.contains_key(&learned_lan.addr));
         // The router isn't routed to or handed to other nodes.
         assert_eq!(a.families[0].table.len(), 0);
     }
@@ -2278,21 +2341,21 @@ mod tests {
         let (mut a, sockets) = public_fixture(vec![
             "224.0.0.1:6881".parse().unwrap(),
             "198.18.0.7:0".parse().unwrap(),
+            "10.0.0.1:6881".parse().unwrap(),
         ]);
         a.cfg.bootstrap = vec!["router.example:6881".into()];
         let start = count();
         a.start_bootstrap(&sockets, Vec::new());
-        assert_eq!(a.seed_refused, 2);
+        assert_eq!((a.seed_refused, a.seed_throttled), (3, 0));
+        assert!(a.seed_warned);
         assert_eq!(count(), start + 1, "every router refused");
         a.start_bootstrap(&sockets, Vec::new());
         assert_eq!(count(), start + 1, "once, not every round");
 
         // A router answers: re-armed. Then it goes silent and times out.
-        let router = StdUdpSocket::bind("127.0.0.1:0").unwrap();
-        let router_addr = router.local_addr().unwrap();
-        a.bootstrap = vec![router_addr];
-        a.start_bootstrap(&sockets, Vec::new());
-        let tid = *a.seed_tids.iter().next().unwrap();
+        let router: SocketAddr = "198.18.0.7:6881".parse().unwrap();
+        a.bootstrap = vec![router];
+        let tid = pretend_seed_sent(&mut a, router);
         let bytes = tid.to_be_bytes();
         let msg = Message {
             transaction_id: &bytes,
@@ -2304,22 +2367,28 @@ mod tests {
                 message: b"busy",
             }),
         };
-        a.on_response(&sockets, 0, &msg, None, router_addr);
+        a.on_response(&sockets, 0, &msg, None, router);
         assert!(!a.seed_warned, "an error reply proves the router is there");
-        a.start_bootstrap(&sockets, Vec::new());
-        assert_eq!(a.seed_tids.len(), 1);
+        a.seed_answered = false;
+        pretend_seed_sent(&mut a, router);
         a.cfg.query_timeout = Duration::ZERO;
         a.maintain(&sockets);
-        assert!(a.seed_tids.is_empty());
+        assert!(a.seed_tids.is_empty() && a.seed_warned);
         assert_eq!(count(), start + 2, "every router timed out");
+
+        // Throttled routers are told apart from refused ones.
+        a.seed_warned = false;
+        a.query_rate.tokens = 0.0;
+        a.query_rate.rate = 0.0;
         a.start_bootstrap(&sockets, Vec::new());
-        a.maintain(&sockets);
-        assert_eq!(count(), start + 2);
+        assert_eq!((a.seed_refused, a.seed_throttled), (0, 1));
+        assert_eq!(count(), start + 3);
 
         // No configured routers: nothing to warn about.
         let (mut quiet, sockets) = public_fixture(vec![]);
         quiet.start_bootstrap(&sockets, Vec::new());
-        assert_eq!(count(), start + 2);
+        assert!(!quiet.seed_warned);
+        assert_eq!(count(), start + 3);
     }
 
     #[test]

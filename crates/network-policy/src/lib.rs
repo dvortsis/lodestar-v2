@@ -26,20 +26,35 @@ pub fn allows(addr: SocketAddr, allow_private: bool) -> bool {
     addr.port() != 0 && (allow_private || public_ip(addr.ip()))
 }
 
-/// For the operator's resolved bootstrap seeds only: fake-ip DNS
-/// (198.18.0.0/15) and DNS64/NAT64 (64:ff9b::/96) answer the configured
-/// router names inside special ranges, so the special-range check is
-/// skipped. A zero port, an unspecified, broadcast or multicast address and
-/// a scoped IPv6 destination are still refused. Never apply this to an
+/// For the operator's resolved bootstrap seeds only: [`allows`], plus the
+/// two ranges a resolver rewrites public router names into. Fake-ip DNS
+/// (Clash, OpenClash, sing-box) answers from 198.18.0.0/15, and DNS64
+/// synthesizes NAT64 addresses in 64:ff9b::/96 (RFC 6052) or the
+/// local-use 64:ff9b:1::/48 (RFC 8215). Every other special range, a zero
+/// port and a scoped IPv6 destination stay refused. Never apply this to an
 /// address learned from the network.
 pub fn allows_seed(addr: SocketAddr, allow_private: bool) -> bool {
-    if !allow_private && matches!(addr, SocketAddr::V6(v6) if v6.scope_id() != 0) {
+    if allows(addr, allow_private) {
+        return true;
+    }
+    if matches!(addr, SocketAddr::V6(v6) if v6.scope_id() != 0) {
         return false;
     }
     let addr = normalize(addr);
-    let ip = addr.ip();
-    let broadcast = matches!(ip, IpAddr::V4(v4) if v4.is_broadcast());
-    addr.port() != 0 && !ip.is_unspecified() && !ip.is_multicast() && !broadcast
+    addr.port() != 0 && rewritten_public_name(addr.ip())
+}
+
+fn rewritten_public_name(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, ..] = ip.octets();
+            a == 198 && matches!(b, 18 | 19)
+        }
+        IpAddr::V6(ip) => {
+            let s = ip.segments();
+            s[0] == 0x64 && s[1] == 0xff9b && (s[2..6] == [0; 4] || s[2] == 1)
+        }
+    }
 }
 
 fn public_ip(ip: IpAddr) -> bool {
@@ -179,28 +194,52 @@ mod tests {
     }
 
     #[test]
-    fn seeds_skip_only_the_special_range_check() {
+    fn seeds_add_only_fake_ip_and_nat64() {
         let seed = |a: &str| allows_seed(a.parse().unwrap(), false);
-        // Fake-ip, NAT64 and private answers for a configured router name.
+        // Fake-ip and NAT64 answers for a configured router name, and a
+        // public one.
         for a in [
             "198.18.0.7:6881",
-            "[64:ff9b::5db8:d822]:6881",
-            "10.0.0.1:6881",
+            "198.19.255.255:6881",
             "[::ffff:198.18.0.7]:6881",
+            "[64:ff9b::5db8:d822]:6881",
+            "[64:ff9b:1::5db8:d822]:6881",
+            "[64:ff9b:1:ffff::1]:6881",
             "67.215.246.10:6881",
         ] {
             assert!(seed(a), "{a}");
         }
+        // Every other special range stays refused, as do unusable ports
+        // and scoped destinations.
         for a in [
+            "198.17.255.255:0",
             "198.18.0.7:0",
+            "10.0.0.1:6881",
+            "127.0.0.1:6881",
+            "169.254.169.254:80",
+            "100.64.0.1:6881",
+            "192.168.1.1:6881",
             "0.0.0.0:6881",
-            "[::]:6881",
             "255.255.255.255:6881",
             "224.0.0.1:6881",
+            "[::]:6881",
+            "[::1]:6881",
+            "[fe80::1]:6881",
+            "[fd00::1]:6881",
             "[ff02::1]:6881",
-            "[::ffff:224.0.0.1]:6881",
+            "[::ffff:127.0.0.1]:6881",
+            "[64:ff9b::5db8:d822]:0",
+            "[64:ff9b:0:1::1]:6881",
+            "[64:ff9b:2::1]:6881",
         ] {
             assert!(!seed(a), "{a}");
         }
+        let scoped = SocketAddr::V6(std::net::SocketAddrV6::new(
+            "64:ff9b::5db8:d822".parse().unwrap(),
+            6881,
+            0,
+            3,
+        ));
+        assert!(!seed(&scoped.to_string()) && !allows_seed(scoped, false));
     }
 }
