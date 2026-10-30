@@ -61,6 +61,62 @@ fn keyword(k: &str, strength: Strength) -> Override {
     }
 }
 
+/// A Neutralize entry on a word the torrent doesn't have leaves the
+/// core's decision as it was: the core then reuses the entries' read of
+/// the name and paths, which must stay aligned with the files it reads
+/// (padding files, a path read differently whole, paths of one segment).
+#[test]
+fn the_core_decides_alike_with_an_entrys_read() {
+    let mut plain = engine();
+    plain.packs = PackSwitches::default();
+    let mut with = plain.clone();
+    with.overrides = vec![keyword("zzunrelated", Strength::Neutralize)].into();
+    let cases: &[(&str, &[(&str, u64)])] = &[
+        ("x", &[("l.e.x/a.16yo.mkv", 1), ("lexa/16yo.mkv", 1)]),
+        ("x", &[("l.e.x/a.16yo.mkv", 1), ("b.mkv", 1)]),
+        ("lexa", &[("pad/16yo", 1), ("x.mkv", 1)]),
+        (
+            "x",
+            &[("a/b/rolea.mkv", 1), ("a/b/lexa.mkv", 1), ("c.srt", 1)],
+        ),
+        ("x", &[("y.mkv", 1)]),
+    ];
+    for &(name, paths) in cases {
+        let f: Vec<FileInfo> = paths
+            .iter()
+            .enumerate()
+            .map(|(i, (p, s))| {
+                let mut f = FileInfo::new(p.split('/').map(str::to_owned).collect(), *s);
+                // The first file of the third case is padding.
+                f.padding = name == "lexa" && i == 0;
+                f
+            })
+            .collect();
+        let class = classify(name, &f);
+        let facts = Facts {
+            class: &class,
+            size: 1,
+            piece_len: 1 << 20,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        };
+        let item = Item {
+            hashes: &[H],
+            name,
+            files: &f,
+            content_type: class.content_type,
+        };
+        let a = plain.judge(&item, Some(&facts), 0).decision;
+        let b = with.judge(&item, Some(&facts), 0).decision;
+        assert_eq!(a, b, "{name} {paths:?}");
+    }
+    assert!(
+        rule(&plain, "x", &[("lexa/16yo.mkv", 1)]).is_some_and(|r| matches!(r, RuleRef::Core(_))),
+        "the cases reach the core"
+    );
+}
+
 #[test]
 fn the_floor_is_final() {
     let mut e = engine();

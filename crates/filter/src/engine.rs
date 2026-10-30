@@ -284,7 +284,7 @@ impl Engine {
         now: i64,
         shadow: &mut Vec<Decision>,
     ) -> Option<Decision> {
-        for hit in self.core.pattern_hits(item, neutral) {
+        for hit in self.core.pattern_hits_read(item, neutral, doc.read()) {
             if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc) {
                 return Some(hit.into());
             }

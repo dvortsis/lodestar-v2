@@ -89,6 +89,10 @@ pub enum Block {
     Wait { until: i64 },
     /// Updates are paused.
     Paused { until: i64 },
+    /// A pause failed to save, so automatic installs are held in this
+    /// process until a pause or resume is saved (DUR-26). It has no end:
+    /// nothing installs automatically while it lasts.
+    Held,
     /// The manifest isn't current (expired, or not refreshed).
     NotCurrent,
     /// The running version is below its `min_from`: `via` goes first.
@@ -130,6 +134,9 @@ pub struct Inputs<'a> {
     /// Versions in `skipped`, whatever the reason.
     pub skipped: &'a [String],
     pub paused_until: Option<i64>,
+    /// A pause failed to save: hold automatic installs in this process.
+    /// Never a durable pause; see [`Block::Held`].
+    pub held_in_process: bool,
     pub now: i64,
     /// The first moment at or after a time when the window is open.
     pub window_from: &'a dyn Fn(i64) -> i64,
@@ -137,7 +144,8 @@ pub struct Inputs<'a> {
     pub incapable: Option<Reason>,
 }
 
-/// The candidates and the next automatic install.
+/// The candidates and the next automatic install: the one place
+/// eligibility is decided, for `/updates` and for installing alike.
 pub fn plan(i: &Inputs<'_>) -> Plan {
     let mut candidates: Vec<&Release> = i
         .releases
@@ -213,6 +221,9 @@ fn assess(i: &Inputs<'_>, r: &Release, reachable: bool, via: Option<String>) -> 
     let paused = i.paused_until.filter(|&p| p > i.now);
     if let Some(until) = paused {
         blocks.push(Block::Paused { until });
+    }
+    if i.held_in_process {
+        blocks.push(Block::Held);
     }
     if !i.current {
         blocks.push(Block::NotCurrent);
@@ -336,6 +347,7 @@ mod tests {
         current: bool,
         skipped: Vec<String>,
         paused_until: Option<i64>,
+        held_in_process: bool,
         incapable: Option<Reason>,
     }
 
@@ -350,6 +362,7 @@ mod tests {
                 current: true,
                 skipped: vec![],
                 paused_until: None,
+                held_in_process: false,
                 incapable: None,
             }
         }
@@ -367,6 +380,7 @@ mod tests {
                 running: RUNNING.get_or_init(|| Version::new(0, 5, 0)),
                 skipped: &self.skipped,
                 paused_until: self.paused_until,
+                held_in_process: self.held_in_process,
                 now: NOW,
                 window_from: &window,
                 incapable: self.incapable,
@@ -384,6 +398,7 @@ mod tests {
                 Block::Reindex => "reindex",
                 Block::Wait { .. } => "wait",
                 Block::Paused { .. } => "paused",
+                Block::Held => "held",
                 Block::NotCurrent => "not_current",
                 Block::UpgradePath { .. } => "upgrade_path",
                 Block::Capability { .. } => "capability",
@@ -490,6 +505,29 @@ mod tests {
         );
         c.paused_until = Some(NOW - 1);
         assert!(c.plan().releases[0].blocked_by.is_empty());
+    }
+
+    /// The failed-pause hold (DUR-26) blocks every candidate, security
+    /// fixes too, with no time it lifts, whatever the response shows.
+    #[test]
+    fn a_hold_makes_nothing_eligible() {
+        let mut fix = release("0.6.0", NOW - 10 * DAY, ReleaseLevel::Fix);
+        fix.security = true;
+        let mut c = Case::new(Mode::Auto, vec![fix]);
+        let a = &c.plan().releases[0];
+        assert!(a.eligible, "{:?}", a.blocked_by);
+        c.held_in_process = true;
+        let plan = c.plan();
+        let a = &plan.releases[0];
+        assert!(!a.eligible);
+        assert_eq!(codes(a), ["held"]);
+        assert_eq!(a.installs_at, None);
+        assert_eq!(plan.next, None, "no automatic install is planned");
+        // Beside a durable pause it stays a hold, not a later install.
+        c.paused_until = Some(NOW + DAY);
+        let a = &c.plan().releases[0];
+        assert_eq!(codes(a), ["paused", "held"]);
+        assert_eq!(a.installs_at, None);
     }
 
     #[test]

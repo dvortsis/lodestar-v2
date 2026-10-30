@@ -7,6 +7,7 @@
 	import { formatDate } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import { statusRef } from '$lib/shell/status-ref.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
@@ -130,6 +131,17 @@
 	};
 	const announcement = $derived(insights.notice ? notices[insights.notice]() : '');
 	const paused = $derived(overview?.kpi.health.state === 'paused');
+	// `cohort_stalled` from this response; the no-progress call needs `uptime_s`, so it is the status
+	// pill's verdict. An index lag has its own exception, and a writer stall always comes with the
+	// stale banner (the server sets both together), so neither adds a second warning.
+	const stalled = $derived(
+		!!overview &&
+			!paused &&
+			!overview.stale &&
+			(overview.exceptions.some((e) => e.kind === 'cohort_stalled') ||
+				(statusRef.current?.pill.kind === 'stalled' &&
+					statusRef.current.pill.reason === 'no_progress'))
+	);
 	const staleText: Record<string, () => string> = {
 		paused: () => m.insights_overview_stale_paused(),
 		writer_stalled: () => m.insights_overview_stale_writer()
@@ -183,6 +195,12 @@
 	{:else if !overview}
 		<Skeleton />
 	{:else}
+		{#if stalled}
+			<Banner kind="warning" title={m.insights_overview_stalled_title()}>
+				<span data-testid="insights-stalled">{m.insights_overview_stalled_body()}</span>
+			</Banner>
+		{/if}
+
 		<StageStrip stages={overview.stages} onjump={jump} />
 
 		{#if overview.stale}

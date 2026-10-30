@@ -11,6 +11,11 @@
 //!   Danger-zone action (§10.10.7), not a Security one.
 //! - **The check** runs at most once a minute (`429 rate_limited` with
 //!   `Retry-After`) and one at a time, at any mode, `off` included.
+//! - **A write is acknowledged only once it's durable** (DUR-26): a pause,
+//!   resume, skip or history clear that couldn't be saved is
+//!   `500 updates_not_saved`, never a `200` the next restart forgets. A
+//!   failed pause still holds automatic installs in this process
+//!   (`policy.held_in_process`).
 
 use std::fmt;
 use std::sync::Arc;
@@ -62,6 +67,10 @@ pub enum UpdatesError {
     Unavailable(UpdatesUnavailable),
     /// `<data>/bin` can't be opened, so nothing can be written there.
     BinUnavailable,
+    /// The change couldn't be written durably (write, flush, rename or
+    /// remove failed), so it isn't acknowledged. The cause is logged; the
+    /// response never carries a path or an OS error.
+    NotSaved,
     /// A value the route doesn't take; the message says which.
     Invalid {
         field: &'static str,
@@ -93,6 +102,12 @@ impl From<UpdatesError> for ApiError {
                 StatusCode::CONFLICT,
                 "bin_unavailable",
                 "Lodestar can't write its update files (the bin folder in its data folder).",
+            ),
+            UpdatesError::NotSaved => ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "updates_not_saved",
+                "Lodestar couldn't save this change, so it may not survive a restart. \
+                 Check that its data folder has free space and can be written, then try again.",
             ),
             UpdatesError::Invalid { field, message } => {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_value", message)
@@ -198,6 +213,7 @@ pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Respo
         (status = 200, body = UpdatesStatus),
         (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
         (status = 409, description = "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
+        (status = 500, description = "`updates_not_saved`: the skip isn't acknowledged. It may not survive a restart (if only the final folder sync failed, it may already be in effect).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
@@ -211,7 +227,10 @@ pub(crate) async fn skip(
 }
 
 /// Pauses automatic installs for 1, 7 or 30 days; 0 resumes. Checks and
-/// Install now carry on.
+/// Install now carry on. A pause that couldn't be saved is refused, yet
+/// holds automatic installs in this process (`policy.held_in_process`)
+/// until a pause or resume is saved; a resume that couldn't be saved
+/// keeps the pause and any hold.
 #[utoipa::path(
     operation_id = "pauseUpdates",
     post,
@@ -221,7 +240,8 @@ pub(crate) async fn skip(
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 422, description = "`invalid_value` for any other number of days.", body = ErrorEnvelope),
-        (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 409, description = "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
+        (status = 500, description = "`updates_not_saved`: the change couldn't be saved and isn't acknowledged.", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
@@ -249,6 +269,7 @@ pub(crate) async fn pause(
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
+        (status = 500, description = "`updates_not_saved`: the clear isn't acknowledged. It may not survive a restart (if only the final folder sync failed, the history may already be gone).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
@@ -273,5 +294,18 @@ mod tests {
         );
         let e = ApiError::from(UpdatesError::Internal("/secret".into()));
         assert!(!e.body().to_string().contains("secret"));
+    }
+
+    /// DUR-26: the fixed code and sentence, a 500, nothing variable.
+    #[test]
+    fn not_saved_is_a_fixed_500() {
+        let e = ApiError::from(UpdatesError::NotSaved);
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::INTERNAL_SERVER_ERROR, "updates_not_saved")
+        );
+        let body = e.body().to_string();
+        assert!(body.contains("may not survive a restart"), "{body}");
+        assert!(!body.contains('/'), "{body}");
     }
 }

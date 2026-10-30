@@ -50,7 +50,7 @@ pub(crate) enum Need {
 /// as the cheap check would ([`crate::matcher`]), some exactly from its
 /// distinct token texts, compared byte for byte. So a gate says *no*
 /// only where the full match must.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Gate {
     None,
     /// The torrent's size (`size:`) within these, inclusive.
@@ -91,8 +91,7 @@ impl Gate {
         }
     }
 
-    /// The gate clause it reads, if any: its answer is the same for
-    /// every rule that shares the clause.
+    /// The gate clause it reads, if any.
     fn clause(self) -> Option<u32> {
         match self {
             Gate::Lacks(i) | Gate::Prefix(i) | Gate::Fuzzy(i) | Gate::Near(i) | Gate::Title(i) => {
@@ -1676,6 +1675,35 @@ impl Clauses {
     }
 }
 
+/// The distinct gates of a rule set, by number.
+#[derive(Debug)]
+struct Gates {
+    list: Vec<Gate>,
+    seen: std::collections::HashMap<Gate, u32>,
+}
+
+/// [`Gate::None`]'s number.
+const NO_GATE: u32 = 0;
+
+impl Default for Gates {
+    fn default() -> Gates {
+        Gates {
+            list: vec![Gate::None],
+            seen: [(Gate::None, NO_GATE)].into(),
+        }
+    }
+}
+
+impl Gates {
+    /// The number of `g`, added if it's new.
+    fn add(&mut self, g: Gate) -> u32 {
+        *self.seen.entry(g).or_insert_with(|| {
+            self.list.push(g);
+            self.list.len() as u32 - 1
+        })
+    }
+}
+
 /// Texts' lengths [`FuzzyGate`] reads, longer ones together at the last.
 const LENGTHS: usize = 72;
 
@@ -1744,15 +1772,21 @@ pub struct RuleList {
 
 #[derive(Debug, Default)]
 struct RuleIndex {
-    /// Rules nothing narrows, by position, with their gates.
-    always: Vec<(u32, Gate)>,
+    /// Rules nothing narrows, by position, with their gates' numbers in
+    /// [`RuleIndex::gates`].
+    always: Vec<(u32, u32)>,
     /// Of those, the fuzzy words' gates laid out to check in a row: the
     /// rule, the word's length, distance and characters.
     always_fuzzy: Vec<FuzzyGate>,
     /// And the prefixes', by start key: the key, which of the
     /// vocabulary's start lists it's in, the rule and the prefix.
     always_prefix: Vec<(u64, usize, u32, Box<str>)>,
-    by_key: IdMap<Vec<(u32, Gate)>>,
+    by_key: IdMap<Vec<(u32, u32)>>,
+    /// Each distinct gate once, [`Gate::None`] first: rules share gates
+    /// (`-sample`, `size:>3TB`, `type:software`), and a gate's answer is
+    /// the same for every rule that has it, so each is answered once a
+    /// torrent.
+    gates: Gates,
     /// One bit per key of [`RuleIndex::by_key`], so most of a torrent's
     /// texts, which no rule names, skip the map: it fits a small cache,
     /// and the map of 10,000 rules doesn't.
@@ -1801,10 +1835,14 @@ impl RuleList {
                         ) => ix
                             .always_prefix
                             .push((*k, start_index(prefix), i, prefix.clone())),
-                        _ => ix.always.push((i, g)),
+                        _ => {
+                            let g = ix.gates.add(g);
+                            ix.always.push((i, g));
+                        }
                     },
                     Need::Never => {}
                     Need::Any(keys) => {
+                        let g = ix.gates.add(g);
                         for k in keys {
                             let v = ix.by_key.entry(k).or_default();
                             if v.last().is_none_or(|l| l.0 != i) {
@@ -1854,21 +1892,15 @@ impl RuleList {
                 marks[g.rule as usize / 64] |= u64::from(pass) << (g.rule % 64);
             }
         }
-        // Each gate clause's answer: unknown, no or yes.
-        let memo = vec![std::cell::Cell::new(0u8); ix.clauses.list.len()];
-        let mut mark = |&(i, g): &(u32, Gate)| {
-            let pass = match g.clause() {
-                None => g == Gate::None || gates(g, &ix.clauses.list),
-                // Rules often share a clause (`-sample`): answered once.
-                Some(c) => {
-                    let m = &memo[c as usize];
-                    if m.get() == 0 {
-                        m.set(1 + u8::from(gates(g, &ix.clauses.list)));
-                    }
-                    m.get() == 2
-                }
-            };
-            if pass {
+        // Each gate's answer: unknown, no or yes. [`Gate::None`] is yes.
+        let mut memo = vec![0u8; ix.gates.list.len()];
+        memo[NO_GATE as usize] = 2;
+        let mut mark = |&(i, g): &(u32, u32)| {
+            let m = &mut memo[g as usize];
+            if *m == 0 {
+                *m = 1 + u8::from(gates(ix.gates.list[g as usize], &ix.clauses.list));
+            }
+            if *m == 2 {
                 marks[i as usize / 64] |= 1 << (i % 64);
             }
         };
@@ -1885,7 +1917,7 @@ impl RuleList {
                         .texts_starting(n, key)
                         .any(|t| t.starts_with(&**prefix))
                 {
-                    mark(&(*i, Gate::None));
+                    mark(&(*i, NO_GATE));
                 }
             }
         }
