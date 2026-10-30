@@ -11,7 +11,7 @@ repository.workspace = true
 [dependencies]
 lodestar-metainfo.workspace = true
 lodestar-store.workspace = true
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
 sha2 = "0.11.0"
 tokio = { version = "1.54.0", features = ["rt", "macros", "time"] }
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
