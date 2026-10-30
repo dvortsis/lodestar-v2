@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T22:42Z",
+ "updated_at": "2026-10-30T22:43Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -548,13 +548,13 @@
    "notes": ""
   },
   "S-appearance": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01MMjhnCiTtdnyHjCTG1QFHP",
-   "pr": null,
+   "pr": 243,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note)"
+   "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note) | 22:43Z PR #243 head 8139b6a7 (baseline regen marker on purpose); fresh Opus reviewer launched; scope calls (filters dropped, start-up hook deferred) for review"
   },
   "M-filters-dialogs": {
    "status": "merged",
@@ -2341,7 +2341,8 @@
   "2026-10-30T22:20Z F-filters-packs opened #240 (43012ebb); fresh Opus reviewer session_01MMjhn8qZB2pn4AbkpKd1Li.",
   "2026-10-30T22:21Z F-rollback-journal opened #241 (00bc89ed); fresh reviewer launched. Holds follow-up recorded.",
   "2026-10-30T22:41Z #241 review MERGE; merge on green. F-rollback-holds brief written (high priority).",
-  "2026-10-30T22:42Z CR-SIM-restart opened #242 (19c08f88); fresh reviewer launched. #240 CI suite done; review pending."
+  "2026-10-30T22:42Z CR-SIM-restart opened #242 (19c08f88); fresh reviewer launched. #240 CI suite done; review pending.",
+  "2026-10-30T22:43Z S-appearance opened #243; reviewer launched. Open PRs: #240 (review), #241 (MERGE, CI), #242 (review), #243 (review)."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
