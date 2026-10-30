@@ -22,7 +22,7 @@ use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
     Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, PeerPermit, PermitReturn,
-    Snapshot, Source, Stats,
+    QueuedDrop, Snapshot, Source, Stats,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -646,6 +646,7 @@ impl Actor {
                         let keep = reply.is_none();
                         if !keep {
                             drop(reply.take());
+                            QueuedDrop::Paused.count(stats);
                             PermitReturn::Paused.release(stats, permit.take());
                         }
                         keep
@@ -1700,6 +1701,7 @@ impl Actor {
         self.get_peers_queue.retain_mut(|(_, reply, permit)| {
             let keep = reply.as_ref().is_none_or(|r| !r.is_closed());
             if !keep {
+                QueuedDrop::CallerClosed.count(stats);
                 PermitReturn::CancelledQueued.release(stats, permit.take());
             }
             keep
@@ -2391,6 +2393,49 @@ mod tests {
         a.maintain(&sockets);
         assert_peer_ownership_drained(&a);
         assert_eq!(a.stats.snapshot().lookups_completed, 0);
+        assert_eq!(a.stats.snapshot().peer_queued_dropped, [0, 1]);
+    }
+
+    /// Every admitted request is counted where it ends, with no permit
+    /// (coordinated admission off): one dropped queued by its caller, one
+    /// by the pause, one cancelled while active.
+    #[test]
+    fn queued_drops_are_counted_without_a_permit() {
+        let (mut a, sockets) = fixture();
+        // A node to ask, so the third request runs rather than ending empty.
+        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        a.families[0]
+            .table
+            .insert(candidate(remote), Contact::Response, 0);
+        a.paused = true;
+        let ask = |a: &mut Actor| {
+            a.paused = false;
+            let (tx, mut rx) = oneshot::channel();
+            a.on_command(Command::RequestPeers(InfoHash([7; 20]), tx, None));
+            rx.try_recv().unwrap().unwrap()
+        };
+        // Queued, then its caller goes before the next turn starts it.
+        drop(ask(&mut a));
+        a.drop_cancelled_queued();
+        // Queued, then the pause drops it.
+        let _paused = ask(&mut a);
+        a.on_command(Command::SetPaused(true));
+        // Started, then its caller goes.
+        let active = ask(&mut a);
+        a.maintain(&sockets);
+        assert_eq!(a.active_get_peers, 1);
+        drop(active);
+        a.scrape_tick(&sockets, Instant::now());
+        // (Maintenance may have started its own lookups; only owned
+        // requests are checked.)
+        assert!(a.peer_requests.is_empty() && a.get_peers_queue.is_empty());
+        assert_eq!(a.active_get_peers, 0);
+        let s = a.stats.snapshot();
+        assert_eq!(s.peer_admitted, 3);
+        assert_eq!(s.peer_queued_dropped, [1, 1]);
+        assert_eq!(s.peer_cancelled, 1);
+        assert_eq!(s.lookups_completed, 0);
+        assert_eq!(s.peer_permit_returns, [0; PermitReturn::ALL.len()]);
     }
 
     #[test]
