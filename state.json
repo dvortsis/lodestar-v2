@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T18:25Z",
+ "updated_at": "2026-10-30T18:35Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2247,7 +2247,8 @@
   "2026-10-30T18:10Z #227 re-check MERGE at e262b6e2, but it conflicts with main after #228; author told to merge main plus optional item 6, then a runner delta check. #225 waits on ci-ok. Check-in re-armed for 19:10Z.",
   "2026-10-30T18:11Z merged #225 IMP-2 (c15a5112) on green ci-ok at a1890137; author and reviewer sessions archived.",
   "2026-10-30T18:30Z opened #230 fix/logging-nits (runner-owned: rotated_name max N+1, wait messages); review by session_01MMjhn984M3k3UJXUCsEYPX (#221's reviewer, idle). #221 author told to remove .update-snapshots marker.",
-  "2026-10-30T18:25Z #227 new head 9c99b688: runner delta check OK (config.rs both sides kept; ci.yml requires >=1 passing privdrop test); merge on green ci-ok. #229 X-flake-supervisor-switch runner review CHANGES (drain spins once stderr disconnects). #221 head ad3895ad sent to reviewer."
+  "2026-10-30T18:25Z #227 new head 9c99b688: runner delta check OK (config.rs both sides kept; ci.yml requires >=1 passing privdrop test); merge on green ci-ok. #229 X-flake-supervisor-switch runner review CHANGES (drain spins once stderr disconnects). #221 head ad3895ad sent to reviewer.",
+  "2026-10-30T18:35Z #231 fix/cr-adm-polish runner review CHANGES: partial-refusal holds miss refusals seen in an earlier poll (refused/unacknowledged are per-poll locals); author session_01MMjhnA3oPv1oEebqrwfFcm."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
 }
