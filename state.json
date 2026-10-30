@@ -1169,13 +1169,13 @@
    "review_rounds": 1
   },
   "F-auth": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhn95sPGRigHUpZhU2wx",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:30Z ready 585dfca4 on next (+382/-22, 3 files); self-review 1 blocking fixed; /security-review clean; runner read diff: OK, no changes. Open PR after swap; fresh reviewer + security on PR head. | 2026-10-30T04:56Z PR #178 head 7db4d0f1; fresh+security reviewer running",
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:30Z ready 585dfca4 on next (+382/-22, 3 files); self-review 1 blocking fixed; /security-review clean; runner read diff: OK, no changes. Open PR after swap; fresh reviewer + security on PR head. | 2026-10-30T04:56Z PR #178 head 7db4d0f1; fresh+security reviewer running | 2026-10-30T05:24Z #178 merged 0537889f (fresh+security MERGE; CI green)",
    "pr": 178
   },
   "F-filters": {
@@ -1194,7 +1194,7 @@
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z PR #177 head bd131a8d; fresh reviewer running; ci.yml fuzz-seeds line granted to slice; \u00a72.19 flags: per-file path.utf-8, .pad/padding, decode fallback (loosens arch \u00a76/\u00a716 raw bytes)",
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z PR #177 head bd131a8d; fresh reviewer running; ci.yml fuzz-seeds line granted to slice; \u00a72.19 flags: per-file path.utf-8, .pad/padding, decode fallback (loosens arch \u00a76/\u00a716 raw bytes) | 2026-10-30T05:24Z 207866e8 delta OK (enforce_path_limits, golden, hint filter); Windows golden CRLF failure -> granted .gitattributes line (-text) + LF-agnostic compare",
    "pr": 177
   },
   "L1": {
@@ -1267,6 +1267,15 @@
    "session": "session_01MMjhnD1tsoWPsM4TCda718",
    "model": "opus",
    "notes": " | 2026-10-30T05:23Z launched: tantivy PhraseScorer seek_danger debug panic via suggest proptest (q=-\"e,h\"~*\u00e90, deterministic with seed cc 275f6bcb\u2026) + rtorrent port-reuse flake. 5th session while F-updater idles waiting on L4 (runner call)."
+  },
+  "F-auth-lock": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
