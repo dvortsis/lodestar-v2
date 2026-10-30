@@ -103,8 +103,34 @@ struct Run {
 }
 
 impl Run {
+    /// A run whose lock nobody holds on purpose: see [`Run::take_lock`].
     fn boot(d: &Dirs, clock: &Arc<SimClock>, on: bool) -> Run {
+        let mut run = Run::boot_with(d, clock, on, None);
+        run.take_lock();
+        run
+    }
+
+    /// A run that may find the lock held, and must say so.
+    fn boot_locked(d: &Dirs, clock: &Arc<SimClock>, on: bool) -> Run {
         Run::boot_with(d, clock, on, None)
+    }
+
+    /// Retries the lock at the same simulated instant until it's free, with
+    /// a 10 s real-time deadline. On Unix a child process another test in
+    /// this binary forks (the abort test) shares the lock file for a moment
+    /// before its `exec` closes it; in production that costs one tick.
+    fn take_lock(&mut self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while matches!(self.proof.phase, Phase::Locking { .. })
+            && std::time::Instant::now() < deadline
+        {
+            self.proof.phase = Phase::Locking {
+                next: Instant::now(),
+                backoff: TICK,
+            };
+            self.tick();
+            std::thread::yield_now();
+        }
     }
 
     fn boot_with(d: &Dirs, clock: &Arc<SimClock>, on: bool, delay: Option<Duration>) -> Run {
@@ -346,7 +372,7 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
     let LockAttempt::Held(other) = restart::try_lock(&d.data).unwrap() else {
         panic!("this test needs file locks in the temp dir");
     };
-    let mut r = Run::boot(&d, &c, true);
+    let mut r = Run::boot_locked(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::Locked);
     assert!(!r.proof.may_sample(Instant::now()));
     assert!(r.proof.suppression_seconds(Instant::now()) >= 1);
@@ -363,6 +389,7 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
     // The retry backs off to at most a minute.
     advance(MAX_RETRY).await;
     r.tick();
+    r.take_lock();
     assert_eq!(
         r.proof.reason(),
         Reason::Resumed,
@@ -379,19 +406,20 @@ async fn an_off_run_holds_the_lock_and_its_window_starts_when_it_gets_it() {
     let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
         panic!("this test needs file locks in the temp dir");
     };
-    let mut off = Run::boot(&d, &c, false);
+    let mut off = Run::boot_locked(&d, &c, false);
     advance(horizon() + Duration::from_secs(3600)).await;
     off.tick();
     assert!(!off.proof.may_sample(Instant::now()), "locked out: nothing");
     drop(holder);
     advance(MAX_RETRY).await;
     off.tick();
+    off.take_lock();
     let took = Instant::now();
     assert!(
         !off.proof.may_sample(took),
         "the window starts now, not at the epoch"
     );
-    let on = Run::boot(&d, &c, true);
+    let on = Run::boot_locked(&d, &c, true);
     assert_eq!(
         on.proof.reason(),
         Reason::Locked,
@@ -575,7 +603,7 @@ async fn an_on_run_holding_the_lock_keeps_an_off_run_out() {
     let on = Run::boot(&d, &c, true);
     assert_eq!(on.proof.reason(), Reason::Resumed);
     let marker = std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap();
-    let mut off = Run::boot(&d, &c, false);
+    let mut off = Run::boot_locked(&d, &c, false);
     assert_eq!(off.proof.reason(), Reason::Locked);
     advance(horizon() * 2).await;
     off.tick();
@@ -601,7 +629,7 @@ async fn overlapping_runs_never_both_resume() {
     let mut old = Run::boot(&d, &c, true);
     assert_eq!(old.proof.reason(), Reason::Resumed);
     old.sampled(addr(6), 1, Duration::from_secs(1800));
-    let mut new = Run::boot(&d, &c, true);
+    let mut new = Run::boot_locked(&d, &c, true);
     assert_eq!(
         new.proof.reason(),
         Reason::Locked,
@@ -612,6 +640,7 @@ async fn overlapping_runs_never_both_resume() {
     old.commit(&d);
     advance(MAX_RETRY).await;
     new.tick();
+    new.take_lock();
     assert_eq!(new.proof.reason(), Reason::Resumed);
     assert!(
         !new.sampler.reserve(addr(6), 2, Instant::now()),
@@ -813,7 +842,7 @@ async fn no_state_save_before_s1_hashes_it() {
     let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
         panic!("this test needs file locks in the temp dir");
     };
-    let mut r = Run::boot(&d, &c, true);
+    let mut r = Run::boot_locked(&d, &c, true);
     assert!(
         !r.proof.may_save_state(),
         "locked out: dht-state.bin is the holder's"
@@ -821,6 +850,7 @@ async fn no_state_save_before_s1_hashes_it() {
     drop(holder);
     advance(MAX_RETRY).await;
     r.tick();
+    r.take_lock();
     assert!(r.proof.may_save_state());
 }
 
