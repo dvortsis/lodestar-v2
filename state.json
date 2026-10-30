@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T14:33:53Z",
+ "updated_at": "2026-10-30T03:32Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1620,7 +1620,6 @@
   "last_heartbeat": "2026-10-24T15:40Z: paused by owner; no open PRs, no running slices.",
   "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
   "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
-  "launch_freeze": "SET 2026-10-24T03:31Z by OWNER (typed in session_01SE4bp9YdZmHr8RN4FHpbmm 03:30Z, verified): 'Let's get .5 finished up. You can start the remaining .5 slices when ready. Hold off on starting other slices until .5 is finished.' Owner usage ~7% left, resets 2026-10-30T00:00Z. v0.5 remaining: S-search-2 (2a,2b) -> S-search-3 (same session) -> G-v05. | 2026-10-24T03:38Z OWNER-HELD (typed 03:37Z in session_01SE4bp9YdZmHr8RN4FHpbmm, verified): 'pause starting any new slices that aren't .5 until my say so.' Freeze on non-v0.5 slices persists after G-v05 until the owner lifts it. Paused in-flight work also stays paused until the owner says.",
   "heartbeat_cadence": "2026-10-23T19:00:53Z every 3 h (38 */3) so runner-state commits stay under the watchdog's 4 h 'gone' threshold (owner allowed 3-4 h)",
   "review_policy": "2026-10-23T17:27:56Z owner: tighter review rule. New PRs: one fresh reviewer (combined fresh+security where security is required). Small deltas/fix rounds: resume the existing reviewer or runner checks the diff directly; no new reviewer agents.",
   "owner_decision_insights_budget": "2026-10-23T17:34:45Z owner: Insights budget = first view <=45 KB (uPlot and below-fold lazy); runner total cap 65 KB. Needs a docs/decisions entry (S-insights-1 records it).",
@@ -1637,7 +1636,11 @@
   "merged_168": "subscriptions client panic fix merged ef236b19",
   "merged_170": "macOS supervisor tests fixed, merged bbe95fc3 07:58Z; watch main CI on it (log-delete flake may still hit macOS)",
   "v050": "Owner (typed in runner session 2026-10-24 ~12:45Z): \"Yes, tag as .5\". Version bump PR #172 merged 2e97defe. Tag push v0.5.0 refused (HTTP 403 from git proxy) - owner must push the tag; then approve the release environment; draft release then publish. | Release notes written (owner: \"Please write\") as docs/releases/v0.5.0.md, PR #173 merged. Owner still to: push tag v0.5.0 at 2e97defe (session cannot push tags), approve release env, paste notes, publish draft.",
-  "runner_paused": "PAUSED 2026-10-24T15:40Z by OWNER (typed in runner session: \"pause runner until I start up again.\"). Heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW and watchdog trig_0172BngAUoA4NRaRWBYiRWVf disabled (not deleted). On resume: re-enable both, then reconcile. Pending owner actions: push tag v0.5.0 at 2e97defe, approve release env, paste docs/releases/v0.5.0.md, publish draft. Launch freeze still owner-held."
+  "runner_paused": "RESUMED 2026-10-30T03:32Z by OWNER approving the master-plan update (owner-decisions \u00a72.25). Heartbeat and watchdog re-enabled.",
+  "launch_freeze": null,
+  "freeze_lift": "2026-10-30T03:32Z: owner lifted the v0.5-only freeze for the work in build-plan \u00a70 (lanes L,F,C,I,S,D). Priority ladder: L+F > release cut > C > I > S > M5 backlog > v0.6 epics; D rides along. Max 4 helpers at once.",
+  "plan_branch": "Plan docs on claude/busy-allen-aptli2 (625225c2), based on next. PR to main after the history swap.",
+  "lineage": "Rewritten history: next = 058d99373e2c (old main 2d5e761d). Sessions branch from next until the owner force-pushes main. Old root 15620683 / old tip 2d5e761d must never appear in a PR head."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
@@ -1652,5 +1655,57 @@
   "S-alerts",
   "S-detail",
   "S-discover"
+ ],
+ "owner_checklist": [
+  {
+   "id": "OC1",
+   "action": "Tell the runner the CR-0 soak state (collector finished? result.json, clean shutdown?)",
+   "unblocks": "soak close-out, G-v051"
+  },
+  {
+   "id": "OC2",
+   "action": "Confirm the two tree diffs origin/main..058d9937 (architecture.md, owner-decisions.md) are intended",
+   "unblocks": "history swap"
+  },
+  {
+   "id": "OC3",
+   "action": "History swap: git bundle backup of all refs; pause runner; lift ruleset; git push --force-with-lease=main:2d5e761d origin 058d99373e2c:main; restore ruleset",
+   "unblocks": "ext:history-swap -> all PRs"
+  },
+  {
+   "id": "OC4",
+   "action": "Decide whether to delete ~150 old-lineage branches after the backup",
+   "unblocks": "scrub completeness"
+  },
+  {
+   "id": "OC5",
+   "action": "Confirm or change the crawler gate thresholds: 24 h mean >=100/min, no hour <70/min, p95 discovery-to-searchable <=10 min",
+   "unblocks": "first acceptance analysis"
+  },
+  {
+   "id": "OC6",
+   "action": "First-run 6 h sampling suppression: accept as product behaviour?",
+   "unblocks": "D-v051 wording, wizard copy"
+  },
+  {
+   "id": "OC7",
+   "action": "Updater signing keys and manifest exist? If not, v0.5.1 ships with updates off",
+   "unblocks": "G-v051"
+  },
+  {
+   "id": "OC8",
+   "action": "\u00a72.19 flags to review: BB-1 deletion-guarantee refinement, 6 h restart suppression, outbound endpoint policy, 8 MiB file-ID cache budget, 45 KB Settings route budgets",
+   "unblocks": "none (veto window)"
+  },
+  {
+   "id": "OC9",
+   "action": "Optional: make Web / web and E2E / run required checks (\u00a72.22 left them outside ci-ok)",
+   "unblocks": "auto-merge safety"
+  },
+  {
+   "id": "OC10",
+   "action": "Later: PostgreSQL 16 restore of the Bitmagnet dump per IMP-0 runbook; Unraid 24 h rc soak; Windows service-mode rc run",
+   "unblocks": "IMP-3 pilots, G-v051"
+  }
  ]
 }
