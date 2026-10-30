@@ -335,6 +335,18 @@ fn texty() -> impl Strategy<Value = String> {
     })
 }
 
+/// A path segment: [`texty`], single letters that a spelled-out run
+/// carries over a `/`, a segment long enough to reach the token cap, or
+/// none.
+fn segment() -> impl Strategy<Value = String> {
+    prop_oneof![
+        4 => texty(),
+        2 => "([a-zA-Z]\\.){0,3}[a-zA-Z]",
+        1 => "[a-z]{1,3}( [a-z]{1,3}){60,70}",
+        1 => Just(String::new()),
+    ]
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
@@ -368,6 +380,35 @@ proptest! {
             tok.continue_path(&[t.as_str()], &mut a, 0, end);
             reference.continue_path(&[t.as_str()], &mut b, 0, end);
             prop_assert_eq!(&a, &b);
+        }
+    }
+
+    /// Paths read in one pass, each folder once, give every path the
+    /// tokens of its joined text: single letters and look-alikes on
+    /// either side of a `/`, more folders than are remembered, paths of
+    /// one segment and of none, and texts past the token cap.
+    #[test]
+    fn paths_read_as_their_joined_text(
+        folders in prop::collection::vec(prop::collection::vec(segment(), 0..4), 1..8),
+        files in prop::collection::vec((any::<prop::sample::Index>(), segment()), 0..24),
+    ) {
+        let paths: Vec<Vec<String>> = files
+            .into_iter()
+            .map(|(at, own)| {
+                let mut p = folders[at.index(folders.len())].clone();
+                if !own.is_empty() || p.is_empty() {
+                    p.push(own);
+                }
+                p
+            })
+            .collect();
+        let (mut out, mut ends) = (Vec::new(), Vec::new());
+        lodestar_filter::normalize::paths(paths.iter().map(|p| &p[..]), &mut out, &mut ends);
+        prop_assert_eq!(ends.len(), paths.len());
+        let mut from = 0;
+        for (p, &to) in paths.iter().zip(&ends) {
+            prop_assert_eq!(&out[from..to], &theirs(&p.join("/"))[..], "{:?}", p);
+            from = to;
         }
     }
 }

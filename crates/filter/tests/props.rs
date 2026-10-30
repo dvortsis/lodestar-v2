@@ -425,9 +425,10 @@ const CALIB_REF_NS: f64 = 10_700.0;
 /// only as they would on ingest. The engine is measured with 1%, 10% and
 /// 25% of the rules built on words the torrents have, with a mixed set
 /// that adds the shapes the cheap check can't decide ([`mixed_rules`]),
-/// and with 10% of each such shape ([`Shape`]). The budget holds the
-/// core, 1%, 10% and the mixed set; 25% and each shape at 10% are
-/// measured and reported, not held. Every rule shape counts (§2.21,
+/// with 10% of each such shape ([`Shape`]), and with the mixed set and
+/// five common words neutralized. The budget holds the core, 1%, 10%,
+/// the mixed set and the mixed set neutralized; 25% and each shape at
+/// 10% are measured and reported, not held. Every rule shape counts (§2.21,
 /// owner-delegated, 2026-10-23).
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
@@ -605,7 +606,8 @@ fn budget() {
             cases.push((what, per, held));
         }
         // The mixed set again with common words neutralized (CSX-5
-        // *Neutralize term*), which every text clause then checks.
+        // *Neutralize term*): every keyword entry reads the name and
+        // paths, and every text clause checks the words.
         engine.rules = mixed_rules().into();
         engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
             .iter()
@@ -623,7 +625,7 @@ fn budget() {
         let per = time(what, &|i| {
             std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
         });
-        cases.push((what.to_owned(), per, false));
+        cases.push((what.to_owned(), per, true));
         drop(engine);
         let after = calibration("after");
 

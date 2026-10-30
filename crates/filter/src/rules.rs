@@ -181,16 +181,80 @@ impl Override {
         }
     }
 
-    /// The neutralized word: its hash for the core and its key for
-    /// queries ([`crate::matcher::neutral_key`]).
-    pub(crate) fn neutral(&self) -> Option<(u64, String)> {
-        match (&self.what, self.strength) {
-            (Match::Keyword(k), Strength::Neutralize) => {
-                let t = keyword_tokens(k);
-                t.first().map(|t| (t.hash, crate::matcher::neutral_key(k)))
-            }
+    /// What judging needs of the entry that doesn't depend on the
+    /// torrent: a keyword's tokens, and the neutralized word, its hash for
+    /// the core and its key for queries ([`crate::matcher::neutral_key`]).
+    fn prepare(&self) -> Prepared {
+        let keyword = match &self.what {
+            Match::Keyword(k) => keyword_tokens(k),
+            _ => Vec::new(),
+        };
+        let neutral = match (&self.what, self.strength) {
+            (Match::Keyword(k), Strength::Neutralize) => keyword
+                .first()
+                .map(|t| (t.hash, crate::matcher::neutral_key(k))),
             _ => None,
+        };
+        Prepared { keyword, neutral }
+    }
+}
+
+/// An [`Override`] worked out once per entry list, not per torrent
+/// (§20.8).
+#[derive(Debug, Clone)]
+pub(crate) struct Prepared {
+    /// A keyword entry's tokens ([`keyword_tokens`]).
+    keyword: Vec<Token>,
+    pub(crate) neutral: Option<(u64, String)>,
+}
+
+/// Your override and neutralize entries (CSX-5). It reads and changes
+/// as a `Vec`; what judging needs of each entry is worked out on the
+/// first torrent after a change ([`Override::prepare`]), so a change
+/// can't leave it stale.
+#[derive(Debug, Clone, Default)]
+pub struct OverrideList {
+    list: Vec<Override>,
+    prepared: std::sync::OnceLock<Box<[Prepared]>>,
+}
+
+impl OverrideList {
+    /// Each entry with what judging needs of it.
+    pub(crate) fn prepared(&self) -> impl Iterator<Item = (&Override, &Prepared)> {
+        let prepared = self
+            .prepared
+            .get_or_init(|| self.list.iter().map(Override::prepare).collect());
+        self.list.iter().zip(prepared.iter())
+    }
+}
+
+impl std::ops::Deref for OverrideList {
+    type Target = Vec<Override>;
+    fn deref(&self) -> &Vec<Override> {
+        &self.list
+    }
+}
+
+impl std::ops::DerefMut for OverrideList {
+    /// Any change goes through here, so the prepared entries are dropped.
+    fn deref_mut(&mut self) -> &mut Vec<Override> {
+        self.prepared = std::sync::OnceLock::new();
+        &mut self.list
+    }
+}
+
+impl From<Vec<Override>> for OverrideList {
+    fn from(list: Vec<Override>) -> OverrideList {
+        OverrideList {
+            list,
+            prepared: Default::default(),
         }
+    }
+}
+
+impl FromIterator<Override> for OverrideList {
+    fn from_iter<I: IntoIterator<Item = Override>>(iter: I) -> OverrideList {
+        iter.into_iter().collect::<Vec<_>>().into()
     }
 }
 
@@ -211,7 +275,7 @@ impl Exception {
 }
 
 /// A keyword's normalized tokens: the first token at each word position.
-fn keyword_tokens(k: &str) -> Vec<Token> {
+pub(crate) fn keyword_tokens(k: &str) -> Vec<Token> {
     let mut all = Vec::new();
     normalize::tokens(k, &mut all);
     let mut out: Vec<Token> = Vec::new();
@@ -232,7 +296,7 @@ fn has_keyword(words: &[Token], text: &str) -> bool {
 }
 
 /// Whether the keyword's words appear in a row in these tokens.
-fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
+pub(crate) fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
     let Some(first) = words.first() else {
         return false;
     };
@@ -248,26 +312,40 @@ fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
 /// Whether a [`Match`] covers the torrent.
 pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc) -> bool {
     match what {
+        Match::Keyword(k) => keyword_in(&keyword_tokens(k), doc),
+        _ => matches_prepared(what, &[], item, doc),
+    }
+}
+
+/// [`matches`] for an entry whose keyword tokens are worked out.
+pub(crate) fn override_matches(o: &Override, p: &Prepared, item: &Item, doc: &Doc) -> bool {
+    matches_prepared(&o.what, &p.keyword, item, doc)
+}
+
+fn matches_prepared(what: &Match, keyword: &[Token], item: &Item, doc: &Doc) -> bool {
+    match what {
         Match::Hashes(hs) => item.hashes.iter().any(|h| hs.contains(h)),
         Match::Payload(sig) => payload_sig(item.files).is_some_and(|p| p.sig == *sig),
-        Match::Keyword(k) => {
-            let words = keyword_tokens(k);
-            doc.normalized().iter().any(|t| in_a_row(&words, t))
-        }
+        Match::Keyword(_) => keyword_in(keyword, doc),
         Match::Query(q) => doc.matches(q, &[]),
     }
 }
 
+/// Whether a keyword's words are in a row in the name or a path.
+fn keyword_in(words: &[Token], doc: &Doc) -> bool {
+    doc.normalized().any(|t| in_a_row(words, t))
+}
+
 /// The neutral sets of the active Neutralize entries.
-pub(crate) fn neutral_sets(entries: &[&Override]) -> (TermSet, Vec<String>) {
+pub(crate) fn neutral_sets(entries: &[&Prepared]) -> (TermSet, Vec<String>) {
     let mut set = TermSet::default();
     let mut words = Vec::new();
     for e in entries {
-        if let Some((h, w)) = e.neutral() {
-            set.insert(h);
+        if let Some((h, w)) = &e.neutral {
+            set.insert(*h);
             // A word of no letters or digits has no key to compare.
             if !w.is_empty() {
-                words.push(w);
+                words.push(w.clone());
             }
         }
     }
