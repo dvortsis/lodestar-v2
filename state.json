@@ -1433,12 +1433,12 @@
    "notes": " | 2026-10-30T11:15Z runner fix: smoke.ps1 warns when Defender unreadable after uninstall (Release check flake on #198) | 2026-10-30T11:35Z merged #205 (MSI smoke green on 7836ae01; fresh review MERGE; install-time read guarded per review)"
   },
   "v051-cut": {
-   "status": "review",
+   "status": "verifying",
    "session": "runner",
    "model": "opus",
    "attempt": 1,
    "pr": 206,
-   "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both | 2026-10-30T12:50Z review: #206 MERGE (merge on green CI); #201 FIX FIRST (material lint 4 failed: word limit, RELEASE_ACTION x3; draft markers; updater hold wording; SHOTLIST); sent to D-v051",
+   "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both | 2026-10-30T12:50Z review: #206 MERGE (merge on green CI); #201 FIX FIRST (material lint 4 failed: word limit, RELEASE_ACTION x3; draft markers; updater hold wording; SHOTLIST); sent to D-v051 | 2026-10-30T13:20Z merged #206 -> release/v0.5.1 head 8b67f269 (with #201); dispatched ci.yml (all incl. macOS), e2e.yml (all-themes, no update_snapshots), release.yml; Web has no dispatch: covered by #206 PR run (only web/ change: openapi.json)",
    "review_session": "session_01MMjhnCfFuShScq5SLixE9d"
   },
   "IMP-1": {
