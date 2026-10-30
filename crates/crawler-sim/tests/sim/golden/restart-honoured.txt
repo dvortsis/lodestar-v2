@@ -1,0 +1,152 @@
+# crawler-sim scenario `restart-honoured`
+# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim
+seed=1 minutes=60 intensity=Balanced switches=none
+restart: leg1_minutes=20 gap=120s safe_restart=true
+net: nodes=2000 dead=150‰ loss=20‰ error=5‰ rate_limit=Some(20) latency=40+U(160)ms slow=30‰@1500ms bep51=600‰ interval=900s sample_size=20
+swarm: catalogue=20000 live=9108 held=61320 distinct_held=19026 max_peers=12
+fetch: unreachable=300‰ ok=450‰@900ms slow=100‰@6000ms refuse=250‰@80ms connect_timeout=4000ms timeout=8000ms
+pool: sockets=400 per_ip=2 max_pending=200000 max_lookups=256 lookup_wait=30s retry_backoff=120s max_attempts=4
+
+# leg 1: a first start with dht.safe_restart on, sampling 20 min after its suppression
+suppression=21604s samples_in_suppression=0 first_sample_at=21604s reason_at_stop=first_start stored=952 stored_first_hour=0
+samples: sent=2989 answered=1941 errors=657 unanswered=391 sample_failures=1047 sealed=1 sample_stale=0
+
+# leg 2: 120s later, dht.safe_restart on
+
+# per minute: counter deltas; gauges sampled each second as mean/max
+min admitted rejected completed peers_found fetch_started fetched stored harvested dht_active dht_queued pool_lookups pool_active
+  1 38 9199 38 14 54 9 9 120 3/32 0/0 7/256 3/9
+  2 176 5 146 84 174 53 53 1046 15/31 0/0 16/32 8/21
+  3 201 9277 219 108 296 103 103 1224 20/32 0/0 25/249 14/25
+  4 186 49 169 72 175 71 71 861 17/32 0/0 18/32 10/17
+  5 248 9299 251 108 246 93 93 865 25/32 0/0 31/245 13/20
+  6 202 78 201 81 174 82 82 917 20/31 0/0 22/32 8/16
+  7 253 9256 253 107 229 92 92 707 25/32 0/0 31/250 11/18
+  8 222 111 217 91 200 81 81 1169 23/32 0/0 24/32 10/19
+  9 243 9419 243 85 232 85 85 728 25/32 0/0 30/252 12/20
+ 10 239 99 242 103 226 88 88 773 24/32 0/0 25/32 12/17
+ 11 227 9254 228 70 184 72 72 566 22/32 0/0 27/247 8/15
+ 12 253 98 253 82 187 72 72 627 25/32 0/0 26/32 9/18
+ 13 244 9260 242 64 157 63 63 674 25/32 0/0 30/250 7/14
+ 14 273 100 272 95 195 82 82 1015 27/32 0/0 28/32 8/18
+ 15 231 9243 232 66 161 62 62 898 25/32 0/0 30/242 8/13
+ 16 241 45 247 84 204 73 73 584 24/32 0/0 25/32 10/17
+ 17 199 9404 208 37 100 38 38 332 19/32 0/0 27/253 4/9
+ 18 165 4 170 23 66 26 26 274 17/32 0/0 18/32 3/10
+ 19 155 9162 150 22 41 18 18 215 13/31 0/0 21/247 2/9
+ 20 98 0 98 7 15 8 8 214 11/18 0/0 11/18 0/3
+ 21 106 9149 112 8 18 8 8 179 9/32 0/0 17/253 0/5
+ 22 86 0 88 11 21 8 8 249 8/16 0/0 9/16 0/3
+ 23 115 9143 110 20 59 19 19 256 10/32 0/0 18/251 3/9
+ 24 86 0 90 7 17 8 8 162 8/15 0/0 9/15 0/4
+ 25 128 9360 124 20 54 14 14 317 12/32 0/0 20/255 2/7
+ 26 90 0 97 30 62 30 30 330 10/16 0/0 10/17 2/6
+ 27 73 9152 75 30 78 24 24 298 8/32 0/0 15/254 3/11
+ 28 31 0 32 7 26 10 10 226 2/8 0/0 3/8 1/4
+ 29 79 9140 80 25 72 18 18 172 7/32 0/0 14/251 4/13
+ 30 19 0 20 17 51 14 14 216 2/8 0/0 2/8 2/6
+ 31 88 9119 84 31 58 30 30 275 8/32 0/0 16/249 2/9
+ 32 20 0 24 23 49 25 25 265 2/8 0/0 2/8 2/7
+ 33 95 9402 94 15 38 12 12 151 7/32 0/0 15/255 2/5
+ 34 10 0 11 11 27 11 11 119 0/3 0/0 0/3 1/4
+ 35 51 9084 50 24 56 15 15 191 4/32 0/0 8/251 2/10
+ 36 11 0 12 10 17 9 9 107 1/4 0/0 1/4 0/3
+ 37 97 9049 97 31 68 29 29 115 7/32 0/0 15/249 3/12
+ 38 5 0 4 4 16 4 4 65 0/1 0/0 0/1 1/2
+ 39 87 9015 88 21 48 20 20 86 6/32 0/0 14/249 2/8
+ 40 14 0 13 13 39 12 12 72 1/5 0/0 1/5 1/5
+ 41 78 9281 79 13 45 5 5 52 7/32 0/0 15/255 3/8
+ 42 12 0 12 12 32 11 11 67 1/4 0/0 1/4 1/5
+ 43 69 9008 65 18 50 16 16 59 4/32 0/0 12/247 2/11
+ 44 47 0 40 10 21 10 10 76 4/12 0/0 4/12 0/4
+ 45 142 9020 145 17 41 14 14 50 13/32 0/0 21/250 2/8
+ 46 63 0 63 5 12 5 5 35 7/14 0/0 7/14 0/2
+ 47 124 9012 128 20 45 19 19 56 12/32 0/0 19/251 2/11
+ 48 57 0 55 7 16 6 6 56 5/9 0/0 5/9 1/3
+ 49 143 9234 142 11 20 8 8 54 13/32 0/0 21/249 0/5
+ 50 77 0 72 4 8 5 5 39 6/12 0/0 7/12 0/1
+ 51 122 8976 124 13 28 11 11 53 11/32 0/0 18/248 1/7
+ 52 72 0 75 2 2 2 2 23 8/15 0/0 8/15 0/1
+ 53 137 8953 136 15 33 14 14 56 12/32 0/0 20/251 1/7
+ 54 78 0 77 3 5 3 3 40 8/17 0/0 8/17 0/1
+ 55 116 8945 115 12 25 10 10 20 11/32 0/0 19/247 1/7
+ 56 84 0 87 2 5 2 2 20 8/15 0/0 8/16 0/2
+ 57 139 9167 132 2 5 1 1 10 11/32 0/0 19/245 0/1
+ 58 66 0 77 0 0 0 0 2 8/16 0/0 8/16 0/0
+ 59 65 8913 67 10 23 9 9 0 7/32 0/0 14/249 0/7
+ 60 25 0 24 0 0 0 0 0 2/6 0/0 2/6 0/0
+steady (after 3 warmup min), per min: admitted=117.3 rejected=4508.8 completed=117.5 fetched=27.7 stored=27.7
+
+# DHT node stats at the end (node::StatsSnapshot), one per line
+packets_in=122493
+packets_out=144145
+malformed_in=0
+queries_in=0
+responses_in=121880
+errors_in=613
+queries_out=144145
+timeouts=21637
+throttled=112
+send_errors=0
+spoofed=0
+routing_nodes=69
+outstanding=12
+harvested_sample=18428
+harvest_dropped=0
+lookups_completed=7099
+samples_sent=3398
+sample_failures=159
+sample_cooling=1951
+sample_inflight=0
+sample_stale=0
+sample_frontier=0
+sample_deferred=0
+peer_admitted=7101
+peer_rejected=275484
+peer_rejected_capacity=275484
+peer_rejected_paused=0
+peer_rejected_caller_closed=0
+peer_ack_failed=0
+peer_command_full=183252
+peer_command_closed=0
+peer_cancelled=0
+peer_queued_dropped_caller_closed=0
+peer_queued_dropped_paused=0
+peer_active=1
+peer_queued=0
+lookup_scheduled=6
+lookup_deadlines=7
+denied=0
+
+# fetch pool stats at the end (PoolStats)
+pending=15926 active=0 waiting=15926 lookups=2 lookup_backlog=0
+fetched=1742 duplicates=15781 finder_full=0 finder_closed=0 lookup_unaccepted=458736 retry_unaccepted=419318
+failures: Unreachable=1328 TimedOut=722 Refused=814 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
+lost: NoPeers=986 TimedOut=32 Refused=34 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=0 GaveUp=0 Unreachable=62
+evicted_service: unaccepted=0 lookup=0 peers=0 fetch=0
+admission_waits=0
+admission_wait_cancelled=0
+admission_wakeups=0
+admission_grants=0
+admission_refusals=0
+admission_holds=0
+admission_permit_returns=0
+dht_permit_returns=0
+funnel: Harvested=2647 PeerFound=1937 Fetched=1742 Lost=0
+
+# scripted network
+queries=211744 ping=1489 find_node=64338 get_peers=139531 sample=6386 other=0
+to_dead=23850 to_unknown=0 lost=7445 rate_limited=344 errors=919 unsupported=648 sample_early=0 replies=180105 values_replies=23863
+discoveries_dropped=0 pool_queue_at_end=15926
+# (the network's tallies cover both legs; `sample` leaves out the samples sent while stopping)
+
+# restart: leg 2 against leg 1's restrictions
+reason=resumed restart_obligations_restored=1991 restart_obligations_pending=1048 restart_obligations_refused=646575 restart_obligations_honoured=943
+leg1_nodes_sampled=2000 restricted_at_restart=1991 expired_at_restart=9 expired_resampled=9
+expiring_in_leg2=943 resampled_after_expiry=943 delay_after_expiry_s median=11 max=316
+sampled_before_expiry=0 fresh_nodes_sampled=0 first_sample_after_start=2s
+samples: sent=3399 answered=3239 errors=15 unanswered=145 sample_failures=159 sealed=1 sample_stale=0
+restart_cost: stored in the first 60 min, fresh start=0 leg 2=1742
+
+outcome_log events=45567 fnv64=c2c66c4d57be5b2e
+fingerprint=5e5047f10dea56aa

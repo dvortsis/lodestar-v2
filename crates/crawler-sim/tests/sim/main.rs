@@ -9,6 +9,7 @@
 mod fetch;
 mod log;
 mod net;
+mod restart;
 mod rng;
 mod run;
 mod scenario;
@@ -217,6 +218,41 @@ fn high_latency_matches_golden() {
 #[test]
 fn admission_pressure_matches_golden() {
     check_golden(&scenario::admission_pressure());
+}
+
+/// CR-SIM-restart: a clean restart with `dht.safe_restart` on. The run
+/// itself asserts that no node is sampled before its restored obligation
+/// expires, that sampling resumes at once, and that the counters add up.
+#[test]
+fn restart_honoured_matches_golden() {
+    check_golden(&scenario::restart_honoured());
+}
+
+/// The negative control: the same restart with `dht.safe_restart` off in
+/// leg 2 suppresses in full, and no node is sampled in leg 2.
+#[test]
+fn restart_without_safe_restart_suppresses_in_full() {
+    let mut s = scenario::restart_honoured();
+    s.minutes = 10;
+    if let Some(r) = &mut s.restart {
+        r.safe_restart = false;
+    }
+    let r = simulate(&s);
+    assert_eq!(
+        r.dht.sample_suppression_reason,
+        lodestar_dht::restart::Reason::Off,
+        "{}",
+        r.text
+    );
+    assert_eq!(r.dht.samples_sent, 0, "{}", r.text);
+    // The full window: 6 h plus the query timeout from leg 2's start, less
+    // the leg's 10 min.
+    assert!(
+        r.dht.sample_suppression_seconds >= 6 * 3600 + 4 - 600,
+        "{}",
+        r.text
+    );
+    assert_eq!(r.dht.restart_obligations_restored, 0, "{}", r.text);
 }
 
 /// Two runs of one seed in one process are byte-identical, and a different
