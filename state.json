@@ -1198,17 +1198,18 @@
    "pr": 177
   },
   "L1": {
-   "status": "review",
+   "status": "merged",
    "branch": "land/L1",
    "head": "ad0ec5a8",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z PR opened",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z PR opened | 2026-10-30T05:23Z #175 merged d9a5a487 (with runner fix commit)",
    "pr": 175
   },
   "L2": {
-   "status": "pending",
+   "status": "review",
    "branch": "land/L2",
    "head": "80d7e198",
-   "notes": "branch created at owner commit; PR after swap, in order"
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T05:23Z #180 opened; full-ci label + dispatched CI and Release on land/L2; Opus protocol+security reviewer running",
+   "pr": 180
   },
   "L3": {
    "status": "pending",
@@ -1260,6 +1261,12 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters."
+  },
+  "X-ci-health": {
+   "status": "running",
+   "session": "session_01MMjhnD1tsoWPsM4TCda718",
+   "model": "opus",
+   "notes": " | 2026-10-30T05:23Z launched: tantivy PhraseScorer seek_danger debug panic via suggest proptest (q=-\"e,h\"~*\u00e90, deterministic with seed cc 275f6bcb\u2026) + rtorrent port-reuse flake. 5th session while F-updater idles waiting on L4 (runner call)."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1743,7 +1750,8 @@
    "2026-10-30T04:56Z F-filters: neutralize applies at token level (dotted/joined/prefix/fuzzy) - content-safety adjacent; floor untouched",
    "2026-10-30T04:56Z F-metainfo: per-file path.utf-8; pathless padding -> .pad/padding; decode-to-UTF-8 fallback loses legacy raw bytes when no lossless re-encode (arch \u00a76/\u00a716)"
   ],
-  "review_round_1": "2026-10-30T05:07Z: fresh review #174 MERGE (+polish: cat-file guard pushed); #175 L1 FIX -> runner commit on land/L1 (labels, Torznab, v0.5.0, PID; CSV exception stated); #176 FIX -> 768327be (owner confirmation of tree diffs recorded in \u00a72.25; 4-slot cap recorded as approved-plan; 2.3KB binds pilots; CR-COL in tier 1 + G-v051; L owns = range files; dep/own fixes). #177 F-metainfo FIX: fuzz bound vs case-3 decode growth -> enforce limit on output; polish sent."
+  "review_round_1": "2026-10-30T05:07Z: fresh review #174 MERGE (+polish: cat-file guard pushed); #175 L1 FIX -> runner commit on land/L1 (labels, Torznab, v0.5.0, PID; CSV exception stated); #176 FIX -> 768327be (owner confirmation of tree diffs recorded in \u00a72.25; 4-slot cap recorded as approved-plan; 2.3KB binds pilots; CR-COL in tier 1 + G-v051; L owns = range files; dep/own fixes). #177 F-metainfo FIX: fuzz bound vs case-3 decode growth -> enforce limit on output; polish sent.",
+  "plan_merged": "2026-10-30T05:23Z #176 merged 9f96d1f3: build-plan \u00a70, owner-decisions \u00a72.25, master-plan decisions, slices.yaml now on main"
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
