@@ -24,7 +24,7 @@ Approve the `release` environment when GitHub asks. The runner records every art
 
 ## 3. Unraid: the 24 h soak, as an in-place upgrade
 1. **Don't restart the old pre-CR-0 container.** The rc image replaces it.
-2. Stop Lodestar and back it up: `docker run --rm -v <appdata>:/data ghcr.io/dvortsis/lodestar-v2:0.5.1-rc.1 backup` (or `lodestar backup` from the container's console). Keep the backup off the appdata share.
+2. **Back up with Lodestar stopped:** copy the whole appdata folder somewhere off the appdata share, for example `cp -a /mnt/user/appdata/lodestar /mnt/user/backups/lodestar-pre-0.5.1`. Don't use `lodestar backup` here: it needs a running Lodestar, and the old container must stay stopped. A cold copy of a stopped data folder is consistent. This copy is your rollback if the rc's migrations go wrong.
 3. Change the container's image tag to `0.5.1-rc.1` and start it on the same appdata. Note the intensity preset it runs at.
 4. Start the collector, following `docs/soak/tools/linux/README.md` ("Run it on Unraid"):
    - `--commit` is the rc's 40-character commit (`git rev-parse v0.5.1-rc.1^{commit}`);
