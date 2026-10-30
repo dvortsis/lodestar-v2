@@ -62,12 +62,16 @@ pub fn default_data_dir_unless_set(config: &mut Config, default_dir: &Path) {
 /// witness in `%ProgramData%\Lodestar-witness`: beside the data folder, so
 /// a backup of the data folder doesn't hold it, and not in the virtual
 /// account's profile. The service makes it private like the data folder;
-/// with the switch off nothing is created.
-pub fn default_witness_dir(config: &Config, program_data: Option<String>) -> Option<PathBuf> {
+/// with the switch off nothing is created. An empty variable chooses
+/// nothing, as `Config::load` reads it. `env` reads the environment.
+pub fn default_witness_dir(
+    config: &Config,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Option<PathBuf> {
     let chosen = config.layers.in_file("dht.restart_witness_dir")
-        || config.layers.in_env("LODESTAR_DHT_WITNESS_DIR");
+        || env("LODESTAR_DHT_WITNESS_DIR").is_some_and(|v| !v.is_empty());
     (config.dht.safe_restart && !chosen).then(|| {
-        PathBuf::from(program_data.unwrap_or_else(|| r"C:\ProgramData".into()))
+        PathBuf::from(env("ProgramData").unwrap_or_else(|| r"C:\ProgramData".into()))
             .join("Lodestar-witness")
     })
 }
@@ -81,11 +85,11 @@ pub fn default_witness_dir(config: &Config, program_data: Option<String>) -> Opt
 /// data, so that counts as unusable too.
 pub fn apply_witness_default(
     config: &mut Config,
-    program_data: Option<String>,
+    env: &impl Fn(&str) -> Option<String>,
     own: Option<&str>,
     ops: &impl acl::Ops,
 ) -> Option<(PathBuf, &'static str)> {
-    let w = default_witness_dir(config, program_data)?;
+    let w = default_witness_dir(config, env)?;
     config.dht.restart_witness_dir = None;
     if within(&w, &config.data_dir) {
         return Some((w, "inside_data"));
@@ -365,12 +369,8 @@ mod scm {
         let config = Config::load(path.as_deref(), env)
             .map(|mut c| {
                 super::default_data_dir_unless_set(&mut c, &default_dir);
-                witness_refused = super::apply_witness_default(
-                    &mut c,
-                    env("ProgramData"),
-                    own,
-                    &acl::Windows { own_sid: own },
-                );
+                witness_refused =
+                    super::apply_witness_default(&mut c, &env, own, &acl::Windows { own_sid: own });
                 c
             })
             .map_err(|e| format!("config: {e}"));
@@ -550,33 +550,34 @@ mod tests {
 
     #[test]
     fn the_service_witness_dir_is_a_sibling_only_when_the_switch_is_on() {
-        let pd = Some(r"D:\PD".to_string());
-        let off = Config::load(None, |_| None).unwrap();
-        assert_eq!(
-            default_witness_dir(&off, pd.clone()),
-            None,
-            "nothing while off"
-        );
-        let on = |extra: &'static str| {
+        let off = |k: &str| (k == "ProgramData").then(|| r"D:\PD".to_string());
+        let c = Config::load(None, off).unwrap();
+        assert_eq!(default_witness_dir(&c, &off), None, "nothing while off");
+        // `None` leaves the variable unset; `Some("")` sets it empty.
+        let on = |witness: Option<&'static str>| {
             move |k: &str| match k {
+                "ProgramData" => Some(r"D:\PD".to_string()),
                 "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
-                "LODESTAR_DHT_WITNESS_DIR" if !extra.is_empty() => Some(extra.to_string()),
+                "LODESTAR_DHT_WITNESS_DIR" => witness.map(str::to_string),
                 _ => None,
             }
         };
-        let c = Config::load(None, on("")).unwrap();
-        assert_eq!(
-            default_witness_dir(&c, pd.clone()),
-            Some(PathBuf::from(r"D:\PD").join("Lodestar-witness"))
-        );
+        let sibling = Some(PathBuf::from(r"D:\PD").join("Lodestar-witness"));
+        for unset in [None, Some("")] {
+            let env = on(unset);
+            let c = Config::load(None, env).unwrap();
+            assert_eq!(default_witness_dir(&c, &env), sibling, "{unset:?}");
+        }
         // A dir chosen in the environment or the file wins.
-        let c = Config::load(None, on(r"E:\w")).unwrap();
-        assert_eq!(default_witness_dir(&c, pd.clone()), None);
+        let env = on(Some(r"E:\w"));
+        let c = Config::load(None, env).unwrap();
+        assert_eq!(default_witness_dir(&c, &env), None);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[dht]\nrestart_witness_dir = \"F:/w\"\n").unwrap();
-        let c = Config::load(Some(&path), on("")).unwrap();
-        assert_eq!(default_witness_dir(&c, pd), None);
+        let env = on(None);
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(default_witness_dir(&c, &env), None);
     }
 
     /// Scripted [`acl::Ops`]: what the folder looks like, and whether
@@ -619,9 +620,13 @@ mod tests {
     #[test]
     fn the_service_witness_is_private_or_none_at_all() {
         let tmp = tempfile::tempdir().unwrap();
-        let pd = || Some(tmp.path().to_string_lossy().into_owned());
+        let pd = tmp.path().to_string_lossy().into_owned();
         let w = tmp.path().join("Lodestar-witness");
-        let on = |k: &str| (k == "LODESTAR_DHT_SAFE_RESTART").then(|| "true".to_string());
+        let on = |k: &str| match k {
+            "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
+            "ProgramData" => Some(pd.clone()),
+            _ => None,
+        };
         let config = || {
             let mut c = Config::load(None, on).unwrap();
             c.data_dir = tmp.path().join("Lodestar");
@@ -634,7 +639,7 @@ mod tests {
             create: true,
         };
         let mut c = config();
-        assert_eq!(apply_witness_default(&mut c, pd(), Some(OWN), &ok), None);
+        assert_eq!(apply_witness_default(&mut c, &on, Some(OWN), &ok), None);
         assert_eq!(c.dht.restart_witness_dir, Some(w.clone()));
 
         let foreign = || {
@@ -667,7 +672,7 @@ mod tests {
         ] {
             let mut c = config();
             assert_eq!(
-                apply_witness_default(&mut c, pd(), Some(OWN), &ops),
+                apply_witness_default(&mut c, &on, Some(OWN), &ops),
                 Some((w.clone(), why))
             );
             assert_eq!(c.dht.restart_witness_dir, None, "{why}");
@@ -683,17 +688,18 @@ mod tests {
             let mut c = config();
             c.data_dir = data;
             assert_eq!(
-                apply_witness_default(&mut c, pd(), Some(OWN), &unused),
+                apply_witness_default(&mut c, &on, Some(OWN), &unused),
                 Some((w.clone(), "inside_data"))
             );
             assert_eq!(c.dht.restart_witness_dir, None);
         }
 
         // Off, or a dir chosen: nothing changes.
-        let mut c = Config::load(None, |_| None).unwrap();
+        let off = |k: &str| (k == "ProgramData").then(|| pd.clone());
+        let mut c = Config::load(None, off).unwrap();
         let before = c.dht.restart_witness_dir.clone();
         assert_eq!(
-            apply_witness_default(&mut c, pd(), Some(OWN), &unused),
+            apply_witness_default(&mut c, &off, Some(OWN), &unused),
             None
         );
         assert_eq!(c.dht.restart_witness_dir, before);

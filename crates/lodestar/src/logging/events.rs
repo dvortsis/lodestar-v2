@@ -271,13 +271,14 @@ lodestar_log::catalogue! {
         fields: { path: Path, uid: Label, gid: Label, changed: Size },
     }
     /// CR-0d §1.5: the restart witness directory wasn't handed over (a
-    /// link, not a directory, `/`, other files in it), so the run has no
-    /// witness and every restart waits out the sampling delay.
+    /// link, not a directory, `/`, other files in it), so with the restart
+    /// check on the run has no witness and every restart waits out the
+    /// sampling delay. The image sets the variable either way.
     SYSTEM_WITNESS_DIR_LEFT {
         id: "system.witness_dir_left",
         component: System,
         level: Warn,
-        message: "The restart witness directory was left as it is, so restarts wait out the sampling delay",
+        message: "The restart witness directory was left as it is: if the restart check is on, restarts wait out the sampling delay",
         fields: { path: Path, error: Error },
     }
     /// Started as root and allowed to stay root.

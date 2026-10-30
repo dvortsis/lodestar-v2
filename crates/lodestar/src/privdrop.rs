@@ -640,6 +640,8 @@ mod imp {
             };
             let regular = FileType::from_raw_mode(fst.st_mode) == FileType::RegularFile;
             if regular
+                // As in chown_tree: fs.protected_hardlinks keeps others'
+                // files from being linked in; a link count above 1 is left.
                 && fst.st_nlink <= 1
                 && (fst.st_uid, fst.st_gid) != (ids.uid, ids.gid)
                 && rustix::fs::chownat(&f, c"", Some(uid), Some(gid), AtFlags::EMPTY_PATH).is_ok()
