@@ -313,12 +313,14 @@ impl Tokenizer {
         let plan = if word.len() <= MAX_PLANNED_BYTES {
             let plan = &mut self.plans[slot(word)];
             if plan.key.as_bytes() != word.as_bytes() {
+                // The key last: a plan is never found before it's made,
+                // even if making it was cut short.
                 plan.key.clear();
-                plan.key.push_str(word);
                 plan.word.clear();
                 plan.word.push_str(word);
                 plan.word.make_ascii_lowercase();
                 make_plan(plan, &mut self.plain, &mut self.swapped);
+                plan.key.push_str(word);
             }
             plan
         } else {
@@ -333,6 +335,7 @@ impl Tokenizer {
             return;
         }
         let first = self.pos;
+        out.reserve(plan.tokens.len());
         for (t, guarded) in &plan.tokens {
             if !guarded || out.len() - self.start < MAX_TOKENS {
                 out.push(Token {
@@ -353,10 +356,15 @@ impl Tokenizer {
         }
     }
 
+    #[inline]
     fn flush_spelled(&mut self, out: &mut Vec<Token>) {
-        if self.spelled.is_empty() {
-            return;
+        if !self.spelled.is_empty() {
+            self.end_spelled(out);
         }
+    }
+
+    #[cold]
+    fn end_spelled(&mut self, out: &mut Vec<Token>) {
         if self.spelled.chars().count() >= MIN_SPELLED && self.room(out) {
             out.push(Token::new(self.spelled_at, &self.spelled));
         }
@@ -455,9 +463,123 @@ fn slot(word: &str) -> usize {
     (crate::hash::fmix64(mix) as usize) % PLANS
 }
 
+/// Runs `f` with this thread's tokenizer, or a new one if it's in use.
+///
+/// One tokenizer is kept per thread, for the core and keyword entries
+/// alike: a new one sets up its word plans on its first word and frees
+/// them after, which cost more than the words did, and the two read the
+/// same words (§20.8). A tokenizer's tokens never depend on what it read
+/// before (`same_tokens_when_reused`).
+pub(crate) fn with_tokenizer<R>(f: impl FnOnce(&mut Tokenizer) -> R) -> R {
+    thread_local! {
+        static TOKENIZER: std::cell::RefCell<Tokenizer> = Default::default();
+    }
+    let mut f = Some(f);
+    let reused = TOKENIZER.try_with(|t| {
+        t.try_borrow_mut()
+            .ok()
+            .map(|mut t| (f.take().expect("called once"))(&mut t))
+    });
+    match reused {
+        Ok(Some(r)) => r,
+        _ => (f.take().expect("not called"))(&mut Tokenizer::default()),
+    }
+}
+
 /// Appends the tokens of `text` to `out`, positions starting at 0.
 pub fn tokens(text: &str, out: &mut Vec<Token>) {
-    Tokenizer::default().text(text, out);
+    with_tokenizer(|t| t.text(text, out));
+}
+
+/// A text read up to just after a `/`, so texts that start with it go
+/// on from there ([`Tokenizer::resume`]).
+#[derive(Debug, Default)]
+struct Paused {
+    tokens: Vec<Token>,
+    pos: u32,
+    spelled: String,
+    spelled_at: u32,
+}
+
+impl Tokenizer {
+    /// Reads `prefix`, the start of a text, into `into`. It ends with a
+    /// `/`, where no word goes on, so the state between words is all
+    /// there is to keep: the position and a spelled-out run, which goes on
+    /// over a `/` in one text.
+    fn pause(&mut self, prefix: &str, into: &mut Paused) {
+        debug_assert!(prefix.ends_with('/'));
+        into.tokens.clear();
+        self.begin(0, 0);
+        self.feed(prefix, &mut into.tokens);
+        into.pos = self.pos;
+        into.spelled.clear();
+        into.spelled.push_str(&self.spelled);
+        into.spelled_at = self.spelled_at;
+    }
+
+    /// Appends the tokens of the text `paused`'s prefix and then `rest`,
+    /// as [`Tokenizer::text`] gives them for the two joined. Compatibility
+    /// decomposition reads the two alike: it reorders only runs of
+    /// combining marks, and a `/` ends any run.
+    fn resume(&mut self, paused: &Paused, rest: &str, out: &mut Vec<Token>) {
+        let start = out.len();
+        out.extend_from_slice(&paused.tokens);
+        self.begin(start, paused.pos);
+        self.spelled.push_str(&paused.spelled);
+        self.spelled_at = paused.spelled_at;
+        self.segment(rest, out);
+    }
+}
+
+/// Folders [`paths`] remembers: a season's episodes and subtitles
+/// alternate between two.
+const FOLDERS: usize = 4;
+
+/// Appends the tokens of each path, its segments joined by `/`, as
+/// [`tokens`] gives them for that text, and the end of each in `out`
+/// to `ends`. Paths in one folder read its part once.
+pub fn paths<'p>(
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+) {
+    with_tokenizer(|tok| {
+        let mut folders: [(&[String], Paused); FOLDERS] = Default::default();
+        let (mut known, mut next) = (0, 0);
+        let mut prefix = String::new();
+        for path in paths {
+            match path.split_last() {
+                Some((name, dirs)) if !dirs.is_empty() => {
+                    let slot = match folders[..known].iter().position(|(d, _)| *d == dirs) {
+                        Some(slot) => slot,
+                        None => {
+                            let slot = if known < FOLDERS {
+                                known += 1;
+                                known - 1
+                            } else {
+                                let slot = next;
+                                next = (next + 1) % FOLDERS;
+                                slot
+                            };
+                            prefix.clear();
+                            for d in dirs {
+                                prefix.push_str(d);
+                                prefix.push('/');
+                            }
+                            folders[slot].0 = dirs;
+                            tok.pause(&prefix, &mut folders[slot].1);
+                            slot
+                        }
+                    };
+                    tok.resume(&folders[slot].1, name, out);
+                }
+                // One segment is its own text; none is an empty one.
+                Some((name, _)) => tok.text(name, out),
+                None => {}
+            }
+            ends.push(out.len());
+        }
+    });
 }
 
 #[cfg(test)]

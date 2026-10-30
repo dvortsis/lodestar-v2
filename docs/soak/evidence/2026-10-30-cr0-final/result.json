@@ -1,0 +1,23 @@
+{
+  "publication_failures": [],
+  "reason": "baseline_window_complete",
+  "assessment": "Evidence collected; review required before any acceptance or performance claim.",
+  "process_identity": "49888:639288302370712270",
+  "suppression_ended": "2026-10-29T06:24:56.0032706+00:00",
+  "stop_mode": "exited_0",
+  "samples": 1815,
+  "baseline_started": "2026-10-29T06:55:11.5755629+00:00",
+  "schema_version": 2,
+  "ended": "2026-10-30T06:55:54.3464814+00:00",
+  "shutdown": {
+    "stop_mode": "exited_0",
+    "exit_confirmed": true,
+    "signal_delivered": true,
+    "exit_code": 0,
+    "errors": [],
+    "shutdown_seconds": 2.2568576
+  },
+  "state": "stopped",
+  "finalization_complete": true,
+  "elapsed_seconds": 109918.1397375
+}

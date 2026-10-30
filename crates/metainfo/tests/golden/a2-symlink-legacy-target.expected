@@ -1,0 +1,8 @@
+version: V1
+name: "t" (GBK)
+path encoding: GBK
+total size: 1
+piece count: 1
+warnings: []
+file: "第一集 高清中文字幕.mkv" size=1 attrs=""
+file: "最新一集" size=0 attrs="l" target="第一集 高清中文字幕.mkv"

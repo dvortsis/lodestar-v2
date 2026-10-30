@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 241df99dd00dd01bc4fbc9313d5a9beabd976c24b867e5046bfe67c413aab344 # shrinks to links = {"a": (["a"], false)}
+cc bb0474576f980d15eeaef1c242b1eeabff569d3b23cd1e726f81efc90d627470 # shrinks to entries = [Plain { legacy: ["A"], utf8: Some(["0"]), size: 0 }, Symlink { legacy: ["a"], utf8: None, target: ["-"], explicit_length: false }]

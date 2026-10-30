@@ -1,0 +1,5648 @@
+{
+  "schema_version": 2,
+  "provenance": {
+    "commit": "744b84d68c7609d8220430ffc9938c05c6d6a527",
+    "sha256": "24CB1EF43D86AD8C0F9F80C41E9D2D661F3FD6FE5573E72C13A87285E11E1475",
+    "collector_sha256": "EEAC3B9EC7BBD28B590291388F88EE2F92085A0FB2A4F39C1EB78E2EB5D4A804"
+  },
+  "run_state": "stopped",
+  "observation_state": "stale_observations",
+  "disk": {
+    "observations": 10879,
+    "read_failure_observations": 0,
+    "minimum_free_bytes": 56875356160,
+    "max_redirected_log_bytes": 530350,
+    "hourly": {
+      "0": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124532953088,
+        "max_redirected_log_bytes": 5757
+      },
+      "1": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124523479040,
+        "max_redirected_log_bytes": 9261
+      },
+      "2": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124066689024,
+        "max_redirected_log_bytes": 12327
+      },
+      "3": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124622999552,
+        "max_redirected_log_bytes": 16025
+      },
+      "4": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124580454400,
+        "max_redirected_log_bytes": 20064
+      },
+      "5": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124544786432,
+        "max_redirected_log_bytes": 24833
+      },
+      "6": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 124316073984,
+        "max_redirected_log_bytes": 45479
+      },
+      "7": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 123871465472,
+        "max_redirected_log_bytes": 66128
+      },
+      "8": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 123511447552,
+        "max_redirected_log_bytes": 86639
+      },
+      "9": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 123077586944,
+        "max_redirected_log_bytes": 107287
+      },
+      "10": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 122621927424,
+        "max_redirected_log_bytes": 127784
+      },
+      "11": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 122169790464,
+        "max_redirected_log_bytes": 148432
+      },
+      "12": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 121270247424,
+        "max_redirected_log_bytes": 169086
+      },
+      "13": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 120410480640,
+        "max_redirected_log_bytes": 189729
+      },
+      "14": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 119418314752,
+        "max_redirected_log_bytes": 210223
+      },
+      "15": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 93505302528,
+        "max_redirected_log_bytes": 230864
+      },
+      "16": {
+        "observations": 354,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 95534764032,
+        "max_redirected_log_bytes": 251359
+      },
+      "17": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 88554065920,
+        "max_redirected_log_bytes": 272001
+      },
+      "18": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 80650272768,
+        "max_redirected_log_bytes": 292818
+      },
+      "19": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 73742995456,
+        "max_redirected_log_bytes": 313317
+      },
+      "20": {
+        "observations": 358,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 70903386112,
+        "max_redirected_log_bytes": 333960
+      },
+      "21": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 66186072064,
+        "max_redirected_log_bytes": 354600
+      },
+      "22": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 64561057792,
+        "max_redirected_log_bytes": 375100
+      },
+      "23": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 64430764032,
+        "max_redirected_log_bytes": 395738
+      },
+      "24": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 62242091008,
+        "max_redirected_log_bytes": 416191
+      },
+      "25": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 59946569728,
+        "max_redirected_log_bytes": 437081
+      },
+      "26": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 57133551616,
+        "max_redirected_log_bytes": 457422
+      },
+      "27": {
+        "observations": 351,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 56875356160,
+        "max_redirected_log_bytes": 478130
+      },
+      "28": {
+        "observations": 357,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 73951207424,
+        "max_redirected_log_bytes": 498663
+      },
+      "29": {
+        "observations": 356,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 73823186944,
+        "max_redirected_log_bytes": 519337
+      },
+      "30": {
+        "observations": 190,
+        "read_failure_observations": 0,
+        "minimum_free_bytes": 73614966784,
+        "max_redirected_log_bytes": 530350
+      }
+    }
+  },
+  "baseline_coverage_fraction": 1.0004675925925925,
+  "collection_quality": {
+    "required_coverage_fraction": 0.99,
+    "maximum_allowed_gap_seconds": 180,
+    "full_duration_observed": true,
+    "core_coverage": {
+      "writer_stored_total": 1.0,
+      "writer_errors_total": 1.0,
+      "fetch_attempts_total": 1.0,
+      "fetch_success_total": 1.0,
+      "dht_peer_admitted_total": 1.0,
+      "dht_peer_rejected_total": 1.0,
+      "dht_lookups_completed_total": 1.0,
+      "working_set_bytes": 1.0,
+      "private_bytes": 1.0,
+      "handles": 1.0,
+      "threads": 1.0,
+      "cpu_seconds": 1.0
+    },
+    "core_coverage_sufficient": true,
+    "gap_limit_met": true
+  },
+  "baseline_status": "collector_window_complete_review_required",
+  "baseline_required_hours": 24,
+  "collector_completed_window": true,
+  "stop_reason": "baseline_window_complete",
+  "clean_shutdown": true,
+  "max_gap_seconds": 90,
+  "issues": {},
+  "phases": {
+    "startup": {
+      "samples": 357,
+      "first_elapsed_seconds": 5.0,
+      "last_elapsed_seconds": 21599.3,
+      "observed_span_seconds": 21594.3,
+      "valid_interval_seconds": 21594.3,
+      "maximum_gap_seconds": 60.80000000000109,
+      "measurement_coverage": {
+        "working_set_bytes": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "private_bytes": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "handles": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "threads": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "cpu_seconds": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_admitted_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_rejected_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_cancelled_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_rejection_reasons_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_ack_failed_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_command_full_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_peer_command_closed_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_lookups_completed_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_lookup_deadlines_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_sample_stale_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_sample_deferred_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_queries_out_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_responses_in_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_timeouts_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_packets_in_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_packets_out_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_harvested_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "dht_harvest_dropped_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_attempts_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_success_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_failures_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_lost_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_finder_full_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_finder_closed_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_lookup_unaccepted_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_retry_unaccepted_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "fetch_evicted_service_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "writer_stored_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "writer_errors_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "writer_transactions_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        },
+        "search_errors_total": {
+          "covered_seconds": 21594.3,
+          "fraction": 1.0
+        }
+      },
+      "health_failed_samples": 0,
+      "metrics_failed_samples": 0,
+      "rss_max_mib": 52.6875,
+      "rss_change_mib": -5.88671875,
+      "rss_change_mib_per_hour": -0.981378766618969,
+      "bounds": {
+        "peer_requests": {
+          "limit": 32,
+          "observed_samples": 357,
+          "max": 5.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "sampler_states": {
+          "limit": 200000,
+          "observed_samples": 357,
+          "max": 0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "sample_frontier": {
+          "limit": 20000,
+          "observed_samples": 357,
+          "max": 20000.0,
+          "at_capacity_samples": 43,
+          "over_capacity_samples": 0
+        },
+        "outstanding_rpcs": {
+          "limit": 1024,
+          "observed_samples": 357,
+          "max": 56.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "pool_lookups": {
+          "limit": 256,
+          "observed_samples": 357,
+          "max": 5.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        }
+      },
+      "breakdowns": {
+        "fetch_failures_total": {
+          "unreachable": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "timed_out": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "refused": {
+            "delta": 8.0,
+            "covered_seconds": 21594.3
+          },
+          "encryption_failed": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "invalid": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "oversize": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          }
+        },
+        "dht_peer_rejection_reasons_total": {
+          "capacity": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "paused": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "caller_closed": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          }
+        },
+        "fetch_evicted_service_total": {
+          "unaccepted": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "lookup": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "peers": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "fetch": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          }
+        },
+        "fetch_lost_total": {
+          "no_peers": {
+            "delta": 62.0,
+            "covered_seconds": 21594.3
+          },
+          "timed_out": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "refused": {
+            "delta": 6.0,
+            "covered_seconds": 21594.3
+          },
+          "encryption_failed": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "oversize": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "invalid": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "blocked": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "evicted": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "gave_up": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          },
+          "unreachable": {
+            "delta": 0.0,
+            "covered_seconds": 21594.3
+          }
+        }
+      },
+      "hourly": {
+        "0": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_failures_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_admitted_total": {
+            "delta": 64.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_rejected_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_attempts_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_success_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "writer_transactions_total": {
+            "delta": 21.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_packets_in_total": {
+            "delta": 2685.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_peer_command_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_harvested_total": {
+            "delta": 20.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_timeouts_total": {
+            "delta": 1616.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_lost_total": {
+            "delta": 8.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_packets_out_total": {
+            "delta": 4353.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 77.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_responses_in_total": {
+            "delta": 2331.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_lookups_completed_total": {
+            "delta": 63.0,
+            "covered_seconds": 3578.6
+          },
+          "writer_stored_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          },
+          "dht_queries_out_total": {
+            "delta": 4217.0,
+            "covered_seconds": 3578.6
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.6
+          }
+        },
+        "1": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_failures_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_admitted_total": {
+            "delta": 40.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_rejected_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_attempts_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_success_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "writer_transactions_total": {
+            "delta": 18.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_packets_in_total": {
+            "delta": 1522.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_peer_command_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_harvested_total": {
+            "delta": 8.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_timeouts_total": {
+            "delta": 616.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_lost_total": {
+            "delta": 13.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_packets_out_total": {
+            "delta": 2092.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 26.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_responses_in_total": {
+            "delta": 1351.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_lookups_completed_total": {
+            "delta": 41.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "writer_stored_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "dht_queries_out_total": {
+            "delta": 2014.0,
+            "covered_seconds": 3578.5000000000005
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.5000000000005
+          }
+        },
+        "2": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_failures_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_admitted_total": {
+            "delta": 40.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_rejected_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_attempts_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_success_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "writer_transactions_total": {
+            "delta": 19.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_packets_in_total": {
+            "delta": 1449.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_peer_command_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_harvested_total": {
+            "delta": 10.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_timeouts_total": {
+            "delta": 591.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_lost_total": {
+            "delta": 10.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_packets_out_total": {
+            "delta": 2029.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 25.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_responses_in_total": {
+            "delta": 1280.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_lookups_completed_total": {
+            "delta": 39.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "writer_stored_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "dht_queries_out_total": {
+            "delta": 1954.0,
+            "covered_seconds": 3639.7999999999993
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.7999999999993
+          }
+        },
+        "3": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_failures_total": {
+            "delta": 4.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_admitted_total": {
+            "delta": 50.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_rejected_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_attempts_total": {
+            "delta": 4.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_success_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "writer_transactions_total": {
+            "delta": 23.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_packets_in_total": {
+            "delta": 1660.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_peer_command_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_harvested_total": {
+            "delta": 13.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_timeouts_total": {
+            "delta": 763.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_lost_total": {
+            "delta": 10.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_packets_out_total": {
+            "delta": 2368.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 39.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_responses_in_total": {
+            "delta": 1451.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_lookups_completed_total": {
+            "delta": 51.0,
+            "covered_seconds": 3579.0
+          },
+          "writer_stored_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          },
+          "dht_queries_out_total": {
+            "delta": 2299.0,
+            "covered_seconds": 3579.0
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3579.0
+          }
+        },
+        "4": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_failures_total": {
+            "delta": 2.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_admitted_total": {
+            "delta": 43.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_rejected_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_attempts_total": {
+            "delta": 2.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_success_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "writer_transactions_total": {
+            "delta": 23.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_packets_in_total": {
+            "delta": 15868.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_peer_command_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_harvested_total": {
+            "delta": 13.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_timeouts_total": {
+            "delta": 22552.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_lost_total": {
+            "delta": 14.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_packets_out_total": {
+            "delta": 40827.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 1396.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_responses_in_total": {
+            "delta": 11650.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_lookups_completed_total": {
+            "delta": 42.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "writer_stored_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "dht_queries_out_total": {
+            "delta": 40649.0,
+            "covered_seconds": 3578.8999999999996
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3578.8999999999996
+          }
+        },
+        "5": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_failures_total": {
+            "delta": 2.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_admitted_total": {
+            "delta": 67.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_rejected_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_attempts_total": {
+            "delta": 2.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_success_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "writer_transactions_total": {
+            "delta": 25.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_packets_in_total": {
+            "delta": 15097.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_peer_command_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_harvested_total": {
+            "delta": 16.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_timeouts_total": {
+            "delta": 18253.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_lost_total": {
+            "delta": 13.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_packets_out_total": {
+            "delta": 35926.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 1155.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_responses_in_total": {
+            "delta": 10468.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_lookups_completed_total": {
+            "delta": 68.0,
+            "covered_seconds": 3639.5
+          },
+          "writer_stored_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          },
+          "dht_queries_out_total": {
+            "delta": 35791.0,
+            "covered_seconds": 3639.5
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 0.0,
+            "covered_seconds": 3639.5
+          }
+        }
+      },
+      "counters": {
+        "dht_peer_admitted_total": {
+          "delta": 304.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 50.680040566260544
+        },
+        "dht_peer_rejected_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_peer_cancelled_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_peer_rejection_reasons_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_peer_ack_failed_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_peer_command_full_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_peer_command_closed_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_lookups_completed_total": {
+          "delta": 304.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 50.680040566260544
+        },
+        "dht_lookup_deadlines_total": {
+          "delta": 2718.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 453.11957322071106
+        },
+        "dht_sample_stale_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_sample_deferred_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "dht_queries_out_total": {
+          "delta": 86924.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 14491.157388755366
+        },
+        "dht_responses_in_total": {
+          "delta": 28531.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 4756.421833539406
+        },
+        "dht_timeouts_total": {
+          "delta": 44391.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 7400.452897292342
+        },
+        "dht_packets_in_total": {
+          "delta": 38281.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 6381.850766174407
+        },
+        "dht_packets_out_total": {
+          "delta": 87595.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 14603.020241452607
+        },
+        "dht_harvested_total": {
+          "delta": 80.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 13.33685278059488
+        },
+        "dht_harvest_dropped_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "fetch_attempts_total": {
+          "delta": 8.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 1.3336852780594879
+        },
+        "fetch_success_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "fetch_failures_total": {
+          "delta": 8.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 1.3336852780594879
+        },
+        "fetch_lost_total": {
+          "delta": 68.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 11.336324863505647
+        },
+        "fetch_finder_full_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "fetch_finder_closed_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "fetch_lookup_unaccepted_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "fetch_retry_unaccepted_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "fetch_evicted_service_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "writer_stored_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "writer_errors_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        },
+        "writer_transactions_total": {
+          "delta": 129.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 21.505675108709244
+        },
+        "search_errors_total": {
+          "delta": 0.0,
+          "covered_seconds": 21594.3,
+          "per_hour": 0.0
+        }
+      }
+    },
+    "warmup": {
+      "samples": 30,
+      "first_elapsed_seconds": 21659.8,
+      "last_elapsed_seconds": 23414.9,
+      "observed_span_seconds": 1755.1000000000022,
+      "valid_interval_seconds": 1755.1000000000022,
+      "maximum_gap_seconds": 60.69999999999709,
+      "measurement_coverage": {
+        "working_set_bytes": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "private_bytes": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "handles": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "threads": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "cpu_seconds": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_admitted_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_rejected_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_cancelled_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_rejection_reasons_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_ack_failed_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_command_full_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_peer_command_closed_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_lookups_completed_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_lookup_deadlines_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_sample_stale_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_sample_deferred_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_queries_out_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_responses_in_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_timeouts_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_packets_in_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_packets_out_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_harvested_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "dht_harvest_dropped_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_attempts_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_success_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_failures_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_lost_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_finder_full_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_finder_closed_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_lookup_unaccepted_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_retry_unaccepted_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "fetch_evicted_service_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "writer_stored_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "writer_errors_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "writer_transactions_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        },
+        "search_errors_total": {
+          "covered_seconds": 1755.1000000000022,
+          "fraction": 1.0
+        }
+      },
+      "health_failed_samples": 0,
+      "metrics_failed_samples": 0,
+      "rss_max_mib": 324.03515625,
+      "rss_change_mib": 196.75390625,
+      "rss_change_mib_per_hour": 403.5747606973957,
+      "bounds": {
+        "peer_requests": {
+          "limit": 32,
+          "observed_samples": 30,
+          "max": 32.0,
+          "at_capacity_samples": 5,
+          "over_capacity_samples": 0
+        },
+        "sampler_states": {
+          "limit": 200000,
+          "observed_samples": 30,
+          "max": 178364.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "sample_frontier": {
+          "limit": 20000,
+          "observed_samples": 30,
+          "max": 19900.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "outstanding_rpcs": {
+          "limit": 1024,
+          "observed_samples": 30,
+          "max": 383.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "pool_lookups": {
+          "limit": 256,
+          "observed_samples": 30,
+          "max": 106.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        }
+      },
+      "breakdowns": {
+        "fetch_failures_total": {
+          "unreachable": {
+            "delta": 1711.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "timed_out": {
+            "delta": 9101.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "refused": {
+            "delta": 1464.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "encryption_failed": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "invalid": {
+            "delta": 10.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "oversize": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          }
+        },
+        "dht_peer_rejection_reasons_total": {
+          "capacity": {
+            "delta": 2693201.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "paused": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "caller_closed": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          }
+        },
+        "fetch_evicted_service_total": {
+          "unaccepted": {
+            "delta": 920063.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "lookup": {
+            "delta": 294.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "peers": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch": {
+            "delta": 1019.0,
+            "covered_seconds": 1755.1000000000022
+          }
+        },
+        "fetch_lost_total": {
+          "no_peers": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "timed_out": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "refused": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "encryption_failed": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "oversize": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "invalid": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "blocked": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "evicted": {
+            "delta": 921376.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "gave_up": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "unreachable": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          }
+        }
+      },
+      "hourly": {
+        "0": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_failures_total": {
+            "delta": 12286.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_admitted_total": {
+            "delta": 2221.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 5.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 2693201.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_rejected_total": {
+            "delta": 2693201.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_attempts_total": {
+            "delta": 12858.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_success_total": {
+            "delta": 573.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "writer_transactions_total": {
+            "delta": 982.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_packets_in_total": {
+            "delta": 161987.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_peer_command_full_total": {
+            "delta": 483540.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_harvested_total": {
+            "delta": 1100870.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_evicted_service_total": {
+            "delta": 921376.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 3177739.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_timeouts_total": {
+            "delta": 117549.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_lost_total": {
+            "delta": 921376.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_packets_out_total": {
+            "delta": 275877.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 1996.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_responses_in_total": {
+            "delta": 147464.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_lookups_completed_total": {
+            "delta": 2219.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "writer_stored_total": {
+            "delta": 571.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "dht_queries_out_total": {
+            "delta": 274132.0,
+            "covered_seconds": 1755.1000000000022
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 2076771.0,
+            "covered_seconds": 1755.1000000000022
+          }
+        }
+      },
+      "counters": {
+        "dht_peer_admitted_total": {
+          "delta": 2221.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 4555.63785539285
+        },
+        "dht_peer_rejected_total": {
+          "delta": 2693201.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 5524200.1025582515
+        },
+        "dht_peer_cancelled_total": {
+          "delta": 5.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 10.255825878867288
+        },
+        "dht_peer_rejection_reasons_total": {
+          "delta": 2693201.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 5524200.1025582515
+        },
+        "dht_peer_ack_failed_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "dht_peer_command_full_total": {
+          "delta": 483540.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 991820.4090934977
+        },
+        "dht_peer_command_closed_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "dht_lookups_completed_total": {
+          "delta": 2219.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 4551.535525041302
+        },
+        "dht_lookup_deadlines_total": {
+          "delta": 1996.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 4094.1256908438213
+        },
+        "dht_sample_stale_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "dht_sample_deferred_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "dht_queries_out_total": {
+          "delta": 274132.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 562290.0119651295
+        },
+        "dht_responses_in_total": {
+          "delta": 147464.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 302473.02148025716
+        },
+        "dht_timeouts_total": {
+          "delta": 117549.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 241112.41524699418
+        },
+        "dht_packets_in_total": {
+          "delta": 161987.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 332262.09332801506
+        },
+        "dht_packets_out_total": {
+          "delta": 275877.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 565869.2951968542
+        },
+        "dht_harvested_total": {
+          "delta": 1100870.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 2258066.2070537265
+        },
+        "dht_harvest_dropped_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "fetch_attempts_total": {
+          "delta": 12858.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 26373.881830095117
+        },
+        "fetch_success_total": {
+          "delta": 573.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 1175.3176457181912
+        },
+        "fetch_failures_total": {
+          "delta": 12286.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 25200.6153495527
+        },
+        "fetch_lost_total": {
+          "delta": 921376.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 1889894.3649934453
+        },
+        "fetch_finder_full_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "fetch_finder_closed_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "fetch_lookup_unaccepted_total": {
+          "delta": 3177739.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 6518067.574497172
+        },
+        "fetch_retry_unaccepted_total": {
+          "delta": 2076771.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 4259800.353256219
+        },
+        "fetch_evicted_service_total": {
+          "delta": 921376.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 1889894.3649934453
+        },
+        "writer_stored_total": {
+          "delta": 571.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 1171.2153153666443
+        },
+        "writer_errors_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        },
+        "writer_transactions_total": {
+          "delta": 982.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 2014.2442026095355
+        },
+        "search_errors_total": {
+          "delta": 0.0,
+          "covered_seconds": 1755.1000000000022,
+          "per_hour": 0.0
+        }
+      }
+    },
+    "baseline": {
+      "samples": 1428,
+      "first_elapsed_seconds": 23475.4,
+      "last_elapsed_seconds": 109915.8,
+      "observed_span_seconds": 86440.4,
+      "valid_interval_seconds": 86440.4,
+      "maximum_gap_seconds": 82.20000000001164,
+      "measurement_coverage": {
+        "working_set_bytes": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "private_bytes": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "handles": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "threads": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "cpu_seconds": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_admitted_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_rejected_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_cancelled_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_rejection_reasons_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_ack_failed_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_command_full_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_peer_command_closed_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_lookups_completed_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_lookup_deadlines_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_sample_stale_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_sample_deferred_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_queries_out_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_responses_in_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_timeouts_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_packets_in_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_packets_out_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_harvested_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "dht_harvest_dropped_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_attempts_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_success_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_failures_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_lost_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_finder_full_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_finder_closed_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_lookup_unaccepted_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_retry_unaccepted_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "fetch_evicted_service_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "writer_stored_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "writer_errors_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "writer_transactions_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        },
+        "search_errors_total": {
+          "covered_seconds": 86440.4,
+          "fraction": 1.0
+        }
+      },
+      "health_failed_samples": 0,
+      "metrics_failed_samples": 0,
+      "rss_max_mib": 556.1328125,
+      "rss_change_mib": 146.83203125,
+      "rss_change_mib_per_hour": 6.115141907024956,
+      "bounds": {
+        "peer_requests": {
+          "limit": 32,
+          "observed_samples": 1428,
+          "max": 32.0,
+          "at_capacity_samples": 435,
+          "over_capacity_samples": 0
+        },
+        "sampler_states": {
+          "limit": 200000,
+          "observed_samples": 1428,
+          "max": 200000.0,
+          "at_capacity_samples": 1284,
+          "over_capacity_samples": 0
+        },
+        "sample_frontier": {
+          "limit": 20000,
+          "observed_samples": 1428,
+          "max": 20000.0,
+          "at_capacity_samples": 1284,
+          "over_capacity_samples": 0
+        },
+        "outstanding_rpcs": {
+          "limit": 1024,
+          "observed_samples": 1428,
+          "max": 406.0,
+          "at_capacity_samples": 0,
+          "over_capacity_samples": 0
+        },
+        "pool_lookups": {
+          "limit": 256,
+          "observed_samples": 1428,
+          "max": 256.0,
+          "at_capacity_samples": 38,
+          "over_capacity_samples": 0
+        }
+      },
+      "breakdowns": {
+        "fetch_failures_total": {
+          "unreachable": {
+            "delta": 57364.0,
+            "covered_seconds": 86440.4
+          },
+          "timed_out": {
+            "delta": 288665.0,
+            "covered_seconds": 86440.4
+          },
+          "refused": {
+            "delta": 43481.0,
+            "covered_seconds": 86440.4
+          },
+          "encryption_failed": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "invalid": {
+            "delta": 127.0,
+            "covered_seconds": 86440.4
+          },
+          "oversize": {
+            "delta": 7.0,
+            "covered_seconds": 86440.4
+          }
+        },
+        "dht_peer_rejection_reasons_total": {
+          "capacity": {
+            "delta": 95553336.0,
+            "covered_seconds": 86440.4
+          },
+          "paused": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "caller_closed": {
+            "delta": 22.0,
+            "covered_seconds": 86440.4
+          }
+        },
+        "fetch_evicted_service_total": {
+          "unaccepted": {
+            "delta": 4224261.0,
+            "covered_seconds": 86440.4
+          },
+          "lookup": {
+            "delta": 9543.0,
+            "covered_seconds": 86440.4
+          },
+          "peers": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "fetch": {
+            "delta": 39224.0,
+            "covered_seconds": 86440.4
+          }
+        },
+        "fetch_lost_total": {
+          "no_peers": {
+            "delta": 144.0,
+            "covered_seconds": 86440.4
+          },
+          "timed_out": {
+            "delta": 795.0,
+            "covered_seconds": 86440.4
+          },
+          "refused": {
+            "delta": 361.0,
+            "covered_seconds": 86440.4
+          },
+          "encryption_failed": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "oversize": {
+            "delta": 7.0,
+            "covered_seconds": 86440.4
+          },
+          "invalid": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "blocked": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "evicted": {
+            "delta": 4273028.0,
+            "covered_seconds": 86440.4
+          },
+          "gave_up": {
+            "delta": 0.0,
+            "covered_seconds": 86440.4
+          },
+          "unreachable": {
+            "delta": 123.0,
+            "covered_seconds": 86440.4
+          }
+        }
+      },
+      "hourly": {
+        "0": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_failures_total": {
+            "delta": 18047.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4560.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 10.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4141482.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4141482.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_attempts_total": {
+            "delta": 18876.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_success_total": {
+            "delta": 836.0,
+            "covered_seconds": 3572.5
+          },
+          "writer_transactions_total": {
+            "delta": 1700.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_packets_in_total": {
+            "delta": 177587.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3298.0,
+            "covered_seconds": 3572.5
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1841547.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_harvested_total": {
+            "delta": 82880.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_evicted_service_total": {
+            "delta": 82429.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5983736.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_timeouts_total": {
+            "delta": 108227.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_lost_total": {
+            "delta": 82429.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_packets_out_total": {
+            "delta": 285256.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5643.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_responses_in_total": {
+            "delta": 147984.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4557.0,
+            "covered_seconds": 3572.5
+          },
+          "writer_stored_total": {
+            "delta": 832.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_queries_out_total": {
+            "delta": 282482.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5873084.0,
+            "covered_seconds": 3572.5
+          }
+        },
+        "1": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_failures_total": {
+            "delta": 14381.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4532.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3774599.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3774599.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_attempts_total": {
+            "delta": 15028.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_success_total": {
+            "delta": 655.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "writer_transactions_total": {
+            "delta": 1521.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_packets_in_total": {
+            "delta": 166274.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3545.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2120658.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_harvested_total": {
+            "delta": 859.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5893907.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_timeouts_total": {
+            "delta": 106651.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_lost_total": {
+            "delta": 13.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_packets_out_total": {
+            "delta": 274851.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 6032.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_responses_in_total": {
+            "delta": 138507.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4532.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "writer_stored_total": {
+            "delta": 654.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "dht_queries_out_total": {
+            "delta": 271628.0,
+            "covered_seconds": 3572.399999999998
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5825571.0,
+            "covered_seconds": 3572.399999999998
+          }
+        },
+        "2": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_failures_total": {
+            "delta": 14579.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4619.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3759182.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3759182.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_attempts_total": {
+            "delta": 15225.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_success_total": {
+            "delta": 644.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "writer_transactions_total": {
+            "delta": 1535.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_packets_in_total": {
+            "delta": 179130.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3603.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2209991.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_harvested_total": {
+            "delta": 836.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_evicted_service_total": {
+            "delta": 62.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5969063.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_timeouts_total": {
+            "delta": 106802.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_lost_total": {
+            "delta": 92.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_packets_out_total": {
+            "delta": 285945.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5414.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_responses_in_total": {
+            "delta": 148246.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4619.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "writer_stored_total": {
+            "delta": 643.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "dht_queries_out_total": {
+            "delta": 282694.0,
+            "covered_seconds": 3633.7999999999993
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5877204.0,
+            "covered_seconds": 3633.7999999999993
+          }
+        },
+        "3": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_failures_total": {
+            "delta": 12643.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4526.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3662250.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3662250.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_attempts_total": {
+            "delta": 13245.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_success_total": {
+            "delta": 604.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "writer_transactions_total": {
+            "delta": 1476.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_packets_in_total": {
+            "delta": 178284.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3544.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2177997.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_harvested_total": {
+            "delta": 1240.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_evicted_service_total": {
+            "delta": 497.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5840958.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_timeouts_total": {
+            "delta": 104905.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_lost_total": {
+            "delta": 567.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_packets_out_total": {
+            "delta": 283246.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5510.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_responses_in_total": {
+            "delta": 145549.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4526.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "writer_stored_total": {
+            "delta": 601.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "dht_queries_out_total": {
+            "delta": 279626.0,
+            "covered_seconds": 3573.0999999999985
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5728695.0,
+            "covered_seconds": 3573.0999999999985
+          }
+        },
+        "4": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_failures_total": {
+            "delta": 13517.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4596.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3693568.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3693568.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_attempts_total": {
+            "delta": 14105.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_success_total": {
+            "delta": 591.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "writer_transactions_total": {
+            "delta": 1475.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_packets_in_total": {
+            "delta": 133440.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3605.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2217682.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_harvested_total": {
+            "delta": 1161.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_evicted_service_total": {
+            "delta": 360.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5911807.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_timeouts_total": {
+            "delta": 74930.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_lost_total": {
+            "delta": 486.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_packets_out_total": {
+            "delta": 205853.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4263.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_responses_in_total": {
+            "delta": 118460.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4596.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "writer_stored_total": {
+            "delta": 588.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "dht_queries_out_total": {
+            "delta": 201823.0,
+            "covered_seconds": 3635.2000000000044
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5774641.0,
+            "covered_seconds": 3635.2000000000044
+          }
+        },
+        "5": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_failures_total": {
+            "delta": 16260.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4528.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 54.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4698906.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4698906.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_attempts_total": {
+            "delta": 17060.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_success_total": {
+            "delta": 777.0,
+            "covered_seconds": 3572.5
+          },
+          "writer_transactions_total": {
+            "delta": 1679.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_packets_in_total": {
+            "delta": 227465.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_sample_deferred_total": {
+            "delta": 1729.0,
+            "covered_seconds": 3572.5
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1669416.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_harvested_total": {
+            "delta": 935341.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_evicted_service_total": {
+            "delta": 934849.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6368798.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_timeouts_total": {
+            "delta": 159459.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_lost_total": {
+            "delta": 934929.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_packets_out_total": {
+            "delta": 381228.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4100.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_responses_in_total": {
+            "delta": 205196.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4526.0,
+            "covered_seconds": 3572.5
+          },
+          "writer_stored_total": {
+            "delta": 775.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.5
+          },
+          "dht_queries_out_total": {
+            "delta": 377745.0,
+            "covered_seconds": 3572.5
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5351069.0,
+            "covered_seconds": 3572.5
+          }
+        },
+        "6": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_failures_total": {
+            "delta": 20754.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4584.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 2.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4171008.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4171008.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_attempts_total": {
+            "delta": 21693.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_success_total": {
+            "delta": 954.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "writer_transactions_total": {
+            "delta": 1845.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_packets_in_total": {
+            "delta": 147765.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3253.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1895116.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_harvested_total": {
+            "delta": 124846.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_evicted_service_total": {
+            "delta": 123888.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6066313.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_timeouts_total": {
+            "delta": 85900.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_lost_total": {
+            "delta": 123889.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_packets_out_total": {
+            "delta": 230312.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4297.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_responses_in_total": {
+            "delta": 133358.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4584.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "writer_stored_total": {
+            "delta": 953.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "dht_queries_out_total": {
+            "delta": 227716.0,
+            "covered_seconds": 3633.0999999999985
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5915972.0,
+            "covered_seconds": 3633.0999999999985
+          }
+        },
+        "7": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_failures_total": {
+            "delta": 17126.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4510.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3753864.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3753864.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_attempts_total": {
+            "delta": 17867.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_success_total": {
+            "delta": 736.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "writer_transactions_total": {
+            "delta": 1622.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_packets_in_total": {
+            "delta": 149059.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3545.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2128841.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_harvested_total": {
+            "delta": 227.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5880908.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_timeouts_total": {
+            "delta": 84583.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_lost_total": {
+            "delta": 17.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_packets_out_total": {
+            "delta": 232415.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4832.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_responses_in_total": {
+            "delta": 129018.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4510.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "writer_stored_total": {
+            "delta": 733.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "dht_queries_out_total": {
+            "delta": 229912.0,
+            "covered_seconds": 3573.4000000000015
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5812350.0,
+            "covered_seconds": 3573.4000000000015
+          }
+        },
+        "8": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_failures_total": {
+            "delta": 17094.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4581.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3741658.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3741658.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_attempts_total": {
+            "delta": 17757.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_success_total": {
+            "delta": 664.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "writer_transactions_total": {
+            "delta": 1570.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_packets_in_total": {
+            "delta": 144435.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3601.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2204289.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_harvested_total": {
+            "delta": 275.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5945874.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_timeouts_total": {
+            "delta": 79561.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_lost_total": {
+            "delta": 30.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_packets_out_total": {
+            "delta": 222283.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4544.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_responses_in_total": {
+            "delta": 127524.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4581.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "writer_stored_total": {
+            "delta": 663.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "dht_queries_out_total": {
+            "delta": 219667.0,
+            "covered_seconds": 3633.7999999999956
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5855973.0,
+            "covered_seconds": 3633.7999999999956
+          }
+        },
+        "9": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_failures_total": {
+            "delta": 14551.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4580.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3632341.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3632341.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_attempts_total": {
+            "delta": 15160.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_success_total": {
+            "delta": 612.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "writer_transactions_total": {
+            "delta": 1522.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_packets_in_total": {
+            "delta": 134661.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3548.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2157369.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_harvested_total": {
+            "delta": 365.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5789805.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_timeouts_total": {
+            "delta": 73136.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_lost_total": {
+            "delta": 81.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_packets_out_total": {
+            "delta": 206218.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4142.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_responses_in_total": {
+            "delta": 122573.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4580.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "writer_stored_total": {
+            "delta": 610.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "dht_queries_out_total": {
+            "delta": 203415.0,
+            "covered_seconds": 3574.100000000006
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5679202.0,
+            "covered_seconds": 3574.100000000006
+          }
+        },
+        "10": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_failures_total": {
+            "delta": 14131.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4830.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3593949.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3593949.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_attempts_total": {
+            "delta": 14764.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_success_total": {
+            "delta": 631.0,
+            "covered_seconds": 3572.0
+          },
+          "writer_transactions_total": {
+            "delta": 1524.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_packets_in_total": {
+            "delta": 140927.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3549.0,
+            "covered_seconds": 3572.0
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2159585.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_harvested_total": {
+            "delta": 276.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5753379.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_timeouts_total": {
+            "delta": 72779.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_lost_total": {
+            "delta": 138.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_packets_out_total": {
+            "delta": 211576.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4027.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_responses_in_total": {
+            "delta": 128741.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4830.0,
+            "covered_seconds": 3572.0
+          },
+          "writer_stored_total": {
+            "delta": 628.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.0
+          },
+          "dht_queries_out_total": {
+            "delta": 208834.0,
+            "covered_seconds": 3572.0
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5629438.0,
+            "covered_seconds": 3572.0
+          }
+        },
+        "11": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_failures_total": {
+            "delta": 18921.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_admitted_total": {
+            "delta": 5042.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 289.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4881367.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4881367.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_attempts_total": {
+            "delta": 19757.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_success_total": {
+            "delta": 835.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "writer_transactions_total": {
+            "delta": 2097.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_packets_in_total": {
+            "delta": 247985.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_sample_deferred_total": {
+            "delta": 1773.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1709636.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_harvested_total": {
+            "delta": 968407.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_evicted_service_total": {
+            "delta": 964695.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6591452.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_timeouts_total": {
+            "delta": 161154.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_lost_total": {
+            "delta": 964782.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_packets_out_total": {
+            "delta": 402303.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 3947.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_responses_in_total": {
+            "delta": 224753.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_lookups_completed_total": {
+            "delta": 5027.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "writer_stored_total": {
+            "delta": 833.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "dht_queries_out_total": {
+            "delta": 399274.0,
+            "covered_seconds": 3636.199999999997
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5549569.0,
+            "covered_seconds": 3636.199999999997
+          }
+        },
+        "12": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_failures_total": {
+            "delta": 19663.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4799.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 5.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4287603.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4287603.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_attempts_total": {
+            "delta": 20639.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_success_total": {
+            "delta": 982.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "writer_transactions_total": {
+            "delta": 1928.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_packets_in_total": {
+            "delta": 157189.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3159.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1647125.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_harvested_total": {
+            "delta": 103835.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_evicted_service_total": {
+            "delta": 102969.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5933974.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_timeouts_total": {
+            "delta": 83031.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_lost_total": {
+            "delta": 102969.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_packets_out_total": {
+            "delta": 235800.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4004.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_responses_in_total": {
+            "delta": 141050.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4797.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "writer_stored_total": {
+            "delta": 979.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "dht_queries_out_total": {
+            "delta": 231598.0,
+            "covered_seconds": 3569.600000000006
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5793793.0,
+            "covered_seconds": 3569.600000000006
+          }
+        },
+        "13": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_failures_total": {
+            "delta": 17204.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4693.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3946407.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3946407.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_attempts_total": {
+            "delta": 18007.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_success_total": {
+            "delta": 798.0,
+            "covered_seconds": 3631.0
+          },
+          "writer_transactions_total": {
+            "delta": 1711.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_packets_in_total": {
+            "delta": 141746.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3611.0,
+            "covered_seconds": 3631.0
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2048578.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_harvested_total": {
+            "delta": 341.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5994993.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_timeouts_total": {
+            "delta": 75033.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_lost_total": {
+            "delta": 4.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_packets_out_total": {
+            "delta": 213225.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 3948.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_responses_in_total": {
+            "delta": 128674.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4693.0,
+            "covered_seconds": 3631.0
+          },
+          "writer_stored_total": {
+            "delta": 799.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3631.0
+          },
+          "dht_queries_out_total": {
+            "delta": 210661.0,
+            "covered_seconds": 3631.0
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5907321.0,
+            "covered_seconds": 3631.0
+          }
+        },
+        "14": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_failures_total": {
+            "delta": 14071.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4593.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3736025.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3736025.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_attempts_total": {
+            "delta": 14724.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_success_total": {
+            "delta": 656.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "writer_transactions_total": {
+            "delta": 1555.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_packets_in_total": {
+            "delta": 138228.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3539.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2103692.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_harvested_total": {
+            "delta": 228.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5841248.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_timeouts_total": {
+            "delta": 73110.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_lost_total": {
+            "delta": 19.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_packets_out_total": {
+            "delta": 207610.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 3821.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_responses_in_total": {
+            "delta": 125644.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4593.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "writer_stored_total": {
+            "delta": 653.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "dht_queries_out_total": {
+            "delta": 205390.0,
+            "covered_seconds": 3567.699999999997
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5729229.0,
+            "covered_seconds": 3567.699999999997
+          }
+        },
+        "15": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_failures_total": {
+            "delta": 13981.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4704.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 1.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3729553.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3729553.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_attempts_total": {
+            "delta": 14544.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_success_total": {
+            "delta": 561.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "writer_transactions_total": {
+            "delta": 1484.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_packets_in_total": {
+            "delta": 139966.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3605.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2171783.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_harvested_total": {
+            "delta": 304.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5901149.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_timeouts_total": {
+            "delta": 73306.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_lost_total": {
+            "delta": 48.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_packets_out_total": {
+            "delta": 209468.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 3766.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_responses_in_total": {
+            "delta": 127353.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4704.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "writer_stored_total": {
+            "delta": 560.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "dht_queries_out_total": {
+            "delta": 207131.0,
+            "covered_seconds": 3633.300000000003
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5770433.0,
+            "covered_seconds": 3633.300000000003
+          }
+        },
+        "16": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_failures_total": {
+            "delta": 13282.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4602.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3609845.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3609845.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_attempts_total": {
+            "delta": 13813.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_success_total": {
+            "delta": 536.0,
+            "covered_seconds": 3575.5
+          },
+          "writer_transactions_total": {
+            "delta": 1469.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_packets_in_total": {
+            "delta": 141152.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3545.0,
+            "covered_seconds": 3575.5
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2153543.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_harvested_total": {
+            "delta": 309.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5762958.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_timeouts_total": {
+            "delta": 76379.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_lost_total": {
+            "delta": 117.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_packets_out_total": {
+            "delta": 215572.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 4000.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_responses_in_total": {
+            "delta": 125529.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4602.0,
+            "covered_seconds": 3575.5
+          },
+          "writer_stored_total": {
+            "delta": 533.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3575.5
+          },
+          "dht_queries_out_total": {
+            "delta": 213206.0,
+            "covered_seconds": 3575.5
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5619239.0,
+            "covered_seconds": 3575.5
+          }
+        },
+        "17": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_failures_total": {
+            "delta": 16932.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4734.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 149.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4917949.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4917949.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_attempts_total": {
+            "delta": 17695.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_success_total": {
+            "delta": 754.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "writer_transactions_total": {
+            "delta": 2731.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_packets_in_total": {
+            "delta": 268901.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_sample_deferred_total": {
+            "delta": 1759.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1781185.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_harvested_total": {
+            "delta": 971320.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_evicted_service_total": {
+            "delta": 967384.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6699436.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_timeouts_total": {
+            "delta": 191733.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_lost_total": {
+            "delta": 967468.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_packets_out_total": {
+            "delta": 460258.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5694.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_responses_in_total": {
+            "delta": 226819.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4728.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "writer_stored_total": {
+            "delta": 753.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "dht_queries_out_total": {
+            "delta": 457790.0,
+            "covered_seconds": 3633.899999999994
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5642245.0,
+            "covered_seconds": 3633.899999999994
+          }
+        },
+        "18": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_failures_total": {
+            "delta": 18389.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4570.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 31.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4284136.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4284136.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_attempts_total": {
+            "delta": 19309.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_success_total": {
+            "delta": 927.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "writer_transactions_total": {
+            "delta": 1945.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_packets_in_total": {
+            "delta": 176373.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3138.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1731968.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_harvested_total": {
+            "delta": 92995.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_evicted_service_total": {
+            "delta": 91886.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6015602.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_timeouts_total": {
+            "delta": 108139.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_lost_total": {
+            "delta": 91886.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_packets_out_total": {
+            "delta": 284731.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5525.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_responses_in_total": {
+            "delta": 142155.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4570.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "writer_stored_total": {
+            "delta": 926.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "dht_queries_out_total": {
+            "delta": 280526.0,
+            "covered_seconds": 3574.899999999994
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5894056.0,
+            "covered_seconds": 3574.899999999994
+          }
+        },
+        "19": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_failures_total": {
+            "delta": 18106.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4542.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3860359.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3860359.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_attempts_total": {
+            "delta": 19081.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_success_total": {
+            "delta": 970.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "writer_transactions_total": {
+            "delta": 1840.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_packets_in_total": {
+            "delta": 186736.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3546.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2057359.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_harvested_total": {
+            "delta": 1557.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_evicted_service_total": {
+            "delta": 575.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5917856.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_timeouts_total": {
+            "delta": 107997.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_lost_total": {
+            "delta": 580.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_packets_out_total": {
+            "delta": 296445.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 6121.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_responses_in_total": {
+            "delta": 143835.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4542.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "writer_stored_total": {
+            "delta": 967.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "dht_queries_out_total": {
+            "delta": 291269.0,
+            "covered_seconds": 3572.2000000000116
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5839240.0,
+            "covered_seconds": 3572.2000000000116
+          }
+        },
+        "20": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_failures_total": {
+            "delta": 17314.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4648.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 4.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3753866.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3753866.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_attempts_total": {
+            "delta": 18179.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_success_total": {
+            "delta": 862.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "writer_transactions_total": {
+            "delta": 1769.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_packets_in_total": {
+            "delta": 186051.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3606.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2267289.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_harvested_total": {
+            "delta": 2654.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_evicted_service_total": {
+            "delta": 1735.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6020634.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_timeouts_total": {
+            "delta": 110839.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_lost_total": {
+            "delta": 1777.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_packets_out_total": {
+            "delta": 300511.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 6329.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_responses_in_total": {
+            "delta": 142645.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4648.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "writer_stored_total": {
+            "delta": 860.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "dht_queries_out_total": {
+            "delta": 292883.0,
+            "covered_seconds": 3654.699999999997
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5908119.0,
+            "covered_seconds": 3654.699999999997
+          }
+        },
+        "21": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_failures_total": {
+            "delta": 15152.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4551.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 3.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3538961.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3538961.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_attempts_total": {
+            "delta": 15803.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_success_total": {
+            "delta": 658.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "writer_transactions_total": {
+            "delta": 1555.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_packets_in_total": {
+            "delta": 181738.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3537.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2328678.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_harvested_total": {
+            "delta": 1168.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_evicted_service_total": {
+            "delta": 409.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5868830.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_timeouts_total": {
+            "delta": 107228.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_lost_total": {
+            "delta": 536.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_packets_out_total": {
+            "delta": 292320.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 6096.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_responses_in_total": {
+            "delta": 143242.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4551.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "writer_stored_total": {
+            "delta": 656.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "dht_queries_out_total": {
+            "delta": 286841.0,
+            "covered_seconds": 3577.5999999999913
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5737776.0,
+            "covered_seconds": 3577.5999999999913
+          }
+        },
+        "22": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_failures_total": {
+            "delta": 14039.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4534.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 3556659.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_rejected_total": {
+            "delta": 3556659.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_attempts_total": {
+            "delta": 14735.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_success_total": {
+            "delta": 697.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "writer_transactions_total": {
+            "delta": 1589.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_packets_in_total": {
+            "delta": 157131.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_sample_deferred_total": {
+            "delta": 3544.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_peer_command_full_total": {
+            "delta": 2274754.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_harvested_total": {
+            "delta": 726.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_evicted_service_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 5830701.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_timeouts_total": {
+            "delta": 92097.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_lost_total": {
+            "delta": 180.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_packets_out_total": {
+            "delta": 251077.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5192.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_responses_in_total": {
+            "delta": 130818.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4534.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "writer_stored_total": {
+            "delta": 696.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "dht_queries_out_total": {
+            "delta": 245783.0,
+            "covered_seconds": 3572.7000000000116
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5685529.0,
+            "covered_seconds": 3572.7000000000116
+          }
+        },
+        "23": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_failures_total": {
+            "delta": 19152.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_admitted_total": {
+            "delta": 4640.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 60.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 4737643.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_rejected_total": {
+            "delta": 4737643.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_attempts_total": {
+            "delta": 20022.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_success_total": {
+            "delta": 868.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "writer_transactions_total": {
+            "delta": 3234.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_packets_in_total": {
+            "delta": 272482.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_sample_deferred_total": {
+            "delta": 1772.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_peer_command_full_total": {
+            "delta": 1734832.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_harvested_total": {
+            "delta": 972232.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_evicted_service_total": {
+            "delta": 969834.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 6473120.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_timeouts_total": {
+            "delta": 191390.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_lost_total": {
+            "delta": 969965.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_packets_out_total": {
+            "delta": 464400.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 5961.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_responses_in_total": {
+            "delta": 229182.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_lookups_completed_total": {
+            "delta": 4638.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "writer_stored_total": {
+            "delta": 867.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "dht_queries_out_total": {
+            "delta": 459040.0,
+            "covered_seconds": 3634.7999999999884
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 5413706.0,
+            "covered_seconds": 3634.7999999999884
+          }
+        },
+        "24": {
+          "search_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_failures_total": {
+            "delta": 355.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_harvest_dropped_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_admitted_total": {
+            "delta": 79.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_cancelled_total": {
+            "delta": 1.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_rejection_reasons_total": {
+            "delta": 90178.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_ack_failed_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_rejected_total": {
+            "delta": 90178.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_attempts_total": {
+            "delta": 387.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_success_total": {
+            "delta": 21.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "writer_transactions_total": {
+            "delta": 86.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_packets_in_total": {
+            "delta": 5558.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_command_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_sample_deferred_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "writer_errors_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_peer_command_full_total": {
+            "delta": 18199.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_harvested_total": {
+            "delta": 31423.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_evicted_service_total": {
+            "delta": 31456.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_lookup_unaccepted_total": {
+            "delta": 108711.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_finder_closed_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_sample_stale_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_timeouts_total": {
+            "delta": 4056.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_lost_total": {
+            "delta": 31456.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_packets_out_total": {
+            "delta": 9419.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_lookup_deadlines_total": {
+            "delta": 65.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_responses_in_total": {
+            "delta": 4964.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_lookups_completed_total": {
+            "delta": 79.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "writer_stored_total": {
+            "delta": 21.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_finder_full_total": {
+            "delta": 0.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "dht_queries_out_total": {
+            "delta": 9290.0,
+            "covered_seconds": 60.40000000000873
+          },
+          "fetch_retry_unaccepted_total": {
+            "delta": 77375.0,
+            "covered_seconds": 60.40000000000873
+          }
+        }
+      },
+      "counters": {
+        "dht_peer_admitted_total": {
+          "delta": 111177.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 4630.209948126108
+        },
+        "dht_peer_rejected_total": {
+          "delta": 95553358.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 3979529.11832893
+        },
+        "dht_peer_cancelled_total": {
+          "delta": 609.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 25.363140383431823
+        },
+        "dht_peer_rejection_reasons_total": {
+          "delta": 95553358.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 3979529.11832893
+        },
+        "dht_peer_ack_failed_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "dht_peer_command_full_total": {
+          "delta": 48811112.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 2032845.7897001866
+        },
+        "dht_peer_command_closed_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "dht_lookups_completed_total": {
+          "delta": 111147.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 4628.960532343673
+        },
+        "dht_lookup_deadlines_total": {
+          "delta": 117273.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 4884.091235116914
+        },
+        "dht_sample_stale_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "dht_sample_deferred_total": {
+          "delta": 76954.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 3204.9180707169335
+        },
+        "dht_queries_out_total": {
+          "delta": 6576224.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 273881.2684809418
+        },
+        "dht_responses_in_total": {
+          "delta": 3581819.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 149172.70628085942
+        },
+        "dht_timeouts_total": {
+          "delta": 2512425.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 104635.44823948063
+        },
+        "dht_packets_in_total": {
+          "delta": 4180263.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 174096.2188976451
+        },
+        "dht_packets_out_total": {
+          "delta": 6662322.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 277467.0084821449
+        },
+        "dht_harvested_total": {
+          "delta": 4295805.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 178908.21884211552
+        },
+        "dht_harvest_dropped_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "fetch_attempts_total": {
+          "delta": 407475.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 16970.189864924272
+        },
+        "fetch_success_total": {
+          "delta": 17829.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 742.5277995011593
+        },
+        "fetch_failures_total": {
+          "delta": 389644.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 16227.578771037617
+        },
+        "fetch_lost_total": {
+          "delta": 4274458.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 178019.17621852746
+        },
+        "fetch_finder_full_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "fetch_finder_closed_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "fetch_lookup_unaccepted_total": {
+          "delta": 144365212.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 6012405.810246135
+        },
+        "fetch_retry_unaccepted_total": {
+          "delta": 137890829.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 5742765.933521826
+        },
+        "fetch_evicted_service_total": {
+          "delta": 4273028.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 177959.62073289807
+        },
+        "writer_stored_total": {
+          "delta": 17783.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 740.6120286347588
+        },
+        "writer_errors_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        },
+        "writer_transactions_total": {
+          "delta": 42462.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 1768.4230984585913
+        },
+        "search_errors_total": {
+          "delta": 0.0,
+          "covered_seconds": 86440.4,
+          "per_hour": 0.0
+        }
+      }
+    }
+  },
+  "limitations": [
+    "Review evidence; this report never declares soak acceptance or a performance improvement.",
+    "Rates use adjacent same-phase, same-process samples within the gap limit; coverage is per counter.",
+    "Health failures remain counted and do not remove valid metric intervals or unsuccessful work.",
+    "Counter resets or changed label sets invalidate that counter interval; absent data is unknown.",
+    "Stored torrents are not verified searchable yield; no cohort latency or kernel-drop proof is available.",
+    "Capacity equality is backpressure; over-capacity observations require review.",
+    "RSS change is first-to-last within a continuous phase, not evidence of a leak.",
+    "Final shutdown metrics have no monotonic sample timestamp and are excluded from rates."
+  ]
+}
