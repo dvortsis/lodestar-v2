@@ -5,31 +5,33 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_dht::node::{Config, Harvest, Source, StatsSnapshot, testing};
+use lodestar_dht::node::testing::{self, SimPort};
+use lodestar_dht::node::{Config, Harvest, Node, NodeHandle, Source, StatsSnapshot};
 use lodestar_peer_wire::FailureKind;
 use lodestar_sources::pool::spawn;
 use lodestar_sources::{
-    Discovery, FetchedKey, Found, FunnelCounts, Loss, PeerRequest, PoolIo, PoolStats, Shutdown,
-    Stage,
+    Discovery, FetchedKey, Found, FunnelCounts, Loss, PeerRequest, PoolConfig, PoolHandle, PoolIo,
+    PoolStats, Shutdown, Stage,
 };
-use lodestar_store::SourceId;
+use lodestar_store::{QueuedKey, SourceId};
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
 
 use crate::fetch::{SimFetcher, hex};
 use crate::log::Log;
 use crate::net::{Net, NetStats};
 use crate::rng::{Rng, hash};
-use crate::scenario::Scenario;
+use crate::scenario::{FetchConfig, Scenario};
 
 /// The node's own (simulated) public address.
-const ME: ([u8; 4], u16) = ([81, 2, 3, 4], 6881);
+pub const ME: ([u8; 4], u16) = ([81, 2, 3, 4], 6881);
 /// Unix time at virtual zero, for discovery stamps.
-const T0: i64 = 1_700_000_000;
+pub const T0: i64 = 1_700_000_000;
 /// Gauges are sampled once per virtual second.
 const SAMPLE: Duration = Duration::from_secs(1);
 
@@ -59,7 +61,7 @@ pub struct PoolEnd {
 }
 
 #[derive(Default, Clone, Copy)]
-struct Gauge {
+pub struct Gauge {
     sum: u64,
     max: u64,
 }
@@ -73,24 +75,24 @@ impl Gauge {
 
 /// One simulated minute: counter deltas and gauge means/maxima.
 #[derive(Default)]
-struct Minute {
-    admitted: u64,
-    rejected: u64,
-    completed: u64,
-    peers_found: u64,
-    fetch_started: u64,
-    fetched: u64,
-    stored: u64,
-    harvested: u64,
-    dht_active: Gauge,
-    dht_queued: Gauge,
-    pool_lookups: Gauge,
-    pool_active: Gauge,
+pub struct Minute {
+    pub admitted: u64,
+    pub rejected: u64,
+    pub completed: u64,
+    pub peers_found: u64,
+    pub fetch_started: u64,
+    pub fetched: u64,
+    pub stored: u64,
+    pub harvested: u64,
+    pub dht_active: Gauge,
+    pub dht_queued: Gauge,
+    pub pool_lookups: Gauge,
+    pub pool_active: Gauge,
 }
 
 /// Cumulative counters the per-minute rows are deltas of.
 #[derive(Default, Clone, Copy)]
-struct Totals {
+pub struct Totals {
     admitted: u64,
     rejected: u64,
     completed: u64,
@@ -160,16 +162,201 @@ async fn glue(
 }
 
 /// The writer: counts what reaches storage.
-async fn writer(
-    mut out: mpsc::Receiver<FetchedKey>,
-    log: Arc<Mutex<Log>>,
-    stored: Arc<std::sync::atomic::AtomicU64>,
-) {
+async fn writer(mut out: mpsc::Receiver<FetchedKey>, log: Arc<Mutex<Log>>, stored: Arc<AtomicU64>) {
     while let Some(f) = out.recv().await {
         stored.fetch_add(1, Ordering::Relaxed);
         log.lock()
             .expect("log lock")
             .event(format_args!("stored {}", hex(&f.key)));
+    }
+}
+
+/// One run of the node and the pipeline around it, wired the way
+/// `crates/pipeline/src/dht.rs` wires them. A restart scenario runs two.
+pub struct Leg {
+    pub node: Node,
+    pub handle: NodeHandle,
+    pub pool: PoolHandle,
+    pub pool_task: JoinHandle<Vec<QueuedKey>>,
+    pub glue_task: JoinHandle<u64>,
+    pub writer_task: JoinHandle<()>,
+    pub net_task: JoinHandle<(Net, SimPort)>,
+    pub stop_tx: watch::Sender<bool>,
+    pub pool_stop: watch::Sender<bool>,
+    pub funnel: Arc<FunnelCounts>,
+    pub fetcher: Arc<SimFetcher>,
+    pub stored: Arc<AtomicU64>,
+}
+
+/// What a stopped leg leaves.
+pub struct Stopped {
+    /// The node's stats after shutdown.
+    pub dht: StatsSnapshot,
+    pub queued: Vec<QueuedKey>,
+    pub dropped: u64,
+    pub net: Net,
+    pub port: SimPort,
+    pub fetched: u64,
+    pub funnel_fetched: i64,
+    pub stored: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct Seeds {
+    pub node: u64,
+    pub fetch: u64,
+}
+
+impl Leg {
+    #[allow(clippy::too_many_arguments)]
+    pub fn start(
+        dht: Config,
+        pool_cfg: PoolConfig,
+        fetch: FetchConfig,
+        net: Net,
+        seeds: Seeds,
+        log: &Arc<Mutex<Log>>,
+        start: Instant,
+        restore: Vec<QueuedKey>,
+    ) -> Leg {
+        let (harvest_tx, harvest_rx) = mpsc::channel(4096);
+        let (node, port) = testing::start(dht, SocketAddr::from(ME), seeds.node, Some(harvest_tx));
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let net_task = tokio::spawn(net.run(port, stop_rx.clone()));
+
+        // The pipeline's channel sizes (`crates/pipeline/src/lib.rs`).
+        let (disc_tx, disc_rx) = mpsc::channel(16_384);
+        let (finder_tx, finder_rx) = mpsc::channel(1024);
+        let (out_tx, out_rx) = mpsc::channel(64);
+        let funnel = Arc::new(FunnelCounts::default());
+        let fetcher = Arc::new(SimFetcher {
+            seed: seeds.fetch,
+            cfg: fetch,
+            log: log.clone(),
+            started: Default::default(),
+        });
+        let (pool_stop, pool_shutdown) = Shutdown::new();
+        let (pool, pool_task) = spawn(
+            pool_cfg,
+            fetcher.clone(),
+            PoolIo {
+                discoveries: disc_rx,
+                peer_finders: vec![finder_tx],
+                out: out_tx,
+                funnel: funnel.clone(),
+                shutdown: pool_shutdown,
+            },
+            HashMap::new(),
+            restore,
+        );
+        let glue_task = tokio::spawn(glue(
+            node.handle(),
+            finder_rx,
+            harvest_rx,
+            disc_tx,
+            log.clone(),
+            start,
+            stop_rx,
+        ));
+        let stored = Arc::new(AtomicU64::new(0));
+        let writer_task = tokio::spawn(writer(out_rx, log.clone(), stored.clone()));
+        Leg {
+            handle: node.handle(),
+            node,
+            pool,
+            pool_task,
+            glue_task,
+            writer_task,
+            net_task,
+            stop_tx,
+            pool_stop,
+            funnel,
+            fetcher,
+            stored,
+        }
+    }
+
+    pub fn totals(&self, d: &StatsSnapshot, p: &PoolStats) -> Totals {
+        Totals {
+            admitted: d.peer_admitted,
+            rejected: d.peer_rejected,
+            completed: d.lookups_completed,
+            peers_found: self.funnel.total(Stage::PeerFound, None) as u64,
+            fetch_started: self.fetcher.started.load(Ordering::Relaxed),
+            fetched: p.fetched.load(Ordering::Relaxed),
+            stored: self.stored.load(Ordering::Relaxed),
+            harvested: d.harvested_sample + d.harvested_get_peers + d.harvested_announce,
+        }
+    }
+
+    /// Runs `minutes` from `from`, sampling the gauges each second.
+    pub async fn minutes(&self, from: Instant, minutes: u32) -> Vec<Minute> {
+        let mut out = Vec::new();
+        let mut minute = Minute::default();
+        let mut last = Totals::default();
+        let seconds = u64::from(minutes) * 60;
+        for sec in 1..=seconds {
+            sleep_until(from + SAMPLE * sec as u32).await;
+            let d = self.node.stats();
+            let p = self.pool.stats();
+            minute.dht_active.add(d.peer_active);
+            minute.dht_queued.add(d.peer_queued);
+            minute.pool_lookups.add(p.lookups.load(Ordering::Relaxed));
+            minute.pool_active.add(p.active.load(Ordering::Relaxed));
+            if sec % 60 == 0 {
+                let t = self.totals(&d, p);
+                minute.admitted = t.admitted - last.admitted;
+                minute.rejected = t.rejected - last.rejected;
+                minute.completed = t.completed - last.completed;
+                minute.peers_found = t.peers_found - last.peers_found;
+                minute.fetch_started = t.fetch_started - last.fetch_started;
+                minute.fetched = t.fetched - last.fetched;
+                minute.stored = t.stored - last.stored;
+                minute.harvested = t.harvested - last.harvested;
+                last = t;
+                out.push(std::mem::take(&mut minute));
+            }
+        }
+        out
+    }
+
+    /// Pool counters at the measurement boundary.
+    pub fn pool_end(&self) -> PoolEnd {
+        let p = self.pool.stats();
+        let l = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        let sum = |a: &[AtomicU64]| a.iter().map(l).sum::<u64>();
+        PoolEnd {
+            lookup_unaccepted: l(&p.lookup_unaccepted),
+            evicted_service: std::array::from_fn(|i| l(&p.evicted_service[i])),
+            admission: [
+                sum(&p.admission_waits),
+                p.admission_grants.iter().map(|g| sum(g)).sum(),
+                sum(&p.admission_refusals),
+                l(&p.admission_holds),
+            ],
+        }
+    }
+
+    /// Stops everything: the pool and the glue, then the node (a clean
+    /// shutdown, which commits the restart proof), then the network.
+    pub async fn stop(self) -> Stopped {
+        let _ = self.pool_stop.send(true);
+        let _ = self.stop_tx.send(true);
+        let queued = self.pool_task.await.expect("pool task");
+        let dropped = self.glue_task.await.expect("glue task");
+        self.node.shutdown().await.expect("node shutdown");
+        let (net, port) = self.net_task.await.expect("net task");
+        let _ = self.writer_task.await;
+        Stopped {
+            dht: testing::stats(&self.handle),
+            queued,
+            dropped,
+            net,
+            port,
+            fetched: self.pool.stats().fetched.load(Ordering::Relaxed),
+            funnel_fetched: self.funnel.total(Stage::Fetched, None),
+            stored: self.stored.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -195,142 +382,77 @@ pub async fn run(s: &Scenario) -> Report {
 
     let keep = std::env::var_os("CRAWLER_SIM_LOG").is_some();
     let log = Arc::new(Mutex::new(Log::new(start, keep)));
-    let (harvest_tx, harvest_rx) = mpsc::channel(4096);
-    let (node, port) = testing::start(dht, me, node_seed, Some(harvest_tx));
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let net_task = tokio::spawn(net.run(port, stop_rx.clone()));
-
-    // The pipeline's channel sizes (`crates/pipeline/src/lib.rs`).
-    let (disc_tx, disc_rx) = mpsc::channel(16_384);
-    let (finder_tx, finder_rx) = mpsc::channel(1024);
-    let (out_tx, out_rx) = mpsc::channel(64);
-    let funnel = Arc::new(FunnelCounts::default());
-    let fetcher = Arc::new(SimFetcher {
-        seed: fetch_seed,
-        cfg: s.swarm.fetch,
-        log: log.clone(),
-        started: Default::default(),
-    });
-    let (pool_stop, pool_shutdown) = Shutdown::new();
-    let (pool, pool_task) = spawn(
-        pool_cfg.clone(),
-        fetcher.clone(),
-        PoolIo {
-            discoveries: disc_rx,
-            peer_finders: vec![finder_tx],
-            out: out_tx,
-            funnel: funnel.clone(),
-            shutdown: pool_shutdown,
-        },
-        HashMap::new(),
-        Vec::new(),
-    );
-    let glue_task = tokio::spawn(glue(
-        node.handle(),
-        finder_rx,
-        harvest_rx,
-        disc_tx,
-        log.clone(),
-        start,
-        stop_rx.clone(),
-    ));
-    let stored = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let writer_task = tokio::spawn(writer(out_rx, log.clone(), stored.clone()));
-
-    let totals = |d: &StatsSnapshot, p: &PoolStats| Totals {
-        admitted: d.peer_admitted,
-        rejected: d.peer_rejected,
-        completed: d.lookups_completed,
-        peers_found: funnel.total(Stage::PeerFound, None) as u64,
-        fetch_started: fetcher.started.load(Ordering::Relaxed),
-        fetched: p.fetched.load(Ordering::Relaxed),
-        stored: stored.load(Ordering::Relaxed),
-        harvested: d.harvested_sample + d.harvested_get_peers + d.harvested_announce,
+    let mut text = header(s, live, held, distinct);
+    let seeds = Seeds {
+        node: node_seed,
+        fetch: fetch_seed,
     };
-    let mut minutes = Vec::new();
-    let mut minute = Minute::default();
-    let mut last = Totals::default();
-    let seconds = u64::from(s.minutes) * 60;
-    for sec in 1..=seconds {
-        sleep_until(start + SAMPLE * sec as u32).await;
-        let d = node.stats();
-        let p = pool.stats();
-        minute.dht_active.add(d.peer_active);
-        minute.dht_queued.add(d.peer_queued);
-        minute.pool_lookups.add(p.lookups.load(Ordering::Relaxed));
-        minute.pool_active.add(p.active.load(Ordering::Relaxed));
-        if sec % 60 == 0 {
-            let t = totals(&d, p);
-            minute.admitted = t.admitted - last.admitted;
-            minute.rejected = t.rejected - last.rejected;
-            minute.completed = t.completed - last.completed;
-            minute.peers_found = t.peers_found - last.peers_found;
-            minute.fetch_started = t.fetch_started - last.fetch_started;
-            minute.fetched = t.fetched - last.fetched;
-            minute.stored = t.stored - last.stored;
-            minute.harvested = t.harvested - last.harvested;
-            last = t;
-            minutes.push(std::mem::take(&mut minute));
-        }
+    if let Some(r) = s.restart {
+        return crate::restart::run(s, r, dht, pool_cfg, net, seeds, log, start, text).await;
     }
 
-    // Measure at the boundary, then stop everything.
-    let dht_final = node.stats();
-    let pool_final = pool.stats();
-    let stored_at_end = stored.load(Ordering::Relaxed);
-    let l = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
-    let sum = |a: &[std::sync::atomic::AtomicU64]| a.iter().map(l).sum::<u64>();
-    let pool_end = PoolEnd {
-        lookup_unaccepted: l(&pool_final.lookup_unaccepted),
-        evicted_service: std::array::from_fn(|i| l(&pool_final.evicted_service[i])),
-        admission: [
-            sum(&pool_final.admission_waits),
-            pool_final.admission_grants.iter().map(|g| sum(g)).sum(),
-            sum(&pool_final.admission_refusals),
-            l(&pool_final.admission_holds),
-        ],
-    };
-    let mut text = header(s, live, held, distinct);
-    write_minutes(&mut text, &minutes);
-    write_totals(&mut text, &dht_final, pool_final, &funnel);
-    let _ = pool_stop.send(true);
-    let _ = stop_tx.send(true);
-    let queued = pool_task.await.expect("pool task");
-    let dropped = glue_task.await.expect("glue task");
-    node.shutdown().await.expect("node shutdown");
-    let net_stats = net_task.await.expect("net task");
-    let _ = writer_task.await;
-    conservation(
-        &dht_final,
-        pool.stats().fetched.load(Ordering::Relaxed),
-        funnel.total(Stage::Fetched, None),
-        stored.load(Ordering::Relaxed),
+    let leg = Leg::start(
+        dht,
+        pool_cfg,
+        s.swarm.fetch,
+        net,
+        seeds,
+        &log,
+        start,
+        Vec::new(),
     );
-    write_net(&mut text, &net_stats, dropped, queued.len());
+    let minutes = leg.minutes(start, s.minutes).await;
+
+    // Measure at the boundary, then stop everything.
+    let dht_final = leg.node.stats();
+    let stored_at_end = leg.stored.load(Ordering::Relaxed);
+    let pool_end = leg.pool_end();
+    write_minutes(&mut text, &minutes);
+    write_totals(&mut text, &dht_final, leg.pool.stats(), &leg.funnel);
+    let end = leg.stop().await;
+    conservation(&dht_final, end.fetched, end.funnel_fetched, end.stored);
+    write_net(&mut text, &end.net.stats, end.dropped, end.queued.len());
+    finish(
+        text,
+        &log,
+        dht_final,
+        end.net.stats,
+        stored_at_end,
+        steady(&minutes, |m| m.stored),
+        pool_end,
+    )
+}
+
+/// The outcome log's digest, the fingerprint, and the report.
+pub fn finish(
+    mut text: String,
+    log: &Mutex<Log>,
+    dht: StatsSnapshot,
+    net: NetStats,
+    stored: u64,
+    steady_stored: f64,
+    pool: PoolEnd,
+) -> Report {
     let mut log = log.lock().expect("log lock");
     let _ = writeln!(
         text,
         "\noutcome_log events={} fnv64={:016x}",
         log.events, log.fnv.0
     );
-    let _ = writeln!(
-        text,
-        "fingerprint={:016x}",
-        hash(&[log.fnv.0, stored_at_end])
-    );
+    let _ = writeln!(text, "fingerprint={:016x}", hash(&[log.fnv.0, stored]));
     Report {
         text,
         log: log.take_lines(),
-        dht: dht_final,
-        net: net_stats,
-        stored: stored_at_end,
-        steady_stored: steady(&minutes, |m| m.stored),
-        pool: pool_end,
+        dht,
+        net,
+        stored,
+        steady_stored,
+        pool,
     }
 }
 
 /// Counters that must agree in every run, whatever a candidate changes.
-fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored: u64) {
+pub fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored: u64) {
     // After shutdown every fetch has reached the writer.
     assert_eq!(fetched, stored, "fetched vs stored");
     assert_eq!(
@@ -358,7 +480,7 @@ fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored: u6
 }
 
 /// The per-minute mean of `f` after warmup.
-fn steady(minutes: &[Minute], f: fn(&Minute) -> u64) -> f64 {
+pub fn steady(minutes: &[Minute], f: fn(&Minute) -> u64) -> f64 {
     let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
     steady.iter().map(f).sum::<u64>() as f64 / steady.len().max(1) as f64
 }
@@ -378,6 +500,13 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
         s.intensity,
         s.switches.describe()
     );
+    if let Some(r) = s.restart {
+        let _ = writeln!(
+            t,
+            "restart: leg1_minutes={} gap={}s safe_restart={}",
+            r.leg1_minutes, r.gap_s, r.safe_restart
+        );
+    }
     let n = &s.net;
     let _ = writeln!(
         t,
@@ -434,7 +563,7 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
 /// synchronized retries. The steady-state line averages the rest.
 const WARMUP_MINUTES: usize = 3;
 
-fn write_minutes(t: &mut String, minutes: &[Minute]) {
+pub fn write_minutes(t: &mut String, minutes: &[Minute]) {
     let _ = writeln!(
         t,
         "\n# per minute: counter deltas; gauges sampled each second as mean/max\nmin admitted rejected completed peers_found fetch_started fetched stored harvested dht_active dht_queued pool_lookups pool_active"
@@ -471,7 +600,7 @@ fn write_minutes(t: &mut String, minutes: &[Minute]) {
     );
 }
 
-fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &FunnelCounts) {
+pub fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &FunnelCounts) {
     let _ = writeln!(
         t,
         "\n# DHT node stats at the end (node::StatsSnapshot), one per line"
@@ -617,7 +746,7 @@ fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &Funne
     let _ = writeln!(t, "funnel: {}", funnel.join(" "));
 }
 
-fn write_net(t: &mut String, n: &NetStats, glue_dropped: u64, queued_at_end: usize) {
+pub fn write_net(t: &mut String, n: &NetStats, glue_dropped: u64, queued_at_end: usize) {
     let _ = writeln!(t, "\n# scripted network");
     let _ = writeln!(
         t,
