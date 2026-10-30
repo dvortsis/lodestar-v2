@@ -1347,7 +1347,7 @@
    "session": "session_01MMjhn95fzNhDro9AJeDYin",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR | 2026-10-30T10:48Z PR #203 head 5242f2e; fresh review session_01MMjhnAWTmyQoLPMGeVReHH; subscribed | 2026-10-30T11:03Z review FIX FIRST (reader role can write via lo_* / tx override; CRLF .sh; RLS forges counts; polish 4-9); sent; runner: .gitattributes one-line ownership extension | 2026-10-30T11:10Z fixes a59f43f (all 10); re-check asked",
+   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR | 2026-10-30T10:48Z PR #203 head 5242f2e; fresh review session_01MMjhnAWTmyQoLPMGeVReHH; subscribed | 2026-10-30T11:03Z review FIX FIRST (reader role can write via lo_* / tx override; CRLF .sh; RLS forges counts; polish 4-9); sent; runner: .gitattributes one-line ownership extension | 2026-10-30T11:10Z fixes a59f43f (all 10); re-check asked | 2026-10-30T11:21Z re-check MERGE (a59f43f); merge on green after confirming the importer job runs the psql test (not skipped)",
    "pr": 203
   },
   "CR-SIM": {
@@ -2047,7 +2047,8 @@
   "2026-10-30T10:41Z F-updater: scheduler reads the updater std::Mutex from async (until_scheduled) and can block a tokio worker for an fsync; move the read into blocking or publish a snapshot (pre-existing)",
   "2026-10-30T10:41Z CR-gate-metrics: carry HashMismatch separately through the pool terminal loss so failed_verification means hash mismatch only (peer-wire/sources change)",
   "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
-  "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea"
+  "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
+  "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
