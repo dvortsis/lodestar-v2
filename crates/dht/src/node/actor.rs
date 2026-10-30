@@ -1971,18 +1971,6 @@ mod tests {
         (actor, vec![socket])
     }
 
-    /// An IPv6 loopback socket, or `None` (the test skips) on a host
-    /// without IPv6.
-    fn loopback_v6() -> Option<StdUdpSocket> {
-        match StdUdpSocket::bind("[::1]:0") {
-            Ok(s) => Some(s),
-            Err(e) => {
-                eprintln!("skipped: no IPv6 loopback ({e})");
-                None
-            }
-        }
-    }
-
     fn candidate(addr: SocketAddr) -> NodeInfo {
         NodeInfo {
             id: NodeId([42; 20]),
@@ -2074,7 +2062,8 @@ mod tests {
     fn dual_stack_completion_and_deadline_drain_both_family_orders() {
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
-            let Some(v6) = loopback_v6() else {
+            // Skipped where the host has no IPv6.
+            let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
                 return;
             };
             v6.set_nonblocking(true).unwrap();
@@ -2464,7 +2453,8 @@ mod tests {
     #[test]
     fn dual_stack_cancellation_cleans_shared_rpc_ownership() {
         let (mut a, mut sockets) = fixture();
-        let Some(v6) = loopback_v6() else {
+        // Skipped where the host has no IPv6.
+        let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
             return;
         };
         v6.set_nonblocking(true).unwrap();

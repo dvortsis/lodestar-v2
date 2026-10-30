@@ -9,8 +9,9 @@ at http://localhost:8090/. The first-run setup token is printed in the black
 window; paste it into the page to create your password.
 
 To stop: press Ctrl+C in that window and wait for shutdown to finish before
-closing it. This lets Lodestar save its database and index. If the launcher
-continues, it prints "Lodestar stopped." before its final prompt.
+closing it. This lets Lodestar save its database and index. Once Lodestar has
+stopped, cmd may ask "Terminate batch job (Y/N)?". Answer N and the launcher
+prints "Lodestar stopped." before its final prompt; Y closes it at once.
 
 Unpack the zip inside your own user folder (for example Documents), not at the top of a drive
 or on a shared drive: other people on this PC could otherwise read your data. Your data is in the
