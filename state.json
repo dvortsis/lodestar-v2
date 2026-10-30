@@ -1909,7 +1909,8 @@
   "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f | 2026-10-30T06:32Z #182 merged b4d80387",
   "landing_plan_L3_L5": "DONE 2026-10-30T10:13Z: #184 merged 5e352be2. Next: #185 L6 (base main), then #186 L7 retarget after L6.",
   "heartbeat_last": "2026-10-30T09:39Z: open PRs #195 (macOS dispatch running), #184 (blocked on #195), #185/#186 stacked, #183 superseded by #184. Merged today since 06:56Z: #181 #187 #188 #189 #190 #191 #192 #193 #194.",
-  "landing": "2026-10-30T10:30Z: L1-L7 landed (#175 #180 #184 #185 #186). v0.5.1 blockers left: F-updater #198, CR-0f #200; soak acceptance (owner ruling); Unraid Linux soak (needs CR-COL #197); MSI service smoke."
+  "landing": "2026-10-30T10:30Z: L1-L7 landed (#175 #180 #184 #185 #186). v0.5.1 blockers left: F-updater #198, CR-0f #200; soak acceptance (owner ruling); Unraid Linux soak (needs CR-COL #197); MSI service smoke.",
+  "v051_delta": "2026-10-30T10:37Z: draft notes/v051-delta-draft.md vs 744b84d6..1199430f. No class-A (lifecycle/sampler/endpoint) changes on main yet. CR-0f #200 (bootstrap/pause) WILL be class A non-trivial -> the cutoff artifact needs a soak; the Unraid 24h Linux rc soak serves as it (plan \u00a70.4/D2). Live-behaviour changes to weigh: V12 in-place edit + repair_v12 at open (applies to soak data dir), SeekGuard (#181), Info::parse (#177), filter semantics (#179,#192). No targeted test: B2 snapshots metadata() failure branch, E1 setup password guard, A2 msg text, F2 align, F5 dep removal, B3 bench. Refresh at cut incl. #196 #198 #199 #200 #202."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
