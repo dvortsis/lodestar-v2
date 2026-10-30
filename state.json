@@ -1282,11 +1282,11 @@
    "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk) | 2026-10-30T08:00Z local reviewer stopped (disk); fresh review moved to cloud session session_01MMjhnBvsF5kreeXyjjL3kB | 2026-10-30T08:21Z fresh review MERGE (0B/0I/2P). Merge blocked by conflict with main fafe2f89 (likely logs_catalog golden); author told to merge main + regenerate | 2026-10-30T08:41Z 95207bf4 conflict resolved (logs_catalog re-blessed); CI running | 2026-10-30T08:54Z #190 merged 476689c9 (A2-1 release blocker closed)"
   },
   "CR-COL": {
-   "status": "review",
+   "status": "merged",
    "session": "session_01MMjhnAXqNdYeYYFdttw8Zo",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww | 2026-10-30T10:21Z review FIX FIRST: B1 gluetun leg recipe (runner decision: --leg gluetun, >=2h baseline, own run), B2 README upgrade-on-existing-volume, I1 pidfd stop, I3 no personal paths/hosts; P1-P5. Reviewer session_01MMjhnAbgoJtA9x6eUfd9Ww re-checks delta. | 2026-10-30T10:29Z cb4ef42 all findings fixed; delta re-check by same reviewer | 2026-10-30T10:31Z re-review MERGE at cb4ef42 (pidfd closes window; no paths/hosts). Merge on green CI.",
+   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww | 2026-10-30T10:21Z review FIX FIRST: B1 gluetun leg recipe (runner decision: --leg gluetun, >=2h baseline, own run), B2 README upgrade-on-existing-volume, I1 pidfd stop, I3 no personal paths/hosts; P1-P5. Reviewer session_01MMjhnAbgoJtA9x6eUfd9Ww re-checks delta. | 2026-10-30T10:29Z cb4ef42 all findings fixed; delta re-check by same reviewer | 2026-10-30T10:31Z re-review MERGE at cb4ef42 (pidfd closes window; no paths/hosts). Merge on green CI. | 2026-10-30T10:34Z #197 merged 7473a6c3",
    "pr": 197
   },
   "CR-0f": {
@@ -1997,6 +1997,12 @@
    "item": "Delete branch measure/windows-nrt (one commit adding a push-only measurement workflow; proxy refuses deletes)",
    "unblocks": "hygiene",
    "ref": "run 41024502148"
+  },
+  {
+   "at": "2026-10-30T10:34Z",
+   "item": "Run the 24h Linux Docker soak on Unraid with docs/soak/tools/linux/collect.py on the v0.5.1-rc image (upgrade in place on the Oct 22 volume after lodestar backup), plus a separate >=2h gluetun leg (--leg gluetun --require-gluetun). README: docs/soak/tools/linux/README.md",
+   "unblocks": "v0.5.1 gate (\u00a70.4)",
+   "ref": "#197; needs rc artifact after cut"
   }
  ],
  "external_gates": {
