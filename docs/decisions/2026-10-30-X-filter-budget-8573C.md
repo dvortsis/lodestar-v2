@@ -1,4 +1,4 @@
-# X-filter-budget-8573C decisions (#PR)
+# X-filter-budget-8573C decisions (#226)
 
 The filter budget gate now scales a listed CPU model by the job's own calibration, times a per-model skew, in place of one fixed factor per model. That makes it fair on the Intel Xeon Platinum 8573C, whose hosts run at two speeds. The owner's 50 µs per torrent at 10,000 rules (`docs/owner-decisions.md` §1.6.6, architecture §20.8) and the EPYC 7763 reference (§2.20) are unchanged. The reference still reads its raw times, and every held case is still held. This supersedes the "scales listed models by the engine's own speed" bullet of `2026-10-30-F-filters-xcpu.md`. **The runner decided this method (2026-10-30) as a refinement under §2.19, and flags it to the owner.** It changes how the gate measures, not the owner's number.
 
