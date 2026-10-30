@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T18:11Z",
+ "updated_at": "2026-10-30T18:30Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2165,8 +2165,6 @@
   "X-clippy-msrv part 2: filter, lodestar, dht, sources, store and update, then remove the 3 allows; after #210, #212, #213, #216, R-gauges and X-filter-budget land",
   "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
-  "logging: the second wait in delete_while_writers_run... (source_tests.rs ~772), and the older one above it, should report how many lines they saw (standards \u00a72) (#213 post-merge review)",
-  "logging: rotated_name (file.rs:763) reuses the lowest free N, so a reused name in the same ms after a prune sorts as the oldest; take max N+1 instead, with a gap test (pre-existing, rare)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "filter budget: the all-disturbed panic message should also say 'or the engine's time varies between passes' (props.rs:1028/1069); add a test that spread is invariant under uniform scaling (props.rs:616); watch the first real 8573C jobs' spread against the 15% DRIFT (#226 review)"
  ],
@@ -2246,7 +2244,8 @@
   "2026-10-30T17:50Z #228 CR-ADM review MERGE at cd824876 (4 mutations caught); waiting for ci-ok. The 5 optional findings go in a fix/cr-adm-polish follow-up after the merge.",
   "2026-10-30T18:04Z merged #228 CR-ADM (39706b3b; switch off by default). The fix/cr-adm-polish follow-up has started. #227 fixes e262b6e2 sent for re-check (the Windows failure was an 8.3-name overlap miss, now fixed). #225 waits on ci-ok. NOTE: session metadata shows a seven-day usage warning (allowed_warning), so the runner is going frugal: no new slices beyond those in flight, same-reviewer or runner delta checks, and longer polling.",
   "2026-10-30T18:10Z #227 re-check MERGE at e262b6e2, but it conflicts with main after #228; author told to merge main plus optional item 6, then a runner delta check. #225 waits on ci-ok. Check-in re-armed for 19:10Z.",
-  "2026-10-30T18:11Z merged #225 IMP-2 (c15a5112) on green ci-ok at a1890137; author and reviewer sessions archived."
+  "2026-10-30T18:11Z merged #225 IMP-2 (c15a5112) on green ci-ok at a1890137; author and reviewer sessions archived.",
+  "2026-10-30T18:30Z opened #230 fix/logging-nits (runner-owned: rotated_name max N+1, wait messages); review by session_01MMjhn984M3k3UJXUCsEYPX (#221's reviewer, idle). #221 author told to remove .update-snapshots marker."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
 }
