@@ -263,24 +263,42 @@ jobs:
   # the best of several runs and compare like with like (the same threads on
   # isolated events), so a shared runner's noise doesn't fail it.
   # The soak analyzer and collectors decide soak acceptance (build-plan §0.4),
-  # so their tests gate like any other code. Standard library only.
+  # so their tests gate like any other code. Standard library only, on the
+  # oldest Python the tools document (3.12: hashlib.file_digest, is_junction).
   soak-tools:
-    name: soak tools (Python)
+    name: soak tools
     needs: changes
     if: needs.changes.outputs.soak_tools == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m unittest discover -s docs/soak/tools -p 'test_*.py' -v
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s docs/soak/tools -p 'test_*.py' -v
+      # The Linux/Docker collector (CR-COL) lands under linux/ later.
       - name: Linux collector
         run: |
           if [ -d docs/soak/tools/linux ]; then
-            python3 -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
+            python -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
           fi
+
+  # The Windows collector's own fault-injection test: PID reuse, bounded
+  # retries, safe binds. The rehearsal script needs a real crawler and stays
+  # on the owner's PC.
+  soak-collector-windows:
+    name: soak collector (Windows)
+    needs: changes
+    if: needs.changes.outputs.soak_tools == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: ./docs/soak/tools/test_cr0_collector.ps1
 
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench, soak-tools]
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench, soak-tools, soak-collector-windows]
     if: always()
     runs-on: ubuntu-latest
     steps:
