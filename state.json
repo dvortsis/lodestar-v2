@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T19:08Z",
+ "updated_at": "2026-10-30T19:12Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2183,7 +2183,6 @@
   "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
-  "tests/cli.rs:21 picks its HTTP port by bind(0)+release (same race #229 fixed in supervisor.rs); move to an allocator like test_port (from X-flake-supervisor-switch)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)"
  ],
  "main_health": [
@@ -2274,7 +2273,8 @@
   "2026-10-30T19:02Z merged #230 logging nits (0140999b) on green ci-ok at 34c228ac, reviewer MERGE.",
   "2026-10-30T19:05Z launched CR-gate-hash-mismatch (Opus, session_01MMjhn9fpZf44nCWftW7LDz): contract note first, code after #231 and #232 merge.",
   "2026-10-30T19:08Z CR-gate-hash-mismatch contract: Option A OK'd (FailureKind::HashMismatch, Funnel::lost gains last: Option<FailureKind>, no new persisted Loss code). Owner flag (\u00a72.19) pending at merge: failed_verification narrows to hash mismatches on the final attempt.",
-  "2026-10-30T19:08Z merged #231 fix/cr-adm-polish (9496cc90) on green ci-ok at 2e18f07f after the runner's delta check; author asked for the IPv6 test report, then archive."
+  "2026-10-30T19:08Z merged #231 fix/cr-adm-polish (9496cc90) on green ci-ok at 2e18f07f after the runner's delta check; author asked for the IPv6 test report, then archive.",
+  "2026-10-30T19:12Z merged #229 X-flake-supervisor-switch (ad89ff04); author archived. Opened #234 fix/cli-test-port (shared tests/ports test_port, used by cli.rs); review by session_01MMjhn984M3k3UJXUCsEYPX. #232 waits on ci-ok."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
