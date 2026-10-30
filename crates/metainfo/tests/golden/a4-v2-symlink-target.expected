@@ -1,0 +1,8 @@
+version: V2
+name: "t" (UTF-8)
+path encoding: UTF-8
+total size: 1
+piece count: 1
+warnings: []
+file: "link" size=0 attrs="l" target="target"
+file: "target" size=1 attrs="" root

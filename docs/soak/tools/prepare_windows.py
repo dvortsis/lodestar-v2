@@ -1,6 +1,6 @@
 """Build a private CR-0 candidate from clean source; never launch a public crawl.
 
-Use Python 3.10+ on Windows with existing offline Rust/npm dependencies. Output
+Use Python 3.12+ on Windows with existing offline Rust/npm dependencies. Output
 must be a NEW direct child of this checkout's target directory. Failed outputs
 are preserved for diagnosis. A package is valid only after its final manifest.
 """

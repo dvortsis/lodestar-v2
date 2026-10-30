@@ -52,10 +52,10 @@ flowchart LR
   D["1. Discover<br/>BEP 5 + BEP 51 DHT"] --> F["2. Fetch<br/>BEP 9 ut_metadata"]
   F --> U["3. Understand<br/>Title, files & filters"]
   U --> I["4. Index<br/>SQLite + Tantivy"]
-  I --> S["5. Serve<br/>Web UI, REST & Torznab"]
+  I --> S["5. Serve<br/>Web UI & REST API"]
 ```
 
-In order: **Discover** walks the DHT for infohashes and **Fetch** pulls the metadata dictionary over BEP 9. **Understand** classifies titles and file trees, **Index** commits rows to SQLite and Tantivy, and **Serve** answers searches over the web UI, REST API and Torznab.
+In order: **Discover** walks the DHT for infohashes and **Fetch** pulls the metadata dictionary over BEP 9. **Understand** classifies titles and file trees, **Index** commits rows to SQLite and Tantivy, and **Serve** answers searches over the web UI and REST API. Torznab is planned.
 
 ## Interface tour
 
@@ -118,7 +118,7 @@ See [Chapter 2](docs/user/02-install-lodestar-on-unraid-and-docker.md) for the U
 - **Search query syntax:** [`docs/query-language.md`](docs/query-language.md)
 - **Operations and environment variables:** [`docs/operations.md`](docs/operations.md)
 - **System architecture:** [`docs/architecture.md`](docs/architecture.md)
-- **Release notes (v0.5.0):** [`docs/releases/v0.5.0.md`](docs/releases/v0.5.0.md)
+- **Release notes:** [`docs/releases/`](docs/releases/). The first release will be v0.5.1.
 - **Brand assets and checksums:** [`brand/source/`](brand/source/) (`SHA256SUMS.txt`)
 
 ## Licence

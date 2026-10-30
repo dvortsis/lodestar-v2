@@ -1640,6 +1640,7 @@ dependencies = [
  "chardetng",
  "encoding_rs",
  "lodestar-bencode",
+ "lodestar-store",
  "proptest",
  "sha1",
  "sha2",

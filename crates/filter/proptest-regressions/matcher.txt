@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8fe7b74cf242a717f3a3dfcfe17bef1a3ab73abf7fa0a718d7df7f39335bf325 # shrinks to q = "-(\"x show 日本語\")", (name, paths) = ("Show.", []), neutral = true
