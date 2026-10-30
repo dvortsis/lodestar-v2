@@ -130,15 +130,23 @@ impl TextEncoding {
     /// Encodings a legacy BitTorrent client could have written names in:
     /// everything but UTF-8, UTF-16 and the placeholder encodings.
     pub(crate) fn legacy_candidates() -> impl Iterator<Item = TextEncoding> {
-        (1..ENCODINGS.len() as u8).map(TextEncoding).filter(|e| {
-            ![
-                encoding_rs::UTF_16BE,
-                encoding_rs::UTF_16LE,
-                encoding_rs::X_USER_DEFINED,
-                encoding_rs::REPLACEMENT,
-            ]
-            .contains(&e.encoding())
-        })
+        (1..ENCODINGS.len() as u8)
+            .map(TextEncoding)
+            .filter(TextEncoding::is_name_encoding)
+    }
+
+    /// Whether names could be in this encoding: UTF-8 and the legacy
+    /// candidates. UTF-16 can't hold bencoded names, and `replacement` and
+    /// `x-user-defined` aren't real charsets, so an encoding hint (a
+    /// `.torrent`'s `encoding` key) naming one is ignored.
+    pub(crate) fn is_name_encoding(&self) -> bool {
+        ![
+            encoding_rs::UTF_16BE,
+            encoding_rs::UTF_16LE,
+            encoding_rs::X_USER_DEFINED,
+            encoding_rs::REPLACEMENT,
+        ]
+        .contains(&self.encoding())
     }
 
     /// Encodes `text` into this encoding only if that is lossless: every

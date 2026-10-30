@@ -622,3 +622,70 @@ fn utf8_overrides_correct_a_wrong_encoding_guess() {
     let info = Info::parse_with(&to_vec(&multi("x", files, 16_384, 1)), &opts).unwrap();
     assert_eq!(info.path_encoding.name(), "EUC-KR");
 }
+
+#[test]
+fn resolved_paths_respect_the_byte_limit() {
+    // Decoding legacy text to UTF-8 (case 3) can triple its length.
+    let gbk = |s: &str| encoding_rs::GBK.encode(s).0.into_owned();
+    let files = |target: Vec<u8>, extra: &[u8]| {
+        vec![
+            d(vec![
+                ("length", i(1)),
+                ("path", l(vec![b(gbk("第一集"))])),
+                ("path.utf-8", path(&["한국어"])),
+            ]),
+            d(vec![
+                ("length", i(1)),
+                (
+                    "path",
+                    l(vec![b(
+                        [gbk("第二集 高清中文字幕"), extra.to_vec()].concat()
+                    )]),
+                ),
+            ]),
+            d(vec![
+                ("attr", b("l")),
+                ("path", l(vec![b(gbk("最新一集"))])),
+                ("symlink path", l(vec![b(target)])),
+            ]),
+        ]
+    };
+    let max = Limits::DEFAULT.max_path_bytes;
+    let info = parse(&multi("x", files(vec![0xff; max], b""), 16_384, 1)).unwrap();
+    assert_eq!(info.path_encoding, TextEncoding::UTF8);
+    assert!(info.files[2].attrs.contains(FileAttrs::SYMLINK));
+    assert_eq!(info.files[2].symlink_target, None, "grew past the limit");
+    for f in &info.files {
+        assert!(f.path.iter().map(Vec::len).sum::<usize>() <= max);
+    }
+
+    let err = parse(&multi("x", files(b"t".to_vec(), &[0xff; 3000]), 16_384, 1)).unwrap_err();
+    assert_eq!(
+        err,
+        Error::LimitExceeded {
+            what: "path length",
+            limit: max
+        }
+    );
+}
+
+#[test]
+fn non_charset_hints_are_ignored() {
+    let files = vec![d(vec![
+        ("length", i(1)),
+        ("path", l(vec![b(b"caf\xe9 cr\xe8me")])),
+    ])];
+    let v = multi("x", files, 16_384, 1);
+    for label in [&b"utf-16le"[..], b"replacement", b"x-user-defined"] {
+        let opts = ParseOptions {
+            encoding_hint: TextEncoding::for_label(label),
+            ..ParseOptions::default()
+        };
+        let info = Info::parse_with(&to_vec(&v), &opts).unwrap();
+        assert!(
+            ["windows-1252", "ISO-8859-2", "ISO-8859-15"].contains(&info.path_encoding.name()),
+            "{label:?} gave {:?}",
+            info.path_encoding
+        );
+    }
+}

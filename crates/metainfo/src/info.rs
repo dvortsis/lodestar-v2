@@ -360,7 +360,8 @@ impl Info {
                 unlabelled.extend(d.symlink_target.iter().flatten().copied());
             }
         }
-        let detected = legacy_encoding(&unlabelled, &drafts, opts.encoding_hint);
+        let hint = opts.encoding_hint.filter(TextEncoding::is_name_encoding);
+        let detected = legacy_encoding(&unlabelled, &drafts, hint);
         let name = match name_utf8 {
             Some(n) => Text {
                 raw: n.to_vec(),
@@ -371,7 +372,8 @@ impl Info {
                 encoding: detected,
             },
         };
-        let (path_encoding, paths) = resolve_paths(&drafts, detected);
+        let (path_encoding, mut paths) = resolve_paths(&drafts, detected);
+        enforce_path_limits(&mut paths, limits)?;
 
         let files = drafts
             .into_iter()
@@ -530,6 +532,34 @@ fn resolve_paths(
         let decode = |s: &[u8]| detected.decode(s).into_owned().into_bytes();
         (TextEncoding::UTF8, map_paths(drafts, raw, decode))
     }
+}
+
+/// Re-checks the byte limit on resolved paths: decoding legacy text to
+/// UTF-8 (up to 3 bytes per input byte) or re-encoding into a stateful
+/// encoding such as ISO-2022-JP can grow them. An over-limit path rejects
+/// the torrent, as it would have in the input; an over-limit symlink target
+/// is dropped and the link kept, as the parser does for input targets.
+/// Segment counts never change, so depth needs no re-check.
+fn enforce_path_limits(
+    paths: &mut [(OwnedPath, Option<OwnedPath>)],
+    limits: &Limits,
+) -> Result<(), Error> {
+    let bytes = |p: &OwnedPath| p.iter().map(Vec::len).sum::<usize>();
+    for (path, target) in paths {
+        if bytes(path) > limits.max_path_bytes {
+            return Err(Error::LimitExceeded {
+                what: "path length",
+                limit: limits.max_path_bytes,
+            });
+        }
+        if target
+            .as_ref()
+            .is_some_and(|t| bytes(t) > limits.max_path_bytes)
+        {
+            *target = None;
+        }
+    }
+    Ok(())
 }
 
 /// Converts every path and target segment: `labelled` for `path.utf-8`
