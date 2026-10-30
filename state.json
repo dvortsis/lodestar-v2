@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T22:20Z",
+ "updated_at": "2026-10-30T22:21Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1532,11 +1532,11 @@
    "notes": "launched 21:37Z"
   },
   "F-rollback-journal": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnASnWheCLRMWNr6pN1",
-   "pr": null,
-   "notes": "brief briefs/F-rollback-journal.md (L4 review I3); 21:50Z"
+   "pr": 241,
+   "notes": "brief briefs/F-rollback-journal.md (L4 review I3); 21:50Z | 22:21Z PR #241 head 00bc89ed; fresh Opus reviewer launched"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2211,7 +2211,8 @@
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
   "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
-  "F-filters-packs LU-1: the lure-file junk reason (lodestar-classify keyword matches) still ignores Neutralize; fails safe, but \u00a720.5.5 says every pack rule (#240 decisions)"
+  "F-filters-packs LU-1: the lure-file junk reason (lodestar-classify keyword matches) still ignores Neutralize; fails safe, but \u00a720.5.5 says every pack rule (#240 decisions)",
+  "F-rollback-holds (content safety): rollback doesn't carry holds recorded after the snapshot (CS-1, tombstones, quarantine) into the restored store; pre-existing (#241 decisions). Follow-up slice; the #241 reviewer assesses the risk."
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2330,7 +2331,8 @@
   "2026-10-30T21:39Z heartbeat: no open PRs; CR-SIM-restart running; the owner's rc.2 gates running. Heartbeat prompt refreshed to the current state.",
   "2026-10-30T21:48Z launched F-filters-packs (session_01MMjhn9HZcFZGjzvAkoTomC) and F-rollback-journal (session_01MMjhnASnWheCLRMWNr6pN1), Opus, frugal. Running: CR-SIM-restart, F-filters-packs, F-rollback-journal. Reconciled the stale slice statuses.",
   "2026-10-30T21:49Z launched S-appearance (Sonnet, session_01MMjhnCiTtdnyHjCTG1QFHP). Running: CR-SIM-restart, F-filters-packs, F-rollback-journal, S-appearance.",
-  "2026-10-30T22:20Z F-filters-packs opened #240 (43012ebb); fresh Opus reviewer session_01MMjhn8qZB2pn4AbkpKd1Li."
+  "2026-10-30T22:20Z F-filters-packs opened #240 (43012ebb); fresh Opus reviewer session_01MMjhn8qZB2pn4AbkpKd1Li.",
+  "2026-10-30T22:21Z F-rollback-journal opened #241 (00bc89ed); fresh reviewer launched. Holds follow-up recorded."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
