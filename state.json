@@ -967,7 +967,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "from #86"
+   "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater)."
   },
   "S-doc-shots": {
    "status": "pending",
@@ -1238,7 +1238,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions."
+   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears)."
   },
   "L7": {
    "status": "pending",
@@ -1790,6 +1790,11 @@
    "id": "OC10",
    "action": "Later: PostgreSQL 16 restore of the Bitmagnet dump per IMP-0 runbook; Unraid 24 h rc soak; Windows service-mode rc run",
    "unblocks": "IMP-3 pilots, G-v051"
+  },
+  {
+   "id": "OC8-F-updater",
+   "item": "F-updater: unreadable updater.json fails closed (auto-updates held in-process until an explicit pause/resume save) - runner refinement, \u00a72.19 veto window.",
+   "status": "open"
   }
  ]
 }
