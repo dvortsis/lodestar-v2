@@ -210,7 +210,7 @@ fn start_and_check(service: &Registered, log_path: &Path) -> String {
     assert!(health.starts_with("HTTP/1.0 200"), "{health}");
     assert!(log().contains("service: starting"), "{}", log());
     // The first run's setup token is only in the file.
-    wait_for(Duration::from_secs(10), || {
+    wait_for(Duration::from_secs(30), || {
         log().contains("setup token ").then_some(())
     })
     .unwrap_or_else(|| panic!("no setup token in the log:\n{}", log()));

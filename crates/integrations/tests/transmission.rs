@@ -13,7 +13,7 @@ use lodestar_integrations::{
     Secret, Selection, TorrentFile,
 };
 use serde_json::{Value, json};
-use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes, refused_addr};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
@@ -480,11 +480,8 @@ async fn oversized_truncated_or_html_answers_are_protocol_errors() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
-    let tr = Transmission::new(&format!("http://127.0.0.1:{port}/"), auth()).unwrap();
+    let (_held, addr) = refused_addr();
+    let tr = Transmission::new(&format!("http://{addr}/"), auth()).unwrap();
     assert_eq!(tr.test().await.unwrap_err(), ClientError::Unreachable);
 }
 

@@ -16,6 +16,7 @@ use crate::files::{IdSet, IdsQuery};
 use crate::filter::{CheckQuery, FastRange};
 use crate::query::{DateField, Node, NumField, ShareBy, TagKey, TextField, When};
 use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, STEM_SCORE, TITLE_BOOST, share_field};
+use crate::seek_guard::SeekGuard;
 use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
@@ -784,12 +785,13 @@ pub(crate) fn parts_query(field: Field, parts: &[Tok], positions: bool, slop: u3
         [one] => term(field, &one.text, IndexRecordOption::WithFreqs),
         many if positions => {
             let first = many[0].position;
-            Box::new(PhraseQuery::new_with_offset_and_slop(
+            // Guarded: tantivy asserts in a phrase excluded with `-`.
+            Box::new(SeekGuard(PhraseQuery::new_with_offset_and_slop(
                 many.iter()
                     .map(|t| (t.position - first, Term::from_field_text(field, &t.text)))
                     .collect(),
                 slop,
-            ))
+            )))
         }
         many => Box::new(BooleanQuery::new(
             many.iter()
