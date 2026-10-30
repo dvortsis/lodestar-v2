@@ -650,6 +650,16 @@ lodestar_log::catalogue! {
         message: "service: stopped",
         fields: {},
     }
+    /// CR-0d §1.5: the service's restart witness folder couldn't be made
+    /// private, so the DHT runs without one and suppresses after every
+    /// restart (`no_witness`).
+    SERVICE_WITNESS_REFUSED {
+        id: "service.witness_refused",
+        component: System,
+        level: Warn,
+        message: "service: the restart witness folder isn't private, so restarts wait out the sampling delay",
+        fields: { path: Path, error: Error },
+    }
     /// The Windows service stopped on an error.
     SERVICE_FAILED {
         id: "service.failed",

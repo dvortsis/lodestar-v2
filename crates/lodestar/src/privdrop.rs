@@ -933,7 +933,7 @@ mod tests {
         }
 
         #[test]
-        fn a_witness_dir_that_is_a_link_a_file_or_missing_is_left_alone() {
+        fn a_witness_dir_that_is_a_link_a_file_missing_or_the_root_is_left_alone() {
             let tmp = tempfile::tempdir().unwrap();
             let real = tmp.path().join("real");
             std::fs::create_dir(&real).unwrap();
@@ -946,7 +946,6 @@ mod tests {
                 (link, "symlink"),
                 (file, "not a directory"),
                 (tmp.path().join("missing"), "No such file"),
-                (std::path::PathBuf::from("/"), "filesystem root"),
             ] {
                 let line = chown_witness_dir(&dir, ids).to_string();
                 assert!(
@@ -954,6 +953,15 @@ mod tests {
                     "{line}"
                 );
             }
+            // `/` asked for its own owner, so a regression run as root
+            // changes nothing.
+            let root = std::path::Path::new("/");
+            let (uid, gid) = owner(root);
+            let line = chown_witness_dir(root, Ids { uid, gid }).to_string();
+            assert!(
+                line.contains("left as it is") && line.contains("filesystem root"),
+                "{line}"
+            );
         }
 
         fn is_root() -> bool {
