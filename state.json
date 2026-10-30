@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T21:52Z",
+ "updated_at": "2026-10-30T22:20Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1257,13 +1257,13 @@
    "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges | 2026-10-30T10:25Z #186 retargeted to main; land/L7 merged main -> ca08002d (docs only); CI running | 2026-10-30T10:30Z #186 merged 1199430f. L1-L7 all on main."
   },
   "F-filters-packs": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhn9HZcFZGjzvAkoTomC",
-   "pr": null,
+   "pr": 240,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src) | 2026-10-30T21:45Z brief briefs/F-filters-packs.md; unblocked (#192 merged); launching"
+   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src) | 2026-10-30T21:45Z brief briefs/F-filters-packs.md; unblocked (#192 merged); launching | 22:19Z PR #240 head 43012ebb; reviewer session_01MMjhn8qZB2pn4AbkpKd1Li"
   },
   "X-ci-health": {
    "status": "merged",
@@ -2186,6 +2186,11 @@
    "item": "FYI (\u00a72.19): lodestar_metadata_excluded_total{reason=\"failed_verification\"} now counts only keys whose last fetch failure was a hash mismatch (#236, runner refinement). Protocol and handshake violations stay funnel 'invalid' and appear in fetch_lost_total{reason=\"invalid\"}. The gate's number doesn't move: the excluded series are diagnostics. A new fetch-failure label, hash_mismatch, is additive.",
    "unblocks": "nothing; acknowledge or overrule",
    "at": "2026-10-30T20:33Z"
+  },
+  {
+   "item": "FYI (\u00a72.19) on #240 merge: pack guards (FK-2 trailer/sample, SC-1 trainer/mod/offline) read the torrent as it is, so neutralizing never widens a pack rule; FK-2 (guard-only keywords) unchanged. LU-1's lure-file reason is a stated follow-up.",
+   "at": "2026-10-30T22:20Z",
+   "status": "pending-merge"
   }
  ],
  "external_gates": {
@@ -2205,7 +2210,8 @@
   "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
-  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)"
+  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
+  "F-filters-packs LU-1: the lure-file junk reason (lodestar-classify keyword matches) still ignores Neutralize; fails safe, but \u00a720.5.5 says every pack rule (#240 decisions)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2323,7 +2329,8 @@
   "2026-10-30T21:37Z merged #239 X-crawler-sim-crate (a0cdf84a). Launched CR-SIM-restart (Opus, session_01MMjhn9zPWSCmVk1uqpWy9M). Shared reviewer session_01MMjhn984M3k3UJXUCsEYPX archived (nothing pending); new PRs get a fresh reviewer.",
   "2026-10-30T21:39Z heartbeat: no open PRs; CR-SIM-restart running; the owner's rc.2 gates running. Heartbeat prompt refreshed to the current state.",
   "2026-10-30T21:48Z launched F-filters-packs (session_01MMjhn9HZcFZGjzvAkoTomC) and F-rollback-journal (session_01MMjhnASnWheCLRMWNr6pN1), Opus, frugal. Running: CR-SIM-restart, F-filters-packs, F-rollback-journal. Reconciled the stale slice statuses.",
-  "2026-10-30T21:49Z launched S-appearance (Sonnet, session_01MMjhnCiTtdnyHjCTG1QFHP). Running: CR-SIM-restart, F-filters-packs, F-rollback-journal, S-appearance."
+  "2026-10-30T21:49Z launched S-appearance (Sonnet, session_01MMjhnCiTtdnyHjCTG1QFHP). Running: CR-SIM-restart, F-filters-packs, F-rollback-journal, S-appearance.",
+  "2026-10-30T22:20Z F-filters-packs opened #240 (43012ebb); fresh Opus reviewer session_01MMjhn8qZB2pn4AbkpKd1Li."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
