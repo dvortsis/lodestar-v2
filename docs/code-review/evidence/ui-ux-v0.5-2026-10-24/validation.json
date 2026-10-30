@@ -1,0 +1,1185 @@
+{
+  "date": "2026-10-24 America/Denver",
+  "commit": "ad0ec5a84555b8b36e7ae94ed515b84ad6d46e02",
+  "browser": "Installed Google Chrome, Playwright 1.56.1, Windows",
+  "data": "Existing OpenAPI mock and hand-built fixtures; not a live-backend reconciliation",
+  "build": "Current source, production Vite preview, VITE_DEV_ROUTES=1; temporary resolver disambiguated shell.svelte.ts on Windows; no source fixes",
+  "routeSurvey": [
+    {
+      "route": "/alerts/1",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/alerts/1",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/alerts/1",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/alerts/1",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/alerts/1",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/alerts/1",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/alerts/1",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/alerts",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": [
+        {
+          "id": "landmark-unique",
+          "impact": "moderate",
+          "nodes": [
+            {
+              "html": "<section aria-labelledby=\"compare-attr-files\" data-testid=\"compare-row-files\">",
+              "summary": "Fix any of the following:\n  The landmark must have a unique aria-label, aria-labelledby, or title to make landmarks distinguishable"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/compare?h=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/discover",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/insights",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/insights/harvest",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/login",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/search",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/settings/general",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/setup",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": [
+        {
+          "id": "heading-order",
+          "impact": "moderate",
+          "nodes": [
+            {
+              "html": "<h4 class=\"font-medium\">Composition</h4>",
+              "summary": "Fix any of the following:\n  Heading order invalid"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": [
+        {
+          "id": "heading-order",
+          "impact": "moderate",
+          "nodes": [
+            {
+              "html": "<h4 class=\"font-medium\">Composition</h4>",
+              "summary": "Fix any of the following:\n  Heading order invalid"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/t/0123456789abcdef0123456789abcdef00000000",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 1366,
+      "scrollWidth": 1366,
+      "clientWidth": 1366,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 2560,
+      "scrollWidth": 2560,
+      "clientWidth": 2560,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 320,
+      "scrollWidth": 320,
+      "clientWidth": 320,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 390,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "violations": []
+    },
+    {
+      "route": "/welcome",
+      "width": 768,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "violations": []
+    }
+  ],
+  "themes": [
+    {
+      "theme": "ayu-dark",
+      "violations": []
+    },
+    {
+      "theme": "ayu-light",
+      "violations": []
+    },
+    {
+      "theme": "catppuccin-dark",
+      "violations": []
+    },
+    {
+      "theme": "catppuccin-light",
+      "violations": []
+    },
+    {
+      "theme": "dracula-dark",
+      "violations": []
+    },
+    {
+      "theme": "dracula-light",
+      "violations": []
+    },
+    {
+      "theme": "ember-dark",
+      "violations": []
+    },
+    {
+      "theme": "ember-light",
+      "violations": []
+    },
+    {
+      "theme": "everforest-dark",
+      "violations": []
+    },
+    {
+      "theme": "everforest-light",
+      "violations": []
+    },
+    {
+      "theme": "graphite-dark",
+      "violations": []
+    },
+    {
+      "theme": "graphite-light",
+      "violations": []
+    },
+    {
+      "theme": "gruvbox-dark",
+      "violations": []
+    },
+    {
+      "theme": "gruvbox-light",
+      "violations": []
+    },
+    {
+      "theme": "high-contrast-dark",
+      "violations": []
+    },
+    {
+      "theme": "high-contrast-light",
+      "violations": []
+    },
+    {
+      "theme": "kanagawa-dark",
+      "violations": []
+    },
+    {
+      "theme": "kanagawa-light",
+      "violations": []
+    },
+    {
+      "theme": "lavender-field-dark",
+      "violations": []
+    },
+    {
+      "theme": "lavender-field-light",
+      "violations": []
+    },
+    {
+      "theme": "midnight-dark",
+      "violations": []
+    },
+    {
+      "theme": "midnight-light",
+      "violations": []
+    },
+    {
+      "theme": "moss-dark",
+      "violations": []
+    },
+    {
+      "theme": "moss-light",
+      "violations": []
+    },
+    {
+      "theme": "nord-dark",
+      "violations": []
+    },
+    {
+      "theme": "nord-light",
+      "violations": []
+    },
+    {
+      "theme": "okabe-ito-dark",
+      "violations": []
+    },
+    {
+      "theme": "okabe-ito-light",
+      "violations": []
+    },
+    {
+      "theme": "one-dark",
+      "violations": []
+    },
+    {
+      "theme": "one-light",
+      "violations": []
+    },
+    {
+      "theme": "paper-ink-dark",
+      "violations": []
+    },
+    {
+      "theme": "paper-ink-light",
+      "violations": []
+    },
+    {
+      "theme": "riverstone-dark",
+      "violations": []
+    },
+    {
+      "theme": "riverstone-light",
+      "violations": []
+    },
+    {
+      "theme": "rose-pine-dark",
+      "violations": []
+    },
+    {
+      "theme": "rose-pine-light",
+      "violations": []
+    },
+    {
+      "theme": "rosewood-dark",
+      "violations": []
+    },
+    {
+      "theme": "rosewood-light",
+      "violations": []
+    },
+    {
+      "theme": "sandstone-dark",
+      "violations": []
+    },
+    {
+      "theme": "sandstone-light",
+      "violations": []
+    },
+    {
+      "theme": "sepia-dark",
+      "violations": []
+    },
+    {
+      "theme": "sepia-light",
+      "violations": []
+    },
+    {
+      "theme": "solarized-dark",
+      "violations": []
+    },
+    {
+      "theme": "solarized-light",
+      "violations": []
+    },
+    {
+      "theme": "tidewater-dark",
+      "violations": []
+    },
+    {
+      "theme": "tidewater-light",
+      "violations": []
+    },
+    {
+      "theme": "tokyo-night-dark",
+      "violations": []
+    },
+    {
+      "theme": "tokyo-night-light",
+      "violations": []
+    }
+  ],
+  "probes": {
+    "drawerFullShiftTab": {
+      "tag": "DIV",
+      "text": "Lantern Keeper 1 Lantern.Keeper.1.1080p   TVPrivate   99% Video 2.70 GiB 3 files Seeders: ",
+      "drawer": false,
+      "rect": {
+        "x": 16,
+        "y": 108,
+        "width": 358,
+        "height": 64,
+        "top": 108,
+        "right": 374,
+        "bottom": 172,
+        "left": 16
+      },
+      "covered": true
+    },
+    "drawerBrowserBack": {
+      "tag": "BODY",
+      "text": "(function(){var b=document.getElementById('boot');if(!b)return;var p=location.pathname,L=/",
+      "drawer": false,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 1111,
+        "top": 0,
+        "right": 390,
+        "bottom": 1111,
+        "left": 0
+      },
+      "covered": false
+    },
+    "drawerDefault": {
+      "viewport": 1366,
+      "scrollWidth": 1448,
+      "grid": "264px 560px 560px",
+      "drawer": {
+        "x": 888,
+        "y": 207,
+        "width": 560,
+        "height": 1287,
+        "top": 207,
+        "right": 1448,
+        "bottom": 1494,
+        "left": 888
+      }
+    },
+    "drawer640": {
+      "viewport": 1366,
+      "scrollWidth": 1528,
+      "grid": "264px 560px 640px",
+      "drawer": {
+        "x": 888,
+        "y": 207,
+        "width": 640,
+        "height": 1287,
+        "top": 207,
+        "right": 1528,
+        "bottom": 1494,
+        "left": 888
+      }
+    },
+    "insightsJump": {
+      "heading": {
+        "x": 16,
+        "y": 0,
+        "width": 288,
+        "height": 26,
+        "top": 0,
+        "right": 304,
+        "bottom": 26,
+        "left": 16
+      },
+      "bar": {
+        "x": 16,
+        "y": 0,
+        "width": 288,
+        "height": 276,
+        "top": 0,
+        "right": 304,
+        "bottom": 276,
+        "left": 16
+      }
+    },
+    "discoverAllTransfer": {
+      "url": "http://127.0.0.1:4173/search?sort=-discovered",
+      "searchCalls": 0,
+      "query": ""
+    },
+    "analytics": {
+      "grain": "hour, UTC",
+      "rows": 48,
+      "first": "Wed, Oct 21, 2026, 12:00 UTC100",
+      "missing": [
+        "Wed, Oct 21, 2026, 19:00 UTC—",
+        "Wed, Oct 21, 2026, 20:00 UTC—"
+      ],
+      "last": "Fri, Oct 23, 2026, 11:00 UTC429",
+      "independent": "100+47*7=429; null buckets remain em dashes; stored literal 40012 -> 40,012; KPI literal1234567 ->1.2M"
+    },
+    "touchRows": [
+      {
+        "class": "rr-title",
+        "text": "Lantern Keeper 1",
+        "rect": {
+          "x": 28,
+          "y": 413,
+          "width": 162.453125,
+          "height": 20,
+          "top": 413,
+          "right": 190.453125,
+          "bottom": 433,
+          "left": 28
+        }
+      },
+      {
+        "class": "rr-fact rr-comp",
+        "text": "99% Video",
+        "rect": {
+          "x": 118.609375,
+          "y": 451,
+          "width": 132.484375,
+          "height": 18,
+          "top": 451,
+          "right": 251.09375,
+          "bottom": 469,
+          "left": 118.609375
+        }
+      },
+      {
+        "class": "rr-fact",
+        "text": "2.70 GiB",
+        "rect": {
+          "x": 267.09375,
+          "y": 451,
+          "width": 51.296875,
+          "height": 18,
+          "top": 451,
+          "right": 318.390625,
+          "bottom": 469,
+          "left": 267.09375
+        }
+      },
+      {
+        "class": "rr-fact",
+        "text": "3 files",
+        "rect": {
+          "x": 334.390625,
+          "y": 451,
+          "width": 35.828125,
+          "height": 18,
+          "top": 451,
+          "right": 370.21875,
+          "bottom": 469,
+          "left": 334.390625
+        }
+      },
+      {
+        "class": "rr-fact",
+        "text": "Seeders: 120 Leechers: 4",
+        "rect": {
+          "x": 386.21875,
+          "y": 451,
+          "width": 76.875,
+          "height": 18,
+          "top": 451,
+          "right": 463.09375,
+          "bottom": 469,
+          "left": 386.21875
+        }
+      },
+      {
+        "class": "rr-fact",
+        "text": "Trackers reporting: 4 / 20Reported by 4 of 20 trac",
+        "rect": {
+          "x": 479.09375,
+          "y": 451,
+          "width": 36.96875,
+          "height": 18,
+          "top": 451,
+          "right": 516.0625,
+          "bottom": 469,
+          "left": 479.09375
+        }
+      },
+      {
+        "class": "rr-fact",
+        "text": "Discovered: 2 years ago (Nov 14, 2023, 15:13)",
+        "rect": {
+          "x": 532.0625,
+          "y": 451,
+          "width": 66.78125,
+          "height": 18,
+          "top": 451,
+          "right": 598.84375,
+          "bottom": 469,
+          "left": 532.0625
+        }
+      },
+      {
+        "class": "rr-actions",
+        "text": "Copy magnet",
+        "rect": {
+          "x": 202.453125,
+          "y": 419,
+          "width": 159.546875,
+          "height": 44,
+          "top": 419,
+          "right": 362,
+          "bottom": 463,
+          "left": 202.453125
+        }
+      },
+      {
+        "class": "rr-action",
+        "text": "Copy magnet",
+        "rect": {
+          "x": 202.453125,
+          "y": 419,
+          "width": 111.546875,
+          "height": 44,
+          "top": 419,
+          "right": 314,
+          "bottom": 463,
+          "left": 202.453125
+        }
+      },
+      {
+        "class": "rr-action",
+        "text": "",
+        "rect": {
+          "x": 318,
+          "y": 419,
+          "width": 44,
+          "height": 44,
+          "top": 419,
+          "right": 362,
+          "bottom": 463,
+          "left": 318
+        }
+      }
+    ],
+    "rootTextStress": {
+      "row": {
+        "x": 32,
+        "y": 784.5,
+        "width": 576,
+        "height": 64,
+        "top": 784.5,
+        "right": 608,
+        "bottom": 848.5,
+        "left": 32
+      },
+      "children": [
+        {
+          "class": "rr-title",
+          "rect": {
+            "x": 56,
+            "y": 786.25,
+            "width": 297.203125,
+            "height": 21,
+            "top": 786.25,
+            "right": 353.203125,
+            "bottom": 807.25,
+            "left": 56
+          },
+          "scroll": 21,
+          "client": 21
+        },
+        {
+          "class": "rr-raw",
+          "rect": {
+            "x": 56,
+            "y": 807.25,
+            "width": 297.203125,
+            "height": 19.5,
+            "top": 807.25,
+            "right": 353.203125,
+            "bottom": 826.75,
+            "left": 56
+          },
+          "scroll": 20,
+          "client": 20
+        },
+        {
+          "class": "rr-facts",
+          "rect": {
+            "x": 56,
+            "y": 826.75,
+            "width": 297.203125,
+            "height": 20,
+            "top": 826.75,
+            "right": 353.203125,
+            "bottom": 846.75,
+            "left": 56
+          },
+          "scroll": 20,
+          "client": 20
+        }
+      ]
+    }
+  },
+  "testReports": [
+    {
+      "run": ".audit-results",
+      "stats": {
+        "startTime": "2026-10-25T02:43:18.781Z",
+        "duration": 197272.076,
+        "expected": 205,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      }
+    },
+    {
+      "run": ".audit-probe-results",
+      "stats": {
+        "startTime": "2026-10-25T02:45:11.014Z",
+        "duration": 157095.699,
+        "expected": 51,
+        "skipped": 0,
+        "unexpected": 1,
+        "flaky": 0
+      }
+    },
+    {
+      "run": ".audit-extra-results",
+      "stats": {
+        "startTime": "2026-10-25T02:49:05.715Z",
+        "duration": 5047.764,
+        "expected": 1,
+        "skipped": 0,
+        "unexpected": 1,
+        "flaky": 0
+      }
+    },
+    {
+      "run": ".audit-overflow-results",
+      "stats": {
+        "startTime": "2026-10-25T02:49:37.27Z",
+        "duration": 4431.527,
+        "expected": 2,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      }
+    }
+  ],
+  "followup": {
+    "focusProbe": "1 passed on rerun after changing initial activation to a pointer click; initial immediate scripted focus/Enter did not open drawer",
+    "longCjkProbe": "1 real failed assertion: 1448px document at 1366px after opening drawer; reproduced independently with ordinary names and default width",
+    "themeUnit": "Initial 75 passed, 26 failed: 25 LF-only docs parser and 1 byte-for-byte generated CSS CRLF comparison; no source changes. Follow-up six all-family gate tests passed; CLI --no-write reports 48 themes pass."
+  },
+  "limitations": [
+    "No actual screen-reader session, native browser zoom session, Firefox/Safari run or production-device touch test",
+    "200% root font stress is not native browser zoom and does not scale fixed pixel type uniformly",
+    "48-theme axe sample is Insights at desktop, not every interaction on every route",
+    "Route survey records axe results without failing its collection tests; compare320 has landmark-unique and full detail at320/1366 has heading-order",
+    "No performance/Lighthouse measurements or live backend validation; shipped binary lacked fixture feature"
+  ]
+}

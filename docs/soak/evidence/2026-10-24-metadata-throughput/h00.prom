@@ -1,0 +1,323 @@
+# HELP lodestar_start_time_seconds Unix time the pipeline started.
+# TYPE lodestar_start_time_seconds gauge
+lodestar_start_time_seconds 1792853030
+# HELP lodestar_torrents Torrents stored.
+# TYPE lodestar_torrents gauge
+lodestar_torrents 7
+# HELP lodestar_floor_removals_kept_total Locked-floor entries a config file or a floor-marked list dropped, kept until removed in the app (counted at each start and list refresh).
+# TYPE lodestar_floor_removals_kept_total counter
+lodestar_floor_removals_kept_total 0
+# HELP lodestar_source_up Whether each source plugin is running.
+# TYPE lodestar_source_up gauge
+lodestar_source_up{source="dht"} 1
+# HELP lodestar_source_dropped_total Keys a source dropped because the pipeline was full.
+# TYPE lodestar_source_dropped_total counter
+lodestar_source_dropped_total{source="dht"} 0
+# HELP lodestar_intake_received_total Keys reported by sources.
+# TYPE lodestar_intake_received_total counter
+lodestar_intake_received_total 29255
+# HELP lodestar_intake_known_total Keys the have-filter says are stored.
+# TYPE lodestar_intake_known_total counter
+lodestar_intake_known_total 0
+# HELP lodestar_intake_new_total Keys sent to the fetch pool.
+# TYPE lodestar_intake_new_total counter
+lodestar_intake_new_total 29255
+# HELP lodestar_intake_dropped_total Rediscoveries dropped while the writer was behind.
+# TYPE lodestar_intake_dropped_total counter
+lodestar_intake_dropped_total 0
+# HELP lodestar_intake_refused_total Keys refused before fetching: CS-1 hashes, tombstones and quarantine.
+# TYPE lodestar_intake_refused_total counter
+lodestar_intake_refused_total 0
+# HELP lodestar_fetch_pending Keys queued or being fetched.
+# TYPE lodestar_fetch_pending gauge
+lodestar_fetch_pending 29248
+# HELP lodestar_fetch_active Metadata fetches in progress.
+# TYPE lodestar_fetch_active gauge
+lodestar_fetch_active 19
+# HELP lodestar_fetch_lookups Peer lookups in flight.
+# TYPE lodestar_fetch_lookups gauge
+lodestar_fetch_lookups 256
+# HELP lodestar_fetch_lookup_backlog Keys waiting for a lookup slot.
+# TYPE lodestar_fetch_lookup_backlog gauge
+lodestar_fetch_lookup_backlog 28731
+# HELP lodestar_fetch_attempts_total Metadata fetches attempted, by transport.
+# TYPE lodestar_fetch_attempts_total counter
+lodestar_fetch_attempts_total{transport="tcp"} 136
+lodestar_fetch_attempts_total{transport="utp"} 0
+# HELP lodestar_fetch_success_total Info dictionaries fetched and verified, by transport.
+# TYPE lodestar_fetch_success_total counter
+lodestar_fetch_success_total{transport="tcp"} 7
+lodestar_fetch_success_total{transport="utp"} 0
+# HELP lodestar_fetch_connect_timeouts_total Peer connections that didn't open in time, by transport.
+# TYPE lodestar_fetch_connect_timeouts_total counter
+lodestar_fetch_connect_timeouts_total{transport="tcp"} 70
+lodestar_fetch_connect_timeouts_total{transport="utp"} 0
+# HELP lodestar_fetch_duplicates_total Keys already queued or just fetched.
+# TYPE lodestar_fetch_duplicates_total counter
+lodestar_fetch_duplicates_total 41
+# HELP lodestar_fetch_failures_total Failed fetch attempts by kind.
+# TYPE lodestar_fetch_failures_total counter
+lodestar_fetch_failures_total{kind="unreachable"} 19
+lodestar_fetch_failures_total{kind="timed_out"} 70
+lodestar_fetch_failures_total{kind="refused"} 21
+lodestar_fetch_failures_total{kind="encryption_failed"} 0
+lodestar_fetch_failures_total{kind="invalid"} 0
+lodestar_fetch_failures_total{kind="oversize"} 0
+# HELP lodestar_fetch_lost_total Keys that left the pool without metadata, by reason.
+# TYPE lodestar_fetch_lost_total counter
+lodestar_fetch_lost_total{reason="no_peers"} 0
+lodestar_fetch_lost_total{reason="timed_out"} 0
+lodestar_fetch_lost_total{reason="refused"} 0
+lodestar_fetch_lost_total{reason="encryption_failed"} 0
+lodestar_fetch_lost_total{reason="oversize"} 0
+lodestar_fetch_lost_total{reason="invalid"} 0
+lodestar_fetch_lost_total{reason="blocked"} 0
+lodestar_fetch_lost_total{reason="evicted"} 0
+lodestar_fetch_lost_total{reason="gave_up"} 0
+lodestar_fetch_lost_total{reason="unreachable"} 0
+# HELP lodestar_writer_stored_total Torrents newly stored.
+# TYPE lodestar_writer_stored_total counter
+lodestar_writer_stored_total 7
+# HELP lodestar_writer_existing_total Fetched torrents that were already stored.
+# TYPE lodestar_writer_existing_total counter
+lodestar_writer_existing_total 0
+# HELP lodestar_writer_invalid_total Verified dictionaries that aren't usable metainfo.
+# TYPE lodestar_writer_invalid_total counter
+lodestar_writer_invalid_total 0
+# HELP lodestar_writer_blocked_total Torrents dropped by a content filter rule.
+# TYPE lodestar_writer_blocked_total counter
+lodestar_writer_blocked_total 0
+# HELP lodestar_writer_quarantined_total Torrents held in quarantine by a content filter rule.
+# TYPE lodestar_writer_quarantined_total counter
+lodestar_writer_quarantined_total 0
+# HELP lodestar_writer_rediscovered_total Stored torrents seen again.
+# TYPE lodestar_writer_rediscovered_total counter
+lodestar_writer_rediscovered_total 0
+# HELP lodestar_writer_filter_false_positives_total Have-filter answers the store contradicted.
+# TYPE lodestar_writer_filter_false_positives_total counter
+lodestar_writer_filter_false_positives_total 0
+# HELP lodestar_writer_transactions_total Store transactions committed.
+# TYPE lodestar_writer_transactions_total counter
+lodestar_writer_transactions_total 18
+# HELP lodestar_writer_errors_total Failed store writes.
+# TYPE lodestar_writer_errors_total counter
+lodestar_writer_errors_total 0
+# HELP lodestar_writer_enriched_total Stored torrents enriched in the background (§6).
+# TYPE lodestar_writer_enriched_total counter
+lodestar_writer_enriched_total 0
+# HELP lodestar_writer_last_commit_seconds Unix time of the last commit.
+# TYPE lodestar_writer_last_commit_seconds gauge
+lodestar_writer_last_commit_seconds 1792853085
+# HELP lodestar_leases_granted_total New keys leased to a worker (each counted as harvested once).
+# TYPE lodestar_leases_granted_total counter
+lodestar_leases_granted_total 29255
+# HELP lodestar_leases_held_total Claims for keys already leased; their source joined the lease.
+# TYPE lodestar_leases_held_total counter
+lodestar_leases_held_total 0
+# HELP lodestar_leases_stale_total Reports and results under a token that was no longer current.
+# TYPE lodestar_leases_stale_total counter
+lodestar_leases_stale_total 0
+# HELP lodestar_leases_expired_total Leases taken back from silent workers.
+# TYPE lodestar_leases_expired_total counter
+lodestar_leases_expired_total 0
+# HELP lodestar_leases_outstanding Keys leased and in flight.
+# TYPE lodestar_leases_outstanding gauge
+lodestar_leases_outstanding 29248
+# HELP lodestar_have_entries Hashes in the have-filter.
+# TYPE lodestar_have_entries gauge
+lodestar_have_entries 7
+# HELP lodestar_have_capacity Have-filter capacity before a rebuild.
+# TYPE lodestar_have_capacity gauge
+lodestar_have_capacity 1048576
+# HELP lodestar_have_bytes Have-filter memory.
+# TYPE lodestar_have_bytes gauge
+lodestar_have_bytes 1310720
+# HELP lodestar_dht_routing_nodes Nodes in the routing tables.
+# TYPE lodestar_dht_routing_nodes gauge
+lodestar_dht_routing_nodes 76
+# HELP lodestar_dht_outstanding Queries awaiting a reply.
+# TYPE lodestar_dht_outstanding gauge
+lodestar_dht_outstanding 231
+# HELP lodestar_dht_reply_ratio Responses per query sent (collapses under NAT saturation).
+# TYPE lodestar_dht_reply_ratio gauge
+lodestar_dht_reply_ratio 0.567129023815755
+# HELP lodestar_dht_packets_in_total UDP packets received.
+# TYPE lodestar_dht_packets_in_total counter
+lodestar_dht_packets_in_total 4547
+# HELP lodestar_dht_packets_out_total UDP packets sent.
+# TYPE lodestar_dht_packets_out_total counter
+lodestar_dht_packets_out_total 7659
+# HELP lodestar_dht_malformed_total Undecodable packets received.
+# TYPE lodestar_dht_malformed_total counter
+lodestar_dht_malformed_total 196
+# HELP lodestar_dht_denied_total Packets to or from addresses on a subscribed IP blocklist.
+# TYPE lodestar_dht_denied_total counter
+lodestar_dht_denied_total 0
+# HELP lodestar_dht_queries_in_total Queries received.
+# TYPE lodestar_dht_queries_in_total counter
+lodestar_dht_queries_in_total 17
+# HELP lodestar_dht_queries_out_total Queries sent.
+# TYPE lodestar_dht_queries_out_total counter
+lodestar_dht_queries_out_total 7642
+# HELP lodestar_dht_responses_in_total Responses received.
+# TYPE lodestar_dht_responses_in_total counter
+lodestar_dht_responses_in_total 4138
+# HELP lodestar_dht_timeouts_total Queries that timed out.
+# TYPE lodestar_dht_timeouts_total counter
+lodestar_dht_timeouts_total 3082
+# HELP lodestar_dht_throttled_total Queries held back by the rate limit.
+# TYPE lodestar_dht_throttled_total counter
+lodestar_dht_throttled_total 116
+# HELP lodestar_dht_lookups_completed_total get_peers lookups finished.
+# TYPE lodestar_dht_lookups_completed_total counter
+lodestar_dht_lookups_completed_total 41
+# HELP lodestar_dht_scrapes_requested_total BEP 33 scrapes asked of the DHT node.
+# TYPE lodestar_dht_scrapes_requested_total counter
+lodestar_dht_scrapes_requested_total 7
+# HELP lodestar_dht_scrapes_completed_total BEP 33 scrape lookups finished.
+# TYPE lodestar_dht_scrapes_completed_total counter
+lodestar_dht_scrapes_completed_total 1
+# HELP lodestar_dht_scrapes_with_responders_total BEP 33 scrapes where at least one node sent filters.
+# TYPE lodestar_dht_scrapes_with_responders_total counter
+lodestar_dht_scrapes_with_responders_total 1
+# HELP lodestar_dht_scrapes_dropped_total BEP 33 scrapes refused because the queue was full.
+# TYPE lodestar_dht_scrapes_dropped_total counter
+lodestar_dht_scrapes_dropped_total 0
+# HELP lodestar_dht_harvest_dropped_total Harvests dropped because the pipeline was full.
+# TYPE lodestar_dht_harvest_dropped_total counter
+lodestar_dht_harvest_dropped_total 0
+# HELP lodestar_dht_harvested_total Info hashes harvested by strategy.
+# TYPE lodestar_dht_harvested_total counter
+lodestar_dht_harvested_total{strategy="sample"} 28699
+lodestar_dht_harvested_total{strategy="get_peers"} 7
+lodestar_dht_harvested_total{strategy="announce"} 0
+# HELP lodestar_search_docs Torrents in the search index.
+# TYPE lodestar_search_docs gauge
+lodestar_search_docs 7
+# HELP lodestar_search_watermark Highest torrent id searchable.
+# TYPE lodestar_search_watermark gauge
+lodestar_search_watermark 7
+# HELP lodestar_search_indexed_total Torrents indexed or re-indexed since start, counted at commit.
+# TYPE lodestar_search_indexed_total counter
+lodestar_search_indexed_total 7
+# HELP lodestar_search_commits_total Index commits.
+# TYPE lodestar_search_commits_total counter
+lodestar_search_commits_total 5
+# HELP lodestar_search_errors_total Indexer errors (store reads and commits); each is retried.
+# TYPE lodestar_search_errors_total counter
+lodestar_search_errors_total 0
+# HELP lodestar_search_last_commit_seconds Unix time of the last index commit.
+# TYPE lodestar_search_last_commit_seconds gauge
+lodestar_search_last_commit_seconds 1792853080
+# HELP lodestar_scrape_rounds_total Scrape rounds started.
+# TYPE lodestar_scrape_rounds_total counter
+lodestar_scrape_rounds_total 3
+# HELP lodestar_scrape_torrents_total Torrents scraped, by what the round found.
+# TYPE lodestar_scrape_torrents_total counter
+lodestar_scrape_torrents_total{result="alive"} 1
+lodestar_scrape_torrents_total{result="dead"} 0
+lodestar_scrape_torrents_total{result="unreached"} 0
+# HELP lodestar_scrape_suspect_total Scrapes the swarm-consistency check flagged as fake seeding.
+# TYPE lodestar_scrape_suspect_total counter
+lodestar_scrape_suspect_total 0
+# HELP lodestar_scrape_private_skipped_total Private torrents taken from a lane and never scraped.
+# TYPE lodestar_scrape_private_skipped_total counter
+lodestar_scrape_private_skipped_total 0
+# HELP lodestar_scrape_fresh_skipped_total Torrents dropped from a lane as already fresh: hints for recent scrapes, and new or due torrents scraped since they were queued.
+# TYPE lodestar_scrape_fresh_skipped_total counter
+lodestar_scrape_fresh_skipped_total 0
+# HELP lodestar_scrape_dht_busy_total DHT scrapes not asked because the node was busy with others.
+# TYPE lodestar_scrape_dht_busy_total counter
+lodestar_scrape_dht_busy_total 0
+# HELP lodestar_scrape_hints_dropped_total Interest and rediscovery hints dropped because a lane was full.
+# TYPE lodestar_scrape_hints_dropped_total counter
+lodestar_scrape_hints_dropped_total 0
+# HELP lodestar_scrape_dht_requested_total DHT (BEP 33) scrapes the scheduler asked for.
+# TYPE lodestar_scrape_dht_requested_total counter
+lodestar_scrape_dht_requested_total 7
+# HELP lodestar_scrape_dht_estimates_total DHT scrapes that returned an estimate.
+# TYPE lodestar_scrape_dht_estimates_total counter
+lodestar_scrape_dht_estimates_total 1
+# HELP lodestar_scrape_stored_total Scrape results committed to the store.
+# TYPE lodestar_scrape_stored_total counter
+lodestar_scrape_stored_total 1
+# HELP lodestar_tracker_rounds_total Scrape rounds per tracker, by outcome.
+# TYPE lodestar_tracker_rounds_total counter
+lodestar_tracker_rounds_total{tracker="1",outcome="ok"} 3
+lodestar_tracker_rounds_total{tracker="1",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="1",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="1",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="1",outcome="skipped"} 0
+lodestar_tracker_rounds_total{tracker="1",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="2",outcome="ok"} 3
+lodestar_tracker_rounds_total{tracker="2",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="2",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="2",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="2",outcome="skipped"} 0
+lodestar_tracker_rounds_total{tracker="2",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="3",outcome="ok"} 0
+lodestar_tracker_rounds_total{tracker="3",outcome="timeout"} 1
+lodestar_tracker_rounds_total{tracker="3",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="3",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="3",outcome="skipped"} 2
+lodestar_tracker_rounds_total{tracker="3",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="4",outcome="ok"} 3
+lodestar_tracker_rounds_total{tracker="4",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="4",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="4",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="4",outcome="skipped"} 0
+lodestar_tracker_rounds_total{tracker="4",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="5",outcome="ok"} 0
+lodestar_tracker_rounds_total{tracker="5",outcome="timeout"} 1
+lodestar_tracker_rounds_total{tracker="5",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="5",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="5",outcome="skipped"} 2
+lodestar_tracker_rounds_total{tracker="5",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="6",outcome="ok"} 3
+lodestar_tracker_rounds_total{tracker="6",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="6",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="6",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="6",outcome="skipped"} 0
+lodestar_tracker_rounds_total{tracker="6",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="7",outcome="ok"} 0
+lodestar_tracker_rounds_total{tracker="7",outcome="timeout"} 1
+lodestar_tracker_rounds_total{tracker="7",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="7",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="7",outcome="skipped"} 2
+lodestar_tracker_rounds_total{tracker="7",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="8",outcome="ok"} 0
+lodestar_tracker_rounds_total{tracker="8",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="8",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="8",outcome="error"} 1
+lodestar_tracker_rounds_total{tracker="8",outcome="skipped"} 2
+lodestar_tracker_rounds_total{tracker="8",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="9",outcome="ok"} 3
+lodestar_tracker_rounds_total{tracker="9",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="9",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="9",outcome="error"} 0
+lodestar_tracker_rounds_total{tracker="9",outcome="skipped"} 0
+lodestar_tracker_rounds_total{tracker="9",outcome="late"} 0
+lodestar_tracker_rounds_total{tracker="10",outcome="ok"} 0
+lodestar_tracker_rounds_total{tracker="10",outcome="timeout"} 0
+lodestar_tracker_rounds_total{tracker="10",outcome="banned"} 0
+lodestar_tracker_rounds_total{tracker="10",outcome="error"} 1
+lodestar_tracker_rounds_total{tracker="10",outcome="skipped"} 2
+lodestar_tracker_rounds_total{tracker="10",outcome="late"} 0
+# HELP lodestar_tracker_health Tracker health: 0 ok, 1 backoff, 2 down, 3 banned.
+# TYPE lodestar_tracker_health gauge
+lodestar_tracker_health{tracker="1"} 0
+lodestar_tracker_health{tracker="2"} 0
+lodestar_tracker_health{tracker="3"} 1
+lodestar_tracker_health{tracker="4"} 0
+lodestar_tracker_health{tracker="5"} 1
+lodestar_tracker_health{tracker="6"} 0
+lodestar_tracker_health{tracker="7"} 1
+lodestar_tracker_health{tracker="8"} 1
+lodestar_tracker_health{tracker="9"} 0
+lodestar_tracker_health{tracker="10"} 1
+# HELP lodestar_hot_columns_ids One past the highest torrent id in the hot columns.
+# TYPE lodestar_hot_columns_ids gauge
+lodestar_hot_columns_ids 8
+# HELP lodestar_hot_columns_bytes Memory held by the hot columns.
+# TYPE lodestar_hot_columns_bytes gauge
+lodestar_hot_columns_bytes 1572864

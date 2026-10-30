@@ -1,0 +1,32 @@
+
+running 3 tests
+file_count=1, raw_present=false
+
+thread 'a_verified_partial_upgrade_archives_raw' (103256) panicked at %USERPROFILE%\AppData\Local\Temp\lodestar-bugbot-eaf08ff1c8a840a19845c51c470f0602\probe.rs:15:2:
+verified fetch must populate enabled raw archive
+stored_name=Old Imported Name
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'a_verified_partial_upgrade_replaces_unverified_name' (79324) panicked at %USERPROFILE%\AppData\Local\Temp\lodestar-bugbot-eaf08ff1c8a840a19845c51c470f0602\probe.rs:24:2:
+assertion `left == right` failed
+  left: "Old Imported Name"
+ right: "Real Name.mkv"
+test a_verified_partial_upgrade_archives_raw ... FAILED
+test a_verified_partial_upgrade_replaces_unverified_name ... FAILED
+purged_torrents=0, warnings=[]
+live_count=0, snapshot_count=1
+
+thread 'expired_refiling_still_purges_snapshot' (87804) panicked at %USERPROFILE%\AppData\Local\Temp\lodestar-bugbot-eaf08ff1c8a840a19845c51c470f0602\probe.rs:41:2:
+assertion `left == right` failed: the live-deleted torrent must not survive snapshot retention purge
+  left: 1
+ right: 0
+test expired_refiling_still_purges_snapshot ... FAILED
+
+failures:
+
+failures:
+    a_verified_partial_upgrade_archives_raw
+    a_verified_partial_upgrade_replaces_unverified_name
+    expired_refiling_still_purges_snapshot
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s

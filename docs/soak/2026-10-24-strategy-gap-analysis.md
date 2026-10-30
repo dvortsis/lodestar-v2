@@ -1,0 +1,48 @@
+# Lodestar versus the supplied high-throughput strategy
+
+Recorded 2026-10-24, America/Denver. Compared the user-supplied five-layer DHT/indexer proposal with source at `ad0ec5a84555b8b36e7ae94ed515b84ad6d46e02` and the [soak investigation](2026-10-24-v0.5.0-metadata-throughput.md). Findings only; no application or runtime changes. Source locations describe this checkout; the running soak binary's exact commit was not independently established.
+
+## Assessment
+
+Lodestar is substantially aligned with the useful architectural foundation, but far from demonstrating the required throughput. This calls for a focused correction to peer discovery and work scheduling, followed by benchmarking, rather than a wholesale rewrite. A completion percentage would obscure the fact that a small number of missing lifecycle guarantees can disable an otherwise well-structured pipeline.
+
+## Stage-by-stage comparison
+
+| Proposed capability | Current implementation | Gap and priority |
+|---|---|---|
+| Decoupled, bounded stages | Intake, fetch pool, preparation and batched writer are separate, with bounded channels (`crates/pipeline/src/lib.rs`). Pending work is managed in memory, with periodic durable snapshots. | Foundation exists. Coordinate admission and cancellation across stages. High priority. |
+| Zero-copy UDP parsing | Borrowing, bounded KRPC parser in `crates/dht/src/krpc.rs`; actor-owned state and reusable receive buffers in `node/actor.rs`. | No demonstrated global per-packet mutex problem. Single-datagram receive remains; batch syscalls/socket sharding are later profiling candidates. |
+| Three separate DHT structures | Routing tables, a bounded sampler frontier/cooldown map, and ephemeral distance-sorted lookups already exist. | No deterministic sweep or persisted sampler cooldowns. Random targets and a 60-second minimum cooldown differ from the proposal. Secondary to metadata conversion. |
+| In-memory deduplication | Rotating Bloom generations for harvested hashes; atomic-word stored-hash Bloom with DB confirmation of positives; pending-map/lease deduplication. | Not a Cuckoo filter, and the stored-filter handle uses a short read lock. Neither difference is demonstrated to limit current throughput. |
+| Pre-fetch swarm grading | Scrape functionality exists for swarm health, but the proposed universal pre-fetch gate is absent. | Prefer freshness/source-aware ranking. Requiring two sightings or positive public-tracker counts would exclude useful candidates. |
+| Bounded metadata fetching | Defaults include 400 sockets, per-IP limits, 4-second connect and 8-second total deadlines, 16 MiB metadata cap, hash verification and a 64-request metadata window. | Major gap is keeping this capacity supplied with peers, not implementing a pool. Tune deadlines by measured outcome. |
+| PEX and transport coverage | PEX messages are parsed, but accumulated addresses are returned with successful fetch results. uTP exists in the codebase without completed application integration. | Early PEX delivery, transport wiring and IPv6 lookup coverage deserve follow-up. No guaranteed immediate PEX response or seeder supply. |
+| Batched embedded storage | SQLite WAL/NORMAL, configurable mmap, batched writer and compressed full file trees; raw metadata archive off by default. Search uses Tantivy. | Already matches the central storage objective. No current evidence for replacing SQLite/Tantivy with ClickHouse/FTS5. |
+| Local enrichment | Filename parsing and classification occur locally, outside the writer's persistence work. | Full local IMDb/TMDB catalog matching is not implemented; external enrichment is not the observed bottleneck. |
+
+Relevant implementation files: [pipeline](../../crates/pipeline/src/lib.rs), [DHT actor](../../crates/dht/src/node/actor.rs), [sampler](../../crates/dht/src/node/sampler.rs), [lookup](../../crates/dht/src/node/lookup.rs), [harvest filter](../../crates/dht/src/node/seen.rs), [stored-hash filter](../../crates/pipeline/src/have.rs), [fetch pool](../../crates/sources/src/pool.rs), [peer fetch](../../crates/peer-wire/src/fetch.rs), [storage configuration](../../crates/store/src/schema.rs), [storage preparation](../../crates/store/src/lib.rs).
+
+## The consequential gaps the supplied strategy does not adequately address
+
+1. **Lookup forward progress.** When initial sends fail or are throttled, an ordinary lookup can retain fresh candidates with no pending requests and no path to restart. It is not complete, but has no ordinary deadline to release the slot. The investigation reproduced this state offline; its precise share of live failures remains unmeasured.
+2. **Mismatched request lifetimes.** The pool's 256 logical lookups and 30-second waits are not aligned with the DHT's 32 active lookups and FIFO backlog. Caller expiry does not reliably cancel queued work. Increasing limits alone cannot correct this.
+3. **Lost source information.** Sample processing calls `harvest_hash(h, Source::Sample, Vec::new())`; the output does not preserve the sampling node's endpoint. That node is an unusually relevant place to ask for peers first. Bitmagnet already uses this association: [sample source](https://github.com/bitmagnet-io/bitmagnet/blob/main/internal/dhtcrawler/sample_infohashes.go), [peer requests](https://github.com/bitmagnet-io/bitmagnet/blob/main/internal/dhtcrawler/get_peers.go).
+4. **Late peer delivery.** Useful peer results are held until lookup completion. Streaming them as responses arrive can overlap discovery and metadata transfer, as demonstrated by [libtorrent's callback path](https://raw.githubusercontent.com/arvidn/libtorrent/RC_2_0/src/kademlia/get_peers.cpp).
+
+These explain why architectural resemblance does not imply operational performance. The soak recorded 16.69 million reports but only 308 verified metadata results over about 13.45 hours. In one hourly interval, 1.166 million reports led to only 68 TCP attempts and one stored record. This is evidence of poor conversion, not a demonstrated need for a faster database. See the linked investigation for timestamps, counters and caveats.
+
+## Recommendations to correct or reject
+
+- **Mandatory scrape gating:** No single public tracker knows every DHT swarm. A zero scrape result or a single sighting does not establish metadata unavailability; incomplete peers can also possess the full metadata. Use these signals for ranking, retaining exploration capacity. [UDP tracker protocol](https://www.bittorrent.org/beps/bep_0015.html), [probabilistic DHT scrape](https://www.bittorrent.org/beps/bep_0033.html).
+- **Keeping only the largest 100 files:** This conflicts with complete file search and classification, particularly for small files. Lodestar compresses the complete manifest. Padding is represented with attributes and excluded from relevant counts, rather than indiscriminately deleting filenames. Reducing the metadata cap from 16 to 4 MiB likewise changes coverage and requires an explicit product tradeoff.
+- **Guaranteed six-hour coverage:** A systematic cursor may improve traversal, but does not guarantee complete discovery on a changing network. BEP 51's target influences returned nodes; samples are drawn from stored peer keys. Its six-hour maximum interval is not a completeness SLA. Persisted cooldowns could still prevent redundant work after restarts. [BEP 51](https://www.bittorrent.org/beps/bep_0051.html).
+- **Blanket Linux tuning:** These settings do not apply to the Windows soak. `tcp_fin_timeout` governs orphaned FIN_WAIT_2, not TIME_WAIT; `tcp_tw_reuse` has distinct global/loopback modes. Kernel and firewall changes need deployment-specific evidence, not treatment as universal prerequisites. No supplied commands were executed. [Linux kernel documentation](https://docs.kernel.org/networking/ip-sysctl.html).
+- **Zero-amplification persistence and fixed footprint claims:** Neither WAL nor a merging storage engine establishes zero write amplification. The supplied 1,240x, 85%, unsupported-node percentage and traversal-complexity claims lack supporting measurements in the attachment. They are not valid capacity assumptions for Lodestar. ClickHouse replacement deduplication occurs during background merges: [ReplacingMergeTree](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/replacingmergetree).
+- **Daily IMDb/TMDB full catalogs:** IMDb provides the named TSV datasets, but TMDB explicitly describes its daily files as ID exports rather than full metadata dumps. These are different enrichment inputs. [IMDb datasets](https://data.imdb.com/non-commercial-datasets/), [TMDB exports](https://developer.themoviedb.org/docs/daily-id-exports).
+- **Creation timestamps from metadata exchange:** BEP 9 retrieves the info dictionary, not the complete torrent envelope. An outer creation-date field cannot generally be recovered from that exchange. [BEP 9](https://www.bittorrent.org/beps/bep_0009.html).
+
+## Recommended implementation boundary
+
+First package: lookup progress/deadlines/cancellation, preserved sampling-node provenance, direct peer requests, early peer delivery and stage telemetry. Second: evidence-driven admission and retry policies, then transport coverage. Only profile-driven evidence should promote batching/sharding or storage replacement.
+
+Do not assign a delivery estimate or claim parity until this package is implemented and measured under matched conditions. The [research record](2026-10-24-modern-dht-research.md) and [throughput strategy](2026-10-24-throughput-strategy.md) define comparator caveats and validation criteria. This review did not run application tests because it changed documentation only; the prior soak investigation contains the existing offline probe evidence.

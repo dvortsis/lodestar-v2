@@ -226,13 +226,15 @@ export const vendorGroup = () => ({
 });
 
 // Badge and Banner both import these four status icons. Keep the icon family
-// together instead of paying separate requests and compression for each icon.
+// together with their shared mapping instead of paying separate requests and compression.
 // Anything needed by initial search remains in its existing first-load group.
 export const statusIconsGroup = () => ({
 	name: 'status-icons',
 	/** @param {string} id */
 	test: (id) =>
-		!firstLoad.has(id) && /^~icons\/ph\/(info|check-circle|warning|x-circle)\.svelte$/.test(id),
+		!firstLoad.has(id) &&
+		(/^~icons\/ph\/(info|check-circle|warning|x-circle)\.svelte$/.test(id) ||
+			id.endsWith('/src/lib/ui/status.ts')),
 	priority: 5
 });
 
