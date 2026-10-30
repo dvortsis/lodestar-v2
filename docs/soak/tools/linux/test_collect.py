@@ -1045,6 +1045,13 @@ class PublicationTests(Base):
             self.assertNotIn(secret, clean)
         self.assertEqual(analyze_cr0.parse_prom(clean)["dht_timeouts_total"], {"": 5.0})
 
+    def test_snapshots_keep_storage_gauges_without_requiring_them(self):
+        extra = 'lodestar_store_wal_bytes 4096\nlodestar_search_result_cache_bytes{kind="facets"} 77\n'
+        clean = collect.sanitize_snapshot(metrics_text(100, extra=extra))
+        self.assertIn("lodestar_store_wal_bytes 4096", clean)
+        self.assertIn('lodestar_search_result_cache_bytes{kind="facets"} 77', clean)
+        self.assertFalse(set(collect.STORAGE) & set(collect.REQUIRED))
+
     def test_counter_list_matches_the_analyzer(self):
         self.assertEqual(collect.COUNTERS, analyze_cr0.COUNTERS)
 

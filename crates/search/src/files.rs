@@ -467,6 +467,12 @@ impl FileSetCache {
         *self.state.lock().expect("cache lock") = CacheState::default();
     }
 
+    /// Entries held and their retained bytes, as the budget charges them.
+    pub fn usage(&self) -> (u64, u64) {
+        let state = self.state.lock().expect("cache lock");
+        (state.map.len() as u64, state.retained_bytes() as u64)
+    }
+
     fn get(&self, key: &CacheKey) -> Option<Arc<Vec<u64>>> {
         let mut state = self.state.lock().expect("cache lock");
         state.clock = state.clock.saturating_add(1);
@@ -784,6 +790,17 @@ mod cache_regressions {
         assert_eq!(large.len(), 1024);
         cache.clear();
         assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
+    }
+
+    #[test]
+    fn usage_reports_entries_and_the_charged_bytes() {
+        let cache = FileSetCache::default();
+        assert_eq!(cache.usage(), (0, 0));
+        cache.insert(key(1), Arc::new(vec![1; 100]));
+        let (entries, bytes) = cache.usage();
+        assert_eq!(entries, 1);
+        assert_eq!(bytes, cache.state.lock().unwrap().retained_bytes() as u64);
+        assert!(bytes >= 800, "{bytes}");
     }
 
     #[test]

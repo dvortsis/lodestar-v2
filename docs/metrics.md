@@ -677,3 +677,20 @@ The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes w
 | `discovery_to_searchable_dropped_total` | counter | Latency measurements lost to a full bound: the writer's 4,096-entry hand-off or the 65,536-entry wait queue (oldest evicted). The record still counts in `searchable_new_total`, without a latency, once an index commit passes the highest id dropped. |
 
 Imports, recovery and every excluded reason are separate series, so a stricter filter moves `filtered` or `quarantined`, never the numerator. Rows a rule only hides, demotes or flags are stored and indexed, so they count (see the decision). Keys lost for other reasons (no peers, time-outs) are in `fetch_lost_total{reason}`. Like the other `/metrics` series, these are process-lifetime and carry no hash or endpoint labels.
+
+## Storage and cache sizes (R-gauges, 2026-10-30)
+
+Added for the v0.5.1 Linux soak, so a memory or disk ramp can be explained (owner's ruling on #189). See [the decision](decisions/2026-10-30-R-gauges.md). The file sizes are sampled every 60 s by a background task; a scrape reads the last sample and never touches the disk. The have-filter and hot columns already have `have_bytes` and `hot_columns_bytes`.
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `store_db_bytes` | gauge | Size of `lodestar.db`. |
+| `store_wal_bytes` | gauge | Size of `lodestar.db-wal`; 0 when there is none. |
+| `search_index_bytes` | gauge | Regular files under `data/index`: every index version and any rebuild in progress. 0 with search off. Symlinks aren't followed; the walk stops after 100,000 entries (an error). |
+| `storage_sampled_seconds` | gauge | Unix time of the last sample that read all three sizes; 0 before the first. A stale value means samples are failing. |
+| `storage_sample_errors_total` | counter | Sizes that couldn't be read, one per size per sample. Each keeps its last value. |
+| `search_file_cache_entries`, `search_file_cache_bytes` | gauge | `file:(…)` id sets the serving index caches, and the bytes they retain as the 8 MiB budget charges them. |
+| `search_browse_cache_entries`, `search_browse_cache_bytes` | gauge | Per-segment sorted tops the serving index caches (bounded at 4,096 entries), and their estimated bytes. |
+| `search_result_cache_entries{kind}`, `search_result_cache_bytes{kind}` | gauge | The result cache by `kind` (`search`, `facets`): entries and estimated bytes. |
+
+The cache series render only with search on. There is no server-side detail cache: the detail caches are in the browser. SQLite's page cache isn't reported (see the decision).
