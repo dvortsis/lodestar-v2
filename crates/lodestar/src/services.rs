@@ -233,6 +233,8 @@ impl Services {
             plugins.push(dht);
         }
         pipeline_config.hot = Some(hot.clone());
+        // The gate's searchable count follows the serving index (below).
+        pipeline_config.gate_follows_index = serving.is_some();
         pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
             config: lodestar_pipeline::health::HealthConfig {
                 deny: Some(lodestar_tracker_scrape::Deny(denied.clone())),
@@ -309,6 +311,13 @@ impl Services {
             stats: s.stats(),
         });
         let paused_now = crawl.clone();
+        // The crawler gate's searchable count (CR-gate-metrics): the
+        // serving index's commits, which outlive a swap.
+        if let Some(s) = &serving {
+            let gate = pipeline.monitor().gate().clone();
+            s.commit_hook()
+                .add(move |c| gate.searchable(c.max_torrent_id, c.at as i64));
+        }
         // Insights (B11a): searchable time from the index's commits.
         let insights = Arc::new(insights::Insights::new(pipeline.monitor()));
         // What the stage pages read beside `OpsApi` (B11b).

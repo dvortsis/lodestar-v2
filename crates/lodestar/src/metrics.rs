@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use lodestar_dht::node::StatsSnapshot;
 use lodestar_peer_wire::{FailureKind, FetchStats};
 use lodestar_pipeline::Monitor;
+use lodestar_pipeline::gate::{EXCLUDED, GateStats, LATENCY_BUCKETS, ORIGINS};
 use lodestar_pipeline::health::{HealthHandle, trackers::Health};
 use lodestar_sources::Loss;
 use lodestar_store::HotColumns;
@@ -287,6 +288,8 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Unix time of the last commit.",
         get(&w.last_commit),
     );
+
+    render_gate(&mut o, m.gate());
 
     let l = m.lease_stats();
     o.one(
@@ -579,6 +582,72 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     o.0
 }
 
+/// The crawler gate (owner-decisions §2.25): new verified records and the
+/// same records searchable, by origin; every excluded outcome by reason;
+/// and the time from first sighting to searchable.
+fn render_gate(o: &mut Out, g: &GateStats) {
+    o.family(
+        "metadata_new_verified_total",
+        "counter",
+        "Unique new infohashes fetched and verified in this run and committed as stored.",
+    );
+    for (origin, label) in ORIGINS {
+        o.value(
+            "metadata_new_verified_total",
+            &format!("origin=\"{label}\""),
+            g.new_verified(origin),
+        );
+    }
+    o.family(
+        "searchable_new_total",
+        "counter",
+        "Of those, records the search index has committed.",
+    );
+    for (origin, label) in ORIGINS {
+        o.value(
+            "searchable_new_total",
+            &format!("origin=\"{label}\""),
+            g.searchable_new(origin),
+        );
+    }
+    o.family(
+        "metadata_excluded_total",
+        "counter",
+        "Outcomes that don't count towards the gate, by reason.",
+    );
+    for (reason, label) in EXCLUDED {
+        o.value(
+            "metadata_excluded_total",
+            &format!("reason=\"{label}\""),
+            g.excluded(reason),
+        );
+    }
+    let name = "discovery_to_searchable_seconds";
+    o.family(
+        name,
+        "histogram",
+        "Seconds from a new record's first sighting in this run to searchable.",
+    );
+    let counts = g.latency.cumulative();
+    for (le, n) in LATENCY_BUCKETS.iter().zip(counts) {
+        o.value(&format!("{name}_bucket"), &format!("le=\"{le}\""), n);
+    }
+    o.value(
+        &format!("{name}_bucket"),
+        "le=\"+Inf\"",
+        counts[LATENCY_BUCKETS.len()],
+    );
+    o.value(&format!("{name}_sum"), "", g.latency.sum());
+    // The `+Inf` bucket, so the two always agree within a scrape.
+    o.value(&format!("{name}_count"), "", counts[LATENCY_BUCKETS.len()]);
+    o.one(
+        "discovery_to_searchable_dropped_total",
+        "counter",
+        "Latency measurements dropped because their bounded queue was full.",
+        g.dropped.load(Ordering::Relaxed),
+    );
+}
+
 /// The search index's counters (§8).
 pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::IndexStats) {
     let mut o = Out(std::mem::take(out));
@@ -763,6 +832,53 @@ pub fn render_hot(out: &mut String, hot: &HotColumns) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lodestar_pipeline::gate::{Excluded, Origin};
+
+    #[test]
+    fn gate_families_render_each_field_on_its_own_line() {
+        // Distinct values everywhere, so a swapped field shows.
+        let g = GateStats::new(100);
+        g.follow();
+        for id in 1..=3 {
+            g.committed_new(Origin::Network, id, 100, 100);
+        }
+        g.searchable(2, 103);
+        // Two more observations, so `_count` differs from the searchable
+        // count and from every bucket below `+Inf`.
+        g.latency.observe(9_000);
+        g.latency.observe(9_001);
+        for (i, (reason, _)) in EXCLUDED.iter().enumerate() {
+            g.exclude(*reason, 10 + i as u64);
+        }
+        g.dropped.store(41, Ordering::Relaxed);
+        let mut o = Out(String::new());
+        render_gate(&mut o, &g);
+        let out = o.0;
+        for line in [
+            "# TYPE lodestar_metadata_new_verified_total counter",
+            "lodestar_metadata_new_verified_total{origin=\"network\"} 3",
+            "lodestar_searchable_new_total{origin=\"network\"} 2",
+            "lodestar_metadata_excluded_total{reason=\"already_stored\"} 10",
+            "lodestar_metadata_excluded_total{reason=\"rediscovered\"} 11",
+            "lodestar_metadata_excluded_total{reason=\"filtered\"} 12",
+            "lodestar_metadata_excluded_total{reason=\"quarantined\"} 13",
+            "lodestar_metadata_excluded_total{reason=\"invalid_metainfo\"} 14",
+            "lodestar_metadata_excluded_total{reason=\"failed_verification\"} 15",
+            "lodestar_metadata_excluded_total{reason=\"duplicate\"} 16",
+            "lodestar_metadata_excluded_total{reason=\"store_failed\"} 17",
+            "# TYPE lodestar_discovery_to_searchable_seconds histogram",
+            "lodestar_discovery_to_searchable_seconds_bucket{le=\"2\"} 0",
+            "lodestar_discovery_to_searchable_seconds_bucket{le=\"5\"} 2",
+            "lodestar_discovery_to_searchable_seconds_bucket{le=\"7200\"} 2",
+            "lodestar_discovery_to_searchable_seconds_bucket{le=\"+Inf\"} 4",
+            "lodestar_discovery_to_searchable_seconds_sum 18007",
+            "lodestar_discovery_to_searchable_seconds_count 4",
+            "lodestar_discovery_to_searchable_dropped_total 41",
+        ] {
+            assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
+        }
+        assert_eq!(g.excluded(Excluded::StoreFailed), 17);
+    }
 
     #[test]
     fn hot_column_gauges_render_on_their_own() {
