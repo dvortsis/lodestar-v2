@@ -1205,10 +1205,10 @@
    "pr": 175
   },
   "L2": {
-   "status": "review",
+   "status": "merged",
    "branch": "land/L2",
    "head": "80d7e198",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T05:23Z #180 opened; full-ci label + dispatched CI and Release on land/L2; Opus protocol+security reviewer running | 2026-10-30T05:35Z runner commit 926e0529 regenerates web/licenses/rust.json (network-policy); filter budget mixed case 50.4 \u00b5s on first run (main-level margin; rerun via new push); reviewer restarted after container restart | 2026-10-30T05:48Z review FIX: blocking dual-stack IPv6 tests -> runner fix 213548e2 (test-only). Important runtime findings -> CR-0f / CR-ADM (PR comment).",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T05:23Z #180 opened; full-ci label + dispatched CI and Release on land/L2; Opus protocol+security reviewer running | 2026-10-30T05:35Z runner commit 926e0529 regenerates web/licenses/rust.json (network-policy); filter budget mixed case 50.4 \u00b5s on first run (main-level margin; rerun via new push); reviewer restarted after container restart | 2026-10-30T05:48Z review FIX: blocking dual-stack IPv6 tests -> runner fix 213548e2 (test-only). Important runtime findings -> CR-0f / CR-ADM (PR comment). | 2026-10-30T06:19Z #180 merged c6aa1925 (all CI incl macOS, release, web, e2e green)",
    "pr": 180
   },
   "L3": {
