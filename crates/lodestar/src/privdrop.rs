@@ -79,6 +79,15 @@ pub enum Line {
     Dropped {
         ids: Ids,
     },
+    /// The restart proof's witness directory (`LODESTAR_DHT_WITNESS_DIR`,
+    /// CR-0d): `changed` entries handed over, or why it was left as it is.
+    /// Never fatal: a witness the run can't write only costs it a resume.
+    Witness {
+        dir: PathBuf,
+        ids: Ids,
+        changed: u64,
+        skipped: Option<String>,
+    },
 }
 
 impl std::fmt::Display for Line {
@@ -139,6 +148,24 @@ impl std::fmt::Display for Line {
                 "dropped root: running as {}:{} with no supplementary groups",
                 ids.uid, ids.gid
             ),
+            Line::Witness {
+                dir,
+                skipped: Some(why),
+                ..
+            } => write!(
+                f,
+                "witness directory {} left as it is: {why}",
+                dir.display()
+            ),
+            Line::Witness {
+                dir, ids, changed, ..
+            } => write!(
+                f,
+                "witness directory {}: {changed} entries changed to {}:{}",
+                dir.display(),
+                ids.uid,
+                ids.gid
+            ),
         }
     }
 }
@@ -184,6 +211,19 @@ impl Line {
                 events::SYSTEM_DROPPED_ROOT,
                 uid = id(ids.uid),
                 gid = id(ids.gid)
+            ),
+            Line::Witness {
+                dir,
+                ids,
+                changed,
+                skipped,
+            } => log_event!(
+                events::SYSTEM_WITNESS_DIR,
+                path = LogPath::new(dir),
+                uid = id(ids.uid),
+                gid = id(ids.gid),
+                changed = *changed,
+                handed_over = skipped.is_none()
             ),
         }
     }
@@ -314,6 +354,11 @@ mod imp {
             let dir = env_data_dir(env);
             report.lines.push(chown_data_dir(&dir, ids)?);
             report.data_dir = Some(dir);
+            // The restart proof's witness, which the image keeps outside
+            // the data directory (CR-0d §1.5). Never fatal.
+            if let Some(w) = env("LODESTAR_DHT_WITNESS_DIR").filter(|w| !w.is_empty()) {
+                report.lines.push(chown_witness_dir(Path::new(&w), ids));
+            }
         }
         if ids.uid == 0 {
             report.lines.push(Line::Root { gid: Some(ids.gid) });
@@ -506,6 +551,85 @@ mod imp {
             special: walk.special,
             too_deep: walk.too_deep,
         })
+    }
+
+    /// Hands the restart witness directory to `ids`: the directory and the
+    /// regular `.gen` files directly in it, nothing else, nothing deeper.
+    /// Unlike the data directory it holds no `lodestar.db`, so
+    /// [`looks_like_data`] can't vouch for it; the narrow scope does
+    /// instead. Every entry is opened without following links and changed
+    /// through that descriptor, as in [`chown_tree`]. A problem leaves the
+    /// directory as it is and says why: the run then has no witness and
+    /// suppresses, which is safe.
+    pub(super) fn chown_witness_dir(dir: &Path, ids: Ids) -> Line {
+        let left = |why: String| Line::Witness {
+            dir: dir.to_path_buf(),
+            ids,
+            changed: 0,
+            skipped: Some(why),
+        };
+        match std::fs::symlink_metadata(dir) {
+            Ok(m) if m.file_type().is_symlink() => return left("it is a symlink".into()),
+            Ok(m) if !m.is_dir() => return left("it is not a directory".into()),
+            Ok(_) => {}
+            Err(e) => return left(e.to_string()),
+        }
+        let fd = match rustix::fs::open(
+            dir,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(e) => return left(format!("opening it: {e}")),
+        };
+        let (Ok(st), Ok(root)) = (rustix::fs::fstat(&fd), rustix::fs::stat("/")) else {
+            return left("it can't be examined".into());
+        };
+        if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
+            return left("it is the filesystem root".into());
+        }
+        let (uid, gid) = (Uid::from_raw(ids.uid), Gid::from_raw(ids.gid));
+        let mut changed = 0;
+        let Ok(mut entries) = Dir::read_from(&fd) else {
+            return left("it can't be read".into());
+        };
+        while let Some(Ok(entry)) = entries.read() {
+            let name = entry.file_name();
+            if !name.to_bytes().ends_with(b".gen") {
+                continue;
+            }
+            let Ok(f) = rustix::fs::openat(
+                &fd,
+                name,
+                OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) else {
+                continue;
+            };
+            let Ok(fst) = rustix::fs::fstat(&f) else {
+                continue;
+            };
+            let regular = FileType::from_raw_mode(fst.st_mode) == FileType::RegularFile;
+            if regular
+                && fst.st_nlink <= 1
+                && (fst.st_uid, fst.st_gid) != (ids.uid, ids.gid)
+                && rustix::fs::chownat(&f, c"", Some(uid), Some(gid), AtFlags::EMPTY_PATH).is_ok()
+            {
+                changed += 1;
+            }
+        }
+        if (st.st_uid, st.st_gid) != (ids.uid, ids.gid) {
+            if let Err(e) = rustix::fs::fchown(&fd, Some(uid), Some(gid)) {
+                return left(format!("chown: {e}"));
+            }
+            changed += 1;
+        }
+        Line::Witness {
+            dir: dir.to_path_buf(),
+            ids,
+            changed,
+            skipped: None,
+        }
     }
 
     /// What Lodestar leaves in a data directory; one is enough.
@@ -763,7 +887,7 @@ mod tests {
     mod linux {
         use std::os::unix::fs::{MetadataExt, symlink};
 
-        use super::super::imp::{can_drop, check_no_caps, chown_data_dir};
+        use super::super::imp::{can_drop, check_no_caps, chown_data_dir, chown_witness_dir};
         use super::super::*;
 
         #[test]
@@ -808,6 +932,30 @@ mod tests {
             assert!(chown_data_dir(&file, ids).is_err());
         }
 
+        #[test]
+        fn a_witness_dir_that_is_a_link_a_file_or_missing_is_left_alone() {
+            let tmp = tempfile::tempdir().unwrap();
+            let real = tmp.path().join("real");
+            std::fs::create_dir(&real).unwrap();
+            let link = tmp.path().join("link");
+            symlink(&real, &link).unwrap();
+            let file = tmp.path().join("file");
+            std::fs::write(&file, b"").unwrap();
+            let ids = Ids { uid: 1, gid: 1 };
+            for (dir, why) in [
+                (link, "symlink"),
+                (file, "not a directory"),
+                (tmp.path().join("missing"), "No such file"),
+                (std::path::PathBuf::from("/"), "filesystem root"),
+            ] {
+                let line = chown_witness_dir(&dir, ids).to_string();
+                assert!(
+                    line.contains("left as it is") && line.contains(why),
+                    "{line}"
+                );
+            }
+        }
+
         fn is_root() -> bool {
             if rustix::process::geteuid().is_root() {
                 true
@@ -820,6 +968,41 @@ mod tests {
         fn owner(p: &std::path::Path) -> (u32, u32) {
             let m = std::fs::symlink_metadata(p).unwrap();
             (m.uid(), m.gid())
+        }
+
+        /// Root-only. Only the directory and the regular `.gen` files
+        /// directly in it change owner: not other names, not links, not a
+        /// hard-linked file, nothing in a subdirectory.
+        #[test]
+        fn the_witness_dir_hands_over_only_its_own_gen_files() {
+            if !is_root() {
+                return;
+            }
+            let tmp = tempfile::tempdir().unwrap();
+            let outside = tmp.path().join("outside.gen");
+            std::fs::write(&outside, b"secret").unwrap();
+            let w = tmp.path().join("witness");
+            std::fs::create_dir_all(w.join("sub")).unwrap();
+            std::fs::write(w.join("a.gen"), b"").unwrap();
+            std::fs::write(w.join("notes.txt"), b"").unwrap();
+            std::fs::write(w.join("sub/deep.gen"), b"").unwrap();
+            symlink(&outside, w.join("link.gen")).unwrap();
+            std::fs::hard_link(&outside, w.join("hard.gen")).unwrap();
+            let ids = Ids {
+                uid: 4242,
+                gid: 4343,
+            };
+            let line = chown_witness_dir(&w, ids).to_string();
+            assert!(line.contains("2 entries changed to 4242:4343"), "{line}");
+            assert_eq!(owner(&w), (4242, 4343));
+            assert_eq!(owner(&w.join("a.gen")), (4242, 4343));
+            for untouched in ["notes.txt", "sub", "sub/deep.gen", "link.gen", "hard.gen"] {
+                assert_eq!(owner(&w.join(untouched)), (0, 0), "{untouched}");
+            }
+            assert_eq!(owner(&outside), (0, 0));
+            // Already theirs: nothing changes.
+            let again = chown_witness_dir(&w, ids).to_string();
+            assert!(again.contains("0 entries changed"), "{again}");
         }
 
         /// Root-only: chown is a privileged call. The tree is root's; the

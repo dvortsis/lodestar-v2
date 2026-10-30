@@ -56,6 +56,21 @@ pub fn default_data_dir_unless_set(config: &mut Config, default_dir: &Path) {
     }
 }
 
+/// CR-0d §1.5: with the restart proof on and no witness dir chosen (in the
+/// config file or `LODESTAR_DHT_WITNESS_DIR`), the service keeps its
+/// witness in `%ProgramData%\Lodestar-witness`: beside the data folder, so
+/// a backup of the data folder doesn't hold it, and not in the virtual
+/// account's profile. The service makes it private like the data folder;
+/// with the switch off nothing is created.
+pub fn default_witness_dir(config: &Config, program_data: Option<String>) -> Option<PathBuf> {
+    let chosen = config.layers.in_file("dht.restart_witness_dir")
+        || config.layers.in_env("LODESTAR_DHT_WITNESS_DIR");
+    (config.dht.safe_restart && !chosen).then(|| {
+        PathBuf::from(program_data.unwrap_or_else(|| r"C:\ProgramData".into()))
+            .join("Lodestar-witness")
+    })
+}
+
 /// Whether two paths name the same folder, as Windows compares them: the
 /// real paths when both exist (so case, 8.3 names and `..` don't matter),
 /// else case-insensitively with `/` as `\` and no trailing separator.
@@ -265,6 +280,13 @@ mod scm {
         let config = Config::load(path.as_deref(), env)
             .map(|mut c| {
                 super::default_data_dir_unless_set(&mut c, &default_dir);
+                if let Some(w) = super::default_witness_dir(&c, env("ProgramData")) {
+                    // Private like the data folder (§1.5). If it can't be
+                    // made so, the DHT has no witness and suppresses after
+                    // every restart, which is safe.
+                    let private = acl::secure_dir(&w, own, &acl::Windows { own_sid: own });
+                    c.dht.restart_witness_dir = private.ok().map(|()| w);
+                }
                 c
             })
             .map_err(|e| format!("config: {e}"));
@@ -440,6 +462,37 @@ mod tests {
         ] {
             assert_eq!(command(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn the_service_witness_dir_is_a_sibling_only_when_the_switch_is_on() {
+        let pd = Some(r"D:\PD".to_string());
+        let off = Config::load(None, |_| None).unwrap();
+        assert_eq!(
+            default_witness_dir(&off, pd.clone()),
+            None,
+            "nothing while off"
+        );
+        let on = |extra: &'static str| {
+            move |k: &str| match k {
+                "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
+                "LODESTAR_DHT_WITNESS_DIR" if !extra.is_empty() => Some(extra.to_string()),
+                _ => None,
+            }
+        };
+        let c = Config::load(None, on("")).unwrap();
+        assert_eq!(
+            default_witness_dir(&c, pd.clone()),
+            Some(PathBuf::from(r"D:\PD").join("Lodestar-witness"))
+        );
+        // A dir chosen in the environment or the file wins.
+        let c = Config::load(None, on(r"E:\w")).unwrap();
+        assert_eq!(default_witness_dir(&c, pd.clone()), None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nrestart_witness_dir = \"F:/w\"\n").unwrap();
+        let c = Config::load(Some(&path), on("")).unwrap();
+        assert_eq!(default_witness_dir(&c, pd), None);
     }
 
     #[test]

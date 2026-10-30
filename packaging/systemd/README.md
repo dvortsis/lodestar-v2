@@ -36,5 +36,10 @@ journalctl -u lodestar | grep "setup token"
   `/var/lib/lodestar` or add its path to `ReadWritePaths=` and set
   `LODESTAR_DATA_DIR`. With `DynamicUser=`, a custom path must be writable by
   the dynamic user, so a drop-in with a fixed `User=` is simpler there.
+- **Restart record:** with `[dht] safe_restart` on, a clean restart can
+  resume sampling at once. Its record lives in `/var/lib/lodestar-witness`,
+  a second state directory beside the data directory. Back up
+  `/var/lib/lodestar`, never the two together: restoring both would hide
+  the restore.
 - **Check the unit:** `systemd-analyze verify lodestar.service` (the binary
   path must exist for the check to pass).

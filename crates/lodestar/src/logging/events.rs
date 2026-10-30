@@ -260,6 +260,17 @@ lodestar_log::catalogue! {
             too_deep_left: Size,
         },
     }
+    /// The restart proof's witness directory (`LODESTAR_DHT_WITNESS_DIR`,
+    /// CR-0d) at start-up as root: handed to the target account
+    /// (`changed` entries), or left as it is (`handed_over=false`), in
+    /// which case the DHT has no witness and suppresses after restarts.
+    SYSTEM_WITNESS_DIR {
+        id: "system.witness_dir",
+        component: System,
+        level: Info,
+        message: "The restart witness directory was checked for the target account",
+        fields: { path: Path, uid: Label, gid: Label, changed: Size, handed_over: Label },
+    }
     /// Started as root and allowed to stay root.
     SYSTEM_ROOT {
         id: "system.running_as_root",
