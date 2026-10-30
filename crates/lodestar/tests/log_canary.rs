@@ -44,6 +44,8 @@ const PASSWORD_2: &str = "canary-second-password-2";
 const WRONG: &str = "canary-wrong-password-3";
 
 mod common;
+mod ports;
+use ports::test_port;
 
 fn now() -> i64 {
     std::time::SystemTime::now()
@@ -904,12 +906,9 @@ fn get_peers_lines(file: &str) -> Vec<&str> {
 /// console.
 #[test]
 fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
-    // A free port to hand the DHT: if another test takes it first, the
-    // DHT can't bind and the wait below says so.
-    let dht = {
-        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        probe.local_addr().unwrap().port()
-    };
+    // A port to hand the DHT that no other test's `bind(0)` can be given
+    // first (a released `bind(0)` port could be).
+    let dht = test_port();
     let s = Server::start_with(Some(dht));
     let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     // Waits for the condition on the file's new lines, failing after 30 s.
