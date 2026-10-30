@@ -17,6 +17,19 @@ lodestar_log::catalogue! {
         message: "DHT socket buffers",
         fields: { receive_requested: Size, send_requested: Size, receive: Size, send: Size, set_errors: Size, read_errors: Size },
     }
+    /// No configured bootstrap router could be queried or answered in a
+    /// bootstrap round: `configured` names, `resolved` addresses, and of
+    /// the last attempt's, `refused` by the outbound policy or the socket
+    /// and `throttled` by the query budget. Written once until a router
+    /// answers again. Fake-ip DNS and NAT64 answers are allowed; check DNS,
+    /// the firewall and the VPN.
+    BOOTSTRAP_UNREACHABLE {
+        id: "dht.bootstrap_unreachable",
+        component: Dht,
+        level: Warn,
+        message: "No DHT bootstrap router answered",
+        fields: { configured: Size, resolved: Size, refused: Size, throttled: Size },
+    }
     /// A key reached the harvest: from samples, someone's `get_peers`, an
     /// announce, or a lookup this node ran (`source`).
     KEY_HARVESTED {

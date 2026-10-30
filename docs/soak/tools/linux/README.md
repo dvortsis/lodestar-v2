@@ -107,9 +107,13 @@ docker run -d --name lodestar-soak-collector --restart no \
   python:3.12-slim python /collect.py --mode docker --container lodestar \
     --url http://127.0.0.1:8484 --cgroup-root /host/cgroup \
     --root /evidence/run-1 --commit <40-char source commit> \
-    --storage-path /evidence
+    --intensity balanced --storage-path /evidence
 ```
 
+- `--intensity`: pass the preset Lodestar is set to (`low`, `balanced` or
+  `aggressive`). The analyzer takes the outstanding-RPC limit from it. Left
+  out, `run.json` has no preset, and the analyzer assumes `balanced` and
+  reports `intensity_assumed_balanced`.
 - `--network host` lets the collector reach a published port at `127.0.0.1`.
   Use the address you actually publish; the URL is `http://host:port` only.
 - Add `--storage-path` for every filesystem that matters (the Lodestar appdata
@@ -152,7 +156,7 @@ docker run -d --name lodestar-soak-collector-gluetun --restart no --network host
   -v /mnt/user/appdata/lodestar-soak:/evidence -v /path/to/collect.py:/collect.py:ro \
   python:3.12-slim python /collect.py --mode docker --container lodestar \
     --url http://127.0.0.1:8484 --cgroup-root /host/cgroup --root /evidence/run-gluetun \
-    --commit <40-char source commit> --storage-path /evidence \
+    --commit <40-char source commit> --intensity balanced --storage-path /evidence \
     --require-gluetun --leg gluetun --baseline-hours 2
 ```
 

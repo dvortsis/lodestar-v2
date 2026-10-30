@@ -27,7 +27,7 @@ class AnalyzerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / "metrics").mkdir()
         (self.root / "run.json").write_text(json.dumps({
-            "commit": "a" * 40, "settings": {"baseline_hours": 24},
+            "commit": "a" * 40, "settings": {"baseline_hours": 24, "intensity": "balanced"},
             "secret": "never-export-this",
         }), encoding="utf-8")
 
@@ -288,6 +288,63 @@ class AnalyzerTests(unittest.TestCase):
             self.assertFalse(analyze(self.root)["clean_shutdown"])
         (self.root / "result.json").write_text(json.dumps(result), encoding="utf-8")
         self.assertTrue(analyze(self.root)["clean_shutdown"])
+
+
+    def run_settings(self, **settings):
+        (self.root / "run.json").write_text(json.dumps({
+            "commit": "a" * 40, "settings": {"baseline_hours": 24, **settings}}), encoding="utf-8")
+
+    def outstanding(self, report):
+        return report["phases"]["baseline"]["bounds"]["outstanding_rpcs"]
+
+    def test_outstanding_rpc_limit_follows_the_preset(self):
+        rows = [sample(0), sample(60)]
+        for row in rows:
+            row["values"]["dht_outstanding"] = 2000
+        self.rows(rows)
+        for preset, limit, over in (("low", 256, 2), ("balanced", 1024, 2),
+                                    ("aggressive", 4096, 0), ("Aggressive", 4096, 0)):
+            self.run_settings(intensity=preset)
+            report = analyze(self.root)
+            self.assertEqual(report["intensity"], preset.lower())
+            self.assertEqual(self.outstanding(report)["limit"], limit)
+            self.assertEqual(self.outstanding(report)["over_capacity_samples"], over)
+            self.assertNotIn("intensity_assumed_balanced", report["issues"])
+        # The flag wins over run.json.
+        self.assertEqual(self.outstanding(analyze(self.root, intensity="low"))["limit"], 256)
+        self.run_settings()
+        report = analyze(self.root)
+        self.assertEqual(self.outstanding(report)["limit"], 1024)
+        self.assertEqual(report["issues"]["intensity_assumed_balanced"], 1)
+        self.run_settings(intensity="turbo")
+        with self.assertRaisesRegex(ValueError, "preset"):
+            analyze(self.root)
+        script = str(Path(__file__).with_name("analyze_cr0.py"))
+        result = subprocess.run([sys.executable, script, str(self.root), "--format", "json",
+                                 "--intensity", "aggressive"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["intensity"], "aggressive")
+
+    def test_deeply_nested_json_is_malformed_evidence(self):
+        deep = "[" * 200000 + "]" * 200000
+        self.rows([sample(0)])
+        (self.root / "disk.jsonl").write_text(deep + "\n", encoding="utf-8")
+        (self.root / "result.json").write_text(deep, encoding="utf-8")
+        report = analyze(self.root)
+        self.assertEqual(report["issues"]["invalid_disk_observations"], 1)
+        self.assertEqual(report["issues"]["invalid_result"], 1)
+        self.rows([sample(0)], deep + "\n")
+        with self.assertRaisesRegex(ValueError, "Malformed samples.jsonl line 2"):
+            analyze(self.root)
+        (self.root / "run.json").write_text(deep, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Malformed run.json"):
+            analyze(self.root)
+        script = str(Path(__file__).with_name("analyze_cr0.py"))
+        result = subprocess.run([sys.executable, script, str(self.root)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Cannot analyze evidence", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
 
 if __name__ == "__main__":
