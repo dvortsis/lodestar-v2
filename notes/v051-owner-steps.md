@@ -53,3 +53,10 @@ Write down whether a Defender exclusion was active. Then smoke-test the portable
 
 ## 7. Hand back
 Push the evidence the same way as `soak/cr0-final`: aggregates and hourly data only, no raw logs, databases or personal paths. Use one branch per run. The runner analyzes it, records the outcome and, if everything passes, asks you to tag `v0.5.1` on the same commit as the passing rc.
+
+
+## Status, 2026-10-30 21:35Z
+- **Artifacts: verified.** The minisig checks against `packaging/keys/lodestar-release.pub`, the four archives match `SHA256SUMS`, and the image digest `sha256:8abcaf52…` matches run 41110604990.
+- **Unraid 24 h soak: running.** It started 21:07Z from a fresh copy of the cold Oct-22 backup, and the V3→V12 upgrade went through. The baseline runs 2026-10-31 03:37Z to 2026-11-01 03:37Z; then comes the gluetun leg (at least 2 h). Then send `analyze_cr0.py`'s aggregate outputs.
+- **Windows portable: PASS.**
+- **Windows MSI service: running** since 21:22Z, with the Defender exclusion active. Keep it running to about 04:30Z on 10-31, past the 03:22Z suppression end, then record the stored count and rate.
