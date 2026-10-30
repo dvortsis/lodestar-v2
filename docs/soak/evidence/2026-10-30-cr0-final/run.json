@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "commit": "744b84d68c7609d8220430ffc9938c05c6d6a527",
+  "exe": "target\\soak\\cr0-native-2026-10-28-744b84d6-r2\\bin\\lodestar-cr0.exe",
+  "sha256": "24CB1EF43D86AD8C0F9F80C41E9D2D661F3FD6FE5573E72C13A87285E11E1475",
+  "version": "lodestar 0.5.0",
+  "started": "2026-10-29T00:23:56.1427820+00:00",
+  "timezone": "Mountain Standard Time",
+  "user_timezone": "America/Denver",
+  "os": "Microsoft Windows NT 10.0.26200.0",
+  "logical_cpus": 20,
+  "collector_sha256": "EEAC3B9EC7BBD28B590291388F88EE2F92085A0FB2A4F39C1EB78E2EB5D4A804",
+  "common_sha256": "44789C7D85F3B7CA60DF85B5234F9831CFAAC4BAA64AD5A44279B92C6AFAEE5C",
+  "signal_sha256": "C3D2C810D8A1930B7B6F630406C96572B6C63D7217CC1D3627677E9DB642DBC6",
+  "build_record_sha256": "C04B937C26E0AC974F91ED65EF2EF32697F3B3259E37622FACC917AF350F6A58",
+  "toolchain": {
+    "target": "x86_64-pc-windows-msvc",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.0\nLLVM version: 22.1.8"
+  },
+  "network": {
+    "dht_port": 6881,
+    "http_bind": "127.0.0.1:8484",
+    "proxy_configured": false
+  },
+  "ui_verified": true,
+  "settings": {
+    "targets": "random",
+    "transport": "TCP",
+    "suppression_seconds": 21604,
+    "http_bind": "127.0.0.1:8484",
+    "updates": "off",
+    "storage_guardrails": {
+      "check_seconds": 10,
+      "warn_free_bytes": 21474836480,
+      "max_redirected_log_bytes": 1073741824,
+      "start_free_bytes": 53687091200,
+      "stop_free_bytes": 10737418240,
+      "volumes": [
+        "C:\\"
+      ]
+    },
+    "intensity": "balanced",
+    "fresh_data": true,
+    "cooldown_floor_seconds": 60,
+    "warmup_minutes": 30,
+    "query_timeout_seconds": 4,
+    "ui": "embedded",
+    "baseline_hours": 24,
+    "data": "target\\soak\\cr0-native-2026-10-28-744b84d6-r2\\data",
+    "dht_port": 6881,
+    "all_other_settings": "commit defaults",
+    "encryption": "prefer"
+  },
+  "process_identity": "49888:639288302370712270",
+  "process_id": 49888,
+  "collector_process_id": 98244,
+  "index_sha256": "725C490222B3A52FD79E55253FE2353C90149E1DB48A9339D32E12CD3E6E6399"
+}

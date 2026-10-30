@@ -11,7 +11,7 @@ use lodestar_integrations::{
     AddOptions, AuthFailure, Category, ClientError, ClientKind, DownloadClient, Magnet, Secret,
     Selection, TorrentFile,
 };
-use support::{Fixture, ReplayServer, fixture, fixture_bytes};
+use support::{Fixture, ReplayServer, fixture, fixture_bytes, refused_addr};
 
 const PASSWORD: &str = "correct-horse-battery";
 const SID: &str = "SID=I2qCXYtOVgSWxVHIylT1bZt5a/Hf5Bvr";
@@ -390,12 +390,9 @@ async fn oversized_or_malformed_answers_are_protocol_errors() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
+    let (_held, addr) = refused_addr();
     let qb = QBittorrent::new(
-        &format!("http://127.0.0.1:{port}/"),
+        &format!("http://{addr}/"),
         "admin".into(),
         Secret::new(PASSWORD),
     )

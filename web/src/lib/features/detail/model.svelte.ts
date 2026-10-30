@@ -10,6 +10,7 @@ import {
 	type SearchHit,
 	type TorrentDetail
 } from './cache';
+import { adoptPrefetch } from './prefetch';
 import { watchDetailVisibility } from './visibility';
 
 export type Status = 'loading' | 'ready' | 'error';
@@ -72,9 +73,19 @@ export class DetailModel {
 
 	private async fetchDetail(hash: string, generation: number, visibility: number) {
 		try {
-			const detail = await this.slot.run((signal) =>
-				api.get('/torrents/{hash}', { path: { hash }, signal })
-			);
+			const adopted = adoptPrefetch(hash, visibility);
+			// A prefetch from this visibility generation is the revalidation; an aborted one
+			// (a newer hover) falls back to a fetch of our own.
+			const fetchOwn = () =>
+				this.slot.run((signal) => api.get('/torrents/{hash}', { path: { hash }, signal }));
+			const detail =
+				adopted === undefined
+					? await fetchOwn()
+					: await Promise.resolve(adopted).catch((e) => {
+							if (!isAbort(e)) throw e;
+							return this.current(generation, visibility) ? fetchOwn() : undefined;
+						});
+			if (!detail) return;
 			if (!this.current(generation, visibility)) return;
 			cacheDetail(hash, detail);
 			this.detail = detail;

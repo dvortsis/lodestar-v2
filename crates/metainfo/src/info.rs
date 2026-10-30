@@ -204,6 +204,11 @@ const KNOWN_KEYS: &[&[u8]] = &[
     b"symlink path",
 ];
 
+/// The path given to a padding file that has none (BEP 47 allows that).
+/// Files need a non-empty path; `.pad/` is the usual padding directory, so
+/// the file also reads as padding by name.
+const PADDING_PATH: &[&[u8]] = &[b".pad", b"padding"];
+
 /// A file before the torrent-wide encoding decision is made.
 struct Draft<'a> {
     path: Vec<&'a [u8]>,
@@ -338,17 +343,25 @@ impl Info {
         };
 
         // One encoding decision per torrent (see `TextEncoding::detect`).
-        // Strings taken from `.utf-8` keys are UTF-8 by definition; everything
-        // else shares one detected encoding.
-        let paths_from_utf8 = !drafts.is_empty() && drafts.iter().all(|d| d.path_utf8.is_some());
+        // Each file prefers its own valid `path.utf-8`; the name (unless
+        // `name.utf-8` labels it), the legacy paths left and the symlink
+        // targets share one encoding.
         let mut unlabelled: Vec<&[u8]> = Vec::new();
         if name_utf8.is_none() {
             unlabelled.push(name_raw);
         }
-        if !paths_from_utf8 {
-            unlabelled.extend(drafts.iter().flat_map(|d| d.path.iter().copied()));
+        for d in &drafts {
+            if d.path_utf8.is_none() {
+                unlabelled.extend(d.path.iter().copied());
+            }
+            // BEP 52 strings are UTF-8, so a pure v2 target can't sway the
+            // encoding of every file name.
+            if version != MetaVersion::V2 {
+                unlabelled.extend(d.symlink_target.iter().flatten().copied());
+            }
         }
-        let detected = TextEncoding::detect(unlabelled.iter().copied(), opts.encoding_hint);
+        let hint = opts.encoding_hint.filter(TextEncoding::is_name_encoding);
+        let detected = legacy_encoding(&unlabelled, &drafts, hint);
         let name = match name_utf8 {
             Some(n) => Text {
                 raw: n.to_vec(),
@@ -359,29 +372,19 @@ impl Info {
                 encoding: detected,
             },
         };
-        let path_encoding = if paths_from_utf8 {
-            TextEncoding::UTF8
-        } else {
-            detected
-        };
+        let (path_encoding, mut paths) = resolve_paths(&drafts, detected);
+        enforce_path_limits(&mut paths, limits)?;
 
         let files = drafts
             .into_iter()
-            .map(|d| {
-                let path = match (paths_from_utf8, d.path_utf8) {
-                    (true, Some(p)) => p,
-                    _ => d.path,
-                };
-                File {
-                    path: path.into_iter().map(<[u8]>::to_vec).collect(),
-                    size: d.size,
-                    attrs: d.attrs,
-                    symlink_target: d
-                        .symlink_target
-                        .map(|t| t.into_iter().map(<[u8]>::to_vec).collect()),
-                    pieces_root: d.pieces_root,
-                    hashes: d.hashes,
-                }
+            .zip(paths)
+            .map(|(d, (path, symlink_target))| File {
+                path,
+                size: d.size,
+                attrs: d.attrs,
+                symlink_target,
+                pieces_root: d.pieces_root,
+                hashes: d.hashes,
             })
             .collect();
 
@@ -432,6 +435,151 @@ impl Info {
         }
         out
     }
+}
+
+type RawPath<'a> = Vec<&'a [u8]>;
+
+/// Files that carry both a legacy `path` and its `path.utf-8` show which
+/// encoding the creator wrote; at most this many are compared.
+const MAX_ENCODING_PAIRS: usize = 16;
+
+/// The encoding of the legacy text in `unlabelled`.
+///
+/// Valid UTF-8 wins. Otherwise detection also reads the legacy `path` bytes
+/// of files that have a `path.utf-8`: the same client wrote them, so they're
+/// more evidence. Those files also give ground truth: if another encoding
+/// decodes more of their legacy paths to exactly their `path.utf-8`, that
+/// encoding is taken over the statistical guess (or the hint).
+fn legacy_encoding(
+    unlabelled: &[&[u8]],
+    drafts: &[Draft<'_>],
+    hint: Option<TextEncoding>,
+) -> TextEncoding {
+    if unlabelled.iter().all(|s| std::str::from_utf8(s).is_ok()) {
+        return TextEncoding::UTF8;
+    }
+    let pairs: Vec<(&[&[u8]], &RawPath<'_>)> = drafts
+        .iter()
+        .filter_map(|d| Some((&d.path[..], d.path_utf8.as_ref()?)))
+        .filter(|(raw, _)| raw.iter().any(|s| std::str::from_utf8(s).is_err()))
+        .take(MAX_ENCODING_PAIRS)
+        .collect();
+    let evidence = unlabelled
+        .iter()
+        .copied()
+        .chain(pairs.iter().flat_map(|(raw, _)| raw.iter().copied()));
+    let detected = TextEncoding::detect(evidence, hint);
+    let fits = |e: TextEncoding| {
+        pairs
+            .iter()
+            .filter(|(raw, utf8)| {
+                raw.len() == utf8.len()
+                    && raw
+                        .iter()
+                        .zip(utf8.iter())
+                        .all(|(r, u)| e.decode(r).as_bytes() == *u)
+            })
+            .count()
+    };
+    let baseline = fits(detected);
+    if baseline == pairs.len() {
+        return detected;
+    }
+    // The first best candidate, so ties keep the table's order.
+    let (best, count) = TextEncoding::legacy_candidates()
+        .map(|e| (e, fits(e)))
+        .fold(
+            (detected, baseline),
+            |acc, c| if c.1 > acc.1 { c } else { acc },
+        );
+    if count > baseline { best } else { detected }
+}
+
+type OwnedPath = Vec<Vec<u8>>;
+
+/// Picks each file's path and the one encoding every stored path and
+/// symlink target is in.
+///
+/// A file with a valid `path.utf-8` uses it. Other paths, and all symlink
+/// targets (BEP 47 has no UTF-8 variant), keep their legacy bytes, judged to
+/// be in `detected`. When both kinds are present and the legacy bytes aren't
+/// UTF-8, the UTF-8 paths are re-encoded into `detected` so the legacy raw
+/// bytes survive. Only if one of them can't be written losslessly in
+/// `detected` is the legacy text decoded to UTF-8 instead, because the right
+/// file name matters more than the legacy bytes.
+fn resolve_paths(
+    drafts: &[Draft<'_>],
+    detected: TextEncoding,
+) -> (TextEncoding, Vec<(OwnedPath, Option<OwnedPath>)>) {
+    let raw = |s: &[u8]| s.to_vec();
+    let legacy = drafts
+        .iter()
+        .any(|d| d.path_utf8.is_none() || d.symlink_target.is_some());
+    let labelled = || drafts.iter().filter_map(|d| d.path_utf8.as_ref()).flatten();
+    let reencode = |s: &[u8]| {
+        std::str::from_utf8(s)
+            .ok()
+            .and_then(|t| detected.encode_exact(t))
+    };
+    if !legacy || detected == TextEncoding::UTF8 {
+        (TextEncoding::UTF8, map_paths(drafts, raw, raw))
+    } else if labelled().next().is_none() {
+        (detected, map_paths(drafts, raw, raw))
+    } else if labelled().all(|s| reencode(s).is_some()) {
+        let files = map_paths(drafts, |s| reencode(s).unwrap_or_else(|| s.to_vec()), raw);
+        (detected, files)
+    } else {
+        let decode = |s: &[u8]| detected.decode(s).into_owned().into_bytes();
+        (TextEncoding::UTF8, map_paths(drafts, raw, decode))
+    }
+}
+
+/// Re-checks the byte limit on resolved paths: decoding legacy text to
+/// UTF-8 (up to 3 bytes per input byte) or re-encoding into a stateful
+/// encoding such as ISO-2022-JP can grow them. An over-limit path rejects
+/// the torrent, as it would have in the input; an over-limit symlink target
+/// is dropped and the link kept, as the parser does for input targets.
+/// Segment counts never change, so depth needs no re-check.
+fn enforce_path_limits(
+    paths: &mut [(OwnedPath, Option<OwnedPath>)],
+    limits: &Limits,
+) -> Result<(), Error> {
+    let bytes = |p: &OwnedPath| p.iter().map(Vec::len).sum::<usize>();
+    for (path, target) in paths {
+        if bytes(path) > limits.max_path_bytes {
+            return Err(Error::LimitExceeded {
+                what: "path length",
+                limit: limits.max_path_bytes,
+            });
+        }
+        if target
+            .as_ref()
+            .is_some_and(|t| bytes(t) > limits.max_path_bytes)
+        {
+            *target = None;
+        }
+    }
+    Ok(())
+}
+
+/// Converts every path and target segment: `labelled` for `path.utf-8`
+/// segments, `legacy` for everything else.
+fn map_paths(
+    drafts: &[Draft<'_>],
+    labelled: impl Fn(&[u8]) -> Vec<u8>,
+    legacy: impl Fn(&[u8]) -> Vec<u8>,
+) -> Vec<(OwnedPath, Option<OwnedPath>)> {
+    let legacy_path = |p: &[&[u8]]| p.iter().map(|s| legacy(s)).collect();
+    drafts
+        .iter()
+        .map(|d| {
+            let path = match &d.path_utf8 {
+                Some(p) => p.iter().map(|s| labelled(s)).collect(),
+                None => legacy_path(&d.path),
+            };
+            (path, d.symlink_target.as_deref().map(legacy_path))
+        })
+        .collect()
 }
 
 /// The info dictionary re-encoded without `pieces`, for the optional raw
@@ -505,13 +653,21 @@ fn parse_v1_files<'a>(
                     .as_dict()
                     .ok_or(wrong_type("files", "list of dictionaries"))?;
                 let mut draft = file_props(f, "length", limits, warnings)?;
-                draft.path = path_list(
-                    f.get(b"path").ok_or(Error::MissingField("path"))?,
-                    "path",
-                    limits,
-                )?;
+                let path = f.get(b"path");
+                if let Some(p) = path {
+                    draft.path = path_list(p, "path", limits)?;
+                }
                 if draft.path.is_empty() {
-                    return Err(invalid("path", "empty path"));
+                    // BEP 47 lets padding files omit their path.
+                    if draft.attrs.contains(FileAttrs::PADDING) {
+                        draft.path = PADDING_PATH.to_vec();
+                        out.push(draft);
+                        continue;
+                    }
+                    return Err(match path {
+                        None => Error::MissingField("path"),
+                        Some(_) => invalid("path", "empty path"),
+                    });
                 }
                 // A broken `path.utf-8` just falls back to `path`.
                 draft.path_utf8 = f
@@ -534,18 +690,9 @@ fn file_props<'a>(
     limits: &Limits,
     warnings: &mut Warnings,
 ) -> Result<Draft<'a>, Error> {
-    let size = get_u64(d, length_key)?.ok_or(Error::MissingField("length"))?;
-    let attrs = get_bytes(d, "attr")
-        .ok()
-        .flatten()
-        .map(FileAttrs::parse)
-        .unwrap_or_default();
-    let symlink_target = if attrs.contains(FileAttrs::SYMLINK) {
-        d.get(b"symlink path")
-            .and_then(|p| path_list(p, "symlink path", limits).ok())
-    } else {
-        None
-    };
+    let attrs = file_attrs(d);
+    let size = file_size(d, length_key, attrs)?;
+    let symlink_target = symlink_target(d, attrs, limits);
     let hashes = FileHashes {
         md5: file_hash::<16>(d, "md5sum", warnings),
         sha1: file_hash::<20>(d, "sha1", warnings),
@@ -560,6 +707,32 @@ fn file_props<'a>(
         pieces_root: None,
         hashes,
     })
+}
+
+fn file_attrs(d: &Dict<'_>) -> FileAttrs {
+    get_bytes(d, "attr")
+        .ok()
+        .flatten()
+        .map(FileAttrs::parse)
+        .unwrap_or_default()
+}
+
+/// BEP 47 lets a symlink omit its length, which is then zero.
+fn file_size(d: &Dict<'_>, length_key: &'static str, attrs: FileAttrs) -> Result<u64, Error> {
+    match get_u64(d, length_key)? {
+        Some(size) => Ok(size),
+        None if attrs.contains(FileAttrs::SYMLINK) => Ok(0),
+        None => Err(Error::MissingField("length")),
+    }
+}
+
+/// A malformed or over-limit target is dropped; the link itself is kept.
+fn symlink_target<'a>(d: &Dict<'a>, attrs: FileAttrs, limits: &Limits) -> Option<Vec<&'a [u8]>> {
+    if !attrs.contains(FileAttrs::SYMLINK) {
+        return None;
+    }
+    d.get(b"symlink path")
+        .and_then(|p| path_list(p, "symlink path", limits).ok())
 }
 
 /// Accepts the raw digest or its hex form; anything else is ignored with a warning.
@@ -684,7 +857,8 @@ fn walk_tree<'a>(
                     limit: limits.max_files,
                 });
             }
-            let size = get_u64(props, "length")?.ok_or(Error::MissingField("length"))?;
+            let attrs = file_attrs(props);
+            let size = file_size(props, "length", attrs)?;
             let pieces_root = match props.get(b"pieces root").and_then(Value::as_bytes) {
                 Some(r) if r.len() == 32 => r.try_into().ok(),
                 _ => None,
@@ -696,12 +870,8 @@ fn walk_tree<'a>(
                 path: prefix.clone(),
                 path_utf8: None,
                 size,
-                attrs: get_bytes(props, "attr")
-                    .ok()
-                    .flatten()
-                    .map(FileAttrs::parse)
-                    .unwrap_or_default(),
-                symlink_target: None,
+                attrs,
+                symlink_target: symlink_target(props, attrs, limits),
                 pieces_root,
                 hashes: FileHashes::default(),
             });
