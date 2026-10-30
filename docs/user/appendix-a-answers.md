@@ -8,7 +8,7 @@ Answers to the questions at the end of each chapter, in the same order.
 2. The index does random reads and writes, which spinning disks and network shares handle slowly.
 3. No. Lodestar works without a router change, and forwarding is optional.
 
-## Chapter 2: Install Lodestar on Unraid and Docker
+## Chapter 2: Install on Unraid and Docker
 
 1. Use `/mnt/cache/appdata/lodestar` or your pool's path. `/mnt/user` goes through Unraid's FUSE layer, which is slow and risky for SQLite.
 2. Leave **PUID** at `99` and **PGID** at `100`, and never use `0`. Lodestar makes **Data** belong to that user on start, and `0` is root.

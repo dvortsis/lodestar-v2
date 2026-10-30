@@ -1,4 +1,4 @@
-# Chapter 2: Install Lodestar on Unraid and Docker
+# Chapter 2: Install on Unraid and Docker
 
 This chapter installs Lodestar from the Unraid template or with Docker Compose, then takes you through first run.
 
@@ -34,6 +34,9 @@ To install from the template:
 5. Check the fields against [section 2.2](#22-settings-in-the-unraid-template). Leave everything else on its default.
 6. Select **Apply**.
    **Result:** Unraid pulls the image and starts the [container](glossary.md#container). A **Lodestar** icon appears on the Docker tab.
+
+![Unraid template form showing Web UI, DHT UDP port and Data pool path](images/unraid-template-illustration.svg)
+*Figure 2.1: The three main fields in the Unraid template, with Data outlined on `/mnt/cache`. Illustration, not a live screenshot.*
 
 Then check the user in [section 2.3](#23-check-the-user-the-container-runs-as) and finish with [section 2.5](#25-create-the-admin-password).
 
@@ -126,6 +129,9 @@ To check the user:
 2. Turn on **Advanced View** at the top right.
 3. Check that **PUID** is `99` and **PGID** is `100`.
    **Result:** Both fields show the Unraid defaults. Leave them.
+
+![Unraid Advanced View showing PUID 99 and PGID 100 fields](images/unraid-puid-pgid-illustration.svg)
+*Figure 2.2: PUID and PGID in Advanced View set to Unraid's nobody and users defaults. Illustration, not a live screenshot.*
 
 > [!CAUTION]
 > Never set **PUID** or **PGID** to `0`. That is root, so a bug in Lodestar could change anything on your server.
@@ -224,6 +230,9 @@ To create the admin password:
 3. Open `http://<server-ip>:8090` in your browser. Replace `<server-ip>` with your server's address, or use `localhost` on the same machine.
 4. Enter the token and choose a password from your password manager.
    **Result:** Lodestar signs you in. It prints no token again.
+
+![Lodestar first-run setup screen with the Setup token field outlined](images/setup-screen.png)
+*Figure 2.3: The first-run setup screen at /setup, with the Setup token field outlined and log instructions expanded.*
 
 The crawler starts at once. The library fills slowly at first while the DHT routing table warms up.
 

@@ -1,0 +1,4 @@
+2026-10-23T12:44:54.196159Z  WARN lodestar::services: first run: open http://127.0.0.1:8484/ and enter setup token [redacted] to create the admin password
+2026-10-23T12:44:54.198939Z  INFO lodestar_pipeline: pipeline starting stored=0 queued=0
+2026-10-23T12:44:54.202502Z  INFO lodestar::services: UI on http://127.0.0.1:8484/, status page on /status (data in [redacted]\soak\data)
+2026-10-23T12:44:54.203184Z  INFO lodestar_pipeline::dht: DHT node started addrs=[0.0.0.0:6881]
