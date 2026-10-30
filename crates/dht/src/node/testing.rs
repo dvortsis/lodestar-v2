@@ -15,7 +15,7 @@ use rand::rngs::StdRng;
 use tokio::sync::{Mutex, mpsc};
 
 use super::transport::{RecvSocket, SendSocket};
-use super::{Config, Harvest, Node};
+use super::{Config, Harvest, Node, NodeHandle, StatsSnapshot};
 
 /// A datagram the node sent: destination and bytes.
 pub type Outbound = (SocketAddr, Vec<u8>);
@@ -95,4 +95,10 @@ pub fn start(
             inbound: in_tx,
         },
     )
+}
+
+/// The node's stats through a handle, which outlives [`Node::shutdown`]:
+/// what a run counted up to its very end, shutdown work included.
+pub fn stats(handle: &NodeHandle) -> StatsSnapshot {
+    handle.stats.snapshot()
 }

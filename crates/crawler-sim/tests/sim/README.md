@@ -14,7 +14,9 @@ wires them, in tokio's paused clock, against:
 - **scripted metadata peers** (`fetch.rs`) at the level the pool sees them:
   success, slow success, refusal, timeout or unreachable.
 
-Ten simulated minutes take one to five seconds of wall time.
+Ten simulated minutes take one to five seconds of wall time. The restart
+scenario (6 h 26 min of leg 1, mostly idle, plus an hour of leg 2) takes
+about ten.
 
 ## Run
 
@@ -35,6 +37,7 @@ Regenerate only when the change is intended, and say why in the PR.
 | `healthy` | 2,000 nodes, 15% dead, 2% loss, 40–200 ms replies; the reference shape |
 | `high-latency` | H1: 35% dead, 6% loss, 0.35–1.75 s replies and 20% at 3.6 s (near the 4 s query timeout), so each owned lookup holds a slot longer |
 | `admission-pressure` | H2: 90% BEP 51 nodes on 60 s intervals over a 200,000-hash catalogue, 15% live, so keys far outrun the 32-request cap and churn through retries and eviction |
+| `restart-honoured` | CR-0d's restored restrictions end to end: `healthy` on 15 min ± 25% intervals, restarted cleanly with `dht.safe_restart` on (below) |
 
 `admission-pressure` also departs from the production pool defaults:
 `max_pending` 20,000 (not 200,000) and `retry_backoff` 30 s (not 120 s).
@@ -42,6 +45,51 @@ That compresses hours of queue growth and retry rounds into ten
 minutes, so its evictions come mostly from that cap. A candidate that
 screens in on it must be re-checked at the production defaults, with the
 60-minute `#[ignore]` run or its own scenario.
+
+### The restart scenario
+
+A scenario with `restart: Some(Restart { .. })` runs two legs in one
+runtime, against one network that keeps its state (sample windows,
+intervals) and its record of every `sample_infohashes` (`Net::asks`: the
+node, when it was sent, and when its reply reached the node with which
+`interval`, if one did):
+
+1. **Leg 1** starts fresh with the restart proof on (`Config.restart`,
+   `state_path` and the witness dir in a temp dir, `inline_io`, and a
+   simulated wall clock: a fixed base plus elapsed virtual time). A first
+   start suppresses for 6 h plus the query timeout; leg 1 then samples for
+   `leg1_minutes` and shuts down cleanly, which commits the proof. Replies
+   still on their way are lost with the process.
+2. **Leg 2** starts `gap_s` later from the same dirs, with the pool's queue
+   restored, and runs the scenario's `minutes`. The per-minute rows and
+   totals are leg 2's.
+
+The run asserts, and the report's last sections show:
+
+- **No node is sampled before its restored obligation expires.** Each
+  node's earliest re-sample is computed from its last leg-1 sample with
+  the sampler's rules: the reply's arrival plus its interval, clamped to
+  the 60 s floor and the 6 h ceiling; the ceiling for an error reply; and
+  the send plus the ceiling when no reply arrived before the stop (a
+  timeout cools from later than that, a sealed sample from the stop).
+  That's a lower bound on the real deadline, so any earlier leg-2 sample
+  is a violation.
+- **Sampling resumes at once** for everything else: the first leg-2 sample
+  comes within a minute, and the report gives how soon each expiring
+  obligation's node was sampled again (median and max).
+- **The counters add up:** `restart_obligations_restored` = `pending` +
+  `honoured`; `restored` ≥ the restrictions the network's record says were
+  still live at the restart (equal in the golden); and each leg's
+  `samples_sent` equals the samples the network saw, answered, errored and
+  unanswered. The proof's `sample_suppression_reason` is `resumed`.
+- **The restart cost:** metadata stored in the first hour after the safe
+  restart, against leg 1's first hour of a fresh 6 h suppression (zero:
+  the simulated network sends no queries, so there are no passive
+  harvests).
+
+The negative control (`restart_without_safe_restart_suppresses_in_full`)
+turns `safe_restart` off for leg 2: the reason is `off`, nothing is
+restored, and no node is sampled in the suppression window.
 
 The first minutes are warmup: the first BEP 51 sweep and the lock-step
 retries of its rejected keys. The report's `steady` line averages the
@@ -77,7 +125,8 @@ It has four parts:
   - an in-memory socket for the actor;
   - a seeded actor RNG;
   - B-tree maps and sets in place of the actor's hash tables and the pool's request map, whose iteration order reaches scheduling;
-  - fixed keys for the DHT seen filter, so its rare false positives (dropped harvests) land on the same hashes every run.
+  - fixed keys for the DHT seen filter, so its rare false positives (dropped harvests) land on the same hashes every run;
+  - `testing::stats`, which reads a node's counters through a handle after its shutdown, so a leg's totals include what it sent while stopping.
 
   Production keeps the randomly keyed std hash tables and seen-filter keys.
 - **Platforms and toolchains:** a fixed hasher would not be enough. A hash table's layout depends on its SIMD group width (16 on x86_64, 8 on arm64) and on the std release, and changing only the hash keys moves every golden. B-tree order depends on `Ord` alone, so the goldens hold on every CI runner and across toolchain updates.
@@ -86,9 +135,9 @@ It has four parts:
 - **Every run checks conservation:**
   - fetched equals stored once the run has shut down;
   - funnel `Fetched` equals `PoolStats::fetched`;
-  - admitted ≥ completed + cancelled, and the same plus the active and queued gauges, less the 32-request cap the 1 s gauge refresh can lag by.
+  - admitted ≥ completed + cancelled + dropped while queued (`peer_queued_dropped`, by reason), and admitted + 32 ≥ the same plus the active and queued gauges.
 
-  `≥`, not `=`: the actor drops closed-caller requests from its queue without counting them, a counter contract that predates CR-SIM.
+  The second check is a bound, not an equality, only because the active and queued gauges refresh on the 1 s tick: at the boundary they may still count up to the 32-request cap that has since finished.
 
 ## A/B a candidate
 

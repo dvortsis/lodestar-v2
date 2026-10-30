@@ -17,6 +17,22 @@ pub struct Scenario {
     pub intensity: Intensity,
     pub pool: PoolConfig,
     pub switches: Switches,
+    /// Two legs with a clean restart between them; `minutes` is then
+    /// leg 2's length.
+    pub restart: Option<Restart>,
+}
+
+/// CR-SIM-restart: leg 1 starts fresh with `dht.safe_restart` on, sits out
+/// its first-start suppression (6 h plus the query timeout), samples for
+/// `leg1_minutes` and stops cleanly. After `gap_s`, leg 2 starts from the
+/// same data and witness dirs against the same network.
+#[derive(Debug, Clone, Copy)]
+pub struct Restart {
+    pub leg1_minutes: u32,
+    pub gap_s: u64,
+    /// `dht.safe_restart` in leg 2. Off is the negative control: the full
+    /// suppression again.
+    pub safe_restart: bool,
 }
 
 /// The simulated DHT nodes.
@@ -161,6 +177,7 @@ pub fn base(name: &'static str) -> Scenario {
         intensity: Intensity::Balanced,
         pool: PoolConfig::default(),
         switches: Switches::default(),
+        restart: None,
     }
 }
 
@@ -197,5 +214,21 @@ pub fn admission_pressure() -> Scenario {
     s.swarm.live_permille = 150;
     s.pool.max_pending = 20_000;
     s.pool.retry_backoff = Duration::from_secs(30);
+    s
+}
+
+/// CR-0d's restored restrictions end to end: a clean restart with
+/// `dht.safe_restart` on. Intervals of 15 min ± 25% keep restored
+/// obligations pending well into leg 2; leg 2's hour is the restart-cost
+/// baseline against leg 1's fresh 6 h suppression.
+pub fn restart_honoured() -> Scenario {
+    let mut s = base("restart-honoured");
+    s.minutes = 60;
+    s.net.sample_interval_s = 900;
+    s.restart = Some(Restart {
+        leg1_minutes: 20,
+        gap_s: 120,
+        safe_restart: true,
+    });
     s
 }

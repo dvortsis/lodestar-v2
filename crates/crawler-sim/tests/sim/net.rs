@@ -12,7 +12,7 @@
 //! to a live hash hold its swarm and return it as `values`.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 
 use lodestar_dht::NodeId;
@@ -76,6 +76,20 @@ pub struct NetStats {
     pub values_replies: u64,
 }
 
+/// One `sample_infohashes` the node sent (CR-SIM-restart's record).
+#[derive(Debug, Clone, Copy)]
+pub struct SampleAsk {
+    pub to: SocketAddr,
+    pub sent: Instant,
+    /// When the reply reaches the node, and the BEP 51 `interval` it
+    /// carries (`None` for a KRPC error). `None` when nothing comes back:
+    /// lost, rate-limited, a dead or unknown address, or sent after the
+    /// network stopped.
+    pub reply: Option<(Instant, Option<u32>)>,
+    /// The reply's place in the in-flight heap.
+    seq: u64,
+}
+
 /// A reply on its way: (due, tie-break, bytes, from).
 type InFlight = Reverse<(Instant, u64, Vec<u8>, SocketAddr)>;
 
@@ -94,6 +108,8 @@ pub struct Net {
     heap: BinaryHeap<InFlight>,
     seq: u64,
     pub stats: NetStats,
+    /// Every `sample_infohashes` the node sent, in order.
+    pub asks: Vec<SampleAsk>,
 }
 
 /// A fresh public address no one else has.
@@ -198,6 +214,7 @@ impl Net {
             heap: BinaryHeap::new(),
             seq: 0,
             stats: NetStats::default(),
+            asks: Vec::new(),
         };
         (net, bootstrap)
     }
@@ -207,8 +224,13 @@ impl Net {
         self.swarms.len()
     }
 
-    /// Serves the node until `stop` fires.
-    pub async fn run(mut self, mut port: SimPort, mut stop: watch::Receiver<bool>) -> NetStats {
+    /// Serves the node until `stop` fires; gives back the network and the
+    /// port, for [`Net::drain`] and a restart.
+    pub async fn run(
+        mut self,
+        mut port: SimPort,
+        mut stop: watch::Receiver<bool>,
+    ) -> (Net, SimPort) {
         loop {
             let next = self.heap.peek().map(|Reverse((at, ..))| *at);
             tokio::select! {
@@ -224,7 +246,36 @@ impl Net {
                 }
             }
         }
-        self.stats
+        (self, port)
+    }
+
+    /// After the node has stopped: records the samples it sent once the
+    /// network had stopped serving, which go unanswered.
+    pub fn drain(&mut self, port: &mut SimPort) {
+        while let Ok((to, bytes)) = port.outbound.try_recv() {
+            if let Ok(msg) = krpc::parse(&bytes)
+                && let Body::Query(q) = &msg.body
+                && matches!(q.method, Method::SampleInfohashes { .. })
+            {
+                self.asks.push(SampleAsk {
+                    to,
+                    sent: Instant::now(),
+                    reply: None,
+                    seq: 0,
+                });
+            }
+        }
+    }
+
+    /// The node's process ended: replies still on their way have nowhere
+    /// to go.
+    pub fn cut(&mut self) {
+        let flying: HashSet<u64> = self.heap.drain().map(|Reverse((_, seq, ..))| seq).collect();
+        for ask in &mut self.asks {
+            if ask.reply.is_some() && flying.contains(&ask.seq) {
+                ask.reply = None;
+            }
+        }
     }
 
     fn on_packet(&mut self, to: SocketAddr, bytes: &[u8]) {
@@ -240,9 +291,19 @@ impl Net {
             Method::Ping => self.stats.ping += 1,
             Method::FindNode { .. } => self.stats.find_node += 1,
             Method::GetPeers { .. } => self.stats.get_peers += 1,
-            Method::SampleInfohashes { .. } => self.stats.sample += 1,
+            Method::SampleInfohashes { .. } => {
+                self.stats.sample += 1;
+                self.asks.push(SampleAsk {
+                    to,
+                    sent: Instant::now(),
+                    reply: None,
+                    seq: 0,
+                });
+            }
             _ => self.stats.other += 1,
         }
+        let ask =
+            matches!(query.method, Method::SampleInfohashes { .. }).then(|| self.asks.len() - 1);
         let Some(&i) = self.by_addr.get(&to) else {
             self.stats.to_unknown += 1;
             return;
@@ -272,12 +333,14 @@ impl Net {
             }
             rate.1 += 1;
         }
-        let reply = if chance(2, self.cfg.error_permille) {
+        let errored = chance(2, self.cfg.error_permille);
+        let reply = if errored {
             self.stats.errors += 1;
             error(msg.transaction_id, error_code::SERVER, b"busy")
         } else {
             self.answer(i, msg.transaction_id, &query.method)
         };
+        let interval = (!errored && self.nodes[i].bep51).then_some(self.nodes[i].interval_s);
         // The reply can be lost on the way back too.
         if roll(3) % 1000 < u64::from(self.cfg.loss_permille) {
             self.stats.lost += 1;
@@ -292,6 +355,10 @@ impl Net {
         self.seq += 1;
         self.stats.replies += 1;
         let at = Instant::now() + Duration::from_millis(ms);
+        if let Some(k) = ask {
+            self.asks[k].reply = Some((at, interval));
+            self.asks[k].seq = self.seq;
+        }
         self.heap.push(Reverse((at, self.seq, reply, to)));
     }
 
