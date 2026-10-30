@@ -48,7 +48,9 @@ const KINDS: usize = 6;
 
 /// Failures since the last summary, by kind, and when that was (seconds
 /// since the first failure, plus one: 0 before it). A monotonic clock, so
-/// a stepped wall clock can't stretch or stall the window.
+/// a stepped wall clock can't stretch or stall the window. Aligned to its
+/// own cache lines, away from other statics the fetch workers touch.
+#[repr(align(128))]
 struct Summary {
     failed: [AtomicU64; KINDS],
     since: AtomicU64,

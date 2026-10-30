@@ -12,7 +12,7 @@ use lodestar_integrations::{
     AddOptions, AuthFailure, Category, ClientError, ClientKind, DownloadClient, Feature, Magnet,
     Secret, Selection, TorrentFile,
 };
-use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes, refused_addr};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "F16304349815C2941FE00ABABB5FE4E9098E0EE4";
@@ -499,11 +499,8 @@ async fn unknown_methods_and_bad_answers() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
-    let rt = RTorrent::new(&format!("http://127.0.0.1:{port}/RPC2"), auth()).unwrap();
+    let (_held, addr) = refused_addr();
+    let rt = RTorrent::new(&format!("http://{addr}/RPC2"), auth()).unwrap();
     assert_eq!(rt.test().await.unwrap_err(), ClientError::Unreachable);
 }
 

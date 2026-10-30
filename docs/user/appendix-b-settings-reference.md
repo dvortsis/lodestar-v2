@@ -17,7 +17,8 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | DHT port | Gluetun template only (`LODESTAR_DHT_PORT`) | `6881` | Match the port your VPN provider forwards. |
 
 The templates do not include a Log level field. You can optionally add a custom
-container variable with key `LODESTAR_LOG` for console logging (`error`, `warn`, `info` or `debug`).
+container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
+(`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
 **Recommended:** leave it unset; the default is `info`.
 
 <!-- nav:start -->
