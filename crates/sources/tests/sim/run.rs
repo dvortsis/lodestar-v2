@@ -337,13 +337,11 @@ fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored: u6
         funnel_fetched, fetched as i64,
         "funnel Fetched vs PoolStats::fetched"
     );
-    // Every admitted request finishes once at most. `>=`, not `==`: the
-    // actor's queue drops closed-caller requests without counting them
-    // (a counter contract predating CR-SIM, followed up separately).
-    // Owned lookups that ended, completed or cancelled (exclusive since
-    // CR-0f). The harness never starts legacy `get_peers` lookups, which
-    // also count as completed.
-    let done = d.lookups_completed + d.peer_cancelled;
+    // Every admitted request ends once at most: completed, cancelled
+    // while active (exclusive since CR-0f) or dropped while queued. The
+    // harness never starts legacy `get_peers` lookups, which also count
+    // as completed.
+    let done = d.lookups_completed + d.peer_cancelled + d.peer_queued_dropped.iter().sum::<u64>();
     assert!(
         d.peer_admitted >= done,
         "admitted {} < done {done}",
@@ -513,6 +511,11 @@ fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &Funne
         ("peer_command_full", d.peer_command_full),
         ("peer_command_closed", d.peer_command_closed),
         ("peer_cancelled", d.peer_cancelled),
+        (
+            "peer_queued_dropped_caller_closed",
+            d.peer_queued_dropped[0],
+        ),
+        ("peer_queued_dropped_paused", d.peer_queued_dropped[1]),
         ("peer_active", d.peer_active),
         ("peer_queued", d.peer_queued),
         ("lookup_scheduled", d.lookup_scheduled),
