@@ -31,6 +31,9 @@ use tokio::time::{Instant, sleep_until};
 use crate::funnel::{Funnel, Loss, Stage};
 use crate::plugin::{BoxFuture, Discovery, PeerRequest, Shutdown};
 
+mod admission;
+use admission::{Admission, Class, Grant, WaitKind, Waiter};
+
 /// The owned-request map, the one map whose iteration order reaches
 /// scheduling (`poll_replies`). Production keeps the randomly keyed std hash
 /// table; the `testing` feature swaps in a B-tree so the crawler simulator
@@ -99,6 +102,13 @@ pub struct PoolConfig {
     pub recent: usize,
     /// Start paused (the crawler's pause): see [`PoolHandle::set_paused`].
     pub paused: bool,
+    /// Coordinated admission (CR-ADM, `dht.coordinated_admission`): ask a
+    /// finder only with one of its permits, and queue for one otherwise.
+    /// Off, the pool behaves exactly as before the switch existed.
+    pub coordinated_admission: bool,
+    /// Permits per finder under coordinated admission: the finder's own
+    /// cap on owned requests (the DHT's `PEER_REQUEST_CAPACITY`).
+    pub finder_capacity: usize,
 }
 
 impl Default for PoolConfig {
@@ -114,6 +124,8 @@ impl Default for PoolConfig {
             max_attempts: 4,
             recent: 50_000,
             paused: false,
+            coordinated_admission: false,
+            finder_capacity: 32,
         }
     }
 }
@@ -157,6 +169,23 @@ pub struct PoolStats {
     pub retry_unaccepted: AtomicU64,
     /// Eviction service reached this process: unaccepted, lookup, peers, fetch.
     pub evicted_service: [AtomicU64; 4],
+    /// Coordinated admission (CR-ADM); all zero with the switch off.
+    /// Keys that queued for a permit, by kind: arrival, retry, requeue.
+    pub admission_waits: [AtomicU64; 3],
+    /// Waiters that left without a request: evicted, peers arrived.
+    pub admission_wait_cancelled: [AtomicU64; 2],
+    pub admission_wakeups: AtomicU64,
+    /// Requests granted permits, by kind, then class (interactive,
+    /// background).
+    pub admission_grants: [[AtomicU64; 2]; 3],
+    /// Permitted requests not accepted: refused, unacknowledged.
+    pub admission_refusals: [AtomicU64; 2],
+    pub admission_holds: AtomicU64,
+    /// Permits returned in the pool: finder full, finder closed, unused.
+    pub admission_permit_returns: [AtomicU64; 3],
+    /// Gauges: keys waiting for a lookup, and permits requests hold.
+    pub admission_waiters: AtomicU64,
+    pub admission_permits_in_use: AtomicU64,
 }
 
 impl PoolStats {
@@ -272,6 +301,9 @@ pub fn spawn(
 ) -> (PoolHandle, JoinHandle<Vec<QueuedKey>>) {
     let (cmd_tx, cmd_rx) = mpsc::channel(64);
     let stats = Arc::new(PoolStats::default());
+    let admission = config
+        .coordinated_admission
+        .then(|| Admission::new(io.peer_finders.len(), config.finder_capacity.max(1)));
     let mut pool = Pool {
         cfg: config,
         fetcher,
@@ -288,6 +320,8 @@ pub fn spawn(
         generations: 0,
         admitted: VecDeque::new(),
         lookup_backlog: VecDeque::new(),
+        admission,
+        waiting: 0,
         lookups: 0,
         requests: RequestMap::default(),
         per_ip: HashMap::new(),
@@ -363,12 +397,18 @@ struct SourceQueue {
 }
 
 enum FinderReply {
-    Admission(oneshot::Receiver<Option<oneshot::Receiver<Vec<SocketAddr>>>>),
+    /// The finder's index and its admission answer.
+    Admission(
+        usize,
+        oneshot::Receiver<Option<oneshot::Receiver<Vec<SocketAddr>>>>,
+    ),
     Completion(oneshot::Receiver<Vec<SocketAddr>>),
 }
 
 struct Request {
     generation: u64,
+    /// Sent with admission permits (CR-ADM).
+    coordinated: bool,
     accepted: bool,
     /// An accepted finder answered. Accepted with none answering means the
     /// finders dropped the work (a pause, a shutdown): cancelled, and the
@@ -396,6 +436,11 @@ struct Pool {
     /// Admission order, for eviction (lazily cleaned).
     admitted: VecDeque<InfoHash>,
     lookup_backlog: VecDeque<InfoHash>,
+    /// Coordinated admission's permits and waiters, with the switch on;
+    /// they replace `lookup_backlog` then.
+    admission: Option<Admission>,
+    /// Entries in `LookupQueued`.
+    waiting: usize,
     lookups: usize,
     requests: RequestMap,
     per_ip: HashMap<IpAddr, usize>,
@@ -405,6 +450,14 @@ struct Pool {
     task_keys: HashMap<Id, (InfoHash, SocketAddr)>,
     recent: HashSet<InfoHash>,
     recent_order: VecDeque<InfoHash>,
+}
+
+/// A queued copy still stands for its entry: the entry waits for a
+/// lookup at the generation it was queued with.
+fn is_waiting(entries: &HashMap<InfoHash, Entry>, w: &Waiter) -> bool {
+    entries
+        .get(&w.key)
+        .is_some_and(|e| e.state == State::LookupQueued && e.generation == w.generation)
 }
 
 /// The next entry generation. Never 0, which a new entry starts at, and
@@ -427,6 +480,7 @@ impl Pool {
             self.dispatch();
             self.publish_stats();
             let wake = self.timers.peek().map(|Reverse((at, ..))| *at);
+            let credit = self.credit_target();
             tokio::select! {
                 biased;
                 _ = shutdown.requested() => break,
@@ -443,6 +497,16 @@ impl Pool {
                 }
                 _ = replies.tick(), if !self.requests.is_empty() => self.poll_replies(),
                 Some(cmd) = cmds.recv() => self.on_cmd(cmd),
+                (finder, permit) = admission::acquire(credit.clone()), if credit.is_some() => {
+                    self.stats.admission_wakeups.fetch_add(1, Ordering::Relaxed);
+                    if let Some(a) = &mut self.admission {
+                        a.on_woken(finder, permit);
+                    }
+                    // A finder answers a refusal before it returns the
+                    // permit, so reading replies now sets the refusal's
+                    // hold before the permit can go to another waiter.
+                    self.poll_replies();
+                }
                 _ = sleep_until(wake.unwrap_or_else(Instant::now)), if wake.is_some() => {
                     self.poll_replies();
                     self.on_timers();
@@ -461,6 +525,10 @@ impl Pool {
             }
         }
         self.tasks.abort_all();
+        if let Some(a) = &mut self.admission {
+            let unused = a.drop_held();
+            self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+        }
         self.snapshot()
     }
 
@@ -486,7 +554,14 @@ impl Pool {
             Cmd::Snapshot(reply) => {
                 let _ = reply.send(self.snapshot());
             }
-            Cmd::SetPaused(paused) => self.cfg.paused = paused,
+            Cmd::SetPaused(paused) => {
+                self.cfg.paused = paused;
+                // A paused pool grants nothing, so it keeps no permit back.
+                if paused && let Some(a) = &mut self.admission {
+                    let unused = a.drop_held();
+                    self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+                }
+            }
             Cmd::Queued(reply) => {
                 let mut q: Vec<(SourceId, usize)> = self
                     .sources
@@ -561,7 +636,7 @@ impl Pool {
             self.admitted.retain(|k| entries.contains_key(k));
         }
         if d.found.peers.is_empty() {
-            self.request_peers(key);
+            self.request_peers(key, WaitKind::Arrival);
         } else {
             self.add_peers(key, &d.found.peers);
             if self
@@ -569,7 +644,7 @@ impl Pool {
                 .get(&key)
                 .is_some_and(|e| e.state == State::Backoff)
             {
-                self.request_peers(key);
+                self.request_peers(key, WaitKind::Arrival);
             }
         }
     }
@@ -600,7 +675,7 @@ impl Pool {
             },
         );
         self.admitted.push_back(q.info_hash);
-        self.request_peers(q.info_hash);
+        self.request_peers(q.info_hash, WaitKind::Arrival);
     }
 
     /// Merges peers into a key; a key that was waiting becomes ready.
@@ -646,6 +721,12 @@ impl Pool {
 
     fn make_ready(&mut self, key: InfoHash) {
         let e = self.entries.get_mut(&key).expect("present");
+        if e.state == State::LookupQueued {
+            self.waiting -= 1;
+            if self.admission.is_some() {
+                self.stats.admission_wait_cancelled[1].fetch_add(1, Ordering::Relaxed);
+            }
+        }
         e.state = State::Ready;
         e.generation = next_generation(&mut self.generations);
         let (source, interest) = (e.source, e.interest);
@@ -672,24 +753,64 @@ impl Pool {
         match e.state {
             // The stale copy in its source queue is skipped when popped.
             State::Ready => self.interest.push_back(key),
-            State::Backoff => self.request_peers(key),
+            State::Backoff => self.request_peers(key, WaitKind::Retry),
+            // A copy joins the interactive queue; whichever is granted
+            // first makes the other stale.
+            // Private keys never take permits.
+            State::LookupQueued if self.admission.is_some() && !e.private => {
+                let kind = if e.lookup_requested {
+                    WaitKind::Retry
+                } else {
+                    WaitKind::Arrival
+                };
+                let waiter = Waiter {
+                    key,
+                    generation: e.generation,
+                    kind,
+                };
+                if let Some(a) = &mut self.admission {
+                    a.push(Class::Interactive, waiter, false);
+                }
+            }
             State::Fetching | State::LookupQueued | State::Lookup => {}
         }
     }
 
     /// Asks the peer finders for peers, or queues the ask if too many
     /// lookups are out. Gives the key up once it has used its attempts.
-    fn request_peers(&mut self, key: InfoHash) {
+    /// Under coordinated admission it also queues without a permit from
+    /// every open finder, or behind keys already waiting.
+    fn request_peers(&mut self, key: InfoHash, kind: WaitKind) {
+        self.request_peers_as(key, kind, None);
+    }
+
+    /// [`request_peers`](Self::request_peers), or with `grant` the send a
+    /// waiter's permits were taken for (from [`drain_admission`]).
+    ///
+    /// [`drain_admission`]: Self::drain_admission
+    fn request_peers_as(&mut self, key: InfoHash, kind: WaitKind, grant: Option<Grant>) {
         let max_attempts = self.cfg.max_attempts;
         let e = self.entries.get_mut(&key).expect("present");
         if e.attempts >= max_attempts {
             let loss = e.last_failure.map_or(Loss::NoPeers, Loss::from);
             self.lose(key, loss);
+            if grant.is_some() {
+                self.stats.admission_permit_returns[2].fetch_add(1, Ordering::Relaxed);
+            }
             return;
         }
+        if e.state == State::LookupQueued {
+            self.waiting -= 1;
+        }
         e.generation = next_generation(&mut self.generations);
+        let coordinated = !e.private && self.admission.as_ref().is_some_and(Admission::active);
         if self.cfg.paused || self.lookups >= self.cfg.max_lookups {
+            if coordinated {
+                self.wait(key, kind, false);
+                return;
+            }
             e.state = State::LookupQueued;
+            self.waiting += 1;
             if e.interest {
                 self.lookup_backlog.push_front(key);
             } else {
@@ -697,24 +818,74 @@ impl Pool {
             }
             return;
         }
+        let grant = match grant {
+            Some(grant) => Some(grant),
+            None if coordinated => {
+                self.poll_unaccepted();
+                let entries = &self.entries;
+                let a = self.admission.as_mut().expect("coordinated");
+                // A key already waiting goes first: no arrival or retry
+                // overtakes one.
+                let permits = if a.has_live_waiter(|w| is_waiting(entries, w)) {
+                    None
+                } else {
+                    a.take_permits(Instant::now())
+                };
+                let Some(permits) = permits else {
+                    self.wait(key, kind, false);
+                    return;
+                };
+                let class = if entries[&key].interest {
+                    Class::Interactive
+                } else {
+                    Class::Background
+                };
+                Some(Grant { permits, class })
+            }
+            None => None,
+        };
+        let e = self.entries.get_mut(&key).expect("present");
         if e.lookup_requested && e.attempts == 0 {
             self.stats.retry_unaccepted.fetch_add(1, Ordering::Relaxed);
         }
         e.lookup_requested = true;
         e.state = State::Lookup;
         let generation = e.generation;
+        let coordinated = grant.is_some();
         // Private keys wait for their own source; no public request is made.
         let mut replies = Vec::new();
         if !e.private {
-            for finder in &self.finders {
+            let mut permits = grant.map(|g| {
+                self.stats.admission_grants[kind as usize][g.class as usize]
+                    .fetch_add(1, Ordering::Relaxed);
+                g.permits.into_iter()
+            });
+            for (i, finder) in self.finders.iter().enumerate() {
+                let permit = match &mut permits {
+                    // A closed finder has no permit and isn't asked again.
+                    Some(p) => match p.next().flatten() {
+                        Some(permit) => Some(permit),
+                        None => continue,
+                    },
+                    None => None,
+                };
                 let (admit, rx) = oneshot::channel();
-                match finder.try_send(PeerRequest { key, admit }) {
-                    Ok(()) => replies.push(FinderReply::Admission(rx)),
-                    Err(mpsc::error::TrySendError::Full(_)) => {
+                match finder.try_send(PeerRequest { key, admit, permit }) {
+                    Ok(()) => replies.push(FinderReply::Admission(i, rx)),
+                    Err(mpsc::error::TrySendError::Full(r)) => {
                         self.stats.finder_full.fetch_add(1, Ordering::Relaxed);
+                        if r.permit.is_some() {
+                            self.stats.admission_permit_returns[0].fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                    Err(mpsc::error::TrySendError::Closed(r)) => {
                         self.stats.finder_closed.fetch_add(1, Ordering::Relaxed);
+                        if r.permit.is_some() {
+                            self.stats.admission_permit_returns[1].fetch_add(1, Ordering::Relaxed);
+                            if let Some(a) = &mut self.admission {
+                                a.close(i);
+                            }
+                        }
                     }
                 }
             }
@@ -733,6 +904,7 @@ impl Pool {
             key,
             Request {
                 generation,
+                coordinated,
                 accepted: false,
                 answered: false,
                 replies,
@@ -741,6 +913,90 @@ impl Pool {
         self.lookups += 1;
         let at = Instant::now() + self.cfg.lookup_wait;
         self.schedule(at, key, generation);
+    }
+
+    /// Queues a key for a permit (coordinated admission). Requeued work
+    /// has waited its turn already and goes to the front.
+    fn wait(&mut self, key: InfoHash, kind: WaitKind, front: bool) {
+        let e = self.entries.get_mut(&key).expect("present");
+        e.state = State::LookupQueued;
+        self.waiting += 1;
+        let class = if e.interest {
+            Class::Interactive
+        } else {
+            Class::Background
+        };
+        let waiter = Waiter {
+            key,
+            generation: e.generation,
+            kind,
+        };
+        self.stats.admission_waits[kind as usize].fetch_add(1, Ordering::Relaxed);
+        let entries = &self.entries;
+        let a = self.admission.as_mut().expect("coordinated");
+        a.push(class, waiter, front);
+        a.compact(self.waiting, |w| is_waiting(entries, w));
+    }
+
+    /// Grants waiting keys the permits available now, oldest first, and
+    /// gives back a woken permit nobody is left to use.
+    fn drain_admission(&mut self) {
+        loop {
+            if self.lookups >= self.cfg.max_lookups {
+                return;
+            }
+            self.poll_unaccepted();
+            let entries = &self.entries;
+            let Some(a) = self.admission.as_mut() else {
+                return;
+            };
+            let live = |w: &Waiter| is_waiting(entries, w);
+            if !a.has_live_waiter(live) {
+                break;
+            }
+            if !a.active() {
+                // Every finder closed: waiters take the ordinary no-finder
+                // path (unaccepted, back-off), with no permit to grant.
+                let (waiter, _) = a.pop(live).expect("a live waiter");
+                self.request_peers(waiter.key, waiter.kind);
+                continue;
+            }
+            let Some(permits) = a.take_permits(Instant::now()) else {
+                return;
+            };
+            let (waiter, class) = a.pop(live).expect("a live waiter");
+            self.request_peers_as(waiter.key, waiter.kind, Some(Grant { permits, class }));
+        }
+        if let Some(a) = &mut self.admission {
+            let unused = a.drop_held();
+            self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+        }
+    }
+
+    /// Reads the answers of permitted requests not yet accepted. A finder
+    /// answers a refusal before it returns the permit, so reading first
+    /// sets the refusal's hold before that permit can be taken again,
+    /// whichever path takes it.
+    fn poll_unaccepted(&mut self) {
+        let keys: Vec<_> = self
+            .requests
+            .iter()
+            .filter(|(_, r)| r.coordinated && !r.accepted)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in keys {
+            self.poll_request(key);
+        }
+    }
+
+    /// What the pool's wakeup waits on: a finder's next permit, while keys
+    /// wait for one and the pool could use it.
+    fn credit_target(&self) -> Option<admission::WaitTarget> {
+        let a = self.admission.as_ref()?;
+        if self.cfg.paused || self.lookups >= self.cfg.max_lookups || !a.has_waiters() {
+            return None;
+        }
+        a.wait_target()
     }
 
     /// Poll only the bounded set of owned requests; no task per discovery.
@@ -766,13 +1022,21 @@ impl Pool {
         let mut waiting = Vec::new();
         let mut peers = Vec::new();
         let mut unique = HashSet::new();
+        // Finders that refused, or never acknowledged, this request.
+        let (mut refused, mut unacknowledged) = (Vec::new(), Vec::new());
         for mut reply in request.replies {
-            if let FinderReply::Admission(rx) = &mut reply {
+            if let FinderReply::Admission(finder, rx) = &mut reply {
+                let finder = *finder;
                 match rx.try_recv() {
                     Ok(Some(done)) => {
                         if !request.accepted {
                             self.entries.get_mut(&key).expect("present").attempts += 1;
                             request.accepted = true;
+                        }
+                        if request.coordinated
+                            && let Some(a) = &mut self.admission
+                        {
+                            a.clear_hold(finder);
                         }
                         reply = FinderReply::Completion(done);
                     }
@@ -780,7 +1044,14 @@ impl Pool {
                         waiting.push(reply);
                         continue;
                     }
-                    Ok(None) | Err(TryRecvError::Closed) => continue,
+                    Ok(None) => {
+                        refused.push(finder);
+                        continue;
+                    }
+                    Err(TryRecvError::Closed) => {
+                        unacknowledged.push(finder);
+                        continue;
+                    }
                 }
             }
             if let FinderReply::Completion(rx) = &mut reply {
@@ -806,8 +1077,12 @@ impl Pool {
         if finished && !request.accepted {
             self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
         }
+        if finished && !request.accepted && request.coordinated {
+            self.requeue_refused(key, &refused, &unacknowledged);
+            return;
+        }
         if finished && request.accepted && !request.answered {
-            self.requeue_cancelled(key);
+            self.requeue_cancelled(key, request.coordinated);
             return;
         }
         self.requests.insert(key, request);
@@ -828,18 +1103,43 @@ impl Pool {
     /// Every accepting finder dropped the request unanswered: give the
     /// attempt back and queue the key for the next lookup slot, with no
     /// back-off. A paused pool holds it until it resumes.
-    fn requeue_cancelled(&mut self, key: InfoHash) {
+    fn requeue_cancelled(&mut self, key: InfoHash, coordinated: bool) {
         self.lookups -= 1;
         let e = self.entries.get_mut(&key).expect("present");
         e.attempts = e.attempts.saturating_sub(1);
         // It was accepted, so its retry isn't a retry of unaccepted work.
         e.lookup_requested = false;
+        if coordinated {
+            self.wait(key, WaitKind::Requeue, true);
+            return;
+        }
         e.state = State::LookupQueued;
+        self.waiting += 1;
         if e.interest {
             self.lookup_backlog.push_front(key);
         } else {
             self.lookup_backlog.push_back(key);
         }
+    }
+
+    /// Coordinated admission: every finder refused the permitted request
+    /// or lost its acknowledgment. No attempt was used and none is charged
+    /// as back-off; the key goes back to the front of its queue, and those
+    /// finders rest for [`admission::REFUSAL_HOLD`] so the permit it gave
+    /// back doesn't come straight back to the same refusal.
+    fn requeue_refused(&mut self, key: InfoHash, refused: &[usize], unacknowledged: &[usize]) {
+        self.lookups -= 1;
+        let reason = usize::from(refused.is_empty());
+        self.stats.admission_refusals[reason].fetch_add(1, Ordering::Relaxed);
+        if let Some(a) = &mut self.admission {
+            let until = Instant::now() + admission::REFUSAL_HOLD;
+            for &finder in refused.iter().chain(unacknowledged) {
+                let unused = a.hold(finder, until);
+                self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+                self.stats.admission_holds.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.wait(key, WaitKind::Requeue, true);
     }
 
     fn schedule(&mut self, at: Instant, key: InfoHash, generation: u64) {
@@ -871,7 +1171,7 @@ impl Pool {
                     e.state = State::Backoff;
                     self.back_off(key);
                 }
-                State::Backoff => self.request_peers(key),
+                State::Backoff => self.request_peers(key, WaitKind::Retry),
                 State::Ready | State::Fetching | State::LookupQueued => {}
             }
         }
@@ -900,6 +1200,12 @@ impl Pool {
         if self.cfg.paused {
             return;
         }
+        if self.admission.is_some() {
+            self.drain_admission();
+        }
+        // Under coordinated admission this still serves keys that don't
+        // take permits: private ones, and all of them once no finder is
+        // open.
         self.drain_lookup_backlog();
         let mut deferred = Vec::new();
         while self.tasks.len() < self.cfg.max_sockets {
@@ -952,7 +1258,7 @@ impl Pool {
                 .get(&key)
                 .is_some_and(|e| e.state == State::LookupQueued)
             {
-                self.request_peers(key);
+                self.request_peers(key, WaitKind::Retry);
             }
         }
     }
@@ -1071,14 +1377,22 @@ impl Pool {
 
     /// Drops the oldest key that's still looking for peers and isn't wanted
     /// by a user. Keys with peers are the likeliest to succeed, so they stay.
+    /// Under coordinated admission a key whose lookup holds a permit stays
+    /// too: the oldest waiter is the next one granted, so evicting granted
+    /// work would cancel nearly every lookup just after admission.
     fn evict_one(&mut self) -> bool {
         for _ in 0..64.min(self.admitted.len()) {
             let Some(key) = self.admitted.pop_front() else {
                 break;
             };
+            let permitted = self.requests.get(&key).is_some_and(|r| r.coordinated);
             match self.entries.get(&key) {
                 None => continue,
-                Some(e) if matches!(e.state, State::Ready | State::Fetching) || e.interest => {
+                Some(e)
+                    if matches!(e.state, State::Ready | State::Fetching)
+                        || e.interest
+                        || permitted =>
+                {
                     self.admitted.push_back(key);
                 }
                 Some(_) => {
@@ -1107,6 +1421,12 @@ impl Pool {
         if e.state == State::Lookup {
             self.requests.remove(&key);
             self.lookups -= 1;
+        }
+        if e.state == State::LookupQueued {
+            self.waiting -= 1;
+            if self.admission.is_some() && loss == Loss::Evicted {
+                self.stats.admission_wait_cancelled[0].fetch_add(1, Ordering::Relaxed);
+            }
         }
         self.lose_untracked(&key, e.cohort, e.source, loss);
     }
@@ -1149,6 +1469,12 @@ impl Pool {
         s.lookups.store(self.lookups as u64, Ordering::Relaxed);
         s.lookup_backlog
             .store(self.lookup_backlog.len() as u64, Ordering::Relaxed);
+        if let Some(a) = &self.admission {
+            s.admission_waiters
+                .store(self.waiting as u64, Ordering::Relaxed);
+            s.admission_permits_in_use
+                .store(a.in_use() as u64, Ordering::Relaxed);
+        }
     }
 }
 
