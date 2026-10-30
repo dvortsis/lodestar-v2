@@ -1459,6 +1459,22 @@
    "model": "opus",
    "attempt": 1,
    "notes": " | 2026-10-30T13:45Z launched: logging source_tests delete_while_writers_run_and_a_compression_is_in_flight deleted 0 under load (reported by IMP-1)"
+  },
+  "S-settings-reconcile": {
+   "notes": " | 2026-10-30T14:25Z launched (opus) from main; base 848e10a0 + ports; budgets by splitting"
+  },
+  "X-crawler-sim-crate": {
+   "status": "queued",
+   "model": "opus",
+   "deps": [
+    "CR-0d-2a"
+   ],
+   "notes": "brief written; launch after CR-0d-2a merges"
+  },
+  "X-clippy-msrv": {
+   "status": "queued",
+   "model": "sonnet",
+   "notes": "brief written; launch when no large Rust PR is open across touched crates"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
