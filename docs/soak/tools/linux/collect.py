@@ -67,7 +67,8 @@ COUNTERS = tuple("dht_" + name + "_total" for name in (
 STORAGE = (
     "store_db_bytes", "store_wal_bytes", "search_index_bytes", "storage_sampled_seconds",
     "storage_sample_errors_total", "search_file_cache_entries", "search_file_cache_bytes",
-    "search_browse_cache_entries", "search_result_cache_entries", "search_result_cache_bytes",
+    "search_browse_cache_entries", "search_browse_cache_bytes", "search_result_cache_entries",
+    "search_result_cache_bytes",
     "have_bytes", "hot_columns_bytes",
 )
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE)

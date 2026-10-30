@@ -64,8 +64,9 @@ pub fn sample(paths: &Paths, g: &Gauges, max_entries: usize) {
         }
     }
     if ok {
+        // Release: a reader that sees the time sees the sizes too.
         g.sampled_at
-            .store(crate::unix_now().max(0) as u64, Ordering::Relaxed);
+            .store(crate::unix_now().max(0) as u64, Ordering::Release);
     }
 }
 
@@ -75,9 +76,11 @@ fn wal_path(db: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// A regular file's length; 0 when `missing_ok` and it doesn't exist.
+/// A file's length; 0 when `missing_ok` and it doesn't exist. These are
+/// fixed paths, so a database moved elsewhere behind a symlink is
+/// followed and its own size reported.
 fn file_len(path: &Path, missing_ok: bool) -> io::Result<u64> {
-    match std::fs::symlink_metadata(path) {
+    match std::fs::metadata(path) {
         Ok(m) => Ok(m.len()),
         Err(e) if missing_ok && e.kind() == io::ErrorKind::NotFound => Ok(0),
         Err(e) => Err(e),
@@ -242,7 +245,7 @@ mod tests {
         // mustn't wait for the next tick.
         let task = spawn(paths, g.clone(), Duration::from_secs(3600), stopped);
         eventually("the first sample", || {
-            g.sampled_at.load(Ordering::Relaxed) > 0
+            g.sampled_at.load(Ordering::Acquire) > 0
         })
         .await;
         assert_eq!(g.db_bytes.load(Ordering::Relaxed), 4096);

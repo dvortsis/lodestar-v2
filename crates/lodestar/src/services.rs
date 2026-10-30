@@ -379,7 +379,7 @@ impl Services {
         let sampler = crate::storage::spawn(
             crate::storage::Paths {
                 db: config.db_path(),
-                index: config.data_dir.join("index"),
+                index: index_root.clone(),
             },
             storage.clone(),
             crate::storage::INTERVAL,

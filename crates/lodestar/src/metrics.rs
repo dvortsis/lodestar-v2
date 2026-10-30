@@ -893,6 +893,12 @@ pub fn render_caches(
         "Per-segment sorted tops cached by the serving index.",
         index.browse_entries,
     );
+    o.one(
+        "search_browse_cache_bytes",
+        "gauge",
+        "Estimated bytes of the per-segment sorted tops.",
+        index.browse_bytes,
+    );
     let kinds = [("search", &results.search), ("facets", &results.facets)];
     o.family(
         "search_result_cache_entries",
@@ -997,6 +1003,7 @@ mod tests {
             file_set_entries: 3,
             file_set_bytes: 1024,
             browse_entries: 5,
+            browse_bytes: 640,
         };
         let mut results = lodestar_search::CacheStats::default();
         results.facets.bytes = 77;
@@ -1012,6 +1019,7 @@ mod tests {
             ("search_file_cache_entries", "gauge"),
             ("search_file_cache_bytes", "gauge"),
             ("search_browse_cache_entries", "gauge"),
+            ("search_browse_cache_bytes", "gauge"),
             ("search_result_cache_entries", "gauge"),
             ("search_result_cache_bytes", "gauge"),
         ] {
@@ -1024,6 +1032,7 @@ mod tests {
             "lodestar_storage_sample_errors_total 2\n",
             "lodestar_search_file_cache_bytes 1024\n",
             "lodestar_search_browse_cache_entries 5\n",
+            "lodestar_search_browse_cache_bytes 640\n",
             "lodestar_search_result_cache_bytes{kind=\"facets\"} 77\n",
             "lodestar_search_result_cache_entries{kind=\"search\"} 0\n",
         ] {

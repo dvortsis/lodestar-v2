@@ -793,6 +793,17 @@ mod cache_regressions {
     }
 
     #[test]
+    fn usage_reports_entries_and_the_charged_bytes() {
+        let cache = FileSetCache::default();
+        assert_eq!(cache.usage(), (0, 0));
+        cache.insert(key(1), Arc::new(vec![1; 100]));
+        let (entries, bytes) = cache.usage();
+        assert_eq!(entries, 1);
+        assert_eq!(bytes, cache.state.lock().unwrap().retained_bytes() as u64);
+        assert!(bytes >= 800, "{bytes}");
+    }
+
+    #[test]
     fn hits_refresh_recency_and_replacement_does_not_double_charge() {
         let cache = FileSetCache {
             state: Mutex::new(CacheState::default()),
