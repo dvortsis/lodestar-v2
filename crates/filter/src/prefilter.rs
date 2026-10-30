@@ -189,10 +189,10 @@ fn need_in(node: &Node, in_file: bool) -> Result<Option<Keyed>, ()> {
         Node::And { of } => {
             let mut best: Option<Keyed> = None;
             for n in of {
-                if let Some(k) = need_in(n, in_file)? {
-                    if best.as_ref().is_none_or(|b| better(&k, b)) {
-                        best = Some(k);
-                    }
+                if let Some(k) = need_in(n, in_file)?
+                    && best.as_ref().is_none_or(|b| better(&k, b))
+                {
+                    best = Some(k);
                 }
             }
             Ok(best)
@@ -1440,29 +1440,28 @@ impl<'a> Scan<'a> {
             pairs(&mut self.pairs, last.get(), first.get());
             // Joined to the previous word by a single '.' or '-': the
             // compound sits at the previous word's first position.
-            if let Some((ps, pe, pp)) = prev {
-                if s == pe + 1
-                    && matches!(b[pe], b'.' | b'-')
-                    && pe - ps <= 4
-                    && word.len() <= 4
-                    && joins(&b[ps..pe], b[pe], word)
-                {
-                    let joined = fmix64(hash(hash(fnv_start(), &b[ps..pe]), word));
-                    if fits(pe - ps + word.len()) {
-                        self.token(joined, &[&b[ps..pe], word]);
-                        self.occur(joined, pp, None);
+            if let Some((ps, pe, pp)) = prev
+                && s == pe + 1
+                && matches!(b[pe], b'.' | b'-')
+                && pe - ps <= 4
+                && word.len() <= 4
+                && joins(&b[ps..pe], b[pe], word)
+            {
+                let joined = fmix64(hash(hash(fnv_start(), &b[ps..pe]), word));
+                if fits(pe - ps + word.len()) {
+                    self.token(joined, &[&b[ps..pe], word]);
+                    self.occur(joined, pp, None);
+                }
+                pairs(&mut self.pairs, self.at.before.get(), &[joined]);
+                match self.at.second {
+                    // The previous word split: its second part follows.
+                    Some(p1) => {
+                        self.pairs.insert(pair(joined, p1));
                     }
-                    pairs(&mut self.pairs, self.at.before.get(), &[joined]);
-                    match self.at.second {
-                        // The previous word split: its second part follows.
-                        Some(p1) => {
-                            self.pairs.insert(pair(joined, p1));
-                        }
-                        // It didn't: its first position was its last.
-                        None => {
-                            pairs(&mut self.pairs, &[joined], first.get());
-                            last.push(joined);
-                        }
+                    // It didn't: its first position was its last.
+                    None => {
+                        pairs(&mut self.pairs, &[joined], first.get());
+                        last.push(joined);
                     }
                 }
             }
@@ -1472,10 +1471,10 @@ impl<'a> Scan<'a> {
                 let (from, to) = w.near;
                 for k in from..to {
                     let (h, off, id) = self.near_words[k as usize];
-                    if off > 0 {
-                        if let Some(plus) = plus_at.take() {
-                            self.occur(plus, p, None);
-                        }
+                    if off > 0
+                        && let Some(plus) = plus_at.take()
+                    {
+                        self.occur(plus, p, None);
                     }
                     self.occur(h, p + off, Some(id));
                 }

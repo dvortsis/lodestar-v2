@@ -155,16 +155,15 @@ impl Near<'_> {
     #[inline]
     fn place(&self, w: &Operand, t: &fasttok::Tok) -> Option<(u32, u32)> {
         let field = self.field;
-        if let Some((first, rest)) = w.parts.split_first() {
-            if t.hash == first.hash
-                && field.text(t) == &*first.text
-                && rest.iter().zip(1..).all(|(x, i)| {
-                    let pos = t.position + i;
-                    self.any_between(pos, pos, |t| field.is(t, x.hash, &x.text))
-                })
-            {
-                return Some((t.position, t.position + rest.len() as u32));
-            }
+        if let Some((first, rest)) = w.parts.split_first()
+            && t.hash == first.hash
+            && field.text(t) == &*first.text
+            && rest.iter().zip(1..).all(|(x, i)| {
+                let pos = t.position + i;
+                self.any_between(pos, pos, |t| field.is(t, x.hash, &x.text))
+            })
+        {
+            return Some((t.position, t.position + rest.len() as u32));
         }
         (!w.whole.is_empty() && w.whole.iter().any(|x| field.is(t, x.hash, &x.text)))
             .then_some((t.position, t.position))
