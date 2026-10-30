@@ -1154,11 +1154,11 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "lodestar-bencode"
-version = "0.0.0"
+version = "0.5.0"
 
 [[package]]
 name = "lodestar-classify"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-cluster"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "futures-util",
  "lodestar-integrations",
@@ -1186,20 +1186,22 @@ dependencies = [
 
 [[package]]
 name = "lodestar-dht"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "lodestar-bencode",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "rand 0.10.3",
  "sha1",
+ "sha2",
  "socket2",
  "tokio",
 ]
 
 [[package]]
 name = "lodestar-filter"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "chacha20poly1305",
  "flate2",
@@ -1231,11 +1233,12 @@ dependencies = [
  "lodestar-utp",
  "semver",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "lodestar-integrations"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.3.4",
@@ -1253,14 +1256,14 @@ dependencies = [
 
 [[package]]
 name = "lodestar-log"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "lodestar-metainfo"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -1270,12 +1273,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-network-policy"
+version = "0.5.0"
+
+[[package]]
 name = "lodestar-release-parser"
-version = "0.0.0"
+version = "0.5.0"
 
 [[package]]
 name = "lodestar-search"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "lodestar-classify",
  "lodestar-log",
@@ -1290,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-store"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
  "rusqlite",
@@ -1299,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-tracker-scrape"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "lodestar-bencode",
  "lodestar-metainfo",
@@ -1312,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-update"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -1325,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-utp"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "rand 0.10.3",
  "socket2",

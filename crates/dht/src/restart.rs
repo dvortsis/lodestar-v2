@@ -24,7 +24,9 @@ pub const VERSION: u32 = 1;
 pub const LOCK_FILE: &str = "dht-restart.lock";
 pub const MARKER_FILE: &str = "dht-restart.mark";
 pub const SNAPSHOT_FILE: &str = "dht-restart.bin";
-/// The sampler's `MAX_KNOWN`: a snapshot never holds more.
+/// The sampler's table bound (`sampler::MAX_KNOWN` is defined from this):
+/// a snapshot never holds more. Seeding must insert every restored entry
+/// or fail to Suppress; it may never drop one to make room.
 pub const MAX_ENTRIES: usize = 200_000;
 /// A decode bound only; validation requires the current `H_s` exactly.
 pub const MAX_HORIZON_S: u32 = 86_400;
@@ -511,8 +513,34 @@ pub enum CaptureError {
     /// happen with the sampler's clamps; refusing the commit (the marker
     /// stays dirty) is safe, where clamping would shorten it.
     BeyondHorizon,
+    /// `horizon_s` is outside `1..=MAX_HORIZON_S`: the file would never
+    /// decode.
+    BadHorizon,
     PortZero,
+    /// An IPv6 key with a scope id or flow label. The sampler keys on the
+    /// whole `SocketAddr`, so writing it without them would restore the
+    /// restriction under a different key (and lose it). Refusing the
+    /// commit is safe; only `allow_private` fixtures can reach this.
+    Scoped,
     TooMany,
+}
+
+/// S10 with the clock reads in the required order: monotonic, then wall.
+pub fn capture_now(
+    clock: &dyn Clock,
+    run: RunHeader,
+    table: impl IntoIterator<Item = (SocketAddr, Instant)>,
+    gate_until: Option<Instant>,
+    horizon_s: u32,
+) -> Result<Snapshot, CaptureError> {
+    let mono = clock.mono();
+    let wall = clock.wall();
+    capture(run, table, gate_until, mono, wall, horizon_s)
+}
+
+/// S11's marker time: a wall reading taken after S10's, rounded up (N4).
+pub fn stamp_after_capture(clock: &dyn Clock) -> u64 {
+    ceil_ms(clock.wall())
 }
 
 /// Builds the snapshot from the live table. `mono` must be read before
@@ -525,6 +553,9 @@ pub fn capture(
     wall: Duration,
     horizon_s: u32,
 ) -> Result<Snapshot, CaptureError> {
+    if horizon_s == 0 || horizon_s > MAX_HORIZON_S {
+        return Err(CaptureError::BadHorizon);
+    }
     let left = |until: Instant| -> Result<u32, CaptureError> {
         let s = ceil_s(until.saturating_duration_since(mono));
         if s > u64::from(horizon_s) {
@@ -542,8 +573,9 @@ pub fn capture(
         if addr.port() == 0 {
             return Err(CaptureError::PortZero);
         }
-        // Drops any IPv6 scope or flow label: they aren't part of the key.
-        let addr = SocketAddr::new(addr.ip(), addr.port());
+        if matches!(addr, SocketAddr::V6(v6) if v6.scope_id() != 0 || v6.flowinfo() != 0) {
+            return Err(CaptureError::Scoped);
+        }
         entries.push(Entry { addr, remaining_s });
     }
     entries.sort_by(|a, b| {
@@ -599,7 +631,8 @@ pub struct Loaded {
     pub state_bin: Option<Digest32>,
 }
 
-/// This run's side of the comparison.
+/// This run's side of the comparison. Build it with [`Here::read`], which
+/// takes the clock readings in the required order.
 #[derive(Debug, Clone)]
 pub struct Here {
     pub path: String,
@@ -609,6 +642,23 @@ pub struct Here {
     /// Read before `mono0` (I4).
     pub wall0: Duration,
     pub mono0: Instant,
+}
+
+impl Here {
+    /// S0: reads wall, then monotonic (I4), and derives `dir_path` from
+    /// `path`, so the two can't disagree.
+    pub fn read(clock: &dyn Clock, path: String, ids: Digest32, horizon_s: u32) -> Here {
+        let wall0 = clock.wall();
+        let mono0 = clock.mono();
+        Here {
+            dir_path: path_digest(&path),
+            path,
+            ids,
+            horizon_s,
+            wall0,
+            mono0,
+        }
+    }
 }
 
 /// Why sampling isn't resumed, or `Resumed` (the metric's label set, §5.3).
@@ -861,7 +911,10 @@ pub enum Point {
     AfterSetLen,
     AfterSync,
     AfterRename,
+    /// Before the directory fsync: the crash state of `AfterRename`, but
+    /// it also injects that fsync's error.
     DirSync,
+    AfterDirSync,
 }
 
 #[cfg(test)]
@@ -914,7 +967,7 @@ fn sync_parent(path: &Path) -> io::Result<()> {
     }
     #[cfg(not(unix))]
     let _ = path;
-    Ok(())
+    fail::hit(Point::AfterDirSync)
 }
 
 fn tmp_path(path: &Path) -> PathBuf {
@@ -1045,11 +1098,12 @@ pub fn read_witness(witness_dir: &Path, data_dir_canonical: &str, dir_id: &Id16)
             _ => WitnessFound::Unusable,
         };
     }
-    match read_found(
-        &witness_path(witness_dir, dir_id),
-        MAX_SMALL_BODY,
-        Witness::decode,
-    ) {
+    let file = witness_path(witness_dir, dir_id);
+    // The file itself may not be a link (into the data dir, say).
+    if fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
+        return WitnessFound::Unusable;
+    }
+    match read_found(&file, MAX_SMALL_BODY, Witness::decode) {
         Found::Missing => WitnessFound::Missing,
         Found::Bad(f) => WitnessFound::Bad(f),
         Found::Ok(w) => WitnessFound::Ok(w),
@@ -1067,10 +1121,26 @@ pub fn remove_stale_tmp(data_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// S3's orphan cleanup (§1.4). Removes witnesses for this path under
-/// another id, and witnesses whose path no longer holds a marker with
-/// their id. Leaves undecodable files alone: they may be mid-write.
-pub fn prune_witnesses(witness_dir: &Path, keep: &Id16, path: &str) -> io::Result<usize> {
+/// Another directory's witness is only judged once it's this old, so a
+/// run between its S3 (new witness) and S4 (marker with that id) keeps it.
+pub const ORPHAN_AGE_MS: u64 = 3_600_000;
+
+/// Orphan cleanup (§1.4). It reads paths named in witness files, which can
+/// hang (a dead network mount), so the caller runs it after S4, off the
+/// S1–S4 critical path. Removes:
+/// - witnesses for this path under another id (this directory's own; no
+///   other run can be writing them while we hold its lock);
+/// - another directory's witness older than [`ORPHAN_AGE_MS`] whose path
+///   has no marker, or a readable marker with a different id.
+///
+/// An unreadable or torn marker, or an undecodable witness, is left alone:
+/// it may be mid-write or on a disk that is spinning up.
+pub fn prune_witnesses(
+    witness_dir: &Path,
+    keep: &Id16,
+    path: &str,
+    now_ms: u64,
+) -> io::Result<usize> {
     let keep_name = witness_path(witness_dir, keep);
     let mut removed = 0;
     for entry in fs::read_dir(witness_dir)?.take(MAX_WITNESS_SCAN) {
@@ -1081,8 +1151,17 @@ pub fn prune_witnesses(witness_dir: &Path, keep: &Id16, path: &str) -> io::Resul
         let Found::Ok(w) = read_found(&p, MAX_SMALL_BODY, Witness::decode) else {
             continue;
         };
-        let orphan = w.path == path
-            || !matches!(read_marker(Path::new(&w.path)), Found::Ok(m) if m.run.dir_id == w.dir_id);
+        let orphan = if w.path == path {
+            true
+        } else if now_ms.saturating_sub(w.at_ms) < ORPHAN_AGE_MS {
+            false
+        } else {
+            match read_marker(Path::new(&w.path)) {
+                Found::Missing => true,
+                Found::Ok(m) => m.run.dir_id != w.dir_id,
+                Found::Bad(_) => false,
+            }
+        };
         if orphan {
             fs::remove_file(&p)?;
             removed += 1;
@@ -1107,6 +1186,10 @@ pub enum LockAttempt {
     Unsupported,
 }
 
+/// `Err` (the lock file can't be created, or the OS refused for another
+/// reason such as `ENOLCK`) means the same as `Busy` to the caller: no
+/// protocol files touched, no samples, retried each tick, and counted as
+/// `persist_errors{step="lock"}`.
 pub fn try_lock(data_dir: &Path) -> io::Result<LockAttempt> {
     let file = OpenOptions::new()
         .read(true)

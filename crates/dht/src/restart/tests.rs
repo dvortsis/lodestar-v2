@@ -150,13 +150,22 @@ type Decodes = fn(&[u8]) -> bool;
 
 #[test]
 fn every_bit_flip_and_truncation_is_rejected() {
-    let files: [(&str, Vec<u8>, Decodes); 3] = [
+    let files: [(&str, Vec<u8>, Decodes); 4] = [
         ("snapshot", snapshot().encode(), |b| {
             Snapshot::decode(b).is_ok()
         }),
-        ("marker", marker(MarkerState::Dirty).encode(), |b| {
+        ("dirty marker", marker(MarkerState::Dirty).encode(), |b| {
             Marker::decode(b).is_ok()
         }),
+        (
+            "clean marker",
+            marker(MarkerState::Clean {
+                snap: [9; 32],
+                state_bin: [8; 32],
+            })
+            .encode(),
+            |b| Marker::decode(b).is_ok(),
+        ),
         ("witness", witness().encode(), |b| {
             Witness::decode(b).is_ok()
         }),
@@ -383,15 +392,10 @@ fn capture_sorts_dedups_normalises_and_skips_expired() {
         IpAddr::V6(Ipv4Addr::new(198, 51, 100, 1).to_ipv6_mapped()),
         6881,
     );
-    let scoped = SocketAddr::V6(std::net::SocketAddrV6::new(
-        "2001:db8::1".parse().unwrap(),
-        6881,
-        7,
-        3,
-    ));
+    // The same endpoint twice (two tables merged): the longer one wins.
     let table = [
         (addr("[2001:db8::1]:6881"), mono + Duration::from_secs(10)),
-        (scoped, mono + Duration::from_secs(20)),
+        (addr("[2001:db8::1]:6881"), mono + Duration::from_secs(20)),
         (mapped, mono + Duration::from_millis(1500)),
         (addr("198.51.100.1:6881"), mono + Duration::from_secs(5)),
         (addr("10.0.0.1:1"), mono),
@@ -451,12 +455,58 @@ fn capture_sorts_dedups_normalises_and_skips_expired() {
     );
 }
 
-#[test]
-fn rounding_never_moves_a_deadline_earlier() {
-    // Wall and monotonic advance together; sub-millisecond offsets
-    // everywhere (I4).
+/// S10 then S2 on clocks that advance together, with the reads in the
+/// required order and sub-millisecond lags: the restored deadline (on the
+/// new monotonic clock, mapped back to wall time) is never before the true
+/// one, and nothing still live is dropped (I4).
+fn assert_capture_then_seed_never_early(
+    offset_ns: u64,
+    s10_lag_ns: u64,
+    gap_ns: u64,
+    s2_lag_ns: u64,
+) {
     let mono_a = Instant::now();
     let wall_a = Duration::from_nanos(1_700_000_000_123_456_789);
+    let until = mono_a + Duration::from_nanos(offset_ns);
+    let true_deadline = wall_a + Duration::from_nanos(offset_ns);
+    // S10: monotonic first (mono_a), the wall a little later.
+    let wall_s10 = wall_a + Duration::from_nanos(s10_lag_ns);
+    let s = capture(
+        run(),
+        [(addr("1.2.3.4:5"), until)],
+        Some(until),
+        mono_a,
+        wall_s10,
+        H,
+    )
+    .unwrap();
+    // S2: the wall first, the monotonic clock a little later.
+    let wall0 = wall_a + Duration::from_nanos(gap_ns);
+    let mono0 = mono_a + Duration::from_nanos(gap_ns + s2_lag_ns);
+    let here = Here {
+        path: "/x".into(),
+        dir_path: [0; 32],
+        ids: [0; 32],
+        horizon_s: H,
+        wall0,
+        mono0,
+    };
+    let seeded = seed(&s, floor_ms(wall0), &here).unwrap();
+    if true_deadline > wall0 {
+        assert_eq!(seeded.entries.len(), 1, "a live entry was dropped");
+        assert!(seeded.gate_until.is_some(), "a live gate was dropped");
+    }
+    for until in seeded.entries.iter().map(|e| e.1).chain(seeded.gate_until) {
+        let wall_of_until = wall0 + until.duration_since(mono0);
+        assert!(
+            wall_of_until >= true_deadline,
+            "early: offset {offset_ns} lag {s10_lag_ns} gap {gap_ns} lag {s2_lag_ns}"
+        );
+    }
+}
+
+#[test]
+fn capture_then_seed_never_moves_a_deadline_earlier() {
     for offset_ns in [
         1u64,
         999_999,
@@ -464,41 +514,25 @@ fn rounding_never_moves_a_deadline_earlier() {
         1_000_001,
         999_999_999,
         1_000_000_000,
+        1_500_000_000,
     ] {
-        let until = mono_a + Duration::from_nanos(offset_ns);
-        // S10 reads mono, then wall a little later.
-        let wall_s10 = wall_a + Duration::from_nanos(3);
-        let s = capture(
-            run(),
-            [(addr("1.2.3.4:5"), until)],
-            Some(until),
-            mono_a,
-            wall_s10,
-            H,
-        )
-        .unwrap();
-        let true_deadline = wall_a + Duration::from_nanos(offset_ns);
-        // S2 one hour later: wall first, mono a little after.
-        let later = Duration::from_secs(5);
-        let wall0 = wall_a + later;
-        let mono0 = mono_a + later + Duration::from_nanos(2);
-        let here = Here {
-            path: "/x".into(),
-            dir_path: [0; 32],
-            ids: [0; 32],
-            horizon_s: H,
-            wall0,
-            mono0,
-        };
-        let seeded = seed(&s, floor_ms(wall0), &here).unwrap();
-        for until in seeded.entries.iter().map(|e| e.1).chain(seeded.gate_until) {
-            // until on the new clock, mapped back to wall time.
-            let wall_of_until = wall0 + until.duration_since(mono0);
-            assert!(
-                wall_of_until >= true_deadline || true_deadline <= wall0,
-                "offset {offset_ns} ns moved earlier"
-            );
+        for gap_ns in [0u64, 1, 999_999, 1_000_000, 500_000_000] {
+            for lag in [0u64, 3, 999_999] {
+                assert_capture_then_seed_never_early(offset_ns, lag, gap_ns, lag);
+            }
         }
+    }
+}
+
+proptest! {
+    #[test]
+    fn capture_then_seed_never_early_for_any_lags(
+        offset_ns in 1u64..30_000_000_000,
+        s10_lag_ns in 0u64..2_000_000,
+        gap_ns in 0u64..30_000_000_000,
+        s2_lag_ns in 0u64..2_000_000,
+    ) {
+        assert_capture_then_seed_never_early(offset_ns, s10_lag_ns, gap_ns, s2_lag_ns);
     }
 }
 
@@ -827,6 +861,7 @@ fn write_atomic_crash_points_leave_old_or_new() {
         Point::AfterSync,
         Point::AfterRename,
         Point::DirSync,
+        Point::AfterDirSync,
     ] {
         write_atomic(&path, &old).unwrap();
         fail::arm(Some(point));
@@ -836,11 +871,36 @@ fn write_atomic_crash_points_leave_old_or_new() {
         );
         fail::arm(None);
         let seen = fs::read(&path).unwrap();
-        let expect_new = matches!(point, Point::AfterRename | Point::DirSync);
+        let expect_new = matches!(
+            point,
+            Point::AfterRename | Point::DirSync | Point::AfterDirSync
+        );
         assert_eq!(seen == new, expect_new, "{point:?}");
         assert!(seen == old || seen == new);
         remove_stale_tmp(dir.path()).unwrap();
         assert!(!tmp_path(&path).exists());
+    }
+}
+
+/// A power cut loses whatever wasn't synced (§6 item 1). Before the
+/// rename is durable that leaves the old file plus a temp file, whole or
+/// torn; a later start reads the old record and removes the temp file.
+#[test]
+fn write_atomic_power_cut_before_the_rename_is_durable() {
+    let dir = Scratch::new("powercut");
+    let path = dir.path().join(MARKER_FILE);
+    let old = marker(MarkerState::Dirty).encode();
+    let new = marker(MarkerState::Off).encode();
+    for torn_len in [0, 1, new.len() / 2, new.len()] {
+        write_atomic(&path, &old).unwrap();
+        fs::write(tmp_path(&path), &new[..torn_len]).unwrap();
+        assert_eq!(
+            read_marker(dir.path()),
+            Found::Ok(marker(MarkerState::Dirty))
+        );
+        remove_stale_tmp(dir.path()).unwrap();
+        assert!(!tmp_path(&path).exists());
+        assert_eq!(fs::read(&path).unwrap(), old);
     }
 }
 
@@ -918,18 +978,23 @@ fn invalidation_never_unlinks() {
 #[test]
 fn abort_mid_write_leaves_a_safe_file() {
     let exe = std::env::current_exe().unwrap();
-    for (mode, point) in [
-        ("atomic", Point::AfterSync),
-        ("atomic", Point::AfterRename),
-        ("inplace", Point::AfterWrite),
-        ("inplace", Point::AfterSetLen),
+    let clean = marker(MarkerState::Clean {
+        snap: [1; 32],
+        state_bin: [2; 32],
+    });
+    let dirty = marker(MarkerState::Dirty);
+    // What each abort point must leave: the atomic path only ever the old
+    // or the new record; the in-place path may also leave a torn file.
+    for (mode, point, expect) in [
+        ("atomic", Point::AfterSync, Some(clean)),
+        ("atomic", Point::AfterRename, Some(dirty)),
+        ("atomic", Point::AfterDirSync, Some(dirty)),
+        ("inplace", Point::AfterWrite, None),
+        ("inplace", Point::AfterSetLen, Some(dirty)),
+        ("inplace", Point::AfterSync, Some(dirty)),
     ] {
         let dir = Scratch::new("abort");
         let path = dir.path().join(MARKER_FILE);
-        let clean = marker(MarkerState::Clean {
-            snap: [1; 32],
-            state_bin: [2; 32],
-        });
         fs::write(&path, clean.encode()).unwrap();
         let status = std::process::Command::new(&exe)
             .args([
@@ -944,15 +1009,11 @@ fn abort_mid_write_leaves_a_safe_file() {
             .status()
             .unwrap();
         assert!(!status.success(), "{mode} {point:?}: the child must abort");
-        // Whatever is left either is the old clean marker, the new dirty
-        // one, or fails to decode: never a different clean proof.
-        match read_marker(dir.path()) {
-            Found::Ok(m) => assert!(
-                m == clean || m.state == MarkerState::Dirty,
-                "{mode} {point:?}"
-            ),
-            Found::Bad(_) => {}
-            Found::Missing => panic!("{mode} {point:?}: marker vanished"),
+        match (read_marker(dir.path()), expect) {
+            (Found::Ok(m), Some(e)) => assert_eq!(m, e, "{mode} {point:?}"),
+            // Torn by an overwrite whose length wasn't set yet.
+            (Found::Bad(_), None) => {}
+            (found, _) => panic!("{mode} {point:?}: left {found:?}"),
         }
     }
 }
@@ -1083,35 +1144,56 @@ fn orphan_witnesses_are_pruned_and_others_kept() {
     fs::create_dir_all(&wdir).unwrap();
     let mine = root.path().join("mine");
     let live = root.path().join("live");
-    fs::create_dir_all(&mine).unwrap();
-    fs::create_dir_all(&live).unwrap();
-    let (mine_c, live_c) = (canonical(&mine).unwrap(), canonical(&live).unwrap());
-    let live_marker = Marker {
+    let torn = root.path().join("torn");
+    let reset = root.path().join("reset");
+    for d in [&mine, &live, &torn, &reset] {
+        fs::create_dir_all(d).unwrap();
+    }
+    let c = |d: &Path| canonical(d).unwrap();
+    let with_id = |id: Id16| Marker {
         run: RunHeader {
-            dir_id: [0x22; 16],
+            dir_id: id,
             ..run()
         },
         ..marker(MarkerState::Dirty)
     };
-    fs::write(live.join(MARKER_FILE), live_marker.encode()).unwrap();
-    let put = |id: Id16, path: &str| {
+    fs::write(live.join(MARKER_FILE), with_id([0x22; 16]).encode()).unwrap();
+    fs::write(torn.join(MARKER_FILE), b"half a marker").unwrap();
+    fs::write(reset.join(MARKER_FILE), with_id([0x55; 16]).encode()).unwrap();
+    let now = 10 * ORPHAN_AGE_MS;
+    let old = now - ORPHAN_AGE_MS;
+    let put = |id: Id16, path: &str, at_ms: u64| {
         let w = Witness {
             dir_id: id,
             path: path.into(),
+            at_ms,
             ..witness()
         };
         fs::write(witness_path(&wdir, &id), w.encode()).unwrap();
     };
-    put([0x11; 16], &mine_c); // this directory's current id
-    put([0x10; 16], &mine_c); // an earlier id of this directory
-    put([0x22; 16], &live_c); // another live data directory
-    put([0x33; 16], "/gone"); // a directory that no longer exists
+    put([0x11; 16], &c(&mine), old); // this directory's current id: kept
+    put([0x10; 16], &c(&mine), now); // an earlier id of this directory: removed, however new
+    put([0x22; 16], &c(&live), old); // another live directory: kept
+    put([0x33; 16], "/gone", old); // no marker there any more: removed
+    put([0x34; 16], "/gone-too", now - 1); // the same, but too recent to judge: kept
+    put([0x44; 16], &c(&torn), old); // a torn marker there: kept
+    put([0x45; 16], &c(&reset), old); // a marker with another id there: removed
     fs::write(wdir.join("torn.gen"), b"not a witness").unwrap();
-    assert_eq!(prune_witnesses(&wdir, &[0x11; 16], &mine_c).unwrap(), 2);
-    assert!(witness_path(&wdir, &[0x11; 16]).exists());
-    assert!(witness_path(&wdir, &[0x22; 16]).exists());
-    assert!(!witness_path(&wdir, &[0x10; 16]).exists());
-    assert!(!witness_path(&wdir, &[0x33; 16]).exists());
+    assert_eq!(
+        prune_witnesses(&wdir, &[0x11; 16], &c(&mine), now).unwrap(),
+        3
+    );
+    for (id, kept) in [
+        (0x11, true),
+        (0x10, false),
+        (0x22, true),
+        (0x33, false),
+        (0x34, true),
+        (0x44, true),
+        (0x45, false),
+    ] {
+        assert_eq!(witness_path(&wdir, &[id; 16]).exists(), kept, "{id:#x}");
+    }
     assert!(wdir.join("torn.gen").exists());
 }
 
@@ -1120,9 +1202,14 @@ fn orphan_witnesses_are_pruned_and_others_kept() {
 #[test]
 fn the_lock_is_exclusive_and_released_on_drop() {
     let dir = Scratch::new("lock");
-    let LockAttempt::Held(first) = try_lock(dir.path()).unwrap() else {
-        // A filesystem without locks: the run would report `locked`.
-        return;
+    let first = match try_lock(dir.path()).unwrap() {
+        LockAttempt::Held(l) => l,
+        other => {
+            // Say so rather than pass silently: this host's temp
+            // filesystem has no locks, so nothing here was checked.
+            eprintln!("SKIPPED: no file locks in the temp dir ({other:?})");
+            return;
+        }
     };
     assert!(matches!(try_lock(dir.path()).unwrap(), LockAttempt::Busy));
     drop(first);
@@ -1134,4 +1221,313 @@ fn the_lock_is_exclusive_and_released_on_drop() {
         dir.path().join(LOCK_FILE).exists(),
         "the lock file is never removed"
     );
+}
+
+// ---- Review round 1 ---------------------------------------------------------------
+
+#[test]
+fn a_scoped_or_flow_labelled_key_refuses_the_commit() {
+    // The sampler keys on the whole SocketAddr; stripping the scope would
+    // restore the restriction under a key the sampler never looks up.
+    let mono = Instant::now();
+    let later = mono + Duration::from_secs(60);
+    for (flow, scope) in [(0, 3), (7, 0)] {
+        let a = SocketAddr::V6(std::net::SocketAddrV6::new(
+            "fe80::1".parse().unwrap(),
+            6881,
+            flow,
+            scope,
+        ));
+        assert_eq!(
+            capture(run(), [(a, later)], None, mono, Duration::ZERO, H),
+            Err(CaptureError::Scoped)
+        );
+    }
+    // An expired scoped entry needs no record, so it doesn't block.
+    let a = SocketAddr::V6(std::net::SocketAddrV6::new(
+        "fe80::1".parse().unwrap(),
+        6881,
+        0,
+        3,
+    ));
+    assert!(capture(run(), [(a, mono)], None, mono, Duration::ZERO, H).is_ok());
+}
+
+#[test]
+fn capture_refuses_a_horizon_the_decoder_would_reject() {
+    let mono = Instant::now();
+    for h in [0, MAX_HORIZON_S + 1] {
+        assert_eq!(
+            capture(run(), [], None, mono, Duration::ZERO, h),
+            Err(CaptureError::BadHorizon)
+        );
+    }
+    assert!(capture(run(), [], None, mono, Duration::ZERO, MAX_HORIZON_S).is_ok());
+}
+
+/// Records the order the protocol reads its clocks in.
+#[derive(Debug, Default)]
+struct OrderClock(std::sync::Mutex<Vec<&'static str>>);
+
+impl Clock for OrderClock {
+    fn wall(&self) -> Duration {
+        self.0.lock().unwrap().push("wall");
+        Duration::from_secs(1_700_000_000)
+    }
+    fn mono(&self) -> Instant {
+        self.0.lock().unwrap().push("mono");
+        Instant::now()
+    }
+}
+
+#[test]
+fn the_clock_readers_take_their_reads_in_the_required_order() {
+    let c = OrderClock::default();
+    let here = Here::read(&c, "/srv/lodestar".into(), [2; 32], H);
+    assert_eq!(
+        *c.0.lock().unwrap(),
+        ["wall", "mono"],
+        "S0: wall, then mono"
+    );
+    assert_eq!(here.dir_path, path_digest("/srv/lodestar"));
+    c.0.lock().unwrap().clear();
+    capture_now(&c, run(), [], None, H).unwrap();
+    let _ = stamp_after_capture(&c);
+    assert_eq!(
+        *c.0.lock().unwrap(),
+        ["mono", "wall", "wall"],
+        "S10 mono, wall; S11 wall"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_witness_file_that_is_a_symlink_is_unusable() {
+    let root = Scratch::new("witlink");
+    let data = root.path().join("data");
+    let wdir = root.path().join("w");
+    fs::create_dir_all(&data).unwrap();
+    fs::create_dir_all(&wdir).unwrap();
+    let data_c = canonical(&data).unwrap();
+    let target = data.join("planted.gen");
+    fs::write(
+        &target,
+        Witness {
+            path: data_c.clone(),
+            ..witness()
+        }
+        .encode(),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&target, witness_path(&wdir, &[1; 16])).unwrap();
+    assert_eq!(
+        read_witness(&wdir, &data_c, &[1; 16]),
+        WitnessFound::Unusable
+    );
+}
+
+#[test]
+fn the_first_failing_rule_names_the_reason() {
+    // Reason order as implemented and recorded in the decisions file
+    // (CR-0d-1): marker faults, then its state, then the snapshot, then
+    // the rest in rule order.
+    let (base, here) = resumable();
+    let mut l = base.clone();
+    // A dirty marker with no snapshot (a crash during the first on-run).
+    if let Found::Ok(m) = &mut l.marker {
+        m.state = MarkerState::Dirty;
+    }
+    l.snapshot = Found::Missing;
+    assert_eq!(suppressed(&l, &here), Some(Reason::Dirty));
+    // A clean marker with a missing snapshot and no witness: corrupt wins.
+    let mut l = base.clone();
+    l.snapshot = Found::Missing;
+    l.witness = WitnessFound::Missing;
+    assert_eq!(suppressed(&l, &here), Some(Reason::Corrupt));
+    // Node identity and a stale clock both wrong: identity comes first.
+    let (l, mut h) = (base.clone(), here.clone());
+    h.ids = [0; 32];
+    h.wall0 += Duration::from_secs(u64::from(H) + 1);
+    assert_eq!(suppressed(&l, &h), Some(Reason::NodeIdentity));
+    // A snapshot whose dir_id differs from the marker's is rule 7.
+    let mut l = base.clone();
+    if let Found::Ok((s, _)) = &mut l.snapshot {
+        s.run.dir_id = [9; 16];
+    }
+    assert_eq!(suppressed(&l, &here), Some(Reason::SnapshotMismatch));
+}
+
+/// Snapshots built from arbitrary, plausible parts.
+fn any_snapshot() -> impl Strategy<Value = Snapshot> {
+    let entry = (
+        any::<bool>(),
+        any::<[u8; 16]>(),
+        1u16..,
+        1u32..=MAX_HORIZON_S,
+    );
+    (
+        any::<[u8; 16]>(),
+        0u64..(1 << 62),
+        0u64..(i64::MAX as u64),
+        1u32..=MAX_HORIZON_S,
+        any::<u32>(),
+        proptest::collection::vec(entry, 0..40),
+    )
+        .prop_map(|(id, generation, at_ms, horizon_s, gate, raw)| {
+            let mut entries: Vec<Entry> = raw
+                .into_iter()
+                .map(|(v6, ip, port, rem)| {
+                    let ip = if v6 {
+                        let ip = Ipv6Addr::from(ip);
+                        match ip.to_ipv4_mapped() {
+                            Some(v4) => IpAddr::V4(v4),
+                            None => IpAddr::V6(ip),
+                        }
+                    } else {
+                        IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]))
+                    };
+                    Entry {
+                        addr: SocketAddr::new(ip, port),
+                        remaining_s: rem.min(horizon_s),
+                    }
+                })
+                .collect();
+            entries.sort_by_key(|e| entry_key(&e.addr));
+            entries.dedup_by(|a, b| a.addr == b.addr);
+            Snapshot {
+                run: RunHeader {
+                    generation,
+                    dir_id: id,
+                    ids: [2; 32],
+                    run_id: [3; 16],
+                },
+                at_ms,
+                horizon_s,
+                gate_s: gate % (horizon_s + 1),
+                entries,
+            }
+        })
+}
+
+/// Dictionaries with the snapshot's or marker's keys but arbitrary values.
+fn near_valid_body(keys: &'static [&'static [u8]]) -> impl Strategy<Value = Vec<u8>> {
+    let value = prop_oneof![
+        any::<i64>().prop_map(|v| (Some(v), Vec::new())),
+        proptest::collection::vec(any::<u8>(), 0..48).prop_map(|b| (None, b)),
+        // The right sizes for the fixed fields, and whole entries.
+        prop_oneof![Just(16usize), Just(32), Just(10), Just(22), Just(44)]
+            .prop_flat_map(|n| proptest::collection::vec(any::<u8>(), n))
+            .prop_map(|b| (None, b)),
+    ];
+    proptest::collection::vec(value, keys.len()).prop_map(move |values| {
+        let mut body = Vec::new();
+        Encoder::new(&mut body).dict(|d| {
+            for (k, (int, bytes)) in keys.iter().zip(values) {
+                match int {
+                    Some(v) => d.entry(k).int(v),
+                    None => d.entry(k).bytes(&bytes),
+                }
+            }
+        });
+        body
+    })
+}
+
+proptest! {
+    /// Structured inputs reach the body decoder (a random input never
+    /// passes the checksum), round-trip exactly, and seed never early.
+    #[test]
+    fn plausible_snapshots_roundtrip_and_seed_never_early(
+        s in any_snapshot(),
+        ahead_ms in 0u64..(u64::from(MAX_HORIZON_S) * 1000 + 10),
+    ) {
+        let bytes = s.encode();
+        let (back, sum) = Snapshot::decode(&bytes).unwrap();
+        prop_assert_eq!(&back, &s);
+        prop_assert_eq!(back.encode(), bytes);
+        let m = Marker {
+            state: MarkerState::Clean { snap: sum, state_bin: [5; 32] },
+            run: s.run,
+            dir_path: path_digest("/x"),
+            at_ms: s.at_ms,
+        };
+        let loaded = Loaded {
+            marker: Found::Ok(m),
+            snapshot: Found::Ok((s.clone(), sum)),
+            witness: WitnessFound::Ok(Witness {
+                generation: s.run.generation,
+                dir_id: s.run.dir_id,
+                at_ms: 0,
+                path: "/x".into(),
+            }),
+            state_bin: Some([5; 32]),
+        };
+        let now = s.at_ms.saturating_add(ahead_ms);
+        let here = Here {
+            path: "/x".into(),
+            dir_path: path_digest("/x"),
+            ids: [2; 32],
+            horizon_s: s.horizon_s,
+            wall0: Duration::from_millis(now),
+            mono0: Instant::now(),
+        };
+        match plan(&loaded, &here).decision {
+            Decision::Resume(seeded) => {
+                prop_assert!(now - s.at_ms <= u64::from(s.horizon_s) * 1000);
+                for (addr, until) in &seeded.entries {
+                    let e = s.entries.iter().find(|e| e.addr == *addr).unwrap();
+                    let left = until.duration_since(here.mono0).as_millis() as u64;
+                    prop_assert!(now + left >= s.at_ms + u64::from(e.remaining_s) * 1000);
+                }
+                let live = s.entries.iter().filter(|e| s.at_ms + u64::from(e.remaining_s) * 1000 > now).count();
+                prop_assert_eq!(seeded.entries.len(), live);
+                if s.at_ms + u64::from(s.gate_s) * 1000 > now {
+                    let g = seeded.gate_until.unwrap();
+                    let left = g.duration_since(here.mono0).as_millis() as u64;
+                    prop_assert!(now + left >= s.at_ms + u64::from(s.gate_s) * 1000);
+                }
+            }
+            Decision::Suppress(r) => prop_assert_eq!(r, Reason::Stale),
+        }
+    }
+
+    #[test]
+    fn near_valid_bodies_never_panic_and_canonical_on_success(
+        snap in near_valid_body(SNAPSHOT_KEYS),
+        mark in near_valid_body(CLEAN_KEYS),
+        dirty in near_valid_body(MARKER_KEYS),
+        wit in near_valid_body(WITNESS_KEYS),
+    ) {
+        let sealed = seal(MAGIC_SNAPSHOT, &snap);
+        if let Ok((s, _)) = Snapshot::decode(&sealed) {
+            prop_assert_eq!(s.encode(), sealed);
+        }
+        for body in [mark, dirty] {
+            let sealed = seal(MAGIC_MARKER, &body);
+            if let Ok(m) = Marker::decode(&sealed) {
+                prop_assert_eq!(m.encode(), sealed);
+            }
+        }
+        let sealed = seal(MAGIC_WITNESS, &wit);
+        if let Ok(w) = Witness::decode(&sealed) {
+            prop_assert_eq!(w.encode(), sealed);
+        }
+    }
+
+    /// Arbitrary bytes never decode to a set that resumes (§6.4).
+    #[test]
+    fn arbitrary_bytes_never_resume(
+        m in proptest::collection::vec(any::<u8>(), 0..256),
+        s in proptest::collection::vec(any::<u8>(), 0..256),
+        w in proptest::collection::vec(any::<u8>(), 0..256),
+    ) {
+        let loaded = Loaded {
+            marker: match Marker::decode(&m) { Ok(v) => Found::Ok(v), Err(f) => Found::Bad(f) },
+            snapshot: match Snapshot::decode(&s) { Ok(v) => Found::Ok(v), Err(f) => Found::Bad(f) },
+            witness: match Witness::decode(&w) { Ok(v) => WitnessFound::Ok(v), Err(f) => WitnessFound::Bad(f) },
+            state_bin: Some([5; 32]),
+        };
+        let (_, here) = resumable();
+        prop_assert!(matches!(plan(&loaded, &here).decision, Decision::Suppress(_)));
+    }
 }

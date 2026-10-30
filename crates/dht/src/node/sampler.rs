@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crate::compact::NodeInfo;
 
 const MAX_FRONTIER: usize = 20_000;
-const MAX_KNOWN: usize = 200_000;
+const MAX_KNOWN: usize = crate::restart::MAX_ENTRIES;
 const RECLAIM_PER_TICK: usize = 1024;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(60);

@@ -1,58 +1,99 @@
 //! CR-0d's restart files (`crates/dht/src/restart.rs`): untrusted bytes on
-//! disk. Nothing may panic, whatever decodes is canonical (re-encodes to
-//! the same bytes), and validation plus seeding of a decoded snapshot is
-//! total for any wall-clock reading.
+//! disk. The fuzzer can't forge the container's SHA-256, so the target
+//! seals the input itself: the first byte picks the file kind and the rest
+//! is the body. Nothing may panic, whatever decodes is canonical
+//! (re-encodes to the same bytes), and a decoded snapshot that resumes
+//! never seeds a deadline earlier than the one it records.
 #![no_main]
 
 use std::time::{Duration, Instant};
 
 use libfuzzer_sys::fuzz_target;
 use lodestar_dht::restart::{
-    self, Found, Here, Loaded, Marker, MarkerState, Snapshot, Witness, WitnessFound,
+    self, Decision, Found, Here, Loaded, Marker, MarkerState, Snapshot, Witness, WitnessFound,
 };
+use sha2::{Digest, Sha256};
+
+fn seal(magic: &[u8; 8], body: &[u8]) -> Vec<u8> {
+    let mut out = magic.to_vec();
+    out.extend_from_slice(&restart::VERSION.to_le_bytes());
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(body);
+    let sum = Sha256::digest(&out);
+    out.extend_from_slice(&sum);
+    out
+}
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(w) = Witness::decode(data) {
-        assert_eq!(w.encode(), data);
-    }
-    if let Ok(m) = Marker::decode(data) {
-        assert_eq!(m.encode(), data);
-    }
-    let Ok((s, sum)) = Snapshot::decode(data) else {
+    let Some((&kind, body)) = data.split_first() else {
         return;
     };
-    assert_eq!(s.encode(), data);
+    // The raw bytes too, for the container checks themselves.
+    let _ = Snapshot::decode(data);
+    let _ = Marker::decode(data);
+    let _ = Witness::decode(data);
+    match kind % 3 {
+        0 => {
+            let bytes = seal(b"LDSRWITN", body);
+            if let Ok(w) = Witness::decode(&bytes) {
+                assert_eq!(w.encode(), bytes);
+            }
+        }
+        1 => {
+            let bytes = seal(b"LDSRMARK", body);
+            if let Ok(m) = Marker::decode(&bytes) {
+                assert_eq!(m.encode(), bytes);
+            }
+        }
+        _ => snapshot(&seal(b"LDSRSNAP", body), kind),
+    }
+});
+
+fn snapshot(bytes: &[u8], kind: u8) {
+    let Ok((s, sum)) = Snapshot::decode(bytes) else {
+        return;
+    };
+    assert_eq!(s.encode(), bytes);
     // A marker and witness that agree with it, so validation reaches the
     // clock rules and seeding.
-    let marker = Marker {
-        state: MarkerState::Clean {
-            snap: sum,
-            state_bin: [0; 32],
-        },
-        run: s.run,
-        dir_path: [0; 32],
-        at_ms: s.at_ms,
-    };
-    let witness = Witness {
-        generation: s.run.generation,
-        dir_id: s.run.dir_id,
-        at_ms: 0,
-        path: String::new(),
-    };
     let loaded = Loaded {
-        marker: Found::Ok(marker),
+        marker: Found::Ok(Marker {
+            state: MarkerState::Clean {
+                snap: sum,
+                state_bin: [0; 32],
+            },
+            run: s.run,
+            dir_path: restart::path_digest(""),
+            at_ms: s.at_ms,
+        }),
         snapshot: Found::Ok((s.clone(), sum)),
-        witness: WitnessFound::Ok(witness),
+        witness: WitnessFound::Ok(Witness {
+            generation: s.run.generation,
+            dir_id: s.run.dir_id,
+            at_ms: 0,
+            path: String::new(),
+        }),
         state_bin: Some([0; 32]),
     };
-    let seed = data.iter().fold(0u64, |a, &b| a.rotate_left(5) ^ u64::from(b));
+    let ahead = u64::from(kind) * 100_003 % (u64::from(s.horizon_s) * 1000 + 2);
+    let now = s.at_ms.saturating_add(ahead);
     let here = Here {
         path: String::new(),
-        dir_path: [0; 32],
+        dir_path: restart::path_digest(""),
         ids: s.run.ids,
         horizon_s: s.horizon_s,
-        wall0: Duration::from_millis(s.at_ms.saturating_add(seed % 30_000_000)),
+        wall0: Duration::from_millis(now),
         mono0: Instant::now(),
     };
-    let _ = restart::plan(&loaded, &here);
-});
+    if let Decision::Resume(seeded) = restart::plan(&loaded, &here).decision {
+        for (addr, until) in &seeded.entries {
+            let e = s.entries.iter().find(|e| e.addr == *addr).expect("seeded from the file");
+            let left = until.duration_since(here.mono0).as_millis() as u64;
+            assert!(now + left >= s.at_ms + u64::from(e.remaining_s) * 1000);
+        }
+        if let Some(g) = seeded.gate_until {
+            let left = g.duration_since(here.mono0).as_millis() as u64;
+            assert!(now + left >= s.at_ms + u64::from(s.gate_s) * 1000);
+        }
+    }
+}
