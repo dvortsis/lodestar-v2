@@ -1339,7 +1339,7 @@
    "session": "session_01MMjhnCnk7norhoKvDiTbRW",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing) | 2026-10-30T10:25Z told: merge main (post-L6) and open PR | 2026-10-30T10:36Z #202 59459b1; E2E dispatched (all-themes); fresh review session_01MMjhnCMt8fzJhXkNzQtmEc | 2026-10-30T10:55Z review FIX FIRST (B1 named stall reasons during suppression; I1-I4; P1-P5); sent to author; I3 runner: stall after WINDOW_CLEAR_S | 2026-10-30T11:08Z fixes 38d1507; delta re-check asked | 2026-10-30T11:28Z re-check FIX FIRST: N1 writer_stalled ranked before no_progress defeats I3 when idle; option (a) sent",
+   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing) | 2026-10-30T10:25Z told: merge main (post-L6) and open PR | 2026-10-30T10:36Z #202 59459b1; E2E dispatched (all-themes); fresh review session_01MMjhnCMt8fzJhXkNzQtmEc | 2026-10-30T10:55Z review FIX FIRST (B1 named stall reasons during suppression; I1-I4; P1-P5); sent to author; I3 runner: stall after WINDOW_CLEAR_S | 2026-10-30T11:08Z fixes 38d1507; delta re-check asked | 2026-10-30T11:28Z re-check FIX FIRST: N1 writer_stalled ranked before no_progress defeats I3 when idle; option (a) sent | 2026-10-30T11:42Z N1 fix b9c44d40 OK (runner-reviewed) but commit reformatted 39 unowned docs/decisions files (prettier); asked to restore them in a new commit",
    "pr": 202
   },
   "IMP-0": {
