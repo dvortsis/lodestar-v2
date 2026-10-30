@@ -1215,7 +1215,7 @@
    "status": "pending",
    "branch": "land/L3",
    "head": "07421c3c",
-   "notes": "branch created at owner commit; PR after swap, in order"
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:00Z pre-review FIX: B1 non-canonical URL q never loads results (search.svelte.ts queryReady); B2 svelte-check 4 errors; I1 prefetch doubles requests; I2 LODESTAR_LOG docs. Content safety OK. Fix session L3-fix (Sonnet) session_01MMjhn8QbzhGq77rN39rjKe pushing to land/L3; after it, re-check L4-L7 merge cleanly."
   },
   "L4": {
    "status": "pending",
