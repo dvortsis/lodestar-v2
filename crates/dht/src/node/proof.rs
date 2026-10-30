@@ -76,6 +76,10 @@ struct Started {
     invalidated: bool,
     /// Whether the witness bump landed (retried once more before S11).
     witness_ok: bool,
+    /// Whether only the marker write can invalidate the earlier proof:
+    /// the marker couldn't be read (it may be a clean one), or this run
+    /// took a new `dir_id`, so its witness bump is another file (§0.1(4)).
+    need_marker: bool,
     /// For the retries and the commit.
     pending: Option<Invalidation>,
     run: Option<RunHeader>,
@@ -260,6 +264,7 @@ impl Proof {
                     self.job = None;
                     fail(stats, PersistStep::Invalidate, io::ErrorKind::Other);
                     self.rerun_at = Some(now + self.retry.1);
+                    self.retry.1 = (self.retry.1 * 2).min(MAX_RETRY);
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
@@ -480,6 +485,7 @@ impl Proof {
         };
         let marker_ok = matches!(r.marker, Some(None));
         let witness_ok = matches!(r.witness, Some(None));
+        let landed = marker_ok || (witness_ok && !started.need_marker);
         if !marker_ok {
             let kind = r.marker.flatten().unwrap_or(io::ErrorKind::Other);
             fail(stats, PersistStep::Invalidate, kind);
@@ -487,7 +493,7 @@ impl Proof {
         if let Some(Some(kind)) = r.witness {
             fail(stats, PersistStep::Witness, kind);
         }
-        if !(marker_ok || witness_ok) {
+        if !landed {
             let backoff = (self.retry.1 * 2).min(MAX_RETRY);
             self.retry = (now + self.retry.1, backoff);
             return;
@@ -713,8 +719,12 @@ impl StartJob {
                     }),
                 )
             }
-            // An unreadable or torn marker can't resume anything, but
-            // overwrite it so the next on-run sees `off_run`.
+            // An unreadable marker may be a clean one we can't read yet (an
+            // I/O error, a permission change), so it must be overwritten
+            // before any sample, and retried until it is (§0.1(4)). Its
+            // real `dir_id` and path are unknown: a fresh id and a zero
+            // path digest make the next on-run read `off_run`, then start
+            // a new chain (§1.4).
             Found::Bad(_) => {
                 let off = Marker {
                     state: MarkerState::Off,
@@ -727,8 +737,14 @@ impl StartJob {
                     dir_path: [0; 32],
                     at_ms: restart::ceil_ms(self.clock.wall()),
                 };
-                let _ = write_marker(&self.data_dir, &off, &mut errors);
-                (true, None)
+                let ok = write_marker(&self.data_dir, &off, &mut errors);
+                (
+                    ok,
+                    Some(Invalidation {
+                        marker: off,
+                        witness: None,
+                    }),
+                )
             }
         };
         Started {
@@ -737,6 +753,7 @@ impl StartJob {
             reason: Reason::Off,
             invalidated,
             witness_ok: true,
+            need_marker: true,
             pending,
             run: None,
             dir_path: [0; 32],
@@ -771,8 +788,15 @@ impl StartJob {
         let state_bin = std::fs::read(&self.state_path)
             .ok()
             .map(|b| restart::digest(&b));
-        let had_clean =
-            matches!(&marker, Found::Ok(m) if matches!(m.state, MarkerState::Clean { .. }));
+        // What must land before the first sample (§0.1(4)): nothing if
+        // there's no marker, or one that can't resume; the marker or the
+        // witness for a readable clean one; only the marker for one we
+        // can't read, which may be clean.
+        let (had_clean, unreadable) = match &marker {
+            Found::Ok(m) => (matches!(m.state, MarkerState::Clean { .. }), false),
+            Found::Bad(_) => (false, true),
+            Found::Missing => (false, false),
+        };
         let previous = previous(&marker);
         let loaded = Loaded {
             marker,
@@ -834,13 +858,21 @@ impl StartJob {
         };
         // S4.
         let marker_ok = write_marker(&self.data_dir, &dirty, &mut errors);
-        let invalidated = !had_clean || witness_ok || marker_ok;
+        // The witness bump only invalidates the old proof when it's the
+        // old marker's own witness: a kept `dir_id`.
+        let need_marker = unreadable || (had_clean && matches!(plan.dir_id, DirId::New));
+        let invalidated = if need_marker {
+            marker_ok
+        } else {
+            !had_clean || witness_ok || marker_ok
+        };
         Started {
             start: here.mono0,
             decision,
             reason,
             invalidated,
             witness_ok,
+            need_marker,
             pending: Some(Invalidation {
                 marker: dirty,
                 witness,

@@ -884,3 +884,184 @@ async fn a_full_table_commits_within_the_budget() {
         restart::MAX_ENTRIES as u64
     );
 }
+
+/// A marker that exists but can't be read or overwritten: a directory in
+/// its place (EISDIR on both, even for root, where `chmod 000` wouldn't
+/// stop a read). The code can't tell it from a clean marker it can't read.
+fn make_marker_unreadable(d: &Dirs) {
+    let m = d.data.join(restart::MARKER_FILE);
+    let _ = std::fs::remove_file(&m);
+    std::fs::create_dir(&m).unwrap();
+}
+
+fn make_marker_readable(d: &Dirs) {
+    std::fs::remove_dir(d.data.join(restart::MARKER_FILE)).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_marker_must_be_overwritten_before_any_sample() {
+    // Runner review B1: an unreadable marker may be a clean one, so an
+    // on-run samples nothing, even past its window and with its own (new
+    // id's) witness written, until the marker itself is overwritten.
+    let d = Dirs::new("unreadable");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    make_marker_unreadable(&d);
+    let start = Instant::now();
+    let mut r = Run::boot(&d, &c, true);
+    assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
+    advance(horizon() + Duration::from_secs(60)).await;
+    r.tick();
+    assert!(
+        !r.proof.may_sample(Instant::now()),
+        "the witness bump doesn't count"
+    );
+    make_marker_readable(&d);
+    settle(&mut r).await;
+    assert_eq!(
+        r.proof.reason(),
+        Reason::Corrupt,
+        "landed: the start's own reason"
+    );
+    assert!(r.proof.may_sample(Instant::now()));
+    assert!(Instant::now() >= start + horizon());
+    let Found::Ok(m) = restart::read_marker(&d.data) else {
+        panic!()
+    };
+    assert_eq!(m.state, MarkerState::Dirty);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_off_run_waits_for_an_unreadable_marker_too() {
+    let d = Dirs::new("unreadableoff");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    make_marker_unreadable(&d);
+    let mut off = Run::boot(&d, &c, false);
+    assert_eq!(off.proof.reason(), Reason::InvalidateFailed);
+    advance(horizon() + Duration::from_secs(60)).await;
+    off.tick();
+    assert!(!off.proof.may_sample(Instant::now()));
+    make_marker_readable(&d);
+    settle(&mut off).await;
+    assert_eq!(off.proof.reason(), Reason::Off);
+    assert!(off.proof.may_sample(Instant::now()));
+    let Found::Ok(m) = restart::read_marker(&d.data) else {
+        panic!()
+    };
+    assert_eq!(m.state, MarkerState::Off);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_copied_directory_needs_its_marker_overwritten() {
+    // N7: the witness for this id names another path, so the run takes a
+    // new `dir_id` and its witness bump goes to another file. Only the
+    // marker write invalidates the old proof.
+    let d = Dirs::new("copied");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    let Found::Ok(m) = restart::read_marker(&d.data) else {
+        panic!()
+    };
+    let w = restart::witness_path(&d.witness, &m.run.dir_id);
+    let mut wit = Witness::decode(&std::fs::read(&w).unwrap()).unwrap();
+    wit.path = "/somewhere/else".into();
+    std::fs::write(&w, wit.encode()).unwrap();
+    // The witness file (written first) lands; the marker can't be written.
+    fail::arm_nth(restart::Point::AfterWrite, 2);
+    let r = Run::boot(&d, &c, true);
+    fail::arm(None);
+    assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
+    assert!(!r.proof.may_sample(Instant::now()));
+}
+
+/// Real time, real blocking pool: the paths `inline_io` skips.
+fn pool_config(d: &Dirs, c: &Arc<SimClock>) -> RestartConfig {
+    RestartConfig {
+        witness_dir: Some(d.witness.clone()),
+        clock: c.clone(),
+        inline_io: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_job_landing_in_the_shutdown_drain_is_seeded_before_the_capture() {
+    // Runner review B2: the run stops right after its first tick, while
+    // S0–S4 run on the pool. The commit drains the job, seeds what it
+    // restored, and only then captures the table.
+    let d = Dirs::new("drain");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    r.sampled(addr(7), 1, Duration::from_secs(3600));
+    r.commit(&d);
+    let cfg = pool_config(&d, &c);
+    let path = d.state_path();
+    let mut proof = Proof::new(
+        Some(&path),
+        Some(&cfg),
+        None,
+        horizon(),
+        TICK,
+        Instant::now(),
+    );
+    let mut sampler = Sampler::default();
+    let stats = Stats::default();
+    proof.tick(Instant::now(), &ids(), &stats, &mut sampler);
+    assert_eq!(
+        proof.commit(&mut sampler, &state(), &path, &stats),
+        Some(Ok(())),
+        "the drained start job resumed, so this run commits"
+    );
+    let Found::Ok((snap, _)) = restart::read_snapshot(&d.data) else {
+        panic!("a snapshot was written")
+    };
+    assert!(
+        snap.entries.iter().any(|e| e.addr == addr(7)),
+        "the restored restriction survives into the new snapshot"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_blocking_pool_path_reaches_a_resume() {
+    let d = Dirs::new("pool");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    r.sampled(addr(8), 1, Duration::from_secs(3600));
+    r.commit(&d);
+    let cfg = pool_config(&d, &c);
+    let path = d.state_path();
+    let mut run = Run {
+        proof: Proof::new(
+            Some(&path),
+            Some(&cfg),
+            None,
+            horizon(),
+            TICK,
+            Instant::now(),
+        ),
+        sampler: Sampler::default(),
+        stats: Stats::default(),
+    };
+    // Wait for the job, polling with a deadline (no fixed sleep).
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !matches!(run.proof.phase, Phase::Ready) && std::time::Instant::now() < deadline {
+        run.tick();
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        matches!(run.proof.phase, Phase::Ready),
+        "the pool job landed"
+    );
+    assert_eq!(run.proof.reason(), Reason::Resumed);
+    assert!(!run.sampler.reserve(addr(8), 2, Instant::now()), "restored");
+    run.commit(&d);
+}

@@ -1227,6 +1227,8 @@ pub enum LockAttempt {
 /// protocol files touched, no samples, retried each tick, and counted as
 /// `persist_errors{step="lock"}`.
 pub fn try_lock(data_dir: &Path) -> io::Result<LockAttempt> {
+    // A fresh install's data directory may not exist yet.
+    fs::create_dir_all(data_dir)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)

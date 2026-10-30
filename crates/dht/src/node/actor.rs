@@ -870,7 +870,9 @@ impl Actor {
             return Err(Sent::Throttled);
         }
         // Never reuse a wire token in this process, even after success.
-        let Some(tid) = self.next_tid.checked_add(1) else {
+        // Wire tokens stay below the sampler's proof-token bit (CR-0d):
+        // exhaustion comes 2^63 tokens early, which never happens.
+        let Some(tid) = self.next_tid.checked_add(1).filter(|t| *t < 1 << 63) else {
             return Err(Sent::Throttled);
         };
         self.next_tid = tid;
