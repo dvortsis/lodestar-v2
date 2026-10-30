@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T21:37Z",
+ "updated_at": "2026-10-30T21:39Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1910,7 +1910,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-10-30T18:47Z",
+ "last_heartbeat": "2026-10-30T21:39Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
@@ -2313,7 +2313,8 @@
   "2026-10-30T21:04Z merged #238 hash-mismatch docs (644e5b28). Open: #239 (fix 2ff1781d in CI; runner's own delta check of the 3-line TARGETS fix is OK).",
   "2026-10-30T21:16Z safety check-in: every listed item done; re-armed for 22:20Z (#239, then launch CR-SIM-restart).",
   "2026-10-30T21:35Z owner: rc.2 artifacts verified (minisig, digests, image); Unraid 24 h soak RUNNING from the restored cold backup (V3->V12 upgrade OK); Windows portable PASS; MSI service run RUNNING with the Defender exclusion. Next gate results ~2026-10-31T04:30Z (MSI) and ~2026-11-01T06Z (Unraid, after gluetun).",
-  "2026-10-30T21:37Z merged #239 X-crawler-sim-crate (a0cdf84a). Launched CR-SIM-restart (Opus, session_01MMjhn9zPWSCmVk1uqpWy9M). Shared reviewer session_01MMjhn984M3k3UJXUCsEYPX archived (nothing pending); new PRs get a fresh reviewer."
+  "2026-10-30T21:37Z merged #239 X-crawler-sim-crate (a0cdf84a). Launched CR-SIM-restart (Opus, session_01MMjhn9zPWSCmVk1uqpWy9M). Shared reviewer session_01MMjhn984M3k3UJXUCsEYPX archived (nothing pending); new PRs get a fresh reviewer.",
+  "2026-10-30T21:39Z heartbeat: no open PRs; CR-SIM-restart running; the owner's rc.2 gates running. Heartbeat prompt refreshed to the current state."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
