@@ -62,6 +62,8 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
         run: |
+          # A head missing from the clone would read as "not an ancestor".
+          git cat-file -e "$HEAD^{commit}" || { echo "::error::$HEAD is not in the checkout."; exit 1; }
           for old in 1562068349a6463990b5b07cfc810ff2680b1c03 2d5e761d30cb1b7947fb09493959668eabcb84ab; do
             if git merge-base --is-ancestor "$old" "$HEAD" 2>/dev/null; then
               echo "::error::$HEAD contains $old from the history before 2026-10-30. Rebuild the branch from the current main (docs/decisions/2026-10-30-master-plan.md)."
