@@ -6,6 +6,9 @@ use std::process::{Command, Output, Stdio};
 
 use lodestar_store::{Store, StoreConfig};
 
+mod ports;
+use ports::test_port;
+
 /// A data folder with a store, and the binary pointed at it.
 struct Data {
     dir: tempfile::TempDir,
@@ -17,12 +20,10 @@ impl Data {
         let dir = tempfile::tempdir().unwrap();
         let data = Data {
             dir,
-            // Nothing listens here, so "is a server up?" is always no.
-            port: std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port(),
+            // Nothing listens here, so "is a server up?" is always no. Not
+            // a released `bind(0)` port: another test's server, binding
+            // port 0, could be handed it, and the command would refuse.
+            port: test_port(),
         };
         let store = data.open();
         set(&store, "marker", "first");
