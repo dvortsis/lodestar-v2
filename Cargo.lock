@@ -1440,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-api"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "argon2",
  "axum",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-bench"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "encoding_rs",
  "lodestar-bencode",
@@ -1535,14 +1535,14 @@ dependencies = [
 
 [[package]]
 name = "lodestar-bencode"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "lodestar-classify"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-metainfo",
  "lodestar-release-parser",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-cluster"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "futures-util",
  "lodestar-integrations",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-dht"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-bencode",
  "lodestar-log",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-filter"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chacha20poly1305",
  "flate2",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-integrations"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "axum",
  "chacha20poly1305",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-log"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "proptest",
  "tracing",
@@ -1635,7 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-metainfo"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -1648,11 +1648,11 @@ dependencies = [
 
 [[package]]
 name = "lodestar-network-policy"
-version = "0.5.0"
+version = "0.5.1"
 
 [[package]]
 name = "lodestar-peer-wire"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-bencode",
  "lodestar-log",
@@ -1670,7 +1670,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-pipeline"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-bencode",
  "lodestar-classify",
@@ -1690,14 +1690,14 @@ dependencies = [
 
 [[package]]
 name = "lodestar-release-parser"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "lodestar-search"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-bencode",
  "lodestar-classify",
@@ -1717,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-sources"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-metainfo",
  "lodestar-network-policy",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-sources-importers"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-metainfo",
  "lodestar-store",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-store"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "encoding_rs",
  "lodestar-bencode",
@@ -1753,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-tracker-scrape"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "lodestar-bencode",
  "lodestar-metainfo",
@@ -1768,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-update"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "lodestar-utp"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "proptest",
  "rand 0.10.3",
