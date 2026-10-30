@@ -554,7 +554,7 @@
       "pr": 243,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note) | 22:43Z PR #243 head 8139b6a7 (baseline regen marker on purpose); fresh Opus reviewer launched; scope calls (filters dropped, start-up hook deferred) for review | 22:45Z CI fix 996c1e19 (e2e typecheck)"
+      "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note) | 22:43Z PR #243 head 8139b6a7 (baseline regen marker on purpose); fresh Opus reviewer launched; scope calls (filters dropped, start-up hook deferred) for review | 22:45Z CI fix 996c1e19 (e2e typecheck) | 2026-10-30T23:53Z delta MERGE at aa79c4f5 (baselines 88dd35c6 Settings-only; marker removed); merge on green ci-ok+Web+E2E"
     },
     "M-filters-dialogs": {
       "status": "merged",
@@ -2214,7 +2214,7 @@
     }
   },
   "followups": [
-    "S-theme-boot (immediate, after #243): shell start-up hook that fetches the account's saved theme and applies/caches it, so a new browser or device follows the account (\u00a710.18); #243 review scope call",
+    "S-theme-boot (immediate, after #243): shell start-up hook that fetches the account's saved theme and applies/caches it, so a new browser or device follows the account (\u00a710.18); #243 review scope call; also move themes.ts `let generation` above applyTheme's JSDoc (#243 delta nit)",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
