@@ -14891,15 +14891,12 @@
         "properties": {
           "reason": {
             "type": "string",
-            "description": "`dht_sample_suppression_reason`'s label (`docs/metrics.md`), such\nas `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`;\n`starting` before the DHT's first report."
+            "description": "`dht_sample_suppression_reason`'s label (`docs/metrics.md`), such\nas `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`."
           },
           "remaining_s": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
-            "description": "Seconds until sampling may begin; null before the DHT's first\nreport. For `locked` and `invalidate_failed` it's a lower bound:\nsampling also waits until the restart record can be written.",
+            "description": "Seconds until sampling may begin (`dht_sample_suppression_seconds`).\nFor `invalidate_failed`, and `locked` while the lock is busy, it's a\nlower bound: sampling also waits until the restart record can be\nwritten.",
             "minimum": 0
           }
         }
@@ -16887,7 +16884,7 @@
               },
               {
                 "$ref": "#/components/schemas/SamplingBlocked",
-                "description": "Why the DHT isn't sampling yet; null when it is, or when the DHT\nis off."
+                "description": "Why the DHT isn't sampling yet; null when it is, before its first\nreport, and when it is off or not running."
               }
             ]
           },

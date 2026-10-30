@@ -185,7 +185,7 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 
 After every start, the crawler waits up to six hours before it samples the [DHT](glossary.md#dht) again. While it waits, the status pill says **Starting**. The wait is on purpose. Lodestar promises other DHT nodes to wait a while before asking them again, and it can't tell whether a restart kept those promises.
 
-The **safe restart** switch removes the wait after a clean restart. When Lodestar stops cleanly, it writes a restart record: the promises still open and a check that the data folder is the same one. On the next start it checks the record and carries on at once. If anything doesn't add up, it waits the six hours as before. It is **off by default**.
+The [safe restart](glossary.md#safe-restart) switch removes the wait after a clean restart. When Lodestar stops cleanly, it writes a [restart record](glossary.md#restart-record): the promises still open and a check that the data folder is the same one. On the next start it checks the record and carries on at once. If anything doesn't add up, it waits the six hours as before. It is **off by default**.
 
 Lodestar still waits the six hours after:
 - its first start, and a crash or power cut;
@@ -207,7 +207,7 @@ The record is in two places: in the data folder, and in a small restart record f
 To turn safe restart on with Unraid:
 
 1. On the Docker tab, select the **Lodestar** icon, then **Edit**.
-2. Select **Add another Path, Port, Variable or Device**. Set **Config Type** to **Variable**, **Key** to `LODESTAR_DHT_SAFE_RESTART` and **Value** to `true`, then select **Add**.
+2. Select **Add another Path, Port, Variable, Label or Device**. Set **Config Type** to **Variable**, **Key** to `LODESTAR_DHT_SAFE_RESTART` and **Value** to `true`, then select **Add**.
 3. Select **Apply**.
    **Result:** The container restarts. This first start still waits the six hours. From the next clean restart on, sampling carries on at once.
 

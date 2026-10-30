@@ -15,7 +15,7 @@ use lodestar_api::ops::{
     OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Source, SourceHealth,
     SourceKind, SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
-use lodestar_dht::node::StatsSnapshot;
+use lodestar_dht::node::{NodeHandle, StatsSnapshot};
 use lodestar_pipeline::Monitor;
 use lodestar_pipeline::control::{
     self, Control, REACH_MIN_SECS, REACH_WINDOW_SECS, SourceChange, SourceError, SourceView,
@@ -35,8 +35,28 @@ const SIZE_TTL: Duration = Duration::from_secs(30);
 
 /// The data directory's last measured size, and when it was measured.
 type SizeCache = Arc<Mutex<Option<(Instant, Option<u64>)>>>;
-/// The DHT's last stats report: `None` inside until its first.
-pub type DhtReport = Arc<Mutex<Option<StatsSnapshot>>>;
+/// The DHT source's last stats report (`None` until its first), and its
+/// node while it runs: a report outlives a node that stopped or never
+/// started.
+#[derive(Clone)]
+pub struct DhtReport {
+    pub stats: Arc<Mutex<Option<StatsSnapshot>>>,
+    pub node: Arc<Mutex<Option<NodeHandle>>>,
+}
+
+impl DhtReport {
+    /// The last report, only while the node runs.
+    fn live(&self) -> Option<StatsSnapshot> {
+        let running = self
+            .node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
+        running
+            .then(|| *self.stats.lock().unwrap_or_else(|e| e.into_inner()))
+            .flatten()
+    }
+}
 
 pub struct Ops {
     pub control: Control,
@@ -119,7 +139,8 @@ impl Ops {
             sampling_blocked: self
                 .dht
                 .as_ref()
-                .and_then(|d| sampling_blocked(*d.lock().unwrap_or_else(|e| e.into_inner()))),
+                .and_then(DhtReport::live)
+                .and_then(sampling_blocked),
             searchable_torrents: self.search.as_ref().map(|s| s.index.index().num_docs()),
             stored_torrents: self.monitor.torrents(),
             updated_at: now,
@@ -128,19 +149,12 @@ impl Ops {
     }
 }
 
-/// What `sampling_blocked` says for the DHT's last report (CR-0d): its
-/// suppression and why while it lasts, nothing once sampling runs, and
-/// `starting` before the first report.
-fn sampling_blocked(report: Option<StatsSnapshot>) -> Option<SamplingBlocked> {
-    let Some(s) = report else {
-        return Some(SamplingBlocked {
-            reason: "starting".into(),
-            remaining_s: None,
-        });
-    };
+/// What `sampling_blocked` says for a running node's report (CR-0d): its
+/// suppression and why while it lasts, nothing once sampling runs.
+fn sampling_blocked(s: StatsSnapshot) -> Option<SamplingBlocked> {
     (s.sample_suppression_seconds > 0).then(|| SamplingBlocked {
         reason: s.sample_suppression_reason.as_str().into(),
-        remaining_s: Some(s.sample_suppression_seconds),
+        remaining_s: s.sample_suppression_seconds,
     })
 }
 

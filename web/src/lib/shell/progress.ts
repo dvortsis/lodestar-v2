@@ -17,7 +17,8 @@ export const STARTUP_SUPPRESSION_S = 6 * 60 * 60 + 60;
  * `ingest_per_hour` is the last full UTC hour, which can start up to two hours back, so the
  * zero-rate rule waits until that whole window lies after the suppression.
  */
-const WINDOW_CLEAR_S = STARTUP_SUPPRESSION_S + 2 * 60 * 60;
+const REPORTED_HOUR_S = 2 * 60 * 60;
+const WINDOW_CLEAR_S = STARTUP_SUPPRESSION_S + REPORTED_HOUR_S;
 
 export type SamplingBlocked = components['schemas']['SamplingBlocked'];
 
@@ -28,6 +29,8 @@ export interface ProgressSnapshot {
 	 * the DHT is off); undefined = not known.
 	 */
 	sampling?: SamplingBlocked | null;
+	/** The uptime at which sampling was last seen to stop being held back; null = not seen. */
+	sampledFromS?: number | null;
 	/** `fetched_per_hour` (`GET /stats`): server rate over its last 5 minutes; null = unmeasured. */
 	fetchedPerHour: number | null;
 	/** `ingest_per_hour` (Insights overview): the last full UTC hour; null = unmeasured. */
@@ -43,13 +46,33 @@ const STALL_REASONS: readonly StallReason[] = ['writer_stalled', 'cohort_stalled
 /** The server raises these when nothing has been stored for a while, which a fresh start does too. */
 const QUIET_REASONS: readonly string[] = ['writer_stalled', 'cohort_stalled'];
 
-/** The restart record can't be taken or written, so sampling waits on that, not on the clock. */
-const RECORD_REASONS: readonly string[] = ['locked', 'invalidate_failed'];
+/**
+ * The restart record can't be written, so sampling waits on that, not on the clock. (`locked` can
+ * also be a filesystem without locks, which waits the usual six hours, so it isn't named here.)
+ */
+const RECORD_REASONS: readonly string[] = ['invalidate_failed'];
 
+/**
+ * After a start that samples at once (a resumed restart, or the DHT off), the first torrents take a
+ * few minutes to be fetched and stored; the server's "nothing stored" reasons don't count before
+ * this.
+ */
+export const START_GRACE_S = 15 * 60;
+
+/** Sampling is held back: as the server says, or, when it doesn't say, by the uptime bound. */
 const isYoung = (p: ProgressSnapshot) =>
 	p.sampling !== undefined
 		? p.sampling !== null
 		: p.uptimeS !== null && p.uptimeS < STARTUP_SUPPRESSION_S;
+
+const quietCounts = (p: ProgressSnapshot) =>
+	!isYoung(p) && (p.uptimeS === null || p.uptimeS >= START_GRACE_S);
+
+/** The stored-rate window lies wholly after the start, and after sampling was last held back. */
+const windowClear = (p: ProgressSnapshot) =>
+	(p.uptimeS ?? 0) >= WINDOW_CLEAR_S &&
+	!p.sampling &&
+	(p.sampledFromS == null || (p.uptimeS ?? 0) - p.sampledFromS >= REPORTED_HOUR_S);
 
 /**
  * A stall while the crawler runs: a reason the API names, or a stored rate of 0 over a window the
@@ -60,14 +83,15 @@ const isYoung = (p: ProgressSnapshot) =>
  * there; `index_lag` always does.
  */
 export function stallReason(p: ProgressSnapshot): StallReason | null {
-	const young = isYoung(p);
+	const quiet = quietCounts(p);
 	const named = STALL_REASONS.find(
-		(r) => p.reasons.includes(r) && (!young || !QUIET_REASONS.includes(r))
+		(r) => p.reasons.includes(r) && (quiet || !QUIET_REASONS.includes(r))
 	);
 	// A starved idle pipeline carries `writer_stalled` too (the writer skips empty commits), so the
 	// stored-rate verdict comes first or the idle rule would hide the very case it exists for.
-	// Nothing stored is expected while sampling is held back, however long that lasts.
-	const starved = p.ingestPerHour === 0 && (p.uptimeS ?? 0) >= WINDOW_CLEAR_S && !p.sampling;
+	// Nothing stored is expected while sampling is held back, however long that lasts, nor in the
+	// hours it covers.
+	const starved = p.ingestPerHour === 0 && windowClear(p);
 	if (starved && (!named || named === 'writer_stalled')) return 'no_progress';
 	return named ?? null;
 }
@@ -108,6 +132,9 @@ export function createProgressSource() {
 	let lastOverview = Date.now();
 	let last: ProgressSnapshot | null = null;
 	let lastUptime = 0;
+	// Whether the last `/stats` said sampling was held back, and the uptime it was last seen to stop.
+	let held = false;
+	let sampledFrom: number | null = null;
 	return async function fetchProgress(now = Date.now()): Promise<ProgressSnapshot | null> {
 		const stats = await api.get('/stats').catch(() => null);
 		const odd =
@@ -118,8 +145,12 @@ export function createProgressSource() {
 				? null
 				: await api.get('/insights/overview', { query: { range: '24h' } }).catch(() => null);
 		// A restart (uptime went down) or a pause makes the kept stored-rate facts stale.
+		if (stats && stats.uptime_s < lastUptime) [held, sampledFrom] = [false, null];
 		if (stats?.paused || (stats && stats.uptime_s < lastUptime)) last = null;
 		if (stats) lastUptime = stats.uptime_s;
+		if (stats?.sampling_blocked) held = true;
+		else if (stats?.sampling_blocked === null && held)
+			[held, sampledFrom] = [false, stats.uptime_s];
 		if (o) lastOverview = now;
 		if (!stats && !o) return null;
 		// Between overview calls the last stored-rate facts stand (they describe an hour, not a moment).
@@ -135,6 +166,7 @@ export function createProgressSource() {
 			ingestPerHour: o ? o.ingest_per_hour : (keep?.ingestPerHour ?? null),
 			uptimeS: stats?.uptime_s ?? null,
 			sampling: stats ? stats.sampling_blocked : undefined,
+			sampledFromS: sampledFrom,
 			reasons: o ? reasons : (keep?.reasons ?? [])
 		};
 		return last;

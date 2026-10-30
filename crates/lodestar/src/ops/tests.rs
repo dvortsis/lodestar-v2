@@ -153,13 +153,19 @@ async fn fixture() -> Fixture {
     .await
     .unwrap();
     settings::crawler::follow_control(registry.subscribe(), control.clone());
-    let ops = Arc::new(Ops::new(
-        control,
-        registry.subscribe(),
-        pipeline.monitor(),
-        None,
-        dir.path().to_path_buf(),
-    ));
+    let ops = Arc::new(
+        Ops::new(
+            control,
+            registry.subscribe(),
+            pipeline.monitor(),
+            None,
+            dir.path().to_path_buf(),
+        )
+        .with_dht(Some(DhtReport {
+            stats: dht.stats_handle(),
+            node: dht.node_handle(),
+        })),
+    );
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let app = Router::new().nest(
@@ -528,6 +534,22 @@ async fn stats_match_the_metrics() {
         stats["data_bytes"].as_u64().unwrap() > 0,
         "the database is there"
     );
+    // The running node, with the restart proof off, holds its samples
+    // back for the whole suppression and says why.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let blocked = loop {
+        let (_, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+        if !stats["sampling_blocked"].is_null() {
+            break stats["sampling_blocked"].clone();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no sampling_blocked after 15 s: {stats}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(blocked["reason"], json!("off"), "{blocked}");
+    assert!(blocked["remaining_s"].as_u64().unwrap() > 0, "{blocked}");
     f.stop().await;
 }
 
@@ -801,14 +823,6 @@ fn dir_size_counts_nested_files() {
 #[test]
 fn sampling_blocked_follows_the_dht_report() {
     use lodestar_dht::restart::Reason;
-    // Before the first report: starting, time unknown.
-    assert_eq!(
-        sampling_blocked(None),
-        Some(SamplingBlocked {
-            reason: "starting".into(),
-            remaining_s: None
-        })
-    );
     let report = |seconds, reason| StatsSnapshot {
         sample_suppression_seconds: seconds,
         sample_suppression_reason: reason,
@@ -816,14 +830,21 @@ fn sampling_blocked_follows_the_dht_report() {
     };
     for reason in [Reason::Off, Reason::Dirty, Reason::InvalidateFailed] {
         assert_eq!(
-            sampling_blocked(Some(report(21_540, reason))),
+            sampling_blocked(report(21_540, reason)),
             Some(SamplingBlocked {
                 reason: reason.as_str().into(),
-                remaining_s: Some(21_540)
+                remaining_s: 21_540
             })
         );
     }
     // Sampling: a resumed run, or a suppression that has run out.
-    assert_eq!(sampling_blocked(Some(report(0, Reason::Resumed))), None);
-    assert_eq!(sampling_blocked(Some(report(0, Reason::Dirty))), None);
+    assert_eq!(sampling_blocked(report(0, Reason::Resumed)), None);
+    assert_eq!(sampling_blocked(report(0, Reason::Dirty)), None);
+    // A report outlives its node (it failed to start, or stopped): no
+    // longer what the DHT is doing, so nothing is said.
+    let stopped = DhtReport {
+        stats: Arc::new(Mutex::new(Some(report(21_540, Reason::Off)))),
+        node: Arc::default(),
+    };
+    assert_eq!(stopped.live(), None);
 }

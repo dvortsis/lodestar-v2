@@ -8,6 +8,7 @@ Lodestar UI screens (`setup-screen.png`, `search-{light,dark}.png`, `detail-{lig
 | 2.3 | **PUID** and **PGID** fields in Advanced View (99 and 100) | Owner | Illustrated (`unraid-puid-pgid-illustration.svg`) |
 | 2.5 | Unraid container **Logs** with the setup-token line (token blurred) | Owner | Pending host capture |
 | 2.5 | Lodestar setup screen where the token is entered | `S-doc-shots` | Captured (`setup-screen.png`) |
+| 3.8 | Unraid **Add Configuration** dialog with **Config Type** Variable, **Key** `LODESTAR_DHT_SAFE_RESTART` and **Value** `true` | Owner | Pending host capture |
 | 4.2 | PowerShell showing the `Get-FileHash` output | `S-doc-shots` | Pending host capture |
 | 4.3 | The SmartScreen **More info** and **Run anyway** buttons | `S-doc-shots` | Pending host capture |
 | 5.1 | **Search** screen with facet rail and composition bars | `S-doc-shots` | Captured (`search-light.png`, `search-dark.png`) |

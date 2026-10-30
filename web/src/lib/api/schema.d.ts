@@ -5633,17 +5633,17 @@ export interface components {
         SamplingBlocked: {
             /**
              * @description `dht_sample_suppression_reason`'s label (`docs/metrics.md`), such
-             *     as `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`;
-             *     `starting` before the DHT's first report.
+             *     as `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`.
              */
             reason: string;
             /**
              * Format: int64
-             * @description Seconds until sampling may begin; null before the DHT's first
-             *     report. For `locked` and `invalidate_failed` it's a lower bound:
-             *     sampling also waits until the restart record can be written.
+             * @description Seconds until sampling may begin (`dht_sample_suppression_seconds`).
+             *     For `invalidate_failed`, and `locked` while the lock is busy, it's a
+             *     lower bound: sampling also waits until the restart record can be
+             *     written.
              */
-            remaining_s: number | null;
+            remaining_s: number;
         };
         /** @description `POST /saved-searches`. */
         SavedSearchCreate: {

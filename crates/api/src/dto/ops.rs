@@ -126,8 +126,8 @@ pub struct StatsResponse {
     pub paused: bool,
     /// Keys queued or in flight in the fetch pool.
     pub queue_depth: u64,
-    /// Why the DHT isn't sampling yet; null when it is, or when the DHT
-    /// is off.
+    /// Why the DHT isn't sampling yet; null when it is, before its first
+    /// report, and when it is off or not running.
     #[schema(required = true)]
     pub sampling_blocked: Option<SamplingBlocked>,
     /// Documents in the search index; null when search is off.
@@ -145,14 +145,13 @@ pub struct StatsResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SamplingBlocked {
     /// `dht_sample_suppression_reason`'s label (`docs/metrics.md`), such
-    /// as `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`;
-    /// `starting` before the DHT's first report.
+    /// as `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`.
     pub reason: String,
-    /// Seconds until sampling may begin; null before the DHT's first
-    /// report. For `locked` and `invalidate_failed` it's a lower bound:
-    /// sampling also waits until the restart record can be written.
-    #[schema(required = true)]
-    pub remaining_s: Option<u64>,
+    /// Seconds until sampling may begin (`dht_sample_suppression_seconds`).
+    /// For `invalidate_failed`, and `locked` while the lock is busy, it's a
+    /// lower bound: sampling also waits until the restart record can be
+    /// written.
+    pub remaining_s: u64,
 }
 
 /// A source's stored lifecycle state (§18.1).

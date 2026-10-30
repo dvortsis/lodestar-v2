@@ -212,7 +212,7 @@ impl OpsApi for FakeOps {
                 queue_depth: 93,
                 sampling_blocked: Some(SamplingBlocked {
                     reason: "dirty".into(),
-                    remaining_s: Some(21_540),
+                    remaining_s: 21_540,
                 }),
                 searchable_torrents: None,
                 stored_torrents: 2_410_391,
