@@ -666,8 +666,9 @@ impl Here {
 }
 
 /// Why sampling isn't resumed, or `Resumed` (the metric's label set, §5.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Reason {
+    #[default]
     Off,
     Locked,
     FirstStart,
@@ -925,16 +926,25 @@ pub enum Point {
 }
 
 #[cfg(test)]
-mod fail {
+pub(crate) mod fail {
     use super::Point;
     use std::cell::Cell;
 
     thread_local! {
         static AT: Cell<Option<Point>> = const { Cell::new(None) };
+        static STICKY: Cell<bool> = const { Cell::new(false) };
     }
 
+    /// Fails the next write that reaches `p` on this thread.
     pub fn arm(p: Option<Point>) {
         AT.with(|a| a.set(p));
+        STICKY.with(|s| s.set(false));
+    }
+
+    /// Fails every write that reaches `p` on this thread until disarmed.
+    pub fn arm_sticky(p: Option<Point>) {
+        AT.with(|a| a.set(p));
+        STICKY.with(|s| s.set(p.is_some()));
     }
 
     pub fn hit(p: Point) -> std::io::Result<()> {
@@ -942,7 +952,9 @@ mod fail {
             std::process::abort();
         }
         if AT.with(|a| a.get()) == Some(p) {
-            AT.with(|a| a.set(None));
+            if !STICKY.with(|s| s.get()) {
+                AT.with(|a| a.set(None));
+            }
             return Err(std::io::Error::other(format!("injected at {p:?}")));
         }
         Ok(())

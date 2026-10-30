@@ -30,6 +30,39 @@ lodestar_log::catalogue! {
         message: "No DHT bootstrap router answered",
         fields: { configured: Size, resolved: Size, refused: Size, throttled: Size },
     }
+    /// The restart proof's start check (CR-0d): whether this run resumes
+    /// from the last clean stop (`mode`), and if not, why (`reason`, the
+    /// `dht_sample_suppression_reason` label). `previous` is the marker the
+    /// last run left (`clean`, `dirty`, `off`, `none` or `bad`); `restored`
+    /// counts the restrictions seeded, `dropped_expired` those already
+    /// over. Counts only: no addresses.
+    RESTART_CHECK {
+        id: "dht.restart_check",
+        component: Dht,
+        level: Info,
+        message: "DHT restart check",
+        fields: { mode: Label, reason: Label, previous: Label, generation: Size, restored: Size, dropped_expired: Size },
+    }
+    /// The restart proof's commit at shutdown: `ok`, how long it took, and
+    /// how many restrictions it wrote. Not ok means the next start
+    /// suppresses for six hours.
+    RESTART_COMMIT {
+        id: "dht.restart_commit",
+        component: Dht,
+        level: Info,
+        message: "DHT restart proof committed",
+        fields: { ok: Label, duration_ms: Size, entries: Size },
+    }
+    /// A restart-proof write failed (`step`: lock, witness, invalidate,
+    /// state_bin, snapshot or marker). Sampling stays safe: the next start
+    /// suppresses, or this run waits until the write lands.
+    RESTART_PERSIST_FAILED {
+        id: "dht.restart_persist_failed",
+        component: Dht,
+        level: Warn,
+        message: "DHT restart proof write failed",
+        fields: { step: Label },
+    }
     /// A key reached the harvest: from samples, someone's `get_peers`, an
     /// announce, or a lookup this node ran (`source`).
     KEY_HARVESTED {

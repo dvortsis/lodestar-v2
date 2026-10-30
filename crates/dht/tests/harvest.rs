@@ -27,6 +27,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         harvest: Default::default(),
         deny: None,
         paused: false,
+        restart: None,
     }
 }
 

@@ -15,6 +15,7 @@ use lodestar_metainfo::InfoHash;
 
 use super::lookup::Lookup;
 use super::peers::PeerStore;
+use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
@@ -373,6 +374,8 @@ struct Actor {
     unsolicited_from: UnsolicitedFrom,
     /// The crawler's pause: no sampling, lookups, scrapes or harvests.
     paused: bool,
+    /// CR-0d: when sampling may start, and the restart proof.
+    proof: Proof,
 }
 
 pub(crate) async fn run(
@@ -432,7 +435,7 @@ pub(crate) async fn run(
             }
         }
     }
-    actor.save()
+    actor.finish()
 }
 
 async fn recv_second(
@@ -555,6 +558,14 @@ impl Actor {
             contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
+            proof: Proof::new(
+                cfg.state_path.as_deref(),
+                cfg.restart.as_ref(),
+                cfg.sample_start_delay,
+                sampler::MAX_INTERVAL + cfg.query_timeout,
+                cfg.tick,
+                now,
+            ),
             cfg,
         }
     }
@@ -1693,6 +1704,8 @@ impl Actor {
     fn maintain(&mut self, sockets: &[SendSocket]) {
         let now_i = Instant::now();
         let now = self.now_secs();
+        self.proof
+            .tick(now_i, &self.ids, &self.stats, &mut self.sampler);
 
         // Timeouts.
         let timeout = self.cfg.query_timeout;
@@ -1788,6 +1801,7 @@ impl Actor {
         }
 
         if self.cfg.state_path.is_some()
+            && self.proof.may_save_state()
             && now_i.duration_since(self.last_save) >= self.cfg.save_every
         {
             self.last_save = now_i;
@@ -1806,14 +1820,9 @@ impl Actor {
         self.stats
             .sample_frontier
             .store(self.sampler.frontier_len() as u64, Ordering::Relaxed);
-        self.stats.sample_suppression_seconds.store(
-            self.cfg
-                .sample_start_delay
-                .unwrap_or(sampler::MAX_INTERVAL + self.cfg.query_timeout)
-                .saturating_sub(now_i.duration_since(self.epoch))
-                .as_secs(),
-            Ordering::Relaxed,
-        );
+        self.stats
+            .sample_suppression_seconds
+            .store(self.proof.suppression_seconds(now_i), Ordering::Relaxed);
         let nodes: usize = self.families.iter().map(|f| f.table.len()).sum();
         self.stats
             .routing_nodes
@@ -1856,12 +1865,8 @@ impl Actor {
     /// frontier from the routing tables and exploring a random region of
     /// the keyspace when it runs low.
     fn sample_tick(&mut self, sockets: &[SendSocket], now_i: Instant) {
-        if now_i.duration_since(self.epoch)
-            < self
-                .cfg
-                .sample_start_delay
-                .unwrap_or(sampler::MAX_INTERVAL + self.cfg.query_timeout)
-        {
+        // The suppression, or the restart proof's gate (CR-0d).
+        if !self.proof.may_sample(now_i) {
             return;
         }
         if self.sampler.saturated() {
@@ -1914,10 +1919,7 @@ impl Actor {
         }
     }
 
-    fn save(&self) -> Result<(), StateError> {
-        let Some(path) = &self.cfg.state_path else {
-            return Ok(());
-        };
+    fn state(&self) -> State {
         let now = self.now_secs();
         let nodes = self
             .families
@@ -1931,7 +1933,31 @@ impl Actor {
             external_ip: self.external.current,
             nodes,
         }
-        .save(path)
+    }
+
+    fn save(&self) -> Result<(), StateError> {
+        let Some(path) = &self.cfg.state_path else {
+            return Ok(());
+        };
+        self.state().save(path)
+    }
+
+    /// At shutdown, after the event loop: the restart proof's commit
+    /// (S8–S11, which saves `dht-state.bin` itself), or today's save.
+    fn finish(&mut self) -> Result<(), StateError> {
+        if let Some(path) = self.cfg.state_path.clone() {
+            let state = self.state();
+            if let Some(result) = self
+                .proof
+                .commit(&mut self.sampler, &state, &path, &self.stats)
+            {
+                // A failure is counted and logged, and leaves the marker
+                // dirty: the next start suppresses. It isn't a node error.
+                let _ = result;
+                return Ok(());
+            }
+        }
+        self.save()
     }
 }
 
@@ -2579,7 +2605,16 @@ mod tests {
         let peer = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = peer.local_addr().unwrap();
         a.sampler.offer(candidate(to), Instant::now());
+        // A production start: the full suppression, no restart proof.
         a.cfg.sample_start_delay = None;
+        a.proof = Proof::new(
+            None,
+            None,
+            None,
+            sampler::MAX_INTERVAL + a.cfg.query_timeout,
+            a.cfg.tick,
+            Instant::now(),
+        );
         a.sample_tick(&sockets, Instant::now());
         assert_eq!(a.sampler.frontier_len(), 1);
         assert!(a.pending.is_empty());

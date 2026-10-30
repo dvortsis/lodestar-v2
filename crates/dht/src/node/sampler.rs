@@ -18,6 +18,12 @@ const RECLAIM_PER_TICK: usize = 1024;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+/// Tokens for records the restart proof made (CR-0d): restored at start or
+/// sealed at shutdown. Wire transaction ids start in the lower half and
+/// only count up, so they never reach this bit.
+const PROOF_TOKEN: u64 = 1 << 63;
+/// Within proof tokens: restored from a snapshot (for the counters).
+const RESTORED: u64 = 1 << 62;
 
 #[derive(Debug, Clone, Copy)]
 enum State {
@@ -32,6 +38,12 @@ pub(crate) struct Sampler {
     frontier: VecDeque<NodeInfo>,
     queued: Set<SocketAddr>,
     capacity: usize,
+    next_proof: u64,
+    /// Restored records still cooling, and the running totals of
+    /// candidates they turned away and of those that expired unsampled.
+    restored_live: usize,
+    restored_refused: u64,
+    restored_honoured: u64,
 }
 
 impl Default for Sampler {
@@ -42,6 +54,10 @@ impl Default for Sampler {
             frontier: VecDeque::new(),
             queued: Set::default(),
             capacity: MAX_KNOWN,
+            next_proof: 0,
+            restored_live: 0,
+            restored_refused: 0,
+            restored_honoured: 0,
         }
     }
 }
@@ -65,6 +81,11 @@ impl Sampler {
 
     pub fn offer(&mut self, mut node: NodeInfo, now: Instant) {
         node.addr = lodestar_network_policy::normalize(node.addr);
+        if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token })
+            if *until > now && token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED)
+        {
+            self.restored_refused += 1;
+        }
         if self.frontier.len() < MAX_FRONTIER
             && !self.queued.contains(&node.addr)
             && self.eligible(&node.addr, now)
@@ -95,6 +116,7 @@ impl Sampler {
         }
         if let Some(State::Cooling { until, token }) = self.states.remove(&addr) {
             self.expiry.remove(&(until, token, addr));
+            self.retire(token);
         }
         if self.states.len() >= self.capacity {
             return false;
@@ -134,8 +156,84 @@ impl Sampler {
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
             {
                 self.states.remove(&addr);
+                self.retire(token);
             }
         }
+    }
+
+    fn proof_token(&mut self, restored: bool) -> u64 {
+        self.next_proof += 1;
+        PROOF_TOKEN | if restored { RESTORED } else { 0 } | self.next_proof
+    }
+
+    /// An expired record left the table: count a restored one as honoured.
+    fn retire(&mut self, token: u64) {
+        if token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED {
+            self.restored_live -= 1;
+            self.restored_honoured += 1;
+        }
+    }
+
+    /// Seeds a restriction restored by the restart proof (S2). It is never
+    /// refused for capacity: dropping one would shorten it, and a snapshot
+    /// holds at most the table's bound. An existing later record wins.
+    /// Sampling is gated until seeding is done, so nothing is in flight.
+    pub fn restore(&mut self, addr: SocketAddr, until: Instant) {
+        let addr = lodestar_network_policy::normalize(addr);
+        match self.states.get(&addr).copied() {
+            Some(State::InFlight(_)) => {
+                debug_assert!(false, "a sample was in flight before seeding");
+                return;
+            }
+            Some(State::Cooling { until: u, .. }) if u >= until => return,
+            Some(State::Cooling { until: u, token }) => {
+                self.expiry.remove(&(u, token, addr));
+                if token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED {
+                    self.restored_live -= 1;
+                }
+            }
+            None => {}
+        }
+        let token = self.proof_token(true);
+        self.states.insert(addr, State::Cooling { until, token });
+        self.expiry.insert((until, token, addr));
+        self.restored_live += 1;
+    }
+
+    /// S8: every sample still in flight becomes a cooldown ending at
+    /// `until` under a fresh token, so a late reply or timeout for the old
+    /// transaction fails `complete` and can't shorten it (P6).
+    pub fn seal_in_flight(&mut self, until: Instant) {
+        let flying: Vec<SocketAddr> = self
+            .states
+            .iter()
+            .filter(|(_, s)| matches!(s, State::InFlight(_)))
+            .map(|(a, _)| *a)
+            .collect();
+        for addr in flying {
+            let token = self.proof_token(false);
+            self.states.insert(addr, State::Cooling { until, token });
+            self.expiry.insert((until, token, addr));
+        }
+    }
+
+    /// Every live cooldown, for the snapshot (S10). Call after
+    /// [`Sampler::seal_in_flight`]: in-flight records aren't listed.
+    pub fn restrictions(&self, now: Instant) -> impl Iterator<Item = (SocketAddr, Instant)> + '_ {
+        self.states.iter().filter_map(move |(addr, s)| match s {
+            State::Cooling { until, .. } if *until > now => Some((*addr, *until)),
+            _ => None,
+        })
+    }
+
+    /// Restored records still cooling, candidates they turned away, and
+    /// those that expired unsampled. Monitoring only (P5).
+    pub fn restored_counts(&self) -> (usize, u64, u64) {
+        (
+            self.restored_live,
+            self.restored_refused,
+            self.restored_honoured,
+        )
     }
 
     pub fn frontier_len(&self) -> usize {

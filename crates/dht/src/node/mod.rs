@@ -13,6 +13,7 @@
 mod actor;
 mod lookup;
 mod peers;
+mod proof;
 mod sampler;
 mod seen;
 #[cfg(feature = "testing")]
@@ -146,6 +147,35 @@ pub struct Config {
     /// Start paused (the crawler's pause, which persists): see
     /// [`NodeHandle::set_paused`].
     pub paused: bool,
+    /// CR-0d's crash-safe restart proof (`dht.safe_restart`): `None` keeps
+    /// the full suppression after every start. It needs `state_path` and
+    /// no `sample_start_delay` override; without them it acts as off.
+    pub restart: Option<RestartConfig>,
+}
+
+/// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
+#[derive(Debug, Clone)]
+pub struct RestartConfig {
+    /// Where the generation witness lives: outside the data directory.
+    /// `None`, or a directory that resolves inside it, means no witness,
+    /// so every start suppresses (`no_witness`).
+    pub witness_dir: Option<PathBuf>,
+    /// The wall clock (and the monotonic clock it is paired with).
+    pub clock: Arc<dyn crate::restart::Clock>,
+    /// Do the file work on the actor's thread instead of tokio's blocking
+    /// pool. For tests on a paused clock, where a pool thread's progress
+    /// isn't ordered with simulated time.
+    pub inline_io: bool,
+}
+
+impl RestartConfig {
+    pub fn new(witness_dir: Option<PathBuf>) -> RestartConfig {
+        RestartConfig {
+            witness_dir,
+            clock: Arc::new(crate::restart::SystemClock),
+            inline_io: false,
+        }
+    }
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -181,6 +211,7 @@ impl Default for Config {
             deny: None,
             allow_private: false,
             paused: false,
+            restart: None,
         }
     }
 }
@@ -243,6 +274,18 @@ pub struct Stats {
     pub lookup_deadlines: AtomicU64,
     pub sample_frontier: AtomicU64,
     pub sample_suppression_seconds: AtomicU64,
+    /// Gauge: why this run is or isn't sampling yet, as an index into
+    /// [`crate::restart::Reason::ALL`].
+    pub sample_suppression_reason: AtomicU64,
+    /// Gauges: restrictions restored at start, and those still cooling.
+    pub restart_obligations_restored: AtomicU64,
+    pub restart_obligations_pending: AtomicU64,
+    /// Candidates a restored restriction turned away, and restored
+    /// restrictions that expired unsampled. Monitoring only.
+    pub restart_obligations_refused: AtomicU64,
+    pub restart_obligations_honoured: AtomicU64,
+    /// Restart-proof I/O failures, by [`PersistStep`].
+    pub restart_persist_errors: [AtomicU64; PersistStep::ALL.len()],
     /// Sampling ticks/admissions deferred by capacity.
     pub sample_deferred: AtomicU64,
     /// BEP 33 scrapes asked for, answered, and refused because the queue
@@ -305,12 +348,54 @@ impl Stats {
             lookup_deadlines: g(&self.lookup_deadlines),
             sample_frontier: g(&self.sample_frontier),
             sample_suppression_seconds: g(&self.sample_suppression_seconds),
+            sample_suppression_reason: crate::restart::Reason::ALL
+                .get(g(&self.sample_suppression_reason) as usize)
+                .copied()
+                .unwrap_or(crate::restart::Reason::Off),
+            restart_obligations_restored: g(&self.restart_obligations_restored),
+            restart_obligations_pending: g(&self.restart_obligations_pending),
+            restart_obligations_refused: g(&self.restart_obligations_refused),
+            restart_obligations_honoured: g(&self.restart_obligations_honoured),
+            restart_persist_errors: std::array::from_fn(|i| g(&self.restart_persist_errors[i])),
             sample_deferred: g(&self.sample_deferred),
             scrapes_requested: g(&self.scrapes_requested),
             scrapes_completed: g(&self.scrapes_completed),
             scrapes_dropped: g(&self.scrapes_dropped),
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
+        }
+    }
+}
+
+/// Where a restart-proof write failed (`dht_restart_persist_errors_total`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistStep {
+    Lock,
+    Witness,
+    Invalidate,
+    StateBin,
+    Snapshot,
+    Marker,
+}
+
+impl PersistStep {
+    pub const ALL: [PersistStep; 6] = [
+        PersistStep::Lock,
+        PersistStep::Witness,
+        PersistStep::Invalidate,
+        PersistStep::StateBin,
+        PersistStep::Snapshot,
+        PersistStep::Marker,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PersistStep::Lock => "lock",
+            PersistStep::Witness => "witness",
+            PersistStep::Invalidate => "invalidate",
+            PersistStep::StateBin => "state_bin",
+            PersistStep::Snapshot => "snapshot",
+            PersistStep::Marker => "marker",
         }
     }
 }
@@ -358,6 +443,13 @@ pub struct StatsSnapshot {
     pub lookup_deadlines: u64,
     pub sample_frontier: u64,
     pub sample_suppression_seconds: u64,
+    pub sample_suppression_reason: crate::restart::Reason,
+    pub restart_obligations_restored: u64,
+    pub restart_obligations_pending: u64,
+    pub restart_obligations_refused: u64,
+    pub restart_obligations_honoured: u64,
+    /// By [`PersistStep::ALL`].
+    pub restart_persist_errors: [u64; 6],
     pub sample_deferred: u64,
     pub scrapes_requested: u64,
     pub scrapes_completed: u64,
