@@ -240,10 +240,10 @@ impl UdpTracker {
     }
 
     async fn connection_id(&mut self) -> Result<u64> {
-        if let Some((id, at)) = self.connection {
-            if at.elapsed() < CONNECTION_TTL {
-                return Ok(id);
-            }
+        if let Some((id, at)) = self.connection
+            && at.elapsed() < CONNECTION_TTL
+        {
+            return Ok(id);
         }
         let tid = rand::random();
         match self.exchange(&connect_request(tid), tid).await? {

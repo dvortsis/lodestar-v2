@@ -11,6 +11,7 @@ use lodestar_api::logs::{
 };
 use lodestar_log::{Record, Sink, Value};
 
+use super::names::LogName;
 use super::ring::Ring;
 use super::state::Applied;
 use super::tests::Buf;
@@ -714,7 +715,15 @@ fn a_link_named_like_a_log_is_refused_and_skipped() {
 #[test]
 fn delete_while_writers_run_and_a_compression_is_in_flight() {
     let dir = tempfile::tempdir().unwrap();
-    let (rt, _) = runtime(&section(dir.path(), |_| {}), None, false);
+    // No prune by count: the writer rotates every 300 lines, far faster
+    // than the worker compresses, so a prune queued ahead of the deletion
+    // would see the newer files and take the older ones first, leaving
+    // the deletion nothing (`a_prune_queued_ahead_can_take_what_a_deletion_names`).
+    let (rt, _) = runtime(
+        &section(dir.path(), |l| l.file_count = u32::MAX),
+        None,
+        false,
+    );
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let lines = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let writer = {
@@ -752,7 +761,18 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
     let src = logs(rt);
     let done = src.delete(LogFilesWhich::All).unwrap();
     assert!(done.deleted >= 1, "{done:?}");
-    std::thread::sleep(Duration::from_millis(100));
+    // Writers go on after it: two more rotations' worth of lines.
+    let after = lines.load(std::sync::atomic::Ordering::Relaxed) + 600;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while lines.load(std::sync::atomic::Ordering::Relaxed) < after
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        lines.load(std::sync::atomic::Ordering::Relaxed) >= after,
+        "the writer didn't write 600 more lines within 30 s"
+    );
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let written = writer.join().unwrap();
     settle(rt);
@@ -777,6 +797,78 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
             assert!(dir.path().join("logs").join(name).exists(), "{name}");
         }
     }
+}
+
+/// A deletion queued behind a compression whose prune sees newer files
+/// (rotated meanwhile) finds what it named already pruned by count: it
+/// reports nothing deleted, skips nothing, and leaves nothing at or older
+/// than the file it set aside. With no prune by count it takes both. It
+/// shows the delete test's old flake; the prune's own order (a newer
+/// `-N` kept over an older name) is `the_count_keeps_the_newest_of_one_millisecond`.
+#[test]
+fn a_prune_queued_ahead_can_take_what_a_deletion_names() {
+    fn run(count: u32) -> (lodestar_api::logs::LogFilesDeleted, Vec<String>, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path().join("logs");
+        let (rt, _) = runtime(&section(dir.path(), |l| l.file_count = count), None, false);
+        let rotate = |n: u64| {
+            line(rt, n, "x");
+            match &mut *lock(&rt.file) {
+                FileState::Open(sink) => sink.rotate().unwrap(),
+                _ => panic!("the file isn't open"),
+            }
+        };
+        settle(rt);
+        let hold = match &*lock(&rt.file) {
+            FileState::Open(sink) => sink.hold(),
+            _ => panic!("the file isn't open"),
+        };
+        // Its compression and prune queue behind the hold.
+        let first = rotate(0);
+        line(rt, 1, "x");
+        let deleting = std::thread::spawn(move || logs(rt).delete(LogFilesWhich::All).unwrap());
+        // The deletion has set the current file aside once a second
+        // rotated file is there.
+        let rotated = || -> Vec<String> {
+            let mut v: Vec<String> = std::fs::read_dir(&logs_dir)
+                .unwrap()
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter(|n| n.starts_with("lodestar-"))
+                .collect();
+            v.sort();
+            v
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let aside = loop {
+            if let Some(n) = rotated().into_iter().find(|n| *n != first) {
+                break n;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", rotated());
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        for n in 2..5 {
+            rotate(n);
+        }
+        drop(hold);
+        let done = deleting.join().unwrap();
+        settle(rt);
+        (done, rotated(), aside)
+    }
+    let newer = |a: &str, b: &str| {
+        let (a, b) = (LogName::parse(a).unwrap(), LogName::parse(b).unwrap());
+        LogName::newest_first(&a, &b) == std::cmp::Ordering::Less
+    };
+    // Pruned to 2 by the first file's prune, before the deletion runs.
+    let (done, left, aside) = run(2);
+    assert_eq!(done.deleted, 0, "{done:?}");
+    assert!(done.skipped.is_empty(), "{done:?}");
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.iter().all(|n| newer(n, &aside)), "{left:?} {aside}");
+    // Nothing pruned: the deletion takes the first file and the one set aside.
+    let (done, left, aside) = run(u32::MAX);
+    assert_eq!(done.deleted, 2, "{done:?}");
+    assert_eq!(left.len(), 3, "{left:?}");
+    assert!(left.iter().all(|n| newer(n, &aside)), "{left:?} {aside}");
 }
 
 /// Every `srctest.line` number in the folder's files.

@@ -686,8 +686,31 @@ struct StartJob {
     horizon_s: u32,
 }
 
+/// Test-only: a start job for this data directory waits for a release
+/// before it runs, so a test can hold it on the pool (the drain test).
+/// Keyed by directory, so no other test's jobs are touched.
+#[cfg(test)]
+pub(crate) static HOLD_START: std::sync::Mutex<Option<(PathBuf, mpsc::Receiver<()>)>> =
+    std::sync::Mutex::new(None);
+
 impl StartJob {
     fn run(self) -> Started {
+        #[cfg(test)]
+        {
+            let held = {
+                let mut hold = HOLD_START.lock().expect("hold lock");
+                match hold.take() {
+                    Some((dir, rx)) if dir == self.data_dir => Some(rx),
+                    other => {
+                        *hold = other;
+                        None
+                    }
+                }
+            };
+            if let Some(rx) = held {
+                let _ = rx.recv_timeout(Duration::from_secs(10));
+            }
+        }
         if self.on {
             self.run_on()
         } else {

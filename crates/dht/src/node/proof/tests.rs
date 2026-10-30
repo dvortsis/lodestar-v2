@@ -1034,6 +1034,9 @@ async fn a_start_job_landing_in_the_shutdown_drain_is_seeded_before_the_capture(
         sampler: Sampler::default(),
         stats: Stats::default(),
     };
+    // Hold the start job on the pool until the shutdown is under way.
+    let (release, held) = std::sync::mpsc::channel();
+    *HOLD_START.lock().unwrap() = Some((d.data.clone(), held));
     // Takes the lock and spawns S0–S4 on the pool, retrying only if a
     // forked child briefly shares the lock file (see `take_lock`).
     run.tick();
@@ -1043,6 +1046,12 @@ async fn a_start_job_landing_in_the_shutdown_drain_is_seeded_before_the_capture(
         mut sampler,
         stats,
     } = run;
+    assert!(
+        proof.job.is_some(),
+        "the start job is still out: the drain is what lands it"
+    );
+    assert!(proof.started.is_none());
+    release.send(()).unwrap();
     assert_eq!(
         proof.commit(&mut sampler, &state(), &path, &stats),
         Some(Ok(())),
