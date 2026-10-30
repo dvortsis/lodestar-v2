@@ -12,13 +12,14 @@ use lodestar_pipeline::health::{HealthHandle, trackers::Health};
 use lodestar_sources::Loss;
 use lodestar_store::HotColumns;
 
-pub const FAILURE_KINDS: [(FailureKind, &str); 6] = [
+pub const FAILURE_KINDS: [(FailureKind, &str); 7] = [
     (FailureKind::Unreachable, "unreachable"),
     (FailureKind::TimedOut, "timed_out"),
     (FailureKind::Refused, "refused"),
     (FailureKind::EncryptionFailed, "encryption_failed"),
     (FailureKind::Invalid, "invalid"),
     (FailureKind::Oversize, "oversize"),
+    (FailureKind::HashMismatch, "hash_mismatch"),
 ];
 
 pub const LOSSES: [(Loss, &str); 10] = [
@@ -1107,6 +1108,21 @@ pub fn render_caches(
 mod tests {
     use super::*;
     use lodestar_pipeline::gate::{Excluded, Origin};
+
+    /// Every slot of the pool's failure array has a label, in index order,
+    /// so a new `FailureKind` can't be left out of `/metrics` and
+    /// `/api/status`.
+    #[test]
+    fn failure_labels_cover_every_kind() {
+        let p = lodestar_sources::PoolStats::default();
+        assert_eq!(FAILURE_KINDS.len(), p.failures.len());
+        for (i, f) in p.failures.iter().enumerate() {
+            f.store(i as u64 + 1, Ordering::Relaxed);
+        }
+        for (i, (kind, _)) in FAILURE_KINDS.iter().enumerate() {
+            assert_eq!(p.failure_count(*kind), i as u64 + 1, "{kind:?}");
+        }
+    }
 
     #[test]
     fn gate_families_render_each_field_on_its_own_line() {

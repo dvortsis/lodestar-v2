@@ -553,6 +553,7 @@ fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &Funne
         FailureKind::EncryptionFailed,
         FailureKind::Invalid,
         FailureKind::Oversize,
+        FailureKind::HashMismatch,
     ];
     let failures: Vec<String> = kinds
         .iter()

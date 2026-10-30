@@ -50,7 +50,7 @@ impl From<FailureKind> for Loss {
             FailureKind::TimedOut => Loss::TimedOut,
             FailureKind::Refused => Loss::Refused,
             FailureKind::EncryptionFailed => Loss::EncryptionFailed,
-            FailureKind::Invalid => Loss::Invalid,
+            FailureKind::Invalid | FailureKind::HashMismatch => Loss::Invalid,
             FailureKind::Oversize => Loss::Oversize,
         }
     }
@@ -68,9 +68,18 @@ pub trait Funnel: Send + Sync {
         self.record(cohort, source, Stage::Harvested, None);
     }
 
-    /// A key left the pool without being fetched. A worker overrides this
-    /// to report the outcome to the lease's holder of record.
-    fn lost(&self, _key: &InfoHash, cohort: i64, source: SourceId, loss: Loss) {
+    /// A key left the pool without being fetched. `cause` is the fetch
+    /// failure behind `loss`, if one was (never persisted: `Loss` is what
+    /// `cohort_hour` keeps). A worker overrides this to report the outcome
+    /// to the lease's holder of record.
+    fn lost(
+        &self,
+        _key: &InfoHash,
+        cohort: i64,
+        source: SourceId,
+        loss: Loss,
+        _cause: Option<FailureKind>,
+    ) {
         self.record(cohort, source, Stage::Lost, Some(loss));
     }
 }

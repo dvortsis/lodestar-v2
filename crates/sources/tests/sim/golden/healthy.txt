@@ -53,6 +53,8 @@ peer_ack_failed=0
 peer_command_full=14029
 peer_command_closed=0
 peer_cancelled=0
+peer_queued_dropped_caller_closed=0
+peer_queued_dropped_paused=0
 peer_active=29
 peer_queued=0
 lookup_scheduled=35
@@ -62,9 +64,17 @@ denied=0
 # fetch pool stats at the end (PoolStats)
 pending=17216 active=8 waiting=17208 lookups=30 lookup_backlog=0
 fetched=705 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=72392 retry_unaccepted=55574
-failures: Unreachable=605 TimedOut=322 Refused=378 EncryptionFailed=0 Invalid=0 Oversize=0
+failures: Unreachable=605 TimedOut=322 Refused=378 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
 lost: NoPeers=0 TimedOut=0 Refused=0 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=0 GaveUp=0 Unreachable=0
 evicted_service: unaccepted=0 lookup=0 peers=0 fetch=0
+admission_waits=0
+admission_wait_cancelled=0
+admission_wakeups=0
+admission_grants=0
+admission_refusals=0
+admission_holds=0
+admission_permit_returns=0
+dht_permit_returns=0
 funnel: Harvested=17921 PeerFound=848 Fetched=705 Lost=0
 
 # scripted network

@@ -13,8 +13,8 @@ use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_sources::pool::spawn;
 use lodestar_sources::{
-    BoxFuture, Discovery, FetchedKey, Fetcher, Found, FunnelCounts, Loss, PoolConfig, PoolHandle,
-    PoolIo, Shutdown, Stage,
+    BoxFuture, Discovery, FetchedKey, Fetcher, Found, Funnel, FunnelCounts, Loss, PoolConfig,
+    PoolHandle, PoolIo, Shutdown, Stage,
 };
 use lodestar_store::{QueuedKey, SourceId};
 use tokio::sync::{mpsc, watch};
@@ -108,11 +108,36 @@ impl Fetcher for Fake {
     }
 }
 
+/// The funnel's counts, plus each loss's cause as the pool reported it.
+struct Causes {
+    counts: Arc<FunnelCounts>,
+    lost: Mutex<Vec<(InfoHash, Loss, Option<FailureKind>)>>,
+}
+
+impl Funnel for Causes {
+    fn record(&self, cohort: i64, source: SourceId, stage: Stage, loss: Option<Loss>) {
+        self.counts.record(cohort, source, stage, loss);
+    }
+
+    fn lost(
+        &self,
+        key: &InfoHash,
+        cohort: i64,
+        source: SourceId,
+        loss: Loss,
+        cause: Option<FailureKind>,
+    ) {
+        self.lost.lock().unwrap().push((*key, loss, cause));
+        self.record(cohort, source, Stage::Lost, Some(loss));
+    }
+}
+
 struct Harness {
     disc: mpsc::Sender<Discovery>,
     lookups: mpsc::Receiver<InfoHash>,
     out: mpsc::Receiver<FetchedKey>,
     funnel: Arc<FunnelCounts>,
+    causes: Arc<Causes>,
     handle: PoolHandle,
     stop: watch::Sender<bool>,
     task: JoinHandle<Vec<QueuedKey>>,
@@ -148,6 +173,10 @@ impl Harness {
         let (out_tx, out) = mpsc::channel(4096);
         let (stop, shutdown) = Shutdown::new();
         let funnel = Arc::new(FunnelCounts::default());
+        let causes = Arc::new(Causes {
+            counts: funnel.clone(),
+            lost: Mutex::default(),
+        });
         let (handle, task) = spawn(
             config,
             Arc::new(Fake(fake.clone())),
@@ -155,7 +184,7 @@ impl Harness {
                 discoveries,
                 peer_finders: vec![finder],
                 out: out_tx,
-                funnel: funnel.clone(),
+                funnel: causes.clone(),
                 shutdown,
             },
             weights.iter().map(|&(s, w)| (src(s), w)).collect(),
@@ -166,6 +195,7 @@ impl Harness {
             lookups,
             out,
             funnel,
+            causes,
             handle,
             stop,
             task,
@@ -823,6 +853,64 @@ async fn oversize_is_terminal() {
         1
     );
     assert_eq!(h.fake.started.lock().unwrap().len(), 1);
+    h.stop().await;
+}
+
+/// A hash mismatch and a protocol violation are both the funnel's
+/// `invalid` loss; only the cause passed with it tells them apart.
+#[tokio::test(start_paused = true)]
+async fn an_invalid_loss_carries_its_cause() {
+    let cfg = PoolConfig {
+        max_attempts: 1,
+        ..config()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 10, Err(FailureKind::HashMismatch));
+    h.script(peer(2, 1), 10, Err(FailureKind::Invalid));
+    h.send(found(0, 1, vec![peer(1, 1)]));
+    h.send(found(0, 2, vec![peer(2, 1)]));
+    // Each fails, backs off, looks again (no peers) and gives up.
+    sleep(Duration::from_secs(600)).await;
+    let mut lost = h.causes.lost.lock().unwrap().clone();
+    lost.sort_by_key(|l| l.0);
+    assert_eq!(
+        lost,
+        vec![
+            (key(1), Loss::Invalid, Some(FailureKind::HashMismatch)),
+            (key(2), Loss::Invalid, Some(FailureKind::Invalid)),
+        ]
+    );
+    assert_eq!(
+        h.funnel
+            .get(COHORT, src(0), Stage::Lost, Some(Loss::Invalid)),
+        2
+    );
+    let stats = h.handle.stats();
+    assert_eq!(stats.failure_count(FailureKind::HashMismatch), 1);
+    assert_eq!(stats.failure_count(FailureKind::Invalid), 1);
+    h.stop().await;
+}
+
+/// A key evicted after a hash mismatch was lost to the full queue, not to
+/// bad data: its loss carries no cause, so the gate can't count it.
+#[tokio::test(start_paused = true)]
+async fn an_evicted_key_carries_no_cause() {
+    let cfg = PoolConfig {
+        max_pending: 1,
+        ..config()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 10, Err(FailureKind::HashMismatch));
+    h.send(found(0, 1, vec![peer(1, 1)]));
+    // It fails and backs off with attempts left, so it's evictable.
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(h.handle.stats().failure_count(FailureKind::HashMismatch), 1);
+    h.send(found(0, 2, vec![]));
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        h.causes.lost.lock().unwrap().clone(),
+        vec![(key(1), Loss::Evicted, None)]
+    );
     h.stop().await;
 }
 

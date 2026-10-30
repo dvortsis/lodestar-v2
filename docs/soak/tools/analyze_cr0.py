@@ -54,7 +54,7 @@ SERIES = re.compile(r"^lodestar_([a-z_]+)(\{[^\r\n]*\})?\s+(\S+)(?:\s+\d+)?$")
 
 # Only fixed, documented enums may leave the private evidence directory.
 BREAKDOWNS = {
-    "fetch_failures_total": ("kind", {"no_peers", "timed_out", "refused", "encryption_failed", "oversize", "invalid", "unreachable"}),
+    "fetch_failures_total": ("kind", {"no_peers", "timed_out", "refused", "encryption_failed", "oversize", "invalid", "unreachable", "hash_mismatch"}),
     "fetch_lost_total": ("reason", {"no_peers", "timed_out", "refused", "encryption_failed", "oversize", "invalid", "blocked", "evicted", "gave_up", "unreachable"}),
     "dht_peer_rejection_reasons_total": ("reason", {"capacity", "paused", "caller_closed"}),
     "fetch_evicted_service_total": ("stage", {"unaccepted", "lookup", "peers", "fetch"}),

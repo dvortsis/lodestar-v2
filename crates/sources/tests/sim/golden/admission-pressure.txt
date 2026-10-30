@@ -64,9 +64,17 @@ denied=0
 # fetch pool stats at the end (PoolStats)
 pending=19999 active=7 waiting=19992 lookups=32 lookup_backlog=0
 fetched=295 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=466708 retry_unaccepted=336038
-failures: Unreachable=248 TimedOut=136 Refused=143 EncryptionFailed=0 Invalid=0 Oversize=0
+failures: Unreachable=248 TimedOut=136 Refused=143 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
 lost: NoPeers=0 TimedOut=0 Refused=0 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=110246 GaveUp=0 Unreachable=0
 evicted_service: unaccepted=108552 lookup=1655 peers=0 fetch=39
+admission_waits=0
+admission_wait_cancelled=0
+admission_wakeups=0
+admission_grants=0
+admission_refusals=0
+admission_holds=0
+admission_permit_returns=0
+dht_permit_returns=0
 funnel: Harvested=130540 PeerFound=351 Fetched=295 Lost=0
 
 # scripted network
