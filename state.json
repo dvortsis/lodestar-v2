@@ -1447,7 +1447,7 @@
    "deps": [
     "v051-cut"
    ],
-   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first",
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK",
    "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx"
   }
  },
