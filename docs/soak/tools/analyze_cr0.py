@@ -42,6 +42,11 @@ STOP_REASONS = {
     "three_consecutive_metrics_failures", "three_consecutive_capacity_violations",
     "rss_over_1GiB_for_five_samples", "active_peer_requests_without_completion_for_five_minutes",
 }
+# The binding memory gate (owner, 2026-10-30, #189; docs/decisions/2026-10-30-CR-0-acceptance.md):
+# the OLS slope of anonymous private memory over baseline hours 12-24, judged by
+# the upper bound of its 95% confidence interval.
+MEMORY_FIT = {"field": "private_bytes", "from_hour": 12.0, "to_hour": 24.0,
+              "bar_mib_per_hour": 2.0, "min_samples": 30}
 SERIES = re.compile(r"^lodestar_([a-z_]+)(\{[^\r\n]*\})?\s+(\S+)(?:\s+\d+)?$")
 
 
@@ -295,6 +300,56 @@ def summarize(rows, max_gap, intensity="balanced"):
     return phases, issues
 
 
+def memory_fit(rows):
+    """OLS slope of private memory (MiB/h) over baseline hours 12-24, with a 95% CI.
+
+    Hours count from the first baseline sample. Samples from another process
+    identity are refused rather than fitted across a restart.
+    """
+    f = MEMORY_FIT
+    baseline = [r for r in rows if r["phase"] == "baseline"]
+    fit = {"series": f["field"], "from_hour": f["from_hour"], "to_hour": f["to_hour"],
+           "bar_upper_ci_mib_per_hour": f["bar_mib_per_hour"], "samples": 0,
+           "slope_mib_per_hour": None, "standard_error": None, "ci95_mib_per_hour": None,
+           "window_complete": False, "meets_bar": None, "refused": None}
+    peaks = [r[f["field"]] for r in rows if number(r.get(f["field"]))]
+    fit["peak_mib"] = max(peaks) / 2**20 if peaks else None
+    if not baseline:
+        fit["refused"] = "no_baseline"
+        return fit
+    t0 = baseline[0]["elapsed_seconds"]
+    points = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
+    window = [(h, r) for h, r in points if f["from_hour"] <= h <= f["to_hour"]]
+    # A failed metrics read lacks the start time, so compare it only where present.
+    processes = {(r["process_id"], r.get("process_identity")) for _, r in window}
+    starts = {identity(r)[1] for _, r in window if usable(r)}
+    if len(processes) > 1 or len(starts) > 1:
+        fit["refused"] = "identity_change"
+        return fit
+    xy = [(h, r[f["field"]] / 2**20) for h, r in window if number(r.get(f["field"]))]
+    fit["samples"] = n = len(xy)
+    # Within one sampling interval of each end of the window.
+    fit["window_complete"] = bool(xy) and xy[0][0] <= f["from_hour"] + 0.05 and xy[-1][0] >= f["to_hour"] - 0.05
+    if n < f["min_samples"]:
+        fit["refused"] = "too_few_samples"
+        return fit
+    mx = sum(x for x, _ in xy) / n
+    my = sum(y for _, y in xy) / n
+    sxx = sum((x - mx) ** 2 for x, _ in xy)
+    if sxx == 0:
+        fit["refused"] = "no_time_spread"
+        return fit
+    slope = sum((x - mx) * (y - my) for x, y in xy) / sxx
+    residual = sum((y - my - slope * (x - mx)) ** 2 for x, y in xy)
+    se = math.sqrt(residual / (n - 2) / sxx)
+    # n >= 30, so the normal quantile stands in for Student's t.
+    ci = [slope - 1.96 * se, slope + 1.96 * se]
+    fit.update(slope_mib_per_hour=slope, standard_error=se, ci95_mib_per_hour=ci)
+    if fit["window_complete"]:
+        fit["meets_bar"] = ci[1] <= f["bar_mib_per_hour"]
+    return fit
+
+
 def result_state(result):
     if result is None:
         return "completion_unknown"
@@ -467,6 +522,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
     core_coverage = {name: baseline["measurement_coverage"][name]["fraction"]
                      for name in CORE_COUNTERS + GAUGES}
     run_info = run_identity(run)
+    fit = memory_fit(rows)
     evidence, reasons = gate_verdict(run_info, baseline["valid_interval_seconds"])
     run_info.update(baseline_measured_hours=baseline["valid_interval_seconds"] / 3600,
                     gate_evidence=evidence, gate_evidence_reasons=reasons)
@@ -485,6 +541,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
             "gap_limit_met": baseline["samples"] > 1 and baseline["maximum_gap_seconds"] <= 180,
         },
         "baseline_status": status, "baseline_required_hours": hours,
+        "memory_fit": fit,
         "collector_completed_window": bool(result and result.get("reason") == "baseline_window_complete"),
         "stop_reason": reason,
         "clean_shutdown": clean_shutdown(result),
@@ -497,6 +554,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
             "Stored torrents are not verified searchable yield; no cohort latency or kernel-drop proof is available.",
             "Capacity equality is backpressure; over-capacity observations require review.",
             "RSS change is first-to-last within a continuous phase, not evidence of a leak.",
+            "The memory fit is plain OLS on samples that are not independent; it applies the owner's bar as stated, and a pass is still reviewed.",
             "Final shutdown metrics have no monotonic sample timestamp and are excluded from rates.",
         ],
     }
@@ -533,6 +591,17 @@ def markdown(report):
         out.append(f"| {phase} | {p['samples']} | {fmt(p['observed_span_seconds']/3600)} | "
                    f"{fmt(p['valid_interval_seconds']/3600)} | {p['health_failed_samples']} | "
                    f"{p['metrics_failed_samples']} | {fmt(p['rss_max_mib'])} | {fmt(p['rss_change_mib_per_hour'])} |")
+    fit = report["memory_fit"]
+    verdict = {None: "not judged", True: "meets the bar", False: "misses the bar"}[fit["meets_bar"]]
+    ci = fit["ci95_mib_per_hour"]
+    out += ["", "## Memory gate", "",
+            f"- Series: `{fit['series']}`, baseline hours {fit['from_hour']:g}-{fit['to_hour']:g} "
+            f"({fit['samples']} samples, window complete: {str(fit['window_complete']).lower()})",
+            f"- OLS slope: {fmt(fit['slope_mib_per_hour'])} MiB/h, 95% CI "
+            + (f"[{ci[0]:,.2f}, {ci[1]:,.2f}]" if ci else "unknown") + " MiB/h",
+            f"- Bar: upper 95% bound <= {fit['bar_upper_ci_mib_per_hour']:g} MiB/h: {verdict}"
+            + (f" ({fit['refused']})" if fit["refused"] else ""),
+            f"- Peak private memory: {fmt(fit['peak_mib'])} MiB"]
     out += ["", f"Observation freshness: {report['observation_state']}.",
             f"Baseline valid coverage: {report['baseline_coverage_fraction']:.2%}.",
             f"Disk summary: {json.dumps(report['disk'])}", "", "## Evidence issues", ""]

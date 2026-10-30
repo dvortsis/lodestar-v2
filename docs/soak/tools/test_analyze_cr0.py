@@ -434,5 +434,69 @@ class AnalyzerTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
 
 
+    def memory_rows(self, slope_mib_per_hour, noise_mib=0.0, hours=24.5, step=60, **changes):
+        # Baseline only, one sample a minute; a deterministic zig-zag stands in for noise.
+        rows = []
+        for i in range(int(hours * 3600 // step) + 1):
+            t = i * step
+            mib = 600 + slope_mib_per_hour * t / 3600 + (noise_mib if i % 2 else -noise_mib)
+            rows.append(sample(t, i, private_bytes=mib * 2**20, **changes))
+        return rows
+
+    def test_memory_fit_flat_series_meets_the_bar(self):
+        self.rows(self.memory_rows(0.0, noise_mib=1.0))
+        fit = analyze(self.root)["memory_fit"]
+        self.assertTrue(fit["window_complete"])
+        self.assertEqual(fit["samples"], 721)
+        self.assertAlmostEqual(fit["slope_mib_per_hour"], 0.0, places=2)
+        self.assertLess(fit["ci95_mib_per_hour"][1], 2.0)
+        self.assertTrue(fit["meets_bar"])
+        self.assertAlmostEqual(fit["peak_mib"], 601.0, places=3)
+
+    def test_memory_fit_growth_misses_the_bar(self):
+        self.rows(self.memory_rows(3.0, noise_mib=1.0))
+        report = analyze(self.root)
+        fit = report["memory_fit"]
+        self.assertAlmostEqual(fit["slope_mib_per_hour"], 3.0, places=2)
+        self.assertFalse(fit["meets_bar"])
+        self.assertIn("misses the bar", markdown(report))
+
+    def test_memory_fit_uses_only_hours_12_to_24(self):
+        # Steep warm-up growth before hour 12 is outside the gate.
+        rows = self.memory_rows(0.0, noise_mib=0.5)
+        for row in rows:
+            if row["elapsed_seconds"] < 12 * 3600:
+                row["private_bytes"] -= (12 * 3600 - row["elapsed_seconds"]) / 3600 * 10 * 2**20
+        self.rows(rows)
+        fit = analyze(self.root)["memory_fit"]
+        self.assertAlmostEqual(fit["slope_mib_per_hour"], 0.0, places=2)
+        self.assertTrue(fit["meets_bar"])
+
+    def test_memory_fit_short_run_is_not_judged(self):
+        self.rows(self.memory_rows(0.0, hours=20))
+        fit = analyze(self.root)["memory_fit"]
+        self.assertFalse(fit["window_complete"])
+        self.assertIsNone(fit["meets_bar"])
+        self.assertIsNotNone(fit["slope_mib_per_hour"])
+
+    def test_memory_fit_refuses_a_restart_in_the_window(self):
+        rows = self.memory_rows(0.0)
+        for row in rows[900:]:
+            row["process_id"] = 456
+        self.rows(rows)
+        fit = analyze(self.root)["memory_fit"]
+        self.assertEqual(fit["refused"], "identity_change")
+        self.assertIsNone(fit["meets_bar"])
+
+    def test_memory_fit_ignores_a_failed_metrics_read(self):
+        rows = self.memory_rows(0.0, noise_mib=1.0)
+        rows[1000]["metrics_ok"] = False
+        rows[1000]["values"] = {}
+        self.rows(rows)
+        fit = analyze(self.root)["memory_fit"]
+        self.assertIsNone(fit["refused"])
+        self.assertTrue(fit["meets_bar"])
+
+
 if __name__ == "__main__":
     unittest.main()
