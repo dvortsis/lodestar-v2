@@ -25,6 +25,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
 
 use crate::coordinator::Coordinator;
+use crate::gate::{Excluded, GateStats, Origin};
 use crate::have::{Bloom, Have, capacity_for};
 use crate::health::HealthHandle;
 use crate::rollups::{Rollups, metric};
@@ -107,6 +108,8 @@ pub(crate) struct Writer {
     pub last_purge: i64,
     pub coordinator: Arc<Coordinator>,
     pub stats: Arc<WriterStats>,
+    /// The crawler gate's commit-point counters.
+    pub gate: Arc<GateStats>,
     /// Updated after each commit, so SQLite is always ahead of them.
     pub hot: Option<Arc<HotColumns>>,
     /// Told about rediscoveries, to scrape them sooner (§5).
@@ -296,6 +299,7 @@ impl Writer {
         // Fencing (§19.3): only results under a current lease count. A
         // stale one comes from a holder whose lease expired; the key's new
         // holder will deliver it.
+        let delivered = results.len();
         let committing: Vec<Committing> = results
             .into_iter()
             .filter_map(|r| {
@@ -312,6 +316,8 @@ impl Writer {
                 })
             })
             .collect();
+        self.gate
+            .exclude(Excluded::Duplicate, (delivered - committing.len()) as u64);
         // The classification rules' generation before the rules
         // themselves: a batch judged under rules older than the store's
         // generation is marked for enriching again (§20.9).
@@ -360,6 +366,8 @@ impl Writer {
                 // leases stay held, so the keys aren't fetched again in
                 // this run.
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                self.gate
+                    .exclude(Excluded::StoreFailed, committing.len() as u64);
                 lodestar_log::log_event!(
                     crate::log_events::STORE_WRITE_FAILED,
                     error = crate::log_events::store_error(&e)
@@ -382,8 +390,18 @@ impl Writer {
                 self.have.insert(h);
             }
         }
+        let committed_at = unix_now();
         for (i, id, new, _) in outcome.stored {
             let c = &committing[i];
+            // The gate counts what the store says, whether or not the
+            // lease is still current below: a new row is new once, and a
+            // second delivery of it reads as already stored.
+            if new {
+                self.gate
+                    .committed_new(Origin::Network, id, c.lease.discovered_at, committed_at);
+            } else {
+                self.gate.exclude(Excluded::AlreadyStored, 1);
+            }
             // A new torrent was last seen when it was discovered, as
             // `torrents.last_seen_at` says: `seen:`, the seen sort and the
             // freshness prior read the hot column, not the row.
@@ -408,11 +426,12 @@ impl Writer {
         }
         for i in outcome.blocked {
             let c = &committing[i];
-            let counter = match c.verdict.as_ref().map(|h| h.action) {
-                Some(Action::Quarantine) => &self.stats.quarantined,
-                _ => &self.stats.blocked,
+            let (counter, excluded) = match c.verdict.as_ref().map(|h| h.action) {
+                Some(Action::Quarantine) => (&self.stats.quarantined, Excluded::Quarantined),
+                _ => (&self.stats.blocked, Excluded::Filtered),
             };
             counter.fetch_add(1, Ordering::Relaxed);
+            self.gate.exclude(excluded, 1);
             for h in c.results.torrent.swarm_hashes() {
                 self.held.insert(h.0);
             }
@@ -442,6 +461,7 @@ impl Writer {
                     health.rediscovered(id);
                 }
                 self.stats.rediscovered.fetch_add(1, Ordering::Relaxed);
+                self.gate.exclude(Excluded::Rediscovered, 1);
                 self.rollups.add(
                     d.at,
                     metric::REDISCOVERED,
@@ -761,6 +781,8 @@ mod tests {
     use lodestar_metainfo::Info;
     use lodestar_store::{Store, StoreConfig};
 
+    use crate::gate::GateStats;
+
     /// A child-role and a sexual stand-in ten words apart: only the
     /// Adult-only CS-5a (window 12) can catch it, not CS-4a (window 8).
     const NAME: &str = "Studiox Rolea one two three four five six seven eight nine Lexa";
@@ -808,6 +830,107 @@ mod tests {
             fix: None,
             private_source: false,
         }
+    }
+
+    fn writer(store: Store, coordinator: Arc<Coordinator>, gate: Arc<GateStats>) -> Writer {
+        Writer {
+            store: Some(store),
+            backfill_after: 0,
+            backfill_done: true,
+            reenrich: Arc::default(),
+            cfg: WriterConfig {
+                flush_every: Duration::from_secs(60),
+                batch_max: 8,
+                batch_wait: Duration::from_millis(1),
+                backfill_until: 0,
+                quarantine_secs: 86_400,
+                hits_secs: 86_400,
+            },
+            have: Arc::new(Have::new(1024)),
+            funnel: Arc::default(),
+            rollups: Arc::default(),
+            filter: Arc::new(Handle::new(engine())),
+            sealer: None,
+            held: Arc::default(),
+            last_purge: 0,
+            coordinator,
+            stats: Arc::default(),
+            gate,
+            hot: None,
+            health: None,
+        }
+    }
+
+    /// Leases `r`'s key to its worker and gives it the token.
+    fn leased(c: &Coordinator, mut r: Results) -> Results {
+        let claim = lodestar_cluster::Claim {
+            key: r.key,
+            source: SourceId::new(1).unwrap(),
+            strategy: 0,
+            at: 0,
+        };
+        let lodestar_cluster::Claimed::Granted(token) = c.claim(r.worker, claim, 0) else {
+            panic!("granted")
+        };
+        r.token = token;
+        r
+    }
+
+    /// The gate at the writer's commit: new once, then already stored; a
+    /// stale lease is a duplicate; a failed transaction loses its batch.
+    #[tokio::test]
+    async fn the_writer_commit_counts_each_gate_outcome() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate.clone());
+        let (retry, _retry_rx) = mpsc::channel(4);
+        let count = |g: &GateStats| {
+            (
+                g.new_verified(Origin::Network),
+                g.excluded(Excluded::AlreadyStored),
+                g.excluded(Excluded::Duplicate),
+                g.excluded(Excluded::StoreFailed),
+            )
+        };
+
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        assert_eq!(count(&gate), (1, 0, 0, 0));
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        assert_eq!(count(&gate), (1, 1, 0, 0));
+        // Under a token that was never current.
+        w.commit(vec![results()], vec![], vec![], vec![], &retry)
+            .await;
+        assert_eq!(count(&gate), (1, 1, 1, 0));
+
+        let mut r = results();
+        r.key = lodestar_metainfo::InfoHash([9; 20]);
+        let r = leased(&coordinator, r);
+        w.store
+            .as_ref()
+            .unwrap()
+            .connection()
+            .execute_batch("PRAGMA query_only = ON")
+            .unwrap();
+        w.commit(vec![r], vec![], vec![], vec![], &retry).await;
+        assert_eq!(count(&gate), (1, 1, 1, 1));
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
+        assert_eq!(w.stats.stored.load(Ordering::Relaxed), 1);
     }
 
     fn stored_type(r: &Results) -> ContentType {

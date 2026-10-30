@@ -12,6 +12,7 @@ use lodestar_classify::FileInfo;
 use lodestar_filter::{Core, CsList, Engine, Handle, Lists, Origin, Sealer, Switches, TermSet};
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
+use lodestar_pipeline::gate::{Excluded, Origin as GateOrigin};
 use lodestar_pipeline::{Pipeline, PipelineConfig, event, metric};
 use lodestar_sources::{
     BoxFuture, Consent, Found, Kind, Loss, Manifest, Network, PluginError, PoolConfig, Priority,
@@ -141,8 +142,9 @@ fn config() -> PipelineConfig {
     }
 }
 
+/// Polls for 10 s (standards §2), so the slowest runner passes.
 async fn until(what: &str, mut f: impl FnMut() -> bool) {
-    for _ in 0..200 {
+    for _ in 0..400 {
         if f() {
             return;
         }
@@ -458,6 +460,13 @@ async fn partial_imports_are_refetched() {
         pipeline.writer_stats().existing.load(Ordering::Relaxed) == 1
     })
     .await;
+    // A refetched import was stored before: not new to the gate.
+    let gate = pipeline.monitor().gate().clone();
+    until("already stored", || {
+        gate.excluded(Excluded::AlreadyStored) == 1
+    })
+    .await;
+    assert_eq!(gate.new_verified(GateOrigin::Network), 0);
     let mut store = pipeline.shutdown().await.unwrap();
     let id = store.find(&key).unwrap().unwrap();
     let row = store.torrent(id).unwrap().unwrap();
@@ -1007,4 +1016,102 @@ async fn packs_are_off_on_a_fresh_install() {
     let (hidden, hits) = run(true).await;
     assert!(hidden);
     assert!(hits.iter().any(|h| h.rule == "MW-1"), "{hits:?}");
+}
+
+/// The crawler gate (owner-decisions §2.25), counted at the writer's
+/// commit: a new record apart from a quarantine, a filter drop and a
+/// rediscovery, then searchable once an index commit reaches its id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gate_counts_new_records_apart_from_each_exclusion() {
+    let repost_files: &[(&str, i64)] = &[("a.mkv", 734_003_201), ("b.srt", 81_233)];
+    let seeds = vec![
+        Seed::v1(info_dict("Title 15yo lexa")),
+        Seed::v1(info_dict_with("Renamed", repost_files)),
+        Seed::v1(info_dict("Clean")),
+    ];
+    let [held, repost, clean] = [0, 1, 2].map(|i| InfoHash(seeds[i].info_hash));
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    // Serves bytes that don't hash to the key, every attempt.
+    let liar_seed = Seed::v1(info_dict("Liar"));
+    let liar = InfoHash(liar_seed.info_hash);
+    let liar_peer =
+        FakePeer::spawn(vec![liar_seed], Accept::Both, Behavior::WrongData, vec![]).await;
+    let filter = stand_in_filter();
+    let sizes: Vec<FileInfo> = repost_files
+        .iter()
+        .map(|(p, s)| FileInfo::new(vec![(*p).to_owned()], *s as u64))
+        .collect();
+    filter.update(|core| {
+        core.cs
+            .add_sig(lodestar_filter::payload_sig(&sizes).unwrap().sig)
+    });
+    let mut cfg = config();
+    cfg.filter = filter;
+    cfg.sealer = Some(Arc::new(Sealer::new(&Sealer::generate_key().unwrap())));
+
+    let (feed, feed_tx) = scripted("feed");
+    let (other, other_tx) = scripted("other");
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    // Lookups keep finding the lying peer until the attempts run out.
+    let finder = Arc::new(PeerTable {
+        manifest: manifest("finder", &[Kind::PeerFinder]),
+        peers: HashMap::from([(liar, vec![liar_peer.addr()])]),
+    });
+    let pipeline = Pipeline::start(cfg, store, vec![feed, other, finder])
+        .await
+        .unwrap();
+    let gate = pipeline.monitor().gate().clone();
+    gate.follow();
+    for k in [held, repost, clean] {
+        feed_tx
+            .send(Found::key(k, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+    }
+    feed_tx
+        .send(Found::key(liar, 0).with_peers(vec![liar_peer.addr()]))
+        .await
+        .unwrap();
+    until("committed", || {
+        gate.excluded(Excluded::FailedVerification) == 1
+            && gate.new_verified(GateOrigin::Network) == 1
+            && gate.excluded(Excluded::Quarantined) == 1
+            && gate.excluded(Excluded::Filtered) == 1
+    })
+    .await;
+    other_tx.send(Found::key(clean, 7)).await.unwrap();
+    until("rediscovered", || {
+        gate.excluded(Excluded::Rediscovered) == 1
+    })
+    .await;
+    for reason in [
+        Excluded::AlreadyStored,
+        Excluded::InvalidMetainfo,
+        Excluded::Duplicate,
+        Excluded::StoreFailed,
+    ] {
+        assert_eq!(gate.excluded(reason), 0, "{reason:?}");
+    }
+
+    // Nothing is searchable until an index commit reaches the id.
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&clean).unwrap().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    gate.searchable(id - 1, now);
+    assert_eq!(gate.searchable_new(GateOrigin::Network), 0);
+    gate.searchable(id, now + 3600);
+    assert_eq!(gate.searchable_new(GateOrigin::Network), 1);
+    // First seen this run, an hour before the commit: in the 1 h bucket
+    // at the earliest, and never below it.
+    let buckets = gate.latency.cumulative();
+    let hour = lodestar_pipeline::gate::LATENCY_BUCKETS
+        .iter()
+        .position(|&le| le == 3600)
+        .unwrap();
+    assert_eq!(buckets[hour - 1], 0);
+    assert_eq!(buckets[buckets.len() - 1], 1);
+    assert_eq!(gate.dropped.load(Ordering::Relaxed), 0);
 }

@@ -17,5 +17,9 @@
 	"settings_form_announce_saved": "已保存。",
 	"settings_form_announce_changed": "已更改。",
 	"settings_form_announce_undone": "已撤销。",
-	"settings_form_announce_secret_removed": "已移除。"
+	"settings_form_announce_secret_removed": "已移除。",
+	"settings_transport_utp_label": "uTP（尚未生效）",
+	"settings_transport_utp_help": "除 TCP 外，也通过 uTP（BEP 29）获取元数据。尚未生效：在后续版本之前 uTP 不起作用，更改此项只会改变已保存的设置。",
+	"settings_transport_fallback_to_tcp_label": "回退到 TCP（尚未生效）",
+	"settings_transport_fallback_to_tcp_help": "uTP 连接失败时，改用 TCP 连接该节点。尚未生效：在后续版本之前 uTP 不起作用，更改此项只会改变已保存的设置。"
 }
