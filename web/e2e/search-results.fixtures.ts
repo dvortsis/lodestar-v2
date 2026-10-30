@@ -119,6 +119,7 @@ export const figures = (searchable: number) => ({
 	index_lag_s: null,
 	paused: false,
 	queue_depth: 0,
+	sampling_blocked: null,
 	searchable_torrents: searchable,
 	stored_torrents: searchable,
 	updated_at: 1_700_000_000,

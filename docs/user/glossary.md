@@ -46,6 +46,14 @@ A rule that connects a port on your server to the port an app listens on inside 
 
 The user ID and group ID a container runs as. They decide who owns the files in the data folder.
 
+## Restart record
+
+What Lodestar writes when it stops cleanly, so the next start can skip the six-hour wait before sampling the DHT. Part of it lives in a separate restart record folder that is never backed up with the data folder. See [section 3.8](03-keep-lodestar-safe.md#38-restart-without-the-six-hour-wait).
+
+## Safe restart
+
+The setting that lets a clean restart skip the six-hour wait. It is off by default.
+
 ## Setup token
 
 A one-time key printed in the log on first run. You enter it to create the admin password.

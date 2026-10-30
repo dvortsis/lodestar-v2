@@ -32,6 +32,8 @@ Environment variables the binary reads today:
 | `LODESTAR_INTENSITY` | `low`, `balanced` or `aggressive` | `balanced` |
 | `LODESTAR_SCRAPE_ENABLED` | Tracker and DHT scrapes (§9): `true` or `false` | `true` |
 | `LODESTAR_LOG` | `error`, `warn`, `info`, `debug` or a `tracing` filter | `info` |
+| `LODESTAR_DHT_SAFE_RESTART` | `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
+| `LODESTAR_DHT_WITNESS_DIR` | The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
 
 Everything else is in `config.toml` (`--config <path>`, or
 `$LODESTAR_DATA_DIR/config.toml`). Unknown keys are rejected. The variables

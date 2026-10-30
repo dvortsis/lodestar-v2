@@ -14881,6 +14881,26 @@
         ],
         "description": "A sample's file: a path, or a path and its size."
       },
+      "SamplingBlocked": {
+        "type": "object",
+        "description": "Why the DHT holds back its samples after a start (CR-0d): an unclean\nrestart, the restart proof switched off, or a restart record it can't\nwrite.",
+        "required": [
+          "reason",
+          "remaining_s"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "`dht_sample_suppression_reason`'s label (`docs/metrics.md`), such\nas `off`, `first_start`, `dirty`, `locked` or `invalidate_failed`."
+          },
+          "remaining_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until sampling may begin (`dht_sample_suppression_seconds`).\nFor `invalidate_failed`, and `locked` while the lock is busy, it's a\nlower bound: sampling also waits until the restart record can be\nwritten.",
+            "minimum": 0
+          }
+        }
+      },
       "SavedSearchCreate": {
         "type": "object",
         "description": "`POST /saved-searches`.",
@@ -16798,6 +16818,7 @@
           "index_lag_s",
           "paused",
           "queue_depth",
+          "sampling_blocked",
           "searchable_torrents",
           "stored_torrents",
           "updated_at",
@@ -16856,6 +16877,17 @@
             "description": "Keys queued or in flight in the fetch pool.",
             "minimum": 0
           },
+          "sampling_blocked": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingBlocked",
+                "description": "Why the DHT isn't sampling yet; null when it is, before its first\nreport, and when it is off or not running."
+              }
+            ]
+          },
           "searchable_torrents": {
             "type": [
               "integer",
@@ -16889,6 +16921,10 @@
           "index_lag_s": 2,
           "paused": false,
           "queue_depth": 15410,
+          "sampling_blocked": {
+            "reason": "first_start",
+            "remaining_s": 20940
+          },
           "searchable_torrents": 2410388,
           "stored_torrents": 2410391,
           "updated_at": 1792681200,

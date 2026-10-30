@@ -13,6 +13,7 @@ const stats = {
 	index_lag_s: null,
 	paused: false,
 	queue_depth: 10,
+	sampling_blocked: null,
 	searchable_torrents: 5,
 	stored_torrents: 5,
 	updated_at: 1792681200,

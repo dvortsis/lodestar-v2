@@ -56,6 +56,8 @@ Terms the core terms depend on, and the truthful-state strings from §10.14.
 | `harvested` | Harvested | A key Lodestar collected from a discovery source (e.g. the DHT), before any metadata. | 已收集 (TBD) |
 | `yield` | Yield | The share of harvested keys that became searchable (completed cohorts only). | 转化率 (TBD) |
 | `in_library` | In library | Already in your download client or library. | 已在库中 (TBD) |
+| `safe_restart` | Safe restart | The switch (`[dht] safe_restart`, off by default) that lets a clean restart skip the six-hour sampling wait (CR-0d). | 安全重启 (TBD) |
+| `restart_record` | Restart record | What Lodestar writes at a clean stop so the next start can skip the wait: in the data folder, and in a restart record folder outside it that is never backed up with the data. | 重启记录 (TBD) |
 
 ## 3. File categories and groups
 

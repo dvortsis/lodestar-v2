@@ -248,8 +248,9 @@ impl Services {
             trackers,
             db: db.clone(),
             store: store_config.clone(),
-            dht: dht_node,
+            dht: dht_node.clone(),
         });
+        let dht_ops_node = dht_node;
         let auth = Arc::new(
             lodestar_api::Auth::load(
                 &config.data_dir.join("auth.json"),
@@ -351,13 +352,21 @@ impl Services {
                 insights_stopped,
             )
         };
-        let ops = Arc::new(ops::Ops::new(
-            crawl,
-            settings.subscribe(),
-            pipeline.monitor(),
-            search_state.clone(),
-            config.data_dir.clone(),
-        ));
+        let ops = Arc::new(
+            ops::Ops::new(
+                crawl,
+                settings.subscribe(),
+                pipeline.monitor(),
+                search_state.clone(),
+                config.data_dir.clone(),
+            )
+            .with_dht(
+                dht_stats
+                    .clone()
+                    .zip(dht_ops_node)
+                    .map(|(stats, node)| ops::DhtReport { stats, node }),
+            ),
+        );
         let monitor = pipeline.monitor();
         let api = lodestar_api::ApiState {
             auth,

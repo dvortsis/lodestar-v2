@@ -38,6 +38,7 @@ const figures = (searchable: number | null): Figures => ({
 	index_lag_s: null,
 	paused: false,
 	queue_depth: 0,
+	sampling_blocked: null,
 	searchable_torrents: searchable,
 	stored_torrents: 0,
 	updated_at: 0,
