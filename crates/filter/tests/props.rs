@@ -426,9 +426,10 @@ const CALIB_REF_NS: f64 = 10_700.0;
 /// 25% of the rules built on words the torrents have, with a mixed set
 /// that adds the shapes the cheap check can't decide ([`mixed_rules`]),
 /// with 10% of each such shape ([`Shape`]), and with the mixed set and
-/// five common words neutralized. The budget holds the core, 1%, 10%,
-/// the mixed set and the mixed set neutralized; 25% and each shape at
-/// 10% are measured and reported, not held. Every rule shape counts (§2.21,
+/// five common words neutralized. The budget holds the core, 1%, 10%
+/// and the mixed set; 25%, each shape at 10% and the mixed set
+/// neutralized are measured and reported, not held (the last until the
+/// calibration holds across CPU types: runner, 2026-10-30). Every rule shape counts (§2.21,
 /// owner-delegated, 2026-10-23).
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
@@ -625,7 +626,7 @@ fn budget() {
         let per = time(what, &|i| {
             std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
         });
-        cases.push((what.to_owned(), per, true));
+        cases.push((what.to_owned(), per, false));
         drop(engine);
         let after = calibration("after");
 
