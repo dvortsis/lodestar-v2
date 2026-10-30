@@ -11,9 +11,13 @@
 //! 5. move the search index aside (`index.before-rollback-<time>`): its
 //!    documents and watermarks follow the current store, and ids reused
 //!    after the restore would show other torrents' data;
-//! 6. copy the snapshot beside the store and rename it into place.
+//! 6. copy the snapshot beside the store, apply the store's deletion
+//!    journal and holds to the copy (BB-1: a rollback never brings back a
+//!    deleted torrent), and rename it into place.
 //!
-//! The snapshot itself is kept, so the same restore can be done again.
+//! The snapshot itself is kept, so the same restore can be done again. A
+//! crash before the rename leaves the store as it was; the staged copy it
+//! leaves is deleted by the next rollback or purge tick.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -266,6 +270,13 @@ pub fn restore(
 ) -> Outcome<Option<Restored>> {
     let db = config.db_path();
     let lock = StoreLock::acquire(&db)?;
+    if let Some((path, e)) = snapshots::remove_stale_stages(&db).into_iter().next() {
+        lock.release()?;
+        return Err(Failure::Failed(format!(
+            "deleting {}, left by an interrupted rollback: {e}",
+            path.display()
+        )));
+    }
     let (snap_schema, snap_torrents) = {
         // A WAL left by an interrupted snapshot purge is folded in first,
         // so the check and the copy below see the purged file.
@@ -281,6 +292,14 @@ pub fn restore(
             torrent_count(&conn).map_err(failed("counting the snapshot's torrents"))?,
         )
     };
+    if !snapshots::can_purge(snap_schema) {
+        lock.release()?;
+        return Err(Failure::Failed(format!(
+            "{} holds schema v{snap_schema}, and this version can't remove the torrents deleted \
+             since from it; restore it with the Lodestar version that uses that schema",
+            snapshot.name
+        )));
+    }
     let cur_schema = schema_version(lock.conn()).map_err(failed("reading the store's schema"))?;
     let cur_torrents = torrent_count(lock.conn()).map_err(failed("counting the torrents"))?;
     let count = |n: Option<u64>| n.map_or_else(|| "no".into(), format_count);
@@ -306,8 +325,9 @@ pub fn restore(
     let summary = format!(
         "Restore {} (schema v{snap_schema}, {} torrents, {})\n\
          over the current store (schema v{cur_schema}, {} torrents).\n\
-         Torrents stored since the snapshot won't be in the restored store. The current store \
-         is kept as {}, and the search index is rebuilt.",
+         Torrents stored since the snapshot won't be in the restored store, and torrents \
+         deleted since stay deleted. The current store is kept as {}, and the search index is \
+         rebuilt.",
         snapshot.name,
         count(snap_torrents),
         snapshot
@@ -344,21 +364,23 @@ pub fn restore(
         )),
         (_, e) => e,
     };
-    // 6. The snapshot, copied beside the store and renamed into place.
+    // 6. The snapshot, copied beside the store, purged and renamed into
+    //    place. Only the rename makes it the store, so a crash before it
+    //    never restores an unpurged copy.
     let staged = dir.join(format!("{stem}.rollback-{stamp}.tmp"));
     remove_if_present(&staged)
         .map_err(failed(format!("removing {}", staged.display())))
         .map_err(index_note)?;
     let copied = std::fs::copy(&snapshot.path, &staged)
         .map_err(failed(format!("copying {}", snapshot.path.display())))
-        .and_then(|_| sync_file(&staged).map_err(failed(format!("syncing {}", staged.display()))));
+        .and_then(|_| purge_staged(lock.conn(), &staged, snapshot.modified, now));
     if let Err(e) = copied {
-        let _ = std::fs::remove_file(&staged);
+        remove_stage(&staged);
         lock.release()?;
         return Err(index_note(e));
     }
     if let Err(e) = lock.replace_with(&staged) {
-        let _ = std::fs::remove_file(&staged);
+        remove_stage(&staged);
         return Err(index_note(e));
     }
     Ok(Some(Restored {
@@ -366,6 +388,37 @@ pub fn restore(
         index_aside,
         schema: snap_schema,
     }))
+}
+
+/// Applies the store's deletions to the staged copy (see
+/// [`snapshots::purge_for_restore`]) and syncs it.
+fn purge_staged(
+    live: &lodestar_store::rusqlite::Connection,
+    staged: &Path,
+    taken: Option<i64>,
+    now: i64,
+) -> Outcome {
+    let purged = snapshots::purge_for_restore(live, staged, taken, now).map_err(|e| {
+        Failure::Failed(format!(
+            "removing deleted torrents from the copy {}: {e}",
+            staged.display()
+        ))
+    })?;
+    if purged.is_none() {
+        return Err(Failure::Failed(format!(
+            "this version can't remove deleted torrents from {}",
+            staged.display()
+        )));
+    }
+    sync_file(staged).map_err(failed(format!("syncing {}", staged.display())))
+}
+
+/// Deletes a staged copy and SQLite's side files beside it.
+fn remove_stage(staged: &Path) {
+    let _ = std::fs::remove_file(staged);
+    for side in super::util::side_files(staged) {
+        let _ = std::fs::remove_file(side);
+    }
 }
 
 #[cfg(test)]
@@ -427,6 +480,105 @@ mod tests {
             age(Some(t), t + 90 * day)
                 .ends_with("past the 90-day window, deleted once Lodestar runs")
         );
+    }
+
+    fn insert_torrent(conn: &lodestar_store::rusqlite::Connection, id: i64, hash: [u8; 20]) {
+        conn.execute(
+            "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                 file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+             VALUES (?1, ?2, 'deleted torrent', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+            lodestar_store::rusqlite::params![id, &hash[..]],
+        )
+        .unwrap();
+    }
+
+    fn hashes(path: &Path, table: &str) -> Vec<Vec<u8>> {
+        let conn = open_read_only(path).unwrap();
+        let col = if table == "torrents" {
+            "info_hash"
+        } else {
+            "hash"
+        };
+        let mut stmt = conn
+            .prepare(&format!("SELECT {col} FROM {table} ORDER BY 1"))
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// A store with torrents 1 and 2, a snapshot of it, then torrent 1
+    /// deleted with no snapshot purge since: what a rollback must not
+    /// bring back.
+    fn deleted_after_snapshot(dir: &Path) -> (Config, Snapshot) {
+        use lodestar_store::{Store, StoreConfig};
+        let config = Config {
+            data_dir: dir.to_path_buf(),
+            ..Config::default()
+        };
+        let db = config.db_path();
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        insert_torrent(store.connection(), 1, [1; 20]);
+        insert_torrent(store.connection(), 2, [2; 20]);
+        let path = dir.join("lodestar.pre-v13.db");
+        store
+            .connection()
+            .execute("VACUUM INTO ?1", [path.to_string_lossy()])
+            .unwrap();
+        store
+            .connection()
+            .execute("DELETE FROM torrents WHERE id = 1", [])
+            .unwrap();
+        drop(store);
+        let snap = snapshots(&db).unwrap().remove(0);
+        assert_eq!(snap.path, path);
+        (config, snap)
+    }
+
+    /// BB-1: a torrent deleted after the snapshot was taken stays
+    /// deleted, though the snapshot purge never ran, and the restored
+    /// store keeps the deletion in its own journal.
+    #[test]
+    fn a_rollback_never_brings_back_a_deleted_torrent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, snap) = deleted_after_snapshot(dir.path());
+        assert_eq!(hashes(&snap.path, "torrents"), [vec![1; 20], vec![2; 20]]);
+        let r = restore(&config, &snap, unix_now(), |_| Ok(true))
+            .unwrap()
+            .unwrap();
+        let db = config.db_path();
+        assert_eq!(hashes(&db, "torrents"), [vec![2; 20]]);
+        assert_eq!(hashes(&db, "snapshot_deletions"), [vec![1; 20]]);
+        // The undo copy is the store as it was.
+        assert_eq!(hashes(&r.kept, "torrents"), [vec![2; 20]]);
+    }
+
+    /// A crash after the copy, before the rename (or the purge), leaves
+    /// the store as it was; the unpurged copy it left goes at the next
+    /// rollback, even one that's declined.
+    #[test]
+    fn an_interrupted_rollback_leaves_the_store_and_its_copy_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, snap) = deleted_after_snapshot(dir.path());
+        let stage = dir.path().join("lodestar.rollback-20261030-120000.tmp");
+        std::fs::copy(&snap.path, &stage).unwrap();
+        let side = dir
+            .path()
+            .join("lodestar.rollback-20261030-120000.tmp-journal");
+        std::fs::write(&side, b"partial").unwrap();
+        let other = dir.path().join("lodestar.rollback-notes.tmp");
+        std::fs::write(&other, b"not a stage").unwrap();
+        assert_eq!(hashes(&config.db_path(), "torrents"), [vec![2; 20]]);
+
+        assert!(
+            restore(&config, &snap, unix_now(), |_| Ok(false))
+                .unwrap()
+                .is_none()
+        );
+        assert!(!stage.exists() && !side.exists());
+        assert!(other.exists());
+        assert_eq!(hashes(&config.db_path(), "torrents"), [vec![2; 20]]);
     }
 
     /// The snapshot purge runs only on an open store, and a rollback
