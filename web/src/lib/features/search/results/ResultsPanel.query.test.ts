@@ -16,6 +16,7 @@ vi.mock('$app/navigation', () => ({ goto: vi.fn(), replaceState: vi.fn(), pushSt
 vi.mock('$lib/state/search.svelte', () => ({
 	search: {
 		q: 'lantern',
+		queryReady: true,
 		ast: { op: 'word', field: 'any', word: 'lantern' },
 		sort: 'relevance',
 		hidden: false,
@@ -37,9 +38,15 @@ const { default: ResultsPanel } = await import('./ResultsPanel.svelte');
 const { results } = await import('./results.svelte');
 
 beforeAll(() => stubLayout(600, 1000));
-// The row actions load lazily with the first rows: let them land before the file ends.
+// The row actions, key commands and detail module load lazily from mount, rows and hover: let
+// them land before the file ends, or the environment can be torn down mid-import.
 afterAll(async () => {
-	await import('./RowActions.svelte');
+	await Promise.all([
+		import('./RowActions.svelte'),
+		import('./commands'),
+		import('$lib/keys'),
+		import('$lib/features/detail/open')
+	]);
 });
 beforeEach(() => {
 	api.get.mockReset();

@@ -53,5 +53,9 @@
 	"shell_fallback_not_found_title": "Page not found",
 	"shell_fallback_error_code": "Error {status}",
 	"shell_fallback_home": "Go to Search",
-	"shell_fallback_retry": "Try again"
+	"shell_fallback_retry": "Try again",
+	"shell_stage_title": "Insights stage",
+	"shell_settings_unavailable": "Settings controls are not available in this build. Crawler pause and intensity controls are available in Insights.",
+	"shell_stage_unavailable": "Detailed stage reports are not available in this build. The Insights overview shows the available totals and trends.",
+	"shell_return_insights": "Go to Insights"
 }

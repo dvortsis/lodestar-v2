@@ -10,6 +10,20 @@ export const FRESH_MS = 60_000;
 
 const hits = new Map<string, SearchHit>();
 const details = new Map<string, { at: number; detail: TorrentDetail }>();
+let generation = 0;
+const invalidations = new Set<(revalidate: boolean) => void>();
+
+/** Capture before a request; check again before publishing or caching its response. */
+export const detailGeneration = () => generation;
+export function onDetailInvalidated(fn: (revalidate: boolean) => void) {
+	invalidations.add(fn);
+	return () => void invalidations.delete(fn);
+}
+
+export function forgetDetail(hash: string) {
+	hits.delete(hash);
+	details.delete(hash);
+}
 
 function remember<V>(map: Map<string, V>, key: string, value: V) {
 	map.delete(key);
@@ -37,7 +51,9 @@ export function cachedDetail(hash: string, now = Date.now()): TorrentDetail | un
 	return entry.detail;
 }
 
-export function clearDetailCaches() {
+export function clearDetailCaches(revalidate = true) {
+	generation++;
 	hits.clear();
 	details.clear();
+	for (const fn of [...invalidations]) fn(revalidate);
 }

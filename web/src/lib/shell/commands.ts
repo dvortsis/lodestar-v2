@@ -5,7 +5,7 @@ import { goto } from '$app/navigation';
 import { keys } from '$lib/keys';
 import { m } from '$lib/paraglide/messages.js';
 import { DESTINATIONS } from './nav';
-import { shell } from './shell.svelte';
+import { shell } from './shell-state.svelte';
 
 // eslint-disable-next-line svelte/no-navigation-without-resolve -- no base path: the app is served from the site root (svelte.config.js sets no paths.base)
 const defaultGo = (href: string) => void goto(href);

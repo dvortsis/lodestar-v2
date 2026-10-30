@@ -20,7 +20,13 @@ export const DEFAULT_SORT = 'relevance';
 export const PARSE_DEBOUNCE_MS = 200;
 const SORT = /^(relevance|[+-]?(discovered|size|files))$/;
 
-export type UrlState = { q: string; sort: string; hidden: boolean; exact: boolean };
+export type UrlState = {
+	q: string;
+	sort: string;
+	hidden: boolean;
+	exact: boolean;
+	browse?: boolean;
+};
 
 const flag = (v: string | null) => v === '1' || v === 'true';
 
@@ -31,7 +37,8 @@ export function readUrl(params: URLSearchParams): UrlState {
 		q: params.get('q') ?? '',
 		sort: SORT.test(sort) ? sort : DEFAULT_SORT,
 		hidden: flag(params.get('hidden')),
-		exact: flag(params.get('exact'))
+		exact: flag(params.get('exact')),
+		browse: params.get('browse') === '1'
 	};
 }
 
@@ -46,6 +53,7 @@ export function writeUrl(base: URL, s: UrlState): string {
 	set('sort', s.sort === DEFAULT_SORT ? null : s.sort);
 	set('hidden', s.hidden ? '1' : null);
 	set('exact', s.exact ? '1' : null);
+	set('browse', s.browse ? '1' : null);
 	return u.pathname + u.search + u.hash;
 }
 
@@ -64,6 +72,9 @@ const kitNav: Nav = {
 export function createSearchState(nav: Nav = kitNav) {
 	let text = $state('');
 	let ast = $state.raw<Ast | null>(null);
+	let parsedQuery = $state<string | null>(null);
+	/** The input text that produced `ast`; a deep link need not be in canonical form. */
+	let parsedFrom = $state<string | null>(null);
 	let parseError = $state.raw<ParseError | null>(null);
 	let parsing = $state(false);
 
@@ -85,6 +96,8 @@ export function createSearchState(nav: Nav = kitNav) {
 			const r = await slot.run((signal) => api.get('/parse', { query: { q: t }, signal }));
 			if (t !== text) return undefined;
 			ast = r.ast;
+			parsedQuery = r.canonical;
+			parsedFrom = t;
 			parseError = null;
 			parsing = false;
 			return r.canonical;
@@ -109,11 +122,27 @@ export function createSearchState(nav: Nav = kitNav) {
 	}
 
 	return {
+		/** Stop pending work when the query editor leaves; the state can be mounted again. */
+		cancelPending() {
+			clearTimeout(timer);
+			slot.cancel();
+			parsing = false;
+			written = undefined;
+		},
 		get text() {
 			return text;
 		},
 		get ast() {
 			return ast;
+		},
+		/** Prevent an old AST (including match-all) being dispatched for a new URL query. */
+		get queryReady() {
+			return (
+				ast !== null &&
+				!parsing &&
+				!parseError &&
+				(parsedFrom === url().q || parsedQuery === url().q)
+			);
 		},
 		get parseError() {
 			return parseError;
@@ -132,6 +161,9 @@ export function createSearchState(nav: Nav = kitNav) {
 		},
 		get exact() {
 			return url().exact;
+		},
+		get browse() {
+			return url().browse === true;
 		},
 
 		/** Typing: updates the draft; after the debounce parses it and replaces the URL entry. */
@@ -185,6 +217,8 @@ export function createSearchState(nav: Nav = kitNav) {
 				);
 				if (text !== draft) return; // typed meanwhile: the newer draft wins
 				ast = next;
+				parsedQuery = r.canonical;
+				parsedFrom = r.canonical;
 				parseError = null;
 				parsing = false;
 				text = r.canonical;
@@ -206,9 +240,11 @@ export function createSearchState(nav: Nav = kitNav) {
 			slot.cancel();
 			text = '';
 			ast = null;
+			parsedQuery = null;
+			parsedFrom = null;
 			parseError = null;
 			parsing = false;
-			await commit('', true, { sort: DEFAULT_SORT, hidden: false, exact: false });
+			await commit('', true, { sort: DEFAULT_SORT, hidden: false, exact: false, browse: false });
 		},
 
 		async setSort(sort: string) {

@@ -57,12 +57,13 @@
 	// (in flight, or a syntax error): no new load, so the last good rows stay.
 	$effect(() => {
 		const q: ResultsQuery = {
-			ast: search.q ? search.ast : null,
+			ast: search.q ? search.ast : search.browse ? { op: 'all' } : null,
 			sort: search.sort,
 			hidden: search.hidden,
-			exact: search.exact
+			exact: search.exact,
+			browse: search.browse
 		};
-		if (search.q && !search.ast) return;
+		if (search.q && !search.queryReady) return;
 		void results.load(q);
 	});
 
@@ -116,6 +117,7 @@
 	let listEl = $state<HTMLElement>();
 	type Detail = typeof import('$lib/features/detail/open');
 	let detail: Detail | undefined;
+	let gone = false;
 	const detailMod = () => (detail ? Promise.resolve(detail) : import('$lib/features/detail/open'));
 
 	onMount(() => {
@@ -139,7 +141,6 @@
 		// `c` and `o` work with the drawer closed: S-detail's commands act on the focused row.
 		void import('$lib/features/detail/commands').then((mod) => mod.registerDetailCommands());
 		let offKeys: (() => void) | undefined;
-		let gone = false;
 		void Promise.all([import('$lib/keys'), import('./commands')]).then(([{ keys }, cmd]) => {
 			if (!gone)
 				offKeys = cmd.registerResultsCommands(keys, {
@@ -151,6 +152,7 @@
 			clearTimeout(giveUp);
 			results.forget(); // answers from before this mount may be stale when it comes back
 			gone = true;
+			detail?.cancelDetailPrefetch();
 			offKeys?.();
 			setCommandTarget(null);
 		};
@@ -202,6 +204,7 @@
 		if (!hash) return;
 		setCommandTarget(hash); // synchronous: a `c` right after the focus moves must see it
 		void detailMod().then((mod) => {
+			if (gone) return;
 			detail = mod;
 			mod.prefetchDetail(hash);
 		});
@@ -213,6 +216,7 @@
 
 	async function open(hit: SearchHit) {
 		const mod = await detailMod();
+		if (gone) return;
 		detail = mod;
 		const rowEl = listEl
 			?.querySelector<HTMLElement>(`[data-hash="${CSS.escape(hit.hash)}"]`)
@@ -247,6 +251,7 @@
 	}
 	async function clearFilters() {
 		ensureSearchPath();
+		if (search.browse) return search.reset();
 		await search.setAst(withoutFilters(search.ast), search.hidden ? { hidden: false } : {});
 	}
 
@@ -285,6 +290,7 @@
 		if (!hash || hash === hovered) return;
 		hovered = hash;
 		void detailMod().then((mod) => {
+			if (gone) return;
 			detail = mod;
 			mod.prefetchDetail(hash);
 		});

@@ -1,15 +1,17 @@
-// The data behind one open torrent: the detail body (prefetch cache, else a latest-wins request)
-// and, for the fields detail doesn't carry yet, the search hit (cached from Search, else a hash
-// lookup). A slow response for an earlier hash never overwrites a newer one.
+// Every open revalidates visibility. Cached metadata is never displayed before that succeeds.
 import { ApiError, api, isAbort, latest } from '$lib/api/client';
 import {
 	cacheDetail,
-	cachedDetail,
 	cachedHit,
 	cacheHit,
+	detailGeneration,
+	forgetDetail,
+	onDetailInvalidated,
 	type SearchHit,
 	type TorrentDetail
 } from './cache';
+import { adoptPrefetch } from './prefetch';
+import { watchDetailVisibility } from './visibility';
 
 export type Status = 'loading' | 'ready' | 'error';
 
@@ -26,49 +28,77 @@ export class DetailModel {
 	title = $derived(this.hit?.title ?? this.detail?.name ?? this.hit?.name ?? '');
 	private slot = latest();
 	private hitSlot = latest();
+	private generation = 0;
+	private off: (() => void) | undefined;
 
 	/** (Re)load `hash`. Cheap to call again: the previous request is cancelled. */
 	load(hash: string) {
-		// A swap must drop the earlier torrent's in-flight requests even when this one is cached.
-		this.slot.cancel();
-		this.hitSlot.cancel();
+		watchDetailVisibility();
+		this.off ??= onDetailInvalidated((revalidate) => {
+			const current = this.hash;
+			this.clear();
+			if (revalidate && current) this.load(current);
+		});
+		this.clear();
 		this.hash = hash;
-		this.error = null;
-		// Plain locals: reading this.hit here would make a calling $effect depend on it.
-		const hit = cachedHit(hash) ?? null;
-		const cached = cachedDetail(hash);
-		this.hit = hit;
-		this.hitDone = !!hit;
-		this.detail = cached ?? null;
-		this.status = cached ? 'ready' : 'loading';
-		if (!cached) void this.fetchDetail(hash);
-		if (!hit) void this.fetchHit(hash);
+		void this.fetchDetail(hash, this.generation, detailGeneration());
 	}
 
 	retry() {
 		if (!this.hash) return;
-		this.error = null;
-		this.status = 'loading';
-		void this.fetchDetail(this.hash);
-		if (!this.hit) void this.fetchHit(this.hash);
+		this.load(this.hash);
 	}
 
 	destroy() {
-		this.slot.cancel();
-		this.hitSlot.cancel();
+		this.off?.();
+		this.off = undefined;
+		this.clear();
+		this.hash = '';
 	}
 
-	private async fetchDetail(hash: string) {
+	private clear() {
+		this.generation++;
+		this.slot.cancel();
+		this.hitSlot.cancel();
+		this.detail = null;
+		this.hit = null;
+		this.hitDone = false;
+		this.error = null;
+		this.status = 'loading';
+	}
+
+	private current(generation: number, visibility: number) {
+		return generation === this.generation && visibility === detailGeneration();
+	}
+
+	private async fetchDetail(hash: string, generation: number, visibility: number) {
 		try {
-			const detail = await this.slot.run((signal) =>
-				api.get('/torrents/{hash}', { path: { hash }, signal })
-			);
+			const adopted = adoptPrefetch(hash, visibility);
+			// A prefetch from this visibility generation is the revalidation; an aborted one
+			// (a newer hover) falls back to a fetch of our own.
+			const fetchOwn = () =>
+				this.slot.run((signal) => api.get('/torrents/{hash}', { path: { hash }, signal }));
+			const detail =
+				adopted === undefined
+					? await fetchOwn()
+					: await Promise.resolve(adopted).catch((e) => {
+							if (!isAbort(e)) throw e;
+							return this.current(generation, visibility) ? fetchOwn() : undefined;
+						});
+			if (!detail) return;
+			if (!this.current(generation, visibility)) return;
 			cacheDetail(hash, detail);
 			this.detail = detail;
+			const hit = cachedHit(hash) ?? null;
+			this.hit = hit;
+			this.hitDone = !!hit;
 			this.status = 'ready';
+			if (!hit) void this.fetchHit(hash, generation, visibility);
 		} catch (e) {
-			if (isAbort(e)) return;
+			if (isAbort(e) || !this.current(generation, visibility)) return;
+			forgetDetail(hash);
 			this.detail = null;
+			this.hit = null;
 			this.error =
 				e instanceof ApiError ? e : new ApiError(0, 'network', e instanceof Error ? e.message : '');
 			this.status = 'error';
@@ -76,11 +106,12 @@ export class DetailModel {
 	}
 
 	// Interim until TorrentDetail carries the summary fields (metrics §7.1 "planned on detail").
-	private async fetchHit(hash: string) {
+	private async fetchHit(hash: string, generation: number, visibility: number) {
 		try {
 			const res = await this.hitSlot.run((signal) =>
 				api.get('/search', { query: { q: `hash:${hash}`, limit: 1, hidden: true }, signal })
 			);
+			if (!this.current(generation, visibility)) return;
 			const first = res.hits[0];
 			if (first && first.hash === hash) {
 				cacheHit(hash, first);
@@ -88,6 +119,14 @@ export class DetailModel {
 			}
 			this.hitDone = true;
 		} catch (e) {
+			if (!this.current(generation, visibility)) return;
+			if (e instanceof ApiError && [401, 403, 404].includes(e.status)) {
+				forgetDetail(hash);
+				this.detail = null;
+				this.hit = null;
+				this.error = e;
+				this.status = 'error';
+			}
 			if (!isAbort(e)) this.hitDone = true;
 			// The header and rows fall back to their null states; the detail error is the one shown.
 		}

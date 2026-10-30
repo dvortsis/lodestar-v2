@@ -62,7 +62,13 @@
 	}
 	$effect(() => {
 		const p = page.url.searchParams;
-		if (p.get('q') || p.get('hidden') === '1' || p.get('hidden') === 'true') loadResults();
+		if (
+			p.get('q') ||
+			p.get('browse') === '1' ||
+			p.get('hidden') === '1' ||
+			p.get('hidden') === 'true'
+		)
+			loadResults();
 	});
 	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
 
@@ -116,7 +122,7 @@
 		</div>
 		<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 		<div id="search-drawer">
-			{#if Host && drawerOpen}<Host />{/if}
+			{#if Host}<Host />{/if}
 		</div>
 	</div>
 </div>

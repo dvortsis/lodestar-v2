@@ -14,8 +14,12 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 | PGID | Group ID Lodestar runs as | `100` | Never `0` (root group). |
 | TZ | Time zone | `Etc/UTC` | Log timestamps are UTC today. |
 | Intensity | Crawler effort (`LODESTAR_INTENSITY`) | `balanced` | `aggressive` can overload home routers. |
-| Log level | Log detail (`LODESTAR_LOG`) | `info` | `error`, `warn`, `info` or `debug`. |
 | DHT port | Gluetun template only (`LODESTAR_DHT_PORT`) | `6881` | Match the port your VPN provider forwards. |
+
+The templates do not include a Log level field. You can optionally add a custom
+container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
+(`error`, `warn`, `info` or `debug`). While it is set, Logging verbosity in Settings can't be changed.
+**Recommended:** leave it unset; the default is `info`.
 
 <!-- nav:start -->
 ---

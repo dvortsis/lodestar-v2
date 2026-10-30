@@ -40,7 +40,8 @@ describe('syncDevRoutes', () => {
 	it('creates the link when wanted, idempotently', () => {
 		syncDevRoutes(root, true, false);
 		syncDevRoutes(root, true, false);
-		expect(readlinkSync(link())).toBe('../dev-routes');
+		expect(lstatSync(link()).isSymbolicLink()).toBe(true);
+		expect(realpathSync(link())).toBe(realpathSync(join(root, 'src/dev-routes')));
 		expect(existsSync(link())).toBe(true);
 	});
 

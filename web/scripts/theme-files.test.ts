@@ -16,7 +16,7 @@ function palette(f: Family) {
 // Minimal reader for the yaml blocks in docs/themes.md. It handles only what those blocks use:
 // top-level scalars, `light:`/`dark:` maps of quoted scalars, and a JSON-style categorical array.
 function parseDocFamilies(md: string): Family[] {
-	const blocks = [...md.matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]!);
+	const blocks = [...md.matchAll(/```yaml\r?\n([\s\S]*?)```/g)].map((m) => m[1]!);
 	return blocks.map((block) => {
 		const fam: Record<string, unknown> = {};
 		let mode: 'light' | 'dark' | null = null;

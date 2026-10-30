@@ -8,7 +8,7 @@
 import { untrack } from 'svelte';
 import { ApiError, api, isAbort, latest } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
-import type { Ast } from '$lib/state/search.svelte';
+type Ast = components['schemas']['AstNode'];
 
 export type FacetsResponse = components['schemas']['FacetsResponse'];
 export type TermFacet = components['schemas']['TermFacet'];
@@ -20,6 +20,7 @@ export const MORE = 100;
 
 export interface FacetsQuery {
 	ast: Ast | null;
+	browse?: boolean;
 	sort: string;
 	hidden: boolean;
 	lease: string | null;
@@ -28,7 +29,7 @@ export interface FacetsQuery {
 }
 
 const keyOf = (q: FacetsQuery) =>
-	JSON.stringify([q.ast, q.sort, q.hidden, q.lease, q.limits ?? {}]);
+	JSON.stringify([q.ast, q.sort, q.hidden, q.lease, q.limits ?? {}, q.browse ?? false]);
 
 export function createFacets() {
 	let data = $state.raw<FacetsResponse | null>(null);
@@ -43,7 +44,7 @@ export function createFacets() {
 
 	async function run(q: FacetsQuery, force: boolean) {
 		if (q.lease !== null && q.lease === deadLease) q = { ...q, lease: null };
-		if (q.ast === null || q.ast.op === 'all') {
+		if (q.ast === null || (q.ast.op === 'all' && !q.browse)) {
 			slot.cancel();
 			data = null;
 			error = null;

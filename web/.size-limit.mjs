@@ -122,6 +122,11 @@ const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
 	/features\/detail\/(Contents|ErrorState|parsed\/Parsed)\.svelte$/,
+	// Clipboard failure is an interaction, not part of opening the detail view.
+	// Its UI and mount runtime remain included in the on-demand budget below.
+	/features\/detail\/manual-mount\.ts$/,
+	/features\/detail\/magnet\.ts$/,
+	/^chunk:magnet$/,
 	/features\/detail\/commands\.ts$/
 ];
 
@@ -277,7 +282,9 @@ export default [
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
-	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '28.5 KB'),
+	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
+	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
+	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),
 	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.4 KB'),
 	entry(
 		'Detail sections (on demand)',

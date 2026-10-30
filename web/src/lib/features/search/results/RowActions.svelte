@@ -51,12 +51,12 @@
 	type="button"
 	class="rr-action"
 	tabindex="-1"
-	aria-label={density === 'compact' ? m.search_results_copy() : undefined}
+	aria-label={m.search_results_copy()}
 	data-testid="{testid}-copy"
 	onclick={copy}
 >
 	<Copy class="rr-icon" aria-hidden="true" />
-	{#if density === 'comfortable'}<span>{m.search_results_copy()}</span>{/if}
+	{#if density === 'comfortable'}<span class="rr-action-label">{m.search_results_copy()}</span>{/if}
 </button>
 {#snippet moreButton(props: Record<string, unknown>, onclick: (e: MouseEvent) => void)}
 	<button

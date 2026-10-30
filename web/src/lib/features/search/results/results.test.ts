@@ -40,6 +40,26 @@ const sent = (n: number) => post.mock.calls[n]![1].body;
 beforeEach(() => post.mockReset());
 
 describe('the results store', () => {
+	it('browses match-all only when requested, with pagination and a distinct request identity', async () => {
+		post.mockResolvedValueOnce(page([1, 2], { next_cursor: 'browse-next' }));
+		const r = createResults();
+		const q = { ...query(), ast: { op: 'all' } as Ast, browse: true };
+		await r.load(q);
+		expect(sent(0).ast).toEqual({ op: 'all' });
+		expect(sent(0)).not.toHaveProperty('browse');
+		expect(r.status).toBe('ready');
+		post.mockResolvedValueOnce(page([3]));
+		await r.loadMore();
+		expect(sent(1).cursor).toBe('browse-next');
+		expect(r.hits.map((h) => h.id)).toEqual([1, 2, 3]);
+		await r.load({ ...q, browse: false });
+		expect(r.status).toBe('empty');
+		expect(r.hits).toEqual([]);
+		post.mockResolvedValueOnce(page([4]));
+		await r.load(q);
+		expect(post).toHaveBeenCalledTimes(3);
+	});
+
 	it('is empty with no query or an empty one, and sends no request', async () => {
 		const r = createResults();
 		await r.load({ ...query(), ast: null });

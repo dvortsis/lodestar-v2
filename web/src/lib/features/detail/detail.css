@@ -131,3 +131,9 @@
 .ls-detail-link {
 	text-decoration-line: underline;
 }
+
+/* The host stays mounted for history focus restoration, but an empty host
+   must not cover Search after the outgoing drawer transition finishes. */
+.ls-detail-host:not(:has([data-testid='drawer'])) {
+	display: contents;
+}

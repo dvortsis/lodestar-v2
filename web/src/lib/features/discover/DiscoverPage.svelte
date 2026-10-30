@@ -293,7 +293,12 @@
 						</EmptyState>
 					{/if}
 				{:else if d.hits.length > 0}
-					<div class="dsc-list" bind:this={listBox}>
+					<div
+						class="dsc-list"
+						class:dsc-complete={!d.hasMore}
+						style:--loaded-height="{d.hits.length * rowHeight}px"
+						bind:this={listBox}
+					>
 						<VirtualList
 							bind:this={list}
 							items={d.hits}
@@ -508,6 +513,13 @@
 	.dsc-list {
 		height: calc(100dvh - calc(var(--spacing) * 14 * 4));
 		min-height: calc(var(--row-height-comfortable) * 6);
+	}
+	.dsc-list.dsc-complete {
+		height: min(
+			var(--loaded-height),
+			max(calc(100dvh - var(--spacing) * 56), calc(var(--row-height-comfortable) * 6))
+		);
+		min-height: 0;
 	}
 	.dsc-cell {
 		position: relative;

@@ -8,6 +8,8 @@ const nav = vi.hoisted(() => ({
 vi.mock('./nav', () => nav);
 
 import { api } from '$lib/api/client';
+import { cacheDetail, cachedDetail, onDetailInvalidated } from '$lib/features/detail/cache';
+import { HASH, torrentDetail } from '$lib/features/detail/fixtures';
 import { currentSession, installAuthHandlers, logout, setSession } from './session.svelte';
 
 const json = (status: number, body: unknown) =>
@@ -28,6 +30,28 @@ afterEach(() => {
 });
 
 describe('installAuthHandlers', () => {
+	it('does not repeat in-flight detail work when the initial session is confirmed', async () => {
+		setSession('unknown');
+		const invalidated = vi.fn();
+		const off = onDetailInvalidated(invalidated);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => json(200, { ok: true }))
+		);
+		try {
+			await api.get('/filters');
+			expect(currentSession()).toBe('signed_in');
+			expect(invalidated).not.toHaveBeenCalled();
+			setSession('signed_out');
+			expect(invalidated).toHaveBeenLastCalledWith(false);
+			await api.post('/login', { body: { password: 'x' } });
+			expect(invalidated).toHaveBeenLastCalledWith(true);
+			expect(invalidated).toHaveBeenCalledTimes(2);
+		} finally {
+			off();
+		}
+	});
+
 	it('sends an expired session to sign-in with the current URL as next', async () => {
 		vi.stubGlobal(
 			'fetch',
@@ -48,6 +72,18 @@ describe('installAuthHandlers', () => {
 		expect(nav.toSetup).toHaveBeenCalledOnce();
 		expect(nav.toLoginFrom).not.toHaveBeenCalled();
 		expect(currentSession()).toBe('setup_required');
+	});
+
+	it('does not invalidate the detail caches on the first answer, only on a later change', () => {
+		setSession('unknown');
+		const seen = vi.fn();
+		const off = onDetailInvalidated(seen);
+		setSession('signed_in');
+		expect(seen).not.toHaveBeenCalled();
+		setSession('signed_out');
+		setSession('signed_in');
+		expect(seen).toHaveBeenLastCalledWith(true);
+		off();
 	});
 
 	it('marks the session signed in after any request that worked', async () => {
@@ -73,6 +109,18 @@ describe('installAuthHandlers', () => {
 });
 
 describe('logout', () => {
+	it('invalidates detail state without revalidation on sign-out', () => {
+		cacheDetail(HASH, torrentDetail());
+		const invalidated = vi.fn();
+		const off = onDetailInvalidated(invalidated);
+		setSession('signed_out');
+		expect(cachedDetail(HASH)).toBeUndefined();
+		expect(invalidated).toHaveBeenCalledWith(false);
+		setSession('signed_out');
+		expect(invalidated).toHaveBeenCalledTimes(1);
+		off();
+	});
+
 	it('posts JSON to /logout, then goes to sign-in', async () => {
 		const fetch = vi.fn(async () => json(200, { ok: true }));
 		vi.stubGlobal('fetch', fetch);

@@ -52,7 +52,9 @@
 	const locale = $derived(currentLocale());
 	let open = $state(false);
 	const shown = $derived(
-		results.shown === null ? null : (JSON.parse(results.shown) as [Ast, string, boolean, boolean])
+		results.shown === null
+			? null
+			: (JSON.parse(results.shown) as [Ast, string, boolean, boolean, boolean])
 	);
 	const wanted = $derived(shown !== null && (mode === 'rail' || open));
 
@@ -73,8 +75,8 @@
 	const live = createFacets();
 	$effect(() => {
 		if (!wanted || !shown) return;
-		const [ast, sort, hidden] = shown;
-		void live.load({ ast, sort, hidden, lease: results.lease, limits });
+		const [ast, sort, hidden, , browse] = shown;
+		void live.load({ ast, sort, hidden, browse, lease: results.lease, limits });
 	});
 
 	// What a click edits: the newest query, never the rows' (`shown` changes only when /search
@@ -97,8 +99,8 @@
 	);
 	$effect(() => {
 		if (!staging || !shown) return;
-		const [, sort, hidden] = shown;
-		void preview.load({ ast: staged, sort, hidden, lease: null, limits });
+		const [, sort, hidden, , browse] = shown;
+		void preview.load({ ast: staged, sort, hidden, browse, lease: null, limits });
 	});
 	const view = $derived(staging ? (preview.data ?? live.data) : live.data);
 	const viewAst = $derived(staging ? staged : base);

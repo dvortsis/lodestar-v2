@@ -28,13 +28,11 @@ export interface MoreItem {
 	label: () => string;
 }
 
-// Targets belong to later slices (Settings sections §10.10, the live log §12.1, the syntax guide);
-// until a slice lands its page, the link shows the 404 state. `about` is Settings → About (§10.10).
+// Shared by navigation and the palette. Only existing routes are offered;
+// unfinished Settings sections explain their availability and provide a return path.
 export const MORE: readonly MoreItem[] = [
 	{ id: 'import', href: '/settings/import', label: () => m.shell_more_import() },
 	{ id: 'backup', href: '/settings/backup', label: () => m.shell_more_backup() },
-	{ id: 'logs', href: '/logs', label: () => m.shell_more_logs() },
-	{ id: 'syntax', href: '/help/syntax', label: () => m.shell_more_syntax() },
 	{ id: 'about', href: '/settings/about', label: () => m.shell_more_about() }
 ];
 

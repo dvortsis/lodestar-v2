@@ -22,7 +22,9 @@ describe('tab URL state', () => {
 
 	it('links "See all in Search" to the query the server runs for Newest', () => {
 		expect(searchHref('movie', q(''))).toBe('/search?q=type%3Amovie&sort=-discovered');
-		expect(searchHref(null, q('density=compact'))).toBe('/search?sort=-discovered&density=compact');
+		expect(searchHref(null, q('density=compact'))).toBe(
+			'/search?browse=1&sort=-discovered&density=compact'
+		);
 	});
 
 	it('builds /t/<hash> only from a 40-digit lowercase hex hash', () => {

@@ -14,13 +14,15 @@
 		clauses: Clause[];
 		/** `hidden=1` in the URL. */
 		hidden: boolean;
+		/** Explicit match-all browsing also needs a Clear all action. */
+		browse?: boolean;
 		/** The editor: focus goes there when the last chip goes. */
 		el: HTMLElement;
 		onremove: (clause: Clause) => Promise<void>;
 		onremovehidden: (label: string) => Promise<void>;
 		onclear: () => Promise<void>;
 	}
-	let { clauses, hidden, el, onremove, onremovehidden, onclear }: Props = $props();
+	let { clauses, hidden, browse = false, el, onremove, onremovehidden, onclear }: Props = $props();
 
 	const hiddenLabel = $derived(m.search_filters_including({ term: m.hidden_by_filters() }));
 
@@ -96,7 +98,7 @@
 			{hiddenLabel}
 		</Chip>
 	{/if}
-	{#if count}
+	{#if count || browse}
 		<Button variant="quiet" dense onclick={() => void run(onclear)}>
 			{m.search_filters_clear_all()}
 		</Button>

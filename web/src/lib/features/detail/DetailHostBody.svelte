@@ -2,7 +2,7 @@
 	// The drawer the search page mounts (§10.5, §10.15). It shows while `page.state.detail` is set
 	// and places itself: in flow from xx-large up, an overlay at x-large and large, and a full
 	// screen view with Back below large. The browser's Back (popstate) clears the state and closes it.
-	import { onMount, untrack } from 'svelte';
+	import { onMount, onDestroy, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -12,6 +12,7 @@
 	import DetailActions from './DetailActions.svelte';
 	import DetailView from './DetailView.svelte';
 	import { setDrawerTarget } from './target';
+	import { coverBackground } from './fullscreen';
 	import { DetailModel } from './model.svelte';
 	import { closeDetail, markClosed, returnFocusTarget } from './open';
 	import './detail.css';
@@ -24,7 +25,10 @@
 		overlay: '(min-width: 1024px)',
 		narrow: '(min-width: 640px)'
 	};
-	let mode = $state<Mode>('inline');
+	let mode = $state<Mode>('overlay');
+	let gridWidth = $state(0);
+	let gridOverhead = $state(0);
+	let viewportMode = $state<Mode>('overlay');
 
 	function readWidth(): number | undefined {
 		try {
@@ -53,6 +57,21 @@
 	let wasOpen = false;
 	let everOpened = false;
 	let openedWith = '';
+	let container: HTMLDivElement;
+	let gone = false;
+	let closure = 0;
+	const focusTarget = () => {
+		const target = returnFocusTarget();
+		return target?.isConnected
+			? target
+			: document.querySelector<HTMLElement>('[data-testid="query-editor"]');
+	};
+	onDestroy(() => {
+		gone = true;
+		model.destroy();
+		setDrawerTarget(null);
+		markClosed();
+	});
 
 	onMount(() => {
 		// The key commands load after mount; they pull in the magnet code only when one runs.
@@ -62,19 +81,53 @@
 			([name, q]) => [name, matchMedia(q)] as const
 		);
 		const update = () => {
-			mode = lists.find(([, l]) => l.matches)?.[0] ?? 'full';
+			viewportMode = lists.find(([, l]) => l.matches)?.[0] ?? 'full';
 		};
+		const searchGrid = container.closest<HTMLElement>('.search-grid');
+		const grid = searchGrid ?? container.parentElement;
+		const measure = () => {
+			if (!grid) return;
+			const style = getComputedStyle(grid);
+			gridWidth = grid.clientWidth;
+			gridOverhead =
+				parseFloat(style.paddingLeft) +
+				parseFloat(style.paddingRight) +
+				(searchGrid ? 2 : 1) * (parseFloat(style.columnGap) || 0) +
+				(searchGrid ? tokenPx('--rail-width', 264) : 0) +
+				tokenPx('--results-min-width', 560);
+		};
+		const observer = new ResizeObserver(measure);
+		if (grid) observer.observe(grid);
+		measure();
 		update();
 		lists.forEach(([, l]) => l.addEventListener('change', update));
 		return () => {
+			observer.disconnect();
 			lists.forEach(([, l]) => l.removeEventListener('change', update));
-			model.destroy();
-			setDrawerTarget(null);
 		};
 	});
 
 	$effect(() => {
+		const chosen = Math.min(
+			tokenPx('--drawer-max-width', 640),
+			Math.max(tokenPx('--drawer-min-width', 480), stored ?? tokenPx('--drawer-overlay-width', 560))
+		);
+		mode =
+			viewportMode === 'inline' && gridWidth < gridOverhead + chosen ? 'overlay' : viewportMode;
+	});
+
+	$effect(() => {
+		if (!open || mode !== 'full' || !container) return;
+		const restore = coverBackground(container);
+		// Resizing an already open desktop drawer must move hidden focus into it too.
+		if (!container.contains(document.activeElement))
+			container.querySelector<HTMLElement>('h2[tabindex]')?.focus();
+		return restore;
+	});
+
+	$effect(() => {
 		if (hash) {
+			closure++;
 			untrack(() => {
 				if (!wasOpen) {
 					// Reopened: a fresh Drawer (the first one is already fresh).
@@ -93,11 +146,14 @@
 			// Closed by the browser's Back: focus has nowhere to be, so it goes back to the invoker.
 			if (wasOpen) {
 				wasOpen = false;
-				queueMicrotask(() => {
-					if (document.activeElement === document.body || !document.activeElement) {
-						const target = returnFocusTarget();
-						if (target?.isConnected) target.focus();
-					}
+				const closed = ++closure;
+				void tick().then(() => {
+					if (gone || closed !== closure) return;
+					const active = document.activeElement;
+					// The outgoing drawer can still be mounted for its transition. Restore now
+					// if it owns focus; leave any control the user chose outside it alone.
+					if (!active || active === document.body || container?.contains(active))
+						focusTarget()?.focus();
 				});
 			}
 		}
@@ -116,7 +172,7 @@
 	// In flow: the width the viewer chose. Overlays use their tokens; full screen takes the container.
 	// Back and "Back to Search" close like the drawer's own X: focus returns to the invoker.
 	function back() {
-		const target = returnFocusTarget();
+		const target = focusTarget();
 		closeDetail();
 		if (target?.isConnected) target.focus();
 	}
@@ -132,7 +188,7 @@
 	);
 </script>
 
-<div class="ls-detail-host" data-mode={mode}>
+<div bind:this={container} class="ls-detail-host" data-mode={mode}>
 	{#key session}
 		<Drawer
 			{open}
@@ -144,7 +200,7 @@
 			maxWidth={mode === 'full' ? 100_000 : undefined}
 			onWidthChange={mode === 'inline' ? saveWidth : undefined}
 			onClose={closeDetail}
-			returnFocus={returnFocusTarget}
+			returnFocus={focusTarget}
 		>
 			{#snippet actions()}<DetailActions detail={model.detail} />{/snippet}
 			{#if mode === 'full'}

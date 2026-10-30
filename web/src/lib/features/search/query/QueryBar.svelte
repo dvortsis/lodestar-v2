@@ -48,7 +48,7 @@
 	$effect(() => {
 		const p = page.url.searchParams;
 		const hidden = p.get('hidden');
-		if (p.get('q') || hidden === '1' || hidden === 'true') void engage();
+		if (p.get('q') || p.get('browse') === '1' || hidden === '1' || hidden === 'true') void engage();
 	});
 
 	/** `/` (search.focus): focus with the caret at the end. */

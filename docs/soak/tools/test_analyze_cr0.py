@@ -47,7 +47,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(self.counter(report, "warmup")["delta"], 20)
         self.assertEqual(self.counter(report)["delta"], 30)
         self.assertEqual(report["phases"]["baseline"]["rss_change_mib_per_hour"], 60)
-        self.assertEqual(report["baseline_status"], "in_progress")
+        self.assertEqual(report["baseline_status"], "completion_unknown")
         self.assertNotIn("never-export-this", json.dumps(report))
 
     def test_missing_baseline_and_metrics_are_unknown(self):
@@ -150,7 +150,7 @@ class AnalyzerTests(unittest.TestCase):
         self.assertFalse(report["clean_shutdown"])
         result["reason"] = "operator_stop"
         (self.root / "result.json").write_text(json.dumps(result), encoding="utf-8")
-        self.assertEqual(analyze(self.root)["baseline_status"], "stopped_early")
+        self.assertEqual(analyze(self.root)["baseline_status"], "interruption_exit_unknown")
 
     def test_invalid_prom_and_snapshot_mismatch_do_not_poison_json_rates(self):
         self.rows([sample(0), sample(60, 2)])
@@ -180,9 +180,9 @@ class AnalyzerTests(unittest.TestCase):
             self.assertEqual(output.read_text(encoding="utf-8"), "keep this")
 
     def test_full_baseline_is_review_required_not_automatic_pass(self):
-        self.rows([sample(t, t // 60) for t in range(0, 24 * 3600, 60)])
+        self.rows([sample(t, t // 60) for t in range(0, 24 * 3600 + 60, 60)])
         (self.root / "result.json").write_text(json.dumps({
-            "reason": "baseline_window_complete", "samples": 1440, "stop_mode": "exited_0",
+            "reason": "baseline_window_complete", "samples": 1441, "stop_mode": "exited_0",
         }), encoding="utf-8")
         report = analyze(self.root)
         self.assertEqual(report["baseline_status"], "collector_window_complete_review_required")
@@ -190,11 +190,104 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(self.counter(report)["per_hour"], 60)
         self.assertTrue(report["clean_shutdown"])
 
+    def test_missing_and_corrupt_result_never_implies_running(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 10, 27, tzinfo=timezone.utc)
+        self.rows([sample(0, time="2026-10-26T00:00:00Z")])
+        report = analyze(self.root, now=now)
+        self.assertEqual(report["run_state"], "completion_unknown")
+        self.assertEqual(report["observation_state"], "stale_observations")
+        (self.root / "result.json").write_text("{", encoding="utf-8")
+        self.assertEqual(analyze(self.root)["issues"]["invalid_result"], 1)
+        self.rows([sample(0, time=now.isoformat())])
+        self.assertEqual(analyze(self.root, now=now)["observation_state"], "fresh_observations")
+
+    def test_reason_breakdown_is_allowlisted_and_covered(self):
+        self.rows([sample(0), sample(60)])
+        for i in range(2):
+            (self.root / "metrics" / f"{i:05d}.prom").write_text(
+                f'lodestar_fetch_lost_total{{reason="evicted"}} {i * 3}\n'
+                f'lodestar_fetch_lost_total{{reason="secret-name"}} {i}\n', encoding="utf-8")
+        report = analyze(self.root)
+        self.assertEqual(report["phases"]["baseline"]["breakdowns"]["fetch_lost_total"]["evicted"],
+                         {"delta": 3, "covered_seconds": 60})
+        self.assertNotIn("secret-name", json.dumps(report))
+
+    def test_short_endpoint_disk_and_sequence(self):
+        self.rows([sample(0, sequence=0), sample(60, sequence=1)])
+        (self.root / "disk.jsonl").write_text(json.dumps({
+            "volumes": [{"volume": "private-path", "free_bytes": 123}],
+            "redirected_log_bytes": 42, "read_failures": 0}) + "\n{", encoding="utf-8")
+        report = analyze(self.root)
+        self.assertEqual(report["disk"]["minimum_free_bytes"], 123)
+        self.assertEqual(report["issues"]["invalid_disk_observations"], 1)
+        self.assertNotIn("private-path", json.dumps(report))
+        self.rows([sample(0, sequence=2)])
+        with self.assertRaisesRegex(ValueError, "sequence"):
+            analyze(self.root)
+
+    def test_unconfirmed_shutdown_does_not_claim_stopped(self):
+        self.rows([sample(0)])
+        for confirmed in (False, True):
+            (self.root / "result.json").write_text(json.dumps({
+                "schema_version": 2, "reason": "operator_stop", "samples": 1,
+                "stop_mode": "unknown", "shutdown": {"exit_confirmed": confirmed}
+            }), encoding="utf-8")
+            self.assertEqual(analyze(self.root)["run_state"],
+                             "stopped" if confirmed else "completion_unknown")
+
     def test_positive_suppression_in_baseline_requires_review(self):
         row = sample(0)
         row["values"]["dht_sample_suppression_seconds"] = 10
         self.rows([row])
         self.assertEqual(analyze(self.root)["issues"]["baseline_during_suppression"], 1)
+
+    def test_invalid_result_versions_remain_unknown(self):
+        self.rows([sample(0)])
+        for version in (None, "2", True, 0, 3, {}):
+            with self.subTest(version=version):
+                (self.root / "result.json").write_text(json.dumps({
+                    "schema_version": version, "reason": "baseline_window_complete"
+                }), encoding="utf-8")
+                report = analyze(self.root)
+                self.assertEqual(report["run_state"], "completion_unknown")
+                self.assertEqual(report["issues"]["invalid_result"], 1)
+
+    def test_core_coverage_does_not_substitute_other_metrics_or_extra_hours(self):
+        self.rows([sample(0), sample(60), sample(300)])
+        report = analyze(self.root)
+        quality = report["collection_quality"]
+        self.assertEqual(quality["core_coverage"]["working_set_bytes"], 0.2)
+        self.assertEqual(quality["core_coverage"]["writer_stored_total"], 0)
+        self.assertFalse(quality["core_coverage_sufficient"])
+        self.assertFalse(quality["gap_limit_met"])
+        self.assertFalse(quality["full_duration_observed"])
+
+    def test_hourly_disk_history_keeps_failures_without_volume_paths(self):
+        self.rows([sample(0)])
+        (self.root / "disk.jsonl").write_text("\n".join(json.dumps(row) for row in [
+            {"elapsed_seconds": 0, "volumes": [{"volume": "private", "free_bytes": 100}], "redirected_log_bytes": 2},
+            {"elapsed_seconds": 60, "volumes": [], "read_failures": 1},
+            {"elapsed_seconds": 3600, "volumes": [{"volume": "private", "free_bytes": 50}], "redirected_log_bytes": 4},
+        ]), encoding="utf-8")
+        report = analyze(self.root)
+        self.assertEqual(report["disk"]["hourly"]["0"]["read_failure_observations"], 1)
+        self.assertEqual(report["disk"]["hourly"]["1"]["minimum_free_bytes"], 50)
+        self.assertNotIn('"volume"', json.dumps(report))
+
+    def test_clean_v2_shutdown_requires_confirmation_signal_and_exit_code(self):
+        self.rows([sample(0)])
+        result = {"schema_version": 2, "reason": "operator_stop", "samples": 1,
+                  "stop_mode": "exited_0", "shutdown": {
+                      "exit_confirmed": True, "signal_delivered": True,
+                      "exit_code": 0, "errors": []}}
+        for field, bad in (("exit_confirmed", False), ("signal_delivered", False),
+                           ("exit_code", 1), ("errors", ["graceful_wait_failed"])):
+            changed = {**result, "shutdown": {**result["shutdown"], field: bad}}
+            (self.root / "result.json").write_text(json.dumps(changed), encoding="utf-8")
+            self.assertFalse(analyze(self.root)["clean_shutdown"])
+        (self.root / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        self.assertTrue(analyze(self.root)["clean_shutdown"])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import { showBidi } from '$lib/util/bidi';
+	import { TYPE_LABELS as TYPE, ADULT_LABELS as ADULT } from '$lib/util/content-labels';
 	import { composition } from './composition';
 
 	interface Props {
@@ -60,29 +61,6 @@
 	);
 
 	// Up to 5 badges (§10.4): what the torrent is, then the flags people filter by.
-	const TYPE: Record<string, () => string> = {
-		movie: m.content_type_movie,
-		tv: m.content_type_tv,
-		music: m.content_type_music,
-		audiobook: m.content_type_audiobook,
-		ebook: m.content_type_ebook,
-		comic: m.content_type_comic,
-		software: m.content_type_software,
-		game: m.content_type_game,
-		images: m.content_type_images,
-		video: m.content_type_video,
-		other: m.content_type_other,
-		adult: m.content_type_adult
-	};
-	const ADULT: Record<string, () => string> = {
-		scene: m.adult_kind_scene,
-		movie: m.adult_kind_movie,
-		photos: m.adult_kind_photos,
-		comics: m.adult_kind_comics,
-		game: m.adult_kind_game,
-		vr: m.adult_kind_vr,
-		audio: m.adult_kind_audio
-	};
 	const FLAG: [string, () => string][] = [
 		['private', m.search_results_flag_private],
 		['v2', m.search_results_flag_v2],
@@ -121,7 +99,7 @@
 		{/if}
 		<div class="rr-facts">
 			<!-- A feature's own fact first: the line clips at its end on a narrow screen. -->
-			{#if extra}<span class="rr-fact">{@render extra()}</span>{/if}
+			{#if extra}<span class="rr-fact rr-extra">{@render extra()}</span>{/if}
 			{#if comfortable && badges.length}
 				<span class="rr-badges" data-testid="{id}-badges">
 					{#each badges as b (b.key)}<span class="rr-badge" data-testid="{id}-badge-{b.key}"
@@ -145,7 +123,7 @@
 					{/if}
 				</span>
 			{/if}
-			<span class="rr-fact" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
+			<span class="rr-fact rr-size" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
 			{#if comfortable}
 				<span class="rr-fact" data-testid="{id}-files"
 					>{(hit.files === 1 ? m.search_results_files_one : m.search_results_files_other)({
@@ -153,7 +131,7 @@
 					})}</span
 				>
 			{/if}
-			<span class="rr-fact" data-testid="{id}-swarm">
+			<span class="rr-fact rr-swarm" data-testid="{id}-swarm">
 				<span class="sr-only">{m.seeders()}: </span><ArrowUp class="rr-icon" aria-hidden="true" />
 				{#if hit.seeders === null}
 					<span role="img" aria-label={m.never_scraped()} data-testid="{id}-never-scraped">—</span>
@@ -163,21 +141,23 @@
 					>
 				{/if}
 				{#if comfortable}
-					<span class="sr-only">{m.leechers()}: </span><ArrowDown
-						class="rr-icon"
-						aria-hidden="true"
-					/>
-					{#if hit.leechers === null}
-						<span
-							role="img"
-							aria-label={m.never_scraped()}
-							data-testid="{id}-leechers-never-scraped">—</span
-						>
-					{:else}
-						<span data-testid="{id}-leechers"
-							>{formatCount({ value: hit.leechers, approx: hit.seeders_approx }, locale)}</span
-						>
-					{/if}
+					<span class="rr-leechers">
+						<span class="sr-only">{m.leechers()}: </span><ArrowDown
+							class="rr-icon"
+							aria-hidden="true"
+						/>
+						{#if hit.leechers === null}
+							<span
+								role="img"
+								aria-label={m.never_scraped()}
+								data-testid="{id}-leechers-never-scraped">—</span
+							>
+						{:else}
+							<span data-testid="{id}-leechers"
+								>{formatCount({ value: hit.leechers, approx: hit.seeders_approx }, locale)}</span
+							>
+						{/if}
+					</span>
 				{/if}
 				{#if hit.swarm_suspect}
 					<span class="rr-fact" title={m.swarm_suspect()}>

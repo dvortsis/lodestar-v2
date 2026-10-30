@@ -12,7 +12,8 @@ request gets:
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
   crate that job builds, following the workspace's path dependencies (the
-  logging bench: `lodestar-log` or the binary's `logging/` runtime).
+  logging bench: `lodestar-log` or the binary's `logging/` runtime);
+- the soak tools' Python tests only if it touches `docs/soak/tools/`.
 
 Prints `key=value` lines for $GITHUB_OUTPUT. Usage:
     ci_changes.py <event> <base-sha> <head-sha> [<labels as JSON>]
@@ -116,7 +117,9 @@ def main() -> None:
     out: dict[str, str] = {}
 
     if event != "pull_request" or "full-ci" in labels:
-        out.update(rust="true", bench="true", filter="true", importer="true", log_bench="true")
+        out.update(
+            rust="true", bench="true", filter="true", importer="true", log_bench="true", soak_tools="true"
+        )
         out["fuzz"] = json.dumps(FUZZ)
         out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest", "macos-latest"])
         emit(out)
@@ -157,6 +160,7 @@ def main() -> None:
             for f in changed
         )
     ).lower()
+    out["soak_tools"] = str(everything or any(f.startswith("docs/soak/tools/") for f in changed)).lower()
     # A change under fuzz/ (a target, the harness, its lockfile) runs them all.
     fuzz_all = "lodestar-fuzz" in touched
     out["fuzz"] = json.dumps([t for t in FUZZ if fuzz_all or needs(fuzz_roots(t))])

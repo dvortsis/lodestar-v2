@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 import { HASH, searchHit, torrentDetail } from './fixtures';
+vi.mock('./visibility', () => ({ watchDetailVisibility: vi.fn() }));
 
 vi.mock('$app/paths', () => ({
 	resolve: (route: string, params?: Record<string, string>) =>
@@ -77,24 +78,24 @@ describe('DetailView states', () => {
 		expect(onBack).toHaveBeenCalled();
 	});
 
-	it('a network error shows a Retry banner and keeps the cached header', async () => {
+	it('a network error shows a Retry banner without a cached header', async () => {
 		const m = model({
 			error: new ApiError(0, 'network', 'offline'),
 			status: 'error',
-			hit: searchHit(),
 			hash: HASH
 		});
 		get.mockRejectedValue(new ApiError(0, 'network', 'offline'));
 		render(DetailView, { model: m, mode: 'drawer' });
 		const alert = await screen.findByRole('alert');
 		expect(alert.textContent).toContain("Couldn't load this torrent");
-		expect(m.title).toBe('Show');
+		expect(m.title).toBe('');
 		get.mockResolvedValue(torrentDetail());
 		within(alert).getByRole('button', { name: 'Retry' }).click();
 		await waitFor(() => expect(m.status).toBe('ready'));
 		await flush();
 		expect(screen.queryByRole('alert')).toBeNull();
 		expect(screen.getByTestId('detail-size')).toBeTruthy();
+		m.destroy();
 	});
 
 	it('a 5xx is the same banner', async () => {
@@ -151,17 +152,20 @@ describe('DetailModel swaps', () => {
 		const B = 'b'.repeat(40);
 		const { cacheDetail } = await import('./cache');
 		let finishA!: () => void;
-		get.mockImplementation((path: string) =>
+		get.mockImplementation((path: string, options: { path?: { hash: string } }) =>
 			path === '/torrents/{hash}'
-				? new Promise((resolve) => {
-						finishA = () => resolve(torrentDetail({ hash: A, name: 'A' }));
-					})
+				? options.path?.hash === B
+					? Promise.resolve(torrentDetail({ hash: B, name: 'B' }))
+					: new Promise((resolve) => {
+							finishA = () => resolve(torrentDetail({ hash: A, name: 'A' }));
+						})
 				: Promise.resolve({ hits: [] })
 		);
 		const m = new DetailModel();
 		m.load(A);
 		cacheDetail(B, torrentDetail({ hash: B, name: 'B' }));
 		m.load(B);
+		expect(m.detail).toBeNull();
 		finishA();
 		await flush();
 		expect(m.detail?.name).toBe('B');
@@ -204,8 +208,9 @@ describe('DetailModel', () => {
 		get.mockResolvedValue(torrentDetail());
 		const m = new DetailModel();
 		m.load(HASH);
-		expect(m.title).toBe('Show');
+		expect(m.title).toBe('');
 		await waitFor(() => expect(m.status).toBe('ready'));
+		expect(m.title).toBe('Show');
 		expect(get.mock.calls.map((c) => c[0])).toEqual(['/torrents/{hash}']);
 		m.destroy();
 	});

@@ -47,18 +47,12 @@ test.describe('navigation', () => {
 		await expect(page).toHaveURL(/\/search/);
 	});
 
-	test('the overflow menu lists its five items and opens a destination', async ({ page, go }) => {
+	test('the overflow menu lists available routes and opens a destination', async ({ page, go }) => {
 		await go('/search');
 		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
-		await expect(menu.getByRole('menuitem')).toHaveText([
-			'Import',
-			'Backup',
-			'Logs',
-			'Syntax guide',
-			'About'
-		]);
+		await expect(menu.getByRole('menuitem')).toHaveText(['Import', 'Backup', 'About']);
 		await menu.getByRole('menuitem', { name: 'About' }).click();
 		await expect(page).toHaveURL(/\/settings\/about/);
 	});

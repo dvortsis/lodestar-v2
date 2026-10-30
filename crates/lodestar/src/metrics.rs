@@ -156,6 +156,34 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Keys waiting for a lookup slot.",
         get(&p.lookup_backlog),
     );
+    for (name, value) in [
+        ("fetch_finder_full_total", &p.finder_full),
+        ("fetch_finder_closed_total", &p.finder_closed),
+        ("fetch_lookup_unaccepted_total", &p.lookup_unaccepted),
+        ("fetch_retry_unaccepted_total", &p.retry_unaccepted),
+    ] {
+        o.one(
+            name,
+            "counter",
+            "Pool admission diagnostics; not network attempts.",
+            get(value),
+        );
+    }
+    o.family(
+        "fetch_evicted_service_total",
+        "counter",
+        "Service reached before eviction; transient process observations.",
+    );
+    for (i, stage) in ["unaccepted", "lookup", "peers", "fetch"]
+        .iter()
+        .enumerate()
+    {
+        o.value(
+            "fetch_evicted_service_total",
+            &format!("stage=\"{stage}\""),
+            get(&p.evicted_service[i]),
+        );
+    }
     // Attempts and successes per transport; the success family replaces
     // the pool's unlabelled count (see `write_prometheus` for how the two
     // can differ). The uTP socket's own
@@ -397,6 +425,34 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Peer requests rejected without ownership.",
             d.peer_rejected,
         );
+        o.family(
+            "dht_peer_rejection_reasons_total",
+            "counter",
+            "Exclusive actor rejection reasons; caller closure precedes pause and capacity.",
+        );
+        for (reason, value) in [
+            ("capacity", d.peer_rejected_capacity),
+            ("paused", d.peer_rejected_paused),
+            ("caller_closed", d.peer_rejected_caller_closed),
+        ] {
+            o.value(
+                "dht_peer_rejection_reasons_total",
+                &format!("reason=\"{reason}\""),
+                value,
+            );
+        }
+        for (name, value) in [
+            ("dht_peer_ack_failed_total", d.peer_ack_failed),
+            ("dht_peer_command_full_total", d.peer_command_full),
+            ("dht_peer_command_closed_total", d.peer_command_closed),
+        ] {
+            o.one(
+                name,
+                "counter",
+                "Pre-ownership delivery failure; not an accepted attempt.",
+                value,
+            );
+        }
         o.one(
             "dht_peer_cancelled_total",
             "counter",

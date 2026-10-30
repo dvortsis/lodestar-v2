@@ -28,6 +28,30 @@ function fakeNav(start = 'http://x/search') {
 	};
 }
 
+it('cancels a pending draft and an in-flight answer without navigating after unmount', async () => {
+	const { nav, calls } = fakeNav();
+	const state = createSearchState(nav);
+	state.setText('abandoned');
+	state.cancelPending();
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(fetchMock).not.toHaveBeenCalled();
+	expect(calls).toEqual([]);
+	let finish!: (response: Response) => void;
+	fetchMock.mockImplementation(
+		() =>
+			new Promise<Response>((resolve) => {
+				finish = resolve;
+			})
+	);
+	state.setText('late');
+	const submitted = state.submit();
+	state.cancelPending();
+	finish(json({ ast: word('late'), canonical: 'late' }));
+	await submitted;
+	expect(calls).toEqual([]);
+	expect(state.parsing).toBe(false);
+});
+
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -54,19 +78,21 @@ describe('URL contract', () => {
 			q: '',
 			sort: 'relevance',
 			hidden: false,
-			exact: false
+			exact: false,
+			browse: false
 		});
 		expect(readUrl(new URLSearchParams('q=a+b&sort=-size&hidden=1&exact=true'))).toEqual({
 			q: 'a b',
 			sort: '-size',
 			hidden: true,
-			exact: true
+			exact: true,
+			browse: false
 		});
 	});
 
 	it('falls back to defaults for invalid values', () => {
 		const s = readUrl(new URLSearchParams('sort=nonsense&hidden=maybe&exact=2'));
-		expect(s).toEqual({ q: '', sort: 'relevance', hidden: false, exact: false });
+		expect(s).toEqual({ q: '', sort: 'relevance', hidden: false, exact: false, browse: false });
 		expect(readUrl(new URLSearchParams('sort=%2Bfiles')).sort).toBe('+files');
 	});
 
@@ -82,7 +108,8 @@ describe('URL contract', () => {
 			q: 'new one',
 			sort: '-size',
 			hidden: true,
-			exact: false
+			exact: false,
+			browse: false
 		});
 		const plain = new URL(
 			writeUrl(base, { q: '', sort: 'relevance', hidden: false, exact: false }),
@@ -93,6 +120,64 @@ describe('URL contract', () => {
 });
 
 describe('search state', () => {
+	it('never authorizes a prior match-all AST for a new URL query before parsing', async () => {
+		const f = fakeNav('http://x/search?browse=1');
+		const s = createSearchState(f.nav);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toEqual(all);
+		expect(s.queryReady).toBe(true);
+		f.visit('http://x/search?browse=1&q=bad+(');
+		// The URL has changed but the query effect has not run yet.
+		expect(s.ast).toEqual(all);
+		expect(s.queryReady).toBe(false);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.queryReady).toBe(false);
+		expect(s.ast).toBeNull();
+	});
+
+	it('treats a non-canonical deep link as ready once its own text has parsed', async () => {
+		const f = fakeNav('http://x/search?q=Lantern');
+		const s = createSearchState(f.nav);
+		expect(s.queryReady).toBe(false);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toEqual(word('Lantern'));
+		expect(s.queryReady).toBe(true);
+	});
+
+	it('preserves explicit browsing through sort/filter edits and removes it on reset', async () => {
+		const f = fakeNav('http://x/search?browse=1&sort=-discovered&density=compact');
+		const s = createSearchState(f.nav);
+		expect(s.browse).toBe(true);
+		await s.setSort('-size');
+		await s.setHidden(true);
+		expect(s.browse).toBe(true);
+		expect(f.nav.url().searchParams.get('density')).toBe('compact');
+		await s.reset();
+		expect(s.browse).toBe(false);
+		expect(f.nav.url().search).toBe('?density=compact');
+		f.back();
+		s.sync();
+		expect(s.browse).toBe(true);
+		expect(s.sort).toBe('-size');
+	});
+
+	it('parses explicit queries in browse mode, including failures, without a match-all fallback', async () => {
+		const f = fakeNav('http://x/search?browse=1&q=lantern');
+		const s = createSearchState(f.nav);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toEqual(word('lantern'));
+		s.setText('bad (');
+		await s.submit();
+		expect(s.ast).toBeNull();
+		expect(s.parseError?.code).toBe('query_syntax');
+		expect(s.q).toBe('bad (');
+		expect(s.browse).toBe(true);
+	});
+
 	it('typing debounces, parses once, and replaces the history entry with the canonical text', async () => {
 		const f = fakeNav();
 		const s = createSearchState(f.nav);

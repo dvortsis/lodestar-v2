@@ -2,6 +2,7 @@
 """Read aggregate CR-0 collector evidence; never contact or modify the crawler."""
 
 import argparse
+from datetime import datetime, timezone
 from collections import Counter
 import json
 import math
@@ -11,12 +12,13 @@ import sys
 
 PHASES = ("startup", "warmup", "baseline")
 COUNTERS = tuple("dht_" + name + "_total" for name in (
-    "peer_admitted", "peer_rejected", "peer_cancelled", "lookups_completed",
+    "peer_admitted", "peer_rejected", "peer_cancelled", "peer_rejection_reasons", "peer_ack_failed", "peer_command_full", "peer_command_closed", "lookups_completed",
     "lookup_deadlines", "sample_stale", "sample_deferred", "queries_out",
     "responses_in", "timeouts", "packets_in", "packets_out", "harvested",
     "harvest_dropped",
 )) + tuple(name + "_total" for name in (
     "fetch_attempts", "fetch_success", "fetch_failures", "fetch_lost",
+    "fetch_finder_full", "fetch_finder_closed", "fetch_lookup_unaccepted", "fetch_retry_unaccepted", "fetch_evicted_service",
     "writer_stored", "writer_errors", "writer_transactions", "search_errors",
 ))
 BOUNDS = {
@@ -26,13 +28,47 @@ BOUNDS = {
     "outstanding_rpcs": (("dht_outstanding",), 1024),
     "pool_lookups": (("fetch_lookups",), 256),
 }
+GAUGES = ("working_set_bytes", "private_bytes", "handles", "threads", "cpu_seconds")
+CORE_COUNTERS = ("writer_stored_total", "writer_errors_total", "fetch_attempts_total",
+                 "fetch_success_total", "dht_peer_admitted_total", "dht_peer_rejected_total",
+                 "dht_lookups_completed_total")
 STOP_REASONS = {
-    "baseline_window_complete", "operator_stop", "collector_error",
+    "baseline_window_complete", "operator_stop", "collector_error", "evidence_write_error",
+    "disk_monitor_failed", "disk_reserve_reached", "redirected_logs_limit",
+    "embedded_ui_mismatch",
     "overall_deadline_without_complete_baseline", "three_consecutive_health_failures",
     "three_consecutive_metrics_failures", "three_consecutive_capacity_violations",
     "rss_over_1GiB_for_five_samples", "active_peer_requests_without_completion_for_five_minutes",
 }
 SERIES = re.compile(r"^lodestar_([a-z_]+)(\{[^\r\n]*\})?\s+(\S+)(?:\s+\d+)?$")
+
+
+# Only fixed, documented enums may leave the private evidence directory.
+BREAKDOWNS = {
+    "fetch_failures_total": ("kind", {"no_peers", "timed_out", "refused", "encryption_failed", "oversize", "invalid", "unreachable"}),
+    "fetch_lost_total": ("reason", {"no_peers", "timed_out", "refused", "encryption_failed", "oversize", "invalid", "blocked", "evicted", "gave_up", "unreachable"}),
+    "dht_peer_rejection_reasons_total": ("reason", {"capacity", "paused", "caller_closed"}),
+    "fetch_evicted_service_total": ("stage", {"unaccepted", "lookup", "peers", "fetch"}),
+}
+
+
+def safe_label(name, labels):
+    if name not in BREAKDOWNS:
+        return None
+    key, allowed = BREAKDOWNS[name]
+    match = re.fullmatch(r'\{' + key + r'="([a-z_]+)"\}', labels)
+    return match[1] if match and match[1] in allowed else None
+
+
+def freshness(rows, now):
+    if not rows:
+        return "unknown"
+    try:
+        stamp = datetime.fromisoformat(rows[-1]["time"].replace("Z", "+00:00"))
+        age = (now - stamp).total_seconds()
+        return "fresh_observations" if 0 <= age <= 180 else "stale_observations"
+    except (KeyError, ValueError, TypeError):
+        return "unknown"
 
 
 def number(value):
@@ -83,10 +119,12 @@ def load_rows(root, issues):
                 or not isinstance(row.get("values"), dict)
                 or not number(row.get("process_id"))):
             raise ValueError(f"Invalid sample schema at line {index + 1}")
+        if "sequence" in row and (type(row["sequence"]) is not int or row["sequence"] != index):
+            raise ValueError("Invalid sample sequence")
         values = row["values"]
         row["counters"] = {name: {"": values[name]} for name in COUNTERS
                            if number(values.get(name))}
-        prom = root / "metrics" / f"{index:05d}.prom"
+        prom = root / "metrics" / f"{row.get('sequence', index):05d}.prom"
         if row.get("metrics_ok") is True:
             if prom.exists():
                 try:
@@ -106,7 +144,7 @@ def load_rows(root, issues):
 
 
 def identity(row):
-    return row["process_id"], row["values"].get("start_time_seconds")
+    return row["process_id"], row["values"].get("start_time_seconds"), row.get("process_identity")
 
 
 def usable(row):
@@ -125,6 +163,8 @@ def summarize(rows, max_gap):
             "observed_span_seconds": (selected[-1]["elapsed_seconds"] - selected[0]["elapsed_seconds"]
                                       if len(selected) > 1 else 0),
             "valid_interval_seconds": 0,
+            "maximum_gap_seconds": 0,
+            "measurement_coverage": {name: 0 for name in GAUGES},
             "health_failed_samples": sum(r.get("health") != 200 for r in selected),
             "metrics_failed_samples": sum(not usable(r) for r in selected),
             "rss_max_mib": max((r["working_set_bytes"] / 2**20 for r in selected
@@ -134,6 +174,7 @@ def summarize(rows, max_gap):
             "bounds": {name: {"limit": limit, "observed_samples": 0, "max": None,
                               "at_capacity_samples": 0, "over_capacity_samples": 0}
                        for name, (_, limit) in BOUNDS.items()},
+            "breakdowns": {}, "hourly": {},
             "counters": {name: {"delta": 0, "covered_seconds": 0, "per_hour": None}
                          for name in COUNTERS},
         }
@@ -160,6 +201,9 @@ def summarize(rows, max_gap):
             continue
         if dt > max_gap:
             issues["sampling_gaps"] += 1
+        if before["phase"] == after["phase"]:
+            p = phases[after["phase"]]
+            p["maximum_gap_seconds"] = max(p["maximum_gap_seconds"], dt)
         if identity(before) != identity(after):
             issues["identity_changes"] += 1
             continue
@@ -178,10 +222,24 @@ def summarize(rows, max_gap):
             continue
         p = phases[after["phase"]]
         p["valid_interval_seconds"] += dt
+        for name in GAUGES:
+            if number(before.get(name)) and number(after.get(name)):
+                p["measurement_coverage"][name] += dt
         for name in before["counters"].keys() & after["counters"].keys() - reset:
             counter = p["counters"][name]
             counter["delta"] += sum(after["counters"][name].values()) - sum(before["counters"][name].values())
             counter["covered_seconds"] += dt
+            for label, value in after["counters"][name].items():
+                enum = safe_label(name, label)
+                if enum is not None:
+                    item = p["breakdowns"].setdefault(name, {}).setdefault(enum, {"delta": 0, "covered_seconds": 0})
+                    item["delta"] += value - before["counters"][name][label]
+                    item["covered_seconds"] += dt
+            # Assign an interval to its ending hour; don't fabricate within-interval events.
+            hour = str(int((after["elapsed_seconds"] - p["first_elapsed_seconds"]) // 3600))
+            item = p["hourly"].setdefault(hour, {}).setdefault(name, {"delta": 0, "covered_seconds": 0})
+            item["delta"] += sum(after["counters"][name].values()) - sum(before["counters"][name].values())
+            item["covered_seconds"] += dt
 
     for phase, p in phases.items():
         selected = [r for r in rows if r["phase"] == phase]
@@ -198,20 +256,113 @@ def summarize(rows, max_gap):
                 counter["per_hour"] = counter["delta"] * 3600 / seconds
             else:
                 counter["delta"] = None
+        p["measurement_coverage"] = {
+            name: {"covered_seconds": seconds, "fraction": seconds / span if span > 0 else None}
+            for name, seconds in p["measurement_coverage"].items()
+        }
+        for name, counter in p["counters"].items():
+            p["measurement_coverage"][name] = {
+                "covered_seconds": counter["covered_seconds"],
+                "fraction": counter["covered_seconds"] / span if span > 0 else None,
+            }
     return phases, issues
 
 
-def analyze(root, max_gap=90):
+def result_state(result):
+    if result is None:
+        return "completion_unknown"
+    if result.get("schema_version", 1) >= 2:
+        shutdown = result.get("shutdown")
+        return "stopped" if isinstance(shutdown, dict) and shutdown.get("exit_confirmed") is True else "completion_unknown"
+    # Legacy collectors confirmed these exit modes; malformed values aren't proof.
+    mode = result.get("stop_mode", "")
+    return "stopped" if re.fullmatch(r"(?:already_)?exited_-?\d+", str(mode)) else "completion_unknown"
+
+
+def clean_shutdown(result):
+    if result is None:
+        return None
+    if result_state(result) != "stopped":
+        return False
+    if result.get("schema_version", 1) == 1:
+        return result.get("stop_mode") in ("exited_0", "already_exited_0")
+    shutdown = result["shutdown"]
+    return (result.get("stop_mode") == "exited_0"
+            and shutdown.get("exit_code") == 0
+            and shutdown.get("signal_delivered") is True
+            and not shutdown.get("errors"))
+
+
+def disk_summary(root, issues):
+    path = root / "disk.jsonl"
+    if not path.exists():
+        return None
+    summary = {"observations": 0, "read_failure_observations": 0, "minimum_free_bytes": None, "max_redirected_log_bytes": None, "hourly": {}}
+    try:
+        with path.open(encoding="utf-8-sig") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                    if not isinstance(row, dict):
+                        raise ValueError("Disk row")
+                    volumes = row.get("volumes", [])
+                    if not isinstance(volumes, list):
+                        raise ValueError("Disk volumes")
+                    for volume in volumes:
+                        free = volume.get("free_bytes") if isinstance(volume, dict) else None
+                        if number(free):
+                            old = summary["minimum_free_bytes"]
+                            summary["minimum_free_bytes"] = free if old is None else min(old, free)
+                    size = row.get("redirected_log_bytes")
+                    if number(size):
+                        summary["max_redirected_log_bytes"] = max(summary["max_redirected_log_bytes"] or 0, size)
+                    elapsed = row.get("elapsed_seconds")
+                    if number(elapsed):
+                        hour = str(int(elapsed // 3600))
+                        bucket = summary["hourly"].setdefault(hour, {
+                            "observations": 0, "read_failure_observations": 0,
+                            "minimum_free_bytes": None, "max_redirected_log_bytes": None})
+                        bucket["observations"] += 1
+                        bucket["read_failure_observations"] += bool(row.get("read_failures"))
+                        frees = [v["free_bytes"] for v in volumes
+                                 if isinstance(v, dict) and number(v.get("free_bytes"))]
+                        if frees:
+                            old = bucket["minimum_free_bytes"]
+                            bucket["minimum_free_bytes"] = min(frees) if old is None else min(old, *frees)
+                        if number(size):
+                            bucket["max_redirected_log_bytes"] = max(bucket["max_redirected_log_bytes"] or 0, size)
+                    summary["read_failure_observations"] += bool(row.get("read_failures"))
+                    summary["observations"] += 1
+                except (ValueError, TypeError):
+                    issues["invalid_disk_observations"] += 1
+    except OSError:
+        issues["unreadable_disk_observations"] += 1
+    return summary
+
+
+def analyze(root, max_gap=90, now=None):
     run = read_json(root / "run.json")
     if not isinstance(run.get("settings", {}), dict):
         raise ValueError("Invalid run settings")
     # Read termination first: a newly completed run during this read is still
-    # conservatively presented as an ongoing snapshot, never prematurely done.
+    # conservatively presented as completion unknown, never prematurely done.
     result_path = root / "result.json"
-    result = read_json(result_path) if result_path.exists() else None
-    if result is not None and not isinstance(result.get("reason"), str):
-        raise ValueError("Invalid termination reason")
     issues = Counter()
+    try:
+        result = read_json(result_path) if result_path.exists() else None
+        if result is not None and not isinstance(result.get("reason"), str):
+            raise ValueError("Invalid termination reason")
+        if result is not None and (type(result.get("schema_version", 1)) is not int
+                                   or result.get("schema_version", 1) not in (1, 2)):
+            raise ValueError("Unsupported result schema")
+    except (ValueError, OSError):
+        result = None
+        issues["invalid_result"] += 1
+    if result is not None and result.get("schema_version", 1) >= 2:
+        if result.get("finalization_complete") is not True:
+            issues["finalization_incomplete"] += 1
+        if result.get("publication_failures"):
+            issues["publication_failures"] += 1
     rows = load_rows(root, issues)
     phases, intervals = summarize(rows, max_gap)
     issues.update(intervals)
@@ -222,15 +373,15 @@ def analyze(root, max_gap=90):
     if baseline["samples"] == 0:
         status = "not_started"
     elif result is None:
-        status = "in_progress"
+        status = "completion_unknown"
     elif result.get("reason") != "baseline_window_complete":
-        status = "stopped_early"
+        status = "interrupted" if result_state(result) == "stopped" else "interruption_exit_unknown"
     else:
         status = "collector_window_complete_review_required"
     if result is not None and result.get("samples") != len(rows):
         issues["result_sample_count_mismatch"] += 1
     if (status == "collector_window_complete_review_required"
-            and baseline["observed_span_seconds"] < hours * 3600 - max_gap):
+            and baseline["observed_span_seconds"] < hours * 3600):
         issues["baseline_evidence_short"] += 1
     if not rows:
         issues["no_samples"] += 1
@@ -240,13 +391,25 @@ def analyze(root, max_gap=90):
     reason = result.get("reason") if result else None
     if reason is not None and reason not in STOP_REASONS:
         reason = "process_exited" if str(reason).startswith("process_exited_") else "unknown"
+    core_coverage = {name: baseline["measurement_coverage"][name]["fraction"]
+                     for name in CORE_COUNTERS + GAUGES}
     return {
-        "schema_version": 1, "provenance": provenance,
-        "run_state": "stopped" if result else "ongoing_snapshot",
+        "schema_version": 2, "provenance": provenance,
+        "run_state": result_state(result),
+        "observation_state": freshness(rows, now or datetime.now(timezone.utc)),
+        "disk": disk_summary(root, issues),
+        "baseline_coverage_fraction": baseline["valid_interval_seconds"] / (hours * 3600),
+        "collection_quality": {
+            "required_coverage_fraction": 0.99, "maximum_allowed_gap_seconds": 180,
+            "full_duration_observed": baseline["observed_span_seconds"] >= hours * 3600,
+            "core_coverage": core_coverage,
+            "core_coverage_sufficient": all(v is not None and v >= 0.99 for v in core_coverage.values()),
+            "gap_limit_met": baseline["samples"] > 1 and baseline["maximum_gap_seconds"] <= 180,
+        },
         "baseline_status": status, "baseline_required_hours": hours,
         "collector_completed_window": bool(result and result.get("reason") == "baseline_window_complete"),
         "stop_reason": reason,
-        "clean_shutdown": (result.get("stop_mode") == "exited_0") if result else None,
+        "clean_shutdown": clean_shutdown(result),
         "max_gap_seconds": max_gap, "issues": dict(sorted((k, v) for k, v in issues.items() if v)), "phases": phases,
         "limitations": [
             "Review evidence; this report never declares soak acceptance or a performance improvement.",
@@ -276,7 +439,9 @@ def markdown(report):
         out.append(f"| {phase} | {p['samples']} | {fmt(p['observed_span_seconds']/3600)} | "
                    f"{fmt(p['valid_interval_seconds']/3600)} | {p['health_failed_samples']} | "
                    f"{p['metrics_failed_samples']} | {fmt(p['rss_max_mib'])} | {fmt(p['rss_change_mib_per_hour'])} |")
-    out += ["", "## Evidence issues", ""]
+    out += ["", f"Observation freshness: {report['observation_state']}.",
+            f"Baseline valid coverage: {report['baseline_coverage_fraction']:.2%}.",
+            f"Disk summary: {json.dumps(report['disk'])}", "", "## Evidence issues", ""]
     out += [f"- {name}: {count}" for name, count in report["issues"].items() if count] or ["No collection issues detected in this snapshot."]
     for phase, p in report["phases"].items():
         if not p["samples"]:
@@ -286,6 +451,9 @@ def markdown(report):
                 "| --- | ---: | ---: | ---: |"]
         for name, c in p["counters"].items():
             out.append(f"| {name} | {fmt(c['delta'])} | {fmt(c['per_hour'])} | {fmt(c['covered_seconds'])} |")
+        for name, labels in p["breakdowns"].items():
+            out += ["", f"Reason breakdown: {name}", "", "| Reason | Delta | Covered seconds |", "| --- | ---: | ---: |"]
+            out += [f"| {label} | {fmt(v['delta'])} | {fmt(v['covered_seconds'])} |" for label, v in sorted(labels.items())]
         out += ["", "| Resource | Observed max | Limit | At capacity samples | Over capacity samples |",
                 "| --- | ---: | ---: | ---: | ---: |"]
         for name, b in p["bounds"].items():

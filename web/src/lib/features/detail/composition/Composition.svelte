@@ -11,10 +11,11 @@
 	import { groupLabel, groupOf } from './groups';
 
 	interface Props {
+		level?: number;
 		/** undefined: the hit is not known (yet); []: padding only. */
 		composition: SearchHit['composition'] | undefined;
 	}
-	let { composition }: Props = $props();
+	let { composition, level = 4 }: Props = $props();
 
 	const locale = $derived(currentLocale());
 	const rows = $derived((composition ?? []).map((c) => ({ ...c, group: groupOf(c.group) })));
@@ -35,7 +36,7 @@
 </script>
 
 <div class="ls-detail-stack" data-testid="detail-composition">
-	<h4 class="font-medium">{m.composition()}</h4>
+	<div role="heading" aria-level={level} class="font-medium">{m.composition()}</div>
 	{#if composition === undefined}
 		<p class="text-muted-text" data-testid="detail-composition-unknown">
 			{m.detail_composition_unknown()}

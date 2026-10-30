@@ -720,6 +720,143 @@ fn a_prepared_fetch_upgrades_a_partial_import() {
     assert_ne!(row.flags & flags::IMPORTED, 0);
 }
 
+#[test]
+fn verified_partial_upgrades_replace_names_encodings_and_archive() {
+    let legacy = encoding_rs::GBK
+        .encode("中文电视剧第一季高清")
+        .0
+        .into_owned();
+    for (imported_name, verified_name) in [
+        (legacy.as_slice(), b"Verified.Name.mkv".as_slice()),
+        (b"Imported.Name".as_slice(), legacy.as_slice()),
+    ] {
+        for archive_raw in [false, true] {
+            for ahead in [false, true] {
+                let config = StoreConfig {
+                    archive_raw,
+                    ..StoreConfig::default()
+                };
+                let mut store = Store::open_in_memory(config.clone()).unwrap();
+                let mut reference = Store::open_in_memory(config).unwrap();
+                let raw = single(verified_name, vec![]);
+                let real = Info::parse(&raw).unwrap();
+                let expected_id = reference.insert(&[new(&real, &raw)]).unwrap()[0].id();
+                let mut partial = real.clone();
+                partial.name = Info::parse(&single(imported_name, vec![])).unwrap().name;
+                partial.files.clear();
+                let id = store
+                    .insert(&[NewTorrent {
+                        info: &partial,
+                        raw_info: None,
+                        extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+                        ..new(&real, &raw)
+                    }])
+                    .unwrap()[0]
+                    .id();
+                let before = store.torrent(id).unwrap().unwrap();
+                let p = store.preparer().prepare(&real, Some(&raw)).unwrap();
+                // An unverified duplicate must not make imported claims authoritative.
+                store
+                    .write(&WriteBatch {
+                        prepared: &[PreparedTorrent {
+                            verified: false,
+                            ..prepared(&p)
+                        }],
+                        ..WriteBatch::default()
+                    })
+                    .unwrap();
+                assert_eq!(store.torrent(id).unwrap().unwrap().name, before.name);
+                assert_eq!(store.raw_info(id).unwrap(), None);
+                if ahead {
+                    assert_eq!(commit(&mut store, &p), Inserted::Existing(id));
+                } else {
+                    assert_eq!(
+                        store.insert(&[new(&real, &raw)]).unwrap(),
+                        [Inserted::Existing(id)]
+                    );
+                }
+                let row = store.torrent(id).unwrap().unwrap();
+                let expected = reference.torrent(expected_id).unwrap().unwrap();
+                assert_eq!(row.name, expected.name);
+                assert_eq!(row.name_raw, expected.name_raw);
+                assert_eq!(
+                    store.raw_info(id).unwrap(),
+                    reference.raw_info(expected_id).unwrap()
+                );
+                assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
+                assert_ne!(row.flags & flags::IMPORTED, 0);
+                assert_eq!(row.discovered_at, before.discovered_at);
+                assert_eq!(store.reindex_after(0, 10).unwrap().len(), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn partial_upgrade_archive_and_name_roll_back_with_the_transaction() {
+    let mut store = Store::open_in_memory(StoreConfig {
+        archive_raw: true,
+        ..StoreConfig::default()
+    })
+    .unwrap();
+    let raw = single(b"Verified.Name.mkv", vec![]);
+    let real = Info::parse(&raw).unwrap();
+    let mut partial = real.clone();
+    partial.name = Info::parse(&single(b"Imported.Name", vec![])).unwrap().name;
+    partial.files.clear();
+    let id = store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..new(&real, &raw)
+        }])
+        .unwrap()[0]
+        .id();
+    let stale = b"de";
+    store
+        .connection()
+        .execute(
+            "INSERT INTO torrent_raw (torrent_id, data) VALUES (?1, ?2)",
+            lodestar_store::rusqlite::params![id, &stale[..]],
+        )
+        .unwrap();
+    let before = store.torrent(id).unwrap().unwrap();
+    store
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER fail_upgrade_reindex BEFORE INSERT ON reindex_log BEGIN
+             SELECT RAISE(ABORT, 'injected reindex failure'); END;",
+        )
+        .unwrap();
+    let p = store.preparer().prepare(&real, Some(&raw)).unwrap();
+    assert!(
+        store
+            .write(&WriteBatch {
+                prepared: &[prepared(&p)],
+                ..WriteBatch::default()
+            })
+            .is_err()
+    );
+    assert_eq!(store.torrent(id).unwrap().unwrap(), before);
+    assert_eq!(
+        store.raw_info(id).unwrap().as_deref(),
+        Some(stale.as_slice())
+    );
+    assert!(store.files(id).unwrap().unwrap().files.is_empty());
+    assert!(store.reindex_after(0, 10).unwrap().is_empty());
+    store
+        .connection()
+        .execute_batch("DROP TRIGGER fail_upgrade_reindex")
+        .unwrap();
+    assert_eq!(commit(&mut store, &p), Inserted::Existing(id));
+    assert_eq!(
+        store.torrent(id).unwrap().unwrap().name,
+        "Verified.Name.mkv"
+    );
+    assert_eq!(store.raw_info(id).unwrap(), p.raw);
+}
+
 fn enriched(version: i64, junk: u8) -> lodestar_store::Enriched {
     lodestar_store::Enriched {
         version,

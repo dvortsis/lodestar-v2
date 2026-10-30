@@ -79,7 +79,10 @@
 		}
 		if (takeSubmit()) submit();
 	});
-	onDestroy(() => editor?.destroy());
+	onDestroy(() => {
+		editor?.destroy();
+		s.cancelPending();
+	});
 
 	const blank = $derived(!s.text.trim());
 	/** Still the text that was parsed: on an error W5 keeps the raw text in the URL. */
@@ -113,10 +116,11 @@
 	});
 	const clauses = $derived(chipClauses(shown));
 	const hidden = $derived(s.hidden);
+	const browse = $derived(s.browse);
 
 	let Strip = $state<typeof import('./FilterStrip.svelte').default>();
 	$effect(() => {
-		if ((clauses.length || hidden) && !Strip)
+		if ((clauses.length || hidden || browse) && !Strip)
 			void import('./FilterStrip.svelte').then((mod) => (Strip = mod.default));
 	});
 
@@ -160,6 +164,11 @@
 
 	async function clearAll() {
 		ensureSearchPath();
+		if (s.browse) {
+			await s.reset();
+			announce(m.search_filters_cleared());
+			return;
+		}
 		const base = pending?.ast ?? shown;
 		if (base && clauses.length) {
 			// One history entry for both: the filters and `hidden`.
@@ -211,16 +220,17 @@
 		{/snippet}
 	</Banner>
 {/if}
-{#if Strip && (clauses.length || hidden)}
+{#if Strip && (clauses.length || hidden || browse)}
 	<Strip
 		{clauses}
 		{hidden}
+		{browse}
 		{el}
 		onremove={remove}
 		onremovehidden={removeHidden}
 		onclear={clearAll}
 	/>
-{:else if clauses.length || hidden}
+{:else if clauses.length || hidden || browse}
 	<!-- The strip's first line, held while its chunk loads (a pasted link with filters): the results
 	     below don't move when it arrives (§10.1, no layout shift). An unseen, inert chip and "Clear
 	     all", so the height is the strip's own, a coarse pointer's 44 px targets included. -->

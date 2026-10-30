@@ -3,6 +3,8 @@
    Search imports this with the results chunk; Discover and Alerts import it with their page.
    Token variables only: utility names would land in the global 20 KB sheet. */
 .rr-row {
+	container-type: inline-size;
+	container-name: result-row;
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 3);
@@ -139,5 +141,36 @@
 	.rr-action {
 		min-width: var(--target-min);
 		min-height: var(--target-min);
+	}
+}
+
+.rr-leechers {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--spacing);
+}
+/* Prioritize decision facts by the actual row width, including Discover's
+   narrow panels. Density remains the user's choice. */
+@container result-row (max-width: 480px) {
+	.rr-raw,
+	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-extra),
+	.rr-leechers,
+	.rr-action-label {
+		display: none;
+	}
+	.rr-facts {
+		gap: calc(var(--spacing) * 2);
+	}
+	.rr-size {
+		order: -2;
+	}
+	.rr-extra {
+		order: -3;
+	}
+	.rr-swarm {
+		order: -1;
+	}
+	.rr-action {
+		padding-inline: var(--spacing);
 	}
 }

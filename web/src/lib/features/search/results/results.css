@@ -9,12 +9,16 @@
    arrived, a layout shift. */
 .search-grid {
 	@apply grid gap-6;
+	position: relative;
 	@variant x-large {
 		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr);
 	}
-	@variant xx-large {
+	&:has(.ls-detail-host[data-mode='inline'] [data-testid='drawer']) {
 		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr) auto;
 	}
+}
+#search-drawer {
+	display: contents;
 }
 .rp {
 	position: relative;

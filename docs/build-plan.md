@@ -109,6 +109,8 @@ At most four helper slices at a time in this phase (§2.25), filled in this orde
 ## Context
 
 **Crawler follow-up (2026-10-25):** [CR-0 and the subsequent crawler sequence](plan/dht-crawler-implementation-plan-2026-10-25.md) consolidate the post-v0.5 architecture review. CR-0 covers sampler/restart correctness, endpoint checks, diagnostics and reliable lookup ownership; the repaired baseline follows before yield experiments. This adds a cross-cutting correctness prerequisite without renumbering P0–P4 or making packaging depend on an experiment. See [CR-0 decisions](decisions/2026-10-25-CR-0.md).
+**Unblocked soak follow-ups (2026-10-26):** [retention, search and UI preparation](plan/2026-10-26-soak-followups.md) records isolated fixes and the post-soak validation order. Source preparation is complete only when recorded; runtime acceptance remains gated on actual collector completion. These fixes do not advance CR-1 or renumber milestones.
+
 M0–M3 are merged: the crawler with MSE fetch, store schema v3, the Tantivy torrent and file indexes, the query language, enrichment and the worker boundary. There's also a minimal API (setup, login, parse, search with offset paging, detail, files) and a 211-line status page.
 
 M4 is being built **in other sessions**. Merged so far:

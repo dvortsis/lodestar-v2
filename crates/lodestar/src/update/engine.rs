@@ -245,15 +245,21 @@ impl Engine {
     /// Changes the engine's `updater.json`, then writes it if it can: a
     /// failed write loses it only across a restart.
     fn save_updater(&self, f: impl FnOnce(&mut Updater)) {
-        let u = {
-            let mut u = lock(&self.inner.updater);
-            u.format = 1;
-            f(&mut u);
-            u.clone()
-        };
-        if let Some(bin) = &self.inner.bin {
-            let _ = bin.write(UPDATER_FILE, &u);
-        }
+        self.save_updater_with(f, |u| {
+            if let Some(bin) = &self.inner.bin {
+                let _ = bin.write(UPDATER_FILE, u);
+            }
+        });
+    }
+
+    fn save_updater_with(&self, f: impl FnOnce(&mut Updater), persist: impl FnOnce(&Updater)) {
+        // Keep mutation and persistence in the same order. Releasing this
+        // lock before writing lets an older check overwrite a newer pause,
+        // and lets writers collide on Bin's temporary filename.
+        let mut u = lock(&self.inner.updater);
+        u.format = 1;
+        f(&mut u);
+        persist(&u);
     }
 
     fn publish(&self, state: UpdatesState, version: Option<String>, error: Option<String>) {
@@ -1258,6 +1264,75 @@ mod tests {
             e.engine.check_now().await,
             Err(UpdatesError::RateLimited { retry_after }) if (1..=60).contains(&retry_after)
         ));
+    }
+
+    #[test]
+    fn a_pause_cannot_be_overtaken_by_an_older_updater_save() {
+        use std::sync::mpsc;
+        let e = env(Mode::Auto);
+        let (writing, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let old = e.engine.clone();
+        let writer = std::thread::spawn(move || {
+            old.save_updater_with(
+                |u| {
+                    u.checked_at = Some(NOW);
+                    u.next_check_at = Some(NOW + 3600);
+                },
+                |u| {
+                    writing.send(()).unwrap();
+                    wait.recv_timeout(Duration::from_secs(10)).unwrap();
+                    old.inner
+                        .bin
+                        .as_ref()
+                        .unwrap()
+                        .write(UPDATER_FILE, u)
+                        .unwrap();
+                },
+            );
+        });
+        started.recv_timeout(Duration::from_secs(10)).unwrap();
+        // The old state is captured but not yet written. Mutation must remain
+        // excluded here, rather than allowing a new pause to persist first.
+        let serialized = matches!(
+            e.engine.inner.updater.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        );
+        let newer = e.engine.clone();
+        let (pausing, attempting) = mpsc::channel();
+        let pause = std::thread::spawn(move || {
+            pausing.send(()).unwrap();
+            newer.pause(7)
+        });
+        attempting.recv_timeout(Duration::from_secs(10)).unwrap();
+        release.send(()).unwrap();
+        writer.join().unwrap();
+        let status = pause.join().unwrap();
+        assert!(
+            serialized,
+            "state mutation must remain locked through persistence"
+        );
+        assert_eq!(status.policy.paused_until, Some(NOW + 7 * 86_400));
+        let persisted = e
+            .engine
+            .inner
+            .bin
+            .as_ref()
+            .unwrap()
+            .read::<Updater>(UPDATER_FILE)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted, e.engine.updater());
+        assert_eq!(persisted.checked_at, Some(NOW));
+        assert_eq!(persisted.paused_until, Some(NOW + 7 * 86_400));
+        let restarted = env_in(Mode::Auto, Some(e.dir.path().to_path_buf()));
+        assert_eq!(restarted.engine.updater(), persisted);
+        // A later check preserves a pause, and clearing a pause survives restart too.
+        e.engine.save_updater(|u| u.checked_at = Some(NOW + 1));
+        e.engine.pause(0);
+        let restarted = env_in(Mode::Auto, Some(e.dir.path().to_path_buf()));
+        assert_eq!(restarted.engine.updater().paused_until, None);
+        assert_eq!(restarted.engine.updater().checked_at, Some(NOW + 1));
     }
 
     #[tokio::test]

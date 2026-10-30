@@ -23,6 +23,8 @@ export const PAGE = 50;
 /** What the results depend on. `ast` null means no query (the empty state). */
 export interface ResultsQuery {
 	ast: Ast | null;
+	/** Frontend-only opt-in to an empty match-all query. Never sent to the HTTP API. */
+	browse?: boolean;
 	sort: string;
 	hidden: boolean;
 	exact: boolean;
@@ -37,7 +39,9 @@ export type Status =
 	/** The first request failed and there are no rows to keep. */
 	| 'error';
 
-const keyOf = (q: ResultsQuery) => JSON.stringify([q.ast, q.sort, q.hidden, q.exact]);
+const keyOf = (q: ResultsQuery) =>
+	JSON.stringify([q.ast, q.sort, q.hidden, q.exact, q.browse ?? false]);
+const empty = (q: ResultsQuery) => q.ast === null || (q.ast.op === 'all' && !q.browse);
 
 export function createResults() {
 	let hits = $state.raw<SearchHit[]>([]);
@@ -82,7 +86,7 @@ export function createResults() {
 	const load = (q: ResultsQuery) => untrack(() => run(q, false));
 
 	async function run(q: ResultsQuery, force: boolean) {
-		const key = q.ast === null || q.ast.op === 'all' ? null : keyOf(q);
+		const key = empty(q) ? null : keyOf(q);
 		// The query already shown, or already asked for: nothing to do (see the header).
 		if (!force && key !== null) {
 			if (key === inflightKey) return;
@@ -93,7 +97,7 @@ export function createResults() {
 		cursor = null;
 		moreError = null;
 		loadingMore = false;
-		if (q.ast === null || q.ast.op === 'all') {
+		if (empty(q)) {
 			// The bare page, or a query with nothing in it: no request.
 			slot.cancel();
 			hits = [];
