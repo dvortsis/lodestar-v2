@@ -1169,31 +1169,33 @@
    "review_rounds": 1
   },
   "F-auth": {
-   "status": "ready-waiting-swap",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhn95sPGRigHUpZhU2wx",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:30Z ready 585dfca4 on next (+382/-22, 3 files); self-review 1 blocking fixed; /security-review clean; runner read diff: OK, no changes. Open PR after swap; fresh reviewer + security on PR head."
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:30Z ready 585dfca4 on next (+382/-22, 3 files); self-review 1 blocking fixed; /security-review clean; runner read diff: OK, no changes. Open PR after swap; fresh reviewer + security on PR head. | 2026-10-30T04:56Z PR #178 head 7db4d0f1; fresh+security reviewer running",
+   "pr": 178
   },
   "F-filters": {
-   "status": "running",
+   "status": "ready",
    "model": "opus",
    "session": "session_01MMjhn9VyDZzDeRHdsz8MwA",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap"
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z 8c5a0b91 ready; runner OK'd: unless raw; token-level neutralize (\u00a72.19 content-safety flag, floor test); allow-both tightening; packs gap -> F-filters-packs"
   },
   "F-metainfo": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnCT9tGHWq3HgcYR3Vm",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap"
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z PR #177 head bd131a8d; fresh reviewer running; ci.yml fuzz-seeds line granted to slice; \u00a72.19 flags: per-file path.utf-8, .pad/padding, decode fallback (loosens arch \u00a76/\u00a716 raw bytes)",
+   "pr": 177
   },
   "L1": {
    "status": "review",
@@ -1249,6 +1251,15 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks)."
+  },
+  "F-filters-packs": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1726,7 +1737,12 @@
   "lineage_guard": "2026-10-30T03:41Z branch ci/lineage-guard (on next): changes job fails heads containing 15620683 or 2d5e761d. Open as first PR after the swap.",
   "l_hygiene": "2026-10-30T03:41Z L1-L6 scanned: no personal paths, public IPs, tokens; only ephemeral soak PIDs and old SHAs (historical). No rewrite-removed lines reintroduced.",
   "pre_swap_local_work": "Old-lineage sessions hold unpushed work: X-sleeps (7fcf111a, c272e0a2 on slice/X-sleeps), B-log1b deferred (72aaed6b on local/B-log1b-4b), B-update 5a (d7f6c8b). After the swap, ask each for a patch (git format-patch from its old merge-base), apply on new-main branches, then archive. Never let them push old-lineage branches.",
-  "open_runner_prs": "2026-10-30T04:55Z: #174 lineage guard, #175 L1, #176 plan (claude/busy-allen-aptli2). Merge order: #174, #176, #175, then L2..L7 one at a time."
+  "open_runner_prs": "2026-10-30T04:55Z: #174 lineage guard, #175 L1, #176 plan (claude/busy-allen-aptli2). Merge order: #174, #176, #175, then L2..L7 one at a time.",
+  "owner_flags_2_19": [
+   "2026-10-30T04:56Z F-updater: unreadable updater.json fails closed (hold)",
+   "2026-10-30T04:56Z F-filters: neutralize applies at token level (dotted/joined/prefix/fuzzy) - content-safety adjacent; floor untouched",
+   "2026-10-30T04:56Z F-metainfo: per-file path.utf-8; pathless padding -> .pad/padding; decode-to-UTF-8 fallback loses legacy raw bytes when no lossless re-encode (arch \u00a76/\u00a716)"
+  ]
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
