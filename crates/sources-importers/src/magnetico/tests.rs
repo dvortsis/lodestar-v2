@@ -285,8 +285,9 @@ fn records_never_debug_print_names() {
 
 #[test]
 fn positions_round_trip_and_reject_others() {
-    assert_eq!(parse_position(&position(42)), Ok(42));
-    assert_eq!(parse_position(&[]), Ok(i64::MIN));
+    assert_eq!(parse_position(&position(42)), Ok(Some(42)));
+    assert_eq!(parse_position(&position(i64::MIN)), Ok(Some(i64::MIN)));
+    assert_eq!(parse_position(&[]), Ok(None));
     assert_eq!(
         parse_position(&[2, 0, 0, 0, 0, 0, 0, 0, 1]),
         Err(Refusal::BadPosition)
@@ -422,7 +423,8 @@ fn batches_are_keyset_paged_and_resume_mid_source() {
     let (batches, last) = read_all(&mut src);
     let sizes: Vec<_> = batches.iter().map(|b| b.records.len()).collect();
     assert_eq!(sizes, vec![500, 500, 200]);
-    assert_eq!(parse_position(&last), Ok(1_200));
+    assert_eq!(parse_position(&last), Ok(Some(1_200)));
+    assert!(src.conn().is_autocommit(), "each batch's transaction ends");
     // Resuming from the first batch's position, on a fresh open, yields
     // exactly what followed it.
     let mut again = open_ok(&path);
@@ -744,6 +746,145 @@ fn unc_paths_are_recognised() {
     }
 }
 
+#[test]
+fn values_over_the_length_limit_become_findings_not_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let huge = vec![b'x'; 17 << 20];
+    let mut rs = rows(4);
+    rs[0].name = Value::Blob(huge.clone());
+    rs[1].info_hash = Value::Blob(huge.clone());
+    rs[2].files = vec![
+        (Value::Blob(huge.clone()), Value::Integer(3)),
+        (Value::Text("ok".into()), Value::Integer(4)),
+    ];
+    rs[3].total_size = Value::Blob(huge);
+    let path = fixture(dir.path(), "huge", Layout::Lax, &rs);
+    let mut src = open_ok(&path);
+    let b = src.read_batch(&[], NOW).unwrap().unwrap();
+    assert!(b.source_bytes < 64 << 10, "{}", b.source_bytes);
+    assert!(matches!(&b.records[0], Record::Candidate(c) if c.name.is_none()));
+    assert_eq!(b.records[1], Record::Invalid(Finding::BadHash));
+    let t = torrent(b.records[2].clone());
+    assert_eq!((t.files.len(), t.files_dropped), (1, 1));
+    assert_eq!(t.completeness, Completeness::Partial);
+    assert!(matches!(&b.records[3], Record::Candidate(c) if c.size.is_none()));
+    assert_eq!(b.findings.get(Finding::NameOverLimit), 1);
+    assert_eq!(b.findings.get(Finding::MissingSize), 1);
+}
+
+#[test]
+fn file_less_parents_stay_within_the_byte_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs: Vec<_> = (1..=500)
+        .map(|i| {
+            let mut r = TorrentRow::good(i, &[]);
+            r.name = Value::Blob(vec![b'n'; 3 << 20]);
+            r
+        })
+        .collect();
+    let path = fixture(dir.path(), "names", Layout::Lax, &rs);
+    let mut src = open_ok(&path);
+    let (batches, _) = read_all(&mut src);
+    assert_eq!(batches.iter().map(|b| b.records.len()).sum::<usize>(), 500);
+    for b in &batches {
+        assert!(b.source_bytes <= MAX_BATCH_BYTES as u64);
+    }
+}
+
+#[test]
+fn the_lowest_possible_id_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("min");
+    let mut conn = super::fixtures::create(&path, Layout::Lax);
+    super::fixtures::insert(&mut conn, &rows(2));
+    conn.execute("UPDATE torrents SET id = ?1 WHERE id = 1", [i64::MIN])
+        .unwrap();
+    conn.close().unwrap();
+    let mut src = open_ok(&path);
+    let (batches, _) = read_all(&mut src);
+    assert_eq!(batches.iter().map(|b| b.records.len()).sum::<usize>(), 2);
+}
+
+#[test]
+fn a_cut_parent_is_counted_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cut");
+    let long = "p".repeat(3_000);
+    let files: Vec<(String, i64)> = (0..1_000).map(|i| (format!("{long}/{i}"), 1)).collect();
+    let files: Vec<(&str, i64)> = files.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+    let mut conn = super::fixtures::create(&path, Layout::V3);
+    let ids = super::fixtures::insert(
+        &mut conn,
+        &(1..=3)
+            .map(|i| TorrentRow::good(i, &files))
+            .collect::<Vec<_>>(),
+    );
+    for id in &ids {
+        insert_file(
+            &conn,
+            true,
+            &FileRow {
+                torrent_id: Value::Integer(*id),
+                size: Value::Integer(0),
+                path: Value::Text("README".into()),
+                readme: Some(b"text".to_vec()),
+            },
+        );
+    }
+    conn.close().unwrap();
+    let mut src = open_ok(&path);
+    let (batches, _) = read_all(&mut src);
+    assert_eq!(batches.len(), 2);
+    let readmes: u64 = batches
+        .iter()
+        .map(|b| b.findings.get(Finding::ReadmeNotImported))
+        .sum();
+    assert_eq!(readmes, 3);
+}
+
+#[test]
+fn over_budget_rows_are_dropped_as_a_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "q".repeat(4_000);
+    let mut files: Vec<(String, i64)> = (0..2_200).map(|i| (format!("{long}/{i}"), 1)).collect();
+    files.push(("small".into(), 1));
+    let files: Vec<(&str, i64)> = files.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+    let path = fixture(
+        dir.path(),
+        "suffix",
+        Layout::V3,
+        &[TorrentRow::good(1, &files)],
+    );
+    let mut src = open_ok(&path);
+    let t = torrent(src.read_batch(&[], NOW).unwrap().unwrap().records[0].clone());
+    assert!(t.files.iter().all(|f| f.path[0] != b"small"));
+}
+
+#[test]
+fn raw_values_and_batches_never_debug_print_content() {
+    let r = RawTorrent {
+        id: 4242,
+        info_hash: Raw::Blob(b"secret-hash-bytes-xx".to_vec()),
+        name: Raw::Text(b"secret-name".to_vec()),
+        total_size: Raw::Integer(987_654),
+        discovered_on: Raw::TooLong(9),
+    };
+    let f = RawFile {
+        path: Raw::Text(b"secret-path".to_vec()),
+        size: Raw::Real(1.5),
+    };
+    let b = Batch {
+        records: vec![],
+        position: position(4242),
+        source_bytes: 1,
+        findings: Findings::default(),
+    };
+    let s = format!("{r:?} {f:?} {b:?}");
+    for leak in ["secret", "4242", "987654", "1.5"] {
+        assert!(!s.contains(leak), "{s}");
+    }
+}
+
 // ---- Through IMP-1 into a store ----
 
 fn reading_job(store: &mut Store, id: &Identity) -> ImportJob {
@@ -841,14 +982,47 @@ fn an_import_round_trips_into_a_store_and_resumes() {
     assert_eq!(c.new, 1_098);
     assert_eq!(c.partial, 1);
 
-    // Every imported row is unverified and of unknown privacy.
-    let ids: Vec<i64> = (1..=10).collect();
-    for id in ids {
-        if let Some(q) = store.import_quality(id).unwrap() {
-            assert_eq!(q.verification, Verification::Unverified);
-            assert_eq!(q.privacy, Privacy::Unknown);
-        }
+    // Every imported row has a quality row: unverified, privacy unknown.
+    for id in 1..=c.new as i64 {
+        let q = store.import_quality(id).unwrap().expect("quality row");
+        assert_eq!(q.verification, Verification::Unverified);
+        assert_eq!(q.privacy, Privacy::Unknown);
     }
+}
+
+#[test]
+fn a_changed_source_blocks_the_job_on_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path(), "v3", Layout::V3, &rows(600));
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let mut src = open_ok(&path);
+    let job = reading_job(&mut store, &src.identity());
+    let b1 = src.read_batch(&[], NOW).unwrap().unwrap();
+    commit(&mut store, job.id, 1, &b1);
+    drop(src);
+    // A restart interrupts the job; meanwhile magneticod adds a torrent.
+    assert_eq!(store.interrupt_import_jobs(NOW).unwrap(), 1);
+    {
+        let mut w = rusqlite::Connection::open(&path).unwrap();
+        super::fixtures::insert(&mut w, &[TorrentRow::good(9_999, &[("a", 1)])]);
+    }
+    let id = open_ok(&path).identity();
+    let job = store.import_job(job.id).unwrap().unwrap();
+    let job = store
+        .resume_import_job(
+            job.id,
+            job.revision,
+            &lodestar_store::import::Revalidation {
+                dataset: &id.dataset,
+                schema_sig: &id.schema_sig,
+                credential_ok: true,
+                space_ok: true,
+            },
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(job.control, lodestar_store::import::Control::Blocked);
+    assert_eq!(job.reason, Some(Reason::SourceChanged));
 }
 
 proptest! {
@@ -861,28 +1035,41 @@ proptest! {
         torrents in prop::collection::vec(
             (
                 prop_oneof![
-                    Just(None),
-                    prop::collection::vec(any::<u8>(), 0..24).prop_map(Some),
-                    (0u8..8).prop_map(|b| Some(vec![b; 20])),
+                    Just(Value::Null),
+                    prop::collection::vec(any::<u8>(), 0..24).prop_map(Value::Blob),
+                    (0u8..8).prop_map(|b| Value::Blob(vec![b; 20])),
+                    "[0-9a-f]{20}".prop_map(Value::Text),
+                    any::<i64>().prop_map(Value::Integer),
                 ],
                 prop::option::of(prop::collection::vec(any::<u8>(), 0..40)),
-                prop::option::of(-5i64..1_000),
+                prop_oneof![
+                    Just(Value::Null),
+                    (-5i64..1_000).prop_map(Value::Integer),
+                    (-5.0f64..1e3).prop_map(Value::Real),
+                    "[0-9]{1,4}".prop_map(Value::Text),
+                ],
+                prop_oneof![
+                    (0i64..2 * NOW).prop_map(Value::Integer),
+                    any::<f64>().prop_map(Value::Real),
+                    Just(Value::Null),
+                ],
                 prop::collection::vec(
                     (prop::collection::vec(prop_oneof![Just(b'/'), Just(0u8), any::<u8>()], 0..12), -2i64..50),
                     0..6,
                 ),
             ),
             0..60,
-        )
+        ),
+        max_parents in 1usize..9,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let rows: Vec<TorrentRow> = torrents
             .into_iter()
-            .map(|(hash, name, size, files)| TorrentRow {
-                info_hash: hash.map_or(Value::Null, Value::Blob),
+            .map(|(hash, name, size, date, files)| TorrentRow {
+                info_hash: hash,
                 name: name.map_or(Value::Null, Value::Blob),
-                total_size: size.map_or(Value::Null, Value::Integer),
-                discovered_on: Value::Integer(NOW),
+                total_size: size,
+                discovered_on: date,
                 files: files
                     .into_iter()
                     .map(|(p, s)| (Value::Blob(p), Value::Integer(s)))
@@ -893,6 +1080,7 @@ proptest! {
         let path = fixture(dir.path(), "p", Layout::Lax, &rows);
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let mut src = open_ok(&path);
+        src.set_max_parents(max_parents);
         let job = reading_job(&mut store, &src.identity());
         let (mut pos, mut seq) = (Vec::new(), 0);
         while let Some(b) = src.read_batch(&pos, NOW).unwrap() {

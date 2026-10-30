@@ -125,10 +125,14 @@ impl fmt::Display for Refusal {
                 "the database is in use or wasn't closed cleanly (a -wal or -journal file is \
                  beside it): stop magneticod, or import a consistent copy",
             ),
+            Refusal::Unavailable(why @ ("folder_not_writable" | "open_failed")) => write!(
+                f,
+                "the database can't be opened ({why}): make its folder writable (SQLite adds \
+                 two small files beside it), or import a copy from a writable folder"
+            ),
             Refusal::Unavailable(why) => write!(
                 f,
-                "the database can't be opened ({why}): check the file, and that its folder is \
-                 writable, or import a copy from a writable folder"
+                "the database can't be read ({why}): check the file, or import a copy"
             ),
             Refusal::UnsupportedSchema(missing) => write!(
                 f,
@@ -227,31 +231,51 @@ impl Findings {
 }
 
 /// One SQLite value as stored, before any interpretation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Raw {
     Null,
     Integer(i64),
     Real(f64),
     Text(Vec<u8>),
     Blob(Vec<u8>),
+    /// A value over the column's byte limit, withheld by the reader's SQL
+    /// so it's never loaded; only its length is known.
+    TooLong(u64),
+}
+
+// Hand-written so a value never prints its content.
+impl fmt::Debug for Raw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Raw::Null => f.write_str("Null"),
+            Raw::Integer(_) => f.write_str("Integer"),
+            Raw::Real(_) => f.write_str("Real"),
+            Raw::Text(b) => write!(f, "Text({} bytes)", b.len()),
+            Raw::Blob(b) => write!(f, "Blob({} bytes)", b.len()),
+            Raw::TooLong(n) => write!(f, "TooLong({n} bytes)"),
+        }
+    }
 }
 
 impl Raw {
-    fn from_ref(v: ValueRef<'_>) -> Raw {
-        match v {
-            ValueRef::Null => Raw::Null,
-            ValueRef::Integer(i) => Raw::Integer(i),
-            ValueRef::Real(r) => Raw::Real(r),
-            ValueRef::Text(t) => Raw::Text(t.to_vec()),
-            ValueRef::Blob(b) => Raw::Blob(b.to_vec()),
-        }
+    /// The guarded value in column `i` and its `octet_length` in `i + 1`
+    /// (see `guard!`): a NULL value with a length was over the limit.
+    fn from_row(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Raw> {
+        Ok(match (r.get_ref(i)?, r.get_ref(i + 1)?) {
+            (ValueRef::Null, ValueRef::Integer(n)) => Raw::TooLong(n.max(0) as u64),
+            (ValueRef::Null, _) => Raw::Null,
+            (ValueRef::Integer(v), _) => Raw::Integer(v),
+            (ValueRef::Real(v), _) => Raw::Real(v),
+            (ValueRef::Text(t), _) => Raw::Text(t.to_vec()),
+            (ValueRef::Blob(b), _) => Raw::Blob(b.to_vec()),
+        })
     }
 
     /// Bytes this value took from the source.
     fn len(&self) -> usize {
         match self {
             Raw::Null => 0,
-            Raw::Integer(_) | Raw::Real(_) => 8,
+            Raw::Integer(_) | Raw::Real(_) | Raw::TooLong(_) => 8,
             Raw::Text(b) | Raw::Blob(b) => b.len(),
         }
     }
@@ -266,7 +290,7 @@ impl Raw {
 }
 
 /// One `torrents` row as read.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct RawTorrent {
     pub id: i64,
     pub info_hash: Raw,
@@ -276,10 +300,31 @@ pub struct RawTorrent {
 }
 
 /// One `files` row as read.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct RawFile {
     pub path: Raw,
     pub size: Raw,
+}
+
+// No row id: it isn't printed either.
+impl fmt::Debug for RawTorrent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawTorrent")
+            .field("info_hash", &self.info_hash)
+            .field("name", &self.name)
+            .field("total_size", &self.total_size)
+            .field("discovered_on", &self.discovered_on)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for RawFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawFile")
+            .field("path", &self.path)
+            .field("size", &self.size)
+            .finish()
+    }
 }
 
 /// One file of a normalised torrent: path segments as raw bytes.
@@ -456,6 +501,10 @@ impl Normaliser {
             }
         };
         let name = match row.name.bytes() {
+            _ if matches!(row.name, Raw::TooLong(_)) => {
+                findings.add(Finding::NameOverLimit, 1);
+                None
+            }
             Some(n) if n.len() > LIMITS.max_name_bytes => {
                 findings.add(Finding::NameOverLimit, 1);
                 None
@@ -604,13 +653,24 @@ impl fmt::Debug for Identity {
 }
 
 /// One source batch, ready to commit as one IMP-1 batch.
-#[derive(Debug)]
 pub struct Batch {
     pub records: Vec<Record>,
     /// Where to resume after this batch: IMP-1's opaque cursor.
     pub position: Vec<u8>,
     pub source_bytes: u64,
     pub findings: Findings,
+}
+
+// The position encodes a row id, so only its length is printed.
+impl fmt::Debug for Batch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Batch")
+            .field("records", &self.records.len())
+            .field("position_len", &self.position.len())
+            .field("source_bytes", &self.source_bytes)
+            .field("findings", &self.findings)
+            .finish()
+    }
 }
 
 /// A validated, opened Magnetico database.
@@ -622,6 +682,7 @@ pub struct Source {
     files_sql: String,
     deadline: Deadline,
     cancel: Arc<AtomicBool>,
+    max_parents: usize,
 }
 
 impl fmt::Debug for Source {
@@ -630,22 +691,38 @@ impl fmt::Debug for Source {
     }
 }
 
-/// A per-step deadline the progress handler checks.
+/// The deadline the progress handler checks: one step's, capped by the
+/// whole batch's.
 #[derive(Clone)]
 struct Deadline {
     base: Instant,
     /// Milliseconds after `base`.
     at: Arc<AtomicU64>,
     step: Duration,
+    /// Milliseconds after `base` the current batch must finish by.
+    batch: u64,
 }
 
+/// A batch may take this many steps' time in all.
+const BATCH_STEPS: u32 = 10;
+
 impl Deadline {
+    fn millis(&self, after: Duration) -> u64 {
+        (self.base.elapsed() + after)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    }
+
+    /// Starts a batch's overall deadline.
+    fn start_batch(&mut self) {
+        self.batch = self.millis(self.step.saturating_mul(BATCH_STEPS));
+    }
+
+    /// Re-arms before a statement or a row step.
     fn arm(&self) {
-        let at = self.base.elapsed() + self.step;
-        self.at.store(
-            at.as_millis().try_into().unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        self.at
+            .store(self.millis(self.step).min(self.batch), Ordering::Relaxed);
     }
 }
 
@@ -689,8 +766,41 @@ const OPTIONAL: [(&str, &[&str]); 2] = [
     ("files", &["is_readme", "content"]),
 ];
 
-const TORRENTS_SQL: &str = "SELECT id, info_hash, name, total_size, discovered_on \
-                            FROM torrents WHERE id > ?1 ORDER BY id LIMIT ?2";
+/// Each value is read only when it's within its byte limit, with its
+/// `octet_length` beside it, which SQLite answers without loading the
+/// value. So no row can make the reader allocate more than the limits,
+/// and a value over `SQLITE_LIMIT_LENGTH` can't fail the read with
+/// `SQLITE_TOOBIG`: it becomes [`Raw::TooLong`] instead.
+macro_rules! guard {
+    ($col:literal, $max:literal) => {
+        concat!(
+            "CASE WHEN octet_length(",
+            $col,
+            ") <= ",
+            $max,
+            " THEN ",
+            $col,
+            " END, octet_length(",
+            $col,
+            ")"
+        )
+    };
+}
+
+// The name and path guards are metainfo's limits.
+const _: () = assert!(LIMITS.max_name_bytes == 4096 && LIMITS.max_path_bytes == 4096);
+
+const TORRENTS_SQL: &str = concat!(
+    "SELECT id, ",
+    guard!("info_hash", "64"),
+    ", ",
+    guard!("name", "4096"),
+    ", ",
+    guard!("total_size", "64"),
+    ", ",
+    guard!("discovered_on", "64"),
+    " FROM torrents WHERE id >= ?1 ORDER BY id LIMIT ?2"
+);
 
 /// Validates `path` and opens it read-only. See the decisions file,
 /// "Opening the source".
@@ -704,11 +814,13 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
     // another VFS.
     let conn = Connection::open_with_flags(&canonical, flags)
         .map_err(|_| Refusal::Unavailable("open_failed"))?;
-    let deadline = Deadline {
+    let mut deadline = Deadline {
         base: Instant::now(),
         at: Arc::new(AtomicU64::new(0)),
         step: policy.statement_timeout,
+        batch: 0,
     };
+    deadline.start_batch();
     let cancel = Arc::new(AtomicBool::new(false));
     deadline.arm();
     harden(&conn, &deadline, &cancel).map_err(map_err)?;
@@ -731,6 +843,7 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
         files_sql,
         deadline,
         cancel,
+        max_parents: MAX_PARENTS,
     })
 }
 
@@ -906,8 +1019,10 @@ impl From<rusqlite::Error> for SchemaError {
 fn files_sql(readme: bool, order: &str) -> String {
     let readme = if readme { "is_readme IS NOT NULL" } else { "0" };
     format!(
-        "SELECT torrent_id, path, size, {readme} FROM files \
-         WHERE torrent_id BETWEEN ?1 AND ?2 ORDER BY {order}"
+        "SELECT torrent_id, {}, {}, {readme} FROM files \
+         WHERE torrent_id BETWEEN ?1 AND ?2 ORDER BY {order}",
+        guard!("path", "4096"),
+        guard!("size", "64"),
     )
 }
 
@@ -1020,6 +1135,7 @@ fn map_err(e: rusqlite::Error) -> Refusal {
             Refusal::Unavailable("folder_not_writable")
         }
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => Refusal::NotQuiescent,
+        Some(ErrorCode::TooBig) => Refusal::Unavailable("value_too_big"),
         _ => Refusal::Unavailable("read_failed"),
     }
 }
@@ -1032,14 +1148,14 @@ pub fn position(id: i64) -> Vec<u8> {
     p
 }
 
-/// The last parent id a [`position`] names; an empty position is the
-/// start of the source.
-pub fn parse_position(p: &[u8]) -> Result<i64, Refusal> {
+/// The last parent id a [`position`] names, or `None` for the empty
+/// position, the start of the source.
+pub fn parse_position(p: &[u8]) -> Result<Option<i64>, Refusal> {
     match p {
-        [] => Ok(i64::MIN),
+        [] => Ok(None),
         [POSITION_VERSION, rest @ ..] => rest
             .try_into()
-            .map(i64::from_be_bytes)
+            .map(|b| Some(i64::from_be_bytes(b)))
             .map_err(|_| Refusal::BadPosition),
         _ => Err(Refusal::BadPosition),
     }
@@ -1051,6 +1167,7 @@ struct Parent {
     files: Vec<RawFile>,
     overflow: u32,
     bytes: usize,
+    readme: u64,
 }
 
 impl Source {
@@ -1070,10 +1187,31 @@ impl Source {
     /// Before reading it checks the source is still quiescent and still
     /// the same dataset, so a magneticod started mid-import blocks the job
     /// with `source_changed` instead of feeding it a moving source.
+    ///
+    /// The identity check and both reads run in one read transaction, so a
+    /// batch comes from one snapshot of the source.
     pub fn read_batch(&mut self, position: &[u8], now: i64) -> Result<Option<Batch>, Refusal> {
-        let after = parse_position(position)?;
-        self.check_unchanged()?;
-        self.read(after, now).map_err(|e| self.refusal(e))
+        let start = match parse_position(position)? {
+            None => i64::MIN,
+            Some(last) => match last.checked_add(1) {
+                Some(next) => next,
+                None => return Ok(None),
+            },
+        };
+        self.precheck()?;
+        self.deadline.start_batch();
+        self.deadline.arm();
+        self.conn
+            .execute_batch("BEGIN DEFERRED")
+            .map_err(|e| self.refusal(e))?;
+        let out = self
+            .same_dataset()
+            .and_then(|()| self.read(start, now).map_err(|e| self.refusal(e)));
+        // A read transaction: ending it can't lose anything.
+        if !self.conn.is_autocommit() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        out
     }
 
     fn refusal(&self, e: rusqlite::Error) -> Refusal {
@@ -1083,15 +1221,20 @@ impl Source {
         }
     }
 
-    fn check_unchanged(&mut self) -> Result<(), Refusal> {
+    fn precheck(&self) -> Result<(), Refusal> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Refusal::Cancelled);
         }
         quiescent(&self.path)?;
         match fs::metadata(&self.path) {
-            Ok(m) if FileId::of(&m) == self.file_id => {}
-            _ => return Err(Refusal::SourceChanged),
+            Ok(m) if FileId::of(&m) == self.file_id => Ok(()),
+            _ => Err(Refusal::SourceChanged),
         }
+    }
+
+    /// Inside the batch's transaction: the snapshot is still the dataset
+    /// the job began on.
+    fn same_dataset(&self) -> Result<(), Refusal> {
         self.deadline.arm();
         let now = identity(&self.conn, &self.files_sql).map_err(|e| self.refusal(e))?;
         if now != self.identity {
@@ -1100,28 +1243,37 @@ impl Source {
         Ok(())
     }
 
-    fn read(&mut self, after: i64, now: i64) -> rusqlite::Result<Option<Batch>> {
+    fn read(&self, start: i64, now: i64) -> rusqlite::Result<Option<Batch>> {
         let mut parents: Vec<Parent> = Vec::new();
         {
             self.deadline.arm();
             let mut s = self.conn.prepare_cached(TORRENTS_SQL)?;
-            let mut rows = s.query(rusqlite::params![after, MAX_PARENTS as i64])?;
+            let mut rows = s.query(rusqlite::params![start, self.max_parents as i64])?;
+            let mut total = 0usize;
             loop {
                 self.deadline.arm();
                 let Some(r) = rows.next()? else { break };
                 let row = RawTorrent {
                     id: r.get(0)?,
-                    info_hash: Raw::from_ref(r.get_ref(1)?),
-                    name: Raw::from_ref(r.get_ref(2)?),
-                    total_size: Raw::from_ref(r.get_ref(3)?),
-                    discovered_on: Raw::from_ref(r.get_ref(4)?),
+                    info_hash: Raw::from_row(r, 1)?,
+                    name: Raw::from_row(r, 3)?,
+                    total_size: Raw::from_row(r, 5)?,
+                    discovered_on: Raw::from_row(r, 7)?,
                 };
-                let bytes = row.info_hash.len() + row.name.len() + 16;
+                let bytes = row.info_hash.len()
+                    + row.name.len()
+                    + row.total_size.len()
+                    + row.discovered_on.len();
+                if !parents.is_empty() && total + bytes > MAX_BATCH_BYTES {
+                    break;
+                }
+                total += bytes;
                 parents.push(Parent {
                     row,
                     files: Vec::new(),
                     overflow: 0,
                     bytes,
+                    readme: 0,
                 });
             }
         }
@@ -1152,15 +1304,20 @@ impl Source {
                     // else is a non-integer or vanished id. Skip it.
                     continue;
                 };
-                if r.get_ref(3)? == ValueRef::Integer(1) {
-                    findings.add(Finding::ReadmeNotImported, 1);
+                if r.get_ref(5)? == ValueRef::Integer(1) {
+                    p.readme += 1;
                 }
                 let f = RawFile {
-                    path: Raw::from_ref(r.get_ref(1)?),
-                    size: Raw::from_ref(r.get_ref(2)?),
+                    path: Raw::from_row(r, 1)?,
+                    size: Raw::from_row(r, 3)?,
                 };
-                let cost = f.path.len() + 16;
-                if p.files.len() < LIMITS.max_files && p.bytes + cost <= MAX_BATCH_BYTES {
+                let cost = f.path.len() + f.size.len();
+                // Rows are kept as a prefix: after the first one over the
+                // budget, every later one is dropped too.
+                if p.overflow == 0
+                    && p.files.len() < LIMITS.max_files
+                    && p.bytes + cost <= MAX_BATCH_BYTES
+                {
                     p.bytes += cost;
                     p.files.push(f);
                 } else {
@@ -1174,6 +1331,16 @@ impl Source {
                 }
             }
         }
+        // Parents without file rows never reach the check above, so the
+        // budget is checked once more over everything kept.
+        let mut total = 0usize;
+        for (i, p) in parents.iter().enumerate().take(keep) {
+            total += p.bytes;
+            if i > 0 && total > MAX_BATCH_BYTES {
+                keep = i;
+                break;
+            }
+        }
         parents.truncate(keep);
         let normaliser = Normaliser { now };
         let mut source_bytes = 0u64;
@@ -1181,10 +1348,13 @@ impl Source {
             .iter()
             .map(|p| {
                 source_bytes += p.bytes as u64;
+                findings.add(Finding::ReadmeNotImported, p.readme);
                 normaliser.torrent(&p.row, &p.files, p.overflow, &mut findings)
             })
             .collect();
-        let last = parents.last().map_or(after, |p| p.row.id);
+        let Some(last) = parents.last().map(|p| p.row.id) else {
+            return Ok(None);
+        };
         Ok(Some(Batch {
             records,
             position: position(last),
@@ -1196,6 +1366,11 @@ impl Source {
     #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_max_parents(&mut self, n: usize) {
+        self.max_parents = n;
     }
 
     /// The query plans the reader uses, for inspection and tests.

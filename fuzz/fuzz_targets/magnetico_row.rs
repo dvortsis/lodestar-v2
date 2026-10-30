@@ -34,7 +34,7 @@ impl Input<'_> {
     }
 
     fn raw(&mut self) -> Raw {
-        match self.byte().unwrap_or(0) % 5 {
+        match self.byte().unwrap_or(0) % 6 {
             0 => Raw::Null,
             1 => Raw::Integer(self.int()),
             2 => Raw::Real(f64::from_bits(self.int() as u64)),
@@ -42,10 +42,11 @@ impl Input<'_> {
                 let n = usize::from(self.byte().unwrap_or(0)) * 24;
                 Raw::Text(self.take(n))
             }
-            _ => {
+            4 => {
                 let n = usize::from(self.byte().unwrap_or(0)) * 24;
                 Raw::Blob(self.take(n))
             }
+            _ => Raw::TooLong(self.int() as u64),
         }
     }
 }
