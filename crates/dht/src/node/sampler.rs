@@ -1,9 +1,8 @@
-//! BEP 51 traversal state: which nodes to sample next and when each node
-//! may be sampled again (it says so in its `interval`). Bounded: the
-//! frontier and the "next allowed" map have caps, so a flood of node
-//! addresses can't grow memory without limit.
+//! Bounded BEP 51 admission. Capacity belongs to a request before it is sent.
+//! An indexed expiry set has exactly one record per cooldown: no stale heap
+//! records, compaction pauses, or per-packet scans of the address map.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -11,66 +10,144 @@ use crate::compact::NodeInfo;
 
 const MAX_FRONTIER: usize = 20_000;
 const MAX_KNOWN: usize = 200_000;
-/// For nodes that don't implement BEP 51 (error reply or no `samples`).
+const RECLAIM_PER_TICK: usize = 1024;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy)]
+enum State {
+    InFlight(u64),
+    Cooling { until: Instant, token: u64 },
+}
+
+#[derive(Debug)]
 pub(crate) struct Sampler {
-    next_at: HashMap<SocketAddr, Instant>,
+    states: HashMap<SocketAddr, State>,
+    expiry: BTreeSet<(Instant, u64, SocketAddr)>,
     frontier: VecDeque<NodeInfo>,
     queued: HashSet<SocketAddr>,
+    capacity: usize,
+}
+
+impl Default for Sampler {
+    fn default() -> Self {
+        Self {
+            states: HashMap::new(),
+            expiry: BTreeSet::new(),
+            frontier: VecDeque::new(),
+            queued: HashSet::new(),
+            capacity: MAX_KNOWN,
+        }
+    }
 }
 
 impl Sampler {
-    /// Queues a node for sampling unless it's queued already or not due.
-    pub fn offer(&mut self, node: NodeInfo, now: Instant) {
-        if self.frontier.len() >= MAX_FRONTIER || self.queued.contains(&node.addr) {
-            return;
+    #[cfg(test)]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            capacity,
+            ..Self::default()
         }
-        if self.next_at.get(&node.addr).is_some_and(|t| *t > now) {
-            return;
-        }
-        self.queued.insert(node.addr);
-        self.frontier.push_back(node);
     }
 
-    /// The next node due for sampling.
+    fn eligible(&self, addr: &SocketAddr, now: Instant) -> bool {
+        match self.states.get(addr) {
+            None => true,
+            Some(State::Cooling { until, .. }) => *until <= now,
+            Some(State::InFlight(_)) => false,
+        }
+    }
+
+    pub fn offer(&mut self, mut node: NodeInfo, now: Instant) {
+        node.addr = lodestar_network_policy::normalize(node.addr);
+        if self.frontier.len() < MAX_FRONTIER
+            && !self.queued.contains(&node.addr)
+            && self.eligible(&node.addr, now)
+        {
+            self.queued.insert(node.addr);
+            self.frontier.push_back(node);
+        }
+    }
+
     pub fn next(&mut self, now: Instant) -> Option<NodeInfo> {
+        // Saturation leaves candidates queued. A later maintenance tick
+        // reclaims capacity; callers never spin looking for a free slot.
+        if self.states.len() >= self.capacity {
+            return None;
+        }
         while let Some(n) = self.frontier.pop_front() {
             self.queued.remove(&n.addr);
-            if self.next_at.get(&n.addr).is_none_or(|t| *t <= now) {
+            if self.eligible(&n.addr, now) {
                 return Some(n);
             }
         }
         None
     }
 
-    /// Records that a node was sampled (or refused) and when it may be
-    /// sampled again.
-    pub fn sampled(&mut self, addr: SocketAddr, wait: Duration, now: Instant) {
-        if self.next_at.len() >= MAX_KNOWN && !self.next_at.contains_key(&addr) {
-            self.prune(now);
-            if self.next_at.len() >= MAX_KNOWN {
-                return;
-            }
+    pub fn reserve(&mut self, addr: SocketAddr, token: u64, now: Instant) -> bool {
+        if !self.eligible(&addr, now) {
+            return false;
         }
-        self.next_at
-            .insert(addr, now + wait.clamp(MIN_INTERVAL, MAX_INTERVAL));
+        if let Some(State::Cooling { until, token }) = self.states.remove(&addr) {
+            self.expiry.remove(&(until, token, addr));
+        }
+        if self.states.len() >= self.capacity {
+            return false;
+        }
+        self.states.insert(addr, State::InFlight(token));
+        true
     }
 
-    /// Drops entries whose wait has passed; they're plain unknown nodes again.
+    pub fn abort(&mut self, addr: SocketAddr, token: u64) -> bool {
+        if matches!(self.states.get(&addr), Some(State::InFlight(t)) if *t == token) {
+            self.states.remove(&addr);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn complete(&mut self, addr: SocketAddr, token: u64, wait: Duration, now: Instant) -> bool {
+        if !matches!(self.states.get(&addr), Some(State::InFlight(t)) if *t == token) {
+            return false;
+        }
+        let until = now + wait.clamp(MIN_INTERVAL, MAX_INTERVAL);
+        self.states.insert(addr, State::Cooling { until, token });
+        self.expiry.insert((until, token, addr));
+        true
+    }
+
     pub fn prune(&mut self, now: Instant) {
-        self.next_at.retain(|_, t| *t > now);
+        for _ in 0..RECLAIM_PER_TICK {
+            let Some(&(until, token, addr)) = self.expiry.first() else {
+                break;
+            };
+            if until > now {
+                break;
+            }
+            self.expiry.pop_first();
+            if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
+            {
+                self.states.remove(&addr);
+            }
+        }
     }
 
     pub fn frontier_len(&self) -> usize {
         self.frontier.len()
     }
-
     pub fn known(&self) -> usize {
-        self.next_at.len()
+        self.states.len()
+    }
+    pub fn cooling(&self) -> usize {
+        self.expiry.len()
+    }
+    pub fn inflight(&self) -> usize {
+        self.known() - self.cooling()
+    }
+    pub fn saturated(&self) -> bool {
+        self.known() >= self.capacity
     }
 }
 
@@ -79,41 +156,91 @@ mod tests {
     use super::*;
     use crate::compact::NodeId;
 
-    fn n(i: u8) -> NodeInfo {
+    fn n(i: u32) -> NodeInfo {
         NodeInfo {
-            id: NodeId([i; 20]),
-            addr: SocketAddr::from(([10, 0, 0, i], 6881)),
+            id: NodeId([1; 20]),
+            addr: SocketAddr::from((i.to_be_bytes(), 6881)),
         }
     }
 
     #[test]
-    fn honours_interval_and_dedups() {
+    fn reserve_complete_duplicate_and_late_reply() {
         let mut s = Sampler::default();
-        let t0 = Instant::now();
-        s.offer(n(1), t0);
-        s.offer(n(1), t0);
-        s.offer(n(2), t0);
-        assert_eq!(s.frontier_len(), 2);
-        let first = s.next(t0).unwrap();
-        s.sampled(first.addr, Duration::from_secs(600), t0);
-        // Not offered again until its interval passes.
-        s.offer(first, t0 + Duration::from_secs(10));
-        assert_eq!(s.next(t0).unwrap(), n(2));
-        assert!(s.next(t0).is_none());
-        s.offer(first, t0 + Duration::from_secs(601));
-        assert_eq!(s.next(t0 + Duration::from_secs(601)), Some(first));
+        let now = Instant::now();
+        s.offer(n(1), now);
+        assert_eq!(s.next(now), Some(n(1)));
+        assert!(s.reserve(n(1).addr, 1, now));
+        s.offer(n(1), now);
+        assert!(s.next(now).is_none());
+        assert!(!s.reserve(n(1).addr, 2, now));
+        assert!(!s.complete(n(1).addr, 2, MIN_INTERVAL, now));
+        assert!(s.complete(n(1).addr, 1, Duration::ZERO, now));
+        assert!(!s.complete(n(1).addr, 1, MAX_INTERVAL, now));
+        assert!(!s.reserve(n(1).addr, 2, now + Duration::from_secs(59)));
+        assert!(s.reserve(n(1).addr, 2, now + MIN_INTERVAL));
+        assert!(!s.abort(n(1).addr, 1));
+        assert!(s.abort(n(1).addr, 2));
+        assert_eq!((s.known(), s.cooling()), (0, 0));
     }
 
     #[test]
-    fn intervals_are_clamped_and_pruned() {
+    fn saturation_preserves_frontier_and_reclaims_in_bounded_steps() {
         let mut s = Sampler::default();
-        let t0 = Instant::now();
-        s.sampled(n(1).addr, Duration::ZERO, t0);
-        s.offer(n(1), t0 + Duration::from_secs(30));
-        assert_eq!(s.frontier_len(), 0, "minimum interval applies");
-        s.sampled(n(2).addr, Duration::from_secs(10 * 86_400), t0);
-        assert_eq!(s.known(), 2);
-        s.prune(t0 + MAX_INTERVAL);
-        assert_eq!(s.known(), 0);
+        let now = Instant::now();
+        for i in 0..MAX_KNOWN as u32 {
+            assert!(s.reserve(n(i).addr, u64::from(i), now));
+            assert!(s.complete(n(i).addr, u64::from(i), MAX_INTERVAL, now));
+        }
+        s.offer(n(MAX_KNOWN as u32), now);
+        assert!(s.next(now).is_none());
+        assert!(!s.reserve(n(MAX_KNOWN as u32).addr, 999999, now));
+        assert_eq!(
+            (s.known(), s.cooling(), s.frontier_len()),
+            (MAX_KNOWN, MAX_KNOWN, 1)
+        );
+        s.prune(now + MAX_INTERVAL);
+        assert_eq!(s.known(), MAX_KNOWN - RECLAIM_PER_TICK);
+        assert_eq!(s.next(now + MAX_INTERVAL), Some(n(MAX_KNOWN as u32)));
+    }
+
+    #[test]
+    fn interval_bounds_and_no_stale_expiries() {
+        for wait in [0, 60, 900, 1800, 21600, 21601] {
+            let mut s = Sampler::default();
+            let now = Instant::now();
+            assert!(s.reserve(n(1).addr, 1, now));
+            assert!(s.complete(n(1).addr, 1, Duration::from_secs(wait), now));
+            let due = now + Duration::from_secs(wait.clamp(60, 21600));
+            s.prune(due - Duration::from_nanos(1));
+            assert_eq!(s.known(), 1);
+            s.prune(due);
+            assert_eq!(s.known(), 0);
+            assert!(s.reserve(n(1).addr, 2, due));
+            s.prune(due + MAX_INTERVAL);
+            assert_eq!(s.inflight(), 1);
+        }
+    }
+
+    #[test]
+    fn repeated_reuse_and_stale_completion_cannot_shorten_new_cooldown() {
+        let mut s = Sampler::with_capacity(1);
+        let start = Instant::now();
+        let addr = n(1).addr;
+        for token in 1..=100u64 {
+            let now = start + MAX_INTERVAL * (token - 1) as u32;
+            // Reserve directly at expiry, before the maintenance prune. This
+            // must retire the old expiry index without freeing the new owner.
+            assert!(s.reserve(addr, token, now));
+            assert!(!s.complete(addr, token - 1, MIN_INTERVAL, now));
+            assert!(!s.abort(addr, token - 1));
+            s.prune(now);
+            assert_eq!((s.known(), s.inflight(), s.cooling()), (1, 1, 0));
+            assert!(s.complete(addr, token, MAX_INTERVAL, now));
+            s.prune(now + MIN_INTERVAL);
+            assert_eq!((s.known(), s.inflight(), s.cooling()), (1, 0, 1));
+            assert!(!s.reserve(addr, token + 1, now + MIN_INTERVAL));
+        }
+        s.prune(start + MAX_INTERVAL * 100);
+        assert_eq!((s.known(), s.inflight(), s.cooling()), (0, 0, 0));
     }
 }

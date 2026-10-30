@@ -129,7 +129,19 @@ impl Harness {
         fake: Arc<FakeState>,
     ) -> Harness {
         let (disc, discoveries) = mpsc::channel(4096);
-        let (finder, lookups) = mpsc::channel(4096);
+        let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(4096);
+        let (keys, lookups) = mpsc::channel(4096);
+        tokio::spawn(async move {
+            let mut held = Vec::<tokio::sync::oneshot::Sender<Vec<SocketAddr>>>::new();
+            while let Some(request) = requests.recv().await {
+                held.retain(|tx| !tx.is_closed());
+                let (done, rx) = tokio::sync::oneshot::channel();
+                if request.admit.send(Some(rx)).is_ok() {
+                    held.push(done);
+                    let _ = keys.send(request.key).await;
+                }
+            }
+        });
         let (out_tx, out) = mpsc::channel(4096);
         let (stop, shutdown) = Shutdown::new();
         let funnel = Arc::new(FunnelCounts::default());
@@ -189,6 +201,151 @@ fn config() -> PoolConfig {
         max_attempts: 3,
         ..PoolConfig::default()
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn admission_rejection_empty_completion_and_cancellation_are_owned() {
+    let (disc, discoveries) = mpsc::channel(16);
+    let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+    let (out, _results) = mpsc::channel(16);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        config(),
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder],
+            out,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        vec![],
+    );
+    disc.send(found(0, 55, vec![])).await.unwrap();
+    let request = requests.recv().await.unwrap();
+    request.admit.send(None).unwrap();
+    async fn drained(handle: &PoolHandle) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.stats().lookups.load(Ordering::Relaxed) != 0 {
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    drained(&handle).await;
+    assert_eq!(
+        handle.snapshot().await[0].attempts,
+        0,
+        "rejected work is not attempted"
+    );
+    let request = requests.recv().await.unwrap();
+    let (done, rx) = tokio::sync::oneshot::channel();
+    request.admit.send(Some(rx)).unwrap();
+    done.send(vec![]).unwrap();
+    drained(&handle).await;
+    assert_eq!(
+        handle.snapshot().await[0].attempts,
+        1,
+        "empty accepted result counts once"
+    );
+    let request = requests.recv().await.unwrap();
+    let (mut done, rx) = tokio::sync::oneshot::channel();
+    request.admit.send(Some(rx)).unwrap();
+    // An alternate peer cancels the still-owned lookup.
+    disc.send(found(0, 55, vec![peer(1, 1)])).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), done.closed())
+        .await
+        .unwrap();
+    assert!(
+        done.send(vec![peer(2, 2)]).is_err(),
+        "old completions cannot reach a new generation"
+    );
+    disc.send(found(0, 56, vec![])).await.unwrap();
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request.key, key(56));
+    let (mut done, rx) = tokio::sync::oneshot::channel();
+    request.admit.send(Some(rx)).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), done.closed())
+        .await
+        .unwrap();
+    assert_eq!(
+        handle
+            .snapshot()
+            .await
+            .iter()
+            .find(|q| q.info_hash == key(56))
+            .unwrap()
+            .attempts,
+        1
+    );
+    disc.send(found(0, 57, vec![])).await.unwrap();
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request.key, key(57));
+    let (mut done, rx) = tokio::sync::oneshot::channel();
+    request.admit.send(Some(rx)).unwrap();
+    stop.send(true).unwrap();
+    task.await.unwrap();
+    assert!(
+        done.is_closed(),
+        "shutdown cancels owned completion receivers"
+    );
+    done.closed().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn multiple_finders_share_one_attempt_and_all_cancel_on_timeout() {
+    let (disc, discoveries) = mpsc::channel(16);
+    let (finder_a, mut requests_a) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+    let (finder_b, mut requests_b) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+    let (out, _results) = mpsc::channel(16);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        config(),
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder_a, finder_b],
+            out,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        vec![],
+    );
+    disc.send(found(0, 58, vec![])).await.unwrap();
+    let a = tokio::time::timeout(Duration::from_secs(10), requests_a.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let b = tokio::time::timeout(Duration::from_secs(10), requests_b.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((a.key, b.key), (key(58), key(58)));
+    let (mut done_a, rx_a) = tokio::sync::oneshot::channel();
+    let (mut done_b, rx_b) = tokio::sync::oneshot::channel();
+    a.admit.send(Some(rx_a)).unwrap();
+    b.admit.send(Some(rx_b)).unwrap();
+    // Persistence snapshots deliberately exclude the in-progress attempt.
+    // Its single charge becomes visible once both finder receivers time out.
+    assert_eq!(handle.snapshot().await[0].attempts, 0);
+    assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 1);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        done_a.closed().await;
+        done_b.closed().await;
+    })
+    .await
+    .unwrap();
+    assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 0);
+    assert_eq!(handle.snapshot().await[0].attempts, 1);
+    assert!(done_a.send(vec![peer(1, 1)]).is_err());
+    assert!(done_b.send(vec![peer(2, 2)]).is_err());
+    stop.send(true).unwrap();
+    let queued = task.await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].attempts, 1);
 }
 
 #[tokio::test(start_paused = true)]
@@ -356,15 +513,18 @@ async fn private_keys_never_reach_peer_finders() {
     h.send(found(0, 2, vec![]));
     sleep(Duration::from_secs(60)).await;
     assert_eq!(h.drain_lookups(), vec![key(2)]);
-    // Key 1 stays private through all its attempts.
+    // Private keys wait for their own source without fictitious attempts.
     sleep(Duration::from_secs(400)).await;
     assert!(h.drain_lookups().iter().all(|k| *k != key(1)));
     assert_eq!(
         h.funnel
             .get(COHORT, src(5), Stage::Lost, Some(Loss::NoPeers)),
-        2
+        1
     );
-    h.stop().await;
+    let remaining = h.stop().await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].info_hash, key(1));
+    assert_eq!(remaining[0].attempts, 0);
 }
 
 #[tokio::test(start_paused = true)]

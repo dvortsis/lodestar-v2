@@ -37,6 +37,7 @@ struct Candidate {
 #[derive(Debug)]
 pub(crate) struct Lookup {
     pub target: NodeId,
+    pub owner: Option<u32>,
     /// Index of the address family (socket) this lookup runs on.
     pub family: usize,
     candidates: Vec<Candidate>,
@@ -56,6 +57,7 @@ impl Lookup {
     pub fn new(target: NodeId, family: usize) -> Lookup {
         Lookup {
             target,
+            owner: None,
             family,
             candidates: Vec::new(),
             in_flight: 0,
@@ -120,12 +122,17 @@ impl Lookup {
     }
 
     /// Candidates to query now, marked in flight.
+    #[cfg(test)]
     pub fn next(&mut self) -> Vec<NodeInfo> {
+        self.next_limit(ALPHA)
+    }
+
+    pub fn next_limit(&mut self, limit: usize) -> Vec<NodeInfo> {
         let mut out = Vec::new();
         let mut live = 0;
         let mut counts = Lookup::slot_filter(self.scrape);
         for c in &mut self.candidates {
-            if self.in_flight >= ALPHA || live >= K {
+            if self.in_flight >= ALPHA || out.len() >= limit || live >= K {
                 break;
             }
             if !counts(c) {
@@ -167,7 +174,12 @@ impl Lookup {
         for n in nodes {
             self.add(n);
         }
-        self.peers.extend(peers.iter().copied());
+        for peer in peers {
+            if self.peers.len() >= 64 {
+                break;
+            }
+            self.peers.insert(*peer);
+        }
         ours
     }
 

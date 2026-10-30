@@ -386,6 +386,84 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             d.throttled,
         );
         o.one(
+            "dht_peer_admitted_total",
+            "counter",
+            "Owned peer requests admitted.",
+            d.peer_admitted,
+        );
+        o.one(
+            "dht_peer_rejected_total",
+            "counter",
+            "Peer requests rejected without ownership.",
+            d.peer_rejected,
+        );
+        o.one(
+            "dht_peer_cancelled_total",
+            "counter",
+            "Active peer requests cancelled by the caller.",
+            d.peer_cancelled,
+        );
+        o.one(
+            "dht_peer_active",
+            "gauge",
+            "Active logical peer requests across families.",
+            d.peer_active,
+        );
+        o.one(
+            "dht_peer_queued",
+            "gauge",
+            "Accepted peer requests awaiting dispatch.",
+            d.peer_queued,
+        );
+        o.one(
+            "dht_lookup_scheduled",
+            "gauge",
+            "Lookups scheduled for continuation.",
+            d.lookup_scheduled,
+        );
+        o.one(
+            "dht_lookup_deadlines_total",
+            "counter",
+            "Lookup legs terminated by deadline.",
+            d.lookup_deadlines,
+        );
+        o.one(
+            "dht_sample_frontier",
+            "gauge",
+            "Eligible sample frontier candidates.",
+            d.sample_frontier,
+        );
+        o.one(
+            "dht_sample_suppression_seconds",
+            "gauge",
+            "Seconds of startup sampling suppression remaining.",
+            d.sample_suppression_seconds,
+        );
+        o.one(
+            "dht_sample_cooling",
+            "gauge",
+            "Sampler cooldown obligations; also the indexed expiry count.",
+            d.sample_cooling,
+        );
+        o.one(
+            "dht_sample_inflight",
+            "gauge",
+            "Reserved sample transactions.",
+            d.sample_inflight,
+        );
+        o.one(
+            "dht_sample_stale_total",
+            "counter",
+            "Stale sampler completions ignored.",
+            d.sample_stale,
+        );
+        o.one(
+            "dht_sample_deferred_total",
+            "counter",
+            "Sample work deferred by state capacity.",
+            d.sample_deferred,
+        );
+        o.one(
             "dht_lookups_completed_total",
             "counter",
             "get_peers lookups finished.",

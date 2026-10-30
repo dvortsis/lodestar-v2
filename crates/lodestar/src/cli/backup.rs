@@ -129,7 +129,9 @@ pub fn backup(
 }
 
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
+    let builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let mut builder = builder;
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder.create(dir)

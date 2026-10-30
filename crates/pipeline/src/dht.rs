@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_dht::node::{Config, Harvest, Node, NodeHandle, Source, StatsSnapshot};
+#[cfg(test)]
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{
     BoxFuture, Consent, Endpoint, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
@@ -107,7 +108,9 @@ fn found(h: Harvest) -> Found {
     Found::key(h.info_hash, strategy).with_peers(h.peers)
 }
 
-async fn next_request(rx: &mut Option<mpsc::Receiver<InfoHash>>) -> Option<InfoHash> {
+async fn next_request(
+    rx: &mut Option<mpsc::Receiver<lodestar_sources::PeerRequest>>,
+) -> Option<lodestar_sources::PeerRequest> {
     match rx {
         Some(rx) => rx.recv().await,
         None => std::future::pending().await,
@@ -141,6 +144,19 @@ impl SourcePlugin for DhtSource {
                 tokio::select! {
                     biased;
                     _ = ctx.shutdown.requested() => break,
+                    Ok(()) = paused.changed() => {
+                        let p = *paused.borrow_and_update();
+                        node.handle().set_paused(p).await;
+                    }
+                    req = next_request(&mut ctx.peer_requests), if requests_open => match req {
+                        Some(request) => {
+                            node.handle().request_peers(request.key, request.admit);
+                        }
+                        None => requests_open = false,
+                    },
+                    _ = tick.tick() => {
+                        *self.stats.lock().expect("dht stats lock") = Some(node.stats());
+                    }
                     Some(h) = harvests.recv() => {
                         // Lookups answer the pool's requests; the rest is
                         // discovery.
@@ -148,21 +164,6 @@ impl SourcePlugin for DhtSource {
                             (Some(replies), Source::Lookup) => replies.try_emit(found(h)),
                             _ => ctx.emitter.try_emit(found(h)),
                         };
-                    }
-                    req = next_request(&mut ctx.peer_requests), if requests_open => match req {
-                        // A full lookup queue drops the ask; the pool asks
-                        // again after its lookup wait.
-                        Some(key) => {
-                            node.get_peers(key);
-                        }
-                        None => requests_open = false,
-                    },
-                    Ok(()) = paused.changed() => {
-                        let p = *paused.borrow_and_update();
-                        node.handle().set_paused(p).await;
-                    }
-                    _ = tick.tick() => {
-                        *self.stats.lock().expect("dht stats lock") = Some(node.stats());
                     }
                 }
             }

@@ -13,6 +13,7 @@ repository.workspace = true
 testing = []
 
 [dependencies]
+lodestar-network-policy.workspace = true
 lodestar-bencode.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-log.workspace = true
