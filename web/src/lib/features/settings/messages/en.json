@@ -101,5 +101,7 @@
 	"settings_form_saving": "Saving…",
 	"settings_form_unsaved_one": "1 unsaved change",
 	"settings_form_unsaved": "{count} unsaved changes",
-	"settings_form_undo_secrets": "Secrets aren't part of Undo."
+	"settings_form_undo_secrets": "Secrets aren't part of Undo.",
+	"settings_transport_utp_label": "uTP (not active yet)",
+	"settings_transport_utp_help": "Fetch metadata over uTP (BEP 29) as well as TCP. Not active yet: uTP has no effect until a later release, so changing this only changes what is saved."
 }

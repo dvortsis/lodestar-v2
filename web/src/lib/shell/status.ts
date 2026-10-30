@@ -17,7 +17,15 @@ export type PillKind =
 	| 'idle'
 	| 'paused'
 	| 'rebuilding'
-	| 'failed';
+	| 'failed'
+	| 'starting'
+	| 'stalled';
+
+/** Why the pill says "Stalled": the API's own reason, or `no_progress` (nothing stored for a window). */
+export type StallReason = 'writer_stalled' | 'cohort_stalled' | 'index_lag' | 'no_progress';
+
+/** What the progress facts add to the pill (`progress.ts` decides); null = nothing to add. */
+export type ProgressOverlay = { kind: 'starting' | 'stalled'; reason?: StallReason } | null;
 
 export interface PillState {
 	kind: PillKind;
@@ -26,6 +34,8 @@ export interface PillState {
 	/** Rebuild progress; null outside a rebuild. */
 	done: number | null;
 	total: number | null;
+	/** Set when `kind` is `stalled`. */
+	reason?: StallReason;
 }
 
 const REBUILDING = new Set<RebuildSnapshot['phase']>(['building', 'finishing', 'swapping']);
@@ -34,8 +44,9 @@ export function pillState(input: {
 	stream: EventsStatus;
 	crawler: CrawlerSnapshot | null;
 	rebuild: RebuildSnapshot | null;
+	progress?: ProgressOverlay;
 }): PillState {
-	const { stream, crawler, rebuild } = input;
+	const { stream, crawler, rebuild, progress } = input;
 	const none = { torrents: null, done: null, total: null };
 	const has = crawler !== null || rebuild !== null;
 	if (stream === 'busy') return { kind: 'busy', ...none };
@@ -48,6 +59,7 @@ export function pillState(input: {
 	if (!crawler) return { kind: 'unknown', ...none };
 	if (crawler.paused)
 		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
+	if (progress) return { ...none, torrents: crawler.torrents, ...progress };
 	const working = crawler.fetch_active > 0 || crawler.fetch_pending > 0;
 	return {
 		kind: working ? 'crawling' : 'idle',

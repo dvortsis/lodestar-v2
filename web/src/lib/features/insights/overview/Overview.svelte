@@ -7,6 +7,7 @@
 	import { formatDate } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import { stallReason } from '$lib/shell/progress';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
@@ -130,6 +131,22 @@
 	};
 	const announcement = $derived(insights.notice ? notices[insights.notice]() : '');
 	const paused = $derived(overview?.kpi.health.state === 'paused');
+	// The same call as the status pill's (the server's reason, or nothing stored for the window it
+	// reports), from this response alone: no uptime here, so the quiet-window rule waits for `/stats`.
+	const stalled = $derived(
+		!!overview &&
+			!paused &&
+			insights.crawler?.paused !== true &&
+			stallReason({
+				fetchedPerHour: null,
+				ingestPerHour: overview.ingest_per_hour,
+				uptimeS: null,
+				reasons: [
+					...(overview.kpi.health.reason ? [overview.kpi.health.reason] : []),
+					...overview.exceptions.map((e) => e.kind)
+				]
+			}) !== null
+	);
 	const staleText: Record<string, () => string> = {
 		paused: () => m.insights_overview_stale_paused(),
 		writer_stalled: () => m.insights_overview_stale_writer()
@@ -184,6 +201,12 @@
 		<Skeleton />
 	{:else}
 		<StageStrip stages={overview.stages} onjump={jump} />
+
+		{#if stalled}
+			<Banner kind="warning" title={m.insights_overview_stalled_title()}>
+				<span data-testid="insights-stalled">{m.insights_overview_stalled_body()}</span>
+			</Banner>
+		{/if}
 
 		{#if overview.stale}
 			<Banner kind="warning" title={m.insights_overview_stale_title()}>
