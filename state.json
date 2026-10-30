@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:28Z",
+ "updated_at": "2026-10-30T20:33Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1515,11 +1515,12 @@
    "notes": "supervisor switch-refusal stall in CI (run 41091029121)"
   },
   "CR-gate-hash-mismatch": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhn9fpZf44nCWftW7LDz",
    "pr": 236,
-   "notes": "launched 19:05Z; contract note first, code after #231/#232 merge"
+   "notes": "launched 19:05Z; contract note first, code after #231/#232 merge",
+   "merge": "e9768a11"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2164,6 +2165,11 @@
   {
    "item": "FYI (\u00a72.19): CR-ADM (bounded admission, switch off by default) includes a runner refinement: with the switch on, eviction skips lookups that hold an admission permit (at most 32 per finder). CR-SIM screen +26-50% steady stored/min; live A/B pending",
    "unblocks": "nothing; informational"
+  },
+  {
+   "item": "FYI (\u00a72.19): lodestar_metadata_excluded_total{reason=\"failed_verification\"} now counts only keys whose last fetch failure was a hash mismatch (#236, runner refinement). Protocol and handshake violations stay funnel 'invalid' and appear in fetch_lost_total{reason=\"invalid\"}. The gate's number doesn't move: the excluded series are diagnostics. A new fetch-failure label, hash_mismatch, is additive.",
+   "unblocks": "nothing; acknowledge or overrule",
+   "at": "2026-10-30T20:33Z"
   }
  ],
  "external_gates": {
@@ -2291,7 +2297,8 @@
   "2026-10-30T20:20Z safety check-in: every listed item done (#232 #233 #234 #217 merged; hash-mismatch is #236). rc.2 Release run 41110604990 succeeded; draft release 429407881. Recorded artifact zip digests; per-file hashes blocked by network policy (blob host denied), asked the owner.",
   "2026-10-30T20:16Z #237 review MERGE at cbd81a42 (let-chain temporaries and operand order verified); merge on green ci-ok after #235.",
   "2026-10-30T20:23Z merged #235 canary UDP port (ccff4000).",
-  "2026-10-30T20:28Z #236 review MERGE at 4cf0ff6b (3 optional doc nits, carried by the runner); merge on green, then flag the owner (\u00a72.19) and archive the author."
+  "2026-10-30T20:28Z #236 review MERGE at 4cf0ff6b (3 optional doc nits, carried by the runner); merge on green, then flag the owner (\u00a72.19) and archive the author.",
+  "2026-10-30T20:33Z merged #236 CR-gate-hash-mismatch (e9768a11) on green ci-ok and the reviewer's MERGE; author archived; owner flag (\u00a72.19) added to owner_checklist. Docs follow-up fix/hash-mismatch-docs pushed."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
