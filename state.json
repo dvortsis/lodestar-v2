@@ -1698,7 +1698,7 @@
   "heartbeat-1139": "open: #125 B-update PR1 (af3874e, round 1 in progress), #92 P-release (49fdebe, round 2), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B11b part 2, B-log2; nothing newly ready",
   "heartbeat-1238": "open: #127 B-log2 part 1 (reviews running), #103 W9 + #48 M4 owner-blocked (M4 still on ExitPlanMode prompt; runner answer queued); running: B11b part 2, B-update PR2; nothing newly ready (B-log1b waits B-log2)",
   "heartbeat-1338": "open: #127 B-log2 part 1 (round 1 fixing, 160a1bc), #103 W9 (d89aa6d, baselines), #48 M4 (da63255, merging main); running: B11b part 2, B-update PR2; nothing newly ready",
-  "last_heartbeat": "2026-10-24T15:40Z: paused by owner; no open PRs, no running slices.",
+  "last_heartbeat": "2026-10-30T03:42Z: swap pending (main=2d5e761d). F-auth, F-filters, F-metainfo, F-updater all working, none pushed. 4/4 slots used.",
   "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
   "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
   "heartbeat_cadence": "2026-10-23T19:00:53Z every 3 h (38 */3) so runner-state commits stay under the watchdog's 4 h 'gone' threshold (owner allowed 3-4 h)",
@@ -1723,7 +1723,8 @@
   "plan_branch": "Plan docs on claude/busy-allen-aptli2 (625225c2), based on next. PR to main after the history swap.",
   "lineage": "Rewritten history: next = 058d99373e2c (old main 2d5e761d). Sessions branch from next until the owner force-pushes main. Old root 15620683 / old tip 2d5e761d must never appear in a PR head.",
   "lineage_guard": "2026-10-30T03:41Z branch ci/lineage-guard (on next): changes job fails heads containing 15620683 or 2d5e761d. Open as first PR after the swap.",
-  "l_hygiene": "2026-10-30T03:41Z L1-L6 scanned: no personal paths, public IPs, tokens; only ephemeral soak PIDs and old SHAs (historical). No rewrite-removed lines reintroduced."
+  "l_hygiene": "2026-10-30T03:41Z L1-L6 scanned: no personal paths, public IPs, tokens; only ephemeral soak PIDs and old SHAs (historical). No rewrite-removed lines reintroduced.",
+  "pre_swap_local_work": "Old-lineage sessions hold unpushed work: X-sleeps (7fcf111a, c272e0a2 on slice/X-sleeps), B-log1b deferred (72aaed6b on local/B-log1b-4b), B-update 5a (d7f6c8b). After the swap, ask each for a patch (git format-patch from its old merge-base), apply on new-main branches, then archive. Never let them push old-lineage branches."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
