@@ -1314,7 +1314,8 @@
       "deps": [
         "CR-0f",
         "CR-SIM"
-      ]
+      ],
+      "session": "session_01MMjhnA3oPv1oEebqrwfFcm"
     },
     "F-filters-neutral-perf": {
       "status": "merged",
@@ -1493,7 +1494,7 @@
     "IMP-2": {
       "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01MMjhnCpgwyxVWV6ECQhK14",
       "pr": null,
       "notes": "brief written 2026-10-30T14:35Z; launch after #210 merges"
     }
@@ -2140,7 +2141,8 @@
     "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
     "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
     "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
-    "X-clippy-msrv part 2: filter, lodestar, dht, sources, store and update, then remove the 3 allows; after #210, #212, #213, #216, R-gauges and X-filter-budget land"
+    "X-clippy-msrv part 2: filter, lodestar, dht, sources, store and update, then remove the 3 allows; after #210, #212, #213, #216, R-gauges and X-filter-budget land",
+    "2026-10-30T08:41Z UI polish: WelcomePage.svelte focuses its h1 (tabindex -1) on load and shows a focus ring wider than the text with a notch; use focus-visible handling for programmatic focus (main's real page is web/src/lib/features/auth/WelcomePage.svelte)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2191,6 +2193,7 @@
     "2026-10-30T15:02Z merged #212 (ac20c916, freshness hardening; CI green, review MERGE)",
     "2026-10-30T15:05Z fresh reviews launched: #216 CR-0d-2a (session_01MMjhnD7Xi4FUtqXj1VbFic), #217 S-settings-reconcile draft (session_01MMjhn9gGM84v8QVWEjT6EV). #217 waits on the owner for 3 non-Settings size-limit entries 0.03-0.77 KB over (Alerts 29.03/29, Alert 45.77/45, Detail sections 34.41/33.9); chunk grouping can't fix it under strict entry signatures",
     "2026-10-30T15:08Z CR-ADM launched for Phase 1 design only (docs); Phase 2 code waits on the runner's go after #216 merges (actor.rs overlap)",
-    "2026-10-30T15:10Z IMP-2 launched: contract note and fixtures now; reader code after #210 merges"
+    "2026-10-30T15:10Z IMP-2 launched: contract note and fixtures now; reader code after #210 merges",
+    "2026-10-30T15:12Z CORRECTION: the 14:20Z pruning of two follow-ups read a stale local branch. F-updater mutex: real on main; fixed in #220 (published reader View; test fails with the old reads); review session_01MMjhn9cE1V6f2F1S4RkUK2. Welcome h1 focus: the real page is web/src/lib/features/auth/WelcomePage.svelte (focuses its h1 on load); follow-up restored"
   ]
 }
