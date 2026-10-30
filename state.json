@@ -1373,7 +1373,7 @@
    "model": "opus",
    "session": "session_01MMjhnCAnPjYNuyFZbX67yK",
    "pr": null,
-   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191. | 2026-10-30T08:41Z #193 merged 18c1f324; Windows NRT measurement pending"
+   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191. | 2026-10-30T08:41Z #193 merged 18c1f324; Windows NRT measurement pending | 2026-10-30T08:43Z Windows NRT measured (run 41024502148): store-to-searchable p50 2.14s max 2.19s (Linux 2.02s); commit-to-alert ~30ms both. 5.74s was test contention. No owner issue. Docs-only r2 decisions PR approved."
   },
   "CR-0": {
    "status": "awaiting-owner",
@@ -1973,6 +1973,12 @@
    "item": "CR-0 memory gate ruling (slope\u22480 after h1 vs no sustained growth) + full-res h12-24 private fit on soak host",
    "unblocks": "CR-0 acceptance -> v0.5.1 delta mapping",
    "ref": "PR #189"
+  },
+  {
+   "at": "2026-10-30T08:43Z",
+   "item": "Delete branch measure/windows-nrt (one commit adding a push-only measurement workflow; proxy refuses deletes)",
+   "unblocks": "hygiene",
+   "ref": "run 41024502148"
   }
  ],
  "external_gates": {
