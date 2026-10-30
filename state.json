@@ -1286,7 +1286,7 @@
    "session": "session_01MMjhnAXqNdYeYYFdttw8Zo",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww",
+   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww | 2026-10-30T10:21Z review FIX FIRST: B1 gluetun leg recipe (runner decision: --leg gluetun, >=2h baseline, own run), B2 README upgrade-on-existing-volume, I1 pidfd stop, I3 no personal paths/hosts; P1-P5. Reviewer session_01MMjhnAbgoJtA9x6eUfd9Ww re-checks delta.",
    "pr": 197
   },
   "CR-0f": {
@@ -1396,6 +1396,15 @@
    "notes": "2026-10-30T07:47Z queued: main filter-budget red = runner-type variance (mixed set 50.4us ref on Xeon 8573C @0.81x calib vs 39.3us EPYC 9V45). Speed the shared mixed path first; calibration method change only within \u00a72.20 (typical hardware; 50us unchanged), record+flag. Then hold the neutralized case. | 2026-10-30T08:41Z launched; carries #192 review polish (decisions heading/wording, with_tokenizer comment) | 2026-10-30T09:29Z speed: mixed 458k->437k, neutralized 487k->436k instr/judgment. Gate method OK: per-CPU-model factors (engine mixed time vs 7763 at same code), provenance per entry, provisional if n<3, raw+factor printed, >20% calib divergence warns, table changes need decisions entry; hold neutralized. | 2026-10-30T10:17Z #196 fresh review MERGE (120k differential 0 mismatches). Asked one push: ::warning:: annotations, patterns_with debug_assert, factor-provenance wording, 8573C re-derive tracking.",
    "session": "session_01MMjhnBFWdSTVf9zY1qSeMu",
    "pr": 196
+  },
+  "CR-COL-2": {
+   "status": "pending",
+   "model": "sonnet",
+   "deps": [
+    "CR-0f",
+    "CR-COL"
+   ],
+   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1823,7 +1832,8 @@
   "2026-10-30T07:18Z CR-0f: bootstrap seed exemption narrowed to fake-ip 198.18/15 + NAT64 prefixes (not all special ranges) to keep CR-0 endpoint policy; docs/decisions/2026-10-30-CR-0f.md",
   "2026-10-30T07:41Z IMP-0: restore runbook runs role step before checker; data-dir attach pinned to postgres:16-alpine (libc collation); checker --encoding for non-SQL_ASCII data dirs",
   "2026-10-30T08:21Z F-auth-lock: when two password changes race, the loser gets bad_password and spends a login attempt (documented in 2026-10-30-F-auth-lock.md)",
-  "2026-10-30T09:29Z F-filters-xcpu: filter-budget gate normalizes by per-CPU-model factors (engine time on that model / EPYC 7763 at identical code) instead of a generic calibration loop; 50us and the 7763 reference unchanged; unlisted models fall back to calibration"
+  "2026-10-30T09:29Z F-filters-xcpu: filter-budget gate normalizes by per-CPU-model factors (engine time on that model / EPYC 7763 at identical code) instead of a generic calibration loop; 50us and the 7763 reference unchanged; unlisted models fall back to calibration",
+  "2026-10-30T10:21Z CR-COL: the Unraid gluetun leg (>=2h measured, plan \u00a70.4) is a separate collector run with --leg gluetun and a 2h baseline after the usual 6h suppression + 30min warm-up (runner decision on evidence shape)"
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
