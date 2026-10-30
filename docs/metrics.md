@@ -641,6 +641,20 @@ These Prometheus series are aggregate, without endpoint/hash labels. Gauges refl
 `dht_lookups_completed_total` counts terminal owned requests, including empty results; a request whose caller cancelled it counts only in `dht_peer_cancelled_total` (CR-0f). It is not a metadata-yield counter. The typed `dht.socket_buffers` startup event reports the existing 4 MiB receive-buffer request, `send_requested=0` (retain the system default), kernel readback for both buffers, and set/read errors per socket. Zero readback with `read_errors > 0` means unknown. OS accounting may differ; do not infer packet drops from grants. Kernel drop counts remain unavailable unless separately collected. The six-hour startup suppression must be excluded from a steady-state sample-yield comparison and reported separately.
 
 
+## CR-0d restart proof (2026-10-30)
+
+With `dht.safe_restart` on, a clean restart can resume sampling at once instead of waiting six hours, honouring every restriction the last run recorded (`docs/decisions/2026-10-30-CR-0d.md`). These series say which happened and why. They are aggregate, with no endpoint labels.
+
+| Series | Meaning |
+|---|---|
+| `dht_sample_suppression_reason{reason}` | Gauge, 1 for this run's reason and 0 for the rest. `resumed` means the proof held. `off` means the switch is off or there's no data directory. Every other label means this run suppresses for the full window, or isn't sampling yet: `locked` (another process holds the data directory, or the filesystem has no locks), `first_start`, `corrupt`, `version`, `dirty` (the last run didn't stop cleanly), `off_run`, `data_dir`, `node_identity`, `foreign_run`, `snapshot_mismatch`, `no_witness`, `generation` (a restored backup), `horizon_changed`, `clock_backward`, `stale` (more than six hours since the last clean stop), `invalidate_failed` (a write the proof needs before sampling hasn't landed yet). |
+| `dht_restart_obligations_restored` | Restrictions seeded from the last clean stop; 0 when this run didn't resume. |
+| `dht_restart_obligations_pending` | Restored restrictions still cooling. |
+| `dht_restart_obligations_refused_total`, `dht_restart_obligations_honoured_total` | Candidates a restored restriction turned away, and restored restrictions that expired unsampled. Monitoring only: the proof that restrictions are honoured is the wire-level test, not these counters. |
+| `dht_restart_persist_errors_total{step}` | Restart-proof write failures by step: `lock`, `witness`, `invalidate`, `state_bin`, `snapshot`, `marker`. Failures never make sampling less safe; they cost the next start its resume, or hold sampling until a retry lands. |
+
+`dht_sample_suppression_seconds` reads 0 from the start of a resumed run, unless a restored blanket gate still holds. While sampling is held with no known end (`locked`, `invalidate_failed`), it never reads 0. Typed events: `dht.restart_check` at start (mode, reason, the previous marker, generation, counts), `dht.restart_commit` at shutdown (ok, duration, entries) and `dht.restart_persist_failed` (Warn, step). A resumed run's sample yield isn't comparable with a suppressed run's first six hours: report the reason with any A/B window.
+
 ## Hardened baseline diagnostics (October 27)
 
 See [the diagnostic boundary contract](decisions/2026-10-27-soak-diagnostics.md).

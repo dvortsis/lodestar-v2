@@ -210,6 +210,7 @@ impl Proof {
             .max(1)
     }
 
+    #[cfg(test)]
     pub(crate) fn reason(&self) -> Reason {
         self.reason
     }
