@@ -1440,12 +1440,13 @@
    "review_session": "session_01MMjhnCfFuShScq5SLixE9d"
   },
   "IMP-1": {
-   "status": "queued",
+   "status": "running",
    "model": "opus",
    "deps": [
     "v051-cut"
    ],
-   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051)"
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first",
+   "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
