@@ -9,6 +9,7 @@ This chapter sets up Lodestar so the web page, your password and your logs stay 
 > - Choose whether to forward the [DHT](glossary.md#dht) port or run through a VPN [container](glossary.md#container).
 > - Keep torrent details out of logs you share.
 > - Back up the data folder and restore it.
+> - Choose whether a clean restart skips the six-hour wait.
 
 ## 3.1 Keep the web UI off the internet
 <!-- index: port forwarding; web UI; remote access; VPN -->
@@ -179,17 +180,61 @@ To restore on Unraid:
 
 You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
 
-## 3.8 Check your understanding
+## 3.8 Restart without the six-hour wait
+<!-- index: safe restart; restart record; witness; six hours; Starting -->
+
+After every start, the crawler waits up to six hours before it samples the [DHT](glossary.md#dht) again. While it waits, the status pill says **Starting**. The wait is on purpose. Lodestar promises other DHT nodes to wait a while before asking them again, and it can't tell whether a restart kept those promises.
+
+The **safe restart** switch removes the wait after a clean restart. When Lodestar stops cleanly, it writes a restart record: the promises still open and a check that the data folder is the same one. On the next start it checks the record and carries on at once. If anything doesn't add up, it waits the six hours as before. It is **off by default**.
+
+Lodestar still waits the six hours after:
+- its first start, and a crash or power cut;
+- a restore from a backup, or a copied or moved data folder;
+- a Docker image update, or a change you **Apply** to the container, because both make a new container;
+- a restart record it can't write. The pill then says sampling waits until Lodestar can save its restart record. Open **Logs** to see why.
+
+The record is in two places: in the data folder, and in a small restart record folder outside it. The second folder is how Lodestar notices a restored backup.
+
+| Install | Restart record folder |
+|---|---|
+| Unraid and Docker | `/var/lib/lodestar-witness`, inside the container. You don't map it. |
+| Linux (systemd) | `/var/lib/lodestar-witness`, beside `/var/lib/lodestar` |
+| Windows service | `C:\ProgramData\Lodestar-witness`, beside `C:\ProgramData\Lodestar`. Lodestar makes it private. |
+
+> [!WARNING]
+> Keep the restart record folder out of your backups. Back up the data folder with `lodestar backup` ([section 3.7](#37-back-up-and-restore)), which copies no part of the restart record. Never back up the restart record folder with the data folder, and never restore the two together. A restore that brings back both looks like a clean restart, and Lodestar would then ask DHT nodes again too soon. On Linux with the systemd unit, both folders are under `/var/lib/private`, so back up `/var/lib/private/lodestar` rather than `/var/lib/private` as a whole.
+
+To turn safe restart on with Unraid:
+
+1. On the Docker tab, select the **Lodestar** icon, then **Edit**.
+2. Select **Add another Path, Port, Variable or Device**. Set **Config Type** to **Variable**, **Key** to `LODESTAR_DHT_SAFE_RESTART` and **Value** to `true`, then select **Add**.
+3. Select **Apply**.
+   **Result:** The container restarts. This first start still waits the six hours. From the next clean restart on, sampling carries on at once.
+
+On other installs, set the same variable, or add this to `config.toml` and restart:
+
+```toml
+[dht]
+safe_restart = true
+```
+
+Leave `LODESTAR_DHT_WITNESS_DIR`, the variable that names the restart record folder, as the image or the service sets it.
+
+When you uninstall Lodestar on Windows, `C:\ProgramData\Lodestar-witness` stays, like the data folder. It is harmless. You can delete it.
+
+## 3.9 Check your understanding
 
 1. A friend wants to open Lodestar from work. What do you set up, and what do you not do?
 2. What does forwarding UDP `6881` tell DHT peers?
 3. Why must a backup stay on a private share, and what does a restore bring back that you should know about?
+4. You turned on safe restart. Why must the restart record folder never be in the same backup as the data folder?
 
 > [!TIP]
 > **Key takeaways**
 > - Never forward port `8090`. Use a VPN for remote access.
 > - Forwarding `6881` over UDP is optional and shows your IP to DHT peers.
 > - Run `lodestar backup`, keep the result private and copy it off the cache pool.
+> - Safe restart is off by default. With it on, a clean restart carries on at once. Keep the restart record folder out of your backups.
 
 <!-- nav:start -->
 ---
