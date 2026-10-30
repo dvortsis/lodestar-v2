@@ -1449,7 +1449,7 @@
    "deps": [
     "v051-cut"
    ],
-   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy | 2026-10-30T13:55Z review FIX FIRST: B1 legacy import path writes no quality row -> runner: option (b) (IMPORTED+no row = unknown; drop V13 backfill); I3 verified-upgrade writes verified row + signal or documented limitation; I4 candidate refile follow-up; polish 5-9 incl. candidates rowid table",
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy | 2026-10-30T13:55Z review FIX FIRST: B1 legacy import path writes no quality row -> runner: option (b) (IMPORTED+no row = unknown; drop V13 backfill); I3 verified-upgrade writes verified row + signal or documented limitation; I4 candidate refile follow-up; polish 5-9 incl. candidates rowid table | 2026-10-30T14:35Z fixes 6c7bcef3 (option b, info_size>0 verified signal, polish); size 3,446 accepted (tests); re-check asked of session_01MMjhnCGd8sA1XL9cargxwy; filter budget red = 8573C gate issue (not PR) -> re-run once when run 41065412960 completes",
    "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx",
    "pr": 210
   },
@@ -1475,6 +1475,13 @@
    "status": "queued",
    "model": "sonnet",
    "notes": "brief written; launch when no large Rust PR is open across touched crates"
+  },
+  "X-filter-budget-8573C": {
+   "status": "running",
+   "session": "session_01MMjhnD99hMEjWMxfqXXsSU",
+   "model": "opus",
+   "attempt": 1,
+   "notes": " | 2026-10-30T14:35Z launched: 8573C provisional factor (1 job) makes neutralized case 53.3us on #210; per-case scaling differs on 8573C; method change goes to runner first; 50us owner budget untouched"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
