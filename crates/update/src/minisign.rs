@@ -296,6 +296,9 @@ mod tests {
         assert_eq!(release.id(), "02910813433E81E0");
         let recovery = PublicKey::from_file(include_str!("../keys/lodestar-recovery.pub")).unwrap();
         assert_eq!(recovery.id(), "67922DDF005FD310");
+        let freshness =
+            PublicKey::from_file(include_str!("../keys/lodestar-freshness.pub")).unwrap();
+        assert_eq!(freshness.id(), "FCA9AFC5C8D864FE");
         assert_eq!(
             PublicKey::from_base64(&release.to_base64()).unwrap(),
             release

@@ -15,7 +15,7 @@ use crate::minisign::PublicKey;
 const RECOVERY: &str = include_str!("../keys/lodestar-recovery.pub");
 const RELEASE: &str = include_str!("../keys/lodestar-release.pub");
 const NIGHTLY: Option<&str> = None;
-const FRESHNESS: Option<&str> = None;
+const FRESHNESS: Option<&str> = Some(include_str!("../keys/lodestar-freshness.pub"));
 const STATEMENTS: &str = include_str!("../keys/statements.json");
 
 /// The trust root a verification starts from.
@@ -54,6 +54,7 @@ mod tests {
         let e = Embedded::builtin().unwrap();
         assert_eq!(e.recovery.id(), "67922DDF005FD310");
         assert_eq!(e.release.unwrap().id(), "02910813433E81E0");
+        assert_eq!(e.freshness.unwrap().id(), "FCA9AFC5C8D864FE");
         let chain = Chain::embedded(&e).unwrap();
         assert_eq!(chain.seq() as usize, e.statements.len());
     }
@@ -92,6 +93,13 @@ mod tests {
                 assert_eq!(
                     text, RELEASE,
                     "crates/update/keys/lodestar-release.pub differs"
+                );
+            }
+            if role == Role::Freshness && chain.keys(role).len() == 1 {
+                assert_eq!(
+                    Some(text.as_str()),
+                    FRESHNESS,
+                    "crates/update/keys/lodestar-freshness.pub differs"
                 );
             }
             let published = PublicKey::from_file(&text).unwrap();
