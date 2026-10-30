@@ -208,10 +208,12 @@ def write_proc(root, pid=777, start=5000, comm="lodestar", state="S", rss_kb=204
     return base
 
 
-def args_for(root, *extra, mode="docker", **kw):
+def args_for(root, *extra, mode="docker", intensity="balanced", **kw):
     argv = ["--mode", mode, "--root", str(root), "--commit", COMMIT, "--rehearsal", "--warmup-minutes", "1",
             "--baseline-hours", "0.05", "--min-free-bytes", "3", "--warn-free-bytes", "2",
             "--stop-free-bytes", "1"]
+    if intensity is not None:
+        argv += ["--intensity", intensity]
     for key, value in kw.items():
         argv += [f"--{key.replace('_', '-')}", str(value)]
     return collect.build_parser().parse_args(argv + list(extra))
@@ -287,6 +289,23 @@ class CleanRunTests(Base):
         self.assertGreater(base["counters"]["writer_stored_total"]["delta"], 0)
         self.assertEqual(base["counters"]["dht_peer_admitted_total"]["covered_seconds"], base["valid_interval_seconds"])
 
+    def test_intensity_is_recorded_only_as_stated(self):
+        self.run_docker(intensity="aggressive")
+        run = json.loads((self.root / "run.json").read_text())
+        self.assertEqual(run["settings"]["intensity"], "aggressive")
+        report = self.report()
+        self.assertEqual(report["intensity"], "aggressive")
+        self.assertEqual(report["phases"]["baseline"]["bounds"]["outstanding_rpcs"]["limit"], 4096)
+        self.assertEqual(report["issues"], {})
+
+    def test_an_omitted_intensity_is_left_out_and_flagged(self):
+        self.run_docker(intensity=None)
+        run = json.loads((self.root / "run.json").read_text())
+        self.assertNotIn("intensity", run["settings"], "absent, never invented")
+        report = self.report()
+        self.assertEqual(report["issues"].get("intensity_assumed_balanced"), 1)
+        self.assertEqual(report["phases"]["baseline"]["bounds"]["outstanding_rpcs"]["limit"], 1024)
+
     def test_run_json_records_identity_and_network(self):
         self.run_docker()
         run = json.loads((self.root / "run.json").read_text())
@@ -327,7 +346,7 @@ class CleanRunTests(Base):
 
     def test_full_production_window_on_virtual_clock(self):
         args = collect.build_parser().parse_args(
-            ["--mode", "docker", "--root", str(self.root), "--commit", COMMIT, "--url", self.lodestar.url,
+            ["--mode", "docker", "--root", str(self.root), "--commit", COMMIT, "--intensity", "balanced", "--url", self.lodestar.url,
              "--min-free-bytes", "3", "--warn-free-bytes", "2", "--stop-free-bytes", "1"])
         self.assertEqual((args.warmup_minutes, args.baseline_hours), (30, 24))
         direct = lambda url: self.lodestar.respond(url.rsplit("/", 1)[1] and "/" + url.rsplit("/", 1)[1])
@@ -526,7 +545,7 @@ class InterruptionTests(Base):
         write_proc(proc_root, pid=pid, comm="python3")
         (proc_root / str(pid) / "stat").write_text((proc_root / str(pid) / "stat").read_text())
         cmd = [sys.executable, "-I", str(HERE / "collect.py"), "--mode", "native", "--pid", str(pid),
-               "--proc-root", str(proc_root), "--root", str(self.root), "--commit", COMMIT,
+               "--proc-root", str(proc_root), "--root", str(self.root), "--commit", COMMIT, "--intensity", "balanced",
                "--url", self.lodestar.url, "--rehearsal", "--min-free-bytes", "3", "--warn-free-bytes", "2",
                "--stop-free-bytes", "1"]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

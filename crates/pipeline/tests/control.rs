@@ -260,3 +260,124 @@ async fn a_failed_event_write_still_applies_the_change() {
     assert_eq!(recorded(&[PAUSE, RESUME]).map(|e| e.kind), Some(RESUME));
     pipeline.shutdown().await.unwrap();
 }
+
+/// Emits what the test sends it, as a discovery source.
+struct Scripted {
+    manifest: Manifest,
+    rx: Mutex<Option<tokio::sync::mpsc::Receiver<lodestar_sources::Found>>>,
+}
+
+impl SourcePlugin for Scripted {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+        let mut rx = self.rx.lock().unwrap().take().expect("run once");
+        Box::pin(async move {
+            loop {
+                tokio::select! {
+                    _ = ctx.shutdown.requested() => return Ok(()),
+                    Some(f) = rx.recv() => {
+                        ctx.emitter.emit(f).await.map_err(|_| PluginError("closed".into()))?;
+                    }
+                }
+            }
+        })
+    }
+}
+
+/// Polls `done` every 25 ms for at most 20 s.
+async fn until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+/// Lookups the pool held during a pause reach a DHT that has already
+/// resumed: none is refused as paused, so none waits out a back-off. The
+/// old pool-first resume lost this only in a narrow scheduling window, so
+/// this guards the end-to-end behaviour; the DHT-first order in
+/// `apply_paused` is what rules the race out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_sends_no_lookup_to_a_still_paused_dht() {
+    use lodestar_pipeline::DhtSource;
+    use lodestar_sources::{Found, PoolConfig};
+    const KEYS: u8 = 16;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let dht = Arc::new(DhtSource::new(lodestar_dht::node::Config {
+        bind: vec!["127.0.0.1:0".parse().unwrap()],
+        bootstrap: vec![],
+        ..lodestar_dht::node::Config::default()
+    }));
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let keys = Arc::new(Scripted {
+        manifest: Manifest {
+            id: "keys",
+            name: "keys",
+            version: "1",
+            kinds: &[Kind::Discovery],
+            networks: &[Network::Bt],
+            endpoints: &[],
+            risk: Risk::Low,
+            consent: Consent::None,
+            default_priority: Priority::Normal,
+            enabled_by_default: true,
+        },
+        rx: Mutex::new(Some(rx)),
+    });
+    let config = PipelineConfig {
+        pool: PoolConfig {
+            lookup_wait: std::time::Duration::from_secs(600),
+            retry_backoff: std::time::Duration::from_secs(3600),
+            ..PoolConfig::default()
+        },
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline::start_with(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![dht.clone(), keys],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let control = Control::start(
+        pipeline.monitor(),
+        Some(dht.clone()),
+        Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    until("the DHT runs", || dht.stats().is_some()).await;
+    assert!(control.set_paused(true).await);
+    for n in 1..=KEYS {
+        tx.send(Found::key(InfoHash([n; 20]), 0)).await.unwrap();
+    }
+    let pool = pipeline.pool_stats();
+    until("the paused pool holds every lookup", || {
+        pool.lookup_backlog.load(Ordering::Relaxed) == u64::from(KEYS)
+    })
+    .await;
+    assert!(control.set_paused(false).await);
+    // The DHT's stats refresh each second.
+    until("every lookup admitted", || {
+        dht.stats()
+            .is_some_and(|s| s.peer_admitted >= u64::from(KEYS))
+    })
+    .await;
+    let s = dht.stats().unwrap();
+    assert_eq!(s.peer_rejected_paused, 0, "a lookup reached a paused DHT");
+    assert_eq!(pool.lookup_unaccepted.load(Ordering::Relaxed), 0);
+    pipeline.shutdown().await.unwrap();
+}

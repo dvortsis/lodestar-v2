@@ -638,7 +638,7 @@ These Prometheus series are aggregate, without endpoint/hash labels. Gauges refl
 | `dht_lookup_scheduled` | Lookup legs with a scheduled continuation, including those awaiting replies. |
 | `dht_lookup_deadlines_total` | Lookup legs terminated at their deadline, including maintenance/scrapes. |
 
-`dht_lookups_completed_total` includes terminal owned requests, including empty results and active cancellation; it is not a metadata-yield counter. The typed `dht.socket_buffers` startup event reports the existing 4 MiB receive-buffer request, `send_requested=0` (retain the system default), kernel readback for both buffers, and set/read errors per socket. Zero readback with `read_errors > 0` means unknown. OS accounting may differ; do not infer packet drops from grants. Kernel drop counts remain unavailable unless separately collected. The six-hour startup suppression must be excluded from a steady-state sample-yield comparison and reported separately.
+`dht_lookups_completed_total` counts terminal owned requests, including empty results; a request whose caller cancelled it counts only in `dht_peer_cancelled_total` (CR-0f). It is not a metadata-yield counter. The typed `dht.socket_buffers` startup event reports the existing 4 MiB receive-buffer request, `send_requested=0` (retain the system default), kernel readback for both buffers, and set/read errors per socket. Zero readback with `read_errors > 0` means unknown. OS accounting may differ; do not infer packet drops from grants. Kernel drop counts remain unavailable unless separately collected. The six-hour startup suppression must be excluded from a steady-state sample-yield comparison and reported separately.
 
 
 ## Hardened baseline diagnostics (October 27)
