@@ -13,6 +13,7 @@ use tokio::time::Instant;
 
 use lodestar_metainfo::InfoHash;
 
+use super::hints::{self, Hint, Hints};
 use super::lookup::Lookup;
 use super::peers::PeerStore;
 use super::proof::Proof;
@@ -21,8 +22,8 @@ use super::seen::SeenFilter;
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
-    Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, PeerPermit, PermitReturn,
-    QueuedDrop, Snapshot, Source, Stats,
+    Command, Config, DhtEstimate, ExternalVotes, Harvest, HintFallback, HintReject, Intensity,
+    PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -93,6 +94,8 @@ struct Pending {
     sent: Instant,
     family: usize,
     purpose: Purpose,
+    /// A responder-hint query (CR-1a-H), which holds its IP's guard.
+    hinted: bool,
 }
 
 /// What happened to a query.
@@ -387,6 +390,8 @@ struct Actor {
     paused: bool,
     /// CR-0d: when sampling may start, and the restart proof.
     proof: Proof,
+    /// CR-1a-H: `None` unless `dht.responder_hints` is on.
+    hints: Option<Hints>,
 }
 
 pub(crate) async fn run(
@@ -578,6 +583,7 @@ impl Actor {
             contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
+            hints: cfg.responder_hints.then(Hints::default),
             proof: Proof::new(
                 cfg.state_path.as_deref(),
                 cfg.restart.as_ref(),
@@ -743,12 +749,13 @@ impl Actor {
     }
 
     /// Hands a hash to the pipeline. Sightings without peers are
-    /// deduplicated; announces and lookup results always pass.
-    fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) {
+    /// deduplicated; announces and lookup results always pass. Returns
+    /// whether a new sighting reached the pipeline.
+    fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) -> bool {
         // Paused, nothing is harvested; the answers of lookups already
         // running still reach the pool that asked.
         if self.paused && source != Source::Lookup {
-            return;
+            return false;
         }
         let new = self.seen.insert(&hash);
         if new {
@@ -762,7 +769,7 @@ impl Actor {
             Source::GetPeers if new => &self.stats.harvested_get_peers,
             Source::Announce => &self.stats.harvested_announce,
             Source::Lookup => &self.stats.lookups_completed,
-            Source::Sample | Source::GetPeers => return,
+            Source::Sample | Source::GetPeers => return false,
         };
         Stats::inc(counter);
         lodestar_log::log_event!(
@@ -779,7 +786,31 @@ impl Actor {
             };
             if tx.try_send(h).is_err() {
                 Stats::inc(&self.stats.harvest_dropped);
+                return false;
             }
+            return new;
+        }
+        false
+    }
+
+    /// CR-1a-H: remembers a sample responder for a hash it just gave the
+    /// pipeline, after the public-endpoint checks.
+    fn capture_hint(&mut self, hash: InfoHash, from: SocketAddr) {
+        let Some(h) = &mut self.hints else {
+            return;
+        };
+        let families = &self.families;
+        let checked = hints::check(from, &self.cfg).and_then(|addr| {
+            if families.iter().any(|f| f.ipv6 == addr.is_ipv6()) {
+                Ok(addr)
+            } else {
+                Err(HintReject::Family)
+            }
+        });
+        match checked.and_then(|addr| h.capture(hash, addr, Instant::now())) {
+            Ok(true) => Stats::inc(&self.stats.hints_captured),
+            Ok(false) => {}
+            Err(why) => why.count(&self.stats),
         }
     }
 
@@ -941,6 +972,7 @@ impl Actor {
                 sent: now,
                 family,
                 purpose,
+                hinted: false,
             },
         );
         Ok(tid)
@@ -959,6 +991,11 @@ impl Actor {
                 .and_then(|o| self.peer_requests.get_mut(&o))
         {
             r.inflight = r.inflight.saturating_sub(1);
+        }
+        if p.hinted
+            && let Some(h) = &mut self.hints
+        {
+            h.settled(p.to.ip());
         }
         if let MapEntry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
             *e.get_mut() -= 1;
@@ -1266,7 +1303,9 @@ impl Actor {
                     let supported =
                         r.samples.is_some() && r.interval.is_some_and(|i| i <= SAMPLE_INTERVAL);
                     for h in r.samples.iter().flat_map(|s| s.iter()) {
-                        self.harvest_hash(h, Source::Sample, Vec::new());
+                        if self.harvest_hash(h, Source::Sample, Vec::new()) {
+                            self.capture_hint(h, from);
+                        }
                     }
                     let wait = if supported {
                         Duration::from_secs(u64::from(r.interval.unwrap_or(SAMPLE_INTERVAL)))
@@ -1328,6 +1367,15 @@ impl Actor {
                             lookup.record_blooms(&id, r.seeds_bloom, r.peers_bloom);
                         }
                         lookup.on_response(&id, others, &peers);
+                    }
+                    None if pending.hinted => {
+                        // Its nodes join by their own distance; the
+                        // responder is no candidate and proves nothing.
+                        lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
+                        if !peers.is_empty() {
+                            Stats::inc(&self.stats.hint_useful);
+                        }
+                        lookup.absorb(others, &peers);
                     }
                     None => {
                         lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1);
@@ -1396,6 +1444,16 @@ impl Actor {
                 started: Instant::now(),
             },
         );
+        let hinted = self.peer_requests[&owner].reply.is_some();
+        if let Some(found) = self
+            .hints
+            .as_mut()
+            .filter(|_| hinted)
+            .map(|h| h.take(&hash))
+        {
+            self.start_hinted_request(sockets, hash, owner, found);
+            return;
+        }
         for family in 0..self.families.len() {
             self.start_lookup_as(
                 sockets,
@@ -1408,6 +1466,94 @@ impl Actor {
                 Some(owner),
             );
         }
+    }
+
+    /// CR-1a-H: every family leg is created first, each fresh hint sends
+    /// its one direct `get_peers`, then ordinary routing drives every leg.
+    /// The hint shares the request's RPC budget and deadline, so a second
+    /// family's hint isn't crowded out by the first leg's routing.
+    fn start_hinted_request(
+        &mut self,
+        sockets: &[SendSocket],
+        hash: InfoHash,
+        owner: u32,
+        found: [Option<Hint>; 2],
+    ) {
+        const _: () = assert!(
+            hints::HINTED_ATTEMPTS_PER_FAMILY == 1,
+            "one slot per family"
+        );
+        let lids: Vec<u32> = (0..self.families.len())
+            .map(|family| {
+                self.insert_lookup(family, NodeId(hash.0), &[], Some(hash), false, Some(owner))
+            })
+            .collect();
+        for (family, &lid) in lids.iter().enumerate() {
+            if let Some(hint) = found[usize::from(self.families[family].ipv6)]
+                && let Err(why) = self.send_hint(sockets, family, lid, owner, hash, hint)
+            {
+                why.count(&self.stats);
+            }
+        }
+        for lid in lids {
+            self.drive_lookup(sockets, lid);
+        }
+    }
+
+    /// One hinted `get_peers`, with every check repeated at send.
+    fn send_hint(
+        &mut self,
+        sockets: &[SendSocket],
+        family: usize,
+        lid: u32,
+        owner: u32,
+        hash: InfoHash,
+        hint: Hint,
+    ) -> Result<(), HintFallback> {
+        let now = Instant::now();
+        if !hint.fresh(now) {
+            return Err(HintFallback::Expired);
+        }
+        let to = hints::check(hint.addr, &self.cfg).map_err(HintReject::at_send)?;
+        if self.families[family].ipv6 != to.is_ipv6() {
+            return Err(HintFallback::Family);
+        }
+        if self
+            .peer_requests
+            .get(&owner)
+            .is_none_or(|r| r.inflight >= 3 || r.sent >= MAX_PEER_QUERIES)
+        {
+            return Err(HintFallback::Throttled);
+        }
+        let guard = self.hints.as_mut().expect("hints are on");
+        guard.admit(to.ip(), now)?;
+        let method = Method::GetPeers {
+            info_hash: hash,
+            want: Want::default(),
+            scrape: false,
+            noseed: false,
+        };
+        let tid = match self.dispatch_query(sockets, family, to, None, method, Purpose::Lookup(lid))
+        {
+            Ok(tid) => tid,
+            Err(Sent::Failed) => return Err(HintFallback::SendFailed),
+            Err(_) => return Err(HintFallback::Throttled),
+        };
+        Stats::inc(&self.stats.hint_queries);
+        if let Some(p) = self.pending.get_mut(&tid) {
+            p.hinted = true;
+        }
+        if let Some(h) = &mut self.hints {
+            h.sent(to.ip(), now);
+        }
+        if let Some(l) = self.lookups.get_mut(&lid) {
+            l.extra_in_flight += 1;
+        }
+        if let Some(r) = self.peer_requests.get_mut(&owner) {
+            r.inflight += 1;
+            r.sent += 1;
+        }
+        Ok(())
     }
 
     /// Starts a BEP 33 scrape lookup; `reply` gets the estimate when it
@@ -1482,6 +1628,40 @@ impl Actor {
         if info_hash.is_none() && self.maintenance_lookups() >= MAX_LOOKUPS {
             return;
         }
+        let lid = self.insert_lookup(family, target, known, info_hash, scrape, owner);
+        // A router answers in the family it sees the query arrive in. Through
+        // NAT64 that's IPv4, so an IPv6 family asks for its own (BEP 32).
+        let ipv6 = self.families[family].ipv6;
+        let want = Want {
+            v4: !ipv6,
+            v6: ipv6,
+        };
+        for addr in seeds {
+            let method = Method::FindNode { target, want };
+            match self.query_seed(sockets, family, *addr, method, lid) {
+                Sent::Yes => {
+                    if let Some(l) = self.lookups.get_mut(&lid) {
+                        l.extra_in_flight += 1;
+                    }
+                }
+                Sent::Throttled => self.seed_throttled += 1,
+                Sent::Failed => self.seed_refused += 1,
+            }
+        }
+        self.drive_lookup(sockets, lid);
+    }
+
+    /// A new lookup seeded from the routing table and `known`, not yet
+    /// driven.
+    fn insert_lookup(
+        &mut self,
+        family: usize,
+        target: NodeId,
+        known: &[NodeInfo],
+        info_hash: Option<InfoHash>,
+        scrape: bool,
+        owner: Option<u32>,
+    ) -> u32 {
         let lid = self.next_lookup;
         self.next_lookup = self.next_lookup.wrapping_add(1);
         while self.lookups.contains_key(&self.next_lookup) || self.next_lookup == lid {
@@ -1507,26 +1687,7 @@ impl Actor {
             }
         }
         self.lookups.insert(lid, lookup);
-        // A router answers in the family it sees the query arrive in. Through
-        // NAT64 that's IPv4, so an IPv6 family asks for its own (BEP 32).
-        let ipv6 = self.families[family].ipv6;
-        let want = Want {
-            v4: !ipv6,
-            v6: ipv6,
-        };
-        for addr in seeds {
-            let method = Method::FindNode { target, want };
-            match self.query_seed(sockets, family, *addr, method, lid) {
-                Sent::Yes => {
-                    if let Some(l) = self.lookups.get_mut(&lid) {
-                        l.extra_in_flight += 1;
-                    }
-                }
-                Sent::Throttled => self.seed_throttled += 1,
-                Sent::Failed => self.seed_refused += 1,
-            }
-        }
-        self.drive_lookup(sockets, lid);
+        lid
     }
 
     /// Check every continuation, including response-driven ones, before dispatch.
@@ -1587,6 +1748,19 @@ impl Actor {
                 // The rest of this batch waits too.
                 if let Some(l) = self.lookups.get_mut(&lid) {
                     l.retry_later(&n.id);
+                }
+                continue;
+            }
+            // CR-1a-H: a retained hint restriction covers ordinary routing
+            // to the same IP, so the fallback can't bypass it.
+            if self
+                .hints
+                .as_ref()
+                .is_some_and(|h| h.restricts(n.addr.ip(), Instant::now()))
+            {
+                Stats::inc(&self.stats.hint_guard_skips);
+                if let Some(l) = self.lookups.get_mut(&lid) {
+                    l.on_failure(&n.id);
                 }
                 continue;
             }
@@ -1684,6 +1858,10 @@ impl Actor {
                         PermitReturn::CancelledActive.release(&self.stats, r.permit);
                     } else {
                         Stats::inc(&self.stats.lookups_completed);
+                        let ms = r.started.elapsed().as_millis();
+                        self.stats
+                            .peer_lookup_millis
+                            .fetch_add(u64::try_from(ms).unwrap_or(u64::MAX), Ordering::Relaxed);
                         // The slot is free before the caller hears, so a
                         // permit it gets back always finds room.
                         PermitReturn::Completed.release(&self.stats, r.permit);
@@ -1808,6 +1986,18 @@ impl Actor {
         }
 
         self.tokens.maybe_rotate(now_i, &mut self.rng);
+        if let Some(h) = &mut self.hints {
+            let expired = h.prune(now_i);
+            self.stats
+                .hints_expired
+                .fetch_add(expired, Ordering::Relaxed);
+            self.stats
+                .hints_held
+                .store(h.held() as u64, Ordering::Relaxed);
+            self.stats
+                .hint_guard_entries
+                .store(h.guard_len() as u64, Ordering::Relaxed);
+        }
 
         for f in 0..self.families.len() {
             // Refresh stale buckets.
@@ -2590,6 +2780,7 @@ mod tests {
                 sent: Instant::now(),
                 family: 0,
                 purpose: Purpose::Lookup(lid),
+                hinted: false,
             },
         );
         *a.pending_addrs.entry(to).or_default() += 1;
@@ -3332,3 +3523,7 @@ mod restart_wire {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[cfg(test)]
+#[path = "hint_tests.rs"]
+mod hint_tests;

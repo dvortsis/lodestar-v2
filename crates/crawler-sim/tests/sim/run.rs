@@ -524,6 +524,9 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
         n.sample_interval_s,
         n.sample_size
     );
+    if n.samplers_hold {
+        let _ = writeln!(t, "net: samplers_hold=true");
+    }
     let w = &s.swarm;
     let _ = writeln!(
         t,

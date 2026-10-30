@@ -387,7 +387,9 @@ impl Net {
             }
             Method::GetPeers { info_hash, .. } => {
                 response.token = Some(b"simtoken");
-                let holder = self.is_holder(&info_hash.0, i);
+                // With `samplers_hold`, a node answers for what it samples.
+                let holder = self.is_holder(&info_hash.0, i)
+                    || (self.cfg.samplers_hold && self.nodes[i].held.contains(info_hash));
                 values = if holder {
                     self.swarms.get(info_hash).cloned().unwrap_or_default()
                 } else {

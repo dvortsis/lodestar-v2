@@ -346,6 +346,7 @@ fn coordinated_admission_stops_capacity_refusals() {
     let on = Scenario {
         switches: Switches {
             coordinated_admission: true,
+            ..Switches::default()
         },
         ..off.clone()
     };
@@ -377,6 +378,7 @@ fn coordinated_admission_screen() {
         let on = Scenario {
             switches: Switches {
                 coordinated_admission: true,
+                ..Switches::default()
             },
             ..off.clone()
         };
@@ -428,6 +430,119 @@ fn coordinated_admission_screen() {
             mean(&steady[1]),
             spread(&steady[1]),
             100.0 * (mean(&steady[1]) - mean(&steady[0])) / mean(&steady[0]).max(1.0),
+            sign_test(&diffs),
+            diffs
+                .iter()
+                .map(|d| (d * 10.0).round() / 10.0)
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// CR-1a-H's switch on a short healthy run whose samplers hold what they
+/// list: hinted queries go out and find peers, the guard stays bounded,
+/// and the same seed is still byte-identical.
+#[test]
+fn responder_hints_send_hinted_queries_deterministically() {
+    let mut off = scenario::healthy();
+    off.minutes = 4;
+    off.net.samplers_hold = true;
+    let on = Scenario {
+        switches: Switches {
+            responder_hints: true,
+            ..Switches::default()
+        },
+        ..off.clone()
+    };
+    let (a, b) = (simulate(&off), simulate(&on));
+    assert_eq!(a.dht.hint_queries + a.dht.hints_captured, 0, "{}", a.text);
+    assert!(b.text.contains("responder_hints=true"));
+    assert!(b.dht.hints_captured > 0, "{}", b.text);
+    assert!(b.dht.hint_queries > 0, "{}", b.text);
+    assert!(b.dht.hint_useful > 0, "{}", b.text);
+    assert!(b.dht.hint_useful <= b.dht.hint_queries);
+    assert!(b.dht.hint_guard_entries <= 20_000);
+    assert!(b.stored > 0, "{}", b.text);
+    assert!(b.dht.peer_active + b.dht.peer_queued <= 32, "{}", b.text);
+    assert_eq!(simulate(&on).text, b.text);
+}
+
+/// The CR-1a-H screen: hints off against on over `SCREEN_SEEDS`, both arms
+/// on a network whose samplers answer `get_peers` for what they list.
+/// `cargo test -p lodestar-crawler-sim --test sim responder_hints_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn responder_hints_screen() {
+    for mut off in [
+        scenario::high_latency(),
+        scenario::healthy(),
+        scenario::admission_pressure(),
+    ] {
+        off.net.samplers_hold = true;
+        let on = Scenario {
+            switches: Switches {
+                responder_hints: true,
+                ..Switches::default()
+            },
+            ..off.clone()
+        };
+        println!("\n## {}", off.name);
+        println!(
+            "seed | arm | admitted | completed | lookup ms | captured | expired unused | queries | useful | fallbacks (expired/throttled/guard_full/other) | guard skips | stored | steady/min"
+        );
+        let mut diffs = Vec::new();
+        let mut steady = [Vec::new(), Vec::new()];
+        let mut ms = [Vec::new(), Vec::new()];
+        for seed in SCREEN_SEEDS {
+            let mut row = [0.0; 2];
+            for (arm, s) in [(0, &off), (1, &on)] {
+                let mut s = s.clone();
+                s.seed = seed;
+                let r = simulate(&s);
+                let d = &r.dht;
+                let f = d.hint_fallbacks;
+                let lookup_ms = d.peer_lookup_millis as f64 / d.lookups_completed.max(1) as f64;
+                println!(
+                    "{seed} | {} | {} | {} | {:.0} | {} | {} | {} | {} | {}/{}/{}/{} | {} | {} | {:.1}",
+                    ["off", "on"][arm],
+                    d.peer_admitted,
+                    d.lookups_completed,
+                    lookup_ms,
+                    d.hints_captured,
+                    d.hints_expired,
+                    d.hint_queries,
+                    d.hint_useful,
+                    f[0],
+                    f[4],
+                    f[5],
+                    f[1] + f[2] + f[3] + f[6],
+                    d.hint_guard_skips,
+                    r.stored,
+                    r.steady_stored
+                );
+                row[arm] = r.steady_stored;
+                steady[arm].push(r.steady_stored);
+                ms[arm].push(lookup_ms);
+            }
+            diffs.push(row[1] - row[0]);
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let spread = |v: &[f64]| {
+            let (lo, hi) = v
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                    (a.min(*x), b.max(*x))
+                });
+            100.0 * (hi - lo) / mean(v).max(1.0)
+        };
+        println!(
+            "steady stored/min: off mean {:.1} (spread {:.1}%), on mean {:.1}, change {:+.1}%; lookup ms: off {:.0}, on {:.0}; sign test {:?}; diffs {:?}",
+            mean(&steady[0]),
+            spread(&steady[0]),
+            mean(&steady[1]),
+            100.0 * (mean(&steady[1]) - mean(&steady[0])) / mean(&steady[0]).max(1.0),
+            mean(&ms[0]),
+            mean(&ms[1]),
             sign_test(&diffs),
             diffs
                 .iter()
