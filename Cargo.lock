@@ -1572,6 +1572,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-crawler-sim"
+version = "0.5.0"
+dependencies = [
+ "lodestar-dht",
+ "lodestar-metainfo",
+ "lodestar-network-policy",
+ "lodestar-peer-wire",
+ "lodestar-sources",
+ "lodestar-store",
+ "tokio",
+]
+
+[[package]]
 name = "lodestar-dht"
 version = "0.5.0"
 dependencies = [
@@ -1720,11 +1733,9 @@ dependencies = [
 name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
- "lodestar-dht",
  "lodestar-metainfo",
  "lodestar-network-policy",
  "lodestar-peer-wire",
- "lodestar-sources",
  "lodestar-store",
  "tokio",
 ]

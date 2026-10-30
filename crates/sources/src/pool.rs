@@ -37,7 +37,7 @@ use admission::{Admission, Class, Grant, WaitKind, Waiter};
 /// The owned-request map, the one map whose iteration order reaches
 /// scheduling (`poll_replies`). Production keeps the randomly keyed std hash
 /// table; the `testing` feature swaps in a B-tree so the crawler simulator
-/// (`tests/sim`) repeats across runs, platforms and toolchains.
+/// (`crates/crawler-sim`) repeats across runs, platforms and toolchains.
 #[cfg(not(feature = "testing"))]
 type RequestMap = HashMap<InfoHash, Request>;
 #[cfg(feature = "testing")]

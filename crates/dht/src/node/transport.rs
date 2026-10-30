@@ -1,6 +1,6 @@
 //! The node's sockets. Production builds have only the UDP variants; the
 //! `testing` feature adds an in-memory one for the deterministic crawler
-//! simulator (`crates/sources/tests/sim`), so the real actor can run
+//! simulator (`crates/crawler-sim`), so the real actor can run
 //! against a scripted network in paused time.
 
 use std::io;

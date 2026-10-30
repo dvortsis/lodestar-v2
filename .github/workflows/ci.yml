@@ -149,9 +149,11 @@ jobs:
       - run: cargo test --workspace
       # The DHT's tests in their production configuration (no `testing`),
       # which the workspace run above never builds.
-      - name: dht tests without test seams
+      # Only lodestar-crawler-sim enables the `testing` seams, so these
+      # build the production types (maps, hashers, sockets).
+      - name: dht and sources tests without test seams
         if: runner.os == 'Linux'
-        run: cargo test -p lodestar-dht
+        run: cargo test -p lodestar-dht -p lodestar-sources
       # DUR-26: the updater's persistence tests are Unix-only; a cfg that
       # compiled them out must not pass as zero tests run.
       - name: updater tests selected
