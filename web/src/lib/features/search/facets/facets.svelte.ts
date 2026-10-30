@@ -8,7 +8,7 @@
 import { untrack } from 'svelte';
 import { ApiError, api, isAbort, latest } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
-import type { Ast } from '$lib/state/search.svelte';
+type Ast = components['schemas']['AstNode'];
 
 export type FacetsResponse = components['schemas']['FacetsResponse'];
 export type TermFacet = components['schemas']['TermFacet'];
