@@ -66,6 +66,11 @@ pub(crate) type Set<T> = std::collections::HashSet<T>;
 pub(crate) type Map<K, V> = std::collections::BTreeMap<K, V>;
 #[cfg(feature = "testing")]
 pub(crate) type Set<T> = std::collections::BTreeSet<T>;
+/// The entry API of [`Map`], so a lookup-then-update hashes once.
+#[cfg(not(feature = "testing"))]
+pub(crate) type MapEntry<'a, K, V> = std::collections::hash_map::Entry<'a, K, V>;
+#[cfg(feature = "testing")]
+pub(crate) type MapEntry<'a, K, V> = std::collections::btree_map::Entry<'a, K, V>;
 
 /// The seen filter's hash keys. Production keys it randomly per process;
 /// under `testing` the keys are fixed, or a false positive (a dropped

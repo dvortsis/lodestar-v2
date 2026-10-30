@@ -41,7 +41,10 @@ pub struct Report {
     pub log: Option<String>,
     pub dht: StatsSnapshot,
     pub net: NetStats,
+    /// Metadata stored by the end of the run.
     pub stored: u64,
+    /// Metadata stored per minute after warmup: what screening compares.
+    pub steady_stored: f64,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -274,6 +277,12 @@ pub async fn run(s: &Scenario) -> Report {
     node.shutdown().await.expect("node shutdown");
     let net_stats = net_task.await.expect("net task");
     let _ = writer_task.await;
+    conservation(
+        &dht_final,
+        pool.stats().fetched.load(Ordering::Relaxed),
+        funnel.total(Stage::Fetched, None),
+        stored.load(Ordering::Relaxed),
+    );
     write_net(&mut text, &net_stats, dropped, queued.len());
     let mut log = log.lock().expect("log lock");
     let _ = writeln!(
@@ -292,7 +301,44 @@ pub async fn run(s: &Scenario) -> Report {
         dht: dht_final,
         net: net_stats,
         stored: stored_at_end,
+        steady_stored: steady(&minutes, |m| m.stored),
     }
+}
+
+/// Counters that must agree in every run, whatever a candidate changes.
+fn conservation(d: &StatsSnapshot, fetched: u64, funnel_fetched: i64, stored: u64) {
+    // After shutdown every fetch has reached the writer.
+    assert_eq!(fetched, stored, "fetched vs stored");
+    assert_eq!(
+        funnel_fetched, fetched as i64,
+        "funnel Fetched vs PoolStats::fetched"
+    );
+    // Every admitted request finishes once at most. `>=`, not `==`: the
+    // actor's queue drops closed-caller requests without counting them
+    // (a counter contract predating CR-SIM, followed up separately).
+    // Owned lookups that ended, completed or cancelled (exclusive since
+    // CR-0f). The harness never starts legacy `get_peers` lookups, which
+    // also count as completed.
+    let done = d.lookups_completed + d.peer_cancelled;
+    assert!(
+        d.peer_admitted >= done,
+        "admitted {} < done {done}",
+        d.peer_admitted
+    );
+    // The active/queued gauges refresh on the 1 s tick, so at the boundary
+    // they may still count up to the 32-request cap that has since finished.
+    let held = d.peer_active + d.peer_queued;
+    assert!(
+        d.peer_admitted + 32 >= done + held,
+        "admitted {} < done {done} + held {held} - 32",
+        d.peer_admitted
+    );
+}
+
+/// The per-minute mean of `f` after warmup.
+fn steady(minutes: &[Minute], f: fn(&Minute) -> u64) -> f64 {
+    let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
+    steady.iter().map(f).sum::<u64>() as f64 / steady.len().max(1) as f64
 }
 
 fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
@@ -391,9 +437,7 @@ fn write_minutes(t: &mut String, minutes: &[Minute]) {
             g(m.pool_active)
         );
     }
-    let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
-    let n = steady.len().max(1) as f64;
-    let mean = |f: fn(&Minute) -> u64| steady.iter().map(f).sum::<u64>() as f64 / n;
+    let mean = |f: fn(&Minute) -> u64| steady(minutes, f);
     let _ = writeln!(
         t,
         "steady (after {WARMUP_MINUTES} warmup min), per min: admitted={:.1} rejected={:.1} completed={:.1} fetched={:.1} stored={:.1}",

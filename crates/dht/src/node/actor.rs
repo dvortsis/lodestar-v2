@@ -18,7 +18,7 @@ use super::peers::PeerStore;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
-use super::transport::{Map, RecvSocket, SendSocket, Set};
+use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
     Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, Snapshot, Source, Stats,
 };
@@ -916,10 +916,10 @@ impl Actor {
                 r.inflight = r.inflight.saturating_sub(1);
             }
         }
-        if let Some(n) = self.pending_addrs.get_mut(&p.to) {
-            *n -= 1;
-            if *n == 0 {
-                self.pending_addrs.remove(&p.to);
+        if let MapEntry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
+            *e.get_mut() -= 1;
+            if *e.get() == 0 {
+                e.remove();
             }
         }
         p

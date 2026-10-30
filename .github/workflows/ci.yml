@@ -147,11 +147,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
-      # The DHT's unit tests in their production configuration (no
-      # `testing`), which the workspace run above never builds.
+      # The DHT's tests in their production configuration (no `testing`),
+      # which the workspace run above never builds.
       - name: dht tests without test seams
         if: runner.os == 'Linux'
-        run: cargo test -p lodestar-dht --lib
+        run: cargo test -p lodestar-dht
       # DUR-26: the updater's persistence tests are Unix-only; a cfg that
       # compiled them out must not pass as zero tests run.
       - name: updater tests selected

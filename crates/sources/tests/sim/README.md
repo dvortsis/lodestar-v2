@@ -82,22 +82,31 @@ It has four parts:
   Production keeps the randomly keyed std hash tables and seen-filter keys.
 - **Platforms and toolchains:** a fixed hasher would not be enough. A hash table's layout depends on its SIMD group width (16 on x86_64, 8 on arm64) and on the std release, and changing only the hash keys moves every golden. B-tree order depends on `Ord` alone, so the goldens hold on every CI runner and across toolchain updates.
 - **Dependencies:** the actor's `StdRng` comes from `rand`; a `rand` upgrade that changes it moves the goldens. Regenerate them in that PR.
-- **Golden fields are listed explicitly**, not printed with `Debug`. A report line `name=0` that the golden doesn't have is ignored, so a candidate's new counter, which reads 0 with its switch off, leaves the golden matching.
+- **Golden fields are listed explicitly**, not printed with `Debug`. A report line `name=0` that the golden doesn't have is ignored, so a candidate's new counter, which reads 0 with its switch off, leaves the golden matching. This only works for counters printed one per line: a new field added to a multi-field line (the pool, failure, loss and network lines) changes that line and moves the golden.
+- **Every run checks conservation:**
+  - fetched equals stored once the run has shut down;
+  - funnel `Fetched` equals `PoolStats::fetched`;
+  - admitted ≥ completed + cancelled, and the same plus the active and queued gauges, less the 32-request cap the 1 s gauge refresh can lag by.
+
+  `≥`, not `=`: the actor drops closed-caller requests from its queue without counting them, a counter contract that predates CR-SIM.
 
 ## A/B a candidate
 
 Each candidate (CR-ADM, CR-1a-H, CR-1a-S, CR-1c, CR-1b, CR-4) ships its runtime switch, default off, in the real `Config` or `PoolConfig`. To screen it here:
 
 1. Add a field to `Switches` in `scenario.rs` (for example `bounded_admission: bool`), and map it onto the real config in `Switches::apply`. List it in `Switches::describe` so the report header names it.
-2. Compare the arms over several seeds, never one, and pair them. Across seeds 1–8, stored metadata spreads 16–20% of its mean (min to max; run the ignored `noise_floor` test to re-measure), so one seed is inside the noise. `paired_stored_difference` runs both arms on each seed (the arms of one seed share their network luck) and returns on − off per seed. Screen a candidate in only when every seed's difference has the same sign and the mean beats the off arm's spread:
+2. Screen it with `screen(off, on)`, the only comparison candidates use. It runs both arms on each of the fixed `SCREEN_SEEDS` (1–8); the arms of one seed share their network luck. It then applies a sign test to the post-warmup stored rate (`steady_stored`, metadata stored per minute after the 3-minute warmup):
+   - `Better` means "on" stored more on every seed;
+   - `Worse` means it stored less on every seed;
+   - `Inconclusive` means mixed signs, or a tie on any seed.
+
+   One seed, or the totals, which include warmup, would be inside the noise: across `SCREEN_SEEDS` the steady rate spreads 11–20% of its mean (run the ignored `noise_floor` test to re-measure).
    ```rust
    let off = scenario::admission_pressure();
    let on = Scenario { switches: Switches { bounded_admission: true }, ..off.clone() };
-   let diffs = paired_stored_difference(&off, &on, 1..9);
-   assert!(diffs.iter().all(|d| *d > 0), "{diffs:?}");
+   let v = screen(&off, &on);
+   assert_eq!(v.outcome, Outcome::Better, "{:?}", v.diffs);
    ```
-   `stored_over_seeds` gives one arm's mean and range.
-   Optionally, check in `golden/<scenario>+<switch>.txt` for the "on" arm.
 3. Off must leave every existing golden unchanged. That is the proof the switch is inert by default.
 
 Screening here is a filter, not the acceptance test. The live A/B runs in the master plan ("Crawler program") still decide.
@@ -112,6 +121,7 @@ Screening here is a filter, not the acceptance test. The live A/B runs in the ma
   - no inbound queries from other nodes, so passive `get_peers`/`announce_peer` harvests are zero;
   - no uTP;
   - no NAT or kernel buffer limits: the in-memory socket never returns `WouldBlock`.
+- **Node behaviour over time:** every node's latency and loss come from the same per-scenario distribution. There are no persistent per-node classes (always-slow or lossy nodes) and no churn: nodes never join, leave or change address during a run.
 - **Fetch timing:** an unreachable peer fails at the 4 s connect timeout, and anything slower than the 8 s fetch deadline times out there, as in peer-wire. There's no per-phase handshake model.
 - **Routing:** an approximation on numerically sorted ids. Lookups converge in about log₈(N) hops, and the 8 XOR-closest ids in a ±16-rank window hold a swarm.
 

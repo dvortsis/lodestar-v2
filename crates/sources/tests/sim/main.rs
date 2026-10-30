@@ -110,40 +110,98 @@ fn comparable(golden: &str, report: &str) -> String {
     out
 }
 
-/// Metadata stored over `seeds` seeds of one scenario: (mean, min, max).
-/// One seed is inside the simulator's noise; compare arms over several.
-pub fn stored_over_seeds(s: &Scenario, seeds: std::ops::Range<u64>) -> (f64, u64, u64) {
-    let stored: Vec<u64> = seeds
-        .map(|seed| {
-            let mut s = s.clone();
-            s.seed = seed;
-            simulate(&s).stored
-        })
-        .collect();
-    let mean = stored.iter().sum::<u64>() as f64 / stored.len().max(1) as f64;
-    let min = stored.iter().copied().min().unwrap_or(0);
-    let max = stored.iter().copied().max().unwrap_or(0);
-    (mean, min, max)
+/// The seeds every screening uses. Fixed, so a candidate can't pick the
+/// seeds it wins on.
+pub const SCREEN_SEEDS: std::ops::Range<u64> = 1..9;
+
+/// A screening result: the sign of every paired difference agrees, or not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Verdict {
+    pub outcome: Outcome,
+    /// Steady-state stored per minute, "on" minus "off", per seed in
+    /// [`SCREEN_SEEDS`] order.
+    pub diffs: Vec<f64>,
 }
 
-/// Stored metadata, "on" arm minus "off" arm, per seed. The network keys
-/// its luck per node and query, so the arms of one seed share their random
-/// numbers and the difference isolates the switch better than unpaired
-/// means do.
-#[allow(dead_code)] // For candidates' A/B tests (README, "A/B a candidate").
-pub fn paired_stored_difference(
-    off: &Scenario,
-    on: &Scenario,
-    seeds: std::ops::Range<u64>,
-) -> Vec<i64> {
-    seeds
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// "On" stored more on every seed.
+    Better,
+    /// "On" stored less on every seed.
+    Worse,
+    /// Mixed signs, or a tie on any seed.
+    Inconclusive,
+}
+
+/// Screens a candidate: runs both arms on each of [`SCREEN_SEEDS`] (the
+/// arms of a seed share their network luck, since the network keys it per
+/// node and query) and applies a sign test to the post-warmup stored rate.
+/// A tie on any seed counts against. This is the only comparison
+/// candidates use (README, "A/B a candidate").
+#[allow(dead_code)] // Called by candidates' A/B tests.
+pub fn screen(off: &Scenario, on: &Scenario) -> Verdict {
+    let diffs: Vec<f64> = SCREEN_SEEDS
         .map(|seed| {
             let (mut a, mut b) = (off.clone(), on.clone());
             a.seed = seed;
             b.seed = seed;
-            simulate(&b).stored as i64 - simulate(&a).stored as i64
+            simulate(&b).steady_stored - simulate(&a).steady_stored
         })
-        .collect()
+        .collect();
+    Verdict {
+        outcome: sign_test(&diffs),
+        diffs,
+    }
+}
+
+fn sign_test(diffs: &[f64]) -> Outcome {
+    if !diffs.is_empty() && diffs.iter().all(|d| *d > 0.0) {
+        Outcome::Better
+    } else if !diffs.is_empty() && diffs.iter().all(|d| *d < 0.0) {
+        Outcome::Worse
+    } else {
+        Outcome::Inconclusive
+    }
+}
+
+/// One scenario's steady-state stored rate over [`SCREEN_SEEDS`]:
+/// (mean, min, max), for the noise floor.
+fn steady_over_seeds(s: &Scenario) -> (f64, f64, f64) {
+    let stored: Vec<f64> = SCREEN_SEEDS
+        .map(|seed| {
+            let mut s = s.clone();
+            s.seed = seed;
+            simulate(&s).steady_stored
+        })
+        .collect();
+    let mean = stored.iter().sum::<f64>() / stored.len().max(1) as f64;
+    let min = stored.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = stored.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (mean, min, max)
+}
+
+#[test]
+fn sign_test_needs_every_seed_and_fails_ties() {
+    assert_eq!(sign_test(&[1.0, 0.5, 2.0]), Outcome::Better);
+    assert_eq!(sign_test(&[-1.0, -0.5]), Outcome::Worse);
+    assert_eq!(sign_test(&[1.0, -0.5, 2.0]), Outcome::Inconclusive);
+    assert_eq!(sign_test(&[1.0, 0.0, 2.0]), Outcome::Inconclusive);
+    assert_eq!(sign_test(&[]), Outcome::Inconclusive);
+}
+
+/// A switch that changes nothing ties on every seed, which fails the
+/// screen. One seed shows it; all of `SCREEN_SEEDS` would cost the ignored
+/// `noise_floor`'s run time.
+#[test]
+fn an_inert_switch_screens_inconclusive() {
+    let mut s = scenario::healthy();
+    s.minutes = 4;
+    s.seed = SCREEN_SEEDS.start;
+    let (off, on) = (simulate(&s), simulate(&s));
+    assert_eq!(
+        sign_test(&[on.steady_stored - off.steady_stored]),
+        Outcome::Inconclusive
+    );
 }
 
 #[test]
@@ -234,11 +292,11 @@ fn noise_floor() {
         scenario::high_latency(),
         scenario::admission_pressure(),
     ] {
-        let (mean, min, max) = stored_over_seeds(&s, 1..9);
+        let (mean, min, max) = steady_over_seeds(&s);
         println!(
-            "noise {}: stored mean={mean:.1} min={min} max={max} spread={:.1}%",
+            "noise {}: steady stored/min mean={mean:.1} min={min:.1} max={max:.1} spread={:.1}%",
             s.name,
-            100.0 * (max - min) as f64 / mean.max(1.0)
+            100.0 * (max - min) / mean.max(1.0)
         );
     }
 }
