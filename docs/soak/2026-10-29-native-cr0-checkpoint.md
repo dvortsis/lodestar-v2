@@ -10,7 +10,7 @@ pending source changes. Publication does not establish release or soak acceptanc
 - Source: `744b84d68c7609d8220430ffc9938c05c6d6a527`, frozen r21 package.
 - Executable SHA-256: `24CB1EF43D86AD8C0F9F80C41E9D2D661F3FD6FE5573E72C13A87285E11E1475`.
 - Run: `target/soak/cr0-native-2026-10-28-744b84d6-r2` from the repository root.
-- Crawler PID 49888 and collector PID 98244 were both alive at the diagnostic check.
+- The crawler and collector processes (identities in the local run) were both alive at the diagnostic check.
 - Started October 28 at 18:23:56 MDT; suppression ended October 29 at 00:24:56;
   measured baseline started at 00:55:11 MDT.
 - Expected end: October 30 at 00:55:11 MDT, subject to actual collector evidence.
