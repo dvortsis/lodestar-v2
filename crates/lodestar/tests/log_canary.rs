@@ -248,9 +248,14 @@ impl Server {
             body.len()
         )
         .ok()?;
-        let mut out = String::new();
-        c.read_to_string(&mut out).ok()?;
-        Some(out)
+        // What arrived, even if the read then fails: a server that answers
+        // before reading a request's body and closes can reset the
+        // connection, and macOS then fails the read after the answer.
+        let mut out = Vec::new();
+        if c.read_to_end(&mut out).is_err() && out.is_empty() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out).into_owned())
     }
 
     fn get(&self, path: &str) -> Option<String> {
@@ -1197,7 +1202,10 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
             format!("{method} {path}?apikey={key} HTTP/1.0{json}"),
             format!("{method} {path}?token={token} HTTP/1.0{json}"),
         ] {
-            let r = s.request(&head, r#"{"which":"all"}"#).unwrap();
+            // No body: the guard refuses before reading one, and a body left
+            // unread makes the server's close a reset (macOS then loses
+            // the answer).
+            let r = s.request(&head, "").unwrap();
             assert!(r.starts_with("HTTP/1.0 401"), "{head}: {r}");
             assert!(r.contains("login_required"), "{r}");
         }
