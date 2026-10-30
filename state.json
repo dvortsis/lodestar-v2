@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:15Z",
+ "updated_at": "2026-10-30T20:12Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1515,10 +1515,10 @@
    "notes": "supervisor switch-refusal stall in CI (run 41091029121)"
   },
   "CR-gate-hash-mismatch": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhn9fpZf44nCWftW7LDz",
-   "pr": null,
+   "pr": 236,
    "notes": "launched 19:05Z; contract note first, code after #231/#232 merge"
   }
  },
@@ -2285,7 +2285,8 @@
   "2026-10-30T19:30Z #217 post-merge runs all green (Web 41113005439, E2E 41113005344, smoke 41113005209); no fix needed. Author and reviewer archived.",
   "2026-10-30T19:51Z merged #234 cli test port (f3f66bd6). Opened #235 fix/canary-udp-port (test_port probes UDP too; log_canary uses it); review by session_01MMjhn984M3k3UJXUCsEYPX. #233 still in CI.",
   "2026-10-30T19:55Z merged #233 CR-0d-2b-2 (5b0cd88c): ci-ok, Web, Playwright core, Lighthouse and smoke all green at 6dd24177. CR-0d complete; session archived. Open now: #235 (runner, canary UDP port) in review; CR-gate-hash-mismatch coding.",
-  "2026-10-30T20:05Z opened #237 fix/clippy-msrv-2b (collapsible_if and manual_is_multiple_of fixed workspace-wide; two allows removed; chunks_exact_to_as_chunks stays); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #235."
+  "2026-10-30T20:05Z opened #237 fix/clippy-msrv-2b (collapsible_if and manual_is_multiple_of fixed workspace-wide; two allows removed; chunks_exact_to_as_chunks stays); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #235.",
+  "2026-10-30T20:12Z #235 review MERGE at 446fbc2d; merge on green ci-ok. #236 CR-gate-hash-mismatch opened (4cf0ff6b; a8706e82 heading fix held locally); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #237. At merge, flag the owner (\u00a72.19): failed_verification now counts hash mismatches only."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
