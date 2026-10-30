@@ -3,7 +3,7 @@
   "info": {
     "title": "Lodestar API",
     "description": "Every node is a new discovery. The JSON API under `/api/v1` (architecture §9): errors are always the `Error` envelope, and every path but the auth ones and this document needs the session cookie.",
-    "version": "0.5.0"
+    "version": "0.5.1"
   },
   "servers": [
     {
