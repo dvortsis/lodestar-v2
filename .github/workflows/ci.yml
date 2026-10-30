@@ -138,6 +138,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # DUR-26: the updater's persistence tests are Unix-only; a cfg that
+      # compiled them out must not pass as zero tests run.
+      - name: updater tests selected
+        if: runner.os == 'Linux'
+        run: |
+          n=$(cargo test -p lodestar --bin lodestar update:: -- --list | grep -c ': test$' || true)
+          echo "update:: selects $n tests"
+          if [ "$n" -eq 0 ]; then echo "::error::no updater tests selected"; exit 1; fi
       # The PUID/PGID drop only happens as root (tests/privdrop.rs skips
       # otherwise). Built as the runner user, so target/ stays theirs.
       - name: privilege drop as root

@@ -2,7 +2,13 @@
 // the connection kind. One instance for the app; `start()` subscribes and returns the stop.
 import { onSessionOk } from '$lib/api/client';
 import { events, type createEvents } from '$lib/state/events.svelte';
-import { connectionKind, pillState, type CrawlerSnapshot, type RebuildSnapshot } from './status';
+import {
+	connectionKind,
+	pillState,
+	type CrawlerSnapshot,
+	type ProgressOverlay,
+	type RebuildSnapshot
+} from './status';
 
 type EventsClient = Pick<ReturnType<typeof createEvents>, 'status' | 'error' | 'on'>;
 
@@ -22,6 +28,7 @@ export function createShellStatus(
 ) {
 	let crawler = $state<CrawlerSnapshot | null>(null);
 	let rebuild = $state<RebuildSnapshot | null>(null);
+	let progress = $state<ProgressOverlay>(null);
 	let everLive = $state(false);
 	// The stream is the only thing the shell opens itself, and proxies or antivirus tools can hold
 	// just that back. Any REST success, or a probe that gets an answer, says the server is there.
@@ -29,7 +36,7 @@ export function createShellStatus(
 	let probing = false;
 	onSessionOk(() => (restOk = true));
 
-	const pill = $derived(pillState({ stream: client.status, crawler, rebuild }));
+	const pill = $derived(pillState({ stream: client.status, crawler, rebuild, progress }));
 	const connection = $derived(
 		connectionKind({ stream: client.status, error: client.error, everLive, restOk })
 	);
@@ -56,6 +63,10 @@ export function createShellStatus(
 					if (ok) restOk = true;
 				});
 			}
+		},
+		/** The server's progress facts (`progress.ts` polls them once the chrome is up). */
+		setProgress(p: ProgressOverlay) {
+			progress = p;
 		},
 		/** Subscribes to `crawler` and `rebuild` (one stream, shared with other consumers). */
 		start(): () => void {

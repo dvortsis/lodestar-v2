@@ -111,12 +111,15 @@ impl Coordinator {
         lease
     }
 
-    /// The holder lost the key: count it once and end the lease.
-    pub fn lost(&self, key: &InfoHash, token: Token, loss: Loss) {
-        if let Some(l) = self.complete(key, token) {
-            self.funnel
-                .record(l.cohort, l.source, Stage::Lost, Some(loss));
-        }
+    /// The holder lost the key: count it once and end the lease. False
+    /// if the token was stale (nothing was counted).
+    pub fn lost(&self, key: &InfoHash, token: Token, loss: Loss) -> bool {
+        let Some(l) = self.complete(key, token) else {
+            return false;
+        };
+        self.funnel
+            .record(l.cohort, l.source, Stage::Lost, Some(loss));
+        true
     }
 
     pub fn heartbeat(&self, worker: WorkerId, now: i64) {
@@ -169,9 +172,9 @@ mod tests {
         };
         // A second claim, a stale report and a double report count nothing.
         c.claim(WorkerId::LOCAL, claim(1), 0);
-        c.lost(&InfoHash([1; 20]), Token(token.0 + 1), Loss::NoPeers);
-        c.lost(&InfoHash([1; 20]), token, Loss::NoPeers);
-        c.lost(&InfoHash([1; 20]), token, Loss::NoPeers);
+        assert!(!c.lost(&InfoHash([1; 20]), Token(token.0 + 1), Loss::NoPeers));
+        assert!(c.lost(&InfoHash([1; 20]), token, Loss::NoPeers));
+        assert!(!c.lost(&InfoHash([1; 20]), token, Loss::NoPeers));
         assert_eq!(funnel.total(Stage::Harvested, None), 1);
         assert_eq!(funnel.total(Stage::Lost, Some(Loss::NoPeers)), 1);
         assert_eq!(c.outstanding(), 0);

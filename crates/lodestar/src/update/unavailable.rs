@@ -45,6 +45,7 @@ impl Unavailable {
                 window_zone: "UTC".into(),
                 next_window_at: None,
                 paused_until: None,
+                held_in_process: false,
                 allow_reindex: false,
             },
             releases: vec![],
