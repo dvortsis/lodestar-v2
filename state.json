@@ -1163,7 +1163,7 @@
    "status": "paused",
    "model": "sonnet",
    "deps": [],
-   "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge | 2026-10-23T21:14Z #147 review FIX: 1 blocking (settings save test-only hook via SettingsApi wrapper), 1 important (logs close poll vacuous), 3 polish. Web PR slice/X-sleeps-web ordered now (shortcuts.keyboard flake hit #149) | 2026-10-23T21:39Z #151 web (02dbc19) runner-reviewed OK, CI running | 2026-10-23T21:40Z #151 merged e9eb1cf (web waitForTimeout) | 2026-10-23T21:55Z #147 fixes 0a1e223 runner-checked OK (SignalSaves flag, chunk-stall wait); merge on green | 2026-10-23T22:29Z #147 merged 89610d7; next pool.rs + lodestar/tests | 2026-10-24T03:31Z paused (owner v0.5 priority, usage)",
+   "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge | 2026-10-23T21:14Z #147 review FIX: 1 blocking (settings save test-only hook via SettingsApi wrapper), 1 important (logs close poll vacuous), 3 polish. Web PR slice/X-sleeps-web ordered now (shortcuts.keyboard flake hit #149) | 2026-10-23T21:39Z #151 web (02dbc19) runner-reviewed OK, CI running | 2026-10-23T21:40Z #151 merged e9eb1cf (web waitForTimeout) | 2026-10-23T21:55Z #147 fixes 0a1e223 runner-checked OK (SignalSaves flag, chunk-stall wait); merge on green | 2026-10-23T22:29Z #147 merged 89610d7; next pool.rs + lodestar/tests | 2026-10-24T03:31Z paused (owner v0.5 priority, usage) | 2026-10-30T05:55Z old session told to port 7fcf111a,c272e0a2 onto new main as port/X-sleeps and open PR",
    "session": "session_01EFQKtWTWkBGHK299HzziBZ",
    "pr": null,
    "review_rounds": 1
@@ -1278,18 +1278,18 @@
    "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so."
   },
   "CR-COL": {
-   "status": "running",
+   "status": "ready-waiting-L5",
    "session": "session_01MMjhnAXqNdYeYYFdttw8Zo",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges"
+   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux."
   },
   "CR-0f": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnBTZv2giQz5rLJjSeM",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "deps": [
     "L5"
@@ -1302,7 +1302,7 @@
     "docs/soak/tools/analyze_cr0.py",
     "docs/decisions/<date>-CR-0f.md"
    ],
-   "notes": "2026-10-30T05:48Z from L2 review (v0.5.1 BLOCKER for item 1): (1) exempt resolved bootstrap seeds from special-range check (fake-ip 198.18/15, NAT64) keeping blocklist+port; warn if all rejected; (2) SetPaused(true) must not burn an attempt: drop reply sender -> cancel; polish: IANA ranges 192.31.196/24,192.52.193/24,192.175.48/24,2620:4f:8000::/48 + range-edge/scope-id tests; analyzer outstanding_rpcs cap per preset (256/1024/4096) + json recursion errors; tx-id start lower half; lookups_completed excludes cancelled. Each runtime change -> release delta + targeted test."
+   "notes": "2026-10-30T05:48Z from L2 review (v0.5.1 BLOCKER for item 1): (1) exempt resolved bootstrap seeds from special-range check (fake-ip 198.18/15, NAT64) keeping blocklist+port; warn if all rejected; (2) SetPaused(true) must not burn an attempt: drop reply sender -> cancel; polish: IANA ranges 192.31.196/24,192.52.193/24,192.175.48/24,2620:4f:8000::/48 + range-edge/scope-id tests; analyzer outstanding_rpcs cap per preset (256/1024/4096) + json recursion errors; tx-id start lower half; lookups_completed excludes cancelled. Each runtime change -> release delta + targeted test. | 2026-10-30T05:55Z launched (Opus) from land/L5"
   },
   "CR-ADM": {
    "notes": " | 2026-10-30T05:48Z L2 review: actor refusals get exponential back-off (pool.rs:764 vs flat pool.rs:675); pool max_lookups 256 > actor cap 32 -> include (requeue refused keys without exp factor; derive max_lookups from actor cap)."
@@ -1792,7 +1792,8 @@
   "review_round_1": "2026-10-30T05:07Z: fresh review #174 MERGE (+polish: cat-file guard pushed); #175 L1 FIX -> runner commit on land/L1 (labels, Torznab, v0.5.0, PID; CSV exception stated); #176 FIX -> 768327be (owner confirmation of tree diffs recorded in \u00a72.25; 4-slot cap recorded as approved-plan; 2.3KB binds pilots; CR-COL in tier 1 + G-v051; L owns = range files; dep/own fixes). #177 F-metainfo FIX: fuzz bound vs case-3 decode growth -> enforce limit on output; polish sent.",
   "plan_merged": "2026-10-30T05:23Z #176 merged 9f96d1f3: build-plan \u00a70, owner-decisions \u00a72.25, master-plan decisions, slices.yaml now on main",
   "next_branch": "2026-10-30T05:37Z deleted origin/next (main == 058d9937 lineage)",
-  "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051."
+  "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051.",
+  "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z"
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
