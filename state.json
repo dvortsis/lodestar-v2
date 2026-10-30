@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:16Z",
+ "updated_at": "2026-10-30T20:23Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2288,7 +2288,8 @@
   "2026-10-30T20:05Z opened #237 fix/clippy-msrv-2b (collapsible_if and manual_is_multiple_of fixed workspace-wide; two allows removed; chunks_exact_to_as_chunks stays); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #235.",
   "2026-10-30T20:12Z #235 review MERGE at 446fbc2d; merge on green ci-ok. #236 CR-gate-hash-mismatch opened (4cf0ff6b; a8706e82 heading fix held locally); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #237. At merge, flag the owner (\u00a72.19): failed_verification now counts hash mismatches only.",
   "2026-10-30T20:20Z safety check-in: every listed item done (#232 #233 #234 #217 merged; hash-mismatch is #236). rc.2 Release run 41110604990 succeeded; draft release 429407881. Recorded artifact zip digests; per-file hashes blocked by network policy (blob host denied), asked the owner.",
-  "2026-10-30T20:16Z #237 review MERGE at cbd81a42 (let-chain temporaries and operand order verified); merge on green ci-ok after #235."
+  "2026-10-30T20:16Z #237 review MERGE at cbd81a42 (let-chain temporaries and operand order verified); merge on green ci-ok after #235.",
+  "2026-10-30T20:23Z merged #235 canary UDP port (ccff4000)."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
