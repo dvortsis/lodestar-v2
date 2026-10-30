@@ -1343,11 +1343,11 @@
    "pr": 202
   },
   "IMP-0": {
-   "status": "review",
+   "status": "merged",
    "session": "session_01MMjhn95fzNhDro9AJeDYin",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR | 2026-10-30T10:48Z PR #203 head 5242f2e; fresh review session_01MMjhnAWTmyQoLPMGeVReHH; subscribed | 2026-10-30T11:03Z review FIX FIRST (reader role can write via lo_* / tx override; CRLF .sh; RLS forges counts; polish 4-9); sent; runner: .gitattributes one-line ownership extension | 2026-10-30T11:10Z fixes a59f43f (all 10); re-check asked | 2026-10-30T11:21Z re-check MERGE (a59f43f); merge on green after confirming the importer job runs the psql test (not skipped)",
+   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR | 2026-10-30T10:48Z PR #203 head 5242f2e; fresh review session_01MMjhnAWTmyQoLPMGeVReHH; subscribed | 2026-10-30T11:03Z review FIX FIRST (reader role can write via lo_* / tx override; CRLF .sh; RLS forges counts; polish 4-9); sent; runner: .gitattributes one-line ownership extension | 2026-10-30T11:10Z fixes a59f43f (all 10); re-check asked | 2026-10-30T11:21Z re-check MERGE (a59f43f); merge on green after confirming the importer job runs the psql test (not skipped) | 2026-10-30T12:00Z merged #203 (CI green; reader-role psql test ran 9/9); author + reviewer archived",
    "pr": 203
   },
   "CR-SIM": {
