@@ -12,13 +12,14 @@ use lodestar_pipeline::health::{HealthHandle, trackers::Health};
 use lodestar_sources::Loss;
 use lodestar_store::HotColumns;
 
-pub const FAILURE_KINDS: [(FailureKind, &str); 6] = [
+pub const FAILURE_KINDS: [(FailureKind, &str); 7] = [
     (FailureKind::Unreachable, "unreachable"),
     (FailureKind::TimedOut, "timed_out"),
     (FailureKind::Refused, "refused"),
     (FailureKind::EncryptionFailed, "encryption_failed"),
     (FailureKind::Invalid, "invalid"),
     (FailureKind::Oversize, "oversize"),
+    (FailureKind::HashMismatch, "hash_mismatch"),
 ];
 
 pub const LOSSES: [(Loss, &str); 10] = [

@@ -61,8 +61,12 @@ pub enum FailureKind {
     TimedOut,
     Refused,
     EncryptionFailed,
+    /// A handshake or protocol violation.
     Invalid,
     Oversize,
+    /// Metadata whose SHA-1 isn't the info hash: the one failure that
+    /// counts as failed verification (§2.25).
+    HashMismatch,
 }
 
 impl Error {
@@ -75,7 +79,8 @@ impl Error {
             }
             Error::Mse(_) => FailureKind::EncryptionFailed,
             Error::MetadataSize(_) => FailureKind::Oversize,
-            Error::Handshake(_) | Error::Protocol(_) | Error::HashMismatch => FailureKind::Invalid,
+            Error::Handshake(_) | Error::Protocol(_) => FailureKind::Invalid,
+            Error::HashMismatch => FailureKind::HashMismatch,
         }
     }
 }
@@ -104,5 +109,17 @@ impl std::error::Error for Error {}
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_hash_mismatch_is_a_failed_verification() {
+        assert_eq!(Error::HashMismatch.kind(), FailureKind::HashMismatch);
+        assert_eq!(Error::Handshake("x").kind(), FailureKind::Invalid);
+        assert_eq!(Error::Protocol("x").kind(), FailureKind::Invalid);
     }
 }

@@ -37,14 +37,14 @@ lodestar_log::catalogue! {
         component: Fetch,
         level: Info,
         message: "Metadata fetches that failed since the last summary",
-        fields: { seconds: Size, unreachable: Size, timed_out: Size, refused: Size, encryption_failed: Size, invalid: Size, oversize: Size },
+        fields: { seconds: Size, unreachable: Size, timed_out: Size, refused: Size, encryption_failed: Size, invalid: Size, oversize: Size, hash_mismatch: Size },
     }
 }
 
 /// How often the summary is written, at most.
 pub const SUMMARY_EVERY_SECS: u64 = 60;
 
-const KINDS: usize = 6;
+const KINDS: usize = 7;
 
 /// Failures since the last summary, by kind, and when that was (seconds
 /// since the first failure, plus one: 0 before it). A monotonic clock, so
@@ -66,6 +66,7 @@ pub(crate) fn label(k: FailureKind) -> &'static str {
         FailureKind::EncryptionFailed => "encryption_failed",
         FailureKind::Invalid => "invalid",
         FailureKind::Oversize => "oversize",
+        FailureKind::HashMismatch => "hash_mismatch",
     }
 }
 
@@ -77,6 +78,7 @@ fn index(k: FailureKind) -> usize {
         FailureKind::EncryptionFailed => 3,
         FailureKind::Invalid => 4,
         FailureKind::Oversize => 5,
+        FailureKind::HashMismatch => 6,
     }
 }
 
@@ -127,7 +129,8 @@ impl Summary {
             refused = n[2],
             encryption_failed = n[3],
             invalid = n[4],
-            oversize = n[5]
+            oversize = n[5],
+            hash_mismatch = n[6]
         );
     }
 }
@@ -158,6 +161,7 @@ mod tests {
             FailureKind::EncryptionFailed,
             FailureKind::Invalid,
             FailureKind::Oversize,
+            FailureKind::HashMismatch,
         ] {
             assert!(!label(k).is_empty());
             assert!(index(k) < KINDS);

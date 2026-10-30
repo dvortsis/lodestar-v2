@@ -158,7 +158,7 @@ pub struct PoolStats {
     pub lookup_backlog: AtomicU64,
     pub fetched: AtomicU64,
     /// Failed fetch attempts by [`FailureKind`], in declaration order.
-    pub failures: [AtomicU64; 6],
+    pub failures: [AtomicU64; 7],
     /// Keys lost, by [`Loss`] code (index = code).
     pub lost: [AtomicU64; 11],
     pub duplicates: AtomicU64,
@@ -206,6 +206,7 @@ fn failure_index(kind: FailureKind) -> usize {
         FailureKind::EncryptionFailed => 3,
         FailureKind::Invalid => 4,
         FailureKind::Oversize => 5,
+        FailureKind::HashMismatch => 6,
     }
 }
 
@@ -604,7 +605,7 @@ impl Pool {
             let cohort = d.at.div_euclid(3600);
             self.funnel.admitted(&key, cohort, d.source);
             self.stats.evicted_service[0].fetch_add(1, Ordering::Relaxed);
-            self.lose_untracked(&key, cohort, d.source, Loss::Evicted);
+            self.lose_untracked(&key, cohort, d.source, Loss::Evicted, None);
             return;
         }
         let cohort = d.at.div_euclid(3600);
@@ -1428,12 +1429,22 @@ impl Pool {
                 self.stats.admission_wait_cancelled[0].fetch_add(1, Ordering::Relaxed);
             }
         }
-        self.lose_untracked(&key, e.cohort, e.source, loss);
+        // The last failure goes with the loss only when it's the cause: a
+        // key evicted after a hash mismatch didn't fail verification.
+        let cause = e.last_failure.filter(|&k| Loss::from(k) == loss);
+        self.lose_untracked(&key, e.cohort, e.source, loss, cause);
     }
 
-    fn lose_untracked(&mut self, key: &InfoHash, cohort: i64, source: SourceId, loss: Loss) {
+    fn lose_untracked(
+        &mut self,
+        key: &InfoHash,
+        cohort: i64,
+        source: SourceId,
+        loss: Loss,
+        cause: Option<FailureKind>,
+    ) {
         self.stats.lost[loss as usize].fetch_add(1, Ordering::Relaxed);
-        self.funnel.lost(key, cohort, source, loss);
+        self.funnel.lost(key, cohort, source, loss, cause);
     }
 
     fn snapshot(&self) -> Vec<QueuedKey> {

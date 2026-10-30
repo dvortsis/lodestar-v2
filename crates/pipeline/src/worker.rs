@@ -20,6 +20,7 @@ use lodestar_classify::{Classification, FileInfo};
 use lodestar_cluster::{Token, WorkerId};
 use lodestar_filter::{Engine, Facts, Handle, Item, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
+use lodestar_peer_wire::FailureKind;
 use lodestar_sources::{FetchedKey, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{Prepared, Preparer, SourceId};
 use tokio::sync::mpsc;
@@ -66,12 +67,22 @@ impl Funnel for WorkerFunnel {
 
     fn admitted(&self, _key: &InfoHash, _cohort: i64, _source: SourceId) {}
 
-    fn lost(&self, key: &InfoHash, _cohort: i64, _source: SourceId, loss: Loss) {
+    fn lost(
+        &self,
+        key: &InfoHash,
+        _cohort: i64,
+        _source: SourceId,
+        loss: Loss,
+        cause: Option<FailureKind>,
+    ) {
         match self.leases.take(key) {
             Some(token) => {
                 // Counted where the lease ends, once per key: the pool
-                // gave it up on data that didn't hash to it.
-                if self.coordinator.lost(key, token, loss) && loss == Loss::Invalid {
+                // gave it up on data that didn't hash to it. A protocol
+                // violation is an `Invalid` loss too, but not this.
+                if self.coordinator.lost(key, token, loss)
+                    && cause == Some(FailureKind::HashMismatch)
+                {
                     self.gate.exclude(Excluded::FailedVerification, 1);
                 }
             }
@@ -381,8 +392,10 @@ mod tests {
         assert_eq!(gate.new_verified(Origin::Network), 0);
     }
 
-    /// The pool's terminal loss to bad data counts once, under the
-    /// current lease only; other losses don't count here.
+    /// The pool's terminal loss to data that didn't hash to the key counts
+    /// once, under the current lease only. A protocol violation is the
+    /// same funnel loss but not a failed verification, and other losses
+    /// don't count.
     #[test]
     fn a_verification_loss_counts_once_under_its_lease() {
         let funnel = Arc::new(FunnelCounts::default());
@@ -390,13 +403,18 @@ mod tests {
         let leases = Arc::new(WorkerLeases::default());
         let gate = Arc::new(GateStats::new(0));
         let wf = WorkerFunnel {
-            counts: funnel,
+            counts: funnel.clone(),
             coordinator: coordinator.clone(),
             leases: leases.clone(),
             gate: gate.clone(),
         };
         let source = SourceId::new(1).unwrap();
-        for (i, loss) in [Loss::Invalid, Loss::NoPeers].into_iter().enumerate() {
+        let cases = [
+            (Loss::Invalid, Some(FailureKind::HashMismatch)),
+            (Loss::Invalid, Some(FailureKind::Invalid)),
+            (Loss::NoPeers, None),
+        ];
+        for (i, (loss, cause)) in cases.into_iter().enumerate() {
             let key = InfoHash([i as u8 + 1; 20]);
             let claim = Claim {
                 key,
@@ -408,10 +426,18 @@ mod tests {
                 panic!("granted")
             };
             leases.insert(key, token);
-            wf.lost(&key, 0, source, loss);
+            wf.lost(&key, 0, source, loss, cause);
             // A second report has no lease left.
-            wf.lost(&key, 0, source, loss);
+            wf.lost(&key, 0, source, loss, cause);
+            // Only the hash mismatch, the first case, counts.
+            assert_eq!(
+                gate.excluded(Excluded::FailedVerification),
+                1,
+                "after {cause:?}"
+            );
         }
-        assert_eq!(gate.excluded(Excluded::FailedVerification), 1);
+        // Both invalid keys are still the funnel's `invalid` losses.
+        assert_eq!(funnel.total(Stage::Lost, Some(Loss::Invalid)), 2);
+        assert_eq!(funnel.total(Stage::Lost, Some(Loss::NoPeers)), 1);
     }
 }
