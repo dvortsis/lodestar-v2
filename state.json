@@ -1355,14 +1355,14 @@
    "session": "session_01MMjhnABUWdrF5PzgVK6oqa",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5"
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines)"
   },
   "D-v051": {
    "status": "running",
    "session": "session_01MMjhn8VPDpTCm2jVkiiVYP",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7"
+   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1852,7 +1852,8 @@
   "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051.",
   "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z",
   "cap_note": "2026-10-30T06:30Z owner goal 'keep building until fully blocked' (usage reset): running beyond the plan's 4-slot cap; ~10 sessions active/idle. Flag to owner.",
-  "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f | 2026-10-30T06:32Z #182 merged b4d80387"
+  "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f | 2026-10-30T06:32Z #182 merged b4d80387",
+  "landing_plan_L3_L5": "2026-10-30T06:38Z L3 can't be green alone (owner-range size budgets + detail-history, fixed by L5 81ba3fda). Land L3+L4+L5 together via #184 retargeted to main: L3-fix fixes e2e typecheck on land/L3, then merges land/L3 into land/L5 (session.svelte.ts conflict); runner merges fixed land/L4 into land/L5 after L4-fix. #183 closes as merged."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
