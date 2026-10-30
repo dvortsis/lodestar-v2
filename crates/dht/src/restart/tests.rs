@@ -1205,12 +1205,9 @@ fn the_lock_is_exclusive_and_released_on_drop() {
     let dir = Scratch::new("lock");
     let first = match try_lock(dir.path()).unwrap() {
         LockAttempt::Held(l) => l,
-        other => {
-            // Say so rather than pass silently: this host's temp
-            // filesystem has no locks, so nothing here was checked.
-            eprintln!("SKIPPED: no file locks in the temp dir ({other:?})");
-            return;
-        }
+        // Fail rather than pass silently: this host's temp filesystem has
+        // no locks, so nothing here would be checked.
+        other => panic!("this test needs file locks in the temp dir ({other:?})"),
     };
     assert!(matches!(try_lock(dir.path()).unwrap(), LockAttempt::Busy));
     drop(first);

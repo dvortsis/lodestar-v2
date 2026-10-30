@@ -166,6 +166,16 @@ impl Run {
     }
 }
 
+/// Enough retry rounds, after a fault is disarmed, for one to land: a
+/// failure already queued is read first, then the next retry runs.
+async fn settle(r: &mut Run) {
+    for _ in 0..3 {
+        advance(MAX_RETRY).await;
+        r.tick();
+        r.tick();
+    }
+}
+
 fn addr(i: u8) -> SocketAddr {
     SocketAddr::from(([198, 51, 100, i], 6881))
 }
@@ -334,8 +344,7 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
     r.commit(&d);
     let before = std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap();
     let LockAttempt::Held(other) = restart::try_lock(&d.data).unwrap() else {
-        eprintln!("SKIPPED: no file locks in the temp dir");
-        return;
+        panic!("this test needs file locks in the temp dir");
     };
     let mut r = Run::boot(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::Locked);
@@ -368,8 +377,7 @@ async fn an_off_run_holds_the_lock_and_its_window_starts_when_it_gets_it() {
     let d = Dirs::new("c1");
     let c = clock();
     let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
-        eprintln!("SKIPPED: no file locks in the temp dir");
-        return;
+        panic!("this test needs file locks in the temp dir");
     };
     let mut off = Run::boot(&d, &c, false);
     advance(horizon() + Duration::from_secs(3600)).await;
@@ -397,8 +405,9 @@ async fn an_off_run_holds_the_lock_and_its_window_starts_when_it_gets_it() {
 #[tokio::test(start_paused = true)]
 async fn failed_invalidation_blocks_sampling_until_a_retry_lands() {
     // I1: a clean marker exists and neither the marker nor the witness can
-    // be written. Nothing is sampled; once a retry lands, the run samples
-    // after its window.
+    // be written. Nothing is sampled. A retry that lands two minutes in
+    // turns the would-be resume into suppress mode: still nothing until
+    // this run's start + H, and the commit passes that window on.
     let d = Dirs::new("i1");
     let c = clock();
     let mut r = Run::boot(&d, &c, true);
@@ -406,24 +415,263 @@ async fn failed_invalidation_blocks_sampling_until_a_retry_lands() {
     r.tick();
     r.commit(&d);
     fail::arm_sticky(Some(restart::Point::AfterWrite));
+    let start = Instant::now();
     let mut r = Run::boot(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
-    advance(horizon() + Duration::from_secs(60)).await;
-    r.tick();
     assert!(!r.proof.may_sample(Instant::now()));
     assert!(
         r.proof.suppression_seconds(Instant::now()) >= 1,
         "never reads 0 while blocked"
     );
+    for _ in 0..4 {
+        advance(Duration::from_secs(30)).await;
+        r.tick();
+    }
     assert!(
         r.stats.restart_persist_errors[step(PersistStep::Invalidate)].load(Ordering::Relaxed) >= 2
     );
+    assert!(!r.proof.may_sample(Instant::now()));
     fail::arm_sticky(None);
-    advance(MAX_RETRY).await;
-    r.tick(); // starts the retry
-    r.tick(); // reads its result
+    settle(&mut r).await;
+    assert!(
+        Instant::now() < start + horizon(),
+        "the retry must land before the window ends for this test to mean anything"
+    );
+    assert_eq!(
+        r.proof.reason(),
+        Reason::InvalidateFailed,
+        "landed late: suppress mode"
+    );
+    assert!(!r.proof.may_sample(Instant::now()), "not before start + H");
+    advance(start + horizon() - Instant::now() - Duration::from_millis(1)).await;
+    r.tick();
+    assert!(!r.proof.may_sample(Instant::now()));
+    advance(Duration::from_millis(1)).await;
+    assert!(r.proof.may_sample(Instant::now()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_late_landing_passes_its_window_on() {
+    // The same, but the run stops before start + H: the next start
+    // resumes behind a gate at this run's start + H.
+    let d = Dirs::new("i1gate");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    fail::arm_sticky(Some(restart::Point::AfterWrite));
+    let start = Instant::now();
+    let mut r = Run::boot(&d, &c, true);
+    fail::arm_sticky(None);
+    settle(&mut r).await;
+    advance(Duration::from_secs(60)).await;
+    r.commit(&d);
+    let mut next = Run::boot(&d, &c, true);
+    assert_eq!(next.proof.reason(), Reason::Resumed);
+    advance(start + horizon() - Instant::now() - Duration::from_millis(1)).await;
+    next.tick();
+    assert!(!next.proof.may_sample(Instant::now()), "the gate holds");
+    advance(Duration::from_millis(1)).await;
+    assert!(next.proof.may_sample(Instant::now()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_commit_step_leaves_the_next_start_dirty() {
+    // S9, S10, S11: whichever write fails, the marker stays dirty, the
+    // step is counted, and the next start suppresses.
+    for (nth, failed) in [
+        (1, PersistStep::StateBin),
+        (2, PersistStep::Snapshot),
+        (3, PersistStep::Marker),
+    ] {
+        let d = Dirs::new("commitfail");
+        let c = clock();
+        let mut r = Run::boot(&d, &c, true);
+        advance(horizon()).await;
+        r.tick();
+        r.sampled(addr(5), 1, Duration::from_secs(600));
+        fail::arm_nth(restart::Point::AfterSync, nth);
+        let Run {
+            mut proof,
+            mut sampler,
+            stats,
+        } = r;
+        let got = proof.commit(&mut sampler, &state(), &d.state_path(), &stats);
+        fail::arm(None);
+        assert_eq!(got, Some(Err(failed)), "{failed:?}");
+        assert_eq!(
+            stats.restart_persist_errors[step(failed)].load(Ordering::Relaxed),
+            1,
+            "{failed:?}"
+        );
+        drop(proof);
+        let next = Run::boot(&d, &c, true);
+        assert_eq!(next.proof.reason(), Reason::Dirty, "{failed:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_witness_with_a_landed_marker_resumes_and_is_retried_at_commit() {
+    // §6.8: S3 fails, S4 lands: invalidated, so the run resumes (not
+    // `invalidate_failed`); the commit bumps the witness again, so the
+    // next start resumes too instead of reading `generation`.
+    let d = Dirs::new("s3");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    fail::arm(Some(restart::Point::AfterWrite)); // the witness, written first
+    let r = Run::boot(&d, &c, true);
+    fail::arm(None);
     assert_eq!(r.proof.reason(), Reason::Resumed);
     assert!(r.proof.may_sample(Instant::now()));
+    assert_eq!(
+        r.stats.restart_persist_errors[step(PersistStep::Witness)].load(Ordering::Relaxed),
+        1
+    );
+    r.commit(&d);
+    let next = Run::boot(&d, &c, true);
+    assert_eq!(next.proof.reason(), Reason::Resumed);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_off_run_that_cant_overwrite_the_marker_waits_for_a_retry() {
+    // §6.13: an off-run with a clean marker it can't overwrite sends no
+    // samples, even after its window, until a retry lands.
+    let d = Dirs::new("offfail");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    fail::arm_sticky(Some(restart::Point::AfterWrite));
+    let mut off = Run::boot(&d, &c, false);
+    assert_eq!(off.proof.reason(), Reason::InvalidateFailed);
+    advance(horizon() + Duration::from_secs(60)).await;
+    off.tick();
+    assert!(!off.proof.may_sample(Instant::now()));
+    fail::arm_sticky(None);
+    settle(&mut off).await;
+    assert_eq!(off.proof.reason(), Reason::Off);
+    assert!(off.proof.may_sample(Instant::now()));
+    let Found::Ok(m) = restart::read_marker(&d.data) else {
+        panic!()
+    };
+    assert_eq!(m.state, MarkerState::Off);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_on_run_holding_the_lock_keeps_an_off_run_out() {
+    // §6.7 / N2 with a marker present: the off-run beside a live on-run
+    // reports `locked`, samples nothing and writes nothing.
+    let d = Dirs::new("onoff");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    let on = Run::boot(&d, &c, true);
+    assert_eq!(on.proof.reason(), Reason::Resumed);
+    let marker = std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap();
+    let mut off = Run::boot(&d, &c, false);
+    assert_eq!(off.proof.reason(), Reason::Locked);
+    advance(horizon() * 2).await;
+    off.tick();
+    assert!(!off.proof.may_sample(Instant::now()));
+    assert_eq!(
+        std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap(),
+        marker
+    );
+    drop(on);
+}
+
+#[tokio::test(start_paused = true)]
+async fn overlapping_runs_never_both_resume() {
+    // §6.7: a new run starting while the old one is still up (an
+    // in-process restart whose old actor hasn't finished) waits for the
+    // lock, then resumes from the old run's commit.
+    let d = Dirs::new("overlap");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    let mut old = Run::boot(&d, &c, true);
+    assert_eq!(old.proof.reason(), Reason::Resumed);
+    old.sampled(addr(6), 1, Duration::from_secs(1800));
+    let mut new = Run::boot(&d, &c, true);
+    assert_eq!(
+        new.proof.reason(),
+        Reason::Locked,
+        "the old run still holds it"
+    );
+    assert!(!new.proof.may_sample(Instant::now()));
+    advance(Duration::from_secs(5)).await;
+    old.commit(&d);
+    advance(MAX_RETRY).await;
+    new.tick();
+    assert_eq!(new.proof.reason(), Reason::Resumed);
+    assert!(
+        !new.sampler.reserve(addr(6), 2, Instant::now()),
+        "the old run's restriction holds"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn reload_send_crash_reload_never_resumes_past_a_crash() {
+    // §6.2: 100 restarts, each stopping cleanly or crashing at a random
+    // point. A crash is always followed by a suppressed start; a clean
+    // stop by a resume that still holds the last run's restrictions.
+    use rand::{RngExt, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
+    let d = Dirs::new("loop");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.commit(&d);
+    let mut last_clean = true;
+    let mut held: Vec<(SocketAddr, Instant)> = Vec::new();
+    for i in 0..100u32 {
+        let mut r = Run::boot(&d, &c, true);
+        if last_clean {
+            assert_eq!(r.proof.reason(), Reason::Resumed, "iteration {i}");
+            let now = Instant::now();
+            for (a, until) in &held {
+                if *until > now {
+                    assert!(
+                        !r.sampler.reserve(*a, 1 << 40, now),
+                        "iteration {i}: {a} free early"
+                    );
+                }
+            }
+        } else {
+            assert_eq!(r.proof.reason(), Reason::Dirty, "iteration {i}");
+        }
+        // Let any window or gate pass, then sample a couple of peers.
+        let wait = r.proof.suppression_seconds(Instant::now());
+        advance(Duration::from_secs(wait)).await;
+        r.tick();
+        assert!(r.proof.may_sample(Instant::now()));
+        let mut sampled = Vec::new();
+        for k in 0..2u32 {
+            let a = SocketAddr::from(([10, (i % 250) as u8, k as u8, 1], 6881));
+            let wait = Duration::from_secs(rng.random_range(60..7200));
+            r.sampled(a, u64::from(i * 10 + k + 1), wait);
+            sampled.push((a, Instant::now() + wait));
+        }
+        advance(Duration::from_secs(rng.random_range(1..600))).await;
+        last_clean = rng.random_bool(0.5);
+        if last_clean {
+            r.commit(&d);
+            held = sampled;
+        } else {
+            drop(r); // kill -9 at a random point in the run
+        }
+        advance(Duration::from_secs(rng.random_range(1..120))).await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -563,8 +811,7 @@ async fn no_state_save_before_s1_hashes_it() {
     let d = Dirs::new("save");
     let c = clock();
     let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
-        eprintln!("SKIPPED: no file locks in the temp dir");
-        return;
+        panic!("this test needs file locks in the temp dir");
     };
     let mut r = Run::boot(&d, &c, true);
     assert!(

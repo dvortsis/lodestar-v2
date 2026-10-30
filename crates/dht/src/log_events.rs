@@ -33,7 +33,8 @@ lodestar_log::catalogue! {
     /// The restart proof's start check (CR-0d): whether this run resumes
     /// from the last clean stop (`mode`), and if not, why (`reason`, the
     /// `dht_sample_suppression_reason` label). `previous` is the marker the
-    /// last run left (`clean`, `dirty`, `off`, `none` or `bad`); `restored`
+    /// last run left (`clean`, `dirty`, `off`, `none` or `bad`; `unknown` on
+    /// a filesystem without locks, where `mode` is `lockless`); `restored`
     /// counts the restrictions seeded, `dropped_expired` those already
     /// over. Counts only: no addresses.
     RESTART_CHECK {
@@ -54,14 +55,16 @@ lodestar_log::catalogue! {
         fields: { ok: Label, duration_ms: Size, entries: Size },
     }
     /// A restart-proof write failed (`step`: lock, witness, invalidate,
-    /// state_bin, snapshot or marker). Sampling stays safe: the next start
-    /// suppresses, or this run waits until the write lands.
+    /// state_bin, snapshot or marker; `kind`: the error, such as
+    /// `permission_denied`, `read_only` or `storage_full`). Sampling stays
+    /// safe: the next start suppresses, or this run waits until the write
+    /// lands.
     RESTART_PERSIST_FAILED {
         id: "dht.restart_persist_failed",
         component: Dht,
         level: Warn,
         message: "DHT restart proof write failed",
-        fields: { step: Label },
+        fields: { step: Label, kind: Label },
     }
     /// A key reached the harvest: from samples, someone's `get_peers`, an
     /// announce, or a lookup this node ran (`source`).

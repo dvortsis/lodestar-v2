@@ -181,9 +181,11 @@ impl Sampler {
     pub fn restore(&mut self, addr: SocketAddr, until: Instant) {
         let addr = lodestar_network_policy::normalize(addr);
         match self.states.get(&addr).copied() {
+            // Can't happen (sampling waits for seeding), but if it did, the
+            // restored restriction wins: the in-flight sample's completion
+            // then fails its token check and can't shorten it.
             Some(State::InFlight(_)) => {
                 debug_assert!(false, "a sample was in flight before seeding");
-                return;
             }
             Some(State::Cooling { until: u, .. }) if u >= until => return,
             Some(State::Cooling { until: u, token }) => {

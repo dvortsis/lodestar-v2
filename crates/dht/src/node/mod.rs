@@ -160,11 +160,15 @@ pub struct RestartConfig {
     /// `None`, or a directory that resolves inside it, means no witness,
     /// so every start suppresses (`no_witness`).
     pub witness_dir: Option<PathBuf>,
-    /// The wall clock (and the monotonic clock it is paired with).
+    /// Test seam: the wall clock. Its `mono` must be tokio's
+    /// `Instant::now()`, the clock the sampler keeps; production uses
+    /// [`crate::restart::SystemClock`] ([`RestartConfig::new`]).
+    #[doc(hidden)]
     pub clock: Arc<dyn crate::restart::Clock>,
-    /// Do the file work on the actor's thread instead of tokio's blocking
-    /// pool. For tests on a paused clock, where a pool thread's progress
-    /// isn't ordered with simulated time.
+    /// Test seam: do the file work on the actor's thread instead of
+    /// tokio's blocking pool, for tests on a paused clock, where a pool
+    /// thread's progress isn't ordered with simulated time.
+    #[doc(hidden)]
     pub inline_io: bool,
 }
 

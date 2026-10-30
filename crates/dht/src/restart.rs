@@ -933,12 +933,21 @@ pub(crate) mod fail {
     thread_local! {
         static AT: Cell<Option<Point>> = const { Cell::new(None) };
         static STICKY: Cell<bool> = const { Cell::new(false) };
+        /// Hits of the armed point to let through before failing one.
+        static SKIP: Cell<u32> = const { Cell::new(0) };
     }
 
     /// Fails the next write that reaches `p` on this thread.
     pub fn arm(p: Option<Point>) {
         AT.with(|a| a.set(p));
         STICKY.with(|s| s.set(false));
+        SKIP.with(|s| s.set(0));
+    }
+
+    /// Fails only the `n`th write (from 1) that reaches `p` on this thread.
+    pub fn arm_nth(p: Point, n: u32) {
+        arm(Some(p));
+        SKIP.with(|s| s.set(n.saturating_sub(1)));
     }
 
     /// Fails every write that reaches `p` on this thread until disarmed.
@@ -952,6 +961,10 @@ pub(crate) mod fail {
             std::process::abort();
         }
         if AT.with(|a| a.get()) == Some(p) {
+            if SKIP.with(|s| s.get()) > 0 {
+                SKIP.with(|s| s.set(s.get() - 1));
+                return Ok(());
+            }
             if !STICKY.with(|s| s.get()) {
                 AT.with(|a| a.set(None));
             }
@@ -989,7 +1002,8 @@ fn sync_parent(path: &Path) -> io::Result<()> {
     fail::hit(Point::AfterDirSync)
 }
 
-fn tmp_path(path: &Path) -> PathBuf {
+/// Where [`write_atomic`] stages `path`.
+pub(crate) fn tmp_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".tmp");
     PathBuf::from(name)

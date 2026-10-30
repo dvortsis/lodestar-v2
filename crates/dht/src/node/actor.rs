@@ -1956,6 +1956,11 @@ impl Actor {
                 let _ = result;
                 return Ok(());
             }
+            // An on-run that never got the lock leaves `dht-state.bin`
+            // to the run that holds it (§6.7).
+            if !self.proof.may_save_state() {
+                return Ok(());
+            }
         }
         self.save()
     }
@@ -2802,7 +2807,7 @@ mod tests {
 #[cfg(test)]
 mod restart_wire {
     use super::*;
-    use crate::restart::Clock;
+    use crate::restart::{Clock, Found};
     use rand::SeedableRng;
     use tokio::time::advance;
 
@@ -2934,13 +2939,29 @@ mod restart_wire {
             a.take_pending(tid);
             assert!(a.sampler.complete(to, tid, wait, Instant::now()));
         }
+        // 960 more restrictions on addresses with no socket behind them,
+        // made as a run's own samples would be, for 1,000 in all (§6.6).
+        // Their sends are read from the actor's own pending queries.
+        let synthetic: Vec<SocketAddr> = (0..960u32)
+            .map(|i| SocketAddr::from(([127, 0, 3 + (i / 250) as u8, (i % 250) as u8 + 1], 7000)))
+            .collect();
+        for (i, s) in synthetic.iter().enumerate() {
+            let token = 1 << 40 | i as u64;
+            assert!(a.sampler.reserve(*s, token, Instant::now()));
+            let wait = Duration::from_secs(60 + (i as u64 * 22) % 21_500);
+            assert!(a.sampler.complete(*s, token, wait, Instant::now()));
+        }
         let stop = Instant::now();
         a.finish().unwrap();
         // The truth: run 1's table at the stop, after S8 sealed what was
         // still in flight. Some samples timed out during run 1 and cool
         // for 6 h from their timeout; the rest have their interval.
         let truth: Map<SocketAddr, Instant> = a.sampler.restrictions(stop).collect();
-        assert_eq!(truth.len(), peers.len(), "every peer has a restriction");
+        assert_eq!(
+            truth.len(),
+            peers.len() + synthetic.len(),
+            "1,000 restrictions"
+        );
 
         // Run 2, a minute later: resumes, and the wire shows every
         // restriction held to the instant.
@@ -2953,8 +2974,14 @@ mod restart_wire {
         let mut first_seen: Map<SocketAddr, Instant> = Map::default();
         let step = Duration::from_secs(30);
         let end = sealed + Duration::from_secs(120);
+        let everyone: Vec<SocketAddr> = peers.iter().chain(&synthetic).copied().collect();
         while Instant::now() < end {
-            turn(&mut b, &sockets, &peers);
+            turn(&mut b, &sockets, &everyone);
+            for p in b.pending.values() {
+                if matches!(p.purpose, Purpose::Sample) && synthetic.contains(&p.to) {
+                    first_seen.entry(p.to).or_insert(Instant::now());
+                }
+            }
             // Answer nothing: timed-out samples back off, which only
             // delays later ones.
             for (i, n) in samples_received(&peer_sockets).into_iter().enumerate() {
@@ -2964,7 +2991,7 @@ mod restart_wire {
             }
             advance(step).await;
         }
-        for p in &peers {
+        for p in &everyone {
             let seen = first_seen.get(p).copied();
             let due = deadline(p);
             assert!(
@@ -2981,6 +3008,47 @@ mod restart_wire {
         let counts = b.sampler.restored_counts();
         assert_eq!(counts.0, 0, "every restored restriction has expired");
         assert!(counts.1 > 0, "restored restrictions turned candidates away");
+        // Those already over at the restart weren't seeded (one here).
+        let restored = b.stats.restart_obligations_restored.load(Ordering::Relaxed);
+        assert!(restored >= 990, "{restored}");
+        assert_eq!(counts.2, restored, "each restored one expired unsampled");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn marker_bytes(root: &std::path::Path) -> Vec<u8> {
+        std::fs::read(root.join("data").join(crate::restart::MARKER_FILE)).unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_run_invalidates_writes_nothing_more_and_commits() {
+        // §6.14: a start in the paused state still invalidates before any
+        // sample; ticks while paused write nothing; a shutdown while paused
+        // commits.
+        let root = std::env::temp_dir().join(format!("lodestar-pause-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let clock = Arc::new(SimClock {
+            base: Duration::from_secs(1_700_000_000),
+            start: Instant::now(),
+        });
+        let (mut a, sockets) = node(&root, &clock);
+        a.paused = true;
+        a.maintain(&sockets);
+        let Found::Ok(m) = crate::restart::read_marker(&root.join("data")) else {
+            panic!("the marker is written before any sample")
+        };
+        assert_eq!(m.state, crate::restart::MarkerState::Dirty);
+        let dirty = marker_bytes(&root);
+        for _ in 0..30 {
+            advance(Duration::from_secs(60)).await;
+            a.maintain(&sockets);
+        }
+        assert_eq!(marker_bytes(&root), dirty, "a pause writes nothing");
+        a.finish().unwrap();
+        let Found::Ok(m) = crate::restart::read_marker(&root.join("data")) else {
+            panic!()
+        };
+        assert!(matches!(m.state, crate::restart::MarkerState::Clean { .. }));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

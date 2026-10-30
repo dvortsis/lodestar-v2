@@ -39,6 +39,9 @@ use crate::restart::{
 
 /// The longest wait between lock or invalidation retries (I1, N3).
 const MAX_RETRY: Duration = Duration::from_secs(60);
+/// At shutdown, how long to wait for a start or retry job still running
+/// on the blocking pool, so a resume it earned isn't lost.
+const DRAIN: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 enum Mode {
@@ -68,15 +71,17 @@ struct Started {
     start: Instant,
     decision: Decision,
     reason: Reason,
-    /// The marker (dirty or off) and, when on, the witness, made durable.
-    /// `None` until one lands; a run that had no clean marker needs none.
+    /// The marker (dirty or off) or, when on, the witness, made durable.
+    /// False until one lands; a run that had no clean marker needs none.
     invalidated: bool,
+    /// Whether the witness bump landed (retried once more before S11).
+    witness_ok: bool,
     /// For the retries and the commit.
     pending: Option<Invalidation>,
     run: Option<RunHeader>,
     dir_path: restart::Digest32,
     path: String,
-    errors: Vec<PersistStep>,
+    errors: Vec<(PersistStep, io::ErrorKind)>,
     /// For `dht.restart_check`: the marker the last run left.
     previous: &'static str,
 }
@@ -101,13 +106,18 @@ pub(crate) struct Proof {
     delay: Duration,
     epoch: Instant,
     phase: Phase,
-    lock: Option<RestartLock>,
+    /// Shared with every job on the blocking pool, so the lock outlives
+    /// any of this run's file work (§2.2): a later run can't start, or
+    /// have its temp files deleted, while one is still running.
+    lock: Option<Arc<RestartLock>>,
     job: Option<mpsc::Receiver<Started>>,
+    /// A start job whose channel closed without a result: rerun it then.
+    rerun_at: Option<Instant>,
     started: Option<Started>,
     /// Invalidation retries: when, and the current backoff.
     retry: (Instant, Duration),
     /// An invalidation retry in progress: (marker landed, witness landed).
-    retrying: Option<mpsc::Receiver<(bool, bool)>>,
+    retrying: Option<mpsc::Receiver<Retried>>,
     reason: Reason,
     /// No sample to anyone before this (N1, and the suppression).
     gate_until: Option<Instant>,
@@ -164,6 +174,7 @@ impl Proof {
             phase,
             lock: None,
             job: None,
+            rerun_at: None,
             started: None,
             retry: (epoch, tick),
             retrying: None,
@@ -219,7 +230,9 @@ impl Proof {
     /// not before S1 has hashed it, or the next start would see another
     /// writer (`foreign_run`) when there was none.
     pub(crate) fn may_save_state(&self) -> bool {
-        !matches!(self.mode, Mode::On) || self.started.is_some()
+        !matches!(self.mode, Mode::On)
+            || self.started.is_some()
+            || matches!(self.phase, Phase::Lockless)
     }
 
     /// One maintenance tick: the lock, the start work and its retries.
@@ -237,10 +250,23 @@ impl Proof {
             }
         }
         if let Some(rx) = &self.job {
-            if let Ok(started) = rx.try_recv() {
-                self.job = None;
-                self.land(started, stats);
+            match rx.try_recv() {
+                Ok(started) => {
+                    self.job = None;
+                    self.land(started, stats);
+                }
+                // The job died (a panic on the pool): try again later (I6).
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.job = None;
+                    fail(stats, PersistStep::Invalidate, io::ErrorKind::Other);
+                    self.rerun_at = Some(now + self.retry.1);
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
             }
+        }
+        if self.rerun_at.is_some_and(|t| now >= t) {
+            self.rerun_at = None;
+            self.start(ids);
         }
         if let Some(seed) = self.seed.take() {
             for (addr, until) in seed {
@@ -270,11 +296,13 @@ impl Proof {
         );
     }
 
+    /// Opening the lock file and a non-blocking `flock`/`LockFileEx` run on
+    /// the actor's thread: neither waits on the disk's contents.
     fn try_lock(&mut self, now: Instant, backoff: Duration, ids: &[NodeId], stats: &Stats) {
         let attempt = restart::try_lock(&self.data_dir);
         match attempt {
             Ok(LockAttempt::Held(lock)) => {
-                self.lock = Some(lock);
+                self.lock = Some(Arc::new(lock));
                 self.phase = Phase::Starting;
                 self.start(ids);
             }
@@ -284,25 +312,36 @@ impl Proof {
                     Mode::On => Reason::Locked,
                     _ => Reason::Off,
                 };
-                // Best effort: a marker carried over from a filesystem
-                // that had locks must not stay clean (§2.2).
-                let marker = restart::read_marker(&self.data_dir);
-                if let Found::Ok(m) = marker {
-                    if !matches!(m.state, MarkerState::Off) {
-                        let off = Marker {
-                            state: MarkerState::Off,
-                            ..m
-                        };
-                        let _ = restart::overwrite_in_place(
-                            &self.data_dir.join(restart::MARKER_FILE),
-                            &off.encode(),
-                        );
+                lodestar_log::log_event!(
+                    crate::log_events::RESTART_CHECK,
+                    mode = "lockless",
+                    reason = self.reason.as_str(),
+                    previous = "unknown",
+                    generation = 0usize,
+                    restored = 0usize,
+                    dropped_expired = 0usize
+                );
+                // Best effort, off the actor's thread: a marker carried over
+                // from a filesystem that had locks must not stay clean (§2.2).
+                let data_dir = self.data_dir.clone();
+                run_blocking(self.inline_io(), move || {
+                    if let Found::Ok(m) = restart::read_marker(&data_dir) {
+                        if !matches!(m.state, MarkerState::Off) {
+                            let off = Marker {
+                                state: MarkerState::Off,
+                                ..m
+                            };
+                            let _ = restart::overwrite_in_place(
+                                &data_dir.join(restart::MARKER_FILE),
+                                &off.encode(),
+                            );
+                        }
                     }
-                }
+                });
             }
             Ok(LockAttempt::Busy) | Err(_) => {
-                if attempt.is_err() {
-                    Stats::inc(&stats.restart_persist_errors[step(PersistStep::Lock)]);
+                if let Err(e) = &attempt {
+                    fail(stats, PersistStep::Lock, e.kind());
                 }
                 self.reason = Reason::Locked;
                 self.phase = Phase::Locking {
@@ -326,15 +365,16 @@ impl Proof {
         };
         let (tx, rx) = mpsc::channel();
         self.job = Some(rx);
+        let lock = self.lock.clone();
         run_blocking(self.inline_io(), move || {
             let _ = tx.send(job.run());
+            drop(lock);
         });
     }
 
     fn land(&mut self, started: Started, stats: &Stats) {
-        for e in &started.errors {
-            Stats::inc(&stats.restart_persist_errors[step(*e)]);
-            lodestar_log::log_event!(crate::log_events::RESTART_PERSIST_FAILED, step = e.as_str());
+        for (e, kind) in &started.errors {
+            fail(stats, *e, *kind);
         }
         let (restored, dropped) = match &started.decision {
             Decision::Resume(s) => (s.entries.len(), s.dropped_expired),
@@ -376,8 +416,10 @@ impl Proof {
                     let (keep, path, now_ms) = (run.dir_id, started.path.clone(), {
                         restart::floor_ms(cfg.clock.wall())
                     });
+                    let lock = self.lock.clone();
                     run_blocking(self.inline_io(), move || {
                         let _ = restart::prune_witnesses(&wdir, &keep, &path, now_ms);
+                        drop(lock);
                     });
                 }
             }
@@ -388,35 +430,24 @@ impl Proof {
     /// I1: until the marker or the witness lands, retry both with backoff,
     /// off the actor's thread like the start work.
     fn retry_invalidation(&mut self, now: Instant, stats: &Stats) {
-        let Some(started) = &mut self.started else {
+        let Some(started) = &self.started else {
             return;
         };
         if started.invalidated {
             return;
         }
         if let Some(rx) = &self.retrying {
-            let Ok((marker_ok, witness_ok)) = rx.try_recv() else {
-                return;
-            };
-            self.retrying = None;
-            if !marker_ok {
-                Stats::inc(&stats.restart_persist_errors[step(PersistStep::Invalidate)]);
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.retrying = None;
+                    self.retried(r, now, stats);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.retrying = None;
+                    self.retried(Retried::default(), now, stats);
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
             }
-            if !witness_ok
-                && started
-                    .pending
-                    .as_ref()
-                    .is_some_and(|p| p.witness.is_some())
-            {
-                Stats::inc(&stats.restart_persist_errors[step(PersistStep::Witness)]);
-            }
-            if marker_ok || witness_ok {
-                started.invalidated = true;
-                self.reason = started.reason;
-                return;
-            }
-            let backoff = (self.retry.1 * 2).min(MAX_RETRY);
-            self.retry = (now + self.retry.1, backoff);
             return;
         }
         if now < self.retry.0 {
@@ -428,14 +459,68 @@ impl Proof {
         let marker_path = self.data_dir.join(restart::MARKER_FILE);
         let (tx, rx) = mpsc::channel();
         self.retrying = Some(rx);
+        let lock = self.lock.clone();
         run_blocking(self.inline_io(), move || {
-            let marker = restart::overwrite_in_place(&marker_path, &inv.marker.encode()).is_ok();
+            let marker = restart::overwrite_in_place(&marker_path, &inv.marker.encode()).err();
             let witness = inv
                 .witness
                 .as_ref()
-                .is_some_and(|(path, w)| restart::overwrite_in_place(path, &w.encode()).is_ok());
-            let _ = tx.send((marker, witness));
+                .map(|(path, w)| restart::overwrite_in_place(path, &w.encode()).err());
+            let _ = tx.send(Retried {
+                marker: Some(marker.map(|e| e.kind())),
+                witness: witness.map(|w| w.map(|e| e.kind())),
+            });
+            drop(lock);
         });
+    }
+
+    fn retried(&mut self, r: Retried, now: Instant, stats: &Stats) {
+        let Some(started) = &mut self.started else {
+            return;
+        };
+        let marker_ok = matches!(r.marker, Some(None));
+        let witness_ok = matches!(r.witness, Some(None));
+        if !marker_ok {
+            let kind = r.marker.flatten().unwrap_or(io::ErrorKind::Other);
+            fail(stats, PersistStep::Invalidate, kind);
+        }
+        if let Some(Some(kind)) = r.witness {
+            fail(stats, PersistStep::Witness, kind);
+        }
+        if !(marker_ok || witness_ok) {
+            let backoff = (self.retry.1 * 2).min(MAX_RETRY);
+            self.retry = (now + self.retry.1, backoff);
+            return;
+        }
+        started.invalidated = true;
+        started.witness_ok |= witness_ok;
+        // A late landing is suppress mode (§2 I1): sampling waits for this
+        // run's start + H, even on a resume, and the commit passes that on.
+        let own_end = started.start + self.horizon;
+        match &started.decision {
+            Decision::Resume(_) if matches!(self.mode, Mode::On) => {
+                self.gate_until = Some(self.gate_until.map_or(own_end, |g| g.max(own_end)));
+                self.reason = Reason::InvalidateFailed;
+            }
+            _ => self.reason = started.reason,
+        }
+    }
+
+    /// At shutdown, waits a bounded time for a job still on the blocking
+    /// pool, and lands its result, so a resume or invalidation that
+    /// finished just now isn't lost.
+    fn drain(&mut self, stats: &Stats) {
+        let now = Instant::now();
+        if let Some(rx) = self.job.take() {
+            if let Ok(started) = rx.recv_timeout(DRAIN) {
+                self.land(started, stats);
+            }
+        }
+        if let Some(rx) = self.retrying.take() {
+            if let Ok(r) = rx.recv_timeout(DRAIN) {
+                self.retried(r, now, stats);
+            }
+        }
     }
 
     /// S8–S11 at shutdown, after the event loop has stopped sending:
@@ -451,6 +536,14 @@ impl Proof {
         state_path: &Path,
         stats: &Stats,
     ) -> Option<Result<(), PersistStep>> {
+        self.drain(stats);
+        // A start job that landed in the drain may have restrictions to
+        // seed: they must be in the table before it's captured.
+        if let Some(seed) = self.seed.take() {
+            for (addr, until) in seed {
+                sampler.restore(addr, until);
+            }
+        }
         let started = self.started.as_ref()?;
         if !matches!(self.mode, Mode::On) || self.lock.is_none() || !started.invalidated {
             return None;
@@ -460,10 +553,20 @@ impl Proof {
         let began = clock.mono();
         // S8: in flight → `now + H`, under fresh tokens (P6).
         sampler.seal_in_flight(clock.mono() + self.horizon);
+        // A witness bump that failed while the marker landed: once more, or
+        // the next start reads `generation` (it would still be safe).
+        if !started.witness_ok {
+            if let Some((path, w)) = started.pending.as_ref().and_then(|p| p.witness.as_ref()) {
+                if let Err(e) = restart::overwrite_in_place(path, &w.encode()) {
+                    fail(stats, PersistStep::Witness, e.kind());
+                }
+            }
+        }
+        let at = |step: PersistStep| move |e: io::Error| (step, e.kind());
         let result = (|| {
             // S9: the ids saved here are the marker's (P2).
             let state_bytes = state.encode();
-            restart::write_atomic(state_path, &state_bytes).map_err(|_| PersistStep::StateBin)?;
+            restart::write_atomic(state_path, &state_bytes).map_err(at(PersistStep::StateBin))?;
             let run = RunHeader {
                 ids: restart::ids_digest(&state.ids),
                 ..run
@@ -479,11 +582,11 @@ impl Proof {
                 gate,
                 self.horizon_s,
             )
-            .map_err(|_| PersistStep::Snapshot)?;
+            .map_err(|_| (PersistStep::Snapshot, io::ErrorKind::InvalidData))?;
             let bytes = snapshot.encode();
             let snap: restart::Digest32 = bytes[bytes.len() - 32..].try_into().expect("32 bytes");
             restart::write_atomic(&self.data_dir.join(restart::SNAPSHOT_FILE), &bytes)
-                .map_err(|_| PersistStep::Snapshot)?;
+                .map_err(at(PersistStep::Snapshot))?;
             // S11: the commit point.
             let marker = Marker {
                 state: MarkerState::Clean {
@@ -495,7 +598,7 @@ impl Proof {
                 at_ms: restart::stamp_after_capture(clock.as_ref()),
             };
             restart::write_atomic(&self.data_dir.join(restart::MARKER_FILE), &marker.encode())
-                .map_err(|_| PersistStep::Marker)?;
+                .map_err(at(PersistStep::Marker))?;
             Ok(snapshot.entries.len())
         })();
         let ok = result.is_ok();
@@ -505,15 +608,46 @@ impl Proof {
             duration_ms = clock.mono().saturating_duration_since(began).as_millis() as u64,
             entries = result.as_ref().map_or(0, |n| *n as u64)
         );
-        if let Err(step_failed) = &result {
-            Stats::inc(&stats.restart_persist_errors[step(*step_failed)]);
-            lodestar_log::log_event!(
-                crate::log_events::RESTART_PERSIST_FAILED,
-                step = step_failed.as_str()
-            );
+        if let Err((step_failed, kind)) = &result {
+            fail(stats, *step_failed, *kind);
         }
         self.lock = None;
-        Some(result.map(|_| ()))
+        Some(result.map(|_| ()).map_err(|(s, _)| s))
+    }
+}
+
+/// What an invalidation retry got: per write, `Some(None)` landed,
+/// `Some(Some(kind))` failed, `None` not attempted (no witness). The
+/// default (a job that died) counts as both failing.
+#[derive(Debug, Default)]
+struct Retried {
+    marker: Option<Option<io::ErrorKind>>,
+    witness: Option<Option<io::ErrorKind>>,
+}
+
+/// Counts a failed write and logs it with its kind (§5.3).
+fn fail(stats: &Stats, s: PersistStep, kind: io::ErrorKind) {
+    Stats::inc(&stats.restart_persist_errors[step(s)]);
+    lodestar_log::log_event!(
+        crate::log_events::RESTART_PERSIST_FAILED,
+        step = s.as_str(),
+        kind = kind_label(kind)
+    );
+}
+
+fn kind_label(kind: io::ErrorKind) -> &'static str {
+    use io::ErrorKind as K;
+    match kind {
+        K::NotFound => "not_found",
+        K::PermissionDenied => "permission_denied",
+        K::ReadOnlyFilesystem => "read_only",
+        K::StorageFull | K::QuotaExceeded => "storage_full",
+        K::TimedOut => "timed_out",
+        K::Unsupported => "unsupported",
+        K::InvalidData => "invalid_data",
+        K::Interrupted => "interrupted",
+        K::WouldBlock => "would_block",
+        _ => "other",
     }
 }
 
@@ -602,6 +736,7 @@ impl StartJob {
             decision: Decision::Suppress(Reason::Off),
             reason: Reason::Off,
             invalidated,
+            witness_ok: true,
             pending,
             run: None,
             dir_path: [0; 32],
@@ -625,6 +760,7 @@ impl StartJob {
         );
         // S1.
         let _ = restart::remove_stale_tmp(&self.data_dir);
+        let _ = std::fs::remove_file(restart::tmp_path(&self.state_path));
         let marker = restart::read_marker(&self.data_dir);
         let snapshot = restart::read_snapshot(&self.data_dir);
         let witness = match (&marker, &self.witness_dir, &path) {
@@ -687,13 +823,13 @@ impl StartJob {
             _ => None,
         };
         let witness_ok = match &witness {
-            Some((file, w)) => {
-                let ok = restart::overwrite_in_place(file, &w.encode()).is_ok();
-                if !ok {
-                    errors.push(PersistStep::Witness);
+            Some((file, w)) => match restart::overwrite_in_place(file, &w.encode()) {
+                Ok(()) => true,
+                Err(e) => {
+                    errors.push((PersistStep::Witness, e.kind()));
+                    false
                 }
-                ok
-            }
+            },
             None => false,
         };
         // S4.
@@ -704,6 +840,7 @@ impl StartJob {
             decision,
             reason,
             invalidated,
+            witness_ok,
             pending: Some(Invalidation {
                 marker: dirty,
                 witness,
@@ -729,18 +866,29 @@ fn previous(marker: &Found<Marker>) -> &'static str {
     }
 }
 
-fn write_marker(data_dir: &Path, m: &Marker, errors: &mut Vec<PersistStep>) -> bool {
-    let ok = restart::overwrite_in_place(&data_dir.join(restart::MARKER_FILE), &m.encode()).is_ok();
-    if !ok {
-        errors.push(PersistStep::Invalidate);
+fn write_marker(
+    data_dir: &Path,
+    m: &Marker,
+    errors: &mut Vec<(PersistStep, io::ErrorKind)>,
+) -> bool {
+    match restart::overwrite_in_place(&data_dir.join(restart::MARKER_FILE), &m.encode()) {
+        Ok(()) => true,
+        Err(e) => {
+            errors.push((PersistStep::Invalidate, e.kind()));
+            false
+        }
     }
-    ok
 }
 
 /// Creates the witness dir if needed, then checks it resolves outside the
 /// data dir (§1.5). `None` means no witness.
 fn prepare_witness_dir(dir: &Path, data_dir_canonical: &str) -> Option<()> {
-    match std::fs::create_dir_all(dir) {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    // Only this account: the witness is the proof's memory (§1.5).
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    match builder.create(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(_) => return None,
