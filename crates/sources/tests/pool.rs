@@ -1,4 +1,7 @@
 //! The shared fetch pool against a scripted fetcher, in paused time.
+//!
+//! Every test here is `start_paused`, so each `sleep` advances the virtual clock the pool
+//! reads: it simulates time passing for the code under test and waits for nothing.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
