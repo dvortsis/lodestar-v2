@@ -199,6 +199,13 @@ python3 docs/soak/tools/analyze_cr0.py <run> --format json --output <new-report.
 
 A report is not a pass. Review `issues`, coverage and the stop reason.
 
+**Memory gate (v0.5.1).** The report's `memory_fit` section (in Markdown, "Memory
+gate") fits the OLS slope of `private_bytes` (cgroup `anon`, or `RssAnon` on a
+native run) over baseline hours 12–24, with its 95% CI and the run's peak. The
+v0.5.1 bar is an upper bound ≤ 2 MiB/h (owner, 2026-10-30;
+`docs/decisions/2026-10-30-CR-0-acceptance.md`). A restart inside the window or
+a window that isn't fully covered is not judged.
+
 ## Tests
 
 ```sh
