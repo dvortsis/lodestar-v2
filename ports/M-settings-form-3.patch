@@ -1,0 +1,1305 @@
+diff --git a/docs/decisions/2026-10-24-M-settings-form-3.md b/docs/decisions/2026-10-24-M-settings-form-3.md
+new file mode 100644
+index 00000000..f7b36aa3
+--- /dev/null
++++ b/docs/decisions/2026-10-24-M-settings-form-3.md
+@@ -0,0 +1,53 @@
++# M-settings-form-3 decisions (the edit chunk)
++
++The third Settings form engine PR (`web/src/lib/features/settings/form/`, architecture §10.10.5, §10.10.11, §10.1). It supersedes two notes in `2026-10-23-M-settings-form-2.md`: "The save pipeline stays in the first view", and the `+3:00` remark under Validation. Items marked **(§2.19)** refine an owner decision and are for the runner to flag.
++
++## The owner's decision
++
++- **The save pipeline loads on demand, as one edit chunk (owner, 2026-10-24: option A, relayed by the runner).** This supersedes the "no async seams on the merge and the draft restore" note in `2026-10-23-M-settings-form.md` and its follow-up in `2026-10-23-M-settings-form-2.md`. The 45 KB route budget stays as it is. The draft code now loads with the first edit, and a stored draft's offer appears once that chunk has loaded. The merge and the restore stay synchronous once it's in.
++
++## What loads when
++
++- **The edit chunk (`edit.ts`)** holds the save pipeline (`saving.ts`: gates, the PATCH, refusals, Undo, the merge, reading and restoring drafts, validation) and the UI they show: the save bar, the error summary, the network notice, the draft offer, a field's conflict and saved lines, and the discard, leave and disruptive questions.
++- **What loads it:** the first staged edit, a stored draft (in parallel with the values, so the offer shows with the fields), a newer `settings` event, a save or a secret's removal. When the browser is idle after the first view, it loads anyway, so the first edit normally finds it in place. Instant mode loads it as well, since it sends through the pipeline.
++- **Writing drafts stays in the first view (`draft-store.ts`).** An edit is drafted from the first keystroke, even when the chunk never loads. Reading a draft and restoring it (`draft.ts`) are in the chunk.
++- **What a refusal names (`errorSection`, `errorKey`) moved to `requests.ts`.** Previews and the pipeline both use it, and the two load separately, so neither pulls in the other.
++- **Before the chunk is in:** leaving a field still validates it once the chunk arrives. Discard, Undo, Use theirs, Restore and the error lines only exist after something loaded it. A field's "locked" note comes from the merge, so it's worded by the chunk.
++
++## When it can't load
++
++Browsers keep a failed module, so a failed chunk isn't tried again. Only a reload helps.
++
++- **A stored draft whose offer can't load:** the draft banner's place shows "Your unsaved changes from earlier couldn't load. They're kept: check your connection, then retry." **Retry** reloads the page.
++  - The stored draft isn't overwritten while its offer can't load, so the reload offers it again.
++  - Edits made in the meantime aren't drafted over it. If there are any, the leave guard gives the browser's own prompt on the reload.
++  - It replaces the general line below, so the form shows one banner.
++- **Any other part of the chunk** (the bar, the summary, the notice): a banner says "Part of this page couldn't load. Check your connection, then reload the page." with **Reload**. Edits are still drafted. A save returns `network` and saves nothing. A staged secret is dropped with that line, as any tried secret is (§10.10.4).
++- **Leaving with unsaved changes when the question can't load** goes by a full page load, so the browser's own prompt asks.
++- **Two new messages:** `settings_form_draft_failed` and `settings_form_reload`, English only like the other engine lines. Retry reuses `settings_form_retry`.
++
++## Size (§10.1, §10.10.11)
++
++Measured on a scratch merge of this branch, current main (`c7b9d71b`) and S-settings-1 (`4fc138d7`), gzip level 9, from the build manifest. The engine's share is estimated by apportioning each chunk's gzip by its sourcemap bytes from `form/**` and the `settings_form_*` messages.
++
++|                                                                 | This PR  |
++| --------------------------------------------------------------- | -------- |
++| "Settings screen route (own JS + CSS)", S-settings-1's gate     | 42.84 KB |
++| Static first load beyond `/search` (the earlier tables' method) | 44.58 KB |
++| Engine's share of that first load                               | ~14.5 KB |
++| "Settings controls (on demand)"                                 | 46.23 KB |
++
++- **The screen route is under the owner's 45 KB budget,** at 42.84 KB, which is inside the runner's 40–43 KB target. The gate is S-settings-1's entry, which now leaves the shell's chrome out.
++- **"Settings controls (on demand)" now gates the edit chunk too.** Its limit is 51 KB, the measurement plus 10%. `settingsOnDemand` in `web/.size-limit.mjs` adds `edit.ts`, so the screen route's entry stops at it.
++- **The ≤ 22 KB engine target is what a section pays on its first view** (runner, §2.19, as in `2026-10-23-M-settings-form-2.md`): about 14.5 KB.
++
++## Behaviour and tests
++
++- **No behaviour changes beyond timing and the failure lines above.** Existing tests keep their assertions; the suites that preload on-demand parts already loaded the pipeline through `preloadSettingsForm`.
++- **`lazy.test.ts`** loads each part cold. It checks that the first view loads nothing, that the first edit loads the chunk and saves with it, that a field left before the chunk arrives is still validated, that an event loads the chunk to merge, and that a stored draft loads it with the values and is offered with the fields. With the chunk failing, it checks that an edit is still drafted and a save reports `network`, and that a stored draft whose offer couldn't load survives edits and `destroy()`.
++- **`SettingsForm.offline.test.ts`** checks the component with the chunk failing: the Reload banner, the draft banner with Retry (and no second banner), and leaving by a full page load.
++- **`lazy-imports.test.ts`** lists the edit chunk's files, so a first-view file that imports one statically fails.
++
++## Validation (correction)
++
++- **`+3:00` is refused by the server too.** The `2026-10-23-M-settings-form-2.md` note said the client was stricter than the server on `+3:00`, because Rust's integer parse accepts a leading `+`. That's wrong for current main. `update::window::parse` (`crates/lodestar/src/update/window.rs`) requires exactly two ASCII digits per field before parsing, so the client and the server agree on it. The client's rule doesn't change.
+diff --git a/web/.size-limit.mjs b/web/.size-limit.mjs
+index 348f2352..c3ab971a 100644
+--- a/web/.size-limit.mjs
++++ b/web/.size-limit.mjs
+@@ -118,12 +118,13 @@ const detailLazy = [
+ ];
+ 
+ // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
+-// them: every control but the toggle and the text input (per type), instant mode, previews, the
+-// field menu, the ⌘S registration, copy's toast and the confirmation dialog. S-settings-1's screen
+-// route entry uses this list; "Settings controls (on demand)" gates what it leaves out.
++// them: every control but the toggle and the text input (per type), the edit chunk (the save
++// pipeline and what it shows, owner 2026-10-24), instant mode, previews, the field menu, the ⌘S
++// registration, copy's toast and the confirmation dialog. S-settings-1's screen route entry uses
++// this list; "Settings controls (on demand)" gates what it leaves out.
+ const settingsOnDemand = [
+ 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
+-	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
++	/features\/settings\/form\/(edit|instant|preview|menu|save-key|copy)\.ts$/,
+ 	/features\/settings\/form\/ConfirmDialog\.svelte$/
+ ];
+ const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
+@@ -176,9 +177,10 @@ export default [
+ 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
+ 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertDialogs }), '45 KB'),
+ 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
+-	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
+-	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
+-	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '38 KB')] : []),
++	// The engine's on-demand code on a Settings screen, still gated: 46.23 KB with S-settings-1's
++	// screen and the edit chunk (limit = measured + 10%). Until a screen uses the engine there's
++	// nothing to measure.
++	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '51 KB')] : []),
+ 	entry(
+ 		'Alert dialogs (on demand)',
+ 		[
+diff --git a/web/src/lib/features/settings/form/README.md b/web/src/lib/features/settings/form/README.md
+index d2e5d99b..fa23abcb 100644
+--- a/web/src/lib/features/settings/form/README.md
++++ b/web/src/lib/features/settings/form/README.md
+@@ -1,36 +1,37 @@
+ # The Settings form engine
+ 
+-The engine behind every Settings screen and wizard step (architecture §10.10). Screens import from `index.ts`; the components (`SettingsForm.svelte`, `SettingField.svelte`) by path. Decisions: `docs/decisions/2026-10-23-M-settings-form.md` and `2026-10-23-M-settings-form-2.md`.
++The engine behind every Settings screen and wizard step (architecture §10.10). Screens import from `index.ts`; the components (`SettingsForm.svelte`, `SettingField.svelte`) by path. Decisions: `docs/decisions/2026-10-23-M-settings-form.md`, `2026-10-23-M-settings-form-2.md` and `2026-10-24-M-settings-form-3.md`.
+ 
+ ## What's in a section's first view, and why
+ 
+-A Settings screen has the owner's 45 KB route budget (§10.1), and the engine is most of it. So what a section shows on first paint, and the save pipeline the owner chose to keep in it (no async seams on the merge and the draft restore, `2026-10-23-M-settings-form.md`), are static imports. Everything else is a dynamic import, loaded once per page when it's first needed.
++A Settings screen has the owner's 45 KB route budget (§10.1), and the engine is most of it. So only what a section shows on first paint is a static import. Everything else is a dynamic import, loaded once per page when it's first needed. That includes the save pipeline, as one edit chunk that loads with the first edit (owner, 2026-10-24). The merge and the draft restore stay synchronous once it's in.
+ 
+ **Eager (static imports):**
+ 
+-| File                                                                                                                    | Why it's in the first view                                                                                                                                          |
+-| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `form.svelte.ts`                                                                                                        | The store: loading, the field view, staging an edit, the debounces, events. Its `Engine` class is the `SettingsForm` the screen holds.                              |
+-| `saving.ts`, `batch.ts`, `merge.ts`, `draft.ts`, `validate.ts`, `units.ts`, `display.ts`                                | The save pipeline, Undo, the merge, drafts and validation: kept in the first view by the owner's decision, so a merge or a draft restore never waits on a download. |
+-| `schema.ts`, `types.ts`, `requests.ts`, `values.ts`                                                                     | Reading the schema into fields, the requests, saved values and staging.                                                                                             |
+-| `messages.ts`, `message-map*`                                                                                           | Field labels and help.                                                                                                                                              |
+-| `widgets.ts`                                                                                                            | Picking each field's control.                                                                                                                                       |
+-| `SettingsForm.svelte`, `SaveBar`, `ErrorSummary`, `FormNotice`, `DraftBanner`, `questions.ts`, `dialogs.ts`, `leave.ts` | The form's frame and everything the save pipeline shows: the bar, the summary, the banners, the draft offer, the discard, leave and disruptive questions.           |
+-| `SettingField.svelte`, `FieldConflict`, `FieldSaved`                                                                    | The field: label, help, error, Automatic, the status line, a conflict, what a save did.                                                                             |
+-| `Control.svelte`                                                                                                        | The two controls cheap enough to keep: the toggle and the text input.                                                                                               |
+-| `LazyControl.svelte`, `controls.svelte.ts`, `lazy.svelte.ts`                                                            | Loading the rest, with a placeholder of the right height so nothing moves.                                                                                          |
++| File                                                         | Why it's in the first view                                                                                                             |
++| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
++| `form.svelte.ts`                                             | The store: loading, the field view, staging an edit, the debounces, events. Its `Engine` class is the `SettingsForm` the screen holds. |
++| `draft-store.ts`                                             | Writing drafts, so an edit is kept from the first keystroke even if the edit chunk never loads.                                        |
++| `schema.ts`, `types.ts`, `requests.ts`, `values.ts`          | Reading the schema into fields, the requests (and what a refusal names), saved values and staging.                                     |
++| `messages.ts`, `message-map*`                                | Field labels and help.                                                                                                                 |
++| `widgets.ts`                                                 | Picking each field's control.                                                                                                          |
++| `SettingsForm.svelte`, `leave.ts`                            | The form's frame, the leave guard's decision, and the lines that say part of the page couldn't load.                                   |
++| `SettingField.svelte`                                        | The field: label, help, error, Automatic, the status line.                                                                             |
++| `Control.svelte`                                             | The two controls cheap enough to keep: the toggle and the text input.                                                                  |
++| `LazyControl.svelte`, `controls.svelte.ts`, `lazy.svelte.ts` | Loading the rest, with a placeholder of the right height so nothing moves.                                                             |
+ 
+ **On demand (dynamic imports):**
+ 
+-| Chunk                                                                                             | Loads with                                                                            | Holds                                                                 |
+-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+-| `instant.ts`                                                                                      | The first instant-mode change; prefetched when the browser is idle on an instant form | Instant mode                                                          |
+-| `preview.ts`                                                                                      | The first preview's debounce                                                          | Previews and what they say (estimates, warnings, "Automatic · value") |
+-| `NumberControl`, `SliderControl`, `ChoiceControl`, `SecretControl`, `ChipsControl`, `JsonControl` | A field of that type, or the form listing one (while the values load)                 | One control each; `ChoiceControl` is segmented, radio and select      |
+-| `menu.ts`                                                                                         | The first ⋯ menu opened                                                               | The menu and its "Show keys" list                                     |
+-| `save-key.ts`                                                                                     | Mounting `SettingsForm` (with the shortcut registry)                                  | ⌘/Ctrl+S in the registry                                              |
+-| `copy.ts`                                                                                         | The first copy                                                                        | The toast after a copy (the write itself stays in the click)          |
+-| `$lib/state/events.svelte`                                                                        | Mounting `SettingsForm`                                                               | The `settings` event stream                                           |
++| Chunk                                                                                                                                                                                                                    | Loads with                                                                                                                                   | Holds                                                                                            |
++| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
++| `edit.ts`: `saving.ts`, `draft.ts`, `merge.ts`, `validate.ts`, `batch.ts`, `units.ts`, `display.ts`, `questions.ts`, `dialogs.ts`, `SaveBar`, `ErrorSummary`, `FormNotice`, `DraftBanner`, `FieldConflict`, `FieldSaved` | The first edit, a stored draft (with the values), a newer `settings` event, a save; prefetched when the browser is idle after the first view | The save pipeline, Undo, the merge, reading and restoring drafts, validation, and what they show |
++| `instant.ts`                                                                                                                                                                                                             | The first instant-mode change; prefetched when the browser is idle on an instant form                                                        | Instant mode                                                                                     |
++| `preview.ts`                                                                                                                                                                                                             | The first preview's debounce                                                                                                                 | Previews and what they say (estimates, warnings, "Automatic · value")                            |
++| `NumberControl`, `SliderControl`, `ChoiceControl`, `SecretControl`, `ChipsControl`, `JsonControl`                                                                                                                        | A field of that type, or the form listing one (while the values load)                                                                        | One control each; `ChoiceControl` is segmented, radio and select                                 |
++| `menu.ts`                                                                                                                                                                                                                | The first ⋯ menu opened                                                                                                                      | The menu and its "Show keys" list                                                                |
++| `save-key.ts`                                                                                                                                                                                                            | Mounting `SettingsForm` (with the shortcut registry)                                                                                         | ⌘/Ctrl+S in the registry                                                                         |
++| `copy.ts`                                                                                                                                                                                                                | The first copy                                                                                                                               | The toast after a copy (the write itself stays in the click)                                     |
++| `$lib/state/events.svelte`                                                                                                                                                                                               | Mounting `SettingsForm`                                                                                                                      | The `settings` event stream                                                                      |
+ 
+ **Keep it that way.**
+ 
+@@ -38,5 +39,5 @@ A Settings screen has the owner's 45 KB route budget (§10.1), and the engine is
+ - A lazy file imports shared code from the eager files, never the other way round: an eager import of a lazy file makes it eager. `lazy-imports.test.ts` fails on one; add a new on-demand file to its list.
+ - The `index.ts` barrel exports only what screens use; a re-export there keeps its module in the first view.
+ - Rolldown pays about 400 B gz per chunk, so group what loads together into one entry (as `menu.ts` does) rather than many small ones.
+-- A chunk that fails to load can't be retried (browsers keep the failure), so every lazy path has a visible fallback: the "couldn't load" line in a control's place, under a previewed field or a field whose menu didn't load, or instant mode putting the value back with it.
++- A chunk that fails to load can't be retried (browsers keep the failure), so every lazy path has a visible fallback: the "couldn't load" line in a control's place, under a previewed field or a field whose menu didn't load, instant mode putting the value back with it, the form's Reload banner when the edit chunk didn't load, or the draft offer's "couldn't load" banner with Retry (a reload; the stored draft is kept for it).
+ - A new on-demand file also goes in `settingsOnDemand` in `web/.size-limit.mjs`, so the screen route's entry stops at it and "Settings controls (on demand)" gates it.
+diff --git a/web/src/lib/features/settings/form/SettingField.svelte b/web/src/lib/features/settings/form/SettingField.svelte
+index 0cd20b30..9b113a68 100644
+--- a/web/src/lib/features/settings/form/SettingField.svelte
++++ b/web/src/lib/features/settings/form/SettingField.svelte
+@@ -18,9 +18,7 @@
+ 	import LazyControl from './LazyControl.svelte';
+ 	import { controlOf, lazyOf } from './controls.svelte';
+ 	import { lazyPart } from './lazy.svelte';
+-	import FieldConflict from './FieldConflict.svelte';
+-	import FieldSaved from './FieldSaved.svelte';
+-	import { loadedPreview, type SettingsForm } from './form.svelte';
++	import { loadEdit, loadedEdit, loadedPreview, type SettingsForm } from './form.svelte';
+ 	import { fieldHelp, fieldLabel } from './messages';
+ 	import { fieldAnchor } from './schema';
+ 	import type { FieldKey } from './types';
+@@ -125,6 +123,11 @@
+ 	// What a preview says loads with the preview's code, which every preview has loaded.
+ 	const Preview = lazyPart(() => import('./preview'), loadedPreview);
+ 	$effect(() => Preview.want(f.preview));
++
++	// A conflict, a staged reset and a save's result come from the edit chunk, which an edit, a
++	// merge or a save has loaded: they show in the same update.
++	const Edit = lazyPart(loadEdit, loadedEdit);
++	$effect(() => Edit.want(f.conflict || f.pendingReset || f.savedRecently || f.undoUntil));
+ </script>
+ 
+ <div id={fieldAnchor(key)} class="ls-field flex flex-col gap-2" data-field={key}>
+@@ -208,10 +211,10 @@
+ 		<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
+ 	{/if}
+ 
+-	{#if f.conflict}
++	{#if f.conflict && Edit.part}
+ 		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
+ 			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
+-			<FieldConflict {form} {key} />
++			<Edit.part.FieldConflict {form} {key} />
+ 		</div>
+ 	{/if}
+ 
+@@ -222,17 +225,17 @@
+ 		</p>
+ 	{/if}
+ 
+-	{#if f.pendingReset}
++	{#if f.pendingReset && Edit.part}
+ 		<p class="flex items-center gap-1 text-small text-muted-text">
+ 			<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
+-			<FieldSaved {form} {key} part="reset" />
++			<Edit.part.FieldSaved {form} {key} part="reset" />
+ 		</p>
+ 	{/if}
+ 
+ 	<!-- Status line: only what applies (§10.10.4). -->
+ 	<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
+-		{#if f.savedRecently}
+-			<FieldSaved {form} {key} part="saved" />
++		{#if f.savedRecently && Edit.part}
++			<Edit.part.FieldSaved {form} {key} part="saved" />
+ 		{:else if spec.restartRequired && !f.locked}
+ 			<span class="inline-flex items-center gap-1">
+ 				<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
+@@ -271,8 +274,8 @@
+ 				{m.setting_file()}
+ 			</span>
+ 		{/if}
+-		{#if f.undoUntil}
+-			<FieldSaved {form} {key} part="undo" />
++		{#if f.undoUntil && Edit.part}
++			<Edit.part.FieldSaved {form} {key} part="undo" />
+ 		{/if}
+ 	</div>
+ 
+diff --git a/web/src/lib/features/settings/form/SettingsForm.offline.test.ts b/web/src/lib/features/settings/form/SettingsForm.offline.test.ts
+new file mode 100644
+index 00000000..0abd1c99
+--- /dev/null
++++ b/web/src/lib/features/settings/form/SettingsForm.offline.test.ts
+@@ -0,0 +1,108 @@
++// SettingsForm when the edit chunk can't load (the connection dropped, or an update replaced
++// the build): edits are still kept as a draft, the form says to reload, a stored draft's offer
++// says it couldn't load and is kept, and leaving falls back to the browser's own prompt.
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { render, screen, waitFor } from '@testing-library/svelte';
++import { tick } from 'svelte';
++import { DRAFT_PREFIX } from './draft-store';
++import { createSettingsForm, type SettingsForm } from './form.svelte';
++import FormHarness from './testing/FormHarness.svelte';
++import { fakeServer } from './testing/fake-server';
++import { spec, sv, values } from './testing/values';
++
++const nav = vi.hoisted(() => ({ guards: [] as ((n: unknown) => void)[] }));
++const hard = vi.hoisted(() => vi.fn());
++vi.mock('./edit', () => {
++	throw new Error('the edit chunk failed to load');
++});
++vi.mock('./leave', async (actual) => ({
++	...(await actual<typeof import('./leave')>()),
++	hardNavigate: hard
++}));
++vi.mock('$app/navigation', () => ({
++	beforeNavigate: (f: (n: unknown) => void) => nav.guards.push(f),
++	goto: async () => {}
++}));
++
++let form: SettingsForm;
++// Up to 10 s, for the slowest CI runner; each test gets 20.
++const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
++
++beforeEach(async () => {
++	vi.spyOn(console, 'warn').mockImplementation(() => {});
++	sessionStorage.clear();
++	nav.guards.length = 0;
++	hard.mockClear();
++	const server = fakeServer([values('crawler', 3, { intensity: sv('low') })]);
++	vi.stubGlobal('fetch', server.fetch);
++	form = createSettingsForm({
++		id: 'offline',
++		fields: [spec('crawler.intensity', { kind: 'enum', enum: ['low', 'balanced'] })]
++	});
++	await until(() => expect(form.status).toBe('ready'));
++});
++
++afterEach(() => {
++	form.destroy();
++	vi.unstubAllGlobals();
++	vi.restoreAllMocks();
++});
++
++describe('SettingsForm without its edit chunk', { timeout: 20_000 }, () => {
++	it('keeps the edit as a draft and says to reload', async () => {
++		render(FormHarness, { form });
++		form.set('crawler.intensity', 'balanced');
++		await until(() => expect(screen.getByTestId('part-failed')).toBeTruthy());
++		expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
++		await until(() =>
++			expect(sessionStorage.getItem(DRAFT_PREFIX + 'offline')).toContain('"balanced"')
++		);
++		expect(await form.save()).toEqual({ ok: false, reason: 'network' });
++	});
++
++	it('says a stored draft couldn’t load, keeps it and offers Retry', async () => {
++		const stored = JSON.stringify({
++			v: 1,
++			at: 1,
++			sections: {
++				crawler: {
++					revision: 3,
++					base: { intensity: 'low' },
++					mine: { intensity: 'balanced' },
++					reset: []
++				}
++			}
++		});
++		sessionStorage.setItem(DRAFT_PREFIX + 'drafted', stored);
++		const drafted = createSettingsForm({
++			id: 'drafted',
++			fields: [spec('crawler.intensity', { kind: 'enum', enum: ['low', 'balanced'] })]
++		});
++		await until(() => expect(drafted.status).toBe('ready'));
++		render(FormHarness, { form: drafted });
++		expect(screen.getByTestId('draft-failed')).toBeTruthy();
++		expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
++		// One banner: the draft's says what the general one would.
++		drafted.set('crawler.intensity', 'balanced');
++		// The save bar's load fails on the same promise as the save's, first.
++		expect(await drafted.save()).toEqual({ ok: false, reason: 'network' });
++		await tick();
++		expect(screen.getByTestId('draft-failed')).toBeTruthy();
++		expect(screen.queryByTestId('part-failed')).toBeNull();
++		drafted.destroy();
++		expect(sessionStorage.getItem(DRAFT_PREFIX + 'drafted')).toBe(stored);
++	});
++
++	it('leaves by a full page load, so the browser’s own prompt asks', async () => {
++		render(FormHarness, { form });
++		form.set('crawler.intensity', 'balanced');
++		nav.guards.at(-1)!({
++			type: 'link',
++			willUnload: false,
++			from: { url: new URL('/settings/crawler', location.href) },
++			to: { url: new URL('/search', location.href) },
++			cancel: vi.fn()
++		});
++		await until(() => expect(hard).toHaveBeenCalledWith(new URL('/search', location.href).href));
++	});
++});
+diff --git a/web/src/lib/features/settings/form/SettingsForm.svelte b/web/src/lib/features/settings/form/SettingsForm.svelte
+index 027c1c7b..76c3dc09 100644
+--- a/web/src/lib/features/settings/form/SettingsForm.svelte
++++ b/web/src/lib/features/settings/form/SettingsForm.svelte
+@@ -2,20 +2,17 @@
+ 	// Everything a form needs that's tied to a component's lifetime (§10.10.5): the error summary,
+ 	// the draft and network banners, the one polite live region, the save bar, ⌘/Ctrl+S, the leave
+ 	// guard, the `settings` subscription and the default disruptive confirmation. The screen puts
+-	// its groups and `SettingField`s in `children`.
++	// its groups and `SettingField`s in `children`. The bar, the summary, the banners and the
++	// questions are in the edit chunk, which the form loads with the first edit.
+ 	import { beforeNavigate, goto } from '$app/navigation';
+ 	import Button from '$lib/ui/controls/Button.svelte';
+ 	import Banner from '$lib/ui/feedback/Banner.svelte';
+ 	import { m } from '$lib/paraglide/messages.js';
+ 	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
+ 	import { loadControls } from './controls.svelte';
+-	import DraftBanner from './DraftBanner.svelte';
+-	import ErrorSummary from './ErrorSummary.svelte';
+-	import FormNotice from './FormNotice.svelte';
+-	import SaveBar from './SaveBar.svelte';
+-	import { preloadSettingsForm, type SettingsForm } from './form.svelte';
+-	import { leaveDecision } from './leave';
+-	import { askDisruptive, askToLeave } from './questions';
++	import { lazyPart } from './lazy.svelte';
++	import { loadEdit, loadedEdit, preloadSettingsForm, type SettingsForm } from './form.svelte';
++	import { hardNavigate, leaveDecision } from './leave';
+ 	import type { FieldKey } from './types';
+ 	import { widgetFor } from './widgets';
+ 
+@@ -59,12 +56,42 @@
+ 
+ 	const notice = $derived(form.status === 'offline' || form.status === 'save-error');
+ 
+-	// Instant mode loads with the first change; once the browser is idle after the first view it
+-	// loads anyway, so the first change finds it in place.
++	// From the edit chunk. `peek` renders a part in the same update as what shows it once the
++	// chunk is in: an offered draft with the fields (the form waits for it), a save's result.
++	const BarPart = lazyPart(
++		() => loadEdit().then((mod) => mod.SaveBar),
++		() => loadedEdit()?.SaveBar
++	);
++	const SummaryPart = lazyPart(
++		() => loadEdit().then((mod) => mod.ErrorSummary),
++		() => loadedEdit()?.ErrorSummary
++	);
++	const NoticePart = lazyPart(
++		() => loadEdit().then((mod) => mod.FormNotice),
++		() => loadedEdit()?.FormNotice
++	);
++	const DraftPart = lazyPart(
++		() => loadEdit().then((mod) => mod.DraftBanner),
++		() => loadedEdit()?.DraftBanner
++	);
++	$effect(() => BarPart.want(barShown));
++	$effect(() => SummaryPart.want(summaryShown));
++	$effect(() => NoticePart.want(notice));
++	$effect(() => DraftPart.want(form.draft));
++	// The edit chunk didn't load: nothing can be saved from this page until a reload. A stored
++	// draft whose offer didn't load says so on its own.
++	const partFailed = $derived(
++		!form.draftUnavailable &&
++			(BarPart.failed || SummaryPart.failed || NoticePart.failed || DraftPart.failed)
++	);
++
++	// After the first view, while the browser is idle: the edit chunk (and on an instant form
++	// instant mode), so the first edit finds it in place, even if the connection drops meanwhile.
+ 	const shown = $derived(form.status !== 'loading' && form.status !== 'load-error');
+ 	$effect(() => {
+-		if (!shown || form.mode !== 'instant') return;
+-		const go = () => void preloadSettingsForm().catch(() => {});
++		if (!shown) return;
++		const instant = form.mode === 'instant';
++		const go = () => void preloadSettingsForm(instant).catch(() => {});
+ 		if (typeof requestIdleCallback !== 'function') {
+ 			const t = setTimeout(go, 500);
+ 			return () => clearTimeout(t);
+@@ -106,7 +133,12 @@
+ 	// --- the default disruptive confirmation (§10.10.7) --------------------------------------
+ 
+ 	// A fallback: a screen's own disruptive handler (Network's lockout dialog, §10.10.6) wins.
+-	$effect(() => form.defaultGate('disruptive', (c) => askDisruptive(form, c, asking.signal)));
++	// The gate runs inside a save, so the edit chunk is in.
++	$effect(() =>
++		form.defaultGate('disruptive', async (c) =>
++			(await loadEdit()).askDisruptive(form, c, asking.signal)
++		)
++	);
+ 
+ 	// --- events ------------------------------------------------------------------------------
+ 
+@@ -186,7 +218,15 @@
+ 
+ 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
+ 	async function confirmLeave(to: URL, unload: boolean) {
+-		await askToLeave(form, to, unload, asking.signal, async (href) => {
++		let edit: Awaited<ReturnType<typeof loadEdit>>;
++		try {
++			edit = await loadEdit();
++		} catch {
++			// The question can't load: leave with a full page load, so the browser's own prompt asks.
++			hardNavigate(to.href);
++			return;
++		}
++		await edit.askToLeave(form, to, unload, asking.signal, async (href) => {
+ 			bypass = true;
+ 			try {
+ 				// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
+@@ -204,8 +244,8 @@
+ 	role="presentation"
+ 	{onkeydown}
+ >
+-	{#if summaryShown && form.errors.length}
+-		<ErrorSummary
++	{#if summaryShown && form.errors.length && SummaryPart.part}
++		<SummaryPart.part
+ 			{form}
+ 			focusId={summaryFocus}
+ 			focused={summaryFocused}
+@@ -214,12 +254,30 @@
+ 		/>
+ 	{/if}
+ 
+-	{#if form.draft}
+-		<DraftBanner {form} />
++	{#if form.draft && DraftPart.part}
++		<DraftPart.part {form} />
++	{:else if form.draftUnavailable}
++		<Banner kind="warning">
++			<span data-testid="draft-failed">{m.settings_form_draft_failed()}</span>
++			{#snippet action()}
++				<!-- Browsers keep a failed module: only a reload loads it again. Unsaved edits made
++				     since get the browser's own prompt from the leave guard. -->
++				<Button dense onclick={() => location.reload()}>{m.settings_form_retry()}</Button>
++			{/snippet}
++		</Banner>
++	{/if}
++
++	{#if partFailed}
++		<Banner kind="warning">
++			<span data-testid="part-failed">{m.settings_form_chunk_failed()}</span>
++			{#snippet action()}
++				<Button dense onclick={() => location.reload()}>{m.settings_form_reload()}</Button>
++			{/snippet}
++		</Banner>
+ 	{/if}
+ 
+-	{#if notice}
+-		<FormNotice {form} />
++	{#if notice && NoticePart.part}
++		<NoticePart.part {form} />
+ 	{/if}
+ 
+ 	{#if form.status === 'loading'}
+@@ -240,8 +298,8 @@
+ 		{#key form.announcement?.id}{form.announcement?.text ?? ''}{/key}
+ 	</div>
+ 
+-	{#if barShown}
+-		<SaveBar {form} signal={asking.signal} ondiscard={() => (summaryShown = false)} />
++	{#if barShown && BarPart.part}
++		<BarPart.part {form} signal={asking.signal} ondiscard={() => (summaryShown = false)} />
+ 	{/if}
+ </div>
+ 
+diff --git a/web/src/lib/features/settings/form/draft-store.ts b/web/src/lib/features/settings/form/draft-store.ts
+new file mode 100644
+index 00000000..c5c28763
+--- /dev/null
++++ b/web/src/lib/features/settings/form/draft-store.ts
+@@ -0,0 +1,88 @@
++// Drafts' storage and writing them (§10.10.5; the format is in `draft.ts`). Part of a section's
++// first view, so an edit is kept from the first keystroke even when the edit chunk can't load.
++// Reading and restoring one (`draft.ts`) load with the edit chunk.
++import { devWarn } from './schema';
++import type { FieldSpec } from './types';
++import { dirtyNames, isLocked, JsonDraft, RESET, type SectionState } from './values';
++
++export const DRAFT_PREFIX = 'lodestar.settings.draft.v1.';
++export const DRAFT_MAX_BYTES = 64 * 1024;
++
++export interface DraftSection {
++	revision: number;
++	base: Record<string, unknown>;
++	mine: Record<string, unknown>;
++	reset: string[];
++}
++export interface Draft {
++	v: 1;
++	at: number;
++	sections: Record<string, DraftSection>;
++}
++
++export type SpecOf = (section: string, name: string) => FieldSpec | undefined;
++
++export function storage(): Storage | undefined {
++	try {
++		return globalThis.sessionStorage ?? undefined;
++	} catch {
++		return undefined; // blocked (sandboxed frame, privacy settings)
++	}
++}
++
++/** Only fields a draft may hold: dirty, not locked, not secret, known to the form. */
++export function draftOf(
++	sections: Record<string, SectionState>,
++	specOf: SpecOf,
++	at: number
++): Draft | null {
++	const out: Record<string, DraftSection> = {};
++	for (const [section, s] of Object.entries(sections)) {
++		for (const name of dirtyNames(s)) {
++			const f = s.fields[name]!;
++			const spec = specOf(section, name);
++			if (!spec || spec.writeOnly || spec.readOnly || isLocked(f.saved)) continue;
++			if (f.mine instanceof JsonDraft) continue; // half-typed JSON: nothing to restore
++			const d = (out[section] ??= { revision: s.revision, base: {}, mine: {}, reset: [] });
++			d.base[name] = f.base;
++			if (f.mine === RESET) d.reset.push(name);
++			else d.mine[name] = f.mine;
++		}
++	}
++	return Object.keys(out).length ? { v: 1, at, sections: out } : null;
++}
++
++/** Writes (or, with nothing to keep, removes) the draft. False when storage refused it. */
++export function writeDraft(id: string, draft: Draft | null): boolean {
++	const store = storage();
++	if (!store) return false;
++	try {
++		if (!draft) {
++			store.removeItem(DRAFT_PREFIX + id);
++			return true;
++		}
++		const text = JSON.stringify(draft);
++		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {
++			if (import.meta.env.DEV) devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
++			store.removeItem(DRAFT_PREFIX + id);
++			return false;
++		}
++		store.setItem(DRAFT_PREFIX + id, text);
++		return true;
++	} catch {
++		return false; // full (QuotaExceededError) or blocked
++	}
++}
++
++export function clearDraft(id: string): void {
++	writeDraft(id, null);
++}
++
++/** A draft is stored for the screen (unread: reading one loads with the edit chunk). */
++export function hasDraft(id: string): boolean {
++	try {
++		return storage()?.getItem(DRAFT_PREFIX + id) != null;
++	} catch {
++		return false;
++	}
++}
+diff --git a/web/src/lib/features/settings/form/draft.ts b/web/src/lib/features/settings/form/draft.ts
+index e1056fa4..80a681d9 100644
+--- a/web/src/lib/features/settings/form/draft.ts
++++ b/web/src/lib/features/settings/form/draft.ts
+@@ -6,91 +6,22 @@
+ //     revision, base: { field: value }, mine: { field: value }, reset: [field] } } }
+ //
+ // A reset has no value, so it's listed in `reset` (with its base) rather than in `mine`.
+-import { merge } from './merge';
+-import { devWarn } from './schema';
+-import type { FieldSpec } from './types';
+-import { JsonDraft, validate } from './validate';
++//
++// Writing one is in `draft-store.ts`, part of the first view so an edit is kept even when this
++// file can't load; reading and restoring one are here.
+ import {
+-	dirtyNames,
+-	isLocked,
+-	RESET,
+-	type FieldModel,
+-	type SectionState,
+-	type Staged
+-} from './values';
+-
+-export const DRAFT_PREFIX = 'lodestar.settings.draft.v1.';
+-export const DRAFT_MAX_BYTES = 64 * 1024;
+-
+-export interface DraftSection {
+-	revision: number;
+-	base: Record<string, unknown>;
+-	mine: Record<string, unknown>;
+-	reset: string[];
+-}
+-export interface Draft {
+-	v: 1;
+-	at: number;
+-	sections: Record<string, DraftSection>;
+-}
+-
+-type SpecOf = (section: string, name: string) => FieldSpec | undefined;
+-
+-function storage(): Storage | undefined {
+-	try {
+-		return globalThis.sessionStorage ?? undefined;
+-	} catch {
+-		return undefined; // blocked (sandboxed frame, privacy settings)
+-	}
+-}
+-
+-/** Only fields a draft may hold: dirty, not locked, not secret, known to the form. */
+-export function draftOf(
+-	sections: Record<string, SectionState>,
+-	specOf: SpecOf,
+-	at: number
+-): Draft | null {
+-	const out: Record<string, DraftSection> = {};
+-	for (const [section, s] of Object.entries(sections)) {
+-		for (const name of dirtyNames(s)) {
+-			const f = s.fields[name]!;
+-			const spec = specOf(section, name);
+-			if (!spec || spec.writeOnly || spec.readOnly || isLocked(f.saved)) continue;
+-			if (f.mine instanceof JsonDraft) continue; // half-typed JSON: nothing to restore
+-			const d = (out[section] ??= { revision: s.revision, base: {}, mine: {}, reset: [] });
+-			d.base[name] = f.base;
+-			if (f.mine === RESET) d.reset.push(name);
+-			else d.mine[name] = f.mine;
+-		}
+-	}
+-	return Object.keys(out).length ? { v: 1, at, sections: out } : null;
+-}
+-
+-/** Writes (or, with nothing to keep, removes) the draft. False when storage refused it. */
+-export function writeDraft(id: string, draft: Draft | null): boolean {
+-	const store = storage();
+-	if (!store) return false;
+-	try {
+-		if (!draft) {
+-			store.removeItem(DRAFT_PREFIX + id);
+-			return true;
+-		}
+-		const text = JSON.stringify(draft);
+-		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {
+-			if (import.meta.env.DEV) devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
+-			store.removeItem(DRAFT_PREFIX + id);
+-			return false;
+-		}
+-		store.setItem(DRAFT_PREFIX + id, text);
+-		return true;
+-	} catch {
+-		return false; // full (QuotaExceededError) or blocked
+-	}
+-}
++	clearDraft,
++	DRAFT_PREFIX,
++	storage,
++	type Draft,
++	type DraftSection,
++	type SpecOf
++} from './draft-store';
++import { merge } from './merge';
++import { validate } from './validate';
++import { isLocked, RESET, type FieldModel, type SectionState, type Staged } from './values';
+ 
+-export function clearDraft(id: string): void {
+-	writeDraft(id, null);
+-}
++export * from './draft-store';
+ 
+ const isObj = (v: unknown): v is Record<string, unknown> =>
+ 	typeof v === 'object' && v !== null && !Array.isArray(v);
+diff --git a/web/src/lib/features/settings/form/edit.ts b/web/src/lib/features/settings/form/edit.ts
+new file mode 100644
+index 00000000..016570d0
+--- /dev/null
++++ b/web/src/lib/features/settings/form/edit.ts
+@@ -0,0 +1,13 @@
++// The edit chunk: what only an edit, a save, a stored draft or a change elsewhere needs. The save
++// pipeline (Undo, the merge, reading and restoring drafts, validation), the form's questions and
++// the UI they show. `form.svelte.ts` loads it once per page (owner, 2026-10-24).
++export * from './saving';
++export { sectionValues } from './merge';
++export { validate } from './validate';
++export { askDisruptive, askToLeave } from './questions';
++export { default as DraftBanner } from './DraftBanner.svelte';
++export { default as ErrorSummary } from './ErrorSummary.svelte';
++export { default as FieldConflict } from './FieldConflict.svelte';
++export { default as FieldSaved } from './FieldSaved.svelte';
++export { default as FormNotice } from './FormNotice.svelte';
++export { default as SaveBar } from './SaveBar.svelte';
+diff --git a/web/src/lib/features/settings/form/form.svelte.ts b/web/src/lib/features/settings/form/form.svelte.ts
+index c142b0b1..42796edc 100644
+--- a/web/src/lib/features/settings/form/form.svelte.ts
++++ b/web/src/lib/features/settings/form/form.svelte.ts
+@@ -2,20 +2,21 @@
+ // component's lifetime (the `settings` subscription, ⌘/Ctrl+S, the leave guard) is wired by
+ // `SettingsForm.svelte`, which calls `received`/`resync` and registers the default gate.
+ //
+-// The store's state and its own half are here; `saving.ts` holds the save pipeline (Undo, the
+-// merge, drafts and validation). Two parts load on demand, once per page, and work on the same
+-// `Engine`: `instant.ts` with the first instant change, `preview.ts` during the first preview's
+-// debounce.
++// This file is what a section's first view needs: loading, the field view, staging an edit,
++// writing drafts, previews' and events' timing. The rest loads on demand, once per page, and
++// works on the same `Engine`: the edit chunk (`edit.ts`: the save pipeline in `saving.ts`, Undo,
++// the merge, reading and restoring drafts, validation, and the UI they show) with the first
++// edit, a stored draft, a `settings` event or a save (owner, 2026-10-24); `instant.ts` with the
++// first instant change; `preview.ts` during the first preview's debounce.
+ //
+ // The Maps and Sets here are bookkeeping that nothing renders; reactive state is `$state.raw`
+ // records replaced on every change.
+ /* eslint-disable svelte/prefer-svelte-reactivity */
+ import { ApiError, isAbort, latest } from '$lib/api/client';
+ import { m } from '$lib/paraglide/messages.js';
+-import { draftOf, writeDraft, type Draft } from './draft';
++import { draftOf, hasDraft, writeDraft, type Draft } from './draft-store';
+ import type { Instant } from './instant';
+ import { getSection, type Batch } from './requests';
+-import * as pipeline from './saving';
+ import { devWarn, loadSettingsIndex } from './schema';
+ import {
+ 	splitKey,
+@@ -68,6 +69,8 @@ export interface SettingsForm {
+ 	/** The last save included a secret, which Undo leaves out. */
+ 	readonly undoSkipsSecrets: boolean;
+ 	readonly draft: null | { fields: number; dropped: number };
++	/** A draft is stored but the code that offers it didn't load: it's kept for a reload. */
++	readonly draftUnavailable: boolean;
+ 	/** The latest polite announcement; `id` changes with each one. */
+ 	readonly announcement: { id: number; text: string } | null;
+ 	/** The latest save's result, from any caller (the bar, ⌘/Ctrl+S, the wizard's Next). */
+@@ -102,6 +105,7 @@ export interface SettingsForm {
+ 
+ export type Sections = Record<string, SectionState>;
+ 
++let editMod: typeof import('./edit') | undefined;
+ let previewMod: typeof import('./preview') | undefined;
+ let instantMod: typeof import('./instant') | undefined;
+ 
+@@ -119,20 +123,29 @@ const loadPreview = once(
+ 	() => import('./preview'),
+ 	(mod) => (previewMod = mod)
+ );
++/** The edit chunk, loaded once (components show its parts). */
++export const loadEdit = once(
++	() => import('./edit'),
++	(mod) => (editMod = mod)
++);
++// Instant mode sends through the save pipeline: it comes along.
+ const loadInstant = once(
+-	() => import('./instant'),
++	() => Promise.all([import('./instant'), loadEdit()]).then(([mod]) => mod),
+ 	(mod) => (instantMod = mod)
+ );
++const ignore = () => {};
+ 
+-/** The preview chunk, if it has loaded (for the field's preview lines). */
++/** The edit chunk and the preview chunk, if they've loaded (for the parts components show). */
++export const loadedEdit = () => editMod;
+ export const loadedPreview = () => previewMod;
+ 
+ /**
+- * Loads now what the engine otherwise loads on demand: previews, and with `instant` instant
+- * mode. `SettingsForm.svelte` calls it on an instant form once the browser is idle.
++ * Loads now what the engine otherwise loads on demand: the edit chunk and previews, and with
++ * `instant` instant mode. `SettingsForm.svelte` calls it once the browser is idle after the
++ * first view.
+  */
+ export async function preloadSettingsForm(instant = true): Promise<void> {
+-	await Promise.all([instant ? loadInstant() : undefined, loadPreview()]);
++	await Promise.all([instant ? loadInstant() : loadEdit(), loadPreview()]);
+ }
+ 
+ /** `SettingsForm`'s methods, bound to the instance. */
+@@ -184,6 +197,7 @@ export class Engine implements SettingsForm {
+ 	undoSkipsSecrets = $state(false);
+ 	instantUndo = $state.raw<Record<string, { until: number; prev: SettingValue }>>({});
+ 	draft = $state.raw<null | { fields: number; dropped: number }>(null);
++	draftUnavailable = $state(false);
+ 	/** The preview code didn't load: previewed fields say so. */
+ 	previewFailed = $state(false);
+ 	announcement = $state.raw<{ id: number; text: string } | null>(null);
+@@ -288,13 +302,23 @@ export class Engine implements SettingsForm {
+ 			this.byKey = new Map(list.map((s) => [s.key, s]));
+ 			this.specs = list;
+ 			const names = [...new Set(list.map((s) => s.section))];
++			// A stored draft is offered with the first view: its code loads with the values.
++			const offer =
++				this.useDrafts && hasDraft(this.id)
++					? loadEdit().then(
++							() => true,
++							() => false
++						)
++					: undefined;
+ 			const values = await Promise.all(names.map((s) => getSection(s)));
++			const offered = await offer;
+ 			if (this.destroyed) return;
+ 			const next: Sections = {};
+ 			for (const v of values) next[v.section] = fromValues(v);
+ 			this.sections = next;
+ 			this.status = 'ready';
+-			if (this.useDrafts) pipeline.offerDraft(this);
++			if (offered) editMod!.offerDraft(this);
++			else if (offered === false) this.draftUnavailable = true;
+ 			this.schedulePreview();
+ 		} catch (e) {
+ 			if (this.destroyed || isAbort(e)) return;
+@@ -339,7 +363,8 @@ export class Engine implements SettingsForm {
+ 		if (spec.writeOnly && f.mine === undefined) state.value = null;
+ 		const error = this.fieldErrors[key] ?? this.previewErrors[key];
+ 		if (error !== undefined) state.error = error;
+-		if (f.note === 'locked') state.note = pipeline.lockedNote(f.saved);
++		// A note comes from the merge, so the pipeline that words it has loaded.
++		if (f.note === 'locked' && editMod) state.note = editMod.lockedNote(f.saved);
+ 		if (f.conflict) state.conflict = { ...f.conflict };
+ 		if (p) {
+ 			state.preview = {
+@@ -365,11 +390,14 @@ export class Engine implements SettingsForm {
+ 		if (next === s) return;
+ 		this.setSection(next);
+ 		// A server error no longer applies once the value changes; a client one is re-checked.
+-		if (this.fieldErrors[key] !== undefined) pipeline.recheck(this, key);
++		// Errors come from the save pipeline, so it has loaded, except a "couldn't load", which
++		// stays until a change gets through.
++		if (this.fieldErrors[key] !== undefined) editMod?.recheck(this, key);
+ 		if (this.previewErrors[key] !== undefined) {
+ 			this.previewErrors = without(this.previewErrors, key);
+ 		}
+ 		if (this.mode === 'instant') return this.scheduleInstant(spec);
++		if (!editMod) void loadEdit().catch(ignore);
+ 		this.scheduleDraft();
+ 		this.schedulePreview();
+ 	}
+@@ -380,7 +408,14 @@ export class Engine implements SettingsForm {
+ 
+ 	/** Leaving a field validates it (§10.10.5). */
+ 	blur(key: FieldKey) {
+-		pipeline.recheck(this, key);
++		const spec = this.byKey.get(key);
++		const [section, name] = splitKey(key);
++		const f = spec ? this.sec(section)?.fields[name] : undefined;
++		if (!spec || !f) return;
++		if (!isDirty(f)) this.setFieldError(key, undefined);
++		// A dirty field was edited, which loads the pipeline; it may still be on its way.
++		else if (editMod) editMod.recheck(this, key);
++		else void loadEdit().then(() => this.blur(key), ignore);
+ 	}
+ 
+ 	// --- drafts ------------------------------------------------------------------------------
+@@ -388,8 +423,9 @@ export class Engine implements SettingsForm {
+ 	writeNow() {
+ 		clearTimeout(this.draftTimer);
+ 		this.draftTimer = undefined;
+-		// An offered draft isn't overwritten before the user restores or discards it.
+-		if (!this.useDrafts || this.draft || this.status === 'loading') return;
++		// An offered draft isn't overwritten before the user restores or discards it, nor one
++		// whose offer couldn't load.
++		if (!this.useDrafts || this.draft || this.draftUnavailable || this.status === 'loading') return;
+ 		writeDraft(this.id, draftOf(this.sections, this.specOf, Date.now()));
+ 	}
+ 
+@@ -446,59 +482,86 @@ export class Engine implements SettingsForm {
+ 		);
+ 	}
+ 
++	/** The pipeline didn't load for a save: staged secrets aren't kept once tried (§10.10.4). */
++	dropSecrets() {
++		for (const spec of this.specs) {
++			const s = this.sec(spec.section);
++			if (!spec.writeOnly || s?.fields[spec.name]?.mine === undefined) continue;
++			this.setSection(stage(s, spec.name, undefined, spec));
++			this.setFieldError(spec.key, m.settings_form_chunk_failed());
++		}
++	}
++
+ 	// --- events ------------------------------------------------------------------------------
+ 
+-	/** A `settings` event: one newer than what the form holds is refetched and merged. */
++	/** A `settings` event: one newer than what the form holds loads the pipeline to merge it. */
+ 	received(e: SettingsEvent) {
+ 		const s = this.sec(e.section);
+ 		if (!s || e.revision <= s.revision) return;
+-		pipeline.received(this, e);
++		if (editMod) editMod.received(this, e);
++		else void loadEdit().then((mod) => mod.received(this, e), ignore);
+ 	}
+ 
+ 	/** Refetches a section and merges it (the pipeline's `refetch`). */
+ 	async refetch(section: string, force = false): Promise<void> {
+ 		try {
+-			await pipeline.refetch(this, section, force);
++			await (editMod ?? (await loadEdit())).refetch(this, section, force);
+ 		} catch {
+ 			// Not shown: the next event or resync tries again.
+ 		}
+ 	}
+ 
+-	// --- the rest of the API: the save pipeline's (`saving.ts`) --------------------------------
++	// --- the rest of the API: the save pipeline's (`saving.ts`), once it's loaded ---------------
+ 
+-	save(): Promise<SaveResult> {
++	async save(): Promise<SaveResult> {
++		let pipeline = editMod;
++		try {
++			pipeline ??= await loadEdit();
++		} catch {
++			this.dropSecrets();
++			return { ok: false, reason: 'network' };
++		}
+ 		return pipeline.save(this);
+ 	}
+ 
++	/** Something to discard was staged, which loaded the pipeline. */
+ 	discard() {
+-		pipeline.discard(this);
++		editMod?.discard(this);
+ 	}
+ 
+ 	async undo(key?: FieldKey): Promise<SaveResult> {
+-		// An instant change's Undo is offered only after a change, which loaded instant mode.
++		// An Undo is offered only after a save or an instant change: its code has loaded.
+ 		const nothing: SaveResult = { ok: false, reason: 'nothing' };
+ 		if (this.mode === 'instant') return key && this.instant ? this.instant.undo(key) : nothing;
+-		return pipeline.undo(this);
++		return editMod ? editMod.undo(this) : nothing;
+ 	}
+ 
++	// A conflict and an offered draft come from the pipeline, so it has loaded.
+ 	resolve(key: FieldKey, pick: 'mine' | 'theirs') {
+-		pipeline.resolve(this, key, pick);
++		editMod?.resolve(this, key, pick);
+ 	}
+ 
+ 	restoreDraft() {
+-		pipeline.restoreDraft(this);
++		editMod?.restoreDraft(this);
+ 	}
+ 
+ 	dropDraft() {
+-		pipeline.dropDraft(this);
++		editMod?.dropDraft(this);
+ 	}
+ 
+ 	async retry() {
+ 		if (this.status === 'load-error') return this.load();
+-		await pipeline.retry(this);
++		// Offline and save errors come from the pipeline.
++		await editMod?.retry(this);
+ 	}
+ 
+-	removeSecret(key: FieldKey): Promise<SaveResult> {
++	async removeSecret(key: FieldKey): Promise<SaveResult> {
++		let pipeline = editMod;
++		try {
++			pipeline ??= await loadEdit();
++		} catch {
++			return { ok: false, reason: 'network' };
++		}
+ 		return pipeline.removeSecret(this, key);
+ 	}
+ 
+diff --git a/web/src/lib/features/settings/form/instant.ts b/web/src/lib/features/settings/form/instant.ts
+index d146959c..f1780d6c 100644
+--- a/web/src/lib/features/settings/form/instant.ts
++++ b/web/src/lib/features/settings/form/instant.ts
+@@ -4,9 +4,8 @@
+ import { ApiError } from '$lib/api/client';
+ import { m } from '$lib/paraglide/messages.js';
+ import { DEBOUNCE_MS, UNDO_MS, without, type Engine } from './form.svelte';
+-import { sectionValues } from './merge';
+-import { announce, applyResponse, holding, runGates, send } from './saving';
+-import { validate } from './validate';
++// The pipeline through its chunk's entry, so instant mode reuses that chunk rather than split it.
++import { announce, applyResponse, holding, runGates, sectionValues, send, validate } from './edit';
+ import { getSection, type Batch } from './requests';
+ import type { FieldKey, FieldSpec, SaveResult, SectionValues, SettingValue } from './types';
+ import { wire } from './batch';
+diff --git a/web/src/lib/features/settings/form/lazy-imports.test.ts b/web/src/lib/features/settings/form/lazy-imports.test.ts
+index 857d01ba..0276afb4 100644
+--- a/web/src/lib/features/settings/form/lazy-imports.test.ts
++++ b/web/src/lib/features/settings/form/lazy-imports.test.ts
+@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
+ 
+ const HERE = import.meta.dirname;
+ 
+-/** Loaded only through `import()` (controls.svelte.ts, form.svelte.ts, SettingField, SettingsForm). */
++/**
++ * Loaded only through `import()` (controls.svelte.ts, form.svelte.ts, SettingField, SettingsForm),
++ * or only by files that are.
++ */
+ const ON_DEMAND = [
+ 	'NumberControl.svelte',
+ 	'SliderControl.svelte',
+@@ -14,6 +17,23 @@ const ON_DEMAND = [
+ 	'SecretControl.svelte',
+ 	'ChipsControl.svelte',
+ 	'JsonControl.svelte',
++	'edit.ts',
++	'saving.ts',
++	'draft.ts',
++	'merge.ts',
++	'validate.ts',
++	'batch.ts',
++	'display.ts',
++	'units.ts',
++	'questions.ts',
++	'dialogs.ts',
++	'ConfirmDialog.svelte',
++	'DraftBanner.svelte',
++	'ErrorSummary.svelte',
++	'FieldConflict.svelte',
++	'FieldSaved.svelte',
++	'FormNotice.svelte',
++	'SaveBar.svelte',
+ 	'instant.ts',
+ 	'preview.ts',
+ 	'FieldPreview.svelte',
+diff --git a/web/src/lib/features/settings/form/lazy.test.ts b/web/src/lib/features/settings/form/lazy.test.ts
+index b2f201bf..dd49b8cd 100644
+--- a/web/src/lib/features/settings/form/lazy.test.ts
++++ b/web/src/lib/features/settings/form/lazy.test.ts
+@@ -1,4 +1,5 @@
+-// The parts the engine loads on demand (form.svelte.ts's header): instant mode and previews.
++// The parts the engine loads on demand (form.svelte.ts's header): the edit chunk, instant mode
++// and previews.
+ // Each test starts from a fresh module graph, so nothing is loaded yet, and records which load.
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+ import { DRAFT_PREFIX } from './draft';
+@@ -12,7 +13,7 @@ let failing = new Set<string>();
+ 
+ /** Records each on-demand module as it's evaluated. */
+ function spyOnLoads() {
+-	for (const name of ['instant', 'preview']) {
++	for (const name of ['edit', 'instant', 'preview']) {
+ 		vi.doMock(`./${name}`, async (original: () => Promise<unknown>) => {
+ 			if (failing.has(name)) throw new Error(`${name} failed to load`);
+ 			loads.push(name);
+@@ -26,6 +27,14 @@ const SPECS: FieldSpec[] = [
+ 	spec('crawler.timeout_secs', { kind: 'integer', minimum: 1, maximum: 120 }),
+ 	spec('transport.utp', { kind: 'boolean' })
+ ];
++/** A stored draft: intensity staged to `low` at the current revision. */
++const DRAFT = {
++	v: 1,
++	at: 1,
++	sections: {
++		crawler: { revision: 3, base: { intensity: 'balanced' }, mine: { intensity: 'low' }, reset: [] }
++	}
++};
+ const PREVIEWED = spec('crawler.max_sockets', { kind: 'integer', auto: 0, preview: true });
+ 
+ let server: ReturnType<typeof fakeServer>;
+@@ -75,17 +84,64 @@ describe('a staged section', { timeout: 20_000 }, () => {
+ 		expect(loaded()).toEqual([]);
+ 	});
+ 
+-	it('saves, writes drafts and merges events without loading anything', async () => {
++	it('loads the edit chunk with the first edit, and saves with it', async () => {
+ 		const form = await open();
+ 		form.set('crawler.intensity', 'low');
+ 		form.blur('crawler.intensity');
+ 		expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toBeNull(); // the draft's debounce
++		await until(() => expect(loaded()).toEqual(['edit']));
+ 		expect(await form.save()).toEqual({ ok: true, restart: [] });
+ 		expect(patches()).toEqual([{ crawler: { if_revision: 3, intensity: 'low' } }]);
++	});
++
++	it('validates a field left before the edit chunk is in', async () => {
++		const form = await open();
++		form.set('crawler.timeout_secs', 500);
++		form.blur('crawler.timeout_secs');
++		await until(() => expect(form.field('crawler.timeout_secs').error).toEqual(expect.any(String)));
++	});
++
++	it('loads it to merge a change made elsewhere', async () => {
++		const form = await open();
+ 		const revision = server.change('crawler', { timeout_secs: { value: 30, source: 'db' } });
+ 		form.received({ section: 'crawler', revision });
+ 		await until(() => expect(form.field('crawler.timeout_secs').value).toBe(30));
+-		expect(loaded()).toEqual([]);
++		expect(loaded()).toEqual(['edit']);
++	});
++
++	it('loads it with the values when a draft is stored, and offers the draft with the fields', async () => {
++		sessionStorage.setItem(DRAFT_PREFIX + 'lazy', JSON.stringify(DRAFT));
++		const form = await open();
++		expect(form.draft).toEqual({ fields: 1, dropped: 0 });
++		expect(loaded()).toEqual(['edit']);
++		form.restoreDraft();
++		expect(form.field('crawler.intensity')).toMatchObject({ value: 'low', dirty: true });
++	});
++});
++
++describe('a staged section without its edit chunk', { timeout: 20_000 }, () => {
++	beforeEach(() => {
++		failing = new Set(['edit']);
++	});
++
++	it('keeps an edit as a draft, and a save says the network failed', async () => {
++		const form = await open();
++		form.set('crawler.intensity', 'low');
++		await until(() =>
++			expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toContain('"intensity":"low"')
++		);
++		expect(await form.save()).toEqual({ ok: false, reason: 'network' });
++		expect(patches()).toEqual([]);
++	});
++
++	it('keeps a stored draft whose offer can’t load, through edits and leaving', async () => {
++		const stored = JSON.stringify(DRAFT);
++		sessionStorage.setItem(DRAFT_PREFIX + 'lazy', stored);
++		const form = await open();
++		expect(form).toMatchObject({ draft: null, draftUnavailable: true });
++		form.set('crawler.timeout_secs', 30);
++		form.destroy();
++		expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toBe(stored);
+ 	});
+ 
+ 	it('loads previews on their own, during the first one’s debounce', async () => {
+@@ -102,7 +158,7 @@ describe('an instant section', { timeout: 20_000 }, () => {
+ 		expect(loaded()).toEqual([]);
+ 		form.set('transport.utp', false);
+ 		await until(() => expect(patches()).toEqual([{ transport: { if_revision: 7, utp: false } }]));
+-		expect(loaded()).toEqual(['instant']);
++		expect(loaded()).toEqual(['edit', 'instant']);
+ 		expect(form.field('transport.utp')).toMatchObject({ value: false, dirty: false });
+ 		expect(await form.undo('transport.utp')).toMatchObject({ ok: true });
+ 	});
+diff --git a/web/src/lib/features/settings/form/preview.ts b/web/src/lib/features/settings/form/preview.ts
+index 6a9ee044..0144b383 100644
+--- a/web/src/lib/features/settings/form/preview.ts
++++ b/web/src/lib/features/settings/form/preview.ts
+@@ -3,8 +3,7 @@
+ // preview's debounce.
+ import { ApiError, isAbort } from '$lib/api/client';
+ import type { Engine } from './form.svelte';
+-import { previewBatch, type Batch } from './requests';
+-import { errorKey } from './saving';
++import { errorKey, previewBatch, type Batch } from './requests';
+ import { buildBatch } from './batch';
+ import { isLocked, JsonDraft } from './values';
+ 
+diff --git a/web/src/lib/features/settings/form/requests.ts b/web/src/lib/features/settings/form/requests.ts
+index c0437a83..8d00156a 100644
+--- a/web/src/lib/features/settings/form/requests.ts
++++ b/web/src/lib/features/settings/form/requests.ts
+@@ -1,6 +1,8 @@
+ // Every request the form engine makes, in one place.
+-import { api } from '$lib/api/client';
++import { api, type ApiError } from '$lib/api/client';
+ import type { components } from '$lib/api/schema';
++import type { Engine } from './form.svelte';
++import type { FieldKey } from './types';
+ 
+ /**
+  * A batch body, `{section: {field: value, if_revision?, confirm_adult?}}`.
+@@ -22,3 +24,20 @@ export const patchBatch = (batch: Batch) => api.patch('/settings', { body: body(
+ 
+ export const previewBatch = (batch: Batch, signal?: AbortSignal) =>
+ 	api.post('/settings/preview', { body: body(batch), signal });
++
++// What a refusal names: shared by the save pipeline and previews, which load apart.
++
++/** The section a refusal names, or the batch's only one. */
++export function errorSection(err: ApiError, batch: Batch): string | undefined {
++	if (err.section) return err.section;
++	const names = Object.keys(batch);
++	return names.length === 1 ? names[0] : undefined;
++}
++
++/** The form's field a refusal names, if any. */
++export function errorKey(e: Engine, err: ApiError, batch: Batch): FieldKey | undefined {
++	const section = errorSection(err, batch);
++	if (!section || !err.field) return undefined;
++	const key = `${section}.${err.field}` as FieldKey;
++	return e.byKey.has(key) ? key : undefined;
++}
+diff --git a/web/src/lib/features/settings/form/saving.ts b/web/src/lib/features/settings/form/saving.ts
+index b6229817..78cc6034 100644
+--- a/web/src/lib/features/settings/form/saving.ts
++++ b/web/src/lib/features/settings/form/saving.ts
+@@ -1,6 +1,7 @@
+ // The save pipeline (§10.10.5). Every save goes through it: busy → nothing → validate → gates →
+ // one PATCH /settings for the whole batch (atomic across sections) → apply, or map the refusal.
+ // Also Undo, the merge, drafts and validation, all on the form's `Engine` (`form.svelte.ts`).
++// Part of the edit chunk (`edit.ts`), which loads with the first edit.
+ import { ApiError, isAbort, latest } from '$lib/api/client';
+ import { formatCount } from '$lib/format';
+ import { currentLocale } from '$lib/i18n/locale.svelte';
+@@ -8,7 +9,14 @@ import { m } from '$lib/paraglide/messages.js';
+ import { clearDraft, planRestore, readDraft } from './draft';
+ import { UNDO_MS, type Engine, type Sections } from './form.svelte';
+ import { merge, resolve as resolveField, sectionValues } from './merge';
+-import { getSection, patchBatch, previewBatch, type Batch } from './requests';
++import {
++	errorKey,
++	errorSection,
++	getSection,
++	patchBatch,
++	previewBatch,
++	type Batch
++} from './requests';
+ import {
+ 	splitKey,
+ 	type Danger,
+@@ -66,21 +74,6 @@ export function lockedNote(saved: SettingValue): string {
+ 		: m.settings_form_note_locked();
+ }
+ 
+-/** The section a refusal names, or the batch's only one. */
+-export function errorSection(err: ApiError, batch: Batch): string | undefined {
+-	if (err.section) return err.section;
+-	const names = Object.keys(batch);
+-	return names.length === 1 ? names[0] : undefined;
+-}
+-
+-/** The form's field a refusal names, if any. */
+-export function errorKey(e: Engine, err: ApiError, batch: Batch): FieldKey | undefined {
+-	const section = errorSection(err, batch);
+-	if (!section || !err.field) return undefined;
+-	const key = `${section}.${err.field}` as FieldKey;
+-	return e.byKey.has(key) ? key : undefined;
+-}
+-
+ // --- drafts --------------------------------------------------------------------------------
+ 
+ export function offerDraft(e: Engine) {
+@@ -426,12 +419,7 @@ async function saveNow(e: Engine): Promise<SaveResult> {
+ 			return await (e.instant ?? (await e.instantMode())).saveSecrets();
+ 		} catch {
+ 			// Instant mode didn't load: the secrets aren't kept once tried (§10.10.4), and say so.
+-			for (const spec of e.specs) {
+-				const s = e.sec(spec.section);
+-				if (!spec.writeOnly || s?.fields[spec.name]?.mine === undefined) continue;
+-				e.setSection(stage(s, spec.name, undefined, spec));
+-				e.setFieldError(spec.key, m.settings_form_chunk_failed());
+-			}
++			e.dropSecrets();
+ 			return { ok: false, reason: 'network' };
+ 		}
+ 	}
+diff --git a/web/src/lib/features/settings/messages/en.json b/web/src/lib/features/settings/messages/en.json
+index 77775bb0..a287a378 100644
+--- a/web/src/lib/features/settings/messages/en.json
++++ b/web/src/lib/features/settings/messages/en.json
+@@ -97,6 +97,8 @@
+ 	"settings_form_retry": "Retry",
+ 	"settings_form_loading": "Loading settings…",
+ 	"settings_form_chunk_failed": "Part of this page couldn't load. Check your connection, then reload the page.",
++	"settings_form_reload": "Reload",
++	"settings_form_draft_failed": "Your unsaved changes from earlier couldn't load. They're kept: check your connection, then retry.",
+ 	"settings_form_load_error": "Couldn't load these settings. Check that Lodestar is running, then retry.",
+ 	"settings_form_saving": "Saving…",
+ 	"settings_form_unsaved_one": "1 unsaved change",

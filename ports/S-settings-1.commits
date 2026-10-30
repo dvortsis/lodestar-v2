@@ -1,0 +1,9 @@
+4fc138d7 Exclude the shell's chrome from Settings route measurements
+ef6ec7f7 Measure the Settings routes with the shared own() and gate what stays on demand
+e7cc7bf9 Bring the config view and the events client in after the Settings page
+0bb33fee Style the import file input in the component, not daisyUI
+11d40283 Fix lint in the Settings search and steady a restart test
+e2a5aada Add Settings search, config.toml view, backup and reset
+cf22a7aa Add the Settings Overview, restart banner and flow, and address check
+3768a19c Load the Settings navigation icons after first paint
+8efd6a09 Add the Settings route, shell, registry and generated screens

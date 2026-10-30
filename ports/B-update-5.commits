@@ -1,0 +1,4 @@
+d7f6c8be Note where B-update 5/5 stopped for the v0.5 pause
+f1bb3b02 WIP: start-up events, goldens and the 5a decisions
+fa07d0a2 WIP: the engine's install pipeline and POST /updates/install
+ba0448f3 Add the update download and the overlay staging
