@@ -1,4 +1,4 @@
-# X-crawler-sim-crate decisions (#PR)
+# X-crawler-sim-crate decisions (#239)
 
 Refines [CR-SIM](2026-10-30-CR-SIM.md) on where the simulator lives. The simulator, its scenarios and its goldens are unchanged.
 
