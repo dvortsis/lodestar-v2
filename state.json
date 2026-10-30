@@ -1169,13 +1169,13 @@
    "review_rounds": 1
   },
   "F-auth": {
-   "status": "running",
+   "status": "ready-waiting-swap",
    "model": "opus",
    "session": "session_01MMjhn95sPGRigHUpZhU2wx",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap"
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:30Z ready 585dfca4 on next (+382/-22, 3 files); self-review 1 blocking fixed; /security-review clean; runner read diff: OK, no changes. Open PR after swap; fresh reviewer + security on PR head."
   },
   "F-filters": {
    "status": "running",
