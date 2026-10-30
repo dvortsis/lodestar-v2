@@ -16,7 +16,7 @@ use lodestar_integrations::{
     Secret, Selection, TorrentFile,
 };
 use serde_json::{Value, json};
-use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes, refused_addr};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
@@ -554,11 +554,8 @@ async fn mismatched_ids_and_bad_answers_are_protocol_errors() {
 
 #[tokio::test]
 async fn nothing_listening_is_unreachable() {
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
-    let dl = Deluge::new(&format!("http://127.0.0.1:{port}/"), Secret::new(PASSWORD)).unwrap();
+    let (_held, addr) = refused_addr();
+    let dl = Deluge::new(&format!("http://{addr}/"), Secret::new(PASSWORD)).unwrap();
     assert_eq!(dl.test().await.unwrap_err(), ClientError::Unreachable);
 }
 

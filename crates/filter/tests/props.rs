@@ -604,6 +604,26 @@ fn budget() {
             });
             cases.push((what, per, held));
         }
+        // The mixed set again with common words neutralized (CSX-5
+        // *Neutralize term*), which every text clause then checks.
+        engine.rules = mixed_rules().into();
+        engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
+            .iter()
+            .zip(1..)
+            .map(|(w, id)| lodestar_filter::Override {
+                id,
+                what: lodestar_filter::Match::Keyword((*w).into()),
+                strength: lodestar_filter::Strength::Neutralize,
+                scope: None,
+                expires_at: None,
+                shadow_until: None,
+            })
+            .collect();
+        let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
+        let per = time(what, &|i| {
+            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
+        });
+        cases.push((what.to_owned(), per, false));
         drop(engine);
         let after = calibration("after");
 

@@ -271,11 +271,14 @@ impl Engine {
                 return Some(hit.into());
             }
         }
-        if self
-            .allow
-            .iter()
-            .any(|a| doc.matches(&a.query, neutral_words))
-        {
+        // Neutralizing only takes evidence away: an allow query must
+        // match without the neutralized words too, so one that needs a
+        // neutralized word absent (`-"amber beacon"`) releases nothing
+        // more than it did.
+        if self.allow.iter().any(|a| {
+            doc.matches(&a.query, neutral_words)
+                && (neutral_words.is_empty() || doc.matches(&a.query, &[]))
+        }) {
             return None;
         }
         for i in doc.candidates(&self.rules, neutral_words) {
@@ -309,6 +312,9 @@ impl Engine {
                 action: r.action(),
                 evidence: vec![Evidence::Pack],
             });
+        // Each pack and list is excepted on its own (§20.12), before the
+        // strongest action left wins (§20.6): an exception to one list
+        // never lifts another that also has the torrent.
         packs
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc))
@@ -336,40 +342,47 @@ impl Engine {
     }
 
     /// The decision on bare hashes, before anything is fetched: the floor,
-    /// then subscribed lists that drop, unless something that needs the
-    /// torrent's text could still let it through.
+    /// then a subscribed list that drops, unless something that needs the
+    /// torrent's text could still let it through. Lists are released one
+    /// by one: an exception to one dropping list doesn't fetch a torrent
+    /// another still drops.
     pub fn blocked_hash(&self, hashes: &[[u8; 20]]) -> Option<Decision> {
         if let Some(hit) = self.core.blocked_hash(hashes) {
             return Some(hit.into());
         }
-        let d = self.listed(hashes).filter(|d| d.action == Action::Drop)?;
         let by_hash = |m: &Match| match m {
             Match::Hashes(hs) => hashes.iter().any(|h| hs.contains(h)),
             _ => true,
         };
-        let releasable = !self.allow.is_empty()
+        if !self.allow.is_empty()
             || self
                 .overrides
                 .iter()
                 .any(|o| o.strength == Strength::Override && by_hash(&o.what))
-            || self
-                .exceptions
-                .iter()
-                .any(|e| e.rule == d.rule && by_hash(&e.what));
-        (!releasable).then_some(d)
+        {
+            return None;
+        }
+        self.listed(hashes)
+            .filter(|d| d.action == Action::Drop)
+            .filter(|d| {
+                !self
+                    .exceptions
+                    .iter()
+                    .any(|e| e.rule == d.rule && by_hash(&e.what))
+            })
+            .last()
     }
 
-    fn listed(&self, hashes: &[[u8; 20]]) -> Option<Decision> {
-        let l = self
-            .lists
+    /// Every subscribed list that has one of these hashes, in order.
+    fn listed<'a>(&'a self, hashes: &'a [[u8; 20]]) -> impl Iterator<Item = Decision> + 'a {
+        self.lists
             .iter()
             .filter(|l| hashes.iter().any(|h| l.hashes.contains(h)))
-            .max_by_key(|l| l.action)?;
-        Some(Decision {
-            rule: RuleRef::List(l.id),
-            action: l.action,
-            evidence: vec![Evidence::Listed],
-        })
+            .map(|l| Decision {
+                rule: RuleRef::List(l.id),
+                action: l.action,
+                evidence: vec![Evidence::Listed],
+            })
     }
 
     /// Sets (or with `None` removes) a subscribed content list.

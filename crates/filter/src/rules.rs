@@ -181,17 +181,13 @@ impl Override {
         }
     }
 
-    /// The neutralized word: its hash for the core and its folded form
-    /// for queries.
+    /// The neutralized word: its hash for the core and its key for
+    /// queries ([`crate::matcher::neutral_key`]).
     pub(crate) fn neutral(&self) -> Option<(u64, String)> {
         match (&self.what, self.strength) {
             (Match::Keyword(k), Strength::Neutralize) => {
                 let t = keyword_tokens(k);
-                let folded: String = lodestar_search::tokenizer::tokenize(k)
-                    .into_iter()
-                    .map(|t| t.text)
-                    .collect();
-                t.first().map(|t| (t.hash, folded))
+                t.first().map(|t| (t.hash, crate::matcher::neutral_key(k)))
             }
             _ => None,
         }
@@ -269,7 +265,10 @@ pub(crate) fn neutral_sets(entries: &[&Override]) -> (TermSet, Vec<String>) {
     for e in entries {
         if let Some((h, w)) = e.neutral() {
             set.insert(h);
-            words.push(w);
+            // A word of no letters or digits has no key to compare.
+            if !w.is_empty() {
+                words.push(w);
+            }
         }
     }
     (set, words)
