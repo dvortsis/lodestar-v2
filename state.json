@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T18:55Z",
+ "updated_at": "2026-10-30T18:47Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1890,7 +1890,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-10-30T16:22Z",
+ "last_heartbeat": "2026-10-30T18:47Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
@@ -2165,8 +2165,8 @@
   "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
-  "filter budget: the all-disturbed panic message should also say 'or the engine's time varies between passes' (props.rs:1028/1069); add a test that spread is invariant under uniform scaling (props.rs:616); watch the first real 8573C jobs' spread against the 15% DRIFT (#226 review)",
-  "tests/cli.rs:21 picks its HTTP port by bind(0)+release (same race #229 fixed in supervisor.rs); move to an allocator like test_port (from X-flake-supervisor-switch)"
+  "tests/cli.rs:21 picks its HTTP port by bind(0)+release (same race #229 fixed in supervisor.rs); move to an allocator like test_port (from X-flake-supervisor-switch)",
+  "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2248,7 +2248,8 @@
   "2026-10-30T18:30Z opened #230 fix/logging-nits (runner-owned: rotated_name max N+1, wait messages); review by session_01MMjhn984M3k3UJXUCsEYPX (#221's reviewer, idle). #221 author told to remove .update-snapshots marker.",
   "2026-10-30T18:25Z #227 new head 9c99b688: runner delta check OK (config.rs both sides kept; ci.yml requires >=1 passing privdrop test); merge on green ci-ok. #229 X-flake-supervisor-switch runner review CHANGES (drain spins once stderr disconnects). #221 head ad3895ad sent to reviewer.",
   "2026-10-30T18:35Z #231 fix/cr-adm-polish runner review CHANGES: partial-refusal holds miss refusals seen in an earlier poll (refused/unacknowledged are per-poll locals); author session_01MMjhnA3oPv1oEebqrwfFcm.",
-  "2026-10-30T18:55Z opened #232 fix/dht-queued-cancel-count (runner-owned: dht_peer_queued_dropped_total{reason}, CR-SIM conservation, admission-pressure golden +2 lines); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #230/#221."
+  "2026-10-30T18:55Z opened #232 fix/dht-queued-cancel-count (runner-owned: dht_peer_queued_dropped_total{reason}, CR-SIM conservation, admission-pressure golden +2 lines); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #230/#221.",
+  "2026-10-30T18:47Z heartbeat. Merged #221 X-welcome-focus (9b3951d6; ci-ok, playwright core, lighthouse, web green; reviewer MERGE); author archived. #230 MERGE, waits on ci-ok. #229 delta OK at 3d1321c3 and #231 delta OK at 2e18f07f; both wait on ci-ok. #227 waits on ci-ok at 9c99b688. #232 CHANGES fixed at 0ec7379a (third drop site in start_peer_request; folded in the filter-budget nits), same reviewer re-checking. Disk full at 18:40: cleared target/debug and scratchpad/l5-target."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
 }
