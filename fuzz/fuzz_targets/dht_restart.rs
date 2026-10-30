@@ -7,11 +7,12 @@
 //! never seeds a deadline earlier than the one it records.
 #![no_main]
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use libfuzzer_sys::fuzz_target;
 use lodestar_dht::restart::{
-    self, Decision, Found, Here, Loaded, Marker, MarkerState, Snapshot, Witness, WitnessFound,
+    self, Decision, Found, Here, Instant, Loaded, Marker, MarkerState, Snapshot, Witness,
+    WitnessFound,
 };
 use sha2::{Digest, Sha256};
 
@@ -95,7 +96,11 @@ fn snapshot(bytes: &[u8], clock: u64) {
     };
     if let Decision::Resume(seeded) = restart::plan(&loaded, &here).decision {
         for (addr, until) in &seeded.entries {
-            let e = s.entries.iter().find(|e| e.addr == *addr).expect("seeded from the file");
+            let e = s
+                .entries
+                .iter()
+                .find(|e| e.addr == *addr)
+                .expect("seeded from the file");
             let recorded = Duration::from_millis(s.at_ms + u64::from(e.remaining_s) * 1000);
             assert!(wall0 + until.duration_since(here.mono0) >= recorded);
         }

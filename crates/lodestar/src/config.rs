@@ -165,6 +165,15 @@ pub struct Dht {
     pub passive: bool,
     /// BEP 43: don't answer queries.
     pub read_only: bool,
+    /// CR-0d: resume sampling after a clean restart instead of waiting the
+    /// full six hours, when the crash-safe proof allows it. Off by default
+    /// (docs/decisions/2026-10-30-CR-0d.md); not in the Settings UI.
+    pub safe_restart: bool,
+    /// Where the restart proof keeps its generation witness. It must be
+    /// outside the data directory and must not be backed up with it. Unset
+    /// means the platform default ([`default_witness_dir`]), where there is
+    /// one.
+    pub restart_witness_dir: Option<PathBuf>,
 }
 
 impl Default for Dht {
@@ -179,7 +188,24 @@ impl Default for Dht {
             sample: d.harvest.sample,
             passive: d.harvest.passive,
             read_only: d.read_only,
+            safe_restart: false,
+            restart_witness_dir: None,
         }
+    }
+}
+
+/// The witness dir when none is configured (CR-0d §1.5): native installs
+/// only. Packaged installs (the Docker image, the MSI) set their own; until
+/// they do, a resolved dir inside the data directory, or none at all,
+/// means every start suppresses.
+pub fn default_witness_dir(env: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let non_empty = |k: &str| env(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if cfg!(windows) {
+        non_empty("LOCALAPPDATA").map(|d| d.join("Lodestar").join("witness"))
+    } else {
+        non_empty("XDG_STATE_HOME")
+            .map(|d| d.join("lodestar"))
+            .or_else(|| non_empty("HOME").map(|h| h.join(".local").join("state").join("lodestar")))
     }
 }
 
@@ -618,6 +644,14 @@ impl Config {
         if let Some(v) = env("LODESTAR_DHT_ENABLED") {
             config.dht.enabled = v.parse().map_err(|_| parse("LODESTAR_DHT_ENABLED", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_SAFE_RESTART") {
+            config.dht.safe_restart = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_SAFE_RESTART", &v))?;
+        }
+        if config.dht.restart_witness_dir.is_none() {
+            config.dht.restart_witness_dir = default_witness_dir(&env);
+        }
         if let Some(v) = env("LODESTAR_SCRAPE_ENABLED") {
             config.scrape.enabled = v
                 .parse()
@@ -665,6 +699,10 @@ impl Config {
                 sample: self.dht.sample,
                 passive: self.dht.passive,
             },
+            restart: self
+                .dht
+                .safe_restart
+                .then(|| dht::RestartConfig::new(self.dht.restart_witness_dir.clone())),
             ..dht::Config::default()
         }
     }
@@ -1101,6 +1139,65 @@ mod tests {
             let e = Config::load(Some(&path), no_env).unwrap_err();
             let field = bad.split(' ').next().unwrap();
             assert!(e.0.contains(&format!("ranking.{field}")), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn safe_restart_is_off_unless_asked_for() {
+        // Off by default: no restart proof, today's suppression.
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.safe_restart);
+        assert!(c.dht_config().restart.is_none());
+        // The environment turns it on; the witness dir defaults to the
+        // platform's state directory.
+        let env = |k: &str| match k {
+            "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
+            "HOME" => Some("/home/me".to_string()),
+            "LOCALAPPDATA" => Some(r"C:\Users\me\AppData\Local".to_string()),
+            _ => None,
+        };
+        let c = Config::load(None, env).unwrap();
+        let restart = c.dht_config().restart.expect("on");
+        let want = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\me\AppData\Local")
+                .join("Lodestar")
+                .join("witness")
+        } else {
+            PathBuf::from("/home/me/.local/state/lodestar")
+        };
+        assert_eq!(restart.witness_dir, Some(want));
+        // A configured dir wins over the default.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[dht]\nsafe_restart = true\nrestart_witness_dir = \"/srv/witness\"\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(
+            c.dht_config().restart.unwrap().witness_dir,
+            Some(PathBuf::from("/srv/witness"))
+        );
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_SAFE_RESTART").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn the_default_witness_dir_needs_a_home() {
+        assert_eq!(default_witness_dir(&no_env), None);
+        if !cfg!(windows) {
+            let xdg = |k: &str| (k == "XDG_STATE_HOME").then(|| "/state".to_string());
+            assert_eq!(
+                default_witness_dir(&xdg),
+                Some(PathBuf::from("/state/lodestar"))
+            );
+            let empty = |k: &str| (k == "HOME").then(String::new);
+            assert_eq!(default_witness_dir(&empty), None);
         }
     }
 }
