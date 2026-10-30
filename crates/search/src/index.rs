@@ -117,13 +117,15 @@ pub fn index_dir(root: &Path) -> PathBuf {
 
 /// What a [`SearchIndex`]'s caches hold: the `file:(…)` id sets (an
 /// 8 MiB budget, `files.rs`) and the browse cache's segment tops
-/// (bounded in entries only, `sorted.rs`).
+/// (bounded in entries, `sorted.rs`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheUsage {
     pub file_set_entries: u64,
     /// Retained bytes, as the budget charges them.
     pub file_set_bytes: u64,
     pub browse_entries: u64,
+    /// Estimated: keys and tops at capacity, plus the map's slots.
+    pub browse_bytes: u64,
 }
 
 #[derive(Clone)]
@@ -1056,10 +1058,12 @@ impl SearchIndex {
     /// What this index's own caches hold, for `/metrics`.
     pub fn cache_usage(&self) -> CacheUsage {
         let (file_set_entries, file_set_bytes) = self.files.cache.usage();
+        let (browse_entries, browse_bytes) = self.cache.usage();
         CacheUsage {
             file_set_entries,
             file_set_bytes,
-            browse_entries: self.cache.len() as u64,
+            browse_entries,
+            browse_bytes,
         }
     }
 
