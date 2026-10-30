@@ -1,6 +1,6 @@
-//! Ports for the tests that start a server on a port they pick, or need
-//! one nobody listens on. Most tests let the server bind port 0 and read
-//! where it is (`common`); these can't.
+//! Ports for the tests that start a server (HTTP, or the DHT over UDP) on
+//! a port they pick, or need one nobody listens on. Most tests let the
+//! server bind port 0 and read where it is (`common`); these can't.
 
 /// A port for one test's server: never the same twice in this run, and
 /// below the ephemeral range, so no `bind(0)` or `connect` is handed it.
@@ -40,8 +40,11 @@ pub fn test_port() -> u16 {
     for _ in 0..COUNT {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let port = (first + (base + n) % COUNT) as u16;
-        // Something outside the tests may hold it.
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        // Something outside the tests may hold it, over TCP (the HTTP
+        // server) or UDP (the DHT).
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+            && std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok()
+        {
             return port;
         }
     }
