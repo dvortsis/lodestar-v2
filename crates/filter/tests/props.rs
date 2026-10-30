@@ -749,12 +749,24 @@ fn budget() {
                     m.code,
                     if m.provisional() { ", provisional" } else { "" },
                 );
+                // Annotations (`::warning::`), so these show on the check,
+                // not only in its log.
                 if (calibrated / m.factor - 1.0).abs() > MODEL_DRIFT {
                     println!(
-                        "warning: the {}'s factor and its calibration disagree by more than \
-                         {:.0}%: the factor may need re-deriving (ENGINE_SPEED)",
+                        "::warning::the {}'s factor ({:.3}) and its calibration ({calibrated:.2}) \
+                         disagree by more than {:.0}%: the factor may need re-deriving \
+                         (ENGINE_SPEED)",
                         m.model,
+                        m.factor,
                         MODEL_DRIFT * 100.0
+                    );
+                }
+                if m.provisional() {
+                    println!(
+                        "::warning::the {}'s factor is provisional, from {} job(s): re-derive it \
+                         once more exist (ENGINE_SPEED)",
+                        m.model,
+                        m.runs.len()
                     );
                 }
                 let note = if m.provisional() { ", provisional" } else { "" };
@@ -762,6 +774,7 @@ fn budget() {
             }
             None => {
                 println!("CPU {cpu}: not in ENGINE_SPEED, so scaling by the calibration");
+                println!("::warning::{cpu} isn't in ENGINE_SPEED: scaled by the calibration");
                 (calibrated, "the calibration".to_owned())
             }
         };

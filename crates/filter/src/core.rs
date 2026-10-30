@@ -852,6 +852,12 @@ impl Core {
             at,
             folders,
         } = scratch;
+        // The read has a path for each file the core reads, in order: a
+        // filter on either side would misalign them.
+        debug_assert!(
+            read.is_none_or(|r| r.apart.len() == item.files.len().min(MAX_FILES)),
+            "the read's paths don't match the files"
+        );
         tokens.clear();
         flags.clear();
         match read {
