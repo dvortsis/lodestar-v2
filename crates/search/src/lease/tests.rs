@@ -533,7 +533,11 @@ fn a_file_scan_cancelled_partway_fails_the_compile_and_caches_nothing() {
     let node = crate::parse("file:(size:>0)").unwrap();
     let cancel = CancelToken::new();
     let (trip, visits) = tripwire(100, &cancel);
+    // Taken by the scan below; a compile that stopped before its file
+    // clause would leave it for the next one on this thread.
     crate::testing::FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+    // Process-wide: no other test reaches the failure arm, and a stray
+    // count could only fail this test, never pass it.
     let failed = &crate::log_events::FILE_SEARCH_FAILED::EVENT;
     let failures = failed.count();
     assert!(matches!(

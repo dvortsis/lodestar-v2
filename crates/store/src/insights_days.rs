@@ -1798,10 +1798,10 @@ mod tests {
     #[test]
     #[ignore]
     fn trigger_cost() {
-        let run = |drop: &[&str], cached: bool| -> Duration {
+        let run = |dropped: &[&str], cached: bool| -> Duration {
             let dir = tempfile::tempdir().unwrap();
             let mut s = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
-            for trigger in drop {
+            for trigger in dropped {
                 s.conn
                     .execute_batch(&format!("DROP TRIGGER {trigger}"))
                     .unwrap();
@@ -1847,12 +1847,21 @@ mod tests {
             ("both triggers", &[]),
         ];
         for cached in [false, true] {
-            let mut medians = Vec::new();
-            for (name, drop) in arms {
-                let mut times: Vec<Duration> = (0..5).map(|_| run(drop, cached)).collect();
-                times.sort();
-                medians.push(format!("{name} {:?}", times[2]));
+            // Interleaved, so drift doesn't favour one arm.
+            let mut times = vec![Vec::new(); arms.len()];
+            for _ in 0..5 {
+                for (t, (_, dropped)) in times.iter_mut().zip(arms) {
+                    t.push(run(dropped, cached));
+                }
             }
+            let medians: Vec<String> = arms
+                .iter()
+                .zip(&mut times)
+                .map(|((name, _), t)| {
+                    t.sort();
+                    format!("{name} {:?}", t[2])
+                })
+                .collect();
             println!(
                 "{} of 100k, median of 5: {}",
                 if cached {

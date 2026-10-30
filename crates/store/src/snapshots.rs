@@ -15,7 +15,9 @@
 //!   rollback window), going by the file's modification time, which
 //!   `VACUUM INTO` sets when it writes the snapshot and this module puts
 //!   back after each purge. A snapshot whose time can't be read is
-//!   deleted too: nothing shows it's inside the window;
+//!   deleted too: nothing shows it's inside the window. One dated ahead
+//!   of the clock is redated to now, so it goes 90 days after it's first
+//!   seen;
 //! - **applies the live purge to the others**, matched to the schema the
 //!   snapshot holds ([`Plan::for_version`]): expired quarantine (adult
 //!   holds become tombstones, as live), sealed names the live store no
@@ -488,20 +490,44 @@ impl Store {
         // scrub: then the journal rows it read stay.
         let mut blocked = false;
         let mut keep = Vec::new();
-        for snap in all {
-            // The safe bound for a time that can't be read: the file can't
-            // be shown to be inside the window, and keeping it would keep
-            // whatever it holds past the journal's 90 days.
+        // Snapshots dated ahead of the clock, redated to now this pass.
+        let mut redated = HashSet::new();
+        for mut snap in all {
+            // A time ahead of the clock (taken while it ran fast, say before
+            // NTP synced) would keep the file past 90 days: it's redated to
+            // now, so it expires 90 days after it was first seen.
+            if snap.taken_at.is_some_and(|t| t > now) && set_modified(&snap.path, now).is_ok() {
+                self.snapshot_marks.0.remove(&snap.path);
+                snap.taken_at = Some(now);
+                redated.insert(snap.path.clone());
+            }
             if snap.expires_at().is_some_and(|at| now < at) {
                 keep.push(snap);
                 continue;
             }
             if snap.taken_at.is_none() {
-                report.warnings.push(format!(
-                    "the snapshot {} has no readable modification time, so its age is \
-                     unknown; it's deleted as if {RETAIN_DAYS} days old",
-                    snap.path.display()
-                ));
+                match std::fs::metadata(&snap.path) {
+                    // Can't be looked at now (or gone): next pass.
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            blocked = true;
+                            report.warnings.push(format!(
+                                "reading the snapshot {} failed: {e}",
+                                snap.path.display()
+                            ));
+                        }
+                        continue;
+                    }
+                    // The safe bound for a time that can't be read: the
+                    // file can't be shown to be inside the window, and
+                    // keeping it would keep what it holds past the
+                    // journal's 91 days.
+                    Ok(_) => report.warnings.push(format!(
+                        "the snapshot {} has no readable modification time, so its age is \
+                         unknown; it's deleted as if {RETAIN_DAYS} days old",
+                        snap.path.display()
+                    )),
+                }
             }
             self.snapshot_marks.0.remove(&snap.path);
             let (gone, failed) = remove_snapshot(&snap.path);
@@ -524,9 +550,18 @@ impl Store {
                 "dropping old snapshot deletion evidence failed: {e}"
             ));
         }
+        // A redated snapshot's real time is unknown: everything is looked
+        // up in it this pass.
+        let since_for = |marks: &Marks, s: &Snapshot| {
+            if redated.contains(&s.path) {
+                (i64::MIN, true)
+            } else {
+                marks.since(s, now)
+            }
+        };
         let Some(since) = keep
             .iter()
-            .map(|s| self.snapshot_marks.since(s, now).0)
+            .map(|s| since_for(&self.snapshot_marks, s).0)
             .min()
         else {
             // No snapshot left to hold a deletion, unless an unlink failed.
@@ -547,7 +582,7 @@ impl Store {
             }
         };
         for snap in keep {
-            let (since, full) = self.snapshot_marks.since(&snap, now);
+            let (since, full) = since_for(&self.snapshot_marks, &snap);
             match purge_one(&snap, &live, since, now, hits_before) {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
@@ -1285,7 +1320,8 @@ mod tests {
 
     /// A row is looked up only in snapshots taken up to a day after it:
     /// a hash deleted and fetched again stays in snapshots taken since.
-    /// A snapshot dated ahead of the clock is matched against every row.
+    /// A snapshot dated ahead of the clock is redated to now and matched
+    /// against every row, then expires 90 days after it was first seen.
     #[test]
     fn a_deletion_matches_only_snapshots_taken_up_to_a_day_after_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -1309,6 +1345,9 @@ mod tests {
             assert!(!contains(p, b"refetched-marker-6d02"), "{}", p.display());
         }
         assert!(contains(&after, b"refetched-marker-6d02"));
+        assert_eq!(modified(&ahead), Some(T + 6 * DAY));
+        let r = store.purge_snapshots(T + 6 * DAY + RETAIN_SECS, 0);
+        assert_eq!(paths(&r.expired), vec![before, edge, after, ahead]);
     }
 
     /// Rows past the window go on every pass, even one that keeps the
