@@ -1917,6 +1917,33 @@ mod tests {
         assert_eq!(restarted.engine.updater().paused_until, None);
     }
 
+    /// The way out of `updater_unreadable`: a saved explicit pause
+    /// rewrites the file and ends the hold, and the next start reads the
+    /// new file normally (paused, no hold, no notice), after which checks
+    /// are saved again.
+    #[tokio::test]
+    async fn a_saved_pause_replaces_an_unreadable_updater_file() {
+        let scratch = env(Mode::Auto);
+        std::fs::create_dir_all(scratch.bin()).unwrap();
+        std::fs::write(scratch.bin().join(UPDATER_FILE), b"\x00\xff not json").unwrap();
+        let e = scratch.restart();
+        assert!(e.engine.status().policy.held_in_process);
+        let s = e.engine.pause(7).unwrap();
+        assert!(!s.policy.held_in_process);
+        assert_eq!(s.policy.paused_until, Some(NOW + 7 * 86_400));
+        let written: Updater = serde_json::from_slice(&e.updater_bytes().unwrap()).unwrap();
+        assert_eq!(written.paused_until, Some(NOW + 7 * 86_400));
+        let next = e.restart();
+        let s = next.engine.status();
+        assert!(!s.policy.held_in_process);
+        assert!(!s.notices.contains(&"updater_unreadable".to_string()));
+        assert_eq!(s.policy.paused_until, Some(NOW + 7 * 86_400));
+        next.engine.run_check().await.unwrap();
+        let written: Updater = serde_json::from_slice(&next.updater_bytes().unwrap()).unwrap();
+        assert_eq!(written.checked_at, Some(NOW), "checks are saved again");
+        assert_eq!(written.paused_until, Some(NOW + 7 * 86_400));
+    }
+
     #[tokio::test]
     async fn skip_pause_and_clear_write_their_state() {
         let e = env(Mode::Auto);
