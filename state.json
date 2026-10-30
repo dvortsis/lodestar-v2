@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T19:51Z",
+ "updated_at": "2026-10-30T19:55Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1422,9 +1422,9 @@
    "pr": 204
   },
   "CR-0d": {
-   "status": "running",
+   "status": "merged",
    "model": "opus",
-   "notes": "2026-10-30T10:40Z brief written; phase 1 design (docs) launched; code after CR-0f #200 merges | 2026-10-30T10:50Z design 007f607a OK in principle; runner: witness option A (+optional state volume follow-up), accept \u00a73.3 residual, no shutdown grace; protocol review session_01MMjhn8sD8WwZ8ZTvs6mEKZ; code waits on review + CR-0f | 2026-10-30T10:55Z ack 7bfbeb6b: Windows witness at C:\\ProgramData\\Lodestar-witness (MSI data dir is C:\\ProgramData\\Lodestar); shared edits Dockerfile, privdrop.rs, main.wxs; docs: back up the data folder itself | 2026-10-30T10:58Z protocol review SOUND WITH CHANGES (B1 data-dir lock; I1-I7; P1-P6); sent to author; runner: I2 snapshot-backup residual accepted, I5 non-suppressing builds residual; re-review by same reviewer | 2026-10-30T11:06Z revised c5e1d9b3 (lock, residuals \u00a78, in-place invalidation w/o unsafe); runner: MSRV 1.85->1.89 for File::try_lock (no fs4); re-check asked | 2026-10-30T11:10Z re-check NOT YET SOUND (N1 suppressed clean stop erases gate -> blanket gate; N2 off-run lock lifetime; N3 locked non-terminal; N4 marker.at ceil); sent; round 3 re-check | 2026-10-30T11:10Z revised 75cb6a00 (gate, off-run lifetime lock, lock retry, ceil marker.at, dir_id); round-3 re-check asked | 2026-10-30T11:12Z round-3 protocol review SOUND (75cb6a00); C1 (off-run window from lock acquisition) to land in Phase 2; Phase 2 code OK locally, push after #200 merges; split if >1.5k lines | 2026-10-30T11:19Z split approved: A format/validation (opens after #200), B actor integration (after A) | 2026-10-30T11:37Z MSRV 1.89 enables collapsible_if/manual_is_multiple_of (115 warnings in 60 files); runner: allow both workspace-wide temporarily in PR A | 2026-10-30T12:22Z told: CR-0f merged; open PR A to main | 2026-10-30T13:00Z PR A #208 (f2ee0951, ~2.9k code lines, size reason stated); fresh Opus review + security review commissioned | 2026-10-30T13:15Z #208 review MERGE (manual security review clean); CI fmt+clippy red: chunks_exact_to_as_chunks (MSRV 1.89-gated, rust 1.99 CI) -> runner: add to temporary allows; add S2 sub-ms rounding test (mutation survived); polish comments | 2026-10-30T14:00Z merged #208 (CR-0d-1, a1bac3db, CI green); PR B (actor integration) started; reviewer archived | 2026-10-30T14:05Z PR B split OK: 2a actor integration+switch (native witness defaults), 2b Docker/privdrop/MSI defaults + docs (/security-review); author waits for #209 before touching actor.rs | 2026-10-30T14:20Z told #209 merged; 2a builds on CR-SIM seams | 2026-10-30T16:28Z #216 (2a) merged f409f214; 2b started",
+   "notes": "2a (#216), 2b-1 (#227 fa836c4e), 2b-2 (#233 5b0cd88c) merged; session archived 19:55Z",
    "pr": 208
   },
   "X-smoke-defender": {
@@ -2284,7 +2284,8 @@
   "2026-10-30T19:21Z #234 review MERGE at d3d85d7f; merge on green ci-ok. #232 still in CI.",
   "2026-10-30T19:24Z merged #232 (58e62d09) DHT queued drops plus the filter-budget nits; the hash-mismatch slice was told to merge main. fix/canary-udp-port pushed (05211aa2, stacked on #234): PR after #234 merges.",
   "2026-10-30T19:30Z #217 post-merge runs all green (Web 41113005439, E2E 41113005344, smoke 41113005209); no fix needed. Author and reviewer archived.",
-  "2026-10-30T19:51Z merged #234 cli test port (f3f66bd6). Opened #235 fix/canary-udp-port (test_port probes UDP too; log_canary uses it); review by session_01MMjhn984M3k3UJXUCsEYPX. #233 still in CI."
+  "2026-10-30T19:51Z merged #234 cli test port (f3f66bd6). Opened #235 fix/canary-udp-port (test_port probes UDP too; log_canary uses it); review by session_01MMjhn984M3k3UJXUCsEYPX. #233 still in CI.",
+  "2026-10-30T19:55Z merged #233 CR-0d-2b-2 (5b0cd88c): ci-ok, Web, Playwright core, Lighthouse and smoke all green at 6dd24177. CR-0d complete; session archived. Open now: #235 (runner, canary UDP port) in review; CR-gate-hash-mismatch coding."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
