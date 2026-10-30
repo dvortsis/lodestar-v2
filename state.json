@@ -1370,7 +1370,7 @@
    "session": "session_01MMjhn8VPDpTCm2jVkiiVYP",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7 | 2026-10-30T10:30Z told: merge main, align notes, open DRAFT PR (merges at release cut) | 2026-10-30T10:32Z draft PR #201 (notes aligned to main 1199430; Before-release checklist; docs lint 0/0). Fresh review at release cut.",
+   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7 | 2026-10-30T10:30Z told: merge main, align notes, open DRAFT PR (merges at release cut) | 2026-10-30T10:32Z draft PR #201 (notes aligned to main 1199430; Before-release checklist; docs lint 0/0). Fresh review at release cut. | 2026-10-30T12:12Z told: refresh notes for #202, #198, #199, #200; merge main; stay draft",
    "pr": 201
   },
   "X-flake-shutdown-percolator": {
