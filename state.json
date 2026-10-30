@@ -1355,7 +1355,7 @@
    "session": "session_01MMjhnBMY2USbbsRFJsaFtR",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f) | 2026-10-30T07:41Z ready 565ab43 on land/L5; held until v0.5.1 cut + CR-0f (runner condition)"
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f) | 2026-10-30T07:41Z ready 565ab43 on land/L5; held until v0.5.1 cut + CR-0f (runner condition) | 2026-10-30T12:25Z told: hold lifted (cut + CR-0f); merge main, open PR"
   },
   "CR-gate-metrics": {
    "status": "merged",
@@ -1402,13 +1402,13 @@
    "pr": 196
   },
   "CR-COL-2": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
    "deps": [
     "CR-0f",
     "CR-COL"
    ],
-   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done."
+   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main"
   },
   "T-v051-gaps": {
    "status": "merged",
