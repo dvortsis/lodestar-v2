@@ -842,7 +842,6 @@ fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
         probe.local_addr().unwrap().port()
     };
     let s = Server::start_with(Some(dht));
-    s.every_event_on();
     let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     // Waits for the condition on the file's new lines, failing after 30 s.
     let wait = |mark: (usize, usize), what: &str, ok: &dyn Fn(&str) -> bool| {
@@ -897,6 +896,17 @@ fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
             },
         );
     };
+    // `dht.key_harvested` is Trace and off by default, and a key's resends
+    // are dropped as seen before anything is logged: every event must be
+    // on before the first query, so wait until the runtime says it applied
+    // Everything.
+    let mark = s.mark();
+    s.every_event_on();
+    wait(mark, "every event never applied", &|file| {
+        lines_of(file, "logging.applied")
+            .iter()
+            .any(|l| l.contains(r#""value":"everything""#))
+    });
     // Each phase is judged by its own lines: the pipeline's later lookup
     // for a key logs it again (source `lookup`) under whatever the kind is
     // by then.
