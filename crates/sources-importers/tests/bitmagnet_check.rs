@@ -163,7 +163,7 @@ async fn checks_a_restored_sql_ascii_database() {
         "{json2}"
     );
 
-    // A smaller sample is bounded and still reads the lowest key first.
+    // A sample smaller than the table is bounded, and still full.
     let small = run(&s, &db, &["--sample", "1", "--counts", "estimate"]);
     let (json3, _) = text(&small);
     assert!(json3.contains(r#""column":"name","rows":1,"#), "{json3}");
@@ -171,6 +171,35 @@ async fn checks_a_restored_sql_ascii_database() {
         json3.contains(r#"{"name":"row_counts","status":"skipped""#),
         "{json3}"
     );
+    drop_database(&s, &db).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn functions_the_database_defines_cant_forge_the_results() {
+    let Some(s) = server() else { return };
+    let db = database(&s, "hijack", "SQL_ASCII", true).await;
+    let c = connect(&format!("{} dbname={db}", s.base)).await;
+    // Better overload matches than pg_catalog's for the checker's calls:
+    // with `public` on the search path, they'd win and forge everything.
+    c.batch_execute(
+        r#"CREATE FUNCTION public.convert_to(text, text) RETURNS bytea
+             LANGUAGE sql AS $$ SELECT '\x5554463800'::bytea $$;
+           CREATE FUNCTION public.sha256(bytea) RETURNS bytea
+             LANGUAGE sql AS $$ SELECT '\x00'::bytea $$;
+           CREATE FUNCTION public.length(bytea) RETURNS integer
+             LANGUAGE sql AS $$ SELECT 0 $$;"#,
+    )
+    .await
+    .unwrap();
+    let out = run(&s, &db, &[]);
+    let (json, summary) = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{summary}\n{json}");
+    assert!(json.contains(r#""encoding":"SQL_ASCII""#), "{json}");
+    assert!(
+        json.contains(NAME_SHA256) && json.contains(PATH_SHA256),
+        "{json}"
+    );
+    assert!(json.contains(r#""bytes":40,"#), "{json}");
     drop_database(&s, &db).await;
 }
 

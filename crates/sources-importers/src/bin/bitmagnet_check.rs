@@ -112,15 +112,14 @@ const KNOWN_TABLES: &[&str] = &[
 
 const FILES_STATUS: &[&str] = &["no_info", "single", "multi", "over_threshold"];
 
-/// Sampled text columns: table, its unique ordering key, the text column.
-const SAMPLED: &[(&str, &str, &str)] = &[
-    ("torrents", "info_hash", "name"),
-    ("torrent_files", "info_hash, \"index\"", "path"),
+/// Sampled text columns: table, its unique ordering key, the text column,
+/// and how many consecutive rows to take from each random starting key.
+/// Files take two per start, so a sample spans hundreds of torrents rather
+/// than the file lists of a few.
+const SAMPLED: &[(&str, &str, &str, i64)] = &[
+    ("torrents", "info_hash", "name", 1),
+    ("torrent_files", "info_hash, \"index\"", "path", 2),
 ];
-
-/// Starting points per sample: the first is the lowest key, the rest are
-/// spread from the seed, so a sample covers the whole key range.
-const SEGMENTS: usize = 8;
 
 const MAX_SAMPLE: u32 = 100_000;
 /// Bounds on the catalog queries, which a hostile database could inflate.
@@ -307,7 +306,14 @@ fn read_password(
     let Some(path) = &args.password_file else {
         return Ok(env("PGPASSWORD").map(String::into_bytes));
     };
-    let mut bytes = std::fs::read(path).map_err(|e| format!("--password-file: {e}"))?;
+    // Bounded, so a FIFO or a device can't hang the checker or fill memory.
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| std::io::Read::read_to_end(&mut std::io::Read::take(f, 4097), &mut bytes))
+        .map_err(|e| format!("--password-file: {e}"))?;
+    if bytes.len() > 4096 {
+        return Err("--password-file is over 4 KiB; is it the right file?".into());
+    }
     // One trailing newline, as `echo` or an editor leaves it.
     if bytes.ends_with(b"\n") {
         bytes.pop();
@@ -351,8 +357,12 @@ async fn connect(args: &Args, password: Option<&[u8]>) -> Result<Client, String>
         .connect_timeout(Duration::from_secs(10))
         .ssl_mode(SslMode::Disable)
         // Set before the first statement runs. Only our own numbers go in.
+        // search_path is pg_catalog alone: the database is untrusted, and a
+        // function it put in `public` (say `public.convert_to(text, text)`)
+        // would otherwise win overload resolution and forge every result.
+        // Its tables are always named `public.<table>`.
         .options(format!(
-            "-c statement_timeout={} -c lock_timeout=10000 \
+            "-c search_path=pg_catalog -c statement_timeout={} -c lock_timeout=10000 \
              -c idle_in_transaction_session_timeout={} -c default_transaction_read_only=on",
             args.timeout.as_millis(),
             args.timeout.as_millis() + 60_000,
@@ -498,13 +508,21 @@ impl Report {
     }
 }
 
-/// Bytes from the database, for display: lossy, with control and bidi
-/// characters escaped so a hostile name can't drive or disguise the terminal.
+/// Bytes from the database, for display: lossy, with control, bidi and
+/// zero-width characters escaped so a hostile name can't drive or disguise
+/// the terminal.
 fn shown(raw: &[u8]) -> String {
     let mut out = String::with_capacity(raw.len());
     for c in String::from_utf8_lossy(raw).chars() {
-        let bidi = matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-        if c.is_control() || bidi {
+        let invisible = matches!(
+            c,
+            '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+        );
+        if c.is_control() || invisible {
             out.extend(c.escape_default());
         } else {
             out.push(c);
@@ -773,14 +791,13 @@ fn splitmix(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The sample's starting info_hashes: the empty key (so the lowest rows are
-/// always in), then `SEGMENTS - 1` keys from the seed. info_hashes are
-/// uniform, so rows following a random key are a random sample, read from
-/// the primary key index rather than by scanning the table.
-fn starts(seed: u64) -> Vec<Vec<u8>> {
+/// `count` random 20-byte starting keys from the seed. info_hashes are
+/// uniform, so the first row at or after each random key is a random row,
+/// read from the primary key index rather than by scanning the table.
+fn starts(seed: u64, count: usize) -> Vec<Vec<u8>> {
     let mut state = seed;
-    let mut out = vec![Vec::new()];
-    for _ in 1..SEGMENTS {
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
         let mut key = Vec::with_capacity(24);
         for _ in 0..3 {
             key.extend_from_slice(&splitmix(&mut state).to_be_bytes());
@@ -811,9 +828,16 @@ fn sample_sql(table: &str, key: &str, column: &str) -> String {
          picked AS (
            SELECT DISTINCT ON ({order}) k.*
            FROM starts CROSS JOIN LATERAL (
-             SELECT {key}, convert_to(t.{column}, 'SQL_ASCII') AS v
-             FROM public.{table} t WHERE t.{first_key} >= starts.s
-             ORDER BY {key} LIMIT $2) k
+             -- Past the highest key, wrap round to the lowest. The second
+             -- branch only runs when the first comes up short.
+             (SELECT {key}, convert_to(t.{column}, 'SQL_ASCII') AS v
+              FROM public.{table} t WHERE t.{first_key} >= starts.s
+              ORDER BY {key} LIMIT $2)
+             UNION ALL
+             (SELECT {key}, convert_to(t.{column}, 'SQL_ASCII') AS v
+              FROM public.{table} t
+              ORDER BY {key} LIMIT $2)
+             LIMIT $2) k
            ORDER BY {order} LIMIT $3),
          agg AS (
            SELECT count(*) AS n, coalesce(sum(length(v)), 0)::bigint AS bytes,
@@ -842,13 +866,33 @@ async fn check_samples(client: &Client, args: &Args, r: &mut Report) -> Result<(
         r.check("samples", Status::Skipped, "the schema check failed");
         return Ok(());
     }
-    let starts = starts(args.seed);
-    let per_segment = i64::from(args.sample.div_ceil(SEGMENTS as u32));
     let total = i64::from(args.sample);
     let mut failed = Vec::new();
-    for (table, key, column) in SAMPLED {
+    for (table, key, column, per_start) in SAMPLED {
+        // A table no bigger than the sample is read whole, from the lowest
+        // key. The probe is bounded too: it stops one row past the sample.
+        let probe = query(
+            client,
+            args.timeout,
+            &format!("SELECT count(*) FROM (SELECT 1 FROM public.{table} LIMIT $1) x"),
+            &[&(total + 1)],
+        )
+        .await;
+        let (starts, per_start) = match probe {
+            Ok(rows) if rows[0].get::<_, i64>(0) <= total => (vec![Vec::new()], total),
+            // Twice as many random starts as rows wanted, so the few that
+            // land on the same row still leave a full sample.
+            Ok(_) => {
+                let n = (args.sample as usize * 2).div_ceil(*per_start as usize);
+                (starts(args.seed, n), *per_start)
+            }
+            Err(e) => {
+                failed.push(format!("{table}.{column}: {e}"));
+                continue;
+            }
+        };
         let sql = sample_sql(table, key, column);
-        let rows = match query(client, args.timeout, &sql, &[&starts, &per_segment, &total]).await {
+        let rows = match query(client, args.timeout, &sql, &[&starts, &per_start, &total]).await {
             Ok(rows) => rows,
             Err(e) => {
                 failed.push(format!("{table}.{column}: {e}"));
@@ -922,6 +966,7 @@ fn available_bytes(path: &std::path::Path) -> Result<u64, String> {
     // POSIX df, so no new dependency: the same on Unraid, in a container and
     // in Docker Desktop's Linux VM. No shell; `--` ends df's options.
     let out = std::process::Command::new("df")
+        .env_remove("PGPASSWORD")
         .args(["-P", "-k", "--"])
         .arg(path)
         .output()
@@ -1139,7 +1184,7 @@ fn summary(r: &Report, seed: u64) -> String {
             Status::Fail => "FAIL",
             Status::Skipped => "skip",
         };
-        let _ = writeln!(o, "{mark} {:<15} {}", c.name, c.detail);
+        let _ = writeln!(o, "{mark} {:<15} {}", c.name, shown(c.detail.as_bytes()));
     }
     for w in &r.warnings {
         let _ = writeln!(o, "warn {w}");
@@ -1190,11 +1235,23 @@ async fn run(args: &Args, password: Option<&[u8]>) -> Result<Report, String> {
     if let Some(w) = password_file_warning(args) {
         r.warnings.push(w);
     }
-    check_server(&client, args, &mut r).await?;
-    check_encoding(&client, args, &mut r).await?;
-    check_schema(&client, args, &mut r).await?;
-    check_counts(&client, args, &mut r).await?;
-    check_samples(&client, args, &mut r).await?;
+    // Connected: from here a failed query is a failed check (exit 1), and
+    // the report still comes out.
+    if let Err(e) = check_server(&client, args, &mut r).await {
+        r.check("server_version", Status::Fail, e);
+    }
+    if let Err(e) = check_encoding(&client, args, &mut r).await {
+        r.check("encoding", Status::Fail, e);
+    }
+    if let Err(e) = check_schema(&client, args, &mut r).await {
+        r.check("schema", Status::Fail, e);
+    }
+    if let Err(e) = check_counts(&client, args, &mut r).await {
+        r.check("row_counts", Status::Fail, e);
+    }
+    if let Err(e) = check_samples(&client, args, &mut r).await {
+        r.check("samples", Status::Fail, e);
+    }
     check_disk(args, &mut r);
     Ok(r)
 }
@@ -1336,13 +1393,15 @@ mod tests {
     }
 
     #[test]
-    fn starts_are_seeded_and_cover_the_bottom() {
-        let a = starts(0);
-        assert_eq!(a.len(), SEGMENTS);
-        assert!(a[0].is_empty());
-        assert!(a[1..].iter().all(|k| k.len() == 20));
-        assert_eq!(a, starts(0));
-        assert_ne!(a, starts(1));
+    fn starts_are_seeded_and_spread() {
+        let a = starts(0, 1000);
+        assert_eq!(a.len(), 1000);
+        assert!(a.iter().all(|k| k.len() == 20));
+        assert_eq!(a, starts(0, 1000));
+        assert_ne!(a, starts(1, 1000));
+        // Spread over the key space: every top-byte sixteenth is hit.
+        let buckets: BTreeSet<u8> = a.iter().map(|k| k[0] >> 4).collect();
+        assert_eq!(buckets.len(), 16);
     }
 
     #[test]

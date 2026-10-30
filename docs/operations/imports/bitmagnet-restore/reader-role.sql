@@ -2,6 +2,10 @@
 -- read the three tables the importer reads, and nothing else. Its password
 -- comes from /run/secrets/reader_pw, never from a command line.
 \set ON_ERROR_STOP on
+-- The password is sent in the ALTER ROLE below; if that statement failed,
+-- PostgreSQL would log it, password and all. Not in this session.
+SET log_min_error_statement = panic;
+SET log_statement = 'none';
 \set pw `cat /run/secrets/reader_pw`
 SELECT length(:'pw') >= 32 AS pw_ok \gset
 \if :pw_ok

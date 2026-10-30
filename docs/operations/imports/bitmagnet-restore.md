@@ -85,7 +85,7 @@ Work out the space before you copy anything, and keep a reserve so the volume ne
 | Reserve, always free | 50 GiB | 50 GiB |
 | **Total** | **≈ 362 GiB** | **copy + 60 GiB** |
 
-The "2 × the dump" is an estimate: table data plus Bitmagnet's indexes. Watch the real growth during the restore (step 4) and stop if the reserve is in danger. After a successful check (step 7) you can delete `backup.sql` and get 97 GiB back.
+The "2 × the dump" is an estimate: table data plus Bitmagnet's indexes (about 35 of them, which the restore keeps up to date row by row, so it is slow as well as large). Watch the real growth during the restore (step 4) and stop if the reserve is in danger. After a successful check (step 7) you can delete `backup.sql` and get 97 GiB back.
 
 Measure the inputs and the free space.
 
@@ -149,17 +149,21 @@ Then look at what the dump is, without running it:
 head -c 5 "$W/dump/backup.sql"; echo                                    # "PGDMP" = custom format, else plain SQL
 grep -a -m1 "client_encoding" "$W/dump/backup.sql"                      # SET client_encoding = 'SQL_ASCII';
 head -c 67108864 "$W/dump/backup.sql" | grep -a -c "^CREATE TABLE"           # 0 = data-only
+grep -a -m1 -c "ON CONFLICT DO NOTHING" "$W/dump/backup.sql"            # 1 = re-runnable inserts
+grep -a -o "^INSERT INTO public\.[a-z_]*" "$W/dump/backup.sql" | sort | uniq -c   # which tables it fills
 grep -a -E '^\\[a-zA-Z!]' "$W/dump/backup.sql" | cut -d' ' -f1 | sort | uniq -c   # psql commands in it
 ```
 
-On Windows, run the same four lines in a throwaway container: `docker run --rm -it --network none -v "${W}\dump:/dump:ro" postgres:16-alpine sh`, then use `/dump/backup.sql` in place of `"$W/dump/backup.sql"`.
+The `INSERT INTO` and backslash lines read the whole file, so they take a while. On Windows, run the same six lines in a throwaway container: `docker run --rm -it --network none -v "${W}\dump:/dump:ro" postgres:16-alpine sh`, then use `/dump/backup.sql` in place of `"$W/dump/backup.sql"`.
 
 What to expect, and what to do otherwise:
 
 - **Plain SQL** (no `PGDMP`). A custom-format dump would need `pg_restore` instead of `restore.sh`; stop and ask.
 - **`client_encoding = 'SQL_ASCII'`.** Anything else: stop and ask, because the steps below assume it.
 - **Data-only (0 `CREATE TABLE`).** Bitmagnet's backup guide makes data-only dumps, so step 4 creates the schema from the migrations first. If the dump does contain `CREATE TABLE`, skip `apply-migrations.sh`.
-- **The only psql commands are `\restrict` and `\unrestrict`.** Any other line starting with a backslash, `\!` above all, could run commands: stop and look at it before going on.
+- **`ON CONFLICT DO NOTHING` (1).** Bitmagnet's guide adds it. The migrations already insert a few rows of their own (into `torrent_sources` and `metadata_sources`), and without it the dump's copies of those rows stop the restore with a duplicate-key error, perhaps hours in. If the count is 0 and the table list includes `torrent_sources` or `metadata_sources`, step 4 deletes the migrations' rows before loading.
+- **The table list** is Bitmagnet's (`torrents`, `torrent_files`, `content`, …), with `goose_db_version` possibly among them; `apply-migrations.sh` creates that table too. Any table you don't recognise: stop and ask.
+- **The only psql commands are `\restrict` and `\unrestrict`.** Any other line starting with a backslash, `\!` above all, could run commands: stop and look at it before going on. psql also accepts commands later on a line, but after `\restrict` it refuses every command until the matching `\unrestrict`, which is why a dump starts with it.
 
 **Input B, the data directory.** Copy it while nothing is running on it.
 
@@ -218,8 +222,14 @@ docker exec -u postgres bitmagnet-restore sh /restore/sql/apply-migrations.sh
 docker exec -d -u postgres bitmagnet-restore sh /restore/sql/restore.sh
 ```
 
+Only if step 3 found no `ON CONFLICT DO NOTHING` but rows for `torrent_sources` or `metadata_sources`, run this between `apply-migrations.sh` and `restore.sh`, so the dump's own copies of those rows go in instead:
+
+```bash
+docker exec -u postgres bitmagnet-restore psql -X -v ON_ERROR_STOP=1 -d bitmagnet -c "DELETE FROM public.torrent_sources; DELETE FROM public.metadata_sources"
+```
+
 - `TEMPLATE template0` and `ENCODING 'SQL_ASCII'` are what keep the database's declared encoding. Never create it from `template1` or with another encoding.
-- `restore-settings.sql` turns off crash safety (`fsync`) for speed. **If the host or container crashes during the restore, delete the cluster and start step 4 again;** it may be silently damaged.
+- `restore-settings.sql` turns off crash safety (`fsync`) for speed. **If the host or container crashes before the end of this step, delete the cluster and start step 4 again;** it may be silently damaged.
 - `restore.sh` refuses to run unless the database is `SQL_ASCII`, and loads the dump with client encoding `SQL_ASCII` and `ON_ERROR_STOP`, so the first error ends it. `docker exec -d` keeps it running when you close the terminal.
 
 **Watch it.** The restore takes hours. Check progress and space now and then:
@@ -232,13 +242,17 @@ df -h "$W"                                          # Windows: the df line from 
 
 It's done when `logs/restore.log` ends with `restore finished …, psql exit 0`. Any other exit code means it stopped at an error, shown just above that line. Fix the cause, then drop the database (`DROP DATABASE bitmagnet` as above) and start this step's commands again from `CREATE DATABASE`.
 
-**When it finished,** go back to safe settings, update the planner's statistics (the checker's estimates use them), and restart:
+**When it finished,** go back to safe settings, update the planner's statistics (the checker's estimates use them), then stop the server and force everything written with `fsync` off onto the disk before starting it again. Without that last part, a power cut later could still damage data the restore wrote.
 
 ```bash
 docker exec -u postgres bitmagnet-restore psql -X -v ON_ERROR_STOP=1 -f /restore/sql/normal-settings.sql
 docker exec -u postgres bitmagnet-restore psql -X -d bitmagnet -c "ANALYZE"
-docker restart bitmagnet-restore
+docker stop -t 120 bitmagnet-restore
+docker run --rm --network none -u postgres -v "${DATA}:/var/lib/postgresql/data" postgres:16-alpine initdb --sync-only -D /var/lib/postgresql/data
+docker start bitmagnet-restore
 ```
+
+The `initdb --sync-only` line prints `syncing data to disk ... ok`. It only flushes files; it doesn't create or change anything.
 
 Continue at step 6.
 
@@ -291,9 +305,10 @@ The importer gets the password the same way the checker does: the `bitmagnet-sec
 
 **If the importer can't use the socket** (it runs outside Docker, on Windows): use a loopback-only port instead. This gives the container a network, so do it only if you need it:
 
-1. Recreate the container with `-p 127.0.0.1:55432:5432` in place of `--network none`, and `-c listen_addresses=*` in place of `-c listen_addresses=`. Use Docker 28 or later; older versions could expose loopback-published ports to the local network.
-2. Add `host bitmagnet bitmagnet_reader samenet scram-sha-256` to a copy of `pg_hba.conf`, copy it in and reload as above.
-3. Connect to `127.0.0.1` port `55432`. Nothing else should listen there.
+1. Create a network of its own, so no other container shares it: `docker network create bitmagnet-net`.
+2. Recreate the container with `--network bitmagnet-net -p 127.0.0.1:55432:5432` in place of `--network none`, and `-c listen_addresses=*` in place of `-c listen_addresses=`. Use Docker 28 or later; older versions could expose loopback-published ports to the local network.
+3. Add `host bitmagnet bitmagnet_reader samenet scram-sha-256` to a copy of `pg_hba.conf`, copy it in and reload as above. `samenet` is `bitmagnet-net` only. Never attach another container to that network: it could reach the server directly.
+4. Connect to `127.0.0.1` port `55432`. Remove the network at teardown: `docker network rm bitmagnet-net`.
 
 ## 7. Verify with the checker
 
@@ -314,7 +329,7 @@ It prints JSON on stdout and a summary on stderr, and exits 0 when every check p
 docker run --rm -v "${REPO}:/src" -w /src -e CARGO_TARGET_DIR=/src/target/restore-check rust:1-bookworm cargo build --release --locked -p lodestar-sources-importers --bin bitmagnet_check
 ```
 
-The binary lands in `target/restore-check/release/` in your clone.
+The binary lands in `target/restore-check/release/` in your clone. It runs on Debian 12 (bookworm), so step 7 runs it in `debian:bookworm-slim`, with no network.
 
 **Run it.** It connects as the importer's role from step 6, so it also proves that role works. Unraid:
 
@@ -324,7 +339,7 @@ docker run --rm --network none \
   -v bitmagnet-secrets:/run/secrets:ro \
   -v "$DATA:/pgdata:ro" \
   -v "$REPO/target/restore-check/release:/opt/check:ro" \
-  rust:1-bookworm /opt/check/bitmagnet_check \
+  debian:bookworm-slim /opt/check/bitmagnet_check \
     --host /var/run/postgresql --dbname bitmagnet --user bitmagnet_reader \
     --password-file /run/secrets/reader_pw \
     --data-dir /pgdata --reserve 50GiB > "$W/logs/check.json"
@@ -339,26 +354,14 @@ On a database the size of the owner's, the exact counts take minutes. If a count
 - **`schema` fails:** the restore is incomplete or isn't Bitmagnet 0.10.0. The JSON names each missing column and wrong type.
 - **`encoding` fails:** the database was created with the wrong encoding, so text may have been converted. Delete it and redo step 4.
 - **`row_counts`:** compare the `torrents` count with what Bitmagnet showed (about 45 million for the dump).
-- **`samples`:** `utf8_valid` below `rows` is expected for `SQL_ASCII` data. Keep the two `sha256` values: running the checker again with the same `--seed` on an unchanged database gives the same ones, so they show later that nothing changed the bytes.
+- **`samples`:** `utf8_valid` below `rows` is expected for `SQL_ASCII` data. `rows` can be below `--sample` for `torrent_files` when there are few torrents: it takes at most two files from each one it lands on. Keep the two `sha256` values: running the checker again with the same `--seed` on an unchanged database gives the same ones, so they show later that nothing changed the bytes.
 - **`disk` fails:** free space before going on.
 
 Keep `check.json` with the import records.
 
 ## 8. Teardown and cleanup
 
-When the import is finished and checked:
-
-```bash
-docker stop -t 120 bitmagnet-restore && docker rm bitmagnet-restore
-docker volume rm bitmagnet-socket bitmagnet-secrets
-```
-
-Then delete the work copies:
-
-- **Unraid:** `rm -rf "$W/pgdata" "$W/dump"` (or all of `$W`).
-- **Windows:** `docker volume rm bitmagnet-pgdata`, then delete `$W`. Docker Desktop doesn't give the freed space back to Windows by itself: **Troubleshoot → Clean / Purge data** does, but removes every container, image and volume.
-
-Finally, confirm the originals didn't change:
+When the import is finished and checked, first confirm the originals didn't change, while the checksums are still there:
 
 ```bash
 sha256sum -c "$W/originals.sha256"                  # Unraid: backup.zip: OK
@@ -368,7 +371,19 @@ sha256sum -c "$W/originals.sha256"                  # Unraid: backup.zip: OK
 Get-FileHash "$O\backup.zip" -Algorithm SHA256      # Windows: compare with originals.sha256
 ```
 
-For the data directory, compare the file list as in step 3. Leave the originals read-only.
+For the data directory, make the file list again as in step 3 and compare it with `originals.list`. Leave the originals read-only.
+
+Then remove the server and its volumes:
+
+```bash
+docker stop -t 120 bitmagnet-restore && docker rm bitmagnet-restore
+docker volume rm bitmagnet-socket bitmagnet-secrets
+```
+
+And delete the work copies:
+
+- **Unraid:** `rm -rf "$W"`.
+- **Windows:** `docker volume rm bitmagnet-pgdata`, then delete `$W`. Docker Desktop doesn't give the freed space back to Windows by itself: **Troubleshoot → Clean / Purge data** does, but removes every container, image and volume.
 
 ## Helper files
 
