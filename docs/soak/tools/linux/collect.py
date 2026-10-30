@@ -63,7 +63,14 @@ COUNTERS = tuple("dht_" + name + "_total" for name in (
     "fetch_retry_unaccepted", "fetch_evicted_service",
     "writer_stored", "writer_errors", "writer_transactions", "search_errors",
 ))
-KEEP = frozenset(REQUIRED) | frozenset(COUNTERS)
+# Storage and cache sizes (R-gauges), kept in snapshots but never required.
+STORAGE = (
+    "store_db_bytes", "store_wal_bytes", "search_index_bytes", "storage_sampled_seconds",
+    "storage_sample_errors_total", "search_file_cache_entries", "search_file_cache_bytes",
+    "search_browse_cache_entries", "search_result_cache_entries", "search_result_cache_bytes",
+    "have_bytes", "hot_columns_bytes",
+)
+KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE)
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
 SERIES = re.compile(r"^lodestar_([a-z_0-9]+)(\{[^{}\r\n]*\})? (" + NUMBER + r")\r?$")
 SAFE_LABELS = re.compile(r'^\{[a-z_]+="[a-z_0-9]{1,24}"(,[a-z_]+="[a-z_0-9]{1,24}")*\}$')

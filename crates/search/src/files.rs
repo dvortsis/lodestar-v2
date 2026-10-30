@@ -467,6 +467,12 @@ impl FileSetCache {
         *self.state.lock().expect("cache lock") = CacheState::default();
     }
 
+    /// Entries held and their retained bytes, as the budget charges them.
+    pub fn usage(&self) -> (u64, u64) {
+        let state = self.state.lock().expect("cache lock");
+        (state.map.len() as u64, state.retained_bytes() as u64)
+    }
+
     fn get(&self, key: &CacheKey) -> Option<Arc<Vec<u64>>> {
         let mut state = self.state.lock().expect("cache lock");
         state.clock = state.clock.saturating_add(1);

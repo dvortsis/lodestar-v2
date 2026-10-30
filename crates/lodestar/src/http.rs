@@ -31,6 +31,8 @@ pub struct AppState {
     /// A read-only store connection for the funnel and recent torrents.
     pub reader: Arc<Mutex<Store>>,
     pub search: Option<SearchState>,
+    /// The storage sampler's last values (R-gauges).
+    pub storage: Option<Arc<crate::storage::Gauges>>,
 }
 
 #[derive(Clone)]
@@ -97,6 +99,14 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     let mut body = metrics::render(&s.monitor, s.dht().as_ref(), &s.fetch);
     if let Some(search) = &s.search {
         metrics::render_search(&mut body, search.index.index().num_docs(), &search.stats);
+        metrics::render_caches(
+            &mut body,
+            &search.index.index().cache_usage(),
+            &search.index.cache().stats(),
+        );
+    }
+    if let Some(storage) = &s.storage {
+        metrics::render_storage(&mut body, storage);
     }
     if let Some(health) = s.monitor.health() {
         let stored = s
