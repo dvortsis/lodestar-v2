@@ -810,8 +810,17 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_NOFOLLOW;
-    // No SQLITE_OPEN_URI: a file name can't smuggle in `immutable=1` or
-    // another VFS.
+    // The bundled SQLite parses `file:` URIs even without SQLITE_OPEN_URI,
+    // so a name like `file:x?immutable=1` would change how it opens. A
+    // canonical path is absolute and never starts with `file:`; checked
+    // anyway, since the guarantee matters more than the cost.
+    if canonical
+        .as_os_str()
+        .as_encoded_bytes()
+        .starts_with(b"file:")
+    {
+        return Err(Refusal::Unavailable("open_failed"));
+    }
     let conn = Connection::open_with_flags(&canonical, flags)
         .map_err(|_| Refusal::Unavailable("open_failed"))?;
     let mut deadline = Deadline {
