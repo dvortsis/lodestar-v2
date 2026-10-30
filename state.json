@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T19:02Z",
+ "updated_at": "2026-10-30T19:05Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1512,11 +1512,11 @@
    "notes": "supervisor switch-refusal stall in CI (run 41091029121)"
   },
   "CR-gate-hash-mismatch": {
-   "status": "queued",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhn9fpZf44nCWftW7LDz",
    "pr": null,
-   "notes": "brief briefs/CR-gate-hash-mismatch.md written 2026-10-30T19:00Z; launch when the usage warning clears or a slot frees; touches sources/pool.rs, so after #231/#232"
+   "notes": "launched 19:05Z; contract note first, code after #231/#232 merge"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2271,7 +2271,8 @@
   "2026-10-30T19:00Z CR-gate-hash-mismatch scoped: multi-crate (FailureKind ripples into stats, metrics, log codes and goldens; Loss is persisted), so it's queued as a slice with a brief instead of a runner patch. The cli.rs port fix is ready locally as cf087f09 on top of #229, to push after #229 merges.",
   "2026-10-30T18:56Z merged #227 CR-0d-2b-1 (fa836c4e) on green ci-ok at 9c99b688; reviewer archived. Author told to merge main into slice/CR-0d-2b-2 and open its PR. #232 re-check MERGE at 0ec7379a.",
   "2026-10-30T18:58Z owner replies (relayed by the owner's desktop dashboard session session_01MMjhnCw1haVpiSDpYLQQqm; rc.2 tag verified): rc.1 rejected, rc.2 tagged at 6be95525 and is the gate candidate; #217 limits option (a), owner ruling; freshness environment closed; the memory-gate fit (h12-24 private on #189) is still open.",
-  "2026-10-30T19:02Z merged #230 logging nits (0140999b) on green ci-ok at 34c228ac, reviewer MERGE."
+  "2026-10-30T19:02Z merged #230 logging nits (0140999b) on green ci-ok at 34c228ac, reviewer MERGE.",
+  "2026-10-30T19:05Z launched CR-gate-hash-mismatch (Opus, session_01MMjhn9fpZf44nCWftW7LDz): contract note first, code after #231 and #232 merge."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
