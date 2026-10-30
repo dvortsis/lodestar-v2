@@ -3,7 +3,7 @@
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
 import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
-import { routeFiles } from './scripts/size-entries.mjs';
+import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
 
@@ -132,24 +132,102 @@ const detailLazy = [
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
 // them: every control but the toggle and the text input (per type), instant mode, previews, the
-// field menu, the ⌘S registration, copy's toast and the confirmation dialog. S-settings-1's screen
-// route entry uses this list; "Settings controls (on demand)" gates what it leaves out.
+// field menu, the ⌘S registration, copy's toast and the confirmation dialog. The section entry uses
+// this list; "Settings controls (on demand)" gates what it leaves out.
 const settingsOnDemand = [
 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
 	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
 	/features\/settings\/form\/ConfirmDialog\.svelte$/
 ];
-const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
+// The edit chunk (owner, 2026-10-24; docs/decisions/2026-10-30-S-settings-reconcile.md): the save
+// pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
+// its own, so "Settings controls (on demand)" keeps measuring only the controls.
+const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
+const settingsLazy = requireMeasuredJs(
+	'Settings controls (on demand)',
+	onDemandOf('/settings/[section]', settingsOnDemand).filter(
+		(f) => !onDemandOf('/settings/[section]', settingsEdit).includes(f)
+	)
+);
+const settingsEditLazy = requireMeasuredJs(
+	'Settings edit chunk (on demand)',
+	onDemandOf('/settings/[section]', settingsEdit)
+);
+// Settings screens (S-settings-reconcile): the registry (shell/screens.ts) imports every screen.ts
+// eagerly. A generated screen's form (`SectionForm`, with the engine) and a hand-built screen's body
+// (`load`, named `*Screen.svelte`, e.g. Keyboard's) are dynamic imports made at mount on their own
+// kind of screen; a screen's extras (`extra`, General's export) load after the form.
+// - "Settings section" is a generated screen's first view: the route, the form and the engine.
+// - Each hand-built screen's first view is the route without the form, plus its body: gated against
+//   the 45 KB route cap (§10.1), one entry per body, so a later screen is gated the moment it lands.
+// - "Settings screen extras (on demand)" gates the extras beyond the section's first view.
+const SECTION_FORM = 'src/lib/features/settings/shell/SectionForm.svelte';
+const settingsBodies = [/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/];
+const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
+// What a hand-built body loads only on an interaction: Keyboard's shortcut sheet (opened with ?) and
+// its single-key toggle command (S-keys' boot.ts). Gated with the extras.
+const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|toggle\.ts)$/];
+const settingsFirstView = [
+	...settingsOnDemand,
+	...settingsEdit,
+	...settingsBodies,
+	...settingsExtras
+];
+const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
+const settingsShellView = own('/settings/[section]', {
+	onDemand: [...settingsFirstView, new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)]
+});
+// Never leave out code a page loads statically: every body or extra the patterns match must be a
+// dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
+const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
+const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
+const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
+	(chunk.imports ?? [])
+		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+		.map((key) => `${from} -> ${key}`)
+);
+if (staticHits.length)
+	throw new Error(
+		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
+	);
+const settingsHandBuilt = bodyKeys.map((key) => ({
+	name: key
+		.split('/')
+		.at(-1)
+		.replace(/\.svelte$/, ''),
+	files: requireMeasuredJs(`Settings ${key} (first view)`, [
+		...new Set([
+			...settingsShellView,
+			...ownChunk(
+				key,
+				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				false,
+				settingsShellView
+			)
+		])
+	])
+}));
+const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
+	...new Set([
+		...extraKeys.flatMap((key) =>
+			ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsSectionView)
+		),
+		...bodyKeys.flatMap((key) =>
+			ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions], true)
+		)
+	])
+]);
 
 // What another route can still add to /search's first load (runner, 2026-10-24):
 // - The route table: one import and one dictionary entry per route, about 27 B gzipped. The budget
 //   allows 1.26 KB (measured with only / and /search) plus 40 B a route, so a route that adds
 //   more fails here.
 // - The vendor chunk holds only modules /search reaches (the stray check above), but it is shared,
-//   so another route that uses more of those modules' exports keeps them in it. Fully used, those
-//   modules measured 31.07 KB (a build without tree-shaking, against 30.42 KB with every route on
-//   main). The budget is that ceiling: another route can't pass it, and only a new dependency of
-//   /search's own can (raise it then, on purpose).
+//   so another route that uses more of those modules' exports keeps them in it. Measured 31.09 KB
+//   with S-settings-reconcile (2026-10-30): the Settings form engine and Keyboard's screen use more of
+//   the Svelte runtime than any earlier route (30.42 KB with every route before them, 30.81 KB with
+//   848e10a0's Settings). The 31.1 KB budget is the ceiling: a route that passes it goes to the owner,
+//   and only a new dependency of /search's own raises it, on purpose.
 const routeCount = existsSync('.svelte-kit/generated/client-optimized/app.js')
 	? (readFileSync('.svelte-kit/generated/client-optimized/app.js', 'utf8')
 			.match(/dictionary = (\{[\s\S]*?\});/)?.[1]
@@ -249,14 +327,33 @@ export default [
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
-	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),
+	// Owner ruling, 2026-10-30 (S-settings-reconcile): with Settings a production route, Rolldown
+	// re-splits shared chunks (Toggle, format/bytes, Svelte's input bindings) these entries load;
+	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
+	// sections 33.9 → 34.5 KB.
+	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.1 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45 KB'),
-	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.8 KB'),
+	entry(
+		'Settings overview (own JS + CSS)',
+		own('/settings', { onDemand: settingsFirstView }),
+		'45 KB'
+	),
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
-	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
-	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '38 KB')] : []),
+	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
+	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
+	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
+	// Each hand-built screen's first view (the route without the form, plus its body), against the
+	// 45 KB route cap (§10.1).
+	...settingsHandBuilt.map(({ name, files }) =>
+		entry(`Settings ${name} (first view)`, files, '45 KB')
+	),
+	// General's export panel beyond the section's first view, and what a hand-built body loads on an
+	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
+	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
+	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',
 		[
@@ -289,7 +386,7 @@ export default [
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'33.9 KB'
+		'34.5 KB' // owner ruling, 2026-10-30: see the Alerts entries
 	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB

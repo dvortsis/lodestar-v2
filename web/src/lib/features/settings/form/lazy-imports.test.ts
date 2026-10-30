@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 const HERE = import.meta.dirname;
 
-/** Loaded only through `import()` (controls.svelte.ts, form.svelte.ts, SettingField, SettingsForm). */
+/**
+ * Loaded only through `import()` (controls.svelte.ts, form.svelte.ts, SettingField, SettingsForm),
+ * or only by files that are.
+ */
 const ON_DEMAND = [
 	'NumberControl.svelte',
 	'SliderControl.svelte',
@@ -14,6 +17,23 @@ const ON_DEMAND = [
 	'SecretControl.svelte',
 	'ChipsControl.svelte',
 	'JsonControl.svelte',
+	'edit.ts',
+	'saving.ts',
+	'draft.ts',
+	'merge.ts',
+	'validate.ts',
+	'batch.ts',
+	'display.ts',
+	'units.ts',
+	'questions.ts',
+	'dialogs.ts',
+	'ConfirmDialog.svelte',
+	'DraftBanner.svelte',
+	'ErrorSummary.svelte',
+	'FieldConflict.svelte',
+	'FieldSaved.svelte',
+	'FormNotice.svelte',
+	'SaveBar.svelte',
 	'instant.ts',
 	'preview.ts',
 	'FieldPreview.svelte',
