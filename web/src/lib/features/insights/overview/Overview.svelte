@@ -131,14 +131,14 @@
 	};
 	const announcement = $derived(insights.notice ? notices[insights.notice]() : '');
 	const paused = $derived(overview?.kpi.health.state === 'paused');
-	// The server's own reasons here (an index lag has its own exception and the writer stall has the
-	// stale banner); the no-progress call needs `uptime_s`, so it is the status pill's verdict.
+	// `cohort_stalled` from this response; the no-progress call needs `uptime_s`, so it is the status
+	// pill's verdict. An index lag has its own exception, and a writer stall always comes with the
+	// stale banner (the server sets both together), so neither adds a second warning.
 	const stalled = $derived(
 		!!overview &&
 			!paused &&
 			!overview.stale &&
-			(overview.kpi.health.reason === 'writer_stalled' ||
-				overview.exceptions.some((e) => e.kind === 'cohort_stalled') ||
+			(overview.exceptions.some((e) => e.kind === 'cohort_stalled') ||
 				(statusRef.current?.pill.kind === 'stalled' &&
 					statusRef.current.pill.reason === 'no_progress'))
 	);

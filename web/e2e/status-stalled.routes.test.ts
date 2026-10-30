@@ -28,10 +28,16 @@ for (const width of [390, 1366]) {
 				'getInsightsOverview',
 				overviewFixture({
 					ingest_per_hour: 0,
-					kpi: {
-						...overviewFixture().kpi,
-						health: { reason: 'writer_stalled', state: 'degraded' }
-					}
+					exceptions: [
+						{
+							fix: { kind: 'stage', target: 'fetch' },
+							kind: 'cohort_stalled',
+							severity: 'warning',
+							since: 1792670000,
+							unit: 'torrents',
+							value: 1200
+						}
+					]
 				})
 			);
 		});

@@ -36,7 +36,6 @@
 	"shell_status_stalled": "Stalled",
 	"shell_status_starting_help": "Starting: sampling resumes after up to 6 h.",
 	"shell_status_stalled_help": "The crawler is running but nothing new is arriving. Open Insights to see which stage is stuck.",
-	"shell_status_stalled_open": "Open Insights",
 	"shell_status_lag_help": "The search index is behind. New torrents are stored but can't be searched yet. Open Insights to see why.",
 	"shell_status_torrents": "{count} torrents",
 	"shell_status_torrents_one": "{count} torrent",

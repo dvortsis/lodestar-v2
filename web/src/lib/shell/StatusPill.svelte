@@ -10,12 +10,14 @@
 	import IconOffline from '~icons/ph/wifi-slash';
 	import IconUnknown from '~icons/ph/circle-dashed';
 	import IconConnecting from '~icons/ph/dots-three';
+	import IconStarting from '~icons/ph/hourglass-medium';
+	import IconStalled from '~icons/ph/warning-octagon';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatCompact, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
-	import { statusIcons, statusInk } from '$lib/ui/status';
+	import { statusInk } from '$lib/ui/status';
 	import Tooltip from '$lib/ui/overlays/Tooltip.svelte';
 	import type { Route } from './nav';
 	import type { PillKind, PillState } from './status';
@@ -32,8 +34,8 @@
 		paused: IconPause,
 		rebuilding: IconRebuild,
 		failed: IconWarning,
-		starting: IconConnecting,
-		stalled: statusIcons.warning
+		starting: IconStarting,
+		stalled: IconStalled
 	};
 	const words: Record<PillKind, () => string> = {
 		unknown: () => m.shell_status_unknown(),

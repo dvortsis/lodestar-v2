@@ -52,11 +52,23 @@ describe('pill progress states', () => {
 		expect(pill(progress({ ingestPerHour: null, fetchedPerHour: null })).kind).toBe('crawling');
 	});
 
-	it('stalled: a named reason from the API, at any uptime', () => {
-		for (const reason of ['writer_stalled', 'cohort_stalled', 'index_lag'] as const) {
-			const s = pill(progress({ reasons: [reason], uptimeS: 60 }));
-			expect(s.kind).toBe('stalled');
-			expect(s.reason).toBe(reason);
+	it.each(['writer_stalled', 'cohort_stalled'] as const)(
+		'%s: a stall once past the startup suppression, "starting" inside it',
+		(reason) => {
+			const old = pill(progress({ reasons: [reason], uptimeS: 5 * 3600 + STARTUP_SUPPRESSION_S }));
+			expect(old).toMatchObject({ kind: 'stalled', reason });
+			for (const uptimeS of [60, 5 * 3600]) {
+				expect(pill(progress({ reasons: [reason], uptimeS })).kind).toBe('starting');
+			}
+		}
+	);
+
+	it('index_lag is a stall at any uptime', () => {
+		for (const uptimeS of [60, 5 * 3600, DAY]) {
+			expect(pill(progress({ reasons: ['index_lag'], uptimeS }))).toMatchObject({
+				kind: 'stalled',
+				reason: 'index_lag'
+			});
 		}
 	});
 
@@ -76,10 +88,16 @@ describe('pill progress states', () => {
 		expect(s.kind).toBe('crawling');
 	});
 
-	it('an idle crawler with a zero stored rate is idle, but a named reason still stalls', () => {
+	it('an idle crawler has no writer to stall, but a starved pipeline still reads as stalled', () => {
 		const idle = crawler({ fetch_active: 0, fetch_pending: 0 });
-		expect(pill(progress({ ingestPerHour: 0, uptimeS: CLEAR_S }), idle).kind).toBe('idle');
-		expect(pill(progress({ reasons: ['writer_stalled'] }), idle).kind).toBe('stalled');
+		expect(pill(progress({ reasons: ['writer_stalled'], uptimeS: CLEAR_S }), idle).kind).toBe(
+			'idle'
+		);
+		expect(pill(progress({ ingestPerHour: 0, uptimeS: CLEAR_S }), idle)).toMatchObject({
+			kind: 'stalled',
+			reason: 'no_progress'
+		});
+		expect(pill(progress({ reasons: ['index_lag'] }), idle).kind).toBe('stalled');
 	});
 
 	it('starting: under six hours up with nothing flowing yet', () => {
@@ -234,6 +252,21 @@ describe('progress source', () => {
 		expect(between?.ingestPerHour).toBe(0);
 	});
 
+	it('drops the kept stored-rate facts when uptime goes down (a restart)', async () => {
+		const source = createProgressSource();
+		const t0 = Date.now();
+		route(
+			stats({ uptime_s: DAY }),
+			overview({ ingest_per_hour: 0, stale: { reason: 'writer_stalled' } })
+		);
+		await source(t0 + 5 * 60_000);
+		const kept = await source(t0 + 6 * 60_000);
+		expect(kept?.reasons).toEqual(['writer_stalled']);
+		route(stats({ uptime_s: 30 }), overview());
+		const after = await source(t0 + 7 * 60_000);
+		expect(after).toMatchObject({ ingestPerHour: null, reasons: [] });
+	});
+
 	it('a failed request leaves its facts unknown; both failing gives null', async () => {
 		route(new Error('down'), overview({ ingest_per_hour: 0 }));
 		const source = createProgressSource();
@@ -264,6 +297,10 @@ describe('progress source', () => {
 		document.dispatchEvent(new Event('visibilitychange'));
 		await vi.advanceTimersByTimeAsync(0);
 		expect(set).toHaveBeenLastCalledWith(null);
+		expect(source).toHaveBeenCalledTimes(3);
+		document.dispatchEvent(new Event('visibilitychange')); // inside the minimum gap: ignored
+		await vi.advanceTimersByTimeAsync(0);
+		expect(source).toHaveBeenCalledTimes(3);
 		stop();
 		await vi.advanceTimersByTimeAsync(120_000);
 		expect(source).toHaveBeenCalledTimes(3);

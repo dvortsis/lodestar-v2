@@ -60,8 +60,9 @@ export function pillState(input: {
 	if (crawler.paused)
 		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
 	const working = crawler.fetch_active > 0 || crawler.fetch_pending > 0;
-	// An idle crawler has nothing to be stuck on, so a zero stored rate alone isn't a stall.
-	if (progress && (working || progress.reason !== 'no_progress'))
+	// An idle crawler has no writer to be stuck on. A starved pipeline is idle too, though, so the
+	// stored-rate verdict (`no_progress`) and the other reasons stand.
+	if (progress && (working || progress.reason !== 'writer_stalled'))
 		return { ...none, torrents: crawler.torrents, ...progress };
 	return {
 		kind: working ? 'crawling' : 'idle',

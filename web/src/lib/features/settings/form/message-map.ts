@@ -2,6 +2,8 @@
 import { m } from '$lib/paraglide/messages.js';
 
 export const MESSAGES: Record<string, () => string> = {
+	settings_transport_fallback_to_tcp_help: m.settings_transport_fallback_to_tcp_help,
+	settings_transport_fallback_to_tcp_label: m.settings_transport_fallback_to_tcp_label,
 	settings_transport_utp_help: m.settings_transport_utp_help,
 	settings_transport_utp_label: m.settings_transport_utp_label
 };

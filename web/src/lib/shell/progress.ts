@@ -28,25 +28,35 @@ export interface ProgressSnapshot {
 	reasons: readonly string[];
 }
 
-const STALL_REASONS: readonly string[] = ['writer_stalled', 'cohort_stalled', 'index_lag'];
+/** In the order they win when several apply. */
+const STALL_REASONS: readonly StallReason[] = ['writer_stalled', 'cohort_stalled', 'index_lag'];
+/** The server raises these when nothing has been stored for a while, which a fresh start does too. */
+const QUIET_REASONS: readonly string[] = ['writer_stalled', 'cohort_stalled'];
+
+const isYoung = (p: ProgressSnapshot) => p.uptimeS !== null && p.uptimeS < STARTUP_SUPPRESSION_S;
 
 /**
  * A stall while the crawler runs: a reason the API names, or a stored rate of 0 over a window the
  * API reports that lies wholly after the startup suppression. A rate that isn't known is not a
- * stall. Fetching that doesn't reach the store is exactly the stall to catch, so the fetch rate
- * plays no part.
+ * stall, and fetching that doesn't reach the store is exactly the stall to catch, so the fetch
+ * rate plays no part. Inside the suppression the server's "nothing stored" reasons
+ * (`writer_stalled`, `cohort_stalled`) are what a fresh start looks like, so they don't count
+ * there; `index_lag` always does.
  */
 export function stallReason(p: ProgressSnapshot): StallReason | null {
-	const named = p.reasons.find((r) => STALL_REASONS.includes(r));
-	if (named) return named as StallReason;
+	const young = isYoung(p);
+	const named = STALL_REASONS.find(
+		(r) => p.reasons.includes(r) && (!young || !QUIET_REASONS.includes(r))
+	);
+	if (named) return named;
 	return p.ingestPerHour === 0 && (p.uptimeS ?? 0) >= WINDOW_CLEAR_S ? 'no_progress' : null;
 }
 
-/** Under six hours up with nothing flowing yet (or nothing known): the quiet is expected. */
+/** Under six hours up and either nothing flowing yet or the server's "nothing stored" reasons. */
 const startingUp = (p: ProgressSnapshot) =>
-	p.uptimeS !== null &&
-	p.uptimeS < STARTUP_SUPPRESSION_S &&
-	!((p.ingestPerHour ?? 0) > 0 || (p.fetchedPerHour ?? 0) > 0);
+	isYoung(p) &&
+	(p.reasons.some((r) => QUIET_REASONS.includes(r)) ||
+		!((p.ingestPerHour ?? 0) > 0 || (p.fetchedPerHour ?? 0) > 0));
 
 /** The pill's extra state for these facts, if any. */
 export function overlayOf(p: ProgressSnapshot): ProgressOverlay {
@@ -57,6 +67,8 @@ export function overlayOf(p: ProgressSnapshot): ProgressOverlay {
 
 /** `/stats` is asked this often; the rates are the server's, never computed here. */
 const STATS_EVERY_MS = 60_000;
+/** Coming back to the tab refreshes, but never more often than this. */
+const MIN_GAP_MS = 10_000;
 /** The overview (a rollup query) is asked this often when `/stats` shows nothing odd. */
 const OVERVIEW_EVERY_MS = 5 * 60_000;
 /** The index is "lagging" past this (docs/metrics.md `index_lag`); the same bound the server uses. */
@@ -72,6 +84,7 @@ const INDEX_LAG_S = 30;
 export function createProgressSource() {
 	let lastOverview = Date.now();
 	let last: ProgressSnapshot | null = null;
+	let lastUptime = 0;
 	return async function fetchProgress(now = Date.now()): Promise<ProgressSnapshot | null> {
 		const stats = await api.get('/stats').catch(() => null);
 		const odd =
@@ -81,7 +94,9 @@ export function createProgressSource() {
 			stats?.paused || !(odd || due)
 				? null
 				: await api.get('/insights/overview', { query: { range: '24h' } }).catch(() => null);
-		if (stats?.paused) last = null;
+		// A restart (uptime went down) or a pause makes the kept stored-rate facts stale.
+		if (stats?.paused || (stats && stats.uptime_s < lastUptime)) last = null;
+		if (stats) lastUptime = stats.uptime_s;
 		if (o) lastOverview = now;
 		if (!stats && !o) return null;
 		// Between overview calls the last stored-rate facts stand (they describe an hour, not a moment).
@@ -108,18 +123,23 @@ export function startProgress(
 	source: () => Promise<ProgressSnapshot | null> = createProgressSource()
 ): () => void {
 	let gone = false;
+	let lastRun = -Infinity;
 	const refresh = () => {
 		if (typeof document !== 'undefined' && document.hidden) return;
+		lastRun = Date.now();
 		void source().then((p) => {
 			if (!gone && p) set(overlayOf(p));
 		});
 	};
 	refresh();
 	const timer = setInterval(refresh, STATS_EVERY_MS);
-	document.addEventListener('visibilitychange', refresh);
+	const onVisible = () => {
+		if (Date.now() - lastRun >= MIN_GAP_MS) refresh();
+	};
+	document.addEventListener('visibilitychange', onVisible);
 	return () => {
 		gone = true;
 		clearInterval(timer);
-		document.removeEventListener('visibilitychange', refresh);
+		document.removeEventListener('visibilitychange', onVisible);
 	};
 }
