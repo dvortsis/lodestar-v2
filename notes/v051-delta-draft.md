@@ -6,6 +6,7 @@ Draft for docs/decisions/2026-10-30-master-plan.md Part D2. Read-only analysis; 
 
 - Soaked build: `744b84d68c7609d8220430ffc9938c05c6d6a527` (CR-0 frozen build).
 - Cutoff candidate: `origin/main` = `1199430f343862b19dce59f155589acd4c5e4120` (after `git fetch -q origin main`).
+- Update 2026-10-30T10:55Z: `origin/main` moved to `7473a6c3` (#197 CR-COL). It adds only `docs/soak/tools/linux/**` (collector, tests, README): no shipped code, no class-A change. The mapping below still holds.
 - `git merge-base --is-ancestor 744b84d6 origin/main` succeeded: 744b84d6 is an ancestor.
 - Range `744b84d6..origin/main`: 99 commits, 22 first-parent merge commits, 358 files changed repo-wide (+36152 / -558, mostly docs, tests, goldens, fuzz seeds).
 - Scoped paths (dht, sources, pipeline, peer-wire, network-policy, store, search, lodestar/src, filter, metainfo, api): 73 files, +4682 / -360, of which 31 are non-test source files (listed below). Net line counts are from `git diff 744b84d6..origin/main`; they include inline `#[cfg(test)]` code where noted.
