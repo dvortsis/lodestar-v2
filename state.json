@@ -1482,6 +1482,13 @@
       "model": "opus",
       "attempt": 1,
       "notes": " | 2026-10-30T14:35Z launched: 8573C provisional factor (1 job) makes neutralized case 53.3us on #210; per-case scaling differs on 8573C; method change goes to runner first; 50us owner budget untouched"
+    },
+    "R-gauges": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhnBEKCAaLuqVT1phsxp",
+      "pr": null,
+      "notes": "owner #189 step 5; cherry-pick to release/v0.5.1 -> v0.5.1-rc.2"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2097,6 +2104,10 @@
     {
       "item": "FYI (\u00a72.19): filter-budget gate method is now per-model skew on the calibration for non-reference CPUs (runner decision, X-filter-budget-8573C); the 50 us budget and the 7763 reference are unchanged",
       "unblocks": "nothing; informational"
+    },
+    {
+      "item": "v0.5.1-rc.1 Release run 41062406135 waits for release-environment approval. rc.1 lacks the R-gauges you asked for (step 5). Recommended: reject or leave rc.1 and gate on rc.2 (gauges, cherry-picked in a few hours). Alternative: approve rc.1 for an early MSI/portable smoke only (those results do not count for rc.2 hashes)",
+      "unblocks": "v0.5.1 gate runs"
     }
   ],
   "external_gates": {
@@ -2159,6 +2170,7 @@
     "2026-10-30T14:11Z S-settings-reconcile q2: Alerts/Alert/Detail entries 0.03-0.77 KB over from importer-set chunk splitting (Toggle, format/bytes, bindings). Runner: option 1, scope extended to the web/vite.config.ts chunk groups; no limit changes, /search first load must not grow; fallback = report numbers, runner takes them to the owner",
     "2026-10-30T14:12Z IMP-1 #210 round-3 review of 562450ae: CHANGES. Blocking: the fold keeps a trunc(v2) hash and drops the hybrid's v1, so a floor or abuse hit misses (content safety). Runner: also refuse the record (invalid) when v2s conflict; hoist the DELETE. Sent to the author",
     "2026-10-30T14:20Z follow-ups pruned: F-updater mutex is stale (main's save_updater drops the lock before bin.write, so no fsync under the lock); the 8573C re-derive follow-up is superseded by X-filter-budget-8573C. The welcome-h1 focus follow-up is kept: main's /welcome route is a one-line stub, so it needs the page it was seen on",
-    "2026-10-30T14:18Z X-flake-logdelete PR #213 (109d4c55): the test's assumption was wrong (prune by count races the delete), plus a real ordering bug in rotated() fixed with LogName::newest_first. Fresh Opus review launched"
+    "2026-10-30T14:18Z X-flake-logdelete PR #213 (109d4c55): the test's assumption was wrong (prune by count races the delete), plus a real ordering bug in rotated() fixed with LogName::newest_first. Fresh Opus review launched",
+    "2026-10-30T14:25Z MISSED EARLIER: the owner ruled on #189 at 13:05Z (accept; memory judged on hours 12-24, upper 95% CI <= 2 MiB/h) and posted the fit at 13:20Z (upper +0.32 MiB/h, so the pass is final). The owner pushed tag v0.5.1-rc.1 (8b67f269); Release run 41062406135 is waiting for release-environment approval. Runner: #214 records acceptance and the Linux memory gate (review session_01MMjhn9958McVAHzTgKg27G); R-gauges launched (session_01MMjhnBEKCAaLuqVT1phsxp) for rc.2"
   ]
 }
