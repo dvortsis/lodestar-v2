@@ -2273,7 +2273,8 @@
   "2026-10-30T18:58Z owner replies (relayed by the owner's desktop dashboard session session_01MMjhnCw1haVpiSDpYLQQqm; rc.2 tag verified): rc.1 rejected, rc.2 tagged at 6be95525 and is the gate candidate; #217 limits option (a), owner ruling; freshness environment closed; the memory-gate fit (h12-24 private on #189) is still open.",
   "2026-10-30T19:02Z merged #230 logging nits (0140999b) on green ci-ok at 34c228ac, reviewer MERGE.",
   "2026-10-30T19:05Z launched CR-gate-hash-mismatch (Opus, session_01MMjhn9fpZf44nCWftW7LDz): contract note first, code after #231 and #232 merge.",
-  "2026-10-30T19:08Z CR-gate-hash-mismatch contract: Option A OK'd (FailureKind::HashMismatch, Funnel::lost gains last: Option<FailureKind>, no new persisted Loss code). Owner flag (\u00a72.19) pending at merge: failed_verification narrows to hash mismatches on the final attempt."
+  "2026-10-30T19:08Z CR-gate-hash-mismatch contract: Option A OK'd (FailureKind::HashMismatch, Funnel::lost gains last: Option<FailureKind>, no new persisted Loss code). Owner flag (\u00a72.19) pending at merge: failed_verification narrows to hash mismatches on the final attempt.",
+  "2026-10-30T19:08Z merged #231 fix/cr-adm-polish (9496cc90) on green ci-ok at 2e18f07f after the runner's delta check; author asked for the IPv6 test report, then archive."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
