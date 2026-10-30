@@ -1372,8 +1372,8 @@
    "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range"
   },
   "CR-0": {
-   "status": "?",
-   "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit)"
+   "status": "awaiting-owner",
+   "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit) | 2026-10-30T07:17Z Opus acceptance review: ACCEPT-WITH-CONDITIONS. All hard gates pass; memory gate not met as worded (private +3.24\u00b11.14 MiB/h h>=1, h12-24 -0.69\u00b12.71). Analyzer e6622d9d lands with #184. Owner ruling requested on #189 (comment 6517206867); if accepting: full-res h12-24 private fit, upper CI <=1 MiB/h, plus peak private. -0.17 MB/h checkpoint figure withdrawn."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1944,6 +1944,12 @@
    "id": "OC8-F-updater",
    "item": "F-updater: unreadable updater.json fails closed (auto-updates held in-process until an explicit pause/resume save) - runner refinement, \u00a72.19 veto window.",
    "status": "open"
+  },
+  {
+   "at": "2026-10-30T07:17Z",
+   "item": "CR-0 memory gate ruling (slope\u22480 after h1 vs no sustained growth) + full-res h12-24 private fit on soak host",
+   "unblocks": "CR-0 acceptance -> v0.5.1 delta mapping",
+   "ref": "PR #189"
   }
  ],
  "external_gates": {
