@@ -180,15 +180,15 @@ pub fn suggest(
         } => {
             out.extend(chips(&cx, word, at.in_file, span(*replace))?);
             out.extend(field_names(partial, at.in_file, span(*replace)));
-            if !at.in_file {
-                if let Some(i) = at.token {
-                    for start in caret::title_runs(q, &toks, i, TITLE_WORDS) {
-                        let found = titles(&cx, &q[start..caret], span((start, replace.1)), limit)?;
-                        if !found.is_empty() {
-                            out.extend(found);
-                            typing_title = Some(i);
-                            break;
-                        }
+            if !at.in_file
+                && let Some(i) = at.token
+            {
+                for start in caret::title_runs(q, &toks, i, TITLE_WORDS) {
+                    let found = titles(&cx, &q[start..caret], span((start, replace.1)), limit)?;
+                    if !found.is_empty() {
+                        out.extend(found);
+                        typing_title = Some(i);
+                        break;
                     }
                 }
             }
@@ -560,13 +560,13 @@ pub fn chip_nodes(word: &str) -> Vec<Node> {
             any: vec![lower.clone()],
         });
     }
-    if let Some(t) = ContentType::from_name(&lower) {
-        if !matches!(t, ContentType::Other | ContentType::Adult) {
-            out.push(Node::Tag {
-                key: TagKey::Type,
-                any: vec![t.as_str().to_owned()],
-            });
-        }
+    if let Some(t) = ContentType::from_name(&lower)
+        && !matches!(t, ContentType::Other | ContentType::Adult)
+    {
+        out.push(Node::Tag {
+            key: TagKey::Type,
+            any: vec![t.as_str().to_owned()],
+        });
     }
     // Only forms the parser reads back as themselves.
     out.retain(|n| query::parse(&n.to_query()).ok().as_ref() == Some(n));
@@ -778,10 +778,10 @@ fn correction(cx: &Cx<'_>, field: Field, word: &str, d: u8) -> Result<Option<Str
                 break;
             }
             read += 1;
-            if let Ok(t) = std::str::from_utf8(k) {
-                if t != word {
-                    *by.entry(t.to_owned()).or_default() += u64::from(info.doc_freq);
-                }
+            if let Ok(t) = std::str::from_utf8(k)
+                && t != word
+            {
+                *by.entry(t.to_owned()).or_default() += u64::from(info.doc_freq);
             }
         }
     }

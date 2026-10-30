@@ -20,13 +20,13 @@ use crate::index::Compiled;
 /// fifth by id (a block of the doc-id space, like a recent date range).
 pub(crate) fn name(i: u64, n: u64) -> String {
     let mut words = vec![format!("Show{i}")];
-    if i % 10 != 0 {
+    if !i.is_multiple_of(10) {
         words.push("Common".into());
     }
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         words.push("Half".into());
     }
-    if i % 100 == 0 {
+    if i.is_multiple_of(100) {
         words.push("Rare".into());
     }
     if i >= n * 4 / 5 {

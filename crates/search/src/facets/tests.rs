@@ -30,33 +30,33 @@ fn doc(i: u64) -> TorrentDoc {
         tags.push(format!("adult:{}", ["scene", "vr"][(i % 2) as usize]));
     }
     // A Not-adult correction keeps the kind the classifier gave (§20.9).
-    if i % 5 == 3 && i % 7 == 0 {
+    if i % 5 == 3 && i.is_multiple_of(7) {
         tags.push("adult:scene".into());
     }
     if i % 4 != 3 {
         tags.push(format!("res:{}", RES[((i / 2) % 3) as usize]));
     }
     tags.push(format!("lang:{}", LANGS[(i % 4) as usize]));
-    if i % 3 == 0 {
+    if i.is_multiple_of(3) {
         tags.push(format!("lang:{}", LANGS[((i + 1) % 4) as usize]));
     }
     tags.push(format!("group:g{}", i % 13));
-    if i % 5 == 0 {
+    if i.is_multiple_of(5) {
         tags.push("has:nfo".into());
     }
-    if i % 7 == 0 {
+    if i.is_multiple_of(7) {
         tags.push("has:subs".into());
     }
     let mut exts = vec![EXTS[(i % 6) as usize].to_owned()];
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         exts.push(EXTS[((i + 3) % 6) as usize].to_owned());
     }
     let mut bits = 0;
     for (on, bit) in [
-        (i % 4 == 0, flags::PRIVATE),
-        (i % 6 == 0, flags::V2),
-        (i % 9 == 0, flags::IMPORTED),
-        (i % 10 == 0, flags::BACKFILL),
+        (i.is_multiple_of(4), flags::PRIVATE),
+        (i.is_multiple_of(6), flags::V2),
+        (i.is_multiple_of(9), flags::IMPORTED),
+        (i.is_multiple_of(10), flags::BACKFILL),
     ] {
         if on {
             bits |= bit;
@@ -68,19 +68,19 @@ fn doc(i: u64) -> TorrentDoc {
         _ => vec![1990 + i % 30],
     };
     let mut shares = Vec::new();
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         shares.push((Category::Video, 50, 80));
     }
-    if i % 3 == 0 {
+    if i.is_multiple_of(3) {
         shares.push((Category::Audio, 10, 5));
     }
-    if i % 4 == 0 {
+    if i.is_multiple_of(4) {
         shares.push((Category::Subtitle, 5, 1));
     }
     let name = format!(
         "Show{i} {}{}",
-        if i % 2 == 0 { "Common" } else { "Odd" },
-        if i % 3 == 0 { " Third" } else { "" }
+        if i.is_multiple_of(2) { "Common" } else { "Odd" },
+        if i.is_multiple_of(3) { " Third" } else { "" }
     );
     TorrentDoc {
         id: i + 1,
@@ -102,7 +102,7 @@ fn doc(i: u64) -> TorrentDoc {
             seasons: Vec::new(),
             episodes: Vec::new(),
             junk: i % 100,
-            ambiguous: i % 8 == 0,
+            ambiguous: i.is_multiple_of(8),
             shares,
         },
     }

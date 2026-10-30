@@ -235,12 +235,15 @@ pub(crate) struct Plan {
     /// Drop API keys, feed tokens, saved searches and collections the
     /// live store deleted, and revoke the keys it revoked (v10+).
     user_data: bool,
+    /// Drop import candidates whose hash the live store deleted or holds
+    /// (`import_candidates`, v13+).
+    candidates: bool,
 }
 
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 12;
+    pub(crate) const KNOWN_THROUGH: i64 = 13;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -249,6 +252,7 @@ impl Plan {
     /// | 1–3 | purged | absent | absent |
     /// | 4–9 | purged | purged | absent |
     /// | 10–12 | purged | purged | purged |
+    /// | 13 | purged, and import candidates | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -259,6 +263,7 @@ impl Plan {
                 filter: false,
                 query_log: false,
                 user_data: false,
+                candidates: false,
             }),
             // V4 adds cs_hashes, tombstones, quarantine (hash, rule,
             // sealed, at, expires_at) and filter_hits (at), unchanged
@@ -270,6 +275,7 @@ impl Plan {
                 filter: true,
                 query_log: false,
                 user_data: false,
+                candidates: false,
             }),
             // V10 adds your data (saved searches, alerts, marks,
             // collections), API keys and the query log. Alerts, marks and
@@ -286,11 +292,22 @@ impl Plan {
             // live (B11b's decisions). V12 adds the live store's deletion
             // journal and its trigger: a V12 snapshot's own journal gains
             // the rows the purge deletes, which a rollback to it keeps.
-            10..=Self::KNOWN_THROUGH => Some(Plan {
+            10..=12 => Some(Plan {
                 torrents: true,
                 filter: true,
                 query_log: true,
                 user_data: true,
+                candidates: false,
+            }),
+            // V13 adds imports (IMP-1). Candidates hold hashes and names
+            // that aren't torrents, so they go by hash; the other import
+            // tables cascade from torrents or hold no names.
+            13..=Self::KNOWN_THROUGH => Some(Plan {
+                torrents: true,
+                filter: true,
+                query_log: true,
+                user_data: true,
+                candidates: true,
             }),
             _ => None,
         }
@@ -313,6 +330,8 @@ pub struct PurgeReport {
     /// API keys, saved searches and collections deleted, and keys
     /// revoked.
     pub user_data: usize,
+    /// Import candidates deleted from snapshots.
+    pub candidates: usize,
     /// Snapshots skipped or failed, and why; for the log.
     pub warnings: Vec<String>,
 }
@@ -596,6 +615,7 @@ impl Store {
                     report.quarantine += n.quarantine;
                     report.query_log += n.query_log;
                     report.user_data += n.user_data;
+                    report.candidates += n.candidates;
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -657,6 +677,7 @@ struct Counts {
     quarantine: usize,
     query_log: usize,
     user_data: usize,
+    candidates: usize,
 }
 
 /// Deletes a snapshot and any side file SQLite left beside it: whether
@@ -769,12 +790,22 @@ fn purge_one(
     // Look first, so a snapshot with nothing to purge isn't written (nor
     // its modification time touched).
     let mut ids = BTreeSet::new();
+    let mut candidates = BTreeSet::new();
     if plan.torrents {
         // `since` is no earlier than a day before the snapshot was taken:
         // a hash deleted before that and fetched again stays in it.
         let recent = (live.held.iter().chain(&live.deleted)).filter(|(_, at)| *at >= since);
+        let mut find = plan
+            .candidates
+            .then(|| conn.prepare(CANDIDATE_BY_HASH))
+            .transpose()?;
         for h in live.reported.iter().chain(recent.map(|(h, _)| h)) {
             ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*h)))?);
+            if let Some(stmt) = &mut find {
+                for c in stmt.query_map([&h[..]], |r| r.get::<_, Vec<u8>>(0))? {
+                    candidates.insert(c?);
+                }
+            }
         }
     }
     let mut unsealed = Vec::new();
@@ -832,6 +863,7 @@ fn purge_one(
         }
     }
     if ids.is_empty()
+        && candidates.is_empty()
         && unsealed.is_empty()
         && expiring == 0
         && hits == 0
@@ -860,6 +892,10 @@ fn purge_one(
             for id in &ids {
                 torrents += delete.execute([id])?;
             }
+        }
+        let mut candidates_gone = 0;
+        for h in &candidates {
+            candidates_gone += tx.execute("DELETE FROM import_candidates WHERE hash = ?1", [h])?;
         }
         let mut quarantine = 0;
         if plan.filter {
@@ -906,6 +942,7 @@ fn purge_one(
             quarantine,
             query_log,
             user_data,
+            candidates: candidates_gone,
         })
     })();
     if wal {
@@ -917,6 +954,12 @@ fn purge_one(
     restore_time(conn);
     Ok(Outcome::Purged(result?))
 }
+
+/// A snapshot's candidates under a hash, primary or truncated v2.
+const CANDIDATE_BY_HASH: &str = "SELECT hash FROM import_candidates WHERE hash = ?1
+     UNION ALL
+     SELECT hash FROM import_candidates
+     WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1";
 
 fn set_modified(path: &Path, secs: i64) -> std::io::Result<()> {
     let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).unwrap_or(0));
@@ -1105,6 +1148,7 @@ mod tests {
             assert_eq!(plan.filter, v >= 4, "v{v}");
             assert_eq!(plan.query_log, v >= 10, "v{v}");
             assert_eq!(plan.user_data, v >= 10, "v{v}");
+            assert_eq!(plan.candidates, v >= 13, "v{v}");
         }
         assert_eq!(Plan::for_version(0), None);
         assert_eq!(Plan::for_version(latest + 1), None);
@@ -1281,7 +1325,8 @@ mod tests {
         assert!(rows[0].1 >= before, "{rows:?}");
 
         // The purge reads the column; a snapshot from before the deletion
-        // loses the torrent.
+        // loses the torrent. So does V13's pre-migration snapshot, taken
+        // on open while `[81; 20]` was still stored.
         let snap = crate::schema::snapshot_path(&db, 12);
         let conn = fixture(&snap, 11);
         insert_torrent(&conn, 2, [82; 20], "deleted-marker-0c5f");
@@ -1289,7 +1334,7 @@ mod tests {
         set_modified(&snap, before - DAY).unwrap();
         let r = store.purge_snapshots(after, 0);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
-        assert_eq!(r.torrents, 1);
+        assert_eq!(r.torrents, 2);
         assert!(!contains(&snap, b"deleted-marker-0c5f"));
         journal_row(&store, [83; 20], 7);
         drop(store);
@@ -1797,6 +1842,42 @@ mod tests {
         store.delete_torrents(&[[7; 20]]).unwrap();
         let r = store.purge_snapshots(T + 3 * DAY, 0);
         assert_eq!(r.torrents, 1, "{r:?}");
+        assert!(!contains(&snap, marker.as_bytes()));
+    }
+
+    /// A V13 snapshot loses an import candidate whose hash the live store
+    /// tombstoned after it was taken: the trigger journals it, as a
+    /// deletion.
+    #[test]
+    fn a_held_candidate_leaves_v13_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let marker = "candidate-name-marker-5d2a";
+        store
+            .connection()
+            .execute_batch(&format!(
+                "INSERT INTO import_sources (id, adapter, dataset, schema_sig)
+                     VALUES (1, 'magnetico', x'01', x'02');
+                 INSERT INTO import_jobs (id, source, adapter_ver, contract_ver, phase, control,
+                     options, created_at, updated_at) VALUES (1, 1, 1, 1, 2, 0, x'', 0, 0);
+                 INSERT INTO import_candidates (hash, job, name, missing, privacy, at)
+                     VALUES (x'{}', 1, CAST('{marker}' AS BLOB), 6, 0, 0);",
+                "33".repeat(20)
+            ))
+            .unwrap();
+        let snap = take(&store, &db, 13, T);
+        store
+            .connection()
+            .execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-2', ?2)",
+                rusqlite::params![&[0x33u8; 20][..], T + DAY],
+            )
+            .unwrap();
+        stamp(&store, T + DAY);
+
+        let r = store.purge_snapshots(T + 2 * DAY, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.candidates, 1, "{r:?}");
         assert!(!contains(&snap, marker.as_bytes()));
     }
 

@@ -190,15 +190,15 @@ pub(crate) fn at(q: &str, toks: &[Raw], caret: usize) -> At {
             // A word touching the quote is part of it: `title:"…` (or
             // `-title:"…`, the negation left out) is a title phrase; any
             // other (`name:"…`, `-"…`, `ab"…`) isn't one to replace.
-            if let Some(prev) = i.checked_sub(1).map(|p| toks[p]) {
-                if prev.end == t.start {
-                    let word = &q[prev.start..prev.end];
-                    let neg = negation(word);
-                    if prev.kind != RawKind::Word || &word[neg..] != "title:" {
-                        return none(t.in_file);
-                    }
-                    start = prev.start + neg;
+            if let Some(prev) = i.checked_sub(1).map(|p| toks[p])
+                && prev.end == t.start
+            {
+                let word = &q[prev.start..prev.end];
+                let neg = negation(word);
+                if prev.kind != RawKind::Word || &word[neg..] != "title:" {
+                    return none(t.in_file);
                 }
+                start = prev.start + neg;
             }
             Context::Phrase {
                 replace: (start, t.end),
@@ -229,23 +229,22 @@ fn word(q: &str, t: Raw, caret: usize) -> Context {
         return Context::None;
     }
     let body = &q[start..t.end];
-    if let Some((name, _)) = body.split_once(':') {
-        if query::is_field_name(name) {
-            if let Some(kind) = query::field(name) {
-                let colon = start + name.len();
-                return Context::Field {
-                    replace: (start, t.end),
-                    name: name.to_string(),
-                    kind,
-                    partial: if caret > colon {
-                        q[colon + 1..caret].to_string()
-                    } else {
-                        q[start..caret].to_string()
-                    },
-                    name_only: caret <= colon,
-                };
-            }
-        }
+    if let Some((name, _)) = body.split_once(':')
+        && query::is_field_name(name)
+        && let Some(kind) = query::field(name)
+    {
+        let colon = start + name.len();
+        return Context::Field {
+            replace: (start, t.end),
+            name: name.to_string(),
+            kind,
+            partial: if caret > colon {
+                q[colon + 1..caret].to_string()
+            } else {
+                q[start..caret].to_string()
+            },
+            name_only: caret <= colon,
+        };
     }
     Context::Word {
         replace: (start, t.end),

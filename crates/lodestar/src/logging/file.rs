@@ -192,6 +192,10 @@ pub(super) enum Job {
     },
     #[cfg(test)]
     Barrier(mpsc::Sender<()>),
+    /// Holds the thread until the sender sends or is dropped (30 s at
+    /// most), so a test can queue jobs behind it.
+    #[cfg(test)]
+    Hold(mpsc::Receiver<()>),
 }
 
 /// The background thread that compresses and prunes.
@@ -228,6 +232,11 @@ impl Worker {
                         #[cfg(test)]
                         Job::Barrier(done) => {
                             let _ = done.send(());
+                            Ok(())
+                        }
+                        #[cfg(test)]
+                        Job::Hold(until) => {
+                            let _ = until.recv_timeout(Duration::from_secs(30));
                             Ok(())
                         }
                     };
@@ -739,6 +748,15 @@ impl FileSink {
         self.worker.send(Job::Barrier(tx));
         let _ = rx.recv_timeout(Duration::from_secs(30));
     }
+
+    /// Holds the background thread until the returned sender sends or is
+    /// dropped: jobs sent meanwhile queue behind the hold.
+    #[cfg(test)]
+    pub fn hold(&self) -> mpsc::Sender<()> {
+        let (tx, rx) = mpsc::channel();
+        self.worker.send(Job::Hold(rx));
+        tx
+    }
 }
 
 /// A free rotated name in `dir` for a file set aside now.
@@ -814,16 +832,18 @@ pub(super) fn lock(index: &Mutex<Index>) -> std::sync::MutexGuard<'_, Index> {
     index.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The rotated files in `dir`, newest first (their names hold the time).
+/// The rotated files in `dir`, newest first by what their names say: by
+/// time, then `-N` as a number. (Not as strings: `lodestar-<t>.jsonl`
+/// sorts after `lodestar-<t>-2.jsonl`, rotated later in the same
+/// millisecond, and `-10` before `-2`, so a prune would keep an older
+/// file over a newer one.)
 fn rotated(dir: &Path) -> io::Result<Vec<String>> {
-    let mut names: Vec<String> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| {
-            n.starts_with("lodestar-") && (n.ends_with(".jsonl") || n.ends_with(".jsonl.gz"))
-        })
+    let mut names: Vec<LogName> = fs::read_dir(dir)?
+        .filter_map(|e| LogName::parse(e.ok()?.file_name().to_str()?))
+        .filter(|n| *n != LogName::Current)
         .collect();
-    names.sort_by(|a, b| b.cmp(a));
-    Ok(names)
+    names.sort_by(LogName::newest_first);
+    Ok(names.iter().map(LogName::file_name).collect())
 }
 
 fn compress(dir: &Path, name: &str, index: &Mutex<Index>) -> io::Result<()> {
@@ -1120,6 +1140,32 @@ mod tests {
         c.total = fs::metadata(dir.path().join(CURRENT)).unwrap().len() + total - 1;
         prune(&c, &index, SystemTime::now()).unwrap();
         assert_eq!(rotated(dir.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_count_keeps_the_newest_of_one_millisecond() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let t = "20261030T120000.000Z";
+        // Oldest to newest; as strings, the first sorts after all but the
+        // older millisecond, and `-10` before `-2`.
+        let names = [
+            "lodestar-20261030T115959.999Z.jsonl.gz".to_string(),
+            format!("lodestar-{t}.jsonl.gz"),
+            format!("lodestar-{t}-2.jsonl.gz"),
+            format!("lodestar-{t}-10.jsonl"),
+        ];
+        for n in &names {
+            fs::write(d.join(n), b"x\n").unwrap();
+        }
+        assert_eq!(
+            rotated(d).unwrap(),
+            names.iter().rev().cloned().collect::<Vec<_>>()
+        );
+        let mut c = cfg(d, 50);
+        c.count = 2;
+        prune(&c, &Mutex::new(Index::load(d)), SystemTime::now()).unwrap();
+        assert_eq!(rotated(d).unwrap(), [names[3].clone(), names[2].clone()]);
     }
 
     #[test]

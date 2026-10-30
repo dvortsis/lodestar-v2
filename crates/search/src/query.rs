@@ -1035,10 +1035,10 @@ fn range(
         if lo.is_none() && hi.is_none() {
             return Err(bad());
         }
-        if let (Some(l), Some(h)) = (lo, hi) {
-            if l > h {
-                return err("range runs backwards", start, end);
-            }
+        if let (Some(l), Some(h)) = (lo, hi)
+            && l > h
+        {
+            return err("range runs backwards", start, end);
         }
         return Ok((lo, hi));
     }
@@ -1126,10 +1126,10 @@ fn date_range(
         if from.is_none() && to.is_none() {
             return Err(bad());
         }
-        if let (Some(When::At(f)), Some(When::At(t))) = (from, to) {
-            if f > t {
-                return err("range runs backwards", start, end);
-            }
+        if let (Some(When::At(f)), Some(When::At(t))) = (from, to)
+            && f > t
+        {
+            return err("range runs backwards", start, end);
         }
         return Ok((from, to));
     }
@@ -1504,7 +1504,7 @@ pub(crate) fn is_plain_word(w: &str) -> bool {
 
 fn bytes_text(n: u64) -> String {
     for (unit, shift) in [("TB", 40), ("GB", 30), ("MB", 20), ("KB", 10)] {
-        if n >= 1 << shift && n % (1 << shift) == 0 {
+        if n >= 1 << shift && n.is_multiple_of(1 << shift) {
             return format!("{}{unit}", n >> shift);
         }
     }
