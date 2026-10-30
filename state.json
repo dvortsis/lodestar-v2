@@ -1339,6 +1339,27 @@
    "model": "opus",
    "attempt": 1,
    "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7"
+  },
+  "CR-SIM": {
+   "status": "running",
+   "session": "session_01MMjhnBMY2USbbsRFJsaFtR",
+   "model": "opus",
+   "attempt": 1,
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5"
+  },
+  "CR-gate-metrics": {
+   "status": "running",
+   "session": "session_01MMjhnABUWdrF5PzgVK6oqa",
+   "model": "opus",
+   "attempt": 1,
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5"
+  },
+  "D-v051": {
+   "status": "running",
+   "session": "session_01MMjhn8VPDpTCm2jVkiiVYP",
+   "model": "sonnet",
+   "attempt": 1,
+   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
