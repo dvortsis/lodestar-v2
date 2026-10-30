@@ -1185,7 +1185,7 @@
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z 8c5a0b91 ready; runner OK'd: unless raw; token-level neutralize (\u00a72.19 content-safety flag, floor test); allow-both tightening; packs gap -> F-filters-packs"
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z 8c5a0b91 ready; runner OK'd: unless raw; token-level neutralize (\u00a72.19 content-safety flag, floor test); allow-both tightening; packs gap -> F-filters-packs | 2026-10-30T05:58Z round 2 bd8d2a43 (I-2 one neutral_key; P-1 phrase_live; P-2 bench+fast path; P-3 independent reference, CJK overlap fix) runner-checked OK; merge on green"
   },
   "F-metainfo": {
    "status": "review",
@@ -1306,6 +1306,15 @@
   },
   "CR-ADM": {
    "notes": " | 2026-10-30T05:48Z L2 review: actor refusals get exponential back-off (pool.rs:764 vs flat pool.rs:675); pool max_lookups 256 > actor cap 32 -> include (requeue refused keys without exp factor; derive max_lookups from actor cap)."
+  },
+  "F-filters-neutral-perf": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner)."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
