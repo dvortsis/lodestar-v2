@@ -244,11 +244,6 @@ fn setup_never_overwrites_a_password_already_in_effect() {
     assert!(auth.confirm(next_ip(), planted).is_ok());
     assert!(auth.confirm(next_ip(), "the setup's own password").is_err());
     assert_eq!(auth.setup_token(), Some(token), "the token isn't spent");
-    assert!(
-        !dir.path().join("auth.json").exists()
-            || Auth::load(&dir.path().join("auth.json"), false)
-                .unwrap()
-                .needs_setup(),
-        "nothing claimed on disk"
-    );
+    let on_disk = Auth::load(&dir.path().join("auth.json"), false).unwrap();
+    assert!(on_disk.needs_setup(), "nothing claimed on disk");
 }
