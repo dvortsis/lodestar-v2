@@ -3,8 +3,8 @@
 These are the runner's choices in the post-soak master plan (`docs/build-plan.md` §0). They sit on top of the owner's answers in `docs/owner-decisions.md` §2.25. The owner can veto any of them under §2.19. The items marked **owner** must be confirmed before the step that depends on them.
 
 ## History swap
-- **`next` holds the rewritten `main` until the owner force-pushes it.** It points at `058d9937`, the rewritten counterpart of the old `main` tip `2d5e761d`, and slice sessions branch from it. GitHub won't open a PR between unrelated histories, so PRs open after the swap. `next` is deleted once `main` equals it.
-- **What the rewrite changed at the tip:** `docs/architecture.md` and `docs/owner-decisions.md` (37 insertions, 46 deletions). It also drops 4 content-filter design commits from the Oct 22 history. **Owner:** confirm both tree diffs are intended before the push.
+- **`next` held the rewritten `main` until the owner force-pushed it** on 2026-10-30. It points at `058d9937`, the rewritten counterpart of the old `main` tip `2d5e761d`; slice sessions branched from it until then. It's deleted now that `main` equals it.
+- **What the rewrite changed at the tip:** `docs/architecture.md` and `docs/owner-decisions.md` (37 insertions, 46 deletions). It also drops 4 content-filter design commits from the Oct 22 history. The owner confirmed both tree diffs as intended (§2.25).
 - **The swap, done by the owner:**
   1. Back up every ref privately (`git bundle create … --all`).
   2. Pause the runner and its scheduled tasks.
@@ -73,7 +73,7 @@ The owner's commits form one linear chain on `work/soak-followups`, and most of 
 - **Gate metric: unique infohashes whose info dictionary was fetched and verified from the network in this run, committed and searchable.**
   - It excludes imports, recovery, rediscoveries, filtered or quarantined items, and failures. Those are reported separately.
   - It's measured on **one node and one public IP, from a fresh data directory with no imports,** at the Balanced preset on a home connection.
-  - **Owner:** confirm the proposed thresholds, a 24 h mean ≥ 100/min with no hour below 70/min and p95 discovery-to-searchable ≤ 10 min, before the first acceptance analysis.
+  - **Owner:** confirm the proposed thresholds, a 24 h mean ≥ 100/min with no hour below 70/min and p95 discovery-to-searchable ≤ 10 min, before the first acceptance analysis. The 10 min runs from first sighting and includes the metadata fetch; it doesn't replace §1.6's < 5 s from stored metadata to searchable.
   - New counters are needed: `metadata_new_verified_total{origin}`, `searchable_new_total{origin}`, and discovery-to-searchable latency.
 - **Guardrails are never tuned away to hit the target:** BEP 51 intervals, per-IP limits, and the §18 politeness caps. Each run also records packets/s, bytes, connects/s, open sockets and router/NAT health.
 - **If every candidate is measured and the single-node metric stays below 100/min,** the runner reports the ceiling and the dominant limiter, and the owner re-decides. Remote workers (more IPs) serve the 1,000/min stretch, not the gate.
@@ -116,7 +116,7 @@ The owner's commits form one linear chain on `work/soak-followups`, and most of 
   - filter, floor and tombstone checks run on every record;
   - pause and cancel are truthful;
   - verification, completeness and recovery stay separate states, with a per-record private/public/unknown policy.
-- **Migration order:** V12 (deletion journal, L4) → V13 (import jobs) → V14 (CR-3 eligibility). Only the main session writes migrations.
+- **Migration order:** V12 (deletion journal, L4) → V13 (import jobs) → V14 (CR-3 eligibility). Migrations are written only by an Opus slice that owns the store schema, one at a time.
 - **Capacity is measured at each pilot (10k → 100k → 1M → 10M → 50M):**
   - bytes per record (SQLite, indexes, provenance);
   - source copies, the PostgreSQL restore, WAL and temp space;
@@ -130,11 +130,11 @@ The owner's commits form one linear chain on `work/soak-followups`, and most of 
   - search p95;
   - Insights overhead.
 
-  §1.6's ~2.3 KB/torrent is an all-in design target, not a forecast. A backup is taken before each stage, and removal by job provenance is tested.
+  Each pilot is measured against §1.6's budget of about 2.3 KB per torrent all-in; any excess, with what drives it, goes to the owner before the next stage. A backup is taken before each stage, and removal by job provenance is tested.
 
 ## Execution
-- **Priority ladder for the 4 helper slots:**
-  1. L and F;
+- **Priority ladder for at most 4 helper slices at a time** (the plan the owner approved, §2.25):
+  1. L, F and CR-COL (the v0.5.1 Linux soak needs it);
   2. the release cut;
   3. C;
   4. I;

@@ -16,7 +16,7 @@
   - 63.7M actor capacity rejections, with 98.9% of evictions happening before an accepted lookup.
 
   This is not a controlled speedup. The v0.5.0 and CR-0 runs used different windows, and an external download overlapped the CR-0 run.
-- **The owner's local work isn't on `main` yet.** It lives on `fix/dht-cr0`, `work/soak-followups` and `work/soak-settings`, on rewritten history. That history replaces `main` (§2.25), and `next` holds it until the owner's force-push.
+- **The owner's local work is landing on the rewritten `main`.** It came from `fix/dht-cr0`, `work/soak-followups` and `work/soak-settings`. The owner force-pushed the rewritten history to `main` on 2026-10-30 (`058d9937`, §2.25), and it lands as L1–L7.
 - **Open findings that no branch fixes:**
   - **A2-1 (security):** a failed `auth.json` save still swaps the credentials.
   - **A3-1..3 (content safety):**
@@ -28,8 +28,8 @@
   - **S03/S04:** admission and uTP.
 
 ### 0.2 Order of work
-Four helper slots, filled in this order (the owner can reorder it):
-1. **L** and **F**;
+At most four helper slices at a time in this phase (§2.25), filled in this order (the owner can reorder it):
+1. **L**, **F** and **CR-COL**, which the v0.5.1 Linux soak needs;
 2. the **v0.5.1 cut**;
 3. **C**;
 4. **I**;
@@ -37,15 +37,15 @@ Four helper slots, filled in this order (the owner can reorder it):
 6. the M5 screen backlog (§3 P2);
 7. the v0.6 epics.
 
-**D** (docs) rides along. Sessions branch from `next` until the swap; PRs open after it.
+**D** (docs) rides along. Sessions branch from `main`.
 
 | Lane | Slices | Notes |
 |---|---|---|
 | **L: land the owner's work** | L1–L7, contiguous commit ranges merged in order | Ranges and reviews are in the decisions file. A blocking review finding is fixed before merge, even in soaked code |
 | **F: release-blocking fixes** (Opus) | F-auth (A2-1), F-filters (A3-1..3, tightening, with property tests), F-metainfo (A1-1..4, golden corpus and fuzz), F-updater (DUR-26, a typed persistence error), F-status (stored/hour plus a stall warning; the uTP setting labelled "not active yet") | F-auth and F-filters get `/security-review` |
-| **C: crawler** (Opus; no live runs on the soak PC) | CR-SIM (deterministic replay), CR-ADM, CR-1a-H, CR-1a-S (each behind its own switch), CR-0d (crash-safe restart snapshot), CR-COL (Linux collector), the gate counters | Merges behind switches. Not in v0.5.1 unless the release delta includes it |
+| **C: crawler** (Opus; no live runs on the soak PC) | CR-SIM (deterministic replay), CR-ADM, CR-1a-H, CR-1a-S (each behind its own switch), CR-0d (crash-safe restart snapshot), the gate counters. CR-COL (Linux collector) is in this lane but launches with L and F | Merges behind switches. Not in v0.5.1 unless the release delta includes it |
 | **I: imports** (Opus for parsers and the store) | IMP-0 (PostgreSQL 16 restore runbook and checker, `SQL_ASCII` as raw bytes), IMP-1 (job table, **V13**), IMP-2 (Magnetico, read-only), IMP-3 (Bitmagnet adapter hardening), IMP-4 (merge, dedupe and CLI), IMP-5 (imported cohorts kept out of crawl-yield Insights) | V13 and later wait for the release branch. Recovery waits for CR-3 |
-| **S: Settings** | S-settings-reconcile: `848e10a0` as the base, plus `9c065fcb` and the paused `S-settings-1` / `M-settings-form-3` | Budgets fixed by code splitting, never by raising limits |
+| **S: Settings** | S-settings-reconcile: `848e10a0` as the base (after L6, which carries `9c065fcb`), plus the paused `S-settings-1` / `M-settings-form-3` | Budgets fixed by code splitting, never by raising limits |
 | **D: docs** | D-v051: release notes, the restart sampling delay, "the index grows over days", don't run `:nightly` on real data | Built from the release branch |
 
 ### 0.3 After the CR-0 soak
@@ -98,10 +98,10 @@ Four helper slots, filled in this order (the owner can reorder it):
   - **What counts:** unique infohashes fetched and verified from the network in this run, committed and searchable.
   - **Where it's measured:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
   - **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers also serve.
-  - **Thresholds proposed for the owner to confirm:** 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min.
+  - **Thresholds proposed for the owner to confirm:** 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
   - Politeness and network guardrails are never relaxed to reach it.
 - **Import scale:**
-  - pilots at 10k → 100k → 1M → 10M against §3's budgets;
+  - pilots at 10k → 100k → 1M → 10M, each measured against §1.6's budgets, including about 2.3 KB per torrent all-in; any excess goes to the owner (the owner's ladder in §2.25 is 1M → 10M → 50M; 10k and 100k are runner smoke stages);
   - then a measured 50M gate, whose numbers go to the owner;
   - capacity is measured at each stage, never estimated (decisions file).
   - After the gate: CR-3 recovery, then a subset of the wizard, then the other source families.
