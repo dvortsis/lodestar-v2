@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T21:02Z",
+ "updated_at": "2026-10-30T21:04Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2308,7 +2308,8 @@
   "2026-10-30T20:39Z merged #237 clippy MSRV 2b (faf3fd48); the collapsible_if and manual_is_multiple_of allows are gone. Only #238 (docs) is open.",
   "2026-10-30T20:56Z opened #239 X-crawler-sim-crate (runner-built): sim moved to crates/crawler-sim, sources drops its testing self-dev-dep, CI tests dht and sources without seams; goldens byte-identical. Review by session_01MMjhn984M3k3UJXUCsEYPX. #238 waits on ci-ok.",
   "2026-10-30T20:50Z #239 review MERGE at 25ecb199; the optional stale README line is carried into the CR-SIM-restart brief.",
-  "2026-10-30T21:02Z owner: rc.2 published (image + draft prerelease with SHA256SUMS and minisig); per-file hashes recorded. Owner asked whether to switch the Unraid soak to rc.2 (restore the cold pre-v0.5.1 backup for the in-place upgrade test) and run the Windows MSI service and portable smokes: runner said yes, with the gate conditions. #239: fixed the targets_cover_every_crate failure (TARGETS entry for lodestar_crawler_sim)."
+  "2026-10-30T21:02Z owner: rc.2 published (image + draft prerelease with SHA256SUMS and minisig); per-file hashes recorded. Owner asked whether to switch the Unraid soak to rc.2 (restore the cold pre-v0.5.1 backup for the in-place upgrade test) and run the Windows MSI service and portable smokes: runner said yes, with the gate conditions. #239: fixed the targets_cover_every_crate failure (TARGETS entry for lodestar_crawler_sim).",
+  "2026-10-30T21:04Z merged #238 hash-mismatch docs (644e5b28). Open: #239 (fix 2ff1781d in CI; runner's own delta check of the 3-line TARGETS fix is OK)."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
