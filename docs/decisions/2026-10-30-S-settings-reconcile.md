@@ -1,4 +1,4 @@
-# S-settings-reconcile decisions
+# S-settings-reconcile decisions (#217)
 
 One Settings implementation, built on the owner's `848e10a0` (`work/soak-settings`, "preserve prepared screens and validation status"). It also takes what that commit lacked from the paused S-settings-1 and M-settings-form-3 (`runner-state:ports/`): the screen registry contract, the on-demand gating of a section's first view, and the save pipeline as an on-demand edit chunk. Architecture §10.1, §10.10.1, §10.10.2, §10.10.5 and §10.10.11. It supersedes `2026-10-23-M-settings-form-2.md` § "The save pipeline stays in the first view". Items marked **(§2.19)** refine an owner decision; the runner flags them to the owner.
 
