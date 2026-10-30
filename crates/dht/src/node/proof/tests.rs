@@ -984,6 +984,22 @@ async fn a_copied_directory_needs_its_marker_overwritten() {
     assert!(!r.proof.may_sample(Instant::now()));
 }
 
+/// On a real clock, waits (deadline 10 s) until the wall clock is past the
+/// marker's time. S11 rounds that up to the millisecond and S2 rounds its
+/// own reading down, so a restart within the commit's millisecond reads
+/// `clock_backward` and suppresses, which is safe and no real restart is
+/// that fast; a test that restarts at once must step past it.
+async fn past_the_marker(d: &Dirs, c: &Arc<SimClock>) {
+    let Found::Ok(m) = restart::read_marker(&d.data) else {
+        panic!("a marker")
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while restart::floor_ms(c.wall()) <= m.at_ms && std::time::Instant::now() < deadline {
+        tokio::task::yield_now().await;
+    }
+    assert!(restart::floor_ms(c.wall()) > m.at_ms);
+}
+
 /// Real time, real blocking pool: the paths `inline_io` skips.
 fn pool_config(d: &Dirs, c: &Arc<SimClock>) -> RestartConfig {
     RestartConfig {
@@ -1003,19 +1019,30 @@ async fn a_start_job_landing_in_the_shutdown_drain_is_seeded_before_the_capture(
     let mut r = Run::boot(&d, &c, true);
     r.sampled(addr(7), 1, Duration::from_secs(3600));
     r.commit(&d);
+    past_the_marker(&d, &c).await;
     let cfg = pool_config(&d, &c);
     let path = d.state_path();
-    let mut proof = Proof::new(
-        Some(&path),
-        Some(&cfg),
-        None,
-        horizon(),
-        TICK,
-        Instant::now(),
-    );
-    let mut sampler = Sampler::default();
-    let stats = Stats::default();
-    proof.tick(Instant::now(), &ids(), &stats, &mut sampler);
+    let mut run = Run {
+        proof: Proof::new(
+            Some(&path),
+            Some(&cfg),
+            None,
+            horizon(),
+            TICK,
+            Instant::now(),
+        ),
+        sampler: Sampler::default(),
+        stats: Stats::default(),
+    };
+    // Takes the lock and spawns S0–S4 on the pool, retrying only if a
+    // forked child briefly shares the lock file (see `take_lock`).
+    run.tick();
+    run.take_lock();
+    let Run {
+        mut proof,
+        mut sampler,
+        stats,
+    } = run;
     assert_eq!(
         proof.commit(&mut sampler, &state(), &path, &stats),
         Some(Ok(())),
@@ -1037,6 +1064,7 @@ async fn the_blocking_pool_path_reaches_a_resume() {
     let mut r = Run::boot(&d, &c, true);
     r.sampled(addr(8), 1, Duration::from_secs(3600));
     r.commit(&d);
+    past_the_marker(&d, &c).await;
     let cfg = pool_config(&d, &c);
     let path = d.state_path();
     let mut run = Run {
