@@ -1227,7 +1227,7 @@
    "status": "pending",
    "branch": "land/L5",
    "head": "e41f0cf3",
-   "notes": "branch created at owner commit; PR after swap, in order"
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures)."
   },
   "L6": {
    "status": "pending",
