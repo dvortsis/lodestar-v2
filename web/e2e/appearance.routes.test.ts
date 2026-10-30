@@ -1,3 +1,4 @@
+import type { Request } from '@playwright/test';
 import { expect as baseExpect, test } from './support/test';
 import { expectNoA11yViolations } from './a11y';
 
@@ -10,27 +11,25 @@ const field = (value: unknown) => ({
 	restart_required: false,
 	source: 'default' as const
 });
-const sections = (show: boolean) => (request: Request) =>
-	request.url().includes('/settings/content')
-		? {
-				section: 'content',
-				revision: 2,
-				restart_required: [],
-				fields: { show_adult: field(show) }
-			}
+const sections = (show: boolean) => (request: Request) => {
+	const content = request.url().includes('/settings/content');
+	const fields: Record<string, ReturnType<typeof field>> = content
+		? { show_adult: field(show) }
 		: {
-				section: 'preferences',
-				revision: 4,
-				restart_required: [],
-				fields: {
-					theme: field('riverstone'),
-					theme_dark: field(''),
-					mode: field('light'),
-					density: field('comfortable'),
-					motion: field('system'),
-					illustrations: field(true)
-				}
+				theme: field('riverstone'),
+				theme_dark: field(''),
+				mode: field('light'),
+				density: field('comfortable'),
+				motion: field('system'),
+				illustrations: field(true)
 			};
+	return {
+		section: content ? 'content' : 'preferences',
+		revision: content ? 2 : 4,
+		restart_required: [],
+		fields
+	};
+};
 
 for (const width of [390, 1366]) {
 	test(`Appearance picks a theme and applies it at once at ${width} px`, async ({
