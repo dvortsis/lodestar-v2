@@ -1273,13 +1273,13 @@
    "pr": 181
   },
   "F-auth-lock": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnA9YgN5pKpBLqeFsYr",
-   "pr": null,
+   "pr": 190,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main"
+   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk)"
   },
   "CR-COL": {
    "status": "ready-waiting-L5",
@@ -1341,14 +1341,14 @@
    "session": "session_01MMjhn95fzNhDro9AJeDYin",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7"
+   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding"
   },
   "CR-SIM": {
    "status": "running",
    "session": "session_01MMjhnBMY2USbbsRFJsaFtR",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f)"
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f) | 2026-10-30T07:41Z ready 565ab43 on land/L5; held until v0.5.1 cut + CR-0f (runner condition)"
   },
   "CR-gate-metrics": {
    "status": "running",
@@ -1380,6 +1380,10 @@
    "model": "opus",
    "session": "session_01MMjhnCUt5LXFpV6Jf9z6yU",
    "notes": "2026-10-30T07:40Z launched from land/L5; pushes fix/L5-e2e; runner merges into land/L5"
+  },
+  "IMP-3": {
+   "status": "?",
+   "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1804,7 +1808,8 @@
   "2026-10-30T07:10Z Detail drawer size-limit entry raised 28.5->29 KB (L3 visibility revalidation pulls event client 2.1 KB); docs/decisions/2026-10-30-L3-L5-landing.md",
   "2026-10-30T07:14Z CR-gate-metrics: rows a rule only hides/demotes/flags count as new and searchable; \"filtered out\" = drop or quarantine (refines \u00a72.25 metric)",
   "2026-10-30T07:14Z F-status: \"Starting\" state shown only when nothing is flowing yet (narrows brief rule)",
-  "2026-10-30T07:18Z CR-0f: bootstrap seed exemption narrowed to fake-ip 198.18/15 + NAT64 prefixes (not all special ranges) to keep CR-0 endpoint policy; docs/decisions/2026-10-30-CR-0f.md"
+  "2026-10-30T07:18Z CR-0f: bootstrap seed exemption narrowed to fake-ip 198.18/15 + NAT64 prefixes (not all special ranges) to keep CR-0 endpoint policy; docs/decisions/2026-10-30-CR-0f.md",
+  "2026-10-30T07:41Z IMP-0: restore runbook runs role step before checker; data-dir attach pinned to postgres:16-alpine (libc collation); checker --encoding for non-SQL_ASCII data dirs"
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
