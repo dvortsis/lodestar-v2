@@ -4,7 +4,7 @@
 //! are excluded even when a special-purpose subrange is globally reachable.
 //! This policy is for outbound discovery, not inbound protocol replies.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Canonicalize mapped IPv4 before deduplication and subscribed-IP checks.
 pub fn normalize(addr: SocketAddr) -> SocketAddr {
@@ -30,7 +30,8 @@ pub fn allows(addr: SocketAddr, allow_private: bool) -> bool {
 /// two ranges a resolver rewrites public router names into. Fake-ip DNS
 /// (Clash, OpenClash, sing-box) answers from 198.18.0.0/15, and DNS64
 /// synthesizes NAT64 addresses in 64:ff9b::/96 (RFC 6052) or the
-/// local-use 64:ff9b:1::/48 (RFC 8215). Every other special range, a zero
+/// local-use 64:ff9b:1::/48 (RFC 8215); a NAT64 address counts only when
+/// the IPv4 address it embeds is public. Every other special range, a zero
 /// port and a scoped IPv6 destination stay refused. Never apply this to an
 /// address learned from the network.
 pub fn allows_seed(addr: SocketAddr, allow_private: bool) -> bool {
@@ -50,11 +51,30 @@ fn rewritten_public_name(ip: IpAddr) -> bool {
             let [a, b, ..] = ip.octets();
             a == 198 && matches!(b, 18 | 19)
         }
-        IpAddr::V6(ip) => {
-            let s = ip.segments();
-            s[0] == 0x64 && s[1] == 0xff9b && (s[2..6] == [0; 4] || s[2] == 1)
-        }
+        // Only a NAT64 address whose embedded IPv4 (RFC 6052) is itself
+        // public: 64:ff9b::7f00:1 is loopback through the translator.
+        IpAddr::V6(ip) => nat64_embedded(ip).is_some_and(|v4| public_ip(IpAddr::V4(v4))),
     }
+}
+
+/// The IPv4 address inside a NAT64 address: the last 32 bits of
+/// 64:ff9b::/96, or the RFC 6052 /48 layout for the local-use
+/// 64:ff9b:1::/48 (bits 48–63 and 72–87, around a zero u-octet).
+fn nat64_embedded(ip: std::net::Ipv6Addr) -> Option<Ipv4Addr> {
+    let s = ip.segments();
+    if s[0] != 0x64 || s[1] != 0xff9b {
+        return None;
+    }
+    if s[2..6] == [0; 4] {
+        return Some(Ipv4Addr::from((u32::from(s[6]) << 16) | u32::from(s[7])));
+    }
+    if s[2] == 1 && s[4] >> 8 == 0 {
+        let [a, b] = s[3].to_be_bytes();
+        let c = s[4].to_be_bytes()[1];
+        let d = s[5].to_be_bytes()[0];
+        return Some(Ipv4Addr::new(a, b, c, d));
+    }
+    None
 }
 
 fn public_ip(ip: IpAddr) -> bool {
@@ -202,9 +222,9 @@ mod tests {
             "198.18.0.7:6881",
             "198.19.255.255:6881",
             "[::ffff:198.18.0.7]:6881",
+            // 93.184.216.34 embedded in each NAT64 form.
             "[64:ff9b::5db8:d822]:6881",
-            "[64:ff9b:1::5db8:d822]:6881",
-            "[64:ff9b:1:ffff::1]:6881",
+            "[64:ff9b:1:5db8:d8:2200::]:6881",
             "67.215.246.10:6881",
         ] {
             assert!(seed(a), "{a}");
@@ -231,9 +251,26 @@ mod tests {
             "[64:ff9b::5db8:d822]:0",
             "[64:ff9b:0:1::1]:6881",
             "[64:ff9b:2::1]:6881",
+            // NAT64 addresses embedding loopback, 10/8 and the metadata
+            // address, in the /96 and the local-use /48 forms.
+            "[64:ff9b::7f00:1]:6881",
+            "[64:ff9b::a00:1]:6881",
+            "[64:ff9b::a9fe:a9fe]:6881",
+            "[64:ff9b:1:7f00:0:100::]:6881",
+            "[64:ff9b:1:a00:0:100::]:6881",
+            "[64:ff9b:1:a9fe:a9:fe00::]:6881",
+            // A /96 inside the /48 decodes as 0.0.0.0, and a nonzero
+            // u-octet isn't RFC 6052.
+            "[64:ff9b:1::5db8:d822]:6881",
+            "[64:ff9b:1:5db8:1d8:2200::]:6881",
         ] {
             assert!(!seed(a), "{a}");
         }
+        // The policy and the seed check agree on a NAT64 loopback.
+        let nat64_loopback: SocketAddr = "[64:ff9b::7f00:1]:6881".parse().unwrap();
+        assert!(!allows(nat64_loopback, false));
+        assert!(!allows_seed(nat64_loopback, false));
+        assert!(allows_seed(nat64_loopback, true), "a local override");
         let scoped = SocketAddr::V6(std::net::SocketAddrV6::new(
             "64:ff9b::5db8:d822".parse().unwrap(),
             6881,

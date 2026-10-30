@@ -2182,12 +2182,17 @@ mod tests {
         let lan: SocketAddr = "10.0.0.1:6881".parse().unwrap();
         let (mut a, sockets) = public_fixture(vec![fake_ip, lan]);
         assert!(!endpoint_allowed(&a.cfg, fake_ip), "special range");
+        // An empty query budget stops a send that passed the policy, so no
+        // packet leaves the host.
+        a.query_rate.tokens = 0.0;
+        a.query_rate.rate = 0.0;
         a.start_bootstrap(&sockets, Vec::new());
-        // The fake-ip seed reached the socket: sent, or refused by this
-        // host's routes, never by the policy. The LAN seed was refused.
+        // The fake-ip seed passed the policy and met the budget; the LAN
+        // seed was refused by the policy.
         let s = a.stats.snapshot();
         assert_eq!(s.denied, 1);
-        assert_eq!(s.queries_out + s.send_errors, 1);
+        assert_eq!((a.seed_throttled, a.seed_refused), (1, 1));
+        assert_eq!(s.queries_out + s.send_errors, 0);
         // The same address learned from the network is refused.
         assert!(!a.query(
             &sockets,
@@ -2336,8 +2341,11 @@ mod tests {
     #[test]
     fn every_refused_or_silent_router_warns_once_per_outage() {
         use crate::log_events::BOOTSTRAP_UNREACHABLE;
+        // The event's count is process-wide, shared by every test in this
+        // binary. It's exact here only because this is the one test that
+        // configures routers (`cfg.bootstrap`), which the warning requires;
+        // a new test that does must not run its rounds alongside this one.
         let count = || BOOTSTRAP_UNREACHABLE::EVENT.count();
-        // The only test with configured routers, so the count is its own.
         let (mut a, sockets) = public_fixture(vec![
             "224.0.0.1:6881".parse().unwrap(),
             "198.18.0.7:0".parse().unwrap(),
