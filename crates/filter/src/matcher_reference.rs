@@ -128,10 +128,18 @@ impl<'a> Doc<'a> {
             Node::Phrase { field, text } => {
                 !is_neutral(text, neutral) && texts(*field, &|t| has_phrase(t, text))
             }
-            Node::Near { field, words, slop } => texts(*field, &|t| has_near(t, words, *slop)),
+            Node::Near { field, words, slop } => {
+                !words.iter().any(|w| is_neutral(w, neutral))
+                    && texts(*field, &|t| has_near(t, words, *slop))
+            }
             Node::Prefix { field, prefix } => {
                 let p = folded(prefix);
-                !p.is_empty() && texts(*field, &|t| t.iter().any(|x| x.text.starts_with(&p)))
+                !p.is_empty()
+                    && texts(*field, &|t| {
+                        t.iter().any(|x| {
+                            x.text.starts_with(&p) && !super::neutral_token(&x.text, neutral)
+                        })
+                    })
             }
             Node::Fuzzy {
                 field,
@@ -140,8 +148,10 @@ impl<'a> Doc<'a> {
             } => {
                 let w = folded(word);
                 texts(*field, &|t| {
-                    t.iter()
-                        .any(|x| edit_distance(&x.text, &w) <= usize::from(*distance))
+                    t.iter().any(|x| {
+                        edit_distance(&x.text, &w) <= usize::from(*distance)
+                            && !super::neutral_token(&x.text, neutral)
+                    })
                 })
             }
             Node::Range { field, lo, hi } => {
@@ -263,8 +273,10 @@ fn parts(text: &str) -> Vec<Tok> {
         .collect()
 }
 
+/// Whether a word, phrase or NEAR word needs a neutralized word: the
+/// semantics both matchers share ([`super::neutral_folds`]).
 fn is_neutral(word: &str, neutral: &[String]) -> bool {
-    !neutral.is_empty() && neutral.iter().any(|n| folded(word) == *n)
+    super::neutralized(&super::neutral_folds(word), neutral)
 }
 
 /// The field tokens at each position, for phrase checks.

@@ -75,13 +75,13 @@ pub(crate) enum Compiled {
         whole: Vec<Term>,
         /// Or the parts in a row.
         parts: Vec<Term>,
-        /// What CSX-5 neutralizing compares.
-        fold: Box<str>,
+        /// What CSX-5 neutralizing compares ([`neutral_folds`]).
+        folds: Box<[Box<str>]>,
     },
     Phrase {
         field: TextField,
         parts: Vec<Term>,
-        fold: Box<str>,
+        folds: Box<[Box<str>]>,
     },
     Near {
         field: TextField,
@@ -122,6 +122,7 @@ pub(crate) enum Compiled {
 pub(crate) struct Operand {
     parts: Vec<Term>,
     whole: Vec<Term>,
+    folds: Box<[Box<str>]>,
 }
 
 /// A NEAR word's parts, and the compound or whole forms that cover all
@@ -192,6 +193,59 @@ fn folded(s: &str) -> String {
         .join("")
 }
 
+/// The most words in a row [`neutral_folds`] reads as one word: a
+/// Neutralize term is one word, so a run of more can't be one.
+const NEUTRAL_RUN: usize = 8;
+
+/// What CSX-5 *Neutralize term* compares for the text of a query word,
+/// phrase or NEAR word: the fold of the whole text, and of each word in
+/// it and each run of words with no space between them (`amber` and
+/// `beacon` in `"amber beacon"` or `amber.beacon`; `web-dl` in
+/// `web-dl.x264`). A neutralized word among them supplies no evidence, so
+/// the clause that needs it is false (§20.6). A word is a run of parts
+/// with nothing between them (`x265`), so a part alone (the `x` of
+/// `x265`) is never one.
+pub(crate) fn neutral_folds(text: &str) -> Box<[Box<str>]> {
+    let mut words: Vec<(usize, usize)> = Vec::new();
+    for t in tokenize(text).iter().filter(|t| t.kind == TokKind::Part) {
+        match words.last_mut() {
+            Some(w) if w.1 == t.from => w.1 = t.to,
+            _ => words.push((t.from, t.to)),
+        }
+    }
+    let mut out: Vec<Box<str>> = vec![folded(text).into()];
+    for i in 0..words.len() {
+        for j in i..words.len().min(i + NEUTRAL_RUN) {
+            let Some(run) = text.get(words[i].0..words[j].1) else {
+                break;
+            };
+            if run.chars().any(char::is_whitespace) {
+                break;
+            }
+            let f = folded(run);
+            if !out.iter().any(|o| **o == *f) {
+                out.push(f.into());
+            }
+        }
+    }
+    out.into()
+}
+
+/// Whether one of a clause's [`neutral_folds`] is a neutralized word.
+#[inline]
+pub(crate) fn neutralized(folds: &[Box<str>], neutral: &[String]) -> bool {
+    !neutral.is_empty() && folds.iter().any(|f| neutral.iter().any(|n| **n == **f))
+}
+
+/// Whether a token a prefix or fuzzy word matched is a neutralized word:
+/// it's no evidence either. Only asked once the token has matched.
+pub(crate) fn neutral_token(text: &str, neutral: &[String]) -> bool {
+    !neutral.is_empty() && {
+        let f = folded(text);
+        neutral.iter().any(|n| *n == f)
+    }
+}
+
 /// Compiles a parsed query.
 pub(crate) fn compile(node: &Node) -> Compiled {
     let terms = |toks: &mut dyn Iterator<Item = String>| toks.map(|t| Term::new(&t)).collect();
@@ -230,7 +284,7 @@ pub(crate) fn compile(node: &Node) -> Compiled {
                         .filter(|t| t.kind == TokKind::Part)
                         .map(|t| t.text.clone()),
                 ),
-                fold: folded(word).into(),
+                folds: neutral_folds(word),
             }
         }
         Node::Phrase { field, text } => Compiled::Phrase {
@@ -241,7 +295,7 @@ pub(crate) fn compile(node: &Node) -> Compiled {
                     .filter(|t| t.kind == TokKind::Part)
                     .map(|t| t.text),
             ),
-            fold: folded(text).into(),
+            folds: neutral_folds(text),
         },
         Node::Near { field, words, slop } => Compiled::Near {
             field: *field,
@@ -252,6 +306,7 @@ pub(crate) fn compile(node: &Node) -> Compiled {
                     Operand {
                         parts: parts.iter().map(|t| Term::new(t)).collect(),
                         whole: whole.iter().map(|t| Term::new(t)).collect(),
+                        folds: neutral_folds(w),
                     }
                 })
                 .collect(),
@@ -527,11 +582,11 @@ impl<'a> Doc<'a> {
             Gate::Pair(a, b) => self.keys().could_follow(a, b),
             Gate::Lacks(i) => match &clauses[i as usize] {
                 Compiled::Word {
-                    whole, parts, fold, ..
-                } => {
-                    neutral.iter().any(|n| **n == **fold)
-                        || self.word_anywhere(whole, parts) != Some(true)
-                }
+                    whole,
+                    parts,
+                    folds,
+                    ..
+                } => neutralized(folds, neutral) || self.word_anywhere(whole, parts) != Some(true),
                 _ => true,
             },
             // Every text a prefix or fuzzy word reads is among the
@@ -556,9 +611,12 @@ impl<'a> Doc<'a> {
             },
             Gate::Title(i) => match &clauses[i as usize] {
                 Compiled::Word {
-                    whole, parts, fold, ..
+                    whole,
+                    parts,
+                    folds,
+                    ..
                 } => {
-                    !neutral.iter().any(|n| **n == **fold)
+                    !neutralized(folds, neutral)
                         && self.titles().iter().any(|t| has_word(t, whole, parts))
                 }
                 _ => true,
@@ -857,7 +915,6 @@ impl<'a> Doc<'a> {
     fn eval(&self, q: &Compiled, file: Option<usize>, neutral: &[String]) -> bool {
         // Inside `file:(…)`, text and size clauses read that one file.
         let texts = |field: TextField, f: &dyn Fn(&Text) -> bool| self.any_text(field, file, f);
-        let neutral_word = |fold: &str| !neutral.is_empty() && neutral.iter().any(|n| **n == *fold);
         match q {
             Compiled::All => true,
             Compiled::And(of) => of.iter().all(|n| self.eval(n, file, neutral)),
@@ -867,26 +924,34 @@ impl<'a> Doc<'a> {
                 field,
                 whole,
                 parts,
-                fold,
+                folds,
             } => {
-                !neutral_word(fold)
+                !neutralized(folds, neutral)
                     && match (field, file) {
                         (TextField::Any, None) => self.word_anywhere(whole, parts),
                         _ => None,
                     }
                     .unwrap_or_else(|| texts(*field, &|t| has_word(t, whole, parts)))
             }
-            Compiled::Phrase { field, parts, fold } => {
-                !neutral_word(fold) && texts(*field, &|t| sequence(t, parts))
+            // Every word of a phrase or NEAR is needed: a neutralized one
+            // makes the clause false, wherever it stands.
+            Compiled::Phrase {
+                field,
+                parts,
+                folds,
+            } => !neutralized(folds, neutral) && texts(*field, &|t| sequence(t, parts)),
+            Compiled::Near { field, words, slop } => {
+                !words.iter().any(|w| neutralized(&w.folds, neutral))
+                    && texts(*field, &|t| has_near(t, words, *slop))
             }
-            Compiled::Near { field, words, slop } => texts(*field, &|t| has_near(t, words, *slop)),
-            // Prefixes and fuzzy words read each distinct token once.
+            // Prefixes and fuzzy words read each distinct token once. A
+            // token that's a neutralized word doesn't count.
             Compiled::Prefix {
                 field,
                 prefix,
                 start,
             } => {
-                let starts = |t: &str| t.starts_with(&**prefix);
+                let starts = |t: &str| t.starts_with(&**prefix) && !neutral_token(t, neutral);
                 !prefix.is_empty()
                     && match (field, file) {
                         (TextField::Any, None) => {
@@ -900,12 +965,15 @@ impl<'a> Doc<'a> {
                 word,
                 distance,
             } => {
-                let near = |t: &str| word.near(t, *distance);
+                let near = |t: &str| word.near(t, *distance) && !neutral_token(t, neutral);
                 match (field, file) {
                     (TextField::Any, None) => self
                         .keys()
                         .vocabulary_near(word.chars.len(), word.has, usize::from(*distance))
-                        .any(|t| within_edits(t, &word.chars, usize::from(*distance))),
+                        .any(|t| {
+                            within_edits(t, &word.chars, usize::from(*distance))
+                                && !neutral_token(t, neutral)
+                        }),
                     _ => texts(*field, &|t| t.toks.iter().any(|x| near(t.text(x)))),
                 }
             }
@@ -1442,6 +1510,21 @@ mod tests {
         assert!(doc.matches(&parse("beta").unwrap(), &["alpha".to_owned()]));
         // Neutralizing makes a word false, so its negation true.
         assert!(doc.matches(&parse("-alpha").unwrap(), &["alpha".to_owned()]));
+    }
+
+    #[test]
+    fn neutral_folds_are_each_word_and_run() {
+        let has = |text: &str, w: &str| neutral_folds(text).iter().any(|f| **f == *folded(w));
+        assert!(has("amber beacon", "amber"));
+        assert!(has("amber beacon", "beacon"));
+        assert!(!has("amber beacon", "amberbeacon"));
+        assert!(has("amber.beacon", "amber"));
+        assert!(has("amber.beacon", "amber.beacon"));
+        assert!(has("web-dl.x264", "web-dl"));
+        // A part alone isn't a word.
+        assert!(has("x265 beacon", "x265"));
+        assert!(!has("x265 beacon", "x"));
+        assert!(!has("ShowName", "show"));
     }
 
     #[test]
