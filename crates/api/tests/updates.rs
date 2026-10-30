@@ -36,6 +36,7 @@ struct FakeEngine {
 
 fn status(e: &FakeEngine) -> UpdatesStatus {
     let skipped = e.skipped.lock().unwrap().clone();
+    let held = *e.held.lock().unwrap();
     let releases = if skipped.contains(&"0.6.0".to_string()) {
         vec![]
     } else {
@@ -64,7 +65,17 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
                     via: None,
                     reason: None,
                 },
-            ],
+            ]
+            .into_iter()
+            // A failed pause holds every release (the engine's
+            // `Block::Held`).
+            .chain(held.then(|| Blocked {
+                code: "held".into(),
+                until: None,
+                via: None,
+                reason: None,
+            }))
+            .collect(),
             installs_at: None,
         }]
     };
@@ -102,7 +113,7 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
                 .unwrap()
                 .filter(|&d| d > 0)
                 .map(|d| 1_792_677_600 + i64::from(d) * 86_400),
-            held_in_process: *e.held.lock().unwrap(),
+            held_in_process: held,
             allow_reindex: true,
         },
         releases,
@@ -442,6 +453,7 @@ async fn a_pause_that_isnt_saved_is_refused_and_held() {
     .await;
     assert_eq!(s["policy"]["held_in_process"], true);
     assert_eq!(s["policy"]["paused_until"], Value::Null);
+    assert_eq!(s["releases"][0]["blocked_by"][2], json!({"code": "held"}));
     *engine.fail_saves.lock().unwrap() = false;
     let (status, _, body) = send(
         &f,

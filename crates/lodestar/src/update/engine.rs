@@ -653,7 +653,9 @@ impl Engine {
         if found.checked.as_ref().is_some_and(|c| !current(c, now)) {
             notices.push("manifest_lapsed".into());
         }
-        if check_unsaved {
+        // Without `<data>/bin` nothing can be saved, which `bin_unavailable`
+        // already says.
+        if check_unsaved && self.inner.bin.is_some() {
             notices.push("check_not_saved".into());
         }
         if unreadable {
@@ -1381,6 +1383,11 @@ mod tests {
         let s = e.engine.status();
         assert_eq!(s.status.checked_at, Some(NOW));
         assert_eq!(s.status.error.as_deref(), Some("bin_unavailable"));
+        assert!(
+            !s.notices.contains(&"check_not_saved".to_string()),
+            "bin_unavailable already says it: {:?}",
+            s.notices
+        );
     }
 
     /// A good check's result lapses at its manifest's expiry even while
@@ -1801,6 +1808,52 @@ mod tests {
             None,
             "the residual: the resume may survive the restart"
         );
+    }
+
+    /// A filesystem that can't fsync a folder at all (`EINVAL` or
+    /// `ENOTSUP`, as on Unraid's FUSE `/mnt/user`) leaves the rename
+    /// standing: the change is acknowledged, and that's logged once per
+    /// run. `EIO` there is a real failure: `updates_not_saved`.
+    #[tokio::test]
+    async fn an_unsupported_folder_fsync_is_acknowledged_but_eio_is_not() {
+        crate::test_log::install();
+        let bin_of = |e: &Env| e.engine.inner.bin.clone().unwrap();
+        for errno in [rustix::io::Errno::INVAL, rustix::io::Errno::NOTSUP] {
+            let e = env(Mode::Auto);
+            e.hook(move |s| {
+                if s == Step::SyncDir {
+                    Err(errno.into())
+                } else {
+                    Ok(())
+                }
+            });
+            let s = e.engine.pause(7).unwrap();
+            assert_eq!(s.policy.paused_until, Some(NOW + 7 * 86_400), "{errno:?}");
+            assert!(!s.policy.held_in_process, "{errno:?}");
+            assert!(bin_of(&e).dir_sync_unsupported(), "{errno:?}");
+            e.engine.pause(0).unwrap();
+            assert_eq!(e.restart().engine.updater().paused_until, None, "{errno:?}");
+        }
+        // Logged once per run however many saves meet it: one line per
+        // engine above (two), not one per save (four).
+        let text = crate::test_log::text();
+        let lines = text
+            .lines()
+            .filter(|l| l.contains("update.dir_sync_unsupported"))
+            .count();
+        assert_eq!(lines, 2, "{text}");
+
+        let e = env(Mode::Auto);
+        e.hook(|s| {
+            if s == Step::SyncDir {
+                Err(rustix::io::Errno::IO.into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(e.engine.pause(7), Err(UpdatesError::NotSaved));
+        assert!(e.engine.status().policy.held_in_process);
+        assert!(!bin_of(&e).dir_sync_unsupported());
     }
 
     /// Without `<data>/bin`, a pause or resume is `bin_unavailable`

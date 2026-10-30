@@ -16,11 +16,15 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lodestar_update::semver::Version;
 use rustix::fs::{FlockOperation, OFlags};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+use super::log_events::UPDATE_DIR_SYNC_UNSUPPORTED;
 
 /// The largest state file read (`history.json` is the biggest).
 pub const MAX_STATE: u64 = 256 * 1024;
@@ -29,6 +33,9 @@ pub const MAX_STATE: u64 = 256 * 1024;
 #[derive(Debug, Clone)]
 pub struct Bin {
     dir: PathBuf,
+    /// The folder can't be fsynced (and that was logged): once per `Bin`,
+    /// which the engine opens once per run.
+    dir_sync_unsupported: Arc<AtomicBool>,
 }
 
 /// The exclusive lock on `<data>/bin/.lock`, held while the value lives.
@@ -104,7 +111,10 @@ impl Bin {
                 ))
             })?;
         }
-        Ok(Bin { dir })
+        Ok(Bin {
+            dir,
+            dir_sync_unsupported: Arc::default(),
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -158,8 +168,7 @@ impl Bin {
         fault: &dyn Fn(Step) -> io::Result<()>,
     ) -> io::Result<()> {
         write_steps(&self.dir, name, &state_bytes(name, value)?, fault)?;
-        fault(Step::SyncDir)?;
-        File::open(&self.dir)?.sync_all()
+        self.sync_acknowledged(fault)
     }
 
     /// [`Bin::remove`] for a removal that's acknowledged to the user: a
@@ -174,8 +183,31 @@ impl Bin {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
-        fault(Step::SyncDir)?;
-        File::open(&self.dir)?.sync_all()
+        self.sync_acknowledged(fault)
+    }
+
+    /// The folder fsync after an acknowledged change. A filesystem that
+    /// can't fsync a folder at all (`EINVAL`, `ENOTSUP`: some FUSE mounts,
+    /// such as Unraid's `/mnt/user`) leaves the rename standing, as every
+    /// other writer here does; that's logged once, without a path. Any
+    /// other error (`EIO`, …) fails the change.
+    fn sync_acknowledged(&self, fault: &dyn Fn(Step) -> io::Result<()>) -> io::Result<()> {
+        let dir = File::open(&self.dir)?;
+        match fault(Step::SyncDir).and_then(|()| dir.sync_all()) {
+            Err(e) if sync_unsupported(&e) => {
+                if !self.dir_sync_unsupported.swap(true, Ordering::Relaxed) {
+                    lodestar_log::log_event!(UPDATE_DIR_SYNC_UNSUPPORTED);
+                }
+                Ok(())
+            }
+            r => r,
+        }
+    }
+
+    /// Whether a folder fsync was found unsupported (and logged).
+    #[cfg(test)]
+    pub fn dir_sync_unsupported(&self) -> bool {
+        self.dir_sync_unsupported.load(Ordering::Relaxed)
     }
 
     /// Removes a state file (and makes that durable); fine if it's gone.
@@ -322,6 +354,13 @@ pub enum Step {
     Rename,
     /// After the rename, before the folder's fsync.
     SyncDir,
+}
+
+/// A folder fsync this filesystem doesn't support, rather than a failure.
+fn sync_unsupported(e: &io::Error) -> bool {
+    use rustix::io::Errno;
+    Errno::from_io_error(e)
+        .is_some_and(|n| n == Errno::INVAL || n == Errno::NOTSUP || n == Errno::OPNOTSUPP)
 }
 
 fn state_bytes<T: Serialize>(name: &str, value: &T) -> io::Result<Vec<u8>> {
