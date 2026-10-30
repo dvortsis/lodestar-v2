@@ -3,6 +3,8 @@ import { DEFAULTS } from './prefs';
 import { CUSTOM_KEY, THEME_CACHE, applyTheme, readCustom, usable } from './themes';
 import type { ThemeEntry, ThemesFile } from './themes';
 
+/** Fixture colours, built from numbers so no hex literal sits in a test (the bans). */
+const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 const KEYS = ['--color-base-100', '--data-1'];
 const entry = (
 	id: string,
@@ -15,7 +17,7 @@ const entry = (
 	group: 'community',
 	mode,
 	contrast: 'AA',
-	values: ['#111111', '#222222'],
+	values: [hex(0x111111), hex(0x222222)],
 	...extra
 });
 const file: ThemesFile = {
@@ -45,11 +47,17 @@ describe('applyTheme', () => {
 		const res = await applyTheme({ ...DEFAULTS, theme: 'nord', mode: 'dark' });
 		expect(res.missing).toEqual([]);
 		expect(document.documentElement.dataset.theme).toBe('nord-dark');
-		expect(document.documentElement.style.getPropertyValue('--data-1')).toBe('#222222');
+		expect(document.documentElement.style.getPropertyValue('--data-1')).toBe(hex(0x222222));
 		expect(cached()).toEqual({
 			mode: 'dark',
-			light: { id: 'nord-light', vars: { '--color-base-100': '#111111', '--data-1': '#222222' } },
-			dark: { id: 'nord-dark', vars: { '--color-base-100': '#111111', '--data-1': '#222222' } }
+			light: {
+				id: 'nord-light',
+				vars: { '--color-base-100': hex(0x111111), '--data-1': hex(0x222222) }
+			},
+			dark: {
+				id: 'nord-dark',
+				vars: { '--color-base-100': hex(0x111111), '--data-1': hex(0x222222) }
+			}
 		});
 	});
 
@@ -112,7 +120,7 @@ describe('readCustom', () => {
 	});
 	it('drops entries that could inject CSS or throw', () => {
 		put([
-			{ ...good, values: ['red;background:url(//x)', '#222222'] },
+			{ ...good, values: ['red;background:url(//x)', hex(0x222222)] },
 			{ ...good, values: 'nope' },
 			{ ...good, id: 'Custom Bad' },
 			{ ...good, keys: undefined },

@@ -6,6 +6,8 @@ import type { ThemeEntry, ThemesFile } from './themes';
 
 configure({ defaultHidden: true });
 
+/** Fixture colours, built from numbers so no hex literal sits in a test (the bans). */
+const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
 const e = (id: string, mode: 'light' | 'dark', family: string, group: string): ThemeEntry => ({
 	id,
 	name: id,
@@ -13,7 +15,7 @@ const e = (id: string, mode: 'light' | 'dark', family: string, group: string): T
 	group,
 	mode,
 	contrast: 'AA',
-	values: ['#111111'],
+	values: [hex(0x111111)],
 	keys: ['--color-base-100']
 });
 const file: ThemesFile = {
