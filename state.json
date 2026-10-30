@@ -1358,11 +1358,11 @@
    "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:39Z seam plan OK with conditions (testing feature never in lodestar bin; merge after v0.5.1 release branch cut; after CR-0f) | 2026-10-30T07:41Z ready 565ab43 on land/L5; held until v0.5.1 cut + CR-0f (runner condition)"
   },
   "CR-gate-metrics": {
-   "status": "review",
+   "status": "merged",
    "session": "session_01MMjhnABUWdrF5PzgVK6oqa",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #199 6eaf198; fresh review session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T10:41Z review FIX FIRST: failed_verification wording (Invalid incl. handshake/protocol), services wiring test, startup-window clause, already_stored wording. One push requested. | 2026-10-30T10:55Z fixes 19f5156; delta re-check asked of session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T11:10Z re-check MERGE (19f5156); merge on green CI",
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #199 6eaf198; fresh review session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T10:41Z review FIX FIRST: failed_verification wording (Invalid incl. handshake/protocol), services wiring test, startup-window clause, already_stored wording. One push requested. | 2026-10-30T10:55Z fixes 19f5156; delta re-check asked of session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T11:10Z re-check MERGE (19f5156); merge on green CI | 2026-10-30T11:30Z merged #199 as 6e944b56; author + reviewer sessions archived",
    "pr": 199
   },
   "D-v051": {
