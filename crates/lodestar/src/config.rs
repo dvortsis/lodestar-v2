@@ -100,6 +100,8 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_DHT_PORT",
     "LODESTAR_INTENSITY",
     "LODESTAR_DHT_ENABLED",
+    "LODESTAR_DHT_SAFE_RESTART",
+    "LODESTAR_DHT_WITNESS_DIR",
     "LODESTAR_SECURE_COOKIES",
     "LODESTAR_SHOW_ADULT",
     "LODESTAR_UPDATES",
@@ -199,10 +201,10 @@ impl Default for Dht {
     }
 }
 
-/// The witness dir when none is configured (CR-0d §1.5): native installs
-/// only. Packaged installs (the Docker image, the MSI) set their own; until
-/// they do, a resolved dir inside the data directory, or none at all,
-/// means every start suppresses.
+/// The witness dir when neither the config nor `LODESTAR_DHT_WITNESS_DIR`
+/// sets one (CR-0d §1.5): a native install's state directory. The Docker
+/// image and the systemd unit set the variable; the Windows service picks
+/// `%ProgramData%\Lodestar-witness` (`windows::service`).
 pub fn default_witness_dir(env: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let non_empty = |k: &str| env(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     if cfg!(windows) {
@@ -658,6 +660,10 @@ impl Config {
             config.dht.coordinated_admission = v
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_COORDINATED_ADMISSION", &v))?;
+        }
+        // Packaging sets this (the Docker image, the systemd unit).
+        if let Some(v) = env("LODESTAR_DHT_WITNESS_DIR").filter(|v| !v.is_empty()) {
+            config.dht.restart_witness_dir = Some(PathBuf::from(v));
         }
         if config.dht.restart_witness_dir.is_none() {
             config.dht.restart_witness_dir = default_witness_dir(&env);
@@ -1197,6 +1203,19 @@ mod tests {
             })
             .is_err()
         );
+        // Packaging's variable wins over the file and the default.
+        let packaged = |k: &str| match k {
+            "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
+            "LODESTAR_DHT_WITNESS_DIR" => Some("/var/lib/lodestar-witness".to_string()),
+            "HOME" => Some("/home/me".to_string()),
+            _ => None,
+        };
+        let c = Config::load(Some(&path), packaged).unwrap();
+        assert_eq!(
+            c.dht_config().restart.unwrap().witness_dir,
+            Some(PathBuf::from("/var/lib/lodestar-witness"))
+        );
+        assert!(c.layers.in_env("LODESTAR_DHT_WITNESS_DIR"));
     }
 
     #[test]

@@ -10,11 +10,15 @@ ExecStart=/usr/local/bin/lodestar serve
 Restart=on-failure
 RestartSec=5
 
-# State lives in /var/lib/lodestar (created and owned by systemd).
+# State lives in /var/lib/lodestar (created and owned by systemd). The
+# restart proof's witness (dht.safe_restart) lives beside it, not in it,
+# so a backup of the data directory never holds it: don't back the two up
+# together.
 DynamicUser=yes
-StateDirectory=lodestar
+StateDirectory=lodestar lodestar-witness
 StateDirectoryMode=0700
 Environment=LODESTAR_DATA_DIR=/var/lib/lodestar
+Environment=LODESTAR_DHT_WITNESS_DIR=/var/lib/lodestar-witness
 
 # Below-normal priority so the crawler yields to other work on the host.
 Nice=10
