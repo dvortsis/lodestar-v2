@@ -1377,7 +1377,7 @@
   },
   "CR-0": {
    "status": "awaiting-owner",
-   "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit) | 2026-10-30T07:17Z Opus acceptance review: ACCEPT-WITH-CONDITIONS. All hard gates pass; memory gate not met as worded (private +3.24\u00b11.14 MiB/h h>=1, h12-24 -0.69\u00b12.71). Analyzer e6622d9d lands with #184. Owner ruling requested on #189 (comment 6517206867); if accepting: full-res h12-24 private fit, upper CI <=1 MiB/h, plus peak private. -0.17 MB/h checkpoint figure withdrawn."
+   "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit) | 2026-10-30T07:17Z Opus acceptance review: ACCEPT-WITH-CONDITIONS. All hard gates pass; memory gate not met as worded (private +3.24\u00b11.14 MiB/h h>=1, h12-24 -0.69\u00b12.71). Analyzer e6622d9d lands with #184. Owner ruling requested on #189 (comment 6517206867); if accepting: full-res h12-24 private fit, upper CI <=1 MiB/h, plus peak private. -0.17 MB/h checkpoint figure withdrawn. | 2026-10-30T09:39Z heartbeat: evidence PR #189 merged 6e91eb06 (evidence only; acceptance awaits owner memory ruling)"
   },
   "L5-e2e": {
    "status": "merged-into-L5",
@@ -1891,7 +1891,8 @@
   "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z",
   "cap_note": "2026-10-30T06:30Z owner goal 'keep building until fully blocked' (usage reset): running beyond the plan's 4-slot cap; ~10 sessions active/idle. Flag to owner.",
   "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f | 2026-10-30T06:32Z #182 merged b4d80387",
-  "landing_plan_L3_L5": "2026-10-30T06:38Z L3 can't be green alone (owner-range size budgets + detail-history, fixed by L5 81ba3fda). Land L3+L4+L5 together via #184 retargeted to main: L3-fix fixes e2e typecheck on land/L3, then merges land/L3 into land/L5 (session.svelte.ts conflict); runner merges fixed land/L4 into land/L5 after L4-fix. #183 closes as merged."
+  "landing_plan_L3_L5": "2026-10-30T06:38Z L3 can't be green alone (owner-range size budgets + detail-history, fixed by L5 81ba3fda). Land L3+L4+L5 together via #184 retargeted to main: L3-fix fixes e2e typecheck on land/L3, then merges land/L3 into land/L5 (session.svelte.ts conflict); runner merges fixed land/L4 into land/L5 after L4-fix. #183 closes as merged.",
+  "heartbeat_last": "2026-10-30T09:39Z: open PRs #195 (macOS dispatch running), #184 (blocked on #195), #185/#186 stacked, #183 superseded by #184. Merged today since 06:56Z: #181 #187 #188 #189 #190 #191 #192 #193 #194."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
