@@ -1491,7 +1491,7 @@
       "notes": "owner #189 step 5; cherry-pick to release/v0.5.1 -> v0.5.1-rc.2"
     },
     "IMP-2": {
-      "status": "queued",
+      "status": "running",
       "model": "opus",
       "session": null,
       "pr": null,
@@ -2190,6 +2190,7 @@
     "2026-10-30T15:00Z #218 X-clippy-msrv part 1 (9 crates with no open PR, 31 files; allows stay) opened; review launched. #216 CR-0d-2a and #217 S-settings-reconcile opened; reviews launch when their authors report ready. Disk full once: incremental caches cleared; use CARGO_INCREMENTAL=0",
     "2026-10-30T15:02Z merged #212 (ac20c916, freshness hardening; CI green, review MERGE)",
     "2026-10-30T15:05Z fresh reviews launched: #216 CR-0d-2a (session_01MMjhnD7Xi4FUtqXj1VbFic), #217 S-settings-reconcile draft (session_01MMjhn9gGM84v8QVWEjT6EV). #217 waits on the owner for 3 non-Settings size-limit entries 0.03-0.77 KB over (Alerts 29.03/29, Alert 45.77/45, Detail sections 34.41/33.9); chunk grouping can't fix it under strict entry signatures",
-    "2026-10-30T15:08Z CR-ADM launched for Phase 1 design only (docs); Phase 2 code waits on the runner's go after #216 merges (actor.rs overlap)"
+    "2026-10-30T15:08Z CR-ADM launched for Phase 1 design only (docs); Phase 2 code waits on the runner's go after #216 merges (actor.rs overlap)",
+    "2026-10-30T15:10Z IMP-2 launched: contract note and fixtures now; reader code after #210 merges"
   ]
 }
