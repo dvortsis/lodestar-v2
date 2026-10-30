@@ -1208,7 +1208,7 @@
    "status": "review",
    "branch": "land/L2",
    "head": "80d7e198",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T05:23Z #180 opened; full-ci label + dispatched CI and Release on land/L2; Opus protocol+security reviewer running",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T05:23Z #180 opened; full-ci label + dispatched CI and Release on land/L2; Opus protocol+security reviewer running | 2026-10-30T05:35Z runner commit 926e0529 regenerates web/licenses/rust.json (network-policy); filter budget mixed case 50.4 \u00b5s on first run (main-level margin; rerun via new push); reviewer restarted after container restart",
    "pr": 180
   },
   "L3": {
@@ -1750,7 +1750,7 @@
   "freeze_lift": "2026-10-30T03:32Z: owner lifted the v0.5-only freeze for the work in build-plan \u00a70 (lanes L,F,C,I,S,D). Priority ladder: L+F > release cut > C > I > S > M5 backlog > v0.6 epics; D rides along. Max 4 helpers at once.",
   "plan_branch": "Plan docs on claude/busy-allen-aptli2 (625225c2), based on next. PR to main after the history swap.",
   "lineage": "Rewritten history: next = 058d99373e2c (old main 2d5e761d). Sessions branch from next until the owner force-pushes main. Old root 15620683 / old tip 2d5e761d must never appear in a PR head.",
-  "lineage_guard": "2026-10-30T03:41Z branch ci/lineage-guard (on next): changes job fails heads containing 15620683 or 2d5e761d. Open as first PR after the swap.",
+  "lineage_guard": "2026-10-30T05:35Z #174 merged fbc22ed6: CI changes job fails heads containing 15620683 or 2d5e761d (and heads missing from the checkout).",
   "l_hygiene": "2026-10-30T03:41Z L1-L6 scanned: no personal paths, public IPs, tokens; only ephemeral soak PIDs and old SHAs (historical). No rewrite-removed lines reintroduced.",
   "pre_swap_local_work": "Old-lineage sessions hold unpushed work: X-sleeps (7fcf111a, c272e0a2 on slice/X-sleeps), B-log1b deferred (72aaed6b on local/B-log1b-4b), B-update 5a (d7f6c8b). After the swap, ask each for a patch (git format-patch from its old merge-base), apply on new-main branches, then archive. Never let them push old-lineage branches.",
   "open_runner_prs": "2026-10-30T04:55Z: #174 lineage guard, #175 L1, #176 plan (claude/busy-allen-aptli2). Merge order: #174, #176, #175, then L2..L7 one at a time.",
