@@ -22,7 +22,7 @@ use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
     Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, PeerPermit, PermitReturn,
-    Snapshot, Source, Stats,
+    QueuedDrop, Snapshot, Source, Stats,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -646,6 +646,7 @@ impl Actor {
                         let keep = reply.is_none();
                         if !keep {
                             drop(reply.take());
+                            QueuedDrop::Paused.count(stats);
                             PermitReturn::Paused.release(stats, permit.take());
                         }
                         keep
@@ -1372,6 +1373,8 @@ impl Actor {
         permit: Option<PeerPermit>,
     ) {
         if reply.as_ref().is_some_and(|r| r.is_closed()) {
+            // Its caller went while it was queued: it never starts.
+            QueuedDrop::CallerClosed.count(&self.stats);
             PermitReturn::CancelledQueued.release(&self.stats, permit);
             return;
         }
@@ -1700,6 +1703,7 @@ impl Actor {
         self.get_peers_queue.retain_mut(|(_, reply, permit)| {
             let keep = reply.as_ref().is_none_or(|r| !r.is_closed());
             if !keep {
+                QueuedDrop::CallerClosed.count(stats);
                 PermitReturn::CancelledQueued.release(stats, permit.take());
             }
             keep
@@ -2318,11 +2322,18 @@ mod tests {
 
     #[test]
     fn a_dual_stack_request_holds_one_permit_until_its_last_leg() {
+        use std::io::Write;
         use tokio::sync::Semaphore;
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
-            // Skipped where the host has no IPv6.
+            // Skipped where the host has no IPv6; say so in the test log.
             let Ok(v6) = std::net::UdpSocket::bind("[::1]:0") else {
+                // Straight to stderr: libtest captures `eprintln!` from
+                // passing tests, and the CI log should show the skip.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "a_dual_stack_request_holds_one_permit_until_its_last_leg: skipped, no IPv6 loopback"
+                );
                 return;
             };
             v6.set_nonblocking(true).unwrap();
@@ -2369,6 +2380,10 @@ mod tests {
             assert_eq!(returns(&a, PermitReturn::CancelledActive), 1);
             let total: u64 = a.stats.snapshot().peer_permit_returns.iter().sum();
             assert_eq!(total, 2);
+            let _ = writeln!(
+                std::io::stderr(),
+                "a_dual_stack_request_holds_one_permit_until_its_last_leg: v6_first={v6_first}, both legs ran"
+            );
         }
     }
 
@@ -2391,6 +2406,55 @@ mod tests {
         a.maintain(&sockets);
         assert_peer_ownership_drained(&a);
         assert_eq!(a.stats.snapshot().lookups_completed, 0);
+        assert_eq!(a.stats.snapshot().peer_queued_dropped, [0, 1]);
+    }
+
+    /// Every admitted request is counted where it ends, with no permit
+    /// (coordinated admission off): two dropped queued by their callers
+    /// (one seen by the queue's sweep, one as the turn would start it),
+    /// one by the pause, one cancelled while active.
+    #[test]
+    fn queued_drops_are_counted_without_a_permit() {
+        let (mut a, sockets) = fixture();
+        // A node to ask, so the third request runs rather than ending empty.
+        let remote: SocketAddr = "127.0.0.1:65530".parse().unwrap();
+        a.families[0]
+            .table
+            .insert(candidate(remote), Contact::Response, 0);
+        a.paused = true;
+        let ask = |a: &mut Actor| {
+            a.paused = false;
+            let (tx, mut rx) = oneshot::channel();
+            a.on_command(Command::RequestPeers(InfoHash([7; 20]), tx, None));
+            rx.try_recv().unwrap().unwrap()
+        };
+        // Queued, then its caller goes: the sweep drops it.
+        drop(ask(&mut a));
+        a.drop_cancelled_queued();
+        // Queued, then its caller goes: the next turn pops it to start it,
+        // and drops it instead.
+        drop(ask(&mut a));
+        a.maintain(&sockets);
+        assert!(a.get_peers_queue.is_empty() && a.peer_requests.is_empty());
+        // Queued, then the pause drops it.
+        let _paused = ask(&mut a);
+        a.on_command(Command::SetPaused(true));
+        // Started, then its caller goes.
+        let active = ask(&mut a);
+        a.maintain(&sockets);
+        assert_eq!(a.active_get_peers, 1);
+        drop(active);
+        a.scrape_tick(&sockets, Instant::now());
+        // (Maintenance may have started its own lookups; only owned
+        // requests are checked.)
+        assert!(a.peer_requests.is_empty() && a.get_peers_queue.is_empty());
+        assert_eq!(a.active_get_peers, 0);
+        let s = a.stats.snapshot();
+        assert_eq!(s.peer_admitted, 4);
+        assert_eq!(s.peer_queued_dropped, [2, 1]);
+        assert_eq!(s.peer_cancelled, 1);
+        assert_eq!(s.lookups_completed, 0);
+        assert_eq!(s.peer_permit_returns, [0; PermitReturn::ALL.len()]);
     }
 
     #[test]

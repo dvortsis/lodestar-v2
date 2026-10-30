@@ -107,11 +107,15 @@ test('narrow result rows retain size and swarm facts', async ({ page, go, mock }
 	}
 });
 
-test('unfinished settings have a clear alternative and return path', async ({ page, go, mock }) => {
-	mock.on('getInsightsOverview', overviewFixture());
-	mock.on('getCrawler', crawlerFixture());
+// S-settings-reconcile replaced the "not available in this build" placeholder with the Overview:
+// an unfinished destination is now one the registry leaves out, never an empty page.
+test('settings offers its sections and a return path', async ({ page, go }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
 	await go('/settings');
-	await expect(page.getByTestId('unavailable-page')).toContainText('not available in this build');
-	await page.getByRole('link', { name: 'Go to Insights' }).click();
-	await expect(page.getByTestId('insights-page')).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1, name: 'Settings overview' })).toBeVisible();
+	const nav = page.getByRole('navigation', { name: 'Settings sections' });
+	await nav.getByRole('link', { name: 'General', exact: true }).click();
+	await expect(page.getByRole('heading', { level: 1, name: 'General' })).toBeVisible();
+	await page.getByRole('link', { name: 'Back to Settings' }).click();
+	await expect(nav).toBeVisible();
 });

@@ -4,9 +4,8 @@
 import { ApiError } from '$lib/api/client';
 import { m } from '$lib/paraglide/messages.js';
 import { DEBOUNCE_MS, UNDO_MS, without, type Engine } from './form.svelte';
-import { sectionValues } from './merge';
-import { announce, applyResponse, holding, runGates, send } from './saving';
-import { validate } from './validate';
+// The pipeline through its chunk's entry, so instant mode reuses that chunk rather than split it.
+import { announce, applyResponse, holding, runGates, sectionValues, send, validate } from './edit';
 import { getSection, type Batch } from './requests';
 import type { FieldKey, FieldSpec, SaveResult, SectionValues, SettingValue } from './types';
 import { wire } from './batch';

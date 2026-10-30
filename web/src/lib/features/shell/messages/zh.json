@@ -35,6 +35,7 @@
 	"shell_status_starting": "正在启动",
 	"shell_status_stalled": "已停滞",
 	"shell_status_starting_help": "正在启动：最多 6 小时后恢复采样。",
+	"shell_status_record_help": "正在启动：Lodestar 能保存重启记录后才会开始采样。请查看日志。",
 	"shell_status_stalled_help": "爬虫正在运行，但没有新内容到达。打开洞察查看哪个阶段卡住了。",
 	"shell_status_lag_help": "搜索索引落后了。新种子已存储，但暂时无法搜索。打开洞察查看原因。",
 	"shell_status_torrents": "{count} 个种子",

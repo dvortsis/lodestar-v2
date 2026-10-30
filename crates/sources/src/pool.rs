@@ -410,6 +410,9 @@ struct Request {
     generation: u64,
     /// Sent with admission permits (CR-ADM).
     coordinated: bool,
+    /// A finder refused it, in this poll or an earlier one; it classifies
+    /// the request's refusal if no finder accepts.
+    refused: bool,
     accepted: bool,
     /// An accepted finder answered. Accepted with none answering means the
     /// finders dropped the work (a pause, a shutdown): cancelled, and the
@@ -806,6 +809,8 @@ impl Pool {
         e.generation = next_generation(&mut self.generations);
         let coordinated = !e.private && self.admission.as_ref().is_some_and(Admission::active);
         if self.cfg.paused || self.lookups >= self.cfg.max_lookups {
+            // `drain_admission` only grants while neither holds.
+            debug_assert!(grant.is_none(), "a grant while paused or at the cap");
             if coordinated {
                 self.wait(key, kind, false);
                 return;
@@ -906,6 +911,7 @@ impl Pool {
             Request {
                 generation,
                 coordinated,
+                refused: false,
                 accepted: false,
                 answered: false,
                 replies,
@@ -1023,8 +1029,9 @@ impl Pool {
         let mut waiting = Vec::new();
         let mut peers = Vec::new();
         let mut unique = HashSet::new();
-        // Finders that refused, or never acknowledged, this request.
-        let (mut refused, mut unacknowledged) = (Vec::new(), Vec::new());
+        // Finders that refused, or never acknowledged, this request: each
+        // rests from the poll that sees it, whatever the other finders do.
+        let mut said_no = Vec::new();
         for mut reply in request.replies {
             if let FinderReply::Admission(finder, rx) = &mut reply {
                 let finder = *finder;
@@ -1046,11 +1053,12 @@ impl Pool {
                         continue;
                     }
                     Ok(None) => {
-                        refused.push(finder);
+                        request.refused = true;
+                        said_no.push(finder);
                         continue;
                     }
                     Err(TryRecvError::Closed) => {
-                        unacknowledged.push(finder);
+                        said_no.push(finder);
                         continue;
                     }
                 }
@@ -1078,8 +1086,11 @@ impl Pool {
         if finished && !request.accepted {
             self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
         }
+        if request.coordinated {
+            self.hold_finders(said_no.iter());
+        }
         if finished && !request.accepted && request.coordinated {
-            self.requeue_refused(key, &refused, &unacknowledged);
+            self.requeue_refused(key, request.refused, &[]);
             return;
         }
         if finished && request.accepted && !request.answered {
@@ -1123,24 +1134,33 @@ impl Pool {
         }
     }
 
-    /// Coordinated admission: every finder refused the permitted request
-    /// or lost its acknowledgment. No attempt was used and none is charged
-    /// as back-off; the key goes back to the front of its queue, and those
-    /// finders rest for [`admission::REFUSAL_HOLD`] so the permit it gave
-    /// back doesn't come straight back to the same refusal.
-    fn requeue_refused(&mut self, key: InfoHash, refused: &[usize], unacknowledged: &[usize]) {
+    /// Coordinated admission: no finder accepted the permitted request.
+    /// No attempt was used and none is charged as back-off; the key goes
+    /// back to the front of its queue. Finders that said no rested when
+    /// that was seen ([`admission::REFUSAL_HOLD`]), so the permits they gave
+    /// back don't come straight back to them; `silent` ones, which never
+    /// answered, rest now. `refused` says whether any finder refused, so
+    /// the refusal counts as refused rather than unacknowledged.
+    fn requeue_refused(&mut self, key: InfoHash, refused: bool, silent: &[usize]) {
         self.lookups -= 1;
-        let reason = usize::from(refused.is_empty());
+        let reason = usize::from(!refused);
         self.stats.admission_refusals[reason].fetch_add(1, Ordering::Relaxed);
-        if let Some(a) = &mut self.admission {
-            let until = Instant::now() + admission::REFUSAL_HOLD;
-            for &finder in refused.iter().chain(unacknowledged) {
-                let unused = a.hold(finder, until);
-                self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
-                self.stats.admission_holds.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        self.hold_finders(silent.iter());
         self.wait(key, WaitKind::Requeue, true);
+    }
+
+    /// Rests each finder for [`admission::REFUSAL_HOLD`]; a permit kept
+    /// back from one goes back now.
+    fn hold_finders<'a>(&mut self, finders: impl Iterator<Item = &'a usize>) {
+        let Some(a) = &mut self.admission else {
+            return;
+        };
+        let until = Instant::now() + admission::REFUSAL_HOLD;
+        for &finder in finders {
+            let unused = a.hold(finder, until);
+            self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+            self.stats.admission_holds.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn schedule(&mut self, at: Instant, key: InfoHash, generation: u64) {
@@ -1165,10 +1185,29 @@ impl Pool {
             match e.state {
                 State::Lookup => {
                     // No peers turned up in time.
-                    self.lookups -= 1;
-                    if self.requests.remove(&key).is_some_and(|r| !r.accepted) {
+                    let request = self.requests.remove(&key);
+                    if request.as_ref().is_some_and(|r| !r.accepted) {
                         self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
                     }
+                    // A permitted request no finder ever acknowledged is an
+                    // unacknowledged one, as if its admission had closed: no
+                    // back-off, and the silent finders rest. The key waits
+                    // for a permit, which only returns once the finder has
+                    // dealt with the request.
+                    if let Some(r) = request.filter(|r| r.coordinated && !r.accepted) {
+                        let silent: Vec<usize> = r
+                            .replies
+                            .iter()
+                            .filter_map(|reply| match reply {
+                                FinderReply::Admission(finder, _) => Some(*finder),
+                                FinderReply::Completion(_) => None,
+                            })
+                            .collect();
+                        self.requeue_refused(key, r.refused, &silent);
+                        continue;
+                    }
+                    self.lookups -= 1;
+                    let e = self.entries.get_mut(&key).expect("present");
                     e.state = State::Backoff;
                     self.back_off(key);
                 }

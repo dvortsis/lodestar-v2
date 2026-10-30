@@ -83,6 +83,7 @@ impl OpsApi for FakeOps {
                 index_lag_s: *self.lag.lock().unwrap(),
                 paused: self.paused.load(Ordering::Relaxed),
                 queue_depth: 0,
+                sampling_blocked: None,
                 searchable_torrents: *self.searchable.lock().unwrap(),
                 stored_torrents: 0,
                 updated_at: NOW,

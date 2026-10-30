@@ -842,3 +842,109 @@ async fn private_keys_bypass_admission_and_survive_a_pause() {
     h.quiet_for(Duration::from_secs(30)).await;
     h.stop().await;
 }
+
+/// With two finders, one accepting and one refusing, the refusing finder
+/// still rests: the next key waits out its hold, since a grant needs a
+/// permit from every open finder.
+#[tokio::test(start_paused = true)]
+async fn a_partial_refusal_holds_the_finder_that_refused() {
+    let (disc, discoveries) = mpsc::channel(8);
+    let (f0, mut r0) = mpsc::channel::<PeerRequest>(8);
+    let (f1, mut r1) = mpsc::channel::<PeerRequest>(8);
+    let (out, _results) = mpsc::channel(8);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        config(true, 4),
+        Arc::new(NoFetch),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![f0, f1],
+            out,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        vec![],
+    );
+    let send = async |n| {
+        disc.send(Discovery {
+            source: SourceId::new(0).unwrap(),
+            found: Found::key(key(n), 0),
+            at: 1_700_000_000,
+            reply: false,
+        })
+        .await
+        .unwrap();
+    };
+    let next = async |r: &mut mpsc::Receiver<PeerRequest>| {
+        tokio::time::timeout(Duration::from_secs(10), r.recv())
+            .await
+            .expect("a request within 10 s")
+            .unwrap()
+    };
+    send(1).await;
+    let (a0, a1) = (next(&mut r0).await, next(&mut r1).await);
+    // Finder 1 refuses first, and the pool sees it while finder 0 is still
+    // silent; only then does finder 0 accept.
+    let refused_at = Instant::now();
+    a1.admit.send(None).unwrap();
+    drop(a1.permit);
+    let s = handle.stats();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while load(&s.admission_holds) == 0 {
+        assert!(Instant::now() < deadline, "no hold for the refusing finder");
+        sleep(Duration::from_millis(1)).await;
+    }
+    let (_done, rx) = oneshot::channel::<Vec<SocketAddr>>();
+    a0.admit.send(Some(rx)).unwrap();
+    // A repeat sighting polls A's admission: the fence for the acceptance.
+    send(1).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while load(&s.duplicates) == 0 {
+        assert!(Instant::now() < deadline, "the repeat sighting");
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(load(&s.admission_refusals[0]), 0, "A was accepted");
+    assert_eq!(load(&s.admission_holds), 1, "held once");
+    send(2).await;
+    let b = next(&mut r1).await;
+    assert_eq!(b.key, key(2));
+    assert!(Instant::now() - refused_at >= Duration::from_secs(1));
+    stop.send(true).unwrap();
+    task.await.unwrap();
+}
+
+/// A permitted request no finder acknowledges before `lookup_wait` is
+/// requeued like any unacknowledged one: no attempt, no back-off, and the
+/// key is asked again once its permit is back and the hold is over.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_request_is_requeued_not_backed_off() {
+    let mut h = Harness::start(PoolConfig {
+        lookup_wait: Duration::from_secs(30),
+        ..config(true, 1)
+    });
+    h.discover(1, false).await;
+    let mut r = h.next().await;
+    let sent = Instant::now();
+    // The finder never answers; when the pool gives up the admission
+    // closes, and the finder then refuses it as caller-closed.
+    tokio::time::timeout(Duration::from_secs(60), r.admit.closed())
+        .await
+        .unwrap();
+    assert!(Instant::now() - sent >= Duration::from_secs(30));
+    h.give_back(r.permit);
+    let again = h.next().await;
+    assert_eq!(again.key, key(1));
+    let waited = Instant::now() - sent;
+    assert!(
+        waited < Duration::from_secs(40),
+        "{waited:?}: not the 60 s back-off"
+    );
+    assert_eq!(load(&h.stats().admission_refusals[1]), 1);
+    assert_eq!(load(&h.stats().admission_holds), 1);
+    assert_eq!(load(&h.stats().lookup_unaccepted), 1);
+    assert!(h.handle.snapshot().await.iter().all(|q| q.attempts == 0));
+    h.refuse(again);
+    h.conserved().await;
+    h.stop().await;
+}

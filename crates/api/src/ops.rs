@@ -35,8 +35,9 @@ use crate::ApiState;
 use crate::auth;
 pub use crate::dto::ops::{
     ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState, CrawlerStatus, DhtStatus,
-    ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel, Source,
-    SourceHealth, SourceKind, SourceList, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    ExternalAddress, FetchStatus, NetworkCheck, PortMapping, ReachReason, RiskLevel,
+    SamplingBlocked, Source, SourceHealth, SourceKind, SourceList, SourcePatch, SourcePriority,
+    SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;

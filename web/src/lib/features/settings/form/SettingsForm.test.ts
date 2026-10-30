@@ -120,9 +120,11 @@ describe('SettingsForm', () => {
 		await waitFor(() => expect(document.activeElement).toBe(within(summary).getByRole('heading')));
 		expect(patches()).toHaveLength(0);
 		// Its link moves focus to the field's control, after the screen reveals it.
-		const link = within(summary).getByRole('link', { name: /timeout_secs: Must be between/ });
+		const link = within(summary).getByRole('link', { name: /Fetch timeout: Must be between/ });
 		await fireEvent.click(link);
-		await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('timeout_secs')));
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByLabelText('Fetch timeout'))
+		);
 		expect(onReveal).toHaveBeenCalledWith('crawler.timeout_secs');
 	});
 
@@ -144,7 +146,7 @@ describe('SettingsForm', () => {
 		const detach = keys.attach(window);
 		render(FormHarness, { form });
 		form.set('crawler.intensity', 'low');
-		const input = screen.getByLabelText('timeout_secs');
+		const input = screen.getByLabelText('Fetch timeout');
 		await waitFor(() =>
 			expect(keys.list().some((c) => c.id === 'settings.save.harness')).toBe(true)
 		);
@@ -175,7 +177,7 @@ describe('SettingsForm', () => {
 	it('saves on Ctrl+S before the registry has loaded', async () => {
 		render(FormHarness, { form });
 		form.set('crawler.intensity', 'low');
-		await fireEvent.keyDown(screen.getByLabelText('timeout_secs'), { key: 's', ctrlKey: true });
+		await fireEvent.keyDown(screen.getByLabelText('Fetch timeout'), { key: 's', ctrlKey: true });
 		await waitFor(() => expect(patches()).toHaveLength(1));
 	});
 
@@ -285,7 +287,7 @@ describe('SettingsForm', () => {
 	it.each([
 		['a radio group', 'crawler.encryption', 'radio', 'prefer'],
 		['a segmented control', 'crawler.intensity', 'radio', 'balanced'],
-		['a toggle', 'crawler.paused', 'switch', 'paused']
+		['a toggle', 'crawler.paused', 'switch', 'Pause crawling']
 	] as const)(
 		'moves focus from the summary to %s, never to its menu',
 		async (_, key, role, name) => {
@@ -309,7 +311,7 @@ describe('SettingsForm', () => {
 	it('prevents the browser’s Save page dialog on a held Ctrl+S, saving once', async () => {
 		render(FormHarness, { form });
 		form.set('crawler.intensity', 'low');
-		const input = screen.getByLabelText('timeout_secs');
+		const input = screen.getByLabelText('Fetch timeout');
 		const saves = vi.spyOn(form, 'save');
 		const press = (repeat: boolean) => {
 			const e = new KeyboardEvent('keydown', {

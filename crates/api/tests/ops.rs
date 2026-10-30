@@ -16,8 +16,8 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
 use lodestar_api::ops::{
     BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
-    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, Source, SourceHealth, SourceKind,
-    SourcePatch, SourcePriority, SourceState, StatsResponse,
+    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, SamplingBlocked, Source, SourceHealth,
+    SourceKind, SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
 use lodestar_api::settings::{
     Imported, Saved, SectionValues, SettingSource, SettingValue, SettingsApi, SettingsBatch,
@@ -210,6 +210,10 @@ impl OpsApi for FakeOps {
                 index_lag_s: Some(0),
                 paused: *self.paused.lock().unwrap(),
                 queue_depth: 93,
+                sampling_blocked: Some(SamplingBlocked {
+                    reason: "dirty".into(),
+                    remaining_s: 21_540,
+                }),
                 searchable_torrents: None,
                 stored_torrents: 2_410_391,
                 updated_at: 1_700_000_100,

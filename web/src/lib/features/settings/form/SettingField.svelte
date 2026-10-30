@@ -18,9 +18,7 @@
 	import LazyControl from './LazyControl.svelte';
 	import { controlOf, lazyOf } from './controls.svelte';
 	import { lazyPart } from './lazy.svelte';
-	import FieldConflict from './FieldConflict.svelte';
-	import FieldSaved from './FieldSaved.svelte';
-	import { loadedPreview, type SettingsForm } from './form.svelte';
+	import { loadEdit, loadedEdit, loadedPreview, type SettingsForm } from './form.svelte';
 	import { fieldHelp, fieldLabel } from './messages';
 	import { fieldAnchor } from './schema';
 	import type { FieldKey } from './types';
@@ -125,6 +123,11 @@
 	// What a preview says loads with the preview's code, which every preview has loaded.
 	const Preview = lazyPart(() => import('./preview'), loadedPreview);
 	$effect(() => Preview.want(f.preview));
+
+	// A conflict, a staged reset and a save's result come from the edit chunk, which an edit, a
+	// merge or a save has loaded: they show in the same update.
+	const Edit = lazyPart(loadEdit, loadedEdit);
+	$effect(() => Edit.want(f.conflict || f.pendingReset || f.savedRecently || f.undoUntil));
 </script>
 
 <div id={fieldAnchor(key)} class="ls-field flex flex-col gap-2" data-field={key}>
@@ -208,10 +211,10 @@
 		<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
 	{/if}
 
-	{#if f.conflict}
+	{#if f.conflict && Edit.part}
 		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
 			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
-			<FieldConflict {form} {key} />
+			<Edit.part.FieldConflict {form} {key} />
 		</div>
 	{/if}
 
@@ -222,17 +225,17 @@
 		</p>
 	{/if}
 
-	{#if f.pendingReset}
+	{#if f.pendingReset && Edit.part}
 		<p class="flex items-center gap-1 text-small text-muted-text">
 			<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-			<FieldSaved {form} {key} part="reset" />
+			<Edit.part.FieldSaved {form} {key} part="reset" />
 		</p>
 	{/if}
 
 	<!-- Status line: only what applies (§10.10.4). -->
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
-		{#if f.savedRecently}
-			<FieldSaved {form} {key} part="saved" />
+		{#if f.savedRecently && Edit.part}
+			<Edit.part.FieldSaved {form} {key} part="saved" />
 		{:else if spec.restartRequired && !f.locked}
 			<span class="inline-flex items-center gap-1">
 				<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
@@ -271,8 +274,8 @@
 				{m.setting_file()}
 			</span>
 		{/if}
-		{#if f.undoUntil}
-			<FieldSaved {form} {key} part="undo" />
+		{#if f.undoUntil && Edit.part}
+			<Edit.part.FieldSaved {form} {key} part="undo" />
 		{/if}
 	</div>
 

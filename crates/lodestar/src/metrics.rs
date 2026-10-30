@@ -465,6 +465,18 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Active peer requests cancelled by the caller.",
             d.peer_cancelled,
         );
+        o.family(
+            "dht_peer_queued_dropped_total",
+            "counter",
+            "Admitted peer requests dropped while queued, never started.",
+        );
+        for (i, why) in lodestar_dht::node::QueuedDrop::ALL.iter().enumerate() {
+            o.value(
+                "dht_peer_queued_dropped_total",
+                &format!("reason=\"{}\"", why.as_str()),
+                d.peer_queued_dropped[i],
+            );
+        }
         o.one(
             "dht_peer_active",
             "gauge",

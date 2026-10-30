@@ -19,6 +19,7 @@ Answers to the questions at the end of each chapter, in the same order.
 1. Set up a VPN such as WireGuard or Tailscale and connect through it. Don't forward port `8090` or use the router's DMZ.
 2. It shows your public IP address to DHT peers.
 3. The backup holds `seal.key` and `auth.json`, so a public share would expose secrets. A restore also brings back the sessions valid at backup time, which last up to 30 days. Changing the password ends them, once the app offers that **(planned)**.
+4. A restore that brings back both looks like a clean restart, so Lodestar would ask DHT nodes again too soon. Back up the data folder with `lodestar backup`, which leaves the record out.
 
 <!-- nav:start -->
 ---
