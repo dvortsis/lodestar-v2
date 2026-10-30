@@ -1343,11 +1343,12 @@
    "pr": 202
   },
   "IMP-0": {
-   "status": "running",
+   "status": "review",
    "session": "session_01MMjhn95fzNhDro9AJeDYin",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR"
+   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR | 2026-10-30T10:48Z PR #203 head 5242f2e; fresh review session_01MMjhnAWTmyQoLPMGeVReHH; subscribed",
+   "pr": 203
   },
   "CR-SIM": {
    "status": "running",
