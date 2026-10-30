@@ -1166,16 +1166,32 @@ fn carry_holds(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
             floor[0], floor[1], floor[2], ADULT_HOLD, hash, rule, sealed, at, expires_at
         ])?;
     }
-    // A hash both tombstoned and quarantined (released since the snapshot,
-    // fetched again and dropped, say) would be released from the running
-    // filter when the quarantine expires: the tombstone is the stronger
-    // hold, so the quarantine and its sealed name go. An adult hold stays:
-    // its expiry turns into a tombstone, never a release.
-    tx.execute(
-        "DELETE FROM quarantine WHERE substr(rule, -length(?1)) != ?1
-             AND hash IN (SELECT hash FROM tombstones)",
-        [ADULT_HOLD],
-    )?;
+    // CS-8 payload signatures (the floor's CS-8a).
+    let mut add = tx.prepare("INSERT OR IGNORE INTO cs_sigs (sig, added_at) VALUES (?1, ?2)")?;
+    let mut stmt = live.prepare("SELECT sig, added_at FROM cs_sigs")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        add.execute(params![r.get::<_, i64>(0)?, r.get::<_, i64>(1)?])?;
+    }
+    // Core switches: a rule is on unless it's listed off, so one the copy
+    // has off goes back on when the store has it on (listed or not).
+    // Switching one off takes the warning and the password (§20.11); a
+    // rollback mustn't do it for you.
+    let mut live_off = HashSet::new();
+    let mut stmt = live.prepare("SELECT rule FROM core_membership WHERE enabled = 0")?;
+    for rule in stmt.query_map([], |r| r.get::<_, String>(0))? {
+        live_off.insert(rule?);
+    }
+    let mut stmt = tx.prepare("SELECT rule FROM core_membership WHERE enabled = 0")?;
+    let copy_off = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for rule in copy_off.iter().filter(|r| !live_off.contains(*r)) {
+        tx.execute(
+            "UPDATE core_membership SET enabled = 1 WHERE rule = ?1",
+            [rule],
+        )?;
+    }
     Ok(())
 }
 
@@ -1185,8 +1201,11 @@ fn carry_holds(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
 /// Only strengthens: a list only the copy has stays, a list both have
 /// keeps the copy's data (its next refresh is due) but is floor-marked or
 /// switched on if either is, and a list only `live` has is added with its
-/// data. Its pending floor removals come along under the copy's id: they
-/// stay blocked until settled in the app.
+/// data. Pending floor removals come along under the copy's id, and so
+/// does what a floor-marked list's live version holds that the copy's
+/// doesn't: they stay blocked until a later version lists them again or
+/// they're settled in the app (§2.7), where the copy's older version
+/// alone would let them go unnoticed when the publisher drops them.
 ///
 /// A copy before V6 has no subscription tables: the entries of `live`'s
 /// floor-marked content lists, applied and pending removal, are added to
@@ -1251,6 +1270,32 @@ fn carry_lists(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
                      WHERE id = ?1",
                     params![id, floor, enabled],
                 )?;
+                let applied = |c: &Connection, id: i64| -> rusqlite::Result<Vec<u8>> {
+                    Ok(c.query_row(
+                        "SELECT d.data FROM subscriptions s
+                         JOIN subscription_data d ON d.sub_id = s.id AND d.pending = 0
+                         WHERE s.id = ?1 AND s.kind = 0",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or_default())
+                };
+                let floored: bool =
+                    tx.query_row("SELECT floor FROM subscriptions WHERE id = ?1", [id], |r| {
+                        r.get(0)
+                    })?;
+                if floored {
+                    let copy = applied(tx, id)?;
+                    let have: HashSet<&[u8]> = copy.chunks_exact(20).collect();
+                    let newer: Vec<u8> = applied(live, live_id)?
+                        .chunks_exact(20)
+                        .filter(|h| !have.contains(h))
+                        .flatten()
+                        .copied()
+                        .collect();
+                    add_pending(tx, &pending_key(id), newer)?;
+                }
                 id
             }
             None => {
@@ -1277,19 +1322,29 @@ fn carry_lists(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
                 id
             }
         };
-        // Packed 20-byte hashes, read as a set: a repeat is harmless.
-        let carried = setting(live, &pending_key(live_id))?;
-        if !carried.is_empty() {
-            let key = pending_key(id);
-            let mut value = setting(tx, &key)?;
-            value.extend(carried);
-            tx.execute(
-                "INSERT INTO settings (key, value) VALUES (?1, ?2)
-                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )?;
-        }
+        add_pending(tx, &pending_key(id), setting(live, &pending_key(live_id))?)?;
     }
+    Ok(())
+}
+
+/// Adds `hashes` (packed, 20 bytes each) to a list's pending floor
+/// removals in `settings`. They're read as a set: a repeat is harmless.
+fn add_pending(tx: &Connection, key: &str, hashes: Vec<u8>) -> rusqlite::Result<()> {
+    if hashes.is_empty() {
+        return Ok(());
+    }
+    let mut value: Vec<u8> = tx
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
+        .optional()?
+        .unwrap_or_default();
+    value.extend(hashes);
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
     Ok(())
 }
 
@@ -1773,6 +1828,9 @@ mod tests {
         store.add_cs_hashes(&[[2; 20]], 2, T + DAY).unwrap();
         store.add_cs_hashes(&[[7; 20]], 0, T + DAY).unwrap();
         store.add_cs_hashes(&[[8; 20]], 2, T + DAY).unwrap();
+        store.add_cs_sig(42, T + DAY).unwrap();
+        store.set_core_switch("CS-5", false).unwrap();
+        store.set_core_switch("CS-6", true).unwrap();
 
         for version in [3, 4, 9, 12, Plan::KNOWN_THROUGH] {
             let copy = dir.path().join(format!("held-v{version}.tmp"));
@@ -1798,6 +1856,12 @@ mod tests {
                 tomb(17, "CS-3", T + 5 * DAY);
                 quarantine(&conn, [18; 20], "CS-2a", b"sealed-copy18", T + 40 * DAY);
                 quarantine(&conn, [19; 20], "CS-2a", b"sealed-copy19", T + 40 * DAY);
+                conn.execute_batch(
+                    "INSERT INTO cs_sigs (sig, added_at) VALUES (7, 0);
+                     INSERT INTO core_membership (rule, enabled)
+                     VALUES ('CS-3', 0), ('CS-5', 0), ('CS-6', 0);",
+                )
+                .unwrap();
                 for (h, origin) in [(7u8, 2i64), (8, 1)] {
                     conn.execute(
                         "INSERT INTO cs_hashes (hash, origin, added_at) VALUES (?1, ?2, ?3)",
@@ -1851,11 +1915,28 @@ mod tests {
                     format!("h13 CS-2a sealed-requeued {}", d(40)),
                     format!("h15 CS-9+adult sealed-adult {}", d(5)),
                     format!("h18 CS-2a sealed-copy18 {}", d(40)),
+                    // Both rows stay (`purge_filter` doesn't release a
+                    // tombstoned hash when its quarantine expires), but
+                    // the name goes: the store holds none for it.
+                    format!("h19 CS-2a Null {}", d(40)),
                 ],
                 "v{version}"
             );
             assert!(!contains(&copy, b"sealed-expired"), "v{version}");
-            assert!(!contains(&copy, b"sealed-copy19"), "v{version}");
+            assert_eq!(
+                rows(&copy, "SELECT sig FROM cs_sigs ORDER BY sig"),
+                ["7", "42"],
+                "v{version}"
+            );
+            // Off in the copy, on in the store (listed or not): on.
+            assert_eq!(
+                rows(
+                    &copy,
+                    "SELECT rule, enabled FROM core_membership ORDER BY rule"
+                ),
+                ["CS-3 1", "CS-5 0", "CS-6 1"],
+                "v{version}"
+            );
         }
     }
 
@@ -1891,20 +1972,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!((both, new), (1, 2));
+        // Refreshed since the snapshot: [23] is new.
+        c.execute(
+            "INSERT INTO subscription_data (sub_id, pending, entries, data) VALUES (?1, 0, 2, ?2)",
+            params![both, [[22u8; 20], [23; 20]].concat()],
+        )
+        .unwrap();
 
         for version in [4, 6, Plan::KNOWN_THROUGH] {
             let copy = dir.path().join(format!("lists-v{version}.tmp"));
             let conn = fixture(&copy, version);
             if version >= 6 {
-                subscribe(&conn, "https://both.example/list", 0);
+                let id = subscribe(&conn, "https://both.example/list", 0);
                 subscribe(&conn, "https://old.example/list", 0);
+                conn.execute(
+                    "INSERT INTO subscription_data (sub_id, pending, entries, data)
+                     VALUES (?1, 0, 1, ?2)",
+                    params![id, &[22u8; 20][..]],
+                )
+                .unwrap();
             }
             drop(conn);
             purge_for_restore(store.connection(), &copy, T + DAY).unwrap();
             if version < 6 {
                 assert_eq!(
                     rows(&copy, "SELECT hash, origin FROM cs_hashes ORDER BY hash"),
-                    ["h20 2", "h21 2"],
+                    ["h20 2", "h21 2", "h22 2", "h23 2"],
                     "v{version}"
                 );
                 continue;
@@ -1922,16 +2015,21 @@ mod tests {
                 "v{version}"
             );
             assert_eq!(
-                rows(&copy, "SELECT sub_id, pending, data FROM subscription_data"),
-                ["3 0 h20"],
+                rows(
+                    &copy,
+                    "SELECT sub_id, pending, data FROM subscription_data ORDER BY sub_id"
+                ),
+                ["1 0 h22", "3 0 h20"],
                 "v{version}"
             );
+            // What the store's version of the shared floor list holds and
+            // the copy's doesn't waits as a pending removal: blocked.
             assert_eq!(
                 rows(
                     &copy,
-                    "SELECT key, value FROM settings WHERE key LIKE 'floor.%'"
+                    "SELECT key, value FROM settings WHERE key LIKE 'floor.%' ORDER BY key"
                 ),
-                ["floor.pending:list:3 h21"],
+                ["floor.pending:list:1 h23", "floor.pending:list:3 h21"],
                 "v{version}"
             );
         }
