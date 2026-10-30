@@ -46,7 +46,9 @@ STOP_REASONS = {
 # the OLS slope of anonymous private memory over baseline hours 12-24, judged by
 # the upper bound of its 95% confidence interval.
 MEMORY_FIT = {"field": "private_bytes", "from_hour": 12.0, "to_hour": 24.0,
-              "bar_mib_per_hour": 2.0, "min_samples": 30}
+              "bar_mib_per_hour": 2.0, "min_samples": 30,
+              # The report's allowed gap (collection_quality.maximum_allowed_gap_seconds).
+              "max_gap_seconds": 180}
 SERIES = re.compile(r"^lodestar_([a-z_]+)(\{[^\r\n]*\})?\s+(\S+)(?:\s+\d+)?$")
 
 
@@ -321,15 +323,19 @@ def memory_fit(rows):
     points = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
     window = [(h, r) for h, r in points if f["from_hour"] <= h <= f["to_hour"]]
     # A failed metrics read lacks the start time, so compare it only where present.
-    processes = {(r["process_id"], r.get("process_identity")) for _, r in window}
+    processes = {r["process_id"] for _, r in window}
+    identities = {r["process_identity"] for _, r in window if r.get("process_identity") is not None}
     starts = {identity(r)[1] for _, r in window if usable(r)}
-    if len(processes) > 1 or len(starts) > 1:
+    if len(processes) > 1 or len(identities) > 1 or len(starts) > 1:
         fit["refused"] = "identity_change"
         return fit
     xy = [(h, r[f["field"]] / 2**20) for h, r in window if number(r.get(f["field"]))]
     fit["samples"] = n = len(xy)
-    # Within one sampling interval of each end of the window.
-    fit["window_complete"] = bool(xy) and xy[0][0] <= f["from_hour"] + 0.05 and xy[-1][0] >= f["to_hour"] - 0.05
+    # Covered end to end: no gap longer than the report's gap limit between
+    # fitted samples, nor between either end of the window and its nearest sample.
+    edges = [f["from_hour"]] + [x for x, _ in xy] + [f["to_hour"]]
+    fit["max_gap_seconds"] = max((b - a) * 3600 for a, b in zip(edges, edges[1:]))
+    fit["window_complete"] = bool(xy) and fit["max_gap_seconds"] <= f["max_gap_seconds"]
     if n < f["min_samples"]:
         fit["refused"] = "too_few_samples"
         return fit

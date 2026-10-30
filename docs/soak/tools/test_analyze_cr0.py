@@ -433,7 +433,6 @@ class AnalyzerTests(unittest.TestCase):
         self.assertIn("Cannot analyze evidence", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
-
     def memory_rows(self, slope_mib_per_hour, noise_mib=0.0, hours=24.5, step=60, **changes):
         # Baseline only, one sample a minute; a deterministic zig-zag stands in for noise.
         rows = []
@@ -478,6 +477,16 @@ class AnalyzerTests(unittest.TestCase):
         self.assertFalse(fit["window_complete"])
         self.assertIsNone(fit["meets_bar"])
         self.assertIsNotNone(fit["slope_mib_per_hour"])
+
+    def test_memory_fit_gap_inside_the_window_is_not_judged(self):
+        rows = [r for r in self.memory_rows(0.0, noise_mib=1.0)
+                if not 12.5 * 3600 < r["elapsed_seconds"] < 23.9 * 3600]
+        self.rows(rows)
+        fit = analyze(self.root)["memory_fit"]
+        self.assertGreaterEqual(fit["samples"], 30)
+        self.assertFalse(fit["window_complete"])
+        self.assertIsNone(fit["meets_bar"])
+        self.assertGreater(fit["max_gap_seconds"], 180)
 
     def test_memory_fit_refuses_a_restart_in_the_window(self):
         rows = self.memory_rows(0.0)
