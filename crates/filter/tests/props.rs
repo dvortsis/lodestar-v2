@@ -520,10 +520,10 @@ const MODEL_DRIFT: f64 = 0.20;
 /// much slower than [`CALIB_REF_NS`] [`calibrate`]'s fastest pass ran.
 /// [`calibrate`] runs either way, before any filter code runs and again
 /// once the engine is gone, to catch a runner whose speed changes under
-/// the test. The calibration never runs beside filter state, so a regression
-/// can't slow it and hide itself, and noise only adds time, so the fastest
-/// pass can only make the gate stricter. Raw times and the runner's speed
-/// are printed too.
+/// the test. Where it scales, it never runs beside filter state, so a
+/// regression can't slow it and hide itself, and noise only adds time, so
+/// its fastest pass can only make the gate stricter. Raw times, the
+/// divisor and where it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
 /// case under 50 µs passes (about +40% at 10% on today's code).

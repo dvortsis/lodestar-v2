@@ -1029,6 +1029,78 @@ mod tests {
         Core::new(lists, CsList::default(), Switches::default())
     }
 
+    /// A path whose spelled-out letters run on over a `/` (`l.e.x/a`)
+    /// reads differently whole: the core reads it itself, and its hits
+    /// are its own read's, whichever path the hit comes from.
+    #[test]
+    fn a_path_read_differently_whole_is_read_again() {
+        let c = core();
+        let path = |p: &str| p.split('/').map(String::from).collect::<Vec<_>>();
+        let files = [
+            FileInfo::new(path("l.e.x/a.16yo.mkv"), 1),
+            FileInfo::new(path("lexa/16yo.mkv"), 1),
+            FileInfo::new(path("x.mkv"), 1),
+        ];
+        let name = "x";
+        let (mut tokens, mut apart) = (Vec::new(), Vec::new());
+        normalize::tokens(name, &mut tokens);
+        let mut ends = vec![tokens.len()];
+        normalize::paths_apart(
+            files.iter().map(|f| &f.path[..]),
+            &mut tokens,
+            &mut ends,
+            &mut apart,
+        );
+        assert_eq!(apart, [false, true, true]);
+        let read = normalize::Read {
+            tokens: &tokens,
+            ends: &ends,
+            apart: &apart,
+        };
+        let none = TermSet::default();
+        for (files, hits) in [
+            (&files[..1], false),
+            (&files[1..], true),
+            (&files[..], true),
+        ] {
+            let item = Item {
+                hashes: &[],
+                name,
+                files,
+                content_type: ContentType::Video,
+            };
+            let own = c.patterns(&item, &none, None);
+            assert_eq!(!own.is_empty(), hits, "{files:?}");
+            // Only the files given: the read's paths past them aren't read.
+            let (mut t, mut a) = (Vec::new(), Vec::new());
+            normalize::tokens(name, &mut t);
+            let mut e = vec![t.len()];
+            normalize::paths_apart(files.iter().map(|f| &f.path[..]), &mut t, &mut e, &mut a);
+            let read_of = normalize::Read {
+                tokens: &t,
+                ends: &e,
+                apart: &a,
+            };
+            assert_eq!(c.patterns(&item, &none, Some(read_of)), own, "{files:?}");
+        }
+        // Reusing the whole read's tokens for the first path would differ.
+        let item = Item {
+            hashes: &[],
+            name,
+            files: &files[..1],
+            content_type: ContentType::Video,
+        };
+        let forced = normalize::Read {
+            apart: &[true],
+            ends: &ends[..2],
+            ..read
+        };
+        assert_ne!(
+            c.patterns(&item, &none, Some(forced)),
+            c.patterns(&item, &none, None)
+        );
+    }
+
     proptest! {
         /// The flag table finds what scanning every token finds: positions
         /// pushed past the table's reach take the scan, and give the same
