@@ -1248,13 +1248,13 @@
    "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears). | 2026-10-30T07:14Z merged land/L5 dcff7b9 -> 397b013 green (891 tests; update:: 85); holding for #184 | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #198 d9c96f9; full-ci + CI dispatched; fresh security review session_01MMjhn8LXfftTgrUx6g7rdp"
   },
   "L7": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": null,
    "pr": 186,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges | 2026-10-30T10:25Z #186 retargeted to main; land/L7 merged main -> ca08002d (docs only); CI running"
+   "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges | 2026-10-30T10:25Z #186 retargeted to main; land/L7 merged main -> ca08002d (docs only); CI running | 2026-10-30T10:30Z #186 merged 1199430f. L1-L7 all on main."
   },
   "F-filters-packs": {
    "status": "pending",
@@ -1346,7 +1346,7 @@
    "session": "session_01MMjhn95fzNhDro9AJeDYin",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding"
+   "notes": " | 2026-10-30T06:30Z launched (Opus) from land/L7; PR after L7 | 2026-10-30T07:41Z ready 57e1614 on land/L7; no rustix; owner flags: role-before-checker, postgres:16-alpine attach, --encoding | 2026-10-30T10:30Z told: merge main and open PR"
   },
   "CR-SIM": {
    "status": "running",
@@ -1368,7 +1368,7 @@
    "session": "session_01MMjhn8VPDpTCm2jVkiiVYP",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7"
+   "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7 | 2026-10-30T10:30Z told: merge main, align notes, open DRAFT PR (merges at release cut)"
   },
   "X-flake-shutdown-percolator": {
    "status": "merged",
@@ -1906,7 +1906,8 @@
   "cap_note": "2026-10-30T06:30Z owner goal 'keep building until fully blocked' (usage reset): running beyond the plan's 4-slot cap; ~10 sessions active/idle. Flag to owner.",
   "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f | 2026-10-30T06:32Z #182 merged b4d80387",
   "landing_plan_L3_L5": "DONE 2026-10-30T10:13Z: #184 merged 5e352be2. Next: #185 L6 (base main), then #186 L7 retarget after L6.",
-  "heartbeat_last": "2026-10-30T09:39Z: open PRs #195 (macOS dispatch running), #184 (blocked on #195), #185/#186 stacked, #183 superseded by #184. Merged today since 06:56Z: #181 #187 #188 #189 #190 #191 #192 #193 #194."
+  "heartbeat_last": "2026-10-30T09:39Z: open PRs #195 (macOS dispatch running), #184 (blocked on #195), #185/#186 stacked, #183 superseded by #184. Merged today since 06:56Z: #181 #187 #188 #189 #190 #191 #192 #193 #194.",
+  "landing": "2026-10-30T10:30Z: L1-L7 landed (#175 #180 #184 #185 #186). v0.5.1 blockers left: F-updater #198, CR-0f #200; soak acceptance (owner ruling); Unraid Linux soak (needs CR-COL #197); MSI service smoke."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
