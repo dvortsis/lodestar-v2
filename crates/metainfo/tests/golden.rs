@@ -78,8 +78,11 @@ fn golden_corpus() {
             fs::write(&expected_path, &got).unwrap();
             continue;
         }
+        // `.gitattributes` keeps these files byte-exact, but a checkout with
+        // CRLF conversion forced on shouldn't fail the comparison.
         let expected = fs::read_to_string(&expected_path)
-            .unwrap_or_else(|_| panic!("{} is missing", expected_path.display()));
+            .unwrap_or_else(|_| panic!("{} is missing", expected_path.display()))
+            .replace("\r\n", "\n");
         if got != expected {
             failures.push(format!(
                 "{}\n--- expected\n{expected}--- got\n{got}",

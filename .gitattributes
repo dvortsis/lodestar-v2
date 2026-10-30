@@ -1,0 +1,2 @@
+crates/metainfo/tests/golden/** -text
+fuzz/seeds/** -text
