@@ -1479,11 +1479,8 @@
       "notes": "brief written; launch when no large Rust PR is open across touched crates"
     },
     "X-filter-budget-8573C": {
-      "status": "running",
-      "session": "session_01MMjhnD99hMEjWMxfqXXsSU",
-      "model": "opus",
-      "attempt": 1,
-      "notes": " | 2026-10-30T14:35Z launched: 8573C provisional factor (1 job) makes neutralized case 53.3us on #210; per-case scaling differs on 8573C; method change goes to runner first; 50us owner budget untouched"
+      "status": "merged",
+      "pr": 226
     },
     "R-gauges": {
       "status": "merged",
@@ -2242,6 +2239,7 @@
     "2026-10-30T17:02Z CR-ADM Phase 2: one PR (~2.19k lines) approved. The evict_one exemption for permit-holding lookups (switch-on only) is approved as a \u00a72.19 runner refinement, with pinning and bound tests and a protocol-review focus. CR-SIM screen, steady stored/min off -> on: admission-pressure 29.8 -> 38.3 (+29%), healthy 76.0 -> 113.7 (+50%), high-latency 33.1 -> 41.7 (+26%); every seed better. The live A/B is still required. #225 IMP-2 fresh review session_01MMjhn9AWgi7FVXFtBZ6UHR.",
     "2026-10-30T17:07Z #224: the one re-run of the failed jobs is queued (run 41091029121). #225 IMP-2 review CHANGES (blocking: UNC/device paths touched before refusal, an NTLM leak on Windows); author told to fix, plus optional items 2-4 in the same push. #226 X-filter-budget: (b) accept the replay, no more dispatches; spread rule accepted; review session_01MMjhn93kPfFmyyUAqgBgNr.",
     "2026-10-30T17:15Z #227 CR-0d-2b-1 (witness packaging, ~610 lines) opened; runner fresh and security review session_01MMjhnBqY1uGE5su7ioUMTQ. 2b-2 started in parallel (disjoint files). #226 now at 13da98a5 (docs only; the earlier red ci-ok came from cancelled runs).",
-    "2026-10-30T17:20Z #226 review MERGE at 13da98a5; waiting for ci-ok."
+    "2026-10-30T17:20Z #226 review MERGE at 13da98a5; waiting for ci-ok.",
+    "2026-10-30T17:32Z merged #226 (b1f4511f, filter-budget per-model skew) and #224 (a332737b, clippy 2a; the re-run was green, and a \u00a72.18 comment was posted about the supervisor stall). #227 review CHANGES (blocking: switch-off chown on Docker -> runner chose (b), keep and record; plus 2-5 and a Windows CI failure) relayed. #225 re-review CHANGES (blocking: the \\??\\ prefix bypasses lexical()) relayed. #228 CR-ADM (~2.5k lines) review session_01MMjhnCJEcHjkR7GJNRTnaz."
   ]
 }
