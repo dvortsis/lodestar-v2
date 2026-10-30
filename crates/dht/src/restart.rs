@@ -854,6 +854,9 @@ fn validate(loaded: &Loaded, here: &Here) -> Result<Seeded, Reason> {
     if !(s.at_ms <= m.at_ms && m.at_ms <= now) {
         return Err(Reason::ClockBackward);
     }
+    // Against `H_s`, which rounds `H` up: at most 1 s looser than `H`,
+    // and harmless, because seeding still converts each deadline exactly
+    // (N6).
     if now - m.at_ms > u64::from(here.horizon_s) * 1000 {
         return Err(Reason::Stale);
     }
@@ -1099,7 +1102,10 @@ pub fn read_witness(witness_dir: &Path, data_dir_canonical: &str, dir_id: &Id16)
         };
     }
     let file = witness_path(witness_dir, dir_id);
-    // The file itself may not be a link (into the data dir, say).
+    // The file itself may not be a link (into the data dir, say). This is
+    // check-then-use: a link swapped in between makes the read below see
+    // a witness that isn't ours, which fails validation (another path, id
+    // or generation) or decoding, so every outcome suppresses.
     if fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
         return WitnessFound::Unusable;
     }

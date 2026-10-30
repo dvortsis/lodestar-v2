@@ -1,7 +1,8 @@
 //! CR-0d's restart files (`crates/dht/src/restart.rs`): untrusted bytes on
 //! disk. The fuzzer can't forge the container's SHA-256, so the target
-//! seals the input itself: the first byte picks the file kind and the rest
-//! is the body. Nothing may panic, whatever decodes is canonical
+//! seals the input itself: the first byte picks the file kind, a snapshot
+//! takes the next 8 bytes as the wall-clock reading for validation, and
+//! the rest is the body. Nothing may panic, whatever decodes is canonical
 //! (re-encodes to the same bytes), and a decoded snapshot that resumes
 //! never seeds a deadline earlier than the one it records.
 #![no_main]
@@ -45,11 +46,18 @@ fuzz_target!(|data: &[u8]| {
                 assert_eq!(m.encode(), bytes);
             }
         }
-        _ => snapshot(&seal(b"LDSRSNAP", body), kind),
+        _ => {
+            let Some((clock, body)) = body.split_first_chunk::<8>() else {
+                return;
+            };
+            snapshot(&seal(b"LDSRSNAP", body), u64::from_le_bytes(*clock));
+        }
     }
 });
 
-fn snapshot(bytes: &[u8], kind: u8) {
+/// `clock`: how far after the snapshot `wall0` is, in nanoseconds,
+/// including sub-millisecond offsets.
+fn snapshot(bytes: &[u8], clock: u64) {
     let Ok((s, sum)) = Snapshot::decode(bytes) else {
         return;
     };
@@ -75,25 +83,25 @@ fn snapshot(bytes: &[u8], kind: u8) {
         }),
         state_bin: Some([0; 32]),
     };
-    let ahead = u64::from(kind) * 100_003 % (u64::from(s.horizon_s) * 1000 + 2);
-    let now = s.at_ms.saturating_add(ahead);
+    let ahead_ns = clock % ((u64::from(s.horizon_s) * 1000 + 2) * 1_000_000);
+    let wall0 = Duration::from_millis(s.at_ms) + Duration::from_nanos(ahead_ns);
     let here = Here {
         path: String::new(),
         dir_path: restart::path_digest(""),
         ids: s.run.ids,
         horizon_s: s.horizon_s,
-        wall0: Duration::from_millis(now),
+        wall0,
         mono0: Instant::now(),
     };
     if let Decision::Resume(seeded) = restart::plan(&loaded, &here).decision {
         for (addr, until) in &seeded.entries {
             let e = s.entries.iter().find(|e| e.addr == *addr).expect("seeded from the file");
-            let left = until.duration_since(here.mono0).as_millis() as u64;
-            assert!(now + left >= s.at_ms + u64::from(e.remaining_s) * 1000);
+            let recorded = Duration::from_millis(s.at_ms + u64::from(e.remaining_s) * 1000);
+            assert!(wall0 + until.duration_since(here.mono0) >= recorded);
         }
         if let Some(g) = seeded.gate_until {
-            let left = g.duration_since(here.mono0).as_millis() as u64;
-            assert!(now + left >= s.at_ms + u64::from(s.gate_s) * 1000);
+            let recorded = Duration::from_millis(s.at_ms + u64::from(s.gate_s) * 1000);
+            assert!(wall0 + g.duration_since(here.mono0) >= recorded);
         }
     }
 }

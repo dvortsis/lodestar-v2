@@ -1531,3 +1531,69 @@ proptest! {
         prop_assert!(matches!(plan(&loaded, &here).decision, Decision::Suppress(_)));
     }
 }
+
+#[test]
+fn a_sub_millisecond_wall0_through_plan_never_seeds_early() {
+    // S2 floors `wall0` to the millisecond. Through `plan` (not `seed`
+    // directly), with `wall0` half a millisecond before each deadline:
+    // every restored deadline, mapped back to wall time, is at or after
+    // the one recorded. Rounding `wall0` up instead would put it 0.5 ms
+    // early.
+    let (base, _) = resumable();
+    let Found::Ok((s, _)) = &base.snapshot else {
+        unreachable!()
+    };
+    let deadlines: Vec<u64> = s
+        .entries
+        .iter()
+        .map(|e| s.at_ms + u64::from(e.remaining_s) * 1000)
+        .chain([s.at_ms + u64::from(s.gate_s) * 1000])
+        .collect();
+    let Found::Ok(m) = &base.marker else {
+        unreachable!()
+    };
+    for &deadline in deadlines.iter().filter(|&&d| d > m.at_ms) {
+        let wall0 =
+            Duration::from_millis(deadline) - Duration::from_micros(500) + Duration::from_nanos(1);
+        let here = Here::read(&FixedClock(wall0), "/srv/lodestar".into(), [2; 32], H);
+        let here = Here {
+            dir_path: [4; 32],
+            ..here
+        };
+        let Decision::Resume(seeded) = plan(&base, &here).decision else {
+            panic!("must resume at {deadline}");
+        };
+        let mut checked = 0;
+        for (addr, until) in &seeded.entries {
+            let e = s.entries.iter().find(|e| e.addr == *addr).unwrap();
+            let recorded = Duration::from_millis(s.at_ms + u64::from(e.remaining_s) * 1000);
+            assert!(
+                here.wall0 + until.duration_since(here.mono0) >= recorded,
+                "{addr}"
+            );
+            checked += 1;
+        }
+        if let Some(g) = seeded.gate_until {
+            let recorded = Duration::from_millis(s.at_ms + u64::from(s.gate_s) * 1000);
+            assert!(
+                here.wall0 + g.duration_since(here.mono0) >= recorded,
+                "gate"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "nothing was live at {deadline}");
+    }
+}
+
+/// A clock frozen at one wall reading.
+#[derive(Debug)]
+struct FixedClock(Duration);
+
+impl Clock for FixedClock {
+    fn wall(&self) -> Duration {
+        self.0
+    }
+    fn mono(&self) -> Instant {
+        Instant::now()
+    }
+}
