@@ -648,7 +648,10 @@ impl NodeHandle {
             Err(mpsc::error::TrySendError::Closed(cmd)) => (&self.stats.peer_command_closed, cmd),
         };
         Stats::inc(counter);
-        if let Command::RequestPeers(_, _, permit) = cmd {
+        if let Command::RequestPeers(_, admit, permit) = cmd {
+            // The caller sees the closed admission before the permit is
+            // back, as with a refusal.
+            drop(admit);
             PermitReturn::HandoffFailed.release(&self.stats, permit);
         }
         false

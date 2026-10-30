@@ -446,6 +446,14 @@ pub(crate) async fn run(
             }
         }
     }
+    // Requests still in the command channel hold permits too.
+    commands.close();
+    while let Ok(cmd) = commands.try_recv() {
+        if let Command::RequestPeers(_, admit, permit) = cmd {
+            drop(admit);
+            PermitReturn::Shutdown.release(&actor.stats, permit);
+        }
+    }
     actor.release_permits();
     actor.finish()
 }
@@ -637,6 +645,7 @@ impl Actor {
                     self.get_peers_queue.retain_mut(|(_, reply, permit)| {
                         let keep = reply.is_none();
                         if !keep {
+                            drop(reply.take());
                             PermitReturn::Paused.release(stats, permit.take());
                         }
                         keep
@@ -2301,6 +2310,9 @@ mod tests {
         assert_eq!(sem.available_permits(), MAX_GET_PEERS);
         let total: u64 = a.stats.snapshot().peer_permit_returns.iter().sum();
         assert_eq!(total, granted);
+        // An acknowledgment fails only if the caller goes between the
+        // actor's closed check and its send, which a single thread can't
+        // arrange; the path is the two lines above `peer_ack_failed`.
         assert_eq!(returns(&a, PermitReturn::AckFailed), 0);
     }
 

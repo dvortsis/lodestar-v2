@@ -688,12 +688,12 @@ These series count only with `dht.coordinated_admission` on ([the decision](deci
 | `fetch_admission_grants_total{kind,class}` | Requests granted permits, by `kind` as above and `class` `interactive` or `background`. |
 | `fetch_admission_refusals_total{reason}` | Requests that held permits but weren't accepted: `refused` (the actor answered no; its reason is in `dht_peer_rejection_reasons_total`) or `unacknowledged` (the handoff or acknowledgment was lost). Neither uses an attempt or a back-off. |
 | `fetch_admission_holds_total` | 1 s holds on a finder after a refusal. |
-| `fetch_admission_permit_returns_total{boundary}` | Permits returned in the pool: `finder_full` and `finder_closed` (granted, never delivered), and `unused` (taken by a wakeup, never granted). |
+| `fetch_admission_permit_returns_total{boundary}` | Permits returned in the pool: `finder_full` and `finder_closed` (granted, never delivered), and `unused` (never granted: kept back from a wakeup or a partial grant and given back on a hold, a pause, shutdown or an empty queue, or taken for a waiter that had run out of attempts). |
 | `dht_peer_permit_returns_total{boundary}` | Permits returned in the actor: `completed`, `cancelled_queued`, `cancelled_active`, `paused`, `refused`, `ack_failed`, `handoff_failed`, `shutdown`. |
 | `fetch_admission_waiters` | Gauge: keys waiting for a lookup now. |
 | `fetch_admission_permits_in_use` | Gauge: permits granted requests hold now, across finders. |
 
-With one finder (the DHT), `fetch_admission_grants_total` = `dht_peer_permit_returns_total` + `fetch_admission_permit_returns_total{boundary=~"finder_full|finder_closed"}` + `fetch_admission_permits_in_use`. A persistent gap means a leaked or duplicated permit; a brief one is a permit in transit between the pool and the actor.
+With one finder (the DHT), `fetch_admission_grants_total` = `dht_peer_permit_returns_total` + `fetch_admission_permit_returns_total{boundary=~"finder_full|finder_closed"}` + `fetch_admission_permits_in_use`. A persistent gap means a leaked or duplicated permit; a brief one is a permit in transit between the pool and the actor. At shutdown, a request still in the DHT plugin's channel returns its permit without being counted.
 
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 

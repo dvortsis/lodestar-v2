@@ -188,14 +188,26 @@ impl Harness {
     }
 
     /// Permits granted = given back here + given back in the pool + in use.
+    /// The in-use gauge refreshes on the pool's next turn, so each check
+    /// gives the pool one (a command round trip).
     async fn conserved(&self) {
         let returned = self.returned;
-        self.until("permit conservation", |s| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.handle.queued().await;
+            sleep(Duration::from_millis(1)).await;
+            let s = self.stats();
             let granted: u64 = s.admission_grants.iter().flatten().map(load).sum();
             let pool: u64 = s.admission_permit_returns[..2].iter().map(load).sum();
-            granted == returned + pool + load(&s.admission_permits_in_use)
-        })
-        .await;
+            let in_use = load(&s.admission_permits_in_use);
+            if granted == returned + pool + in_use {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "permits: granted {granted}, returned {returned} + pool {pool} + in use {in_use}"
+            );
+        }
     }
 
     async fn stop(self) -> (Vec<QueuedKey>, mpsc::Receiver<PeerRequest>) {
@@ -523,6 +535,7 @@ async fn a_closed_finder_is_never_woken_for_again() {
     assert_eq!(load(&s.admission_permit_returns[1]), 1);
     assert_eq!(load(&s.finder_closed), 3);
     assert_eq!(load(&s.admission_waiters), 0);
+    assert_eq!(load(&s.admission_wakeups), 0, "never woken for");
     stop.send(true).unwrap();
     assert!(task.await.unwrap().iter().all(|q| q.attempts == 0));
 }
@@ -644,5 +657,188 @@ async fn off_means_no_permits_and_no_new_counters() {
         + load(&s.admission_waiters)
         + load(&s.admission_permits_in_use);
     assert_eq!(new, 0);
+    h.stop().await;
+}
+
+/// The eviction exemption never pins an entry: whichever way a permitted
+/// lookup ends (completion, timeout, the finder dropping it, the pause,
+/// shutdown), its permit comes back and the entry is evictable again.
+#[tokio::test(start_paused = true)]
+async fn a_permitted_lookup_is_released_and_evictable_after_every_boundary() {
+    for boundary in ["completion", "timeout", "dropped", "pause", "shutdown"] {
+        let mut h = Harness::start(PoolConfig {
+            max_pending: 2,
+            lookup_wait: Duration::from_secs(30),
+            ..config(true, 1)
+        });
+        h.discover(1, false).await;
+        let a = h.next().await;
+        let mut a = h.accept(a);
+        h.fence(1).await;
+        match boundary {
+            "completion" => {
+                h.complete(a, vec![]);
+                h.until("A done", |s| load(&s.lookups) == 0).await;
+            }
+            "timeout" => {
+                h.reclaim(a).await;
+                h.until("A timed out", |s| load(&s.lookups) == 0).await;
+            }
+            "dropped" => {
+                // The finder drops it unanswered: A is requeued with its
+                // attempt back, granted again, and this time completes.
+                h.give_back(a.permit.take());
+                drop(a.done);
+                let r = h.next().await;
+                assert_eq!(r.key, key(1));
+                let again = h.accept(r);
+                h.complete(again, vec![]);
+                h.until("A done", |s| load(&s.lookups) == 0).await;
+            }
+            "pause" => {
+                h.handle.set_paused(true).await;
+                h.give_back(a.permit.take());
+                drop(a.done);
+                h.until("A requeued", |s| load(&s.admission_waiters) == 1)
+                    .await;
+            }
+            _ => {
+                h.conserved().await;
+                let (saved, mut requests) = h.stop().await;
+                assert_eq!(saved.len(), 1, "{boundary}");
+                tokio::time::timeout(Duration::from_secs(10), a.done.closed())
+                    .await
+                    .unwrap();
+                drop(a.permit.take());
+                drained(&mut requests).await;
+                continue;
+            }
+        }
+        h.conserved().await;
+        assert_eq!(load(&h.stats().admission_permits_in_use), 0, "{boundary}");
+        // A is the oldest and no longer holds a permit: it goes first.
+        h.discover(2, false).await;
+        h.discover(3, false).await;
+        h.until("one eviction", |s| s.lost_count(Loss::Evicted) == 1)
+            .await;
+        let left: Vec<_> = h
+            .handle
+            .snapshot()
+            .await
+            .iter()
+            .map(|q| q.info_hash)
+            .collect();
+        assert!(!left.contains(&key(1)), "{boundary}: A was pinned");
+        h.stop().await;
+    }
+}
+
+/// The exemption is bounded by the permits: with every entry holding one,
+/// arrivals are refused entry instead of growing the pool, and the pool
+/// never holds more than `max_pending` keys.
+#[tokio::test(start_paused = true)]
+async fn the_eviction_bound_holds_when_every_entry_holds_a_permit() {
+    let mut h = Harness::start(PoolConfig {
+        max_pending: 8,
+        ..config(true, 32)
+    });
+    let mut held = Vec::new();
+    for n in 1..=8 {
+        h.discover(n, false).await;
+        let r = h.next().await;
+        held.push(h.accept(r));
+    }
+    h.until("eight admitted", |s| load(&s.admission_permits_in_use) == 8)
+        .await;
+    for n in 100..150 {
+        h.discover(n, false).await;
+        assert!(load(&h.stats().pending) <= 8);
+    }
+    h.until("arrivals turned away", |s| {
+        s.lost_count(Loss::Evicted) == 50
+    })
+    .await;
+    assert_eq!(load(&h.stats().pending), 8);
+    assert_eq!(load(&h.stats().evicted_service[0]), 50, "none were served");
+    assert!(
+        held.iter().all(|a| !a.done.is_closed()),
+        "none was cancelled"
+    );
+    assert!(load(&h.stats().admission_permits_in_use) <= 32);
+    // Their lookups end, and arrivals can evict them again.
+    for a in held {
+        h.complete(a, vec![]);
+    }
+    h.until("all done", |s| load(&s.lookups) == 0).await;
+    h.discover(200, false).await;
+    h.until("an entry evicted", |s| s.lost_count(Loss::Evicted) == 51)
+        .await;
+    assert!(
+        h.handle
+            .snapshot()
+            .await
+            .iter()
+            .any(|q| q.info_hash == key(200)),
+        "the arrival got in"
+    );
+    assert_eq!(load(&h.stats().pending), 8);
+    h.conserved().await;
+    h.stop().await;
+}
+
+/// A refusal whose permit comes back while the pool is busy with something
+/// else (here an arrival) is read before that permit is taken again: the
+/// arrival waits, and the refused key is asked again after its hold.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_is_read_before_its_permit_is_reused_on_any_path() {
+    let mut h = Harness::start(config(true, 1));
+    h.discover(1, false).await;
+    let r = h.next().await;
+    let refused_at = Instant::now();
+    h.refuse(r);
+    h.discover(2, false).await;
+    let r = h.next().await;
+    assert_eq!(r.key, key(1), "the refused key, requeued in front");
+    assert!(Instant::now() - refused_at >= Duration::from_secs(1));
+    assert_eq!(load(&h.stats().admission_holds), 1);
+    let a = h.accept(r);
+    h.complete(a, vec![]);
+    let r = h.next().await;
+    assert_eq!(r.key, key(2));
+    h.refuse(r);
+    h.conserved().await;
+    h.stop().await;
+}
+
+/// Private keys never take permits, and a paused pool still serves them
+/// after it resumes, as it does with the switch off.
+#[tokio::test(start_paused = true)]
+async fn private_keys_bypass_admission_and_survive_a_pause() {
+    let mut h = Harness::start(config(true, 1));
+    h.handle.set_paused(true).await;
+    let mut found = Found::key(key(1), 0);
+    found.private_source = true;
+    h.disc
+        .send(Discovery {
+            source: SourceId::new(0).unwrap(),
+            found,
+            at: 1_700_000_000,
+            reply: false,
+        })
+        .await
+        .unwrap();
+    h.until("queued", |s| load(&s.pending) == 1).await;
+    h.handle.set_paused(false).await;
+    // Asked of no finder: the no-finder path, then its back-off.
+    h.until("the private key's lookup", |s| {
+        load(&s.lookup_unaccepted) == 1
+    })
+    .await;
+    h.until("nothing waiting", |s| load(&s.admission_waiters) == 0)
+        .await;
+    assert_eq!(load(&h.stats().admission_waits[0]), 0);
+    let grants: u64 = h.stats().admission_grants.iter().flatten().map(load).sum();
+    assert_eq!(grants, 0);
+    h.quiet_for(Duration::from_secs(30)).await;
     h.stop().await;
 }

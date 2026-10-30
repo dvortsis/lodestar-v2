@@ -525,6 +525,10 @@ impl Pool {
             }
         }
         self.tasks.abort_all();
+        if let Some(a) = &mut self.admission {
+            let unused = a.drop_held();
+            self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+        }
         self.snapshot()
     }
 
@@ -752,7 +756,8 @@ impl Pool {
             State::Backoff => self.request_peers(key, WaitKind::Retry),
             // A copy joins the interactive queue; whichever is granted
             // first makes the other stale.
-            State::LookupQueued if self.admission.is_some() => {
+            // Private keys never take permits.
+            State::LookupQueued if self.admission.is_some() && !e.private => {
                 let kind = if e.lookup_requested {
                     WaitKind::Retry
                 } else {
@@ -816,6 +821,7 @@ impl Pool {
         let grant = match grant {
             Some(grant) => Some(grant),
             None if coordinated => {
+                self.poll_unaccepted();
                 let entries = &self.entries;
                 let a = self.admission.as_mut().expect("coordinated");
                 // A key already waiting goes first: no arrival or retry
@@ -939,6 +945,7 @@ impl Pool {
             if self.lookups >= self.cfg.max_lookups {
                 return;
             }
+            self.poll_unaccepted();
             let entries = &self.entries;
             let Some(a) = self.admission.as_mut() else {
                 return;
@@ -946,6 +953,13 @@ impl Pool {
             let live = |w: &Waiter| is_waiting(entries, w);
             if !a.has_live_waiter(live) {
                 break;
+            }
+            if !a.active() {
+                // Every finder closed: waiters take the ordinary no-finder
+                // path (unaccepted, back-off), with no permit to grant.
+                let (waiter, _) = a.pop(live).expect("a live waiter");
+                self.request_peers(waiter.key, waiter.kind);
+                continue;
             }
             let Some(permits) = a.take_permits(Instant::now()) else {
                 return;
@@ -956,6 +970,22 @@ impl Pool {
         if let Some(a) = &mut self.admission {
             let unused = a.drop_held();
             self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+        }
+    }
+
+    /// Reads the answers of permitted requests not yet accepted. A finder
+    /// answers a refusal before it returns the permit, so reading first
+    /// sets the refusal's hold before that permit can be taken again,
+    /// whichever path takes it.
+    fn poll_unaccepted(&mut self) {
+        let keys: Vec<_> = self
+            .requests
+            .iter()
+            .filter(|(_, r)| r.coordinated && !r.accepted)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in keys {
+            self.poll_request(key);
         }
     }
 
@@ -1172,9 +1202,11 @@ impl Pool {
         }
         if self.admission.is_some() {
             self.drain_admission();
-        } else {
-            self.drain_lookup_backlog();
         }
+        // Under coordinated admission this still serves keys that don't
+        // take permits: private ones, and all of them once no finder is
+        // open.
+        self.drain_lookup_backlog();
         let mut deferred = Vec::new();
         while self.tasks.len() < self.cfg.max_sockets {
             let Some(key) = self.next_ready() else {
