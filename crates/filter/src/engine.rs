@@ -321,7 +321,7 @@ impl Engine {
             }
             return Some(d);
         }
-        let ctx = facts.map(|f| packs::Ctx::new(item, f));
+        let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words));
         let packs = PackRule::ALL
             .into_iter()
             .filter(|r| self.packs.is_on(*r) && ctx.as_ref().is_some_and(|c| c.matches(*r)))
