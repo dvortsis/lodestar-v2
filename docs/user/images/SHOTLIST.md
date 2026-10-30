@@ -13,3 +13,4 @@ Lodestar UI screens (`setup-screen.png`, `search-{light,dark}.png`, `detail-{lig
 | 5.1 | **Search** screen with facet rail and composition bars | `S-doc-shots` | Captured (`search-light.png`, `search-dark.png`) |
 | 5.2 | Torrent detail drawer open on **Search** | `S-doc-shots` | Captured (`detail-light.png`, `detail-dark.png`) |
 | 5.3 | **Discover** and **Insights** screens | `S-doc-shots` | Captured (`discover-{light,dark}.png`, `insights-{light,dark}.png`) |
+| 5.3 | Status pill in its normal and stalled states (v0.5.1) | `S-doc-shots` | Pending capture |

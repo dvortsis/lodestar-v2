@@ -2,8 +2,8 @@
 
 This chapter installs Lodestar from the Unraid template or with Docker Compose, then takes you through first run.
 
-> [!IMPORTANT]
-> The Lodestar image is published from the first release. No release exists yet, so `latest` isn't available and **Apply** or `docker compose up` fails with "manifest unknown". The only tag today is `nightly`, which is built daily from `main` and untested. Use it only to try Lodestar, and check this guide again after the first release.
+> [!WARNING]
+> Don't run the `nightly` image on real data. It is built daily from `main` and untested, and it can apply database migrations that the release can't read. Once that happens, you can't go back to the release without a backup. Use `nightly` only for a throwaway try-out, and take a backup first ([section 3.7](03-keep-lodestar-safe.md#37-back-up-and-restore)) if you ever ran it on data you want to keep.
 
 > [!NOTE]
 > **What you will learn**
@@ -174,14 +174,14 @@ To install with the named volume:
     docker compose up -d
     ```
 
-   **Result:** Docker pulls the image and starts the container `lodestar`. Until the first release, this fails with "manifest unknown" unless you change the tag to `nightly`.
+   **Result:** Docker pulls the image and starts the container `lodestar`.
 4. Check that it is healthy:
 
     ```bash
     docker inspect --format '{{.State.Health.Status}}' lodestar
     ```
 
-   **Result:** The command prints `healthy` after about 30 seconds.
+   **Result:** The command prints `healthy` after about 30 seconds. `healthy` means only that the Lodestar process is alive. It doesn't mean Lodestar is finding torrents. The status pill on the **Search** screen and **Insights** show that ([section 5.3](05-use-lodestar.md#53-browse-discover-and-insights)).
 
 > [!WARNING]
 > Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there.
@@ -214,7 +214,7 @@ To keep the data in a folder you own instead:
 
 Do not use `network_mode: host` unless you need it. It skips Docker's network translation for better DHT reach, but it exposes port `8090` on every host interface.
 
-Pin an exact version such as `x.y.z` instead of `latest` once releases exist, if you want updates only when you decide.
+Pin an exact version such as `x.y.z` instead of `latest`, if you want updates only when you decide.
 
 ## 2.5 Create the admin password
 <!-- index: setup token; admin password; first run -->
@@ -238,6 +238,11 @@ To create the admin password:
 *Figure 2.3: The first-run setup screen at /setup, with the Setup token field outlined and log instructions expanded.*
 
 The crawler starts at once. The library fills slowly at first while the DHT routing table warms up.
+
+> [!NOTE]
+> **What to expect in the first hours**
+> - Search works at once, but the index is small. It grows over days, not minutes.
+> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start.
 
 > [!NOTE]
 > **Worked example**

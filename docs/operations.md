@@ -229,10 +229,17 @@ split are **planned**.
     snapshot until it is deleted.
   - `lodestar stats` shows how many snapshots there are and their total
     size.
-- **`lodestar backup`, using SQLite's online backup (planned).** Until then,
-  back up with the service stopped: copy `lodestar.db` (including `-wal`),
-  `seal.key`, `auth.json` and `config.toml`. The index can be rebuilt, so it
-  can be skipped.
+- **`lodestar backup`** makes a consistent copy of everything that can't be
+  rebuilt, and it is safe while Lodestar runs (it uses SQLite's online
+  backup). It writes a new folder `lodestar-backup-<time>` under `backups/`
+  in the data folder, with a `README.txt` that repeats the restore steps. In
+  Docker, run `docker exec lodestar /lodestar backup` (on Unraid the container
+  is named `Lodestar`). Copy the folder off the cache pool, and keep it
+  private. If Lodestar can't be started, fall back to copying with the service
+  stopped: `lodestar.db` (including `-wal`), `seal.key`, `auth.json` and
+  `config.toml`. The index can be rebuilt, so it can be skipped. The guide's
+  [section 3.7](user/03-keep-lodestar-safe.md#37-back-up-and-restore) has the
+  full steps.
 - **Update notices** inside the app are planned. Lodestar sends no telemetry.
 - **Importing from bitmagnet:** stop Lodestar, then run
   `lodestar import-bitmagnet postgres://user:pass@host/bitmagnet`. It reads
