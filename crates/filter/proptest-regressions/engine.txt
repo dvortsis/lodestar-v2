@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b0ee2dac1a3461663c825e619cc982338255ef0378ef6fdd20b7e066a4cf32e4 # shrinks to (name, files) = ("", [FileInfo { path: ["webweb x ", "h.e.v.c .mkv"], size: 1048576, padding: false }]), list = [Override { id: 1, what: Keyword("hevc"), strength: Override, scope: None, expires_at: None, shadow_until: None }], more = [], now = 0

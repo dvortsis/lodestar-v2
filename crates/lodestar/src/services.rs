@@ -537,16 +537,9 @@ impl Services {
         // Past the bound its connections are dropped: the tasks axum
         // spawned for them run on, detached, until the runtime ends, and
         // hold only the router's state, nothing `shutdown` waits on.
-        let served = tokio::select! {
-            served = serve => served,
-            () = forced_after(stopping, SHUTDOWN_GRACE) => {
-                lodestar_log::log_event!(
-                    crate::logging::events::APP_SHUTDOWN_FORCED,
-                    waited_s = SHUTDOWN_GRACE.as_secs()
-                );
-                Ok(())
-            }
-        };
+        let served = bounded(serve, stopping, SHUTDOWN_GRACE)
+            .await
+            .unwrap_or(Ok(()));
         // Saved and logged whatever `serve` returned: no error skips the
         // save or the required `app.stop`.
         events.close();
@@ -570,6 +563,26 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 /// never hang on one. With [`SHUTDOWN_GRACE`] and the saves, inside the
 /// update supervisor's and the SCM's 30 s.
 pub const RUNTIME_GRACE: Duration = Duration::from_secs(5);
+
+/// `serve`'s result, or `None` once `grace` has passed since `stopping`
+/// turned true: the future is dropped then, and `app.shutdown_forced` is
+/// logged.
+async fn bounded<T>(
+    serve: impl Future<Output = T>,
+    stopping: watch::Receiver<bool>,
+    grace: Duration,
+) -> Option<T> {
+    tokio::select! {
+        served = serve => Some(served),
+        () = forced_after(stopping, grace) => {
+            lodestar_log::log_event!(
+                crate::logging::events::APP_SHUTDOWN_FORCED,
+                waited_s = grace.as_secs()
+            );
+            None
+        }
+    }
+}
 
 /// Resolves `grace` after `stopping` turns true; never if it doesn't.
 async fn forced_after(mut stopping: watch::Receiver<bool>, grace: Duration) {
@@ -692,5 +705,56 @@ impl lodestar_api::ApiEvents for Events {
             metric::latency_bucket(took),
             1,
         );
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    /// Every case finishes well inside this; it only keeps a broken one
+    /// from hanging the suite.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    /// A serve future that never ends (a stalled client's) is dropped
+    /// once the bound has passed after the signal.
+    #[tokio::test]
+    async fn a_serve_that_never_ends_is_dropped_after_the_bound() {
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        let got = tokio::time::timeout(
+            DEADLINE,
+            bounded(std::future::pending::<()>(), rx, Duration::from_millis(50)),
+        )
+        .await
+        .expect("the bound ended it");
+        assert_eq!(got, None);
+    }
+
+    /// A serve future that ends wins, whatever the bound.
+    #[tokio::test]
+    async fn a_serve_that_ends_returns_its_result() {
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        let got = tokio::time::timeout(DEADLINE, bounded(async { 7 }, rx, DEADLINE * 2))
+            .await
+            .unwrap();
+        assert_eq!(got, Some(7));
+    }
+
+    /// Before the signal the bound never runs, even at zero: only `serve`
+    /// can end the race.
+    #[tokio::test]
+    async fn without_the_signal_the_bound_never_runs() {
+        let (_tx, rx) = watch::channel(false);
+        let (done, ended) = tokio::sync::oneshot::channel();
+        let serve = async move { ended.await.unwrap() };
+        let race = tokio::spawn(bounded(serve, rx, Duration::ZERO));
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        done.send("served").unwrap();
+        let got = tokio::time::timeout(DEADLINE, race).await.unwrap().unwrap();
+        assert_eq!(got, Some("served"));
     }
 }

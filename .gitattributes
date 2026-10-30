@@ -2,3 +2,6 @@
 /web/** text=auto eol=lf
 # These textual originals are verified byte-for-byte against SHA256SUMS.txt.
 /brand/source/** text=auto eol=lf
+# Parser goldens and fuzz seeds are raw bytes: never convert line endings.
+crates/metainfo/tests/golden/** -text
+fuzz/seeds/** -text

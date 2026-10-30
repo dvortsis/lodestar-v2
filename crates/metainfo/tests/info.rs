@@ -324,6 +324,31 @@ fn rejections() {
             with(base.clone(), "files", l(vec![v1_file(&[], 1)])),
             "empty path",
         ),
+        (
+            // Only padding may omit its path, and only symlinks their length.
+            with(base.clone(), "files", l(vec![d(vec![("length", i(1))])])),
+            "missing field \"path\"",
+        ),
+        (
+            with(
+                base.clone(),
+                "files",
+                l(vec![d(vec![("attr", b("hx")), ("path", path(&["a"]))])]),
+            ),
+            "missing field \"length\"",
+        ),
+        (
+            d(vec![
+                (
+                    "file tree",
+                    d(vec![("f", d(vec![("", d(vec![("attr", b("x"))]))]))]),
+                ),
+                ("meta version", i(2)),
+                ("name", b("x")),
+                ("piece length", i(16_384)),
+            ]),
+            "missing field \"length\"",
+        ),
         (with(base.clone(), "pieces", b([0; 19])), "multiple of 20"),
         (with(base.clone(), "piece length", i(0)), "zero"),
         (with(base.clone(), "meta version", i(3)), "meta version 3"),
@@ -476,4 +501,191 @@ fn torrent_info_hash_uses_exact_raw_bytes() {
     let t = TorrentFile::parse(&torrent).unwrap();
     assert_eq!(t.info, Info::parse(&info_raw).unwrap());
     assert_eq!(t.info.info_size, info_raw.len());
+}
+
+#[test]
+fn bep47_padding_and_symlink_shapes() {
+    let link = |target: OwnedValue| {
+        d(vec![
+            ("attr", b("l")),
+            ("path", path(&["link"])),
+            ("symlink path", target),
+        ])
+    };
+    let files = vec![
+        v1_file(&["a"], 1),
+        // An empty path list is as good as none for padding.
+        d(vec![
+            ("attr", b("p")),
+            ("length", i(10)),
+            ("path", l(vec![])),
+        ]),
+        link(path(&["a"])),
+        // Targets go through the bounded path parser; a bad one is dropped.
+        link(b("not a list")),
+        link(l(vec![b("x"); 100])),
+    ];
+    let info = parse(&multi("x", files, 16_384, 1)).unwrap();
+    assert_eq!(info.files[1].path, [b".pad".to_vec(), b"padding".to_vec()]);
+    assert!(info.files[1].is_padding());
+    assert_eq!(info.total_size, 1);
+    assert_eq!(info.files[2].symlink_target, Some(vec![b"a".to_vec()]));
+    for f in &info.files[2..] {
+        assert_eq!(f.size, 0);
+        assert!(f.attrs.contains(FileAttrs::SYMLINK));
+    }
+    assert_eq!(info.files[3].symlink_target, None);
+    assert_eq!(info.files[4].symlink_target, None, "over max_path_depth");
+
+    // An explicit length is still taken as given.
+    let files = vec![with(link(path(&["a"])), "length", i(7))];
+    assert_eq!(
+        parse(&multi("x", files, 16_384, 1)).unwrap().files[0].size,
+        7
+    );
+}
+
+#[test]
+fn v2_symlink_targets_are_bounded() {
+    let opts = ParseOptions {
+        limits: Limits {
+            max_path_bytes: 8,
+            ..Limits::DEFAULT
+        },
+        encoding_hint: None,
+    };
+    let link = |target: &[&str]| {
+        d(vec![(
+            "",
+            d(vec![("attr", b("l")), ("symlink path", path(target))]),
+        )])
+    };
+    let v = d(vec![
+        (
+            "file tree",
+            d(vec![
+                ("long", link(&["123456789"])),
+                ("ok", link(&["dir", "f"])),
+            ]),
+        ),
+        ("meta version", i(2)),
+        ("name", b("x")),
+        ("piece length", i(16_384)),
+    ]);
+    let info = Info::parse_with(&to_vec(&v), &opts).unwrap();
+    assert_eq!(info.files[0].symlink_target, None);
+    assert_eq!(
+        info.files[1].symlink_target,
+        Some(vec![b"dir".to_vec(), b"f".to_vec()])
+    );
+}
+
+#[test]
+fn utf8_overrides_correct_a_wrong_encoding_guess() {
+    let gbk = |s: &str| encoding_rs::GBK.encode(s).0.into_owned();
+    let files = vec![
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第一集 高清"))])),
+            ("path.utf-8", path(&["第一集 高清"])),
+        ]),
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第二集 高清"))])),
+        ]),
+    ];
+    let v = multi("x", files, 16_384, 1);
+    // A wrong hint stands in for a wrong statistical guess: the pair of
+    // `path` and `path.utf-8` shows the creator wrote GBK.
+    let opts = ParseOptions {
+        encoding_hint: TextEncoding::for_label(b"euc-kr"),
+        ..ParseOptions::default()
+    };
+    let info = Info::parse_with(&to_vec(&v), &opts).unwrap();
+    assert_eq!(info.path_encoding.name(), "GBK");
+    assert_eq!(info.files[1].path[0], gbk("第二集 高清"));
+    assert_eq!(info.path_string(&info.files[0]), "第一集 高清");
+    assert_eq!(info.path_string(&info.files[1]), "第二集 高清");
+
+    // A pair that matches no encoding (a wrong override) changes nothing.
+    let files = vec![
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(b"\xff\xfe")])),
+            ("path.utf-8", path(&["第一集"])),
+        ]),
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第二集 高清"))])),
+        ]),
+    ];
+    let info = Info::parse_with(&to_vec(&multi("x", files, 16_384, 1)), &opts).unwrap();
+    assert_eq!(info.path_encoding.name(), "EUC-KR");
+}
+
+#[test]
+fn resolved_paths_respect_the_byte_limit() {
+    // Decoding legacy text to UTF-8 (case 3) can triple its length.
+    let gbk = |s: &str| encoding_rs::GBK.encode(s).0.into_owned();
+    let files = |target: Vec<u8>, extra: &[u8]| {
+        vec![
+            d(vec![
+                ("length", i(1)),
+                ("path", l(vec![b(gbk("第一集"))])),
+                ("path.utf-8", path(&["한국어"])),
+            ]),
+            d(vec![
+                ("length", i(1)),
+                (
+                    "path",
+                    l(vec![b(
+                        [gbk("第二集 高清中文字幕"), extra.to_vec()].concat()
+                    )]),
+                ),
+            ]),
+            d(vec![
+                ("attr", b("l")),
+                ("path", l(vec![b(gbk("最新一集"))])),
+                ("symlink path", l(vec![b(target)])),
+            ]),
+        ]
+    };
+    let max = Limits::DEFAULT.max_path_bytes;
+    let info = parse(&multi("x", files(vec![0xff; max], b""), 16_384, 1)).unwrap();
+    assert_eq!(info.path_encoding, TextEncoding::UTF8);
+    assert!(info.files[2].attrs.contains(FileAttrs::SYMLINK));
+    assert_eq!(info.files[2].symlink_target, None, "grew past the limit");
+    for f in &info.files {
+        assert!(f.path.iter().map(Vec::len).sum::<usize>() <= max);
+    }
+
+    let err = parse(&multi("x", files(b"t".to_vec(), &[0xff; 3000]), 16_384, 1)).unwrap_err();
+    assert_eq!(
+        err,
+        Error::LimitExceeded {
+            what: "path length",
+            limit: max
+        }
+    );
+}
+
+#[test]
+fn non_charset_hints_are_ignored() {
+    let files = vec![d(vec![
+        ("length", i(1)),
+        ("path", l(vec![b(b"caf\xe9 cr\xe8me")])),
+    ])];
+    let v = multi("x", files, 16_384, 1);
+    for label in [&b"utf-16le"[..], b"replacement", b"x-user-defined"] {
+        let opts = ParseOptions {
+            encoding_hint: TextEncoding::for_label(label),
+            ..ParseOptions::default()
+        };
+        let info = Info::parse_with(&to_vec(&v), &opts).unwrap();
+        assert!(
+            ["windows-1252", "ISO-8859-2", "ISO-8859-15"].contains(&info.path_encoding.name()),
+            "{label:?} gave {:?}",
+            info.path_encoding
+        );
+    }
 }
