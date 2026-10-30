@@ -324,6 +324,31 @@ fn rejections() {
             with(base.clone(), "files", l(vec![v1_file(&[], 1)])),
             "empty path",
         ),
+        (
+            // Only padding may omit its path, and only symlinks their length.
+            with(base.clone(), "files", l(vec![d(vec![("length", i(1))])])),
+            "missing field \"path\"",
+        ),
+        (
+            with(
+                base.clone(),
+                "files",
+                l(vec![d(vec![("attr", b("hx")), ("path", path(&["a"]))])]),
+            ),
+            "missing field \"length\"",
+        ),
+        (
+            d(vec![
+                (
+                    "file tree",
+                    d(vec![("f", d(vec![("", d(vec![("attr", b("x"))]))]))]),
+                ),
+                ("meta version", i(2)),
+                ("name", b("x")),
+                ("piece length", i(16_384)),
+            ]),
+            "missing field \"length\"",
+        ),
         (with(base.clone(), "pieces", b([0; 19])), "multiple of 20"),
         (with(base.clone(), "piece length", i(0)), "zero"),
         (with(base.clone(), "meta version", i(3)), "meta version 3"),
@@ -476,4 +501,81 @@ fn torrent_info_hash_uses_exact_raw_bytes() {
     let t = TorrentFile::parse(&torrent).unwrap();
     assert_eq!(t.info, Info::parse(&info_raw).unwrap());
     assert_eq!(t.info.info_size, info_raw.len());
+}
+
+#[test]
+fn bep47_padding_and_symlink_shapes() {
+    let link = |target: OwnedValue| {
+        d(vec![
+            ("attr", b("l")),
+            ("path", path(&["link"])),
+            ("symlink path", target),
+        ])
+    };
+    let files = vec![
+        v1_file(&["a"], 1),
+        // An empty path list is as good as none for padding.
+        d(vec![
+            ("attr", b("p")),
+            ("length", i(10)),
+            ("path", l(vec![])),
+        ]),
+        link(path(&["a"])),
+        // Targets go through the bounded path parser; a bad one is dropped.
+        link(b("not a list")),
+        link(l(vec![b("x"); 100])),
+    ];
+    let info = parse(&multi("x", files, 16_384, 1)).unwrap();
+    assert_eq!(info.files[1].path, [b".pad".to_vec(), b"padding".to_vec()]);
+    assert!(info.files[1].is_padding());
+    assert_eq!(info.total_size, 1);
+    assert_eq!(info.files[2].symlink_target, Some(vec![b"a".to_vec()]));
+    for f in &info.files[2..] {
+        assert_eq!(f.size, 0);
+        assert!(f.attrs.contains(FileAttrs::SYMLINK));
+    }
+    assert_eq!(info.files[3].symlink_target, None);
+    assert_eq!(info.files[4].symlink_target, None, "over max_path_depth");
+
+    // An explicit length is still taken as given.
+    let files = vec![with(link(path(&["a"])), "length", i(7))];
+    assert_eq!(
+        parse(&multi("x", files, 16_384, 1)).unwrap().files[0].size,
+        7
+    );
+}
+
+#[test]
+fn v2_symlink_targets_are_bounded() {
+    let opts = ParseOptions {
+        limits: Limits {
+            max_path_bytes: 8,
+            ..Limits::DEFAULT
+        },
+        encoding_hint: None,
+    };
+    let link = |target: &[&str]| {
+        d(vec![(
+            "",
+            d(vec![("attr", b("l")), ("symlink path", path(target))]),
+        )])
+    };
+    let v = d(vec![
+        (
+            "file tree",
+            d(vec![
+                ("long", link(&["123456789"])),
+                ("ok", link(&["dir", "f"])),
+            ]),
+        ),
+        ("meta version", i(2)),
+        ("name", b("x")),
+        ("piece length", i(16_384)),
+    ]);
+    let info = Info::parse_with(&to_vec(&v), &opts).unwrap();
+    assert_eq!(info.files[0].symlink_target, None);
+    assert_eq!(
+        info.files[1].symlink_target,
+        Some(vec![b"dir".to_vec(), b"f".to_vec()])
+    );
 }

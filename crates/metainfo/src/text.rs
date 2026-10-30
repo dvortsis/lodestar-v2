@@ -126,6 +126,15 @@ impl TextEncoding {
         detector.feed(b"", true);
         TextEncoding::from_encoding(detector.guess(None, Utf8Detection::Deny))
     }
+
+    /// Encodes `text` into this encoding only if that is lossless: every
+    /// character is representable and decoding gives `text` back. Encodings
+    /// `encoding_rs` can't write (UTF-16, replacement) never qualify.
+    pub(crate) fn encode_exact(self, text: &str) -> Option<Vec<u8>> {
+        let encoding = self.encoding();
+        let (raw, used, unmappable) = encoding.encode(text);
+        (!unmappable && used == encoding && self.decode(&raw) == text).then(|| raw.into_owned())
+    }
 }
 
 impl fmt::Debug for TextEncoding {
@@ -179,6 +188,20 @@ mod tests {
         let (raw, _, _) = encoding_rs::SHIFT_JIS.encode("日本語のファイル名とフォルダ");
         let enc = TextEncoding::detect([&raw[..]].into_iter(), None);
         assert_eq!(enc.decode(&raw), "日本語のファイル名とフォルダ");
+    }
+
+    #[test]
+    fn encode_exact_rejects_lossy_targets() {
+        let gbk = TextEncoding::for_label(b"gbk").unwrap();
+        let raw = gbk.encode_exact("第一集.mkv").unwrap();
+        assert_eq!(gbk.decode(&raw), "第一集.mkv");
+        assert_eq!(gbk.encode_exact("ascii").unwrap(), b"ascii");
+        // Hangul syllables outside GBK, and encoders that write UTF-8.
+        assert!(gbk.encode_exact("한국어").is_none());
+        let utf16 = TextEncoding::from_encoding(encoding_rs::UTF_16LE);
+        assert!(utf16.encode_exact("a").is_none());
+        let cp1252 = TextEncoding::for_label(b"windows-1252").unwrap();
+        assert!(cp1252.encode_exact("中").is_none());
     }
 
     #[test]
