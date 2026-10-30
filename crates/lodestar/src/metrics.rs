@@ -498,6 +498,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Seconds of startup sampling suppression remaining.",
             d.sample_suppression_seconds,
         );
+        render_restart(&mut o, d);
         o.one(
             "dht_sample_cooling",
             "gauge",
@@ -829,6 +830,62 @@ pub fn render_hot(out: &mut String, hot: &HotColumns) {
     *out = o.0;
 }
 
+/// CR-0d's restart-proof families (docs/metrics.md).
+fn render_restart(o: &mut Out, d: &StatsSnapshot) {
+    // CR-0d: why sampling is or isn't running, one label set to 1.
+    o.family(
+        "dht_sample_suppression_reason",
+        "gauge",
+        "Why this run is or isn't sampling yet (1 for the current reason).",
+    );
+    for r in lodestar_dht::restart::Reason::ALL {
+        o.value(
+            "dht_sample_suppression_reason",
+            &format!("reason=\"{}\"", r.as_str()),
+            u64::from(r == d.sample_suppression_reason),
+        );
+    }
+    o.one(
+        "dht_restart_obligations_restored",
+        "gauge",
+        "Restrictions restored from the last clean stop.",
+        d.restart_obligations_restored,
+    );
+    o.one(
+        "dht_restart_obligations_pending",
+        "gauge",
+        "Restored restrictions still cooling.",
+        d.restart_obligations_pending,
+    );
+    o.one(
+        "dht_restart_obligations_refused_total",
+        "counter",
+        "Sample candidates a restored restriction turned away.",
+        d.restart_obligations_refused,
+    );
+    o.one(
+        "dht_restart_obligations_honoured_total",
+        "counter",
+        "Restored restrictions that expired unsampled.",
+        d.restart_obligations_honoured,
+    );
+    o.family(
+        "dht_restart_persist_errors_total",
+        "counter",
+        "Restart-proof write failures, by step.",
+    );
+    for (step, v) in lodestar_dht::node::PersistStep::ALL
+        .iter()
+        .zip(d.restart_persist_errors)
+    {
+        o.value(
+            "dht_restart_persist_errors_total",
+            &format!("step=\"{}\"", step.as_str()),
+            v,
+        );
+    }
+}
+
 /// The storage sampler's last values (R-gauges); the scrape reads them
 /// and never the filesystem.
 pub fn render_storage(out: &mut String, g: &crate::storage::Gauges) {
@@ -991,6 +1048,42 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
+
+    #[test]
+    fn restart_families_render_one_reason_and_each_step() {
+        let mut d = StatsSnapshot {
+            sample_suppression_reason: lodestar_dht::restart::Reason::Resumed,
+            restart_obligations_restored: 7,
+            restart_obligations_pending: 5,
+            restart_obligations_refused: 3,
+            restart_obligations_honoured: 2,
+            ..StatsSnapshot::default()
+        };
+        d.restart_persist_errors[4] = 9;
+        let mut o = Out(String::new());
+        render_restart(&mut o, &d);
+        let out = o.0;
+        for line in [
+            "# TYPE lodestar_dht_sample_suppression_reason gauge",
+            "lodestar_dht_sample_suppression_reason{reason=\"resumed\"} 1",
+            "lodestar_dht_sample_suppression_reason{reason=\"first_start\"} 0",
+            "lodestar_dht_restart_obligations_restored 7",
+            "lodestar_dht_restart_obligations_pending 5",
+            "lodestar_dht_restart_obligations_refused_total 3",
+            "lodestar_dht_restart_obligations_honoured_total 2",
+            "lodestar_dht_restart_persist_errors_total{step=\"snapshot\"} 9",
+            "lodestar_dht_restart_persist_errors_total{step=\"lock\"} 0",
+        ] {
+            assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
+        }
+        let ones = out
+            .lines()
+            .filter(|l| {
+                l.starts_with("lodestar_dht_sample_suppression_reason{") && l.ends_with(" 1")
+            })
+            .count();
+        assert_eq!(ones, 1, "exactly one reason is set");
     }
 
     #[test]

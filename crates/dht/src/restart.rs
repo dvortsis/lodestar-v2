@@ -15,7 +15,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+// The actor's clock: the same as std's unless a test pauses it, so
+// restored deadlines run on the clock the sampler keeps. Re-exported so
+// callers (the fuzz target) don't need tokio themselves.
+pub use tokio::time::Instant;
 
 use lodestar_bencode::{self as bencode, DecodeOptions, Encoder, Value};
 use sha2::{Digest, Sha256};
@@ -662,8 +666,9 @@ impl Here {
 }
 
 /// Why sampling isn't resumed, or `Resumed` (the metric's label set, §5.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Reason {
+    #[default]
     Off,
     Locked,
     FirstStart,
@@ -921,16 +926,34 @@ pub enum Point {
 }
 
 #[cfg(test)]
-mod fail {
+pub(crate) mod fail {
     use super::Point;
     use std::cell::Cell;
 
     thread_local! {
         static AT: Cell<Option<Point>> = const { Cell::new(None) };
+        static STICKY: Cell<bool> = const { Cell::new(false) };
+        /// Hits of the armed point to let through before failing one.
+        static SKIP: Cell<u32> = const { Cell::new(0) };
     }
 
+    /// Fails the next write that reaches `p` on this thread.
     pub fn arm(p: Option<Point>) {
         AT.with(|a| a.set(p));
+        STICKY.with(|s| s.set(false));
+        SKIP.with(|s| s.set(0));
+    }
+
+    /// Fails only the `n`th write (from 1) that reaches `p` on this thread.
+    pub fn arm_nth(p: Point, n: u32) {
+        arm(Some(p));
+        SKIP.with(|s| s.set(n.saturating_sub(1)));
+    }
+
+    /// Fails every write that reaches `p` on this thread until disarmed.
+    pub fn arm_sticky(p: Option<Point>) {
+        AT.with(|a| a.set(p));
+        STICKY.with(|s| s.set(p.is_some()));
     }
 
     pub fn hit(p: Point) -> std::io::Result<()> {
@@ -938,7 +961,13 @@ mod fail {
             std::process::abort();
         }
         if AT.with(|a| a.get()) == Some(p) {
-            AT.with(|a| a.set(None));
+            if SKIP.with(|s| s.get()) > 0 {
+                SKIP.with(|s| s.set(s.get() - 1));
+                return Ok(());
+            }
+            if !STICKY.with(|s| s.get()) {
+                AT.with(|a| a.set(None));
+            }
             return Err(std::io::Error::other(format!("injected at {p:?}")));
         }
         Ok(())
@@ -973,7 +1002,8 @@ fn sync_parent(path: &Path) -> io::Result<()> {
     fail::hit(Point::AfterDirSync)
 }
 
-fn tmp_path(path: &Path) -> PathBuf {
+/// Where [`write_atomic`] stages `path`.
+pub(crate) fn tmp_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".tmp");
     PathBuf::from(name)
@@ -1197,6 +1227,8 @@ pub enum LockAttempt {
 /// protocol files touched, no samples, retried each tick, and counted as
 /// `persist_errors{step="lock"}`.
 pub fn try_lock(data_dir: &Path) -> io::Result<LockAttempt> {
+    // A fresh install's data directory may not exist yet.
+    fs::create_dir_all(data_dir)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
