@@ -1952,7 +1952,10 @@ mod tests {
     fn dual_stack_completion_and_deadline_drain_both_family_orders() {
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
-            let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+            // Skipped where the host has no IPv6.
+            let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
+                return;
+            };
             v6.set_nonblocking(true).unwrap();
             sockets.push(v6);
             a.families.push(Family {
@@ -2145,7 +2148,10 @@ mod tests {
     #[test]
     fn dual_stack_cancellation_cleans_shared_rpc_ownership() {
         let (mut a, mut sockets) = fixture();
-        let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+        // Skipped where the host has no IPv6.
+        let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
+            return;
+        };
         v6.set_nonblocking(true).unwrap();
         sockets.push(v6);
         a.families.push(Family {
