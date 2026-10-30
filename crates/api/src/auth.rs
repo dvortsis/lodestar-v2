@@ -343,6 +343,8 @@ impl Auth {
             // Spent and published together: `needs_setup` turns false
             // only once `setup_token` already reads `None`.
             let mut pending = self.setup_token.lock().expect("token lock");
+            // Under the token guard: the one place `setup_token` and
+            // `state` are held together, in the documented order.
             self.publish(next);
             *pending = None;
             drop(pending);
