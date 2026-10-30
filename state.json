@@ -1179,13 +1179,13 @@
    "pr": 178
   },
   "F-filters": {
-   "status": "ready",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhn9VyDZzDeRHdsz8MwA",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z 8c5a0b91 ready; runner OK'd: unless raw; token-level neutralize (\u00a72.19 content-safety flag, floor test); allow-both tightening; packs gap -> F-filters-packs | 2026-10-30T05:58Z round 2 bd8d2a43 (I-2 one neutral_key; P-1 phrase_live; P-2 bench+fast path; P-3 independent reference, CJK overlap fix) runner-checked OK; merge on green"
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z 8c5a0b91 ready; runner OK'd: unless raw; token-level neutralize (\u00a72.19 content-safety flag, floor test); allow-both tightening; packs gap -> F-filters-packs | 2026-10-30T05:58Z round 2 bd8d2a43 (I-2 one neutral_key; P-1 phrase_live; P-2 bench+fast path; P-3 independent reference, CJK overlap fix) runner-checked OK; merge on green | 2026-10-30T06:32Z #179 merged f898813b"
   },
   "F-metainfo": {
    "status": "review",
@@ -1260,7 +1260,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters."
+   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src)"
   },
   "X-ci-health": {
    "status": "review",
@@ -1309,13 +1309,13 @@
    "notes": " | 2026-10-30T05:48Z L2 review: actor refusals get exponential back-off (pool.rs:764 vs flat pool.rs:675); pool max_lookups 256 > actor cap 32 -> include (requeue refused keys without exp factor; derive max_lookups from actor cap)."
   },
   "F-filters-neutral-perf": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnCKp7p5iJoFMiPvUdt",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner)."
+   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main"
   },
   "L4-followups": {
    "status": "pending",
@@ -1849,7 +1849,7 @@
   "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051.",
   "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z",
   "cap_note": "2026-10-30T06:30Z owner goal 'keep building until fully blocked' (usage reset): running beyond the plan's 4-slot cap; ~10 sessions active/idle. Flag to owner.",
-  "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f"
+  "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f | 2026-10-30T06:32Z #182 merged b4d80387"
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
