@@ -181,10 +181,10 @@ fn row(v1: [u8; 20], v2: Option<[u8; 32]>) -> TorrentRow {
 /// `lodestar_store::Prepared::swarm_hashes`, which ingest judges with.
 fn swarm(r: &TorrentRow) -> Vec<[u8; 20]> {
     let mut out = vec![r.info_hash.0];
-    if let Some(t) = r.info_hash_v2.map(|h| h.truncated()) {
-        if t != r.info_hash {
-            out.push(t.0);
-        }
+    if let Some(t) = r.info_hash_v2.map(|h| h.truncated())
+        && t != r.info_hash
+    {
+        out.push(t.0);
     }
     out
 }
