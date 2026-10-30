@@ -1,0 +1,18 @@
+{
+  "cutoff": "2026-10-29T23:02:59.7200592+00:00",
+  "last_sequence": 1346,
+  "samples": 1347,
+  "disk_observations": 8075,
+  "baseline_hours": 16.130027777777777,
+  "total_stored": 12171.0,
+  "baseline_stored": 11574.0,
+  "baseline_per_hour": 717.5437116075781,
+  "current_free_gib": 61.26365661621094,
+  "current_rss_mib": 156.640625,
+  "current_private_mib": 514.76171875,
+  "peak_rss_mib": 535.9921875,
+  "peak_private_mib": 613.42578125,
+  "health_failures": 0,
+  "metrics_failures": 0,
+  "archive_bytes": 6075088
+}

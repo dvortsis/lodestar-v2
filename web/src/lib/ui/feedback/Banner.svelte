@@ -1,9 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import IconInfo from '~icons/ph/info';
-	import IconSuccess from '~icons/ph/check-circle';
-	import IconWarning from '~icons/ph/warning';
-	import IconError from '~icons/ph/x-circle';
+	import { statusIcons as icons, statusInk as ink, statusBorder as border } from '../status';
 	import { m } from '$lib/paraglide/messages.js';
 
 	type Kind = 'info' | 'success' | 'warning' | 'error';
@@ -20,19 +17,6 @@
 
 	let { kind = 'info', title, children, action, class: className = '' }: Props = $props();
 
-	const icons = { info: IconInfo, success: IconSuccess, warning: IconWarning, error: IconError };
-	const ink = {
-		info: 'text-info',
-		success: 'text-success',
-		warning: 'text-warning',
-		error: 'text-error'
-	};
-	const border = {
-		info: 'border-info',
-		success: 'border-success',
-		warning: 'border-warning',
-		error: 'border-error'
-	};
 	const kindLabel = $derived(
 		{
 			info: m.common_info,
