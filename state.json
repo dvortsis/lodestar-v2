@@ -1196,10 +1196,11 @@
    "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap"
   },
   "L1": {
-   "status": "pending",
+   "status": "review",
    "branch": "land/L1",
    "head": "ad0ec5a8",
-   "notes": "branch created at owner commit; PR after swap, in order"
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z PR opened",
+   "pr": 175
   },
   "L2": {
    "status": "pending",
@@ -1217,7 +1218,7 @@
    "status": "pending",
    "branch": "land/L4",
    "head": "5e1a53c0",
-   "notes": "branch created at owner commit; PR after swap, in order"
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z runner fix 66152cee on land/L4: v4 fixture drops V12 objects; is_multiple_of -> % (MSRV). Same fixes already in L5."
   },
   "L5": {
    "status": "pending",
@@ -1724,7 +1725,8 @@
   "lineage": "Rewritten history: next = 058d99373e2c (old main 2d5e761d). Sessions branch from next until the owner force-pushes main. Old root 15620683 / old tip 2d5e761d must never appear in a PR head.",
   "lineage_guard": "2026-10-30T03:41Z branch ci/lineage-guard (on next): changes job fails heads containing 15620683 or 2d5e761d. Open as first PR after the swap.",
   "l_hygiene": "2026-10-30T03:41Z L1-L6 scanned: no personal paths, public IPs, tokens; only ephemeral soak PIDs and old SHAs (historical). No rewrite-removed lines reintroduced.",
-  "pre_swap_local_work": "Old-lineage sessions hold unpushed work: X-sleeps (7fcf111a, c272e0a2 on slice/X-sleeps), B-log1b deferred (72aaed6b on local/B-log1b-4b), B-update 5a (d7f6c8b). After the swap, ask each for a patch (git format-patch from its old merge-base), apply on new-main branches, then archive. Never let them push old-lineage branches."
+  "pre_swap_local_work": "Old-lineage sessions hold unpushed work: X-sleeps (7fcf111a, c272e0a2 on slice/X-sleeps), B-log1b deferred (72aaed6b on local/B-log1b-4b), B-update 5a (d7f6c8b). After the swap, ask each for a patch (git format-patch from its old merge-base), apply on new-main branches, then archive. Never let them push old-lineage branches.",
+  "open_runner_prs": "2026-10-30T04:55Z: #174 lineage guard, #175 L1, #176 plan (claude/busy-allen-aptli2). Merge order: #174, #176, #175, then L2..L7 one at a time."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
@@ -1744,17 +1746,23 @@
   {
    "id": "OC1",
    "action": "Tell the runner the CR-0 soak state (collector finished? result.json, clean shutdown?)",
-   "unblocks": "soak close-out, G-v051"
+   "unblocks": "soak close-out, G-v051",
+   "status": "answered",
+   "note": "2026-10-30T04:55Z: soak healthy at 22:41 MDT 10-29, 21h46m of 24h, 738/h avg, 0 health failures in 1,682 samples; ends ~00:55 MDT 10-30. Acceptance pending clean-shutdown evidence."
   },
   {
    "id": "OC2",
    "action": "Confirm the two tree diffs origin/main..058d9937 (architecture.md, owner-decisions.md) are intended",
-   "unblocks": "history swap"
+   "unblocks": "history swap",
+   "status": "answered",
+   "note": "2026-10-30T04:55Z: owner: 'the rewritten history is confirmed'. Runner noted the \u00a720.8 'or disabled' wording change to the owner."
   },
   {
    "id": "OC3",
    "action": "History swap: git bundle backup of all refs; pause runner; lift ruleset; git push --force-with-lease=main:2d5e761d origin 058d99373e2c:main; restore ruleset",
-   "unblocks": "ext:history-swap -> all PRs"
+   "unblocks": "ext:history-swap -> all PRs",
+   "status": "done",
+   "note": "2026-10-30T04:55Z: swap done and ruleset restored."
   },
   {
    "id": "OC4",
@@ -1796,5 +1804,12 @@
    "item": "F-updater: unreadable updater.json fails closed (auto-updates held in-process until an explicit pause/resume save) - runner refinement, \u00a72.19 veto window.",
    "status": "open"
   }
- ]
+ ],
+ "external_gates": {
+  "history-swap": {
+   "status": "cleared",
+   "at": "2026-10-30T04:55Z",
+   "note": "owner force-pushed main 2d5e761d -> 058d9937 with lease; bundle backup (202 refs) outside repo; ruleset 25689105 restored (deletion, non_fast_forward, pull_request, ci-ok)."
+  }
+ }
 }
