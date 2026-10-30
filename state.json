@@ -1232,10 +1232,10 @@
    "pr": 184
   },
   "L6": {
-   "status": "review",
+   "status": "merged",
    "branch": "land/L6",
    "head": "d63799fc",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:24Z pre-review FIX -> runner 210426ad (owner quote 'Ok. Go.' removed; PIDs redacted in md; zip kept for manifest hashes). Size 6.57 MB (zip 6.08 MB, per-minute .prom predates policy; state in PR). | 2026-10-30T06:35Z PR #185 opened (base land/L5); retarget to main after the range below merges | 2026-10-30T06:54Z #185 base land/L5 stays; retarget to main after #184 merges | 2026-10-30T10:13Z #185 retargeted to main; land/L6 merged main -> e82dfcb9 (web check/vitest 2332/build/size OK locally); CI + E2E dispatch running",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:24Z pre-review FIX -> runner 210426ad (owner quote 'Ok. Go.' removed; PIDs redacted in md; zip kept for manifest hashes). Size 6.57 MB (zip 6.08 MB, per-minute .prom predates policy; state in PR). | 2026-10-30T06:35Z PR #185 opened (base land/L5); retarget to main after the range below merges | 2026-10-30T06:54Z #185 base land/L5 stays; retarget to main after #184 merges | 2026-10-30T10:13Z #185 retargeted to main; land/L6 merged main -> e82dfcb9 (web check/vitest 2332/build/size OK locally); CI + E2E dispatch running | 2026-10-30T10:25Z #185 merged fa11c782 (all green incl. all-themes)",
    "pr": 185
   },
   "F-updater": {
@@ -1254,7 +1254,7 @@
    "pr": 186,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges"
+   "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges | 2026-10-30T10:25Z #186 retargeted to main; land/L7 merged main -> ca08002d (docs only); CI running"
   },
   "F-filters-packs": {
    "status": "pending",
@@ -1339,7 +1339,7 @@
    "session": "session_01MMjhnCnk7norhoKvDiTbRW",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing)"
+   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing) | 2026-10-30T10:25Z told: merge main (post-L6) and open PR"
   },
   "IMP-0": {
    "status": "running",
