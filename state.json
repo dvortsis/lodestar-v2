@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T19:17Z",
+ "updated_at": "2026-10-30T19:21Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2184,7 +2184,8 @@
   "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
-  "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)"
+  "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
+  "log_canary.rs:909 run_2_a_harvested_key: DHT UDP port picked by UdpSocket::bind(0)+release, same race as #229/#234; extend tests/ports with a UDP probe (bind both) and use it (#234 review, optional)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2277,7 +2278,8 @@
   "2026-10-30T19:08Z merged #231 fix/cr-adm-polish (9496cc90) on green ci-ok at 2e18f07f after the runner's delta check; author asked for the IPv6 test report, then archive.",
   "2026-10-30T19:12Z merged #229 X-flake-supervisor-switch (ad89ff04); author archived. Opened #234 fix/cli-test-port (shared tests/ports test_port, used by cli.rs); review by session_01MMjhn984M3k3UJXUCsEYPX. #232 waits on ci-ok.",
   "2026-10-30T19:16Z #233 CR-0d-2b-2 (head 6dd24177): runner review MERGE (sampling_blocked live-only, pill fallback, grace logic, zh present) plus the author's fresh reviewer MERGE at c4765d60; merge on green. #217 head 1f562194 with the owner's limits; delta re-check sent to session_01MMjhn9gGM84v8QVWEjT6EV. #231 author archived (IPv6 test reached its asserts on ubuntu and windows). Safety check-in re-armed for 20:10Z.",
-  "2026-10-30T19:17Z merged #217 S-settings-reconcile (5f1deef5) on the reviewer's delta MERGE at 1f562194 and green ci-ok. ERROR: its web (check+test+build+size), Playwright core, Lighthouse and Docker smoke runs were still in progress (runs 41113005439, 41113005344, 41113005209); the ruleset only requires ci-ok. Watching them; on any failure, fix forward on main at once. Lesson: for PRs touching web/, check that the Web and E2E runs are green before merging (owner item OC9 would enforce it)."
+  "2026-10-30T19:17Z merged #217 S-settings-reconcile (5f1deef5) on the reviewer's delta MERGE at 1f562194 and green ci-ok. ERROR: its web (check+test+build+size), Playwright core, Lighthouse and Docker smoke runs were still in progress (runs 41113005439, 41113005344, 41113005209); the ruleset only requires ci-ok. Watching them; on any failure, fix forward on main at once. Lesson: for PRs touching web/, check that the Web and E2E runs are green before merging (owner item OC9 would enforce it).",
+  "2026-10-30T19:21Z #234 review MERGE at d3d85d7f; merge on green ci-ok. #232 still in CI."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
