@@ -268,7 +268,12 @@ if ($Msi) {
   }
   Assert (-not $left) 'REMOVE_DATA=1 left the data folder behind'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
-    try { Assert (-not (@((Get-MpPreference).ExclusionPath) -like "$dataDir*")) 'Defender exclusion left behind after uninstall' } catch [System.Management.Automation.RuntimeException] { throw } catch { }
+    # Read first, assert outside the try: an unreadable Defender (0x800106ba,
+    # the service is off on some runners) surfaces as a RuntimeException under
+    # Stop, so catching by type would fail the smoke on a runner condition.
+    $ex = $null
+    try { $ex = @((Get-MpPreference).ExclusionPath) } catch { Write-Host "::warning::could not read Defender settings after uninstall: $_" }
+    if ($null -ne $ex) { Assert (-not ($ex -like "$dataDir*")) 'Defender exclusion left behind after uninstall' }
   }
   Write-Host "msi ok: $Msi"
 }
