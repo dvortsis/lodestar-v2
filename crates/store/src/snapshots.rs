@@ -1222,6 +1222,81 @@ mod tests {
         );
     }
 
+    /// A store at V12's pre-release shape (builds from `a7c6d5c8` until
+    /// `at` was added: no time column, a trigger that wrote none) is
+    /// repaired when opened: rows dated now, live hashes dropped, the
+    /// trigger replaced, and the purge runs. Opening again changes nothing.
+    #[test]
+    fn opening_a_pre_release_v12_store_repairs_its_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let conn = fixture(&db, 11);
+        conn.execute_batch(
+            "CREATE TABLE snapshot_deletions (
+                 hash BLOB PRIMARY KEY CHECK (length(hash) = 20)
+             ) STRICT, WITHOUT ROWID;
+             CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
+                 INSERT OR IGNORE INTO snapshot_deletions (hash) VALUES (old.info_hash);
+                 INSERT OR IGNORE INTO snapshot_deletions (hash)
+                     SELECT substr(old.info_hash_v2, 1, 20) WHERE old.info_hash_v2 IS NOT NULL;
+             END;
+             INSERT INTO schema_migrations (version, applied_at) VALUES (12, 0);",
+        )
+        .unwrap();
+        insert_torrent(&conn, 1, [81; 20], "live again");
+        insert_torrent(&conn, 2, [82; 20], "deleted-marker-0c5f");
+        conn.execute("DELETE FROM torrents WHERE id = 2", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO snapshot_deletions (hash) VALUES (?1)",
+            [&[81u8; 20][..]],
+        )
+        .unwrap();
+        drop(conn);
+        let clock = || {
+            let t = std::time::SystemTime::now().duration_since(UNIX_EPOCH);
+            i64::try_from(t.unwrap().as_secs()).unwrap()
+        };
+
+        let before = clock();
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let after = clock();
+        let rows = journal(&store);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, [82; 20]);
+        assert!((before..=after).contains(&rows[0].1), "{rows:?}");
+        let trigger = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name = 'snapshot_torrent_deleted'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let fresh = Store::open_in_memory(StoreConfig::default()).unwrap();
+        assert_eq!(trigger(store.connection()), trigger(fresh.connection()));
+        store.delete_torrents(&[[81; 20]]).unwrap();
+        let rows = journal(&store);
+        assert_eq!(rows[0].0, [81; 20]);
+        assert!(rows[0].1 >= before, "{rows:?}");
+
+        // The purge reads the column; a snapshot from before the deletion
+        // loses the torrent.
+        let snap = crate::schema::snapshot_path(&db, 12);
+        let conn = fixture(&snap, 11);
+        insert_torrent(&conn, 2, [82; 20], "deleted-marker-0c5f");
+        drop(conn);
+        set_modified(&snap, before - DAY).unwrap();
+        let r = store.purge_snapshots(after, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.torrents, 1);
+        assert!(!contains(&snap, b"deleted-marker-0c5f"));
+        journal_row(&store, [83; 20], 7);
+        drop(store);
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        assert_eq!(journal(&store), [([83; 20], 7)], "repaired once");
+    }
+
     /// The trigger journals a hybrid's v1 hash and its truncated v2 one,
     /// at the time of the delete; deleting a hash again moves it forward.
     #[test]

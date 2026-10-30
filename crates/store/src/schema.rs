@@ -61,6 +61,32 @@ CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
 END;
 ";
 
+/// V12's pre-release shape repair. Builds from `a7c6d5c8` up to the fix
+/// that added `at` created `snapshot_deletions (hash)` with no time and a
+/// trigger that wrote none, and recorded V12 as applied, so V12 doesn't
+/// run again there. This brings such a store to V12's final shape, once:
+/// rows are dated now (the safe direction: they keep scrubbing snapshots
+/// for the journal's full 91 days rather than being dropped as old), a
+/// hash that's live again is dropped as V12's backfill skips it, and the
+/// trigger is replaced.
+const V12_REPAIR: &str = "
+ALTER TABLE snapshot_deletions ADD COLUMN at INTEGER NOT NULL DEFAULT 0;
+UPDATE snapshot_deletions SET at = unixepoch() WHERE at = 0;
+DELETE FROM snapshot_deletions
+    WHERE hash IN (SELECT info_hash FROM torrents)
+       OR hash IN (
+           SELECT substr(info_hash_v2, 1, 20) FROM torrents WHERE info_hash_v2 IS NOT NULL
+       );
+DROP TRIGGER snapshot_torrent_deleted;
+CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
+    INSERT INTO snapshot_deletions (hash, at) VALUES (old.info_hash, unixepoch())
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT substr(old.info_hash_v2, 1, 20), unixepoch() WHERE old.info_hash_v2 IS NOT NULL
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+END;
+";
+
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
 /// Ids are `AUTOINCREMENT` so a deleted id is never reused: hot-column
@@ -684,7 +710,27 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
 /// newer version, and snapshots an existing database before changing it
 /// (architecture §12).
 pub(crate) fn migrate(conn: &mut Connection, path: Option<&Path>) -> Result<()> {
-    migrate_with(conn, path, MIGRATIONS)
+    migrate_with(conn, path, MIGRATIONS)?;
+    repair_v12(conn)
+}
+
+/// Applies [`V12_REPAIR`] to a store with V12's pre-release journal (no
+/// `at` column); does nothing otherwise.
+fn repair_v12(conn: &mut Connection) -> Result<()> {
+    let tx = crate::begin_write(conn)?;
+    let has = |column: &str| -> rusqlite::Result<bool> {
+        tx.query_row(
+            "SELECT count(*) FROM pragma_table_info('snapshot_deletions') WHERE name = ?1",
+            [column],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+    };
+    if has("hash")? && !has("at")? {
+        tx.execute_batch(V12_REPAIR)?;
+        tx.commit()?;
+    }
+    Ok(())
 }
 
 /// For read-only connections: the schema must be exactly this build's.
