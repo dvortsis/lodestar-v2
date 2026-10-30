@@ -422,6 +422,8 @@ const CALIB_REF_NS: f64 = 10_700.0;
 /// which is what a typical 7763 host runs, so a listed model's host is
 /// measured against the typical 7763's calibration, not the fastest's
 /// ([`CALIB_REF_NS`], which stays the fallback for unlisted models).
+/// Re-derive it on the same triggers as [`CALIB_REF_NS`]; its jobs ran
+/// rustc 1.99.1.
 const CALIB_TYPICAL_NS: f64 = 11_090.0;
 
 /// How a hosted runner model runs the engine compared with the
@@ -494,7 +496,8 @@ const REFERENCE: EngineSpeed = EngineSpeed {
 /// code the gate runs: the median of [`REFERENCE`]'s jobs since #196.
 /// Only the drift warning reads it: the skews are ratios taken at the same
 /// code, so an engine change moves them alike. Re-derive it when the
-/// engine's speed changes much (the test prints the ratio on every job).
+/// engine's speed changes much (the test prints the ratio on every job),
+/// and on the same triggers as [`CALIB_REF_NS`].
 const REFERENCE_RATIO: f64 = 3.93;
 
 /// The engine's speed on each other hosted runner model seen. A job on a
@@ -687,9 +690,11 @@ fn scaling(cpu: &str, calib_us: f64, mixed: f64) -> Scaling {
 
 #[test]
 fn the_reference_reads_raw() {
-    let s = scaling("AMD EPYC 7763 64-Core Processor", 9.9, 43.3);
-    assert_eq!(s.speed, 1.0);
-    assert!(s.notes.iter().all(|n| !n.starts_with("::warning::")));
+    for calib_us in [5.0, 9.9, 20.0] {
+        let s = scaling("AMD EPYC 7763 64-Core Processor", calib_us, 43.3);
+        assert_eq!(s.speed, 1.0);
+        assert!(s.notes.iter().all(|n| !n.starts_with("::warning::")));
+    }
 }
 
 #[test]
@@ -738,10 +743,17 @@ fn a_skew_off_by_more_than_model_drift_warns() {
 
 #[test]
 fn a_provisional_skew_still_scales_and_warns() {
-    let m = ENGINE_SPEED.iter().find(|m| m.provisional()).unwrap();
+    let m = ENGINE_SPEED
+        .iter()
+        .find(|m| m.provisional())
+        .expect("a provisional entry exists; drop this test when none does");
     let s = scaling(m.model, 10.0, 10.0 * REFERENCE_RATIO * m.skew);
     assert!((s.speed - 10e3 / CALIB_TYPICAL_NS * m.skew).abs() < 1e-12);
     assert!(s.notes.iter().any(|n| n.contains("provisional")));
+    assert!(s.notes.iter().all(|n| !n.contains("% off")));
+    // The drift warning stays live for it.
+    let s = scaling(m.model, 10.0, 10.0 * REFERENCE_RATIO * m.skew * 1.25);
+    assert!(s.notes.iter().any(|n| n.contains("% off")));
 }
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
@@ -988,7 +1000,8 @@ fn budget() {
         let mixed = cases
             .iter()
             .find(|(what, ..)| what.contains("mixed ("))
-            .map_or(f64::NAN, |c| c.1);
+            .expect("the mixed case")
+            .1;
         let Scaling { speed, how, notes } = scaling(&cpu, calib_us, mixed);
         for note in notes {
             println!("{note}");
