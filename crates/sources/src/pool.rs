@@ -805,6 +805,8 @@ impl Pool {
         e.generation = next_generation(&mut self.generations);
         let coordinated = !e.private && self.admission.as_ref().is_some_and(Admission::active);
         if self.cfg.paused || self.lookups >= self.cfg.max_lookups {
+            // `drain_admission` only grants while neither holds.
+            debug_assert!(grant.is_none(), "a grant while paused or at the cap");
             if coordinated {
                 self.wait(key, kind, false);
                 return;
@@ -1081,6 +1083,10 @@ impl Pool {
             self.requeue_refused(key, &refused, &unacknowledged);
             return;
         }
+        // Accepted by another finder: the ones that said no still rest.
+        if request.coordinated && request.accepted {
+            self.hold_finders(refused.iter().chain(&unacknowledged));
+        }
         if finished && request.accepted && !request.answered {
             self.requeue_cancelled(key, request.coordinated);
             return;
@@ -1131,15 +1137,22 @@ impl Pool {
         self.lookups -= 1;
         let reason = usize::from(refused.is_empty());
         self.stats.admission_refusals[reason].fetch_add(1, Ordering::Relaxed);
-        if let Some(a) = &mut self.admission {
-            let until = Instant::now() + admission::REFUSAL_HOLD;
-            for &finder in refused.iter().chain(unacknowledged) {
-                let unused = a.hold(finder, until);
-                self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
-                self.stats.admission_holds.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        self.hold_finders(refused.iter().chain(unacknowledged));
         self.wait(key, WaitKind::Requeue, true);
+    }
+
+    /// Rests each finder for [`admission::REFUSAL_HOLD`]; a permit kept
+    /// back from one goes back now.
+    fn hold_finders<'a>(&mut self, finders: impl Iterator<Item = &'a usize>) {
+        let Some(a) = &mut self.admission else {
+            return;
+        };
+        let until = Instant::now() + admission::REFUSAL_HOLD;
+        for &finder in finders {
+            let unused = a.hold(finder, until);
+            self.stats.admission_permit_returns[2].fetch_add(unused, Ordering::Relaxed);
+            self.stats.admission_holds.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn schedule(&mut self, at: Instant, key: InfoHash, generation: u64) {
@@ -1164,10 +1177,29 @@ impl Pool {
             match e.state {
                 State::Lookup => {
                     // No peers turned up in time.
-                    self.lookups -= 1;
-                    if self.requests.remove(&key).is_some_and(|r| !r.accepted) {
+                    let request = self.requests.remove(&key);
+                    if request.as_ref().is_some_and(|r| !r.accepted) {
                         self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
                     }
+                    // A permitted request no finder ever acknowledged is an
+                    // unacknowledged one, as if its admission had closed: no
+                    // back-off, and the silent finders rest. The key waits
+                    // for a permit, which only returns once the finder has
+                    // dealt with the request.
+                    if let Some(r) = request.filter(|r| r.coordinated && !r.accepted) {
+                        let silent: Vec<usize> = r
+                            .replies
+                            .iter()
+                            .filter_map(|reply| match reply {
+                                FinderReply::Admission(finder, _) => Some(*finder),
+                                FinderReply::Completion(_) => None,
+                            })
+                            .collect();
+                        self.requeue_refused(key, &[], &silent);
+                        continue;
+                    }
+                    self.lookups -= 1;
+                    let e = self.entries.get_mut(&key).expect("present");
                     e.state = State::Backoff;
                     self.back_off(key);
                 }

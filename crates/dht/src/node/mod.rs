@@ -499,7 +499,7 @@ pub struct StatsSnapshot {
     pub peer_command_full: u64,
     pub peer_command_closed: u64,
     /// By [`PermitReturn::ALL`].
-    pub peer_permit_returns: [u64; 8],
+    pub peer_permit_returns: [u64; PermitReturn::ALL.len()],
 
     pub peer_cancelled: u64,
     pub peer_active: u64,

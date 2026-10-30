@@ -2318,11 +2318,18 @@ mod tests {
 
     #[test]
     fn a_dual_stack_request_holds_one_permit_until_its_last_leg() {
+        use std::io::Write;
         use tokio::sync::Semaphore;
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
-            // Skipped where the host has no IPv6.
+            // Skipped where the host has no IPv6; say so in the test log.
             let Ok(v6) = std::net::UdpSocket::bind("[::1]:0") else {
+                // Straight to stderr: libtest captures `eprintln!` from
+                // passing tests, and the CI log should show the skip.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "a_dual_stack_request_holds_one_permit_until_its_last_leg: skipped, no IPv6 loopback"
+                );
                 return;
             };
             v6.set_nonblocking(true).unwrap();
@@ -2369,6 +2376,10 @@ mod tests {
             assert_eq!(returns(&a, PermitReturn::CancelledActive), 1);
             let total: u64 = a.stats.snapshot().peer_permit_returns.iter().sum();
             assert_eq!(total, 2);
+            let _ = writeln!(
+                std::io::stderr(),
+                "a_dual_stack_request_holds_one_permit_until_its_last_leg: v6_first={v6_first}, both legs ran"
+            );
         }
     }
 
