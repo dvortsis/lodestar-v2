@@ -654,8 +654,14 @@ fn write_private(path: &Path, file: &AuthFile) -> io::Result<()> {
 fn write_and_rename(tmp: &Path, path: &Path, file: &AuthFile) -> io::Result<()> {
     let text = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
     {
+        // A leftover temporary file would keep its own permissions, and a
+        // symlink there would be followed: start from nothing.
+        match std::fs::remove_file(tmp) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -666,7 +672,20 @@ fn write_and_rename(tmp: &Path, path: &Path, file: &AuthFile) -> io::Result<()> 
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
     }
-    std::fs::rename(tmp, path)
+    std::fs::rename(tmp, path)?;
+    // Make the rename itself durable, so a power cut can't bring back the
+    // old file. Best effort: the new file is already in place, and an
+    // error here mustn't make the caller keep the old state in memory.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -907,6 +926,30 @@ mod tests {
         let old = header(&auth.setup(IP, &token, "correct horse battery").unwrap());
         let new = header(&auth.rotate_sessions().unwrap());
         assert!(!auth.verify(&old) && auth.verify(&new));
+    }
+
+    /// A leftover `auth.json.tmp` with wider permissions, or a symlink
+    /// there, doesn't carry over into the saved file.
+    #[cfg(unix)]
+    #[test]
+    fn a_leftover_temporary_file_is_not_reused() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, auth) = fresh();
+        let path = dir.path().join("auth.json");
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, "stale").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let token = auth.setup_token().unwrap();
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::write(&elsewhere, "untouched").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &tmp).unwrap();
+        auth.rotate_sessions().unwrap();
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "untouched");
+        assert!(!std::fs::symlink_metadata(&path).unwrap().is_symlink());
     }
 
     #[cfg(unix)]

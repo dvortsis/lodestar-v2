@@ -200,7 +200,7 @@ fn successful_saves_change_what_they_should() {
     }
 }
 
-/// Area 2 review finding 1, first reproduction: a failed password change
+/// Area 2 review finding 1 (A2-1), first reproduction: a failed password change
 /// used to end the caller's session and the old password, and accept the
 /// new one until a restart.
 #[test]
@@ -226,7 +226,7 @@ fn failed_password_save_preserves_active_credentials() {
     assert!(accepts(&restarted, OLD) && !accepts(&restarted, NEW));
 }
 
-/// Area 2 review finding 1, second reproduction: a failed setup used to
+/// Area 2 review finding 1 (A2-1), second reproduction: a failed setup used to
 /// leave the instance claimed with the token still pending, until a
 /// restart returned it to setup.
 #[test]
@@ -253,4 +253,23 @@ fn failed_setup_save_leaves_setup_pending() {
     let cookie = cookie_header(&auth.setup(next_ip(), &token, OLD).unwrap());
     assert!(!auth.needs_setup() && auth.setup_token().is_none());
     assert!(auth.verify(&cookie));
+}
+
+/// A save that wrote the temporary file but couldn't rename it into place
+/// (here `auth.json` is a non-empty directory) removes that file: it holds
+/// the new password hash and session key.
+#[test]
+fn a_failed_rename_removes_the_temporary_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auth.json");
+    let auth = Auth::load(&path, false).unwrap();
+    let token = auth.setup_token().unwrap();
+    let cookie = cookie_header(&auth.setup(next_ip(), &token, OLD).unwrap());
+
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("keep"), "x").unwrap();
+    assert!(matches!(auth.rotate_sessions(), Err(AuthError::Storage(_))));
+    assert!(!tmp_path(&path).exists(), "no secrets left behind");
+    assert!(auth.verify(&cookie), "and nothing changed");
 }
