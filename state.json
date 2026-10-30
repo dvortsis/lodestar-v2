@@ -1318,7 +1318,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main"
+   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main | 2026-10-30T07:47Z neutralized 3.4x->1.08-1.11x mixed (callgrind 1.34M->0.51M instr). Runner: (a) land with neutralized case reported not held; (c) follow-up F-filters-xcpu"
   },
   "L4-followups": {
    "status": "pending",
@@ -1384,6 +1384,11 @@
   "IMP-3": {
    "status": "?",
    "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values"
+  },
+  "F-filters-xcpu": {
+   "status": "pending",
+   "model": "opus",
+   "notes": "2026-10-30T07:47Z queued: main filter-budget red = runner-type variance (mixed set 50.4us ref on Xeon 8573C @0.81x calib vs 39.3us EPYC 9V45). Speed the shared mixed path first; calibration method change only within \u00a72.20 (typical hardware; 50us unchanged), record+flag. Then hold the neutralized case."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1976,6 +1981,7 @@
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
-  "2026-10-30T07:46Z main 42779e4a CI: ubuntu shutdown.rs stall race (fix/shutdown-stall), macOS toolchain download infra failure; a84c3681 macOS log_canary run_4 (fix in #187); filter budget props::budget (F-filters-neutral-perf scope?)"
+  "2026-10-30T07:46Z main 42779e4a CI: ubuntu shutdown.rs stall race (fix/shutdown-stall), macOS toolchain download infra failure; a84c3681 macOS log_canary run_4 (fix in #187); filter budget props::budget (F-filters-neutral-perf scope?)",
+  "2026-10-30T07:47Z filter budget red on main = cross-CPU calibration variance (Intel 8573C), not a code regression (diff empty b4d80387..a84c3681 in filter/search/classify/release-parser) -> F-filters-xcpu"
  ]
 }
