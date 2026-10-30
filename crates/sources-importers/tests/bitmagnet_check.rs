@@ -203,6 +203,131 @@ async fn functions_the_database_defines_cant_forge_the_results() {
     drop_database(&s, &db).await;
 }
 
+/// The runbook's own `reader-role.sql`, through psql: the role can't
+/// write even after turning its read-only default off, the checker passes
+/// as that role, and a row-level security policy can't hide rows from it.
+/// Skipped where psql isn't installed. Roles are cluster-wide, so this is
+/// the only test that creates `bitmagnet_reader`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reader_role_cant_write_and_rls_cant_hide_rows() {
+    let Some(s) = server() else { return };
+    if Command::new("psql").arg("--version").output().is_err() {
+        eprintln!("skipped: needs psql on PATH");
+        return;
+    }
+    let db = database(&s, "reader", "SQL_ASCII", true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let pw_file = dir.path().join("reader_pw");
+    let pw = "0123456789abcdef0123456789abcdef0123456789abcdef";
+    std::fs::write(&pw_file, pw).unwrap();
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/operations/imports/bitmagnet-restore/reader-role.sql"
+    );
+    let port = s.port.to_string();
+    let mut psql = Command::new("psql");
+    psql.args([
+        "-X", "-h", &s.host, "-p", &port, "-U", &s.user, "-d", &db, "-f", script,
+    ])
+    .env("READER_PW_FILE", &pw_file);
+    if let Some(p) = &s.password {
+        psql.env("PGPASSWORD", String::from_utf8(p.clone()).unwrap());
+    }
+    let out = psql.output().unwrap();
+    let (stdout, stderr) = text(&out);
+    assert!(
+        stdout.contains("bitmagnet_reader is ready"),
+        "{stdout}\n{stderr}"
+    );
+
+    let reader = connect(&format!(
+        "{} dbname={db} user=bitmagnet_reader password={pw}",
+        s.base
+    ))
+    .await;
+    for sql in [
+        "SET default_transaction_read_only = off; SELECT lo_from_bytea(0, '\\x41')",
+        "BEGIN READ WRITE; SELECT lo_create(0)",
+        "BEGIN READ WRITE; CREATE TEMP TABLE t (i int)",
+        "BEGIN READ WRITE; CREATE TABLE public.t (i int)",
+        "BEGIN READ WRITE; DELETE FROM public.torrent_pieces",
+    ] {
+        let e = reader.batch_execute(sql).await.unwrap_err();
+        let code = e.code().map(|c| c.code().to_string());
+        assert_eq!(code.as_deref(), Some("42501"), "{sql}: {e:?}");
+        let _ = reader.batch_execute("ROLLBACK").await;
+    }
+
+    // The checker as the importer's role: least privilege is enough.
+    let mut c = checker();
+    c.args([
+        "--host",
+        &s.host,
+        "--port",
+        &port,
+        "--user",
+        "bitmagnet_reader",
+        "--dbname",
+        &db,
+    ])
+    .arg("--password-file")
+    .arg(&pw_file);
+    let out = c.output().unwrap();
+    let (json, summary) = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{summary}\n{json}");
+    assert!(
+        json.contains(NAME_SHA256) && json.contains(PATH_SHA256),
+        "{json}"
+    );
+
+    // A policy showing one torrent of five: the counts and the sample fail
+    // rather than report one.
+    let admin = connect(&format!("{} dbname={db}", s.base)).await;
+    admin
+        .batch_execute(
+            "ALTER TABLE torrents ENABLE ROW LEVEL SECURITY;
+             CREATE POLICY one ON torrents FOR SELECT USING (substr(info_hash, 1, 1) = '\\x01'::bytea)",
+        )
+        .await
+        .unwrap();
+    let out = c.output().unwrap();
+    let (json, summary) = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{summary}\n{json}");
+    assert!(
+        json.contains(r#"{"name":"row_counts","status":"fail""#),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#"{"name":"samples","status":"fail""#),
+        "{json}"
+    );
+    let torrents = json.split(r#"{"name":"torrents","#).nth(1).unwrap();
+    let torrents = &torrents[..torrents.find('}').unwrap()];
+    assert!(torrents.ends_with(r#""rows_exact":null"#), "{torrents}");
+
+    drop(reader);
+    drop_database(&s, &db).await;
+    let _ = admin;
+    let _ = connect(&s.base)
+        .await
+        .batch_execute("DROP ROLE IF EXISTS bitmagnet_reader")
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_database_fails_even_on_estimates() {
+    let Some(s) = server() else { return };
+    let db = database(&s, "empty", "SQL_ASCII", false).await;
+    let out = run(&s, &db, &["--counts", "estimate"]);
+    let (json, summary) = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{summary}\n{json}");
+    assert!(
+        json.contains(r#""detail":"no torrents to sample""#),
+        "{json}"
+    );
+    drop_database(&s, &db).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_missing_or_retyped_column_fails_the_schema_check() {
     let Some(s) = server() else { return };

@@ -360,9 +360,12 @@ async fn connect(args: &Args, password: Option<&[u8]>) -> Result<Client, String>
         // search_path is pg_catalog alone: the database is untrusted, and a
         // function it put in `public` (say `public.convert_to(text, text)`)
         // would otherwise win overload resolution and forge every result.
-        // Its tables are always named `public.<table>`.
+        // Its tables are always named `public.<table>`. row_security=off: a
+        // row-level security policy would otherwise hide rows silently and
+        // forge the counts and samples; with it off, such a read is an error.
         .options(format!(
-            "-c search_path=pg_catalog -c statement_timeout={} -c lock_timeout=10000 \
+            "-c search_path=pg_catalog -c row_security=off \
+             -c statement_timeout={} -c lock_timeout=10000 \
              -c idle_in_transaction_session_timeout={} -c default_transaction_read_only=on",
             args.timeout.as_millis(),
             args.timeout.as_millis() + 60_000,
@@ -394,12 +397,13 @@ async fn connect(args: &Args, password: Option<&[u8]>) -> Result<Client, String>
     Ok(client)
 }
 
-/// The server's message where there is one: tokio-postgres alone says only
-/// "db error". It never contains the password.
+/// The server's message where there is one, escaped: tokio-postgres alone
+/// says only "db error". It never contains the password.
 fn pg_error(e: &tokio_postgres::Error) -> String {
     match e.as_db_error() {
-        Some(db) => format!("{} ({})", db.message(), db.code().code()),
-        None => e.to_string(),
+        // The message can quote the database's own text: escape it.
+        Some(db) => format!("{} ({})", shown(db.message().as_bytes()), db.code().code()),
+        None => shown(e.to_string().as_bytes()),
     }
 }
 
@@ -762,9 +766,11 @@ async fn check_counts(client: &Client, args: &Args, r: &mut Report) -> Result<()
                     torrents = Some(n);
                 }
             }
-            Err(e) => failed.push(format!(
+            // 57014: cancelled by the statement timeout.
+            Err(e) if e.contains("(57014)") || e.contains("timed out") => failed.push(format!(
                 "{table}: {e} (raise --statement-timeout, or use --counts estimate)"
             )),
+            Err(e) => failed.push(format!("{table}: {e}")),
         }
     }
     if torrents == Some(0) {
@@ -824,9 +830,9 @@ fn sample_sql(table: &str, key: &str, column: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "WITH starts(s) AS (SELECT unnest($1::bytea[])),
-         picked AS (
-           SELECT DISTINCT ON ({order}) k.*
+        "WITH starts(s, ord) AS (SELECT * FROM unnest($1::bytea[]) WITH ORDINALITY),
+         candidates AS (
+           SELECT DISTINCT ON ({order}) k.*, starts.ord
            FROM starts CROSS JOIN LATERAL (
              -- Past the highest key, wrap round to the lowest. The second
              -- branch only runs when the first comes up short.
@@ -838,7 +844,10 @@ fn sample_sql(table: &str, key: &str, column: &str) -> String {
               FROM public.{table} t
               ORDER BY {key} LIMIT $2)
              LIMIT $2) k
-           ORDER BY {order} LIMIT $3),
+           ORDER BY {order}, starts.ord),
+         -- The first rows by start, not by key: starts are random, so the
+         -- sample spans the whole key range.
+         picked AS (SELECT * FROM candidates k ORDER BY k.ord, {order} LIMIT $3),
          agg AS (
            SELECT count(*) AS n, coalesce(sum(length(v)), 0)::bigint AS bytes,
              encode(sha256(coalesce(string_agg(
@@ -928,6 +937,13 @@ async fn check_samples(client: &Client, args: &Args, r: &mut Report) -> Result<(
         }
         s.sha256 = digest;
         r.samples.push(s);
+    }
+    // An empty corpus, or one hidden from this role, has nothing to import.
+    if r.samples
+        .iter()
+        .any(|s| s.table == "torrents" && s.rows == 0)
+    {
+        failed.push("no torrents to sample".into());
     }
     if failed.is_empty() {
         let detail = r

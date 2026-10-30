@@ -242,11 +242,11 @@ df -h "$W"                                          # Windows: the df line from 
 
 It's done when `logs/restore.log` ends with `restore finished …, psql exit 0`. Any other exit code means it stopped at an error, shown just above that line. Fix the cause, then drop the database (`DROP DATABASE bitmagnet` as above) and start this step's commands again from `CREATE DATABASE`.
 
-**When it finished,** go back to safe settings, update the planner's statistics (the checker's estimates use them), then stop the server and force everything written with `fsync` off onto the disk before starting it again. Without that last part, a power cut later could still damage data the restore wrote.
+**When it finished,** go back to safe settings, then `VACUUM (ANALYZE)`: it updates the planner's statistics (the checker's estimates use them) and marks every page as checked once, here, as the admin, so later reads by the importer don't. Then stop the server and force everything written with `fsync` off onto the disk before starting it again. Without that last part, a power cut later could still damage data the restore wrote.
 
 ```bash
 docker exec -u postgres bitmagnet-restore psql -X -v ON_ERROR_STOP=1 -f /restore/sql/normal-settings.sql
-docker exec -u postgres bitmagnet-restore psql -X -d bitmagnet -c "ANALYZE"
+docker exec -u postgres bitmagnet-restore psql -X -d bitmagnet -c "VACUUM (ANALYZE)"
 docker stop -t 120 bitmagnet-restore
 docker run --rm --network none -u postgres -v "${DATA}:/var/lib/postgresql/data" postgres:16-alpine initdb --sync-only -D /var/lib/postgresql/data
 docker start bitmagnet-restore
@@ -291,7 +291,7 @@ The steps below assume the database is called `bitmagnet`. If its encoding isn't
 
 ## 6. Create the importer's read-only role
 
-The role can log in to `bitmagnet` over the socket only, and read only `torrents`, `torrent_files` and `torrent_pieces`. Every transaction it runs is read-only. Its password is the `reader_pw` file from step 1.
+The role can log in to `bitmagnet` over the socket only, and read only `torrents`, `torrent_files` and `torrent_pieces`. **Its privileges are what stop it writing:** it owns nothing, can create nothing (no tables, no temporary tables, no schemas), can't change those three tables, and can't run the large-object functions, which PostgreSQL otherwise lets every role use to store data with no table at all. It also starts every transaction read-only, but that's only a default it could switch off; the privileges are the guarantee. Its password is the `reader_pw` file from step 1.
 
 ```bash
 docker exec -u postgres bitmagnet-restore cp /restore/sql/pg_hba.conf /var/lib/postgresql/data/pg_hba.conf
@@ -299,9 +299,9 @@ docker exec -u postgres bitmagnet-restore psql -X -c "SELECT pg_reload_conf()"
 docker exec -u postgres bitmagnet-restore psql -X -d bitmagnet -f /restore/sql/reader-role.sql
 ```
 
-It ends with `bitmagnet_reader is ready`. If it prints `STOP: … reader_pw …`, the secret is missing or unreadable: rerun `make-secrets.sh` (step 1) and this step. It never creates the role without a password.
+It ends with `bitmagnet_reader is ready`. If it prints `STOP: the password file …`, the secret is missing or unreadable: rerun `make-secrets.sh` (step 1) and this step. It never creates the role without a password.
 
-The importer gets the password the same way the checker does: the `bitmagnet-secrets` volume mounted read-only and `--password-file /run/secrets/reader_pw`, or the `PGPASSWORD` environment variable. Never pass it as an argument.
+The checker gets the password from the `bitmagnet-secrets` volume, mounted read-only, with `--password-file /run/secrets/reader_pw` (step 7). It runs as root in its container, so it can read the file. **How the importer gets it isn't settled yet:** `reader_pw` belongs to the database container's `postgres` user (uid 70, mode 600), and Lodestar runs as a different user (uid 65532, or 99 on Unraid), so it can't read the file as it stands. The import slice (IMP-3) will say how the credential reaches Lodestar. Whatever it is, it will be a file or an environment variable, never an argument.
 
 **If the importer can't use the socket** (it runs outside Docker, on Windows): use a loopback-only port instead. This gives the container a network, so do it only if you need it:
 
