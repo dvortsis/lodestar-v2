@@ -1109,6 +1109,21 @@ mod tests {
     use super::*;
     use lodestar_pipeline::gate::{Excluded, Origin};
 
+    /// Every slot of the pool's failure array has a label, in index order,
+    /// so a new `FailureKind` can't be left out of `/metrics` and
+    /// `/api/status`.
+    #[test]
+    fn failure_labels_cover_every_kind() {
+        let p = lodestar_sources::PoolStats::default();
+        assert_eq!(FAILURE_KINDS.len(), p.failures.len());
+        for (i, f) in p.failures.iter().enumerate() {
+            f.store(i as u64 + 1, Ordering::Relaxed);
+        }
+        for (i, (kind, _)) in FAILURE_KINDS.iter().enumerate() {
+            assert_eq!(p.failure_count(*kind), i as u64 + 1, "{kind:?}");
+        }
+    }
+
     #[test]
     fn gate_families_render_each_field_on_its_own_line() {
         // Distinct values everywhere, so a swapped field shows.

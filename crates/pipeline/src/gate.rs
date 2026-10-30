@@ -55,8 +55,9 @@ pub enum Excluded {
     Quarantined = 3,
     /// Hashed to the key but isn't usable metainfo.
     InvalidMetainfo = 4,
-    /// The pool gave the key up on invalid data on its final attempt: a
-    /// hash mismatch, or a protocol or handshake violation.
+    /// The pool gave the key up on metadata that didn't hash to it on its
+    /// final attempt (`FailureKind::HashMismatch`). A protocol or
+    /// handshake violation is the same funnel loss but not counted here.
     FailedVerification = 5,
     /// A result under a lease that was no longer current: the key's
     /// current holder delivers it.

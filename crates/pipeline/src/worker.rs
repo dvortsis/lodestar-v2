@@ -81,6 +81,7 @@ impl Funnel for WorkerFunnel {
                 // gave it up on data that didn't hash to it. A protocol
                 // violation is an `Invalid` loss too, but not this.
                 if self.coordinator.lost(key, token, loss)
+                    && loss == Loss::Invalid
                     && cause == Some(FailureKind::HashMismatch)
                 {
                     self.gate.exclude(Excluded::FailedVerification, 1);
@@ -413,6 +414,8 @@ mod tests {
             (Loss::Invalid, Some(FailureKind::HashMismatch)),
             (Loss::Invalid, Some(FailureKind::Invalid)),
             (Loss::NoPeers, None),
+            // Not a cause the pool passes, but the gate doesn't rely on it.
+            (Loss::Evicted, Some(FailureKind::HashMismatch)),
         ];
         for (i, (loss, cause)) in cases.into_iter().enumerate() {
             let key = InfoHash([i as u8 + 1; 20]);
@@ -439,5 +442,6 @@ mod tests {
         // Both invalid keys are still the funnel's `invalid` losses.
         assert_eq!(funnel.total(Stage::Lost, Some(Loss::Invalid)), 2);
         assert_eq!(funnel.total(Stage::Lost, Some(Loss::NoPeers)), 1);
+        assert_eq!(funnel.total(Stage::Lost, Some(Loss::Evicted)), 1);
     }
 }

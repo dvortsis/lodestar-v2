@@ -891,6 +891,29 @@ async fn an_invalid_loss_carries_its_cause() {
     h.stop().await;
 }
 
+/// A key evicted after a hash mismatch was lost to the full queue, not to
+/// bad data: its loss carries no cause, so the gate can't count it.
+#[tokio::test(start_paused = true)]
+async fn an_evicted_key_carries_no_cause() {
+    let cfg = PoolConfig {
+        max_pending: 1,
+        ..config()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    h.script(peer(1, 1), 10, Err(FailureKind::HashMismatch));
+    h.send(found(0, 1, vec![peer(1, 1)]));
+    // It fails and backs off with attempts left, so it's evictable.
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(h.handle.stats().failure_count(FailureKind::HashMismatch), 1);
+    h.send(found(0, 2, vec![]));
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        h.causes.lost.lock().unwrap().clone(),
+        vec![(key(1), Loss::Evicted, None)]
+    );
+    h.stop().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_queue_survives_a_restart() {
     let mut h = Harness::start(config(), &[], vec![]);
