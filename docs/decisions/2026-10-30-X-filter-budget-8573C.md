@@ -46,11 +46,17 @@ The filter budget gate now scales a listed CPU model by the job's own calibratio
   - **(b) A per-case factor for the neutralized case:** the data doesn't support it. The neutralized case scales like the mixed set on every model.
   - **(c) Report-only on a provisional model:** with 9 jobs the 8573C isn't provisional, and report-only would only defer the slow-band failure.
   - **Using the fastest pass for each case:** that would loosen every model, and 124095631213's fastest pass (45.6 µs ÷ 0.90 = 50.7 µs) would still fail.
+- **A held case disturbed mid-run measures again** (`spread`). This slice's first dispatch (run 41070391665, job 124112699853) drew a 7763 and failed the mixed set at 51.1 µs raw, on the reference path this PR leaves unchanged. Its passes were 42.9, 44.3, 51.1, 56.9, 49.6, 62.0 and 52.6 µs, while every other case on that host varied by 1–2% and the calibrations before and after agreed within 1%. Every other 7763 job since #196 read the mixed set at 43.1–43.4 µs.
+  - **Why the existing checks missed it:** a busy neighbour slowed most of one case's passes. The median of 7 can't absorb that, and the calibration drift check only looks either side of the cases.
+  - **The rule:** a held case whose median pass is more than `DRIFT` (15%) above its fastest pass is a disturbed attempt, measured again under the same three-attempt rule as calibration drift. That job's mixed set was 19% over. Steady cases are under 2% on the 7763 and the 9V45, and up to 13% on the 8573C.
+  - **What it doesn't loosen:** a disturbed attempt never passes, and disturbance on all three attempts fails the gate. A slower engine slows every pass alike, so its spread stays small and the slow median still fails. The 50 µs, the held cases and the reference's raw reading are unchanged.
+  - **Not here:** reported cases don't trigger it, because they don't decide the verdict.
 - **Tests** (`tests/props.rs`, run in debug with the rest): the scaling is a function (`scaling`), so it's checked without timing anything.
   - The 7763 gets divisor 1.0, raw, with no warning.
   - An unlisted model gets its calibration ÷ `CALIB_REF_NS`, unchanged.
   - The 8573C's divisor for job 124095631213 is checked against a hand-computed value: 9.86 ÷ 11.09 × 1.126 = 1.001115.
   - The drift warning fires at more than 20% either side of the model's skew, and not inside it.
   - A provisional entry still scales, and its warning says it's provisional.
+  - `spread` gives that 7763 job's disturbed mixed set a spread over 15%, and its steady neutralized case one under 1%.
 - **Unchanged:** the 50 µs; the 7763 as the reference and its raw reading; which cases are held (the core, 1%, 10%, the mixed set, the mixed set neutralized); the calibration, its drift check and its 0.4–2.0× range; and the fallback for unlisted models.
 - **CI evidence:** the runs dispatched on this branch are listed in the PR.

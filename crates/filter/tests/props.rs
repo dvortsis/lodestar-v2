@@ -601,6 +601,29 @@ const ENGINE_SPEED: &[EngineSpeed] = &[
 /// that the skew may need re-deriving. It only warns: the table decides.
 const MODEL_DRIFT: f64 = 0.20;
 
+/// A case's median pass, and how far it is above the fastest pass, as a
+/// share. A shared host's neighbours can slow most of one case's passes
+/// while the calibrations either side run clean; then the median isn't
+/// the engine's time, and the spread shows it. A slower engine slows
+/// every pass alike, so its spread stays small.
+fn spread(mut passes: Vec<f64>) -> (f64, f64) {
+    passes.sort_by(f64::total_cmp);
+    let median = passes[passes.len() / 2];
+    (median, median / passes[0] - 1.0)
+}
+
+#[test]
+fn a_case_disturbed_mid_run_has_a_wide_spread() {
+    // This slice's dispatch on a 7763 (job 124112699853): the mixed set
+    // while the host was busy, and the neutralized case right after.
+    let (median, wide) = spread(vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6]);
+    assert_eq!(median, 51.1);
+    assert!(wide > 0.15, "{wide}");
+    let (median, narrow) = spread(vec![43.6, 43.2, 43.2, 43.3, 43.8, 43.4, 43.2]);
+    assert_eq!(median, 43.3);
+    assert!(narrow < 0.01, "{narrow}");
+}
+
 /// How a job's times become reference-runner microseconds: each case's
 /// raw time ÷ `speed`.
 struct Scaling {
@@ -780,7 +803,9 @@ fn a_provisional_skew_still_scales_and_warns() {
 /// by how much slower than [`CALIB_REF_NS`] that pass ran.
 /// [`calibrate`] runs either way, before any filter code runs and again
 /// once the engine is gone, to catch a runner whose speed changes under
-/// the test. Where it scales, it never runs beside filter state, so a
+/// the test; a held case whose median pass is more than 15% over its
+/// fastest ([`spread`]) is caught the same way, and either measures
+/// again. Where it scales, it never runs beside filter state, so a
 /// regression can't slow it and hide itself, and noise only adds time, so
 /// its fastest pass can only make the gate stricter. Raw times, the
 /// divisor and where it came from are printed too.
@@ -797,7 +822,8 @@ fn budget() {
     // VM) the reference's time.
     const SPEED: std::ops::RangeInclusive<f64> = 0.4..=2.0;
     // The fastest calibration passes before and after must agree this
-    // closely, or the runner's speed changed under the test.
+    // closely, or the runner's speed changed under the test; and so must
+    // a held case's median pass and its fastest ([`spread`]).
     const DRIFT: f64 = 0.15;
     // Attempts at a measurement the drift doesn't spoil.
     const ATTEMPTS: usize = 3;
@@ -872,13 +898,13 @@ fn budget() {
     };
     // A warm-up pass (the first judgment also builds the rule index),
     // then seven passes over the set. The median decides, so one noisy
-    // pass on a shared runner doesn't.
+    // pass on a shared runner doesn't; with how far it is above the
+    // fastest pass, so a run of them is caught.
     let time = |what: &str, f: &dyn Fn(usize)| {
         pass(f);
-        let mut passes: Vec<f64> = (0..7).map(|_| pass(f)).collect();
+        let passes: Vec<f64> = (0..7).map(|_| pass(f)).collect();
         println!("{what}: passes {} µs", show(&passes));
-        passes.sort_by(f64::total_cmp);
-        passes[3]
+        spread(passes)
     };
     // The fastest of seven calibration passes, after a warm-up.
     let calibration = |when: &str| {
@@ -889,21 +915,19 @@ fn budget() {
     };
 
     // A runner's speed can change under the test (a shared host's
-    // neighbours), which the calibrations before and after catch. Such a
-    // run measures again rather than failing, up to three times; only a
+    // neighbours), which the calibrations before and after catch, or
+    // during one case, which that case's spread catches. Such a run
+    // measures again rather than failing, up to three times; only a
     // trusted attempt decides, and only drift on every attempt fails.
     let mut drifted = Vec::new();
     for attempt in 1..=ATTEMPTS {
         println!("attempt {attempt} of {ATTEMPTS}");
         let before = calibration("before");
         let core = shipped();
-        let mut cases = vec![(
-            "core".to_owned(),
-            time("core", &|i| {
-                std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
-            }),
-            true,
-        )];
+        let (per, spread) = time("core", &|i| {
+            std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
+        });
+        let mut cases = vec![("core".to_owned(), per, true, spread)];
 
         // The whole engine: the core, every pack, and 10,000 of your rules,
         // reading the classification as ingest does.
@@ -937,7 +961,7 @@ fn budget() {
                 met as f64 / items.len() as f64,
                 full as f64 / items.len() as f64
             );
-            let per = time(&what, &|i| {
+            let (per, spread) = time(&what, &|i| {
                 let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
                 assert!(
                     v.decision
@@ -947,7 +971,7 @@ fn budget() {
                     v.decision
                 );
             });
-            cases.push((what, per, held));
+            cases.push((what, per, held, spread));
         }
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
@@ -966,10 +990,10 @@ fn budget() {
             })
             .collect();
         let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
-        let per = time(what, &|i| {
+        let (per, spread) = time(what, &|i| {
             std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
         });
-        cases.push((what.to_owned(), per, true));
+        cases.push((what.to_owned(), per, true, spread));
         drop(engine);
         let after = calibration("after");
 
@@ -992,6 +1016,19 @@ fn budget() {
             drifted.push(note);
             continue;
         }
+        let unsteady: Vec<_> = cases
+            .iter()
+            .filter(|(_, _, held, spread)| *held && *spread > DRIFT)
+            .map(|(what, _, _, spread)| {
+                format!("{what}: median {:.0}% over the fastest", spread * 100.0)
+            })
+            .collect();
+        if !unsteady.is_empty() {
+            let note = format!("attempt {attempt}: {unsteady:?}");
+            println!("{note}: the runner's speed changed during a held case, so measuring again");
+            drifted.push(note);
+            continue;
+        }
         assert!(
             SPEED.contains(&calibrated),
             "the runner took {calibrated:.2}× the reference's time to calibrate, outside \
@@ -1007,7 +1044,7 @@ fn budget() {
             println!("{note}");
         }
         let mut over = Vec::new();
-        for (what, raw, held) in cases {
+        for (what, raw, held, _) in cases {
             let per = raw / speed;
             println!(
                 "{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here \
