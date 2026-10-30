@@ -2183,6 +2183,7 @@
     "2026-10-30T14:18Z X-flake-logdelete PR #213 (109d4c55): the test's assumption was wrong (prune by count races the delete), plus a real ordering bug in rotated() fixed with LogName::newest_first. Fresh Opus review launched",
     "2026-10-30T14:25Z MISSED EARLIER: the owner ruled on #189 at 13:05Z (accept; memory judged on hours 12-24, upper 95% CI <= 2 MiB/h) and posted the fit at 13:20Z (upper +0.32 MiB/h, so the pass is final). The owner pushed tag v0.5.1-rc.1 (8b67f269); Release run 41062406135 is waiting for release-environment approval. Runner: #214 records acceptance and the Linux memory gate (review session_01MMjhn9958McVAHzTgKg27G); R-gauges launched (session_01MMjhnBEKCAaLuqVT1phsxp) for rc.2",
     "2026-10-30T14:35Z #215 X-soak-memory-fit (analyzer computes the binding memory gate) opened; review session_01MMjhnBkxvdSzAfCFK7KQ7t. Owner steps note updated for rc.2 and the memory gate",
-    "2026-10-30T15:00Z #218 X-clippy-msrv part 1 (9 crates with no open PR, 31 files; allows stay) opened; review launched. #216 CR-0d-2a and #217 S-settings-reconcile opened; reviews launch when their authors report ready. Disk full once: incremental caches cleared; use CARGO_INCREMENTAL=0"
+    "2026-10-30T15:00Z #218 X-clippy-msrv part 1 (9 crates with no open PR, 31 files; allows stay) opened; review launched. #216 CR-0d-2a and #217 S-settings-reconcile opened; reviews launch when their authors report ready. Disk full once: incremental caches cleared; use CARGO_INCREMENTAL=0",
+    "2026-10-30T15:02Z merged #212 (ac20c916, freshness hardening; CI green, review MERGE)"
   ]
 }
