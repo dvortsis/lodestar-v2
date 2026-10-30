@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:58Z",
+ "updated_at": "2026-10-30T20:50Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2306,7 +2306,8 @@
   "2026-10-30T20:36Z opened #238 fix/hash-mismatch-docs (the #236 optional nits); review by session_01MMjhn984M3k3UJXUCsEYPX. Told the owner via the dashboard session: \u00a72.19 flag for #236, and the rc.2 per-file hashes are blocked by network policy. #237 still in CI.",
   "2026-10-30T20:38Z #238 review MERGE at 00188a18; merge on green ci-ok.",
   "2026-10-30T20:39Z merged #237 clippy MSRV 2b (faf3fd48); the collapsible_if and manual_is_multiple_of allows are gone. Only #238 (docs) is open.",
-  "2026-10-30T20:56Z opened #239 X-crawler-sim-crate (runner-built): sim moved to crates/crawler-sim, sources drops its testing self-dev-dep, CI tests dht and sources without seams; goldens byte-identical. Review by session_01MMjhn984M3k3UJXUCsEYPX. #238 waits on ci-ok."
+  "2026-10-30T20:56Z opened #239 X-crawler-sim-crate (runner-built): sim moved to crates/crawler-sim, sources drops its testing self-dev-dep, CI tests dht and sources without seams; goldens byte-identical. Review by session_01MMjhn984M3k3UJXUCsEYPX. #238 waits on ci-ok.",
+  "2026-10-30T20:50Z #239 review MERGE at 25ecb199; the optional stale README line is carried into the CR-SIM-restart brief."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {

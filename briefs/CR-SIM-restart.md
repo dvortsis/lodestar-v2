@@ -19,7 +19,7 @@ It also gives the crawler program a baseline for restart cost: stored per minute
    - Report the conservation of the sampling counters.
 3. **A new golden, `restart-honoured.txt`.** Bless it with `CRAWLER_SIM_BLESS=1`. The existing three goldens must stay byte-identical.
 4. **Negative control:** a variant with `safe_restart` off. It must show the full suppression (`sample_suppression_reason`), with no samples in the suppression window. It can be an ignored test or a second golden; your choice.
-5. **README:** update the CR-SIM README. **Decisions:** add a section to a new decisions file.
+5. **README:** update the CR-SIM README. Also fix its conservation paragraph (about line 91), which still says the actor drops closed-caller requests without counting them. Since #232 they're `peer_queued_dropped`, and the bound remains only because of the 1 s gauge lag (#239 review, optional). **Decisions:** add a section to a new decisions file.
 
 ## Own
 `crates/crawler-sim/**`, plus test-only seams in `crates/dht` only if one is missing. No production behaviour change.
