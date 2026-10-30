@@ -49,5 +49,7 @@
 	"insights_group_software": "软件",
 	"insights_group_images": "图片",
 	"insights_group_other": "其他",
-	"insights_group_unclassified": "未分类"
+	"insights_group_unclassified": "未分类",
+	"insights_overview_stalled_title": "爬虫似乎已停滞",
+	"insights_overview_stalled_body": "爬虫正在运行，但没有新内容被存储。下方的阶段条会显示卡在哪里。"
 }

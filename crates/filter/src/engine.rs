@@ -25,7 +25,7 @@ use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts};
 use crate::packs::{self, PackRule, PackSwitches};
 use crate::prefilter::RuleList;
-use crate::rules::{self, Allow, ClassRules, Exception, Match, Override, Strength};
+use crate::rules::{self, Allow, ClassRules, Exception, Match, OverrideList, Strength};
 
 /// Which rule decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,6 +106,14 @@ pub struct Verdict {
     pub shadow: Vec<Decision>,
 }
 
+/// [`Engine::released`].
+#[derive(Debug, Default)]
+struct Released<'a> {
+    overridden: bool,
+    neutral: Vec<&'a rules::Prepared>,
+    shadow: Vec<u32>,
+}
+
 /// A subscribed content list in the pack layer.
 #[derive(Debug, Clone)]
 pub struct ListLayer {
@@ -121,7 +129,7 @@ pub struct Engine {
     pub packs: PackSwitches,
     /// Your rules, indexed so a torrent only meets those that could match.
     pub rules: RuleList,
-    pub overrides: Vec<Override>,
+    pub overrides: OverrideList,
     pub exceptions: Vec<Exception>,
     pub allow: Vec<Allow>,
     /// Classification rules (§20.9): they decide what's stored, and an
@@ -138,7 +146,7 @@ impl Engine {
             lists: Vec::new(),
             packs: PackSwitches::default(),
             rules: RuleList::default(),
-            overrides: Vec::new(),
+            overrides: OverrideList::default(),
             exceptions: Vec::new(),
             allow: Vec::new(),
             class_rules: ClassRules::default(),
@@ -209,28 +217,38 @@ impl Engine {
         self.judge_doc(item, facts, &doc, now)
     }
 
-    /// [`Engine::judge`] past the floor, on a prepared torrent.
-    fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
-        let mut v = Verdict::default();
-        let mut neutral = Vec::new();
-        let mut shadow_overrides = Vec::new();
-        let mut overridden = false;
-        for o in &self.overrides {
+    /// The override and neutralize entries that apply to a torrent:
+    /// whether an Override entry releases it, the Neutralize entries, and
+    /// the entries in shadow mode.
+    fn released(&self, item: &Item, doc: &Doc, now: i64) -> Released<'_> {
+        let mut r = Released::default();
+        for (o, p) in self.overrides.prepared() {
             if o.expires_at.is_some_and(|t| t <= now)
-                || !rules::matches(&o.what, item, doc)
+                || !rules::override_matches(o, p, item, doc)
                 || o.scope.as_ref().is_some_and(|q| !doc.matches(q, &[]))
             {
                 continue;
             }
             if o.shadow_until.is_some_and(|t| t > now) {
-                shadow_overrides.push(o.id);
+                r.shadow.push(o.id);
                 continue;
             }
             match o.strength {
-                Strength::Override => overridden = true,
-                Strength::Neutralize => neutral.push(o),
+                Strength::Override => r.overridden = true,
+                Strength::Neutralize => r.neutral.push(p),
             }
         }
+        r
+    }
+
+    /// [`Engine::judge`] past the floor, on a prepared torrent.
+    fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
+        let mut v = Verdict::default();
+        let Released {
+            overridden,
+            neutral,
+            shadow: shadow_overrides,
+        } = self.released(item, doc, now);
         let (neutral_set, neutral_words) = rules::neutral_sets(&neutral);
         if !overridden {
             v.decision = self.below_overrides(
@@ -266,16 +284,19 @@ impl Engine {
         now: i64,
         shadow: &mut Vec<Decision>,
     ) -> Option<Decision> {
-        for hit in self.core.pattern_hits(item, neutral) {
+        for hit in self.core.pattern_hits_read(item, neutral, doc.read()) {
             if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc) {
                 return Some(hit.into());
             }
         }
-        if self
-            .allow
-            .iter()
-            .any(|a| doc.matches(&a.query, neutral_words))
-        {
+        // Neutralizing only takes evidence away: an allow query must
+        // match without the neutralized words too, so one that needs a
+        // neutralized word absent (`-"amber beacon"`) releases nothing
+        // more than it did.
+        if self.allow.iter().any(|a| {
+            doc.matches(&a.query, neutral_words)
+                && (neutral_words.is_empty() || doc.matches(&a.query, &[]))
+        }) {
             return None;
         }
         for i in doc.candidates(&self.rules, neutral_words) {
@@ -309,6 +330,9 @@ impl Engine {
                 action: r.action(),
                 evidence: vec![Evidence::Pack],
             });
+        // Each pack and list is excepted on its own (§20.12), before the
+        // strongest action left wins (§20.6): an exception to one list
+        // never lifts another that also has the torrent.
         packs
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc))
@@ -336,40 +360,47 @@ impl Engine {
     }
 
     /// The decision on bare hashes, before anything is fetched: the floor,
-    /// then subscribed lists that drop, unless something that needs the
-    /// torrent's text could still let it through.
+    /// then a subscribed list that drops, unless something that needs the
+    /// torrent's text could still let it through. Lists are released one
+    /// by one: an exception to one dropping list doesn't fetch a torrent
+    /// another still drops.
     pub fn blocked_hash(&self, hashes: &[[u8; 20]]) -> Option<Decision> {
         if let Some(hit) = self.core.blocked_hash(hashes) {
             return Some(hit.into());
         }
-        let d = self.listed(hashes).filter(|d| d.action == Action::Drop)?;
         let by_hash = |m: &Match| match m {
             Match::Hashes(hs) => hashes.iter().any(|h| hs.contains(h)),
             _ => true,
         };
-        let releasable = !self.allow.is_empty()
+        if !self.allow.is_empty()
             || self
                 .overrides
                 .iter()
                 .any(|o| o.strength == Strength::Override && by_hash(&o.what))
-            || self
-                .exceptions
-                .iter()
-                .any(|e| e.rule == d.rule && by_hash(&e.what));
-        (!releasable).then_some(d)
+        {
+            return None;
+        }
+        self.listed(hashes)
+            .filter(|d| d.action == Action::Drop)
+            .filter(|d| {
+                !self
+                    .exceptions
+                    .iter()
+                    .any(|e| e.rule == d.rule && by_hash(&e.what))
+            })
+            .last()
     }
 
-    fn listed(&self, hashes: &[[u8; 20]]) -> Option<Decision> {
-        let l = self
-            .lists
+    /// Every subscribed list that has one of these hashes, in order.
+    fn listed<'a>(&'a self, hashes: &'a [[u8; 20]]) -> impl Iterator<Item = Decision> + 'a {
+        self.lists
             .iter()
             .filter(|l| hashes.iter().any(|h| l.hashes.contains(h)))
-            .max_by_key(|l| l.action)?;
-        Some(Decision {
-            rule: RuleRef::List(l.id),
-            action: l.action,
-            evidence: vec![Evidence::Listed],
-        })
+            .map(|l| Decision {
+                rule: RuleRef::List(l.id),
+                action: l.action,
+                evidence: vec![Evidence::Listed],
+            })
     }
 
     /// Sets (or with `None` removes) a subscribed content list.
@@ -430,8 +461,9 @@ impl Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CsList, Lists, Switches, TermSet};
-    use lodestar_classify::ContentType;
+    use crate::{CsList, Lists, Override, Switches, TermSet};
+    use lodestar_classify::{ContentType, FileInfo};
+    use proptest::prelude::*;
 
     fn engine() -> Engine {
         let lists = Lists {
@@ -493,5 +525,206 @@ mod tests {
         assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs1b));
         e.core.cs.set_list(7, None);
         assert!(e.blocked_hash(&[[9; 20]]).is_none());
+    }
+
+    /// Every way of writing a word the neutralize tests use: spellings,
+    /// look-alikes, letter-for-number swaps, spelled-out letters, single
+    /// letters that run on over a `/`, and words that aren't neutralized.
+    const SPELLINGS: &[&str] = &[
+        "web",
+        "Web-DL",
+        "WEB.DL",
+        "W.E.B",
+        "w3b",
+        "WEBRip",
+        "webrip",
+        "HEVC",
+        "h.e.v.c",
+        "h3vc",
+        "mkv",
+        "Sample",
+        "sample",
+        "x265",
+        "x",
+        "265",
+        "amber",
+        "a",
+        "b",
+        "c",
+        "\u{FF57}eb",
+        "w\u{0435}b",
+        "we\u{200B}b",
+        "S01E02",
+        "$ample",
+        "@mber",
+    ];
+    const KEYWORDS: &[&str] = &[
+        "web",
+        "webrip",
+        "hevc",
+        "mkv",
+        "sample",
+        "amber",
+        "x265",
+        "a",
+        "abc",
+        "web-dl",
+        "\u{FF57}eb",
+        "h3vc",
+        "s01e02",
+    ];
+
+    fn text() -> impl Strategy<Value = String> {
+        prop::collection::vec(
+            (
+                prop::sample::select(SPELLINGS.to_vec()),
+                prop::sample::select(vec![" ", ".", "-", "_", ""]),
+            ),
+            0..6,
+        )
+        .prop_map(|v| v.into_iter().map(|(w, s)| format!("{w}{s}")).collect())
+    }
+
+    /// A torrent: a name, and files in a few folders, in any order.
+    fn torrent() -> impl Strategy<Value = (String, Vec<FileInfo>)> {
+        let folder = prop::collection::vec(text(), 0..3);
+        (
+            text(),
+            prop::collection::vec(folder, 1..7),
+            prop::collection::vec((any::<prop::sample::Index>(), text(), any::<bool>()), 0..14),
+        )
+            .prop_map(|(name, folders, files)| {
+                let files = files
+                    .into_iter()
+                    .map(|(at, own, padding)| {
+                        let mut path = folders[at.index(folders.len())].clone();
+                        path.push(format!("{own}.mkv"));
+                        FileInfo {
+                            padding,
+                            ..FileInfo::new(path, 1 << 20)
+                        }
+                    })
+                    .collect();
+                (name, files)
+            })
+    }
+
+    fn entries() -> impl Strategy<Value = Vec<Override>> {
+        let entry = (
+            prop::sample::select(KEYWORDS.to_vec()),
+            prop::option::of(prop::sample::select(KEYWORDS.to_vec())),
+            any::<bool>(),
+            prop::option::of(0..20i64),
+            prop::option::of(0..20i64),
+        )
+            .prop_map(|(k, more, neutralize, expires_at, shadow_until)| {
+                // A Neutralize term is one word; an Override may be more.
+                let (what, strength) = match more {
+                    Some(m) if !neutralize => (format!("{k} {m}"), Strength::Override),
+                    _ if neutralize => (k.to_owned(), Strength::Neutralize),
+                    _ => (k.to_owned(), Strength::Override),
+                };
+                Override {
+                    id: 0,
+                    what: Match::Keyword(what),
+                    strength,
+                    scope: None,
+                    expires_at,
+                    shadow_until,
+                }
+            });
+        prop::collection::vec(entry, 0..7).prop_map(|mut v| {
+            for (o, id) in v.iter_mut().zip(1..) {
+                o.id = id;
+            }
+            v
+        })
+    }
+
+    /// [`Engine::released`] as it was decided before the entries were
+    /// prepared once and the texts read in one pass: each keyword's
+    /// tokens worked out for each torrent, and each text read by a new
+    /// tokenizer as one string.
+    fn reference_released(
+        overrides: &[Override],
+        item: &Item,
+        now: i64,
+    ) -> (bool, Vec<(u64, String)>, Vec<u32>) {
+        let texts: Vec<Vec<crate::normalize::Token>> = std::iter::once(item.name.to_owned())
+            .chain(
+                item.files
+                    .iter()
+                    .take(crate::MAX_FILES)
+                    .map(|f| f.path.join("/")),
+            )
+            .map(|t| {
+                let mut out = Vec::new();
+                crate::normalize::Tokenizer::default().text(&t, &mut out);
+                out
+            })
+            .collect();
+        let (mut overridden, mut neutral, mut shadow) = (false, Vec::new(), Vec::new());
+        for o in overrides {
+            let Match::Keyword(k) = &o.what else {
+                unreachable!("keyword entries only")
+            };
+            let words = rules::keyword_tokens(&k[..]);
+            if o.expires_at.is_some_and(|t| t <= now)
+                || !texts.iter().any(|t| rules::in_a_row(&words, t))
+            {
+                continue;
+            }
+            if o.shadow_until.is_some_and(|t| t > now) {
+                shadow.push(o.id);
+                continue;
+            }
+            match o.strength {
+                Strength::Override => overridden = true,
+                Strength::Neutralize => {
+                    if let Some(t) = words.first() {
+                        neutral.push((t.hash, crate::matcher::neutral_key(&k[..])));
+                    }
+                }
+            }
+        }
+        (overridden, neutral, shadow)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// The entries that apply to a torrent are those the reference
+        /// finds, over random Neutralize and Override lists, and stay so
+        /// as the list changes.
+        #[test]
+        fn released_entries_match_the_reference(
+            (name, files) in torrent(),
+            list in entries(),
+            more in entries(),
+            now in 0..20i64,
+        ) {
+            let it = Item {
+                hashes: &[[1; 20]],
+                name: &name,
+                files: &files,
+                content_type: ContentType::Video,
+            };
+            let mut e = engine();
+            e.overrides = list.into();
+            for round in 0..2 {
+                let doc = Doc::new(&it, None);
+                let r = e.released(&it, &doc, now);
+                let neutral: Vec<(u64, String)> =
+                    r.neutral.iter().map(|p| p.neutral.clone().unwrap()).collect();
+                prop_assert_eq!(
+                    (r.overridden, neutral, r.shadow),
+                    reference_released(&e.overrides, &it, now),
+                    "round {}: {:?} {:?} {:?}", round, name, files, e.overrides
+                );
+                // A change after the first judgment is honoured.
+                e.overrides.extend(more.iter().cloned());
+                e.overrides.retain(|o| o.id % 3 != 0);
+            }
+        }
     }
 }

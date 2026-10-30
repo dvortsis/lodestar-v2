@@ -111,6 +111,21 @@
 
 	$effect(() => statusRef.current?.observe());
 
+	// The pill's progress facts (stalled, starting) come from their own small module.
+	$effect(() => {
+		const status = statusRef.current;
+		if (bare || !status) return;
+		let stop: (() => void) | undefined;
+		let gone = false;
+		void import('./progress').then((mod) => {
+			if (!gone) stop = mod.startProgress((p) => status.setProgress(p));
+		});
+		return () => {
+			gone = true;
+			stop?.();
+		};
+	});
+
 	$effect(() => {
 		if (shell.paletteOpen && !Palette)
 			void import('./CommandPalette.svelte').then((mod) => (Palette = mod.default));

@@ -635,6 +635,13 @@ impl SearchIndex {
         (&self.index, &self.reader)
     }
 
+    /// The file index and its reader, for tests that write raw file
+    /// documents.
+    #[cfg(test)]
+    pub(crate) fn raw_files(&self) -> (&Index, &IndexReader) {
+        (&self.files.index, &self.files.reader)
+    }
+
     /// The file index's fields, for tests.
     #[cfg(test)]
     pub(crate) fn file_fields(&self) -> &FileFields {
@@ -965,7 +972,13 @@ impl SearchIndex {
         for of in &clauses {
             let key = format!("{of:?}");
             cancel.check()?;
-            let ids = match files::compile(of, &self.files.fields) {
+            let query = files::compile(of, &self.files.fields);
+            // Tests swap in a query that cancels partway (`testing`).
+            #[cfg(test)]
+            let query = crate::testing::FILE_QUERY
+                .with(|q| q.borrow_mut().take())
+                .or(query);
+            let ids = match query {
                 Some(q) => match files::torrent_ids(
                     &files_searcher,
                     q.as_ref(),

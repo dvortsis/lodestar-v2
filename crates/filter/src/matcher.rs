@@ -20,6 +20,7 @@
 //! hash lookups. It never says *yes* from a hash, so a token whose hash
 //! collides with a word can't make a rule match, or stop one matching.
 
+use std::borrow::Cow;
 use std::cell::OnceCell;
 
 use lodestar_classify::{Category, Classification, FileInfo, Record};
@@ -51,14 +52,27 @@ pub struct Facts<'a> {
 pub(crate) struct Term {
     hash: u64,
     text: Box<str>,
+    /// Its [`neutral_key`], when that differs from the text (a compound
+    /// form like `dd+`).
+    key: Option<Box<str>>,
 }
 
 impl Term {
     fn new(text: &str) -> Term {
+        let key = neutral_key(text);
         Term {
             hash: term_hash(text),
+            key: (*key != *text).then(|| key.into()),
             text: text.into(),
         }
+    }
+
+    /// Whether this token is a neutralized word. A torrent's token of the
+    /// same text then supplies no evidence, wherever it stands, so the
+    /// query token can't be matched.
+    fn dead(&self, neutral: &[String]) -> bool {
+        let k = self.key.as_deref().unwrap_or(&self.text);
+        neutral.iter().any(|n| **n == *k)
     }
 }
 
@@ -75,13 +89,16 @@ pub(crate) enum Compiled {
         whole: Vec<Term>,
         /// Or the parts in a row.
         parts: Vec<Term>,
-        /// What CSX-5 neutralizing compares.
-        fold: Box<str>,
+        /// What CSX-5 neutralizing compares ([`neutral_folds`]).
+        folds: Box<[Box<str>]>,
     },
     Phrase {
         field: TextField,
         parts: Vec<Term>,
-        fold: Box<str>,
+        folds: Box<[Box<str>]>,
+        /// Its words, as NEAR has them: for a word with a neutralized
+        /// part, a whole or compound form stands in ([`phrase_live`]).
+        words: Vec<Operand>,
     },
     Near {
         field: TextField,
@@ -122,6 +139,7 @@ pub(crate) enum Compiled {
 pub(crate) struct Operand {
     parts: Vec<Term>,
     whole: Vec<Term>,
+    folds: Box<[Box<str>]>,
 }
 
 /// A NEAR word's parts, and the compound or whole forms that cover all
@@ -192,6 +210,172 @@ fn folded(s: &str) -> String {
         .join("")
 }
 
+/// What CSX-5 *Neutralize term* compares: a text's parts, joined, so
+/// every spelling of a word compares alike (`web-dl`, `web.dl` and
+/// `webdl` are all `webdl`; `x265` is `x265`).
+pub(crate) fn neutral_key(text: &str) -> String {
+    let mut out = String::new();
+    for t in tokenize(text) {
+        if t.kind == TokKind::Part {
+            out.push_str(&t.text);
+        }
+    }
+    out
+}
+
+/// The most parts in a row [`neutral_folds`] reads as one word: a
+/// Neutralize term is one word, so a run of more can't be one.
+const NEUTRAL_RUN: usize = 8;
+
+/// The [`neutral_key`]s CSX-5 *Neutralize term* compares for the runs of
+/// two or more parts in a query word, phrase or NEAR word with no space
+/// between them (`x265`, `web-dl` and `web.dl` in `web-dl.x264` or
+/// `web.dl`), beside its single tokens ([`Term::dead`]). A neutralized
+/// word among them supplies no evidence, so the clause that needs it is
+/// false (§20.6). A torrent's word of several parts carries them as its
+/// own tokens too, so its parts match a query's in a row: this is where a
+/// neutralized `x265` is caught. A phrase as a whole is never one word:
+/// `"amber beacon"` isn't `amberbeacon`.
+pub(crate) fn neutral_folds(text: &str) -> Box<[Box<str>]> {
+    let parts: Vec<Tok> = tokenize(text)
+        .into_iter()
+        .filter(|t| t.kind == TokKind::Part)
+        .collect();
+    let mut out: Vec<Box<str>> = Vec::new();
+    for i in 0..parts.len() {
+        let mut key = parts[i].text.clone();
+        for j in i + 1..parts.len().min(i + NEUTRAL_RUN) {
+            // Overlapping parts (CJK pairs) have nothing between them.
+            let gap = parts[j - 1].to.min(parts[j].from)..parts[j].from;
+            if text
+                .get(gap)
+                .is_none_or(|b| b.chars().any(char::is_whitespace))
+            {
+                break;
+            }
+            key.push_str(&parts[j].text);
+            if !out.iter().any(|o| **o == *key) {
+                out.push(key.as_str().into());
+            }
+        }
+    }
+    out.into()
+}
+
+/// A word's forms with the neutralized ones gone (§20.6): its whole and
+/// compound forms that aren't neutralized words, and its parts in a row
+/// unless one of them is. A torrent's token that is a neutralized word
+/// supplies no evidence, and a query token only ever matches a token of
+/// the same text, so this matches as if those tokens weren't there.
+fn live<'q>(
+    whole: &'q [Term],
+    parts: &'q [Term],
+    neutral: &[String],
+) -> (Cow<'q, [Term]>, &'q [Term]) {
+    if neutral.is_empty() {
+        return (Cow::Borrowed(whole), parts);
+    }
+    let parts = if parts.iter().any(|p| p.dead(neutral)) {
+        &[][..]
+    } else {
+        parts
+    };
+    let whole = if whole.iter().any(|w| w.dead(neutral)) {
+        Cow::Owned(whole.iter().filter(|w| !w.dead(neutral)).cloned().collect())
+    } else {
+        Cow::Borrowed(whole)
+    };
+    (whole, parts)
+}
+
+/// NEAR words with their neutralized forms gone, as [`live`].
+fn live_near<'q>(words: &'q [Operand], neutral: &[String]) -> Cow<'q, [Operand]> {
+    let dead = |w: &Operand| w.parts.iter().chain(&w.whole).any(|t| t.dead(neutral));
+    if neutral.is_empty() || !words.iter().any(dead) {
+        return Cow::Borrowed(words);
+    }
+    Cow::Owned(
+        words
+            .iter()
+            .map(|w| {
+                let (whole, parts) = live(&w.whole, &w.parts, neutral);
+                Operand {
+                    parts: parts.to_vec(),
+                    whole: whole.into_owned(),
+                    folds: w.folds.clone(),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Whether one of a clause's [`neutral_folds`] is a neutralized word.
+#[inline]
+pub(crate) fn neutralized(folds: &[Box<str>], neutral: &[String]) -> bool {
+    !neutral.is_empty() && folds.iter().any(|f| neutral.iter().any(|n| **n == **f))
+}
+
+/// Whether a token a prefix or fuzzy word matched is a neutralized word:
+/// it's no evidence either. Only asked once the token has matched. A
+/// token of lowercase letters or of digits is one part, its own key, so
+/// it's compared as it is.
+pub(crate) fn neutral_token(text: &str, neutral: &[String]) -> bool {
+    if neutral.is_empty() {
+        return false;
+    }
+    let b = text.as_bytes();
+    if b.iter().all(u8::is_ascii_lowercase) || b.iter().all(u8::is_ascii_digit) {
+        neutral.iter().any(|n| n == text)
+    } else {
+        neutral.contains(&neutral_key(text))
+    }
+}
+
+/// A phrase when some word of it has a neutralized part: that word
+/// matches where a live whole or compound form of it stands, over the
+/// torrent's own parts in a row (`"x265 beacon"` with `x` neutralized
+/// matches "x265 Beacon", not "x 265 Beacon"). The other words match
+/// their parts in a row, as in [`sequence`]. Neutralizing only takes
+/// matches away: every match here is one without it too.
+fn phrase_live(field: &Text, words: &[Operand], neutral: &[String]) -> bool {
+    let Some(head) = words.first().and_then(|w| w.parts.first()) else {
+        return false;
+    };
+    let at = |w: &Operand, p: u32| {
+        w.parts
+            .iter()
+            .zip(0..)
+            .all(|(x, i)| field.at(p + i).any(|t| field.is(t, x.hash, &x.text)))
+            && (!w.parts.iter().any(|x| x.dead(neutral))
+                || w.whole
+                    .iter()
+                    .any(|x| !x.dead(neutral) && field.at(p).any(|t| field.is(t, x.hash, &x.text))))
+    };
+    crate::work::tick(field.toks.len());
+    field
+        .toks
+        .iter()
+        .filter(|t| field.is(t, head.hash, &head.text))
+        .any(|start| {
+            let mut p = start.position;
+            words.iter().all(|w| {
+                let ok = at(w, p);
+                p += w.parts.len() as u32;
+                ok
+            })
+        })
+}
+
+/// A word of a NEAR or phrase, compiled.
+fn near_word(w: &str) -> Operand {
+    let (parts, whole) = near_operand(w);
+    Operand {
+        parts: parts.iter().map(|t| Term::new(t)).collect(),
+        whole: whole.iter().map(|t| Term::new(t)).collect(),
+        folds: neutral_folds(w),
+    }
+}
+
 /// Compiles a parsed query.
 pub(crate) fn compile(node: &Node) -> Compiled {
     let terms = |toks: &mut dyn Iterator<Item = String>| toks.map(|t| Term::new(&t)).collect();
@@ -230,7 +414,7 @@ pub(crate) fn compile(node: &Node) -> Compiled {
                         .filter(|t| t.kind == TokKind::Part)
                         .map(|t| t.text.clone()),
                 ),
-                fold: folded(word).into(),
+                folds: neutral_folds(word),
             }
         }
         Node::Phrase { field, text } => Compiled::Phrase {
@@ -241,20 +425,16 @@ pub(crate) fn compile(node: &Node) -> Compiled {
                     .filter(|t| t.kind == TokKind::Part)
                     .map(|t| t.text),
             ),
-            fold: folded(text).into(),
+            folds: neutral_folds(text),
+            words: text
+                .split_whitespace()
+                .map(near_word)
+                .filter(|w| !w.parts.is_empty())
+                .collect(),
         },
         Node::Near { field, words, slop } => Compiled::Near {
             field: *field,
-            words: words
-                .iter()
-                .map(|w| {
-                    let (parts, whole) = near_operand(w);
-                    Operand {
-                        parts: parts.iter().map(|t| Term::new(t)).collect(),
-                        whole: whole.iter().map(|t| Term::new(t)).collect(),
-                    }
-                })
-                .collect(),
+            words: words.iter().map(|w| near_word(w)).collect(),
             slop: *slop,
         },
         Node::Prefix { field, prefix } => {
@@ -434,8 +614,10 @@ pub struct Doc<'a> {
     /// Each file's own name.
     file_names: OnceCell<Vec<Text>>,
     titles: OnceCell<Vec<Text>>,
-    /// The name and each path in the core's tokens, for keyword entries.
-    normalized: OnceCell<Vec<Vec<crate::normalize::Token>>>,
+    /// The name and each path in the core's tokens, for keyword entries:
+    /// all in one buffer, with where each text ends, and whether each
+    /// path reads the same with its segments apart.
+    normalized: OnceCell<(Vec<crate::normalize::Token>, Vec<usize>, Vec<bool>)>,
     enrichment: OnceCell<Option<DocEnrichment>>,
     keys: OnceCell<DocKeys>,
     /// The rule set's NEAR terms, whose nearness the keys record.
@@ -527,10 +709,13 @@ impl<'a> Doc<'a> {
             Gate::Pair(a, b) => self.keys().could_follow(a, b),
             Gate::Lacks(i) => match &clauses[i as usize] {
                 Compiled::Word {
-                    whole, parts, fold, ..
+                    whole,
+                    parts,
+                    folds,
+                    ..
                 } => {
-                    neutral.iter().any(|n| **n == **fold)
-                        || self.word_anywhere(whole, parts) != Some(true)
+                    let (whole, parts) = live(whole, parts, neutral);
+                    neutralized(folds, neutral) || self.word_anywhere(&whole, parts) != Some(true)
                 }
                 _ => true,
             },
@@ -556,9 +741,12 @@ impl<'a> Doc<'a> {
             },
             Gate::Title(i) => match &clauses[i as usize] {
                 Compiled::Word {
-                    whole, parts, fold, ..
+                    whole,
+                    parts,
+                    folds,
+                    ..
                 } => {
-                    !neutral.iter().any(|n| **n == **fold)
+                    !neutralized(folds, neutral)
                         && self.titles().iter().any(|t| has_word(t, whole, parts))
                 }
                 _ => true,
@@ -600,23 +788,40 @@ impl<'a> Doc<'a> {
     }
 
     /// The name, then each path, in the core's tokens.
-    pub(crate) fn normalized(&self) -> &[Vec<crate::normalize::Token>] {
-        self.normalized.get_or_init(|| {
-            let text = |t: &str| {
-                let mut out = Vec::new();
-                crate::normalize::tokens(t, &mut out);
-                out
-            };
-            std::iter::once(text(self.item.name))
-                .chain(
-                    self.item
-                        .files
-                        .iter()
-                        .take(crate::MAX_FILES)
-                        .map(|f| text(&f.path.join("/"))),
-                )
-                .collect()
-        })
+    pub(crate) fn normalized(&self) -> impl Iterator<Item = &[crate::normalize::Token]> {
+        let (tokens, ends, _) = self.normalized.get_or_init(|| {
+            let mut tokens = Vec::new();
+            crate::normalize::tokens(self.item.name, &mut tokens);
+            let mut ends = vec![tokens.len()];
+            let mut apart = Vec::new();
+            crate::normalize::paths_apart(
+                self.item
+                    .files
+                    .iter()
+                    .take(crate::MAX_FILES)
+                    .map(|f| &f.path[..]),
+                &mut tokens,
+                &mut ends,
+                &mut apart,
+            );
+            (tokens, ends, apart)
+        });
+        std::iter::once(0)
+            .chain(ends.iter().copied())
+            .zip(ends)
+            .map(|(from, to)| &tokens[from..*to])
+    }
+
+    /// The name and paths in the core's tokens, if keyword entries have
+    /// read them already, for the core to reuse.
+    pub(crate) fn read(&self) -> Option<crate::normalize::Read<'_>> {
+        self.normalized
+            .get()
+            .map(|(tokens, ends, apart)| crate::normalize::Read {
+                tokens,
+                ends,
+                apart,
+            })
     }
 
     fn enrichment(&self) -> Option<&DocEnrichment> {
@@ -857,7 +1062,6 @@ impl<'a> Doc<'a> {
     fn eval(&self, q: &Compiled, file: Option<usize>, neutral: &[String]) -> bool {
         // Inside `file:(…)`, text and size clauses read that one file.
         let texts = |field: TextField, f: &dyn Fn(&Text) -> bool| self.any_text(field, file, f);
-        let neutral_word = |fold: &str| !neutral.is_empty() && neutral.iter().any(|n| **n == *fold);
         match q {
             Compiled::All => true,
             Compiled::And(of) => of.iter().all(|n| self.eval(n, file, neutral)),
@@ -867,26 +1071,49 @@ impl<'a> Doc<'a> {
                 field,
                 whole,
                 parts,
-                fold,
+                folds,
             } => {
-                !neutral_word(fold)
-                    && match (field, file) {
-                        (TextField::Any, None) => self.word_anywhere(whole, parts),
-                        _ => None,
-                    }
-                    .unwrap_or_else(|| texts(*field, &|t| has_word(t, whole, parts)))
+                if neutralized(folds, neutral) {
+                    return false;
+                }
+                let (whole, parts) = live(whole, parts, neutral);
+                match (field, file) {
+                    (TextField::Any, None) => self.word_anywhere(&whole, parts),
+                    _ => None,
+                }
+                .unwrap_or_else(|| texts(*field, &|t| has_word(t, &whole, parts)))
             }
-            Compiled::Phrase { field, parts, fold } => {
-                !neutral_word(fold) && texts(*field, &|t| sequence(t, parts))
+            // Every word of a phrase or NEAR is needed: a neutralized one
+            // makes the clause false, wherever it stands.
+            Compiled::Phrase {
+                field,
+                parts,
+                folds,
+                words,
+            } => {
+                if neutralized(folds, neutral) {
+                    false
+                } else if neutral.is_empty() || !parts.iter().any(|p| p.dead(neutral)) {
+                    texts(*field, &|t| sequence(t, parts))
+                } else {
+                    texts(*field, &|t| phrase_live(t, words, neutral))
+                }
             }
-            Compiled::Near { field, words, slop } => texts(*field, &|t| has_near(t, words, *slop)),
-            // Prefixes and fuzzy words read each distinct token once.
+            Compiled::Near { field, words, slop } => {
+                if words.iter().any(|w| neutralized(&w.folds, neutral)) {
+                    return false;
+                }
+                let words = live_near(words, neutral);
+                texts(*field, &|t| has_near(t, &words, *slop))
+            }
+            // Prefixes and fuzzy words read each distinct token once. A
+            // token that's a neutralized word doesn't count.
             Compiled::Prefix {
                 field,
                 prefix,
                 start,
             } => {
-                let starts = |t: &str| t.starts_with(&**prefix);
+                let starts = |t: &str| t.starts_with(&**prefix) && !neutral_token(t, neutral);
                 !prefix.is_empty()
                     && match (field, file) {
                         (TextField::Any, None) => {
@@ -900,12 +1127,15 @@ impl<'a> Doc<'a> {
                 word,
                 distance,
             } => {
-                let near = |t: &str| word.near(t, *distance);
+                let near = |t: &str| word.near(t, *distance) && !neutral_token(t, neutral);
                 match (field, file) {
                     (TextField::Any, None) => self
                         .keys()
                         .vocabulary_near(word.chars.len(), word.has, usize::from(*distance))
-                        .any(|t| within_edits(t, &word.chars, usize::from(*distance))),
+                        .any(|t| {
+                            within_edits(t, &word.chars, usize::from(*distance))
+                                && !neutral_token(t, neutral)
+                        }),
                     _ => texts(*field, &|t| t.toks.iter().any(|x| near(t.text(x)))),
                 }
             }
@@ -1445,6 +1675,68 @@ mod tests {
     }
 
     #[test]
+    fn neutral_folds_are_runs_of_parts() {
+        let has = |text: &str, w: &str| neutral_folds(text).iter().any(|f| **f == *neutral_key(w));
+        assert!(has("amber.beacon", "amber.beacon"));
+        assert!(has("amber.beacon", "amberbeacon"));
+        assert!(has("web-dl.x264", "web-dl"));
+        assert!(has("web.dl", "webdl"));
+        assert!(has("x265 beacon", "x265"));
+        assert!(has("ShowName", "ShowName"));
+        // A phrase isn't one word, and single parts are tokens
+        // ([`Term::dead`]), not runs.
+        assert!(!has("amber beacon", "amberbeacon"));
+        assert!(!has("amber beacon", "amber"));
+        assert!(!has("x265 beacon", "x"));
+        // Every spelling of a word has one key.
+        for w in ["web-dl", "web.dl", "webdl", "WEB-DL"] {
+            assert_eq!(neutral_key(w), "webdl", "{w}");
+        }
+    }
+
+    #[test]
+    fn a_neutralized_token_never_matches() {
+        let f = files(&[("a.mkv", 1)]);
+        let item = Item {
+            hashes: &[[0; 20]],
+            name: "Cedar Amber Beacon WEB-DL x265",
+            files: &f,
+            content_type: ContentType::Video,
+        };
+        let doc = Doc::new(&item, None);
+        let n = |w: &str| vec![neutral_key(w)];
+        for (q, neutral, matches) in [
+            // Its parts in a row are the torrent's own words.
+            ("AmberBeacon", "amber", false),
+            ("\"cedar AmberBeacon\"", "amber", false),
+            ("AmberBeacon NEAR/1 cedar", "amber", false),
+            ("AmberBeacon", "beacon", false),
+            ("AmberBeacon", "cedar", true),
+            // A compound or whole form is a token of its own.
+            ("web-dl", "web", true),
+            ("x265", "x", true),
+            ("\"web dl\"", "web", false),
+            ("x265", "x265", false),
+            // Another spelling of a neutralized word is the word.
+            ("webdl", "web-dl", false),
+            ("web.dl", "web-dl", false),
+            ("webd*", "web-dl", false),
+            ("amber.beacon", "amberbeacon", false),
+            ("AmberBeacon", "amberbeacon", false),
+            // A phrase is never one word.
+            ("\"amber beacon\"", "amberbeacon", true),
+            // A phrase word with a neutralized part matches its own
+            // whole token, never the part on its own.
+            ("\"web-dl x265\"", "x", true),
+            ("\"web-dl x265\"", "web", true),
+            ("\"amber beacon web-dl\"", "amber", false),
+        ] {
+            let q = parse(q).unwrap();
+            assert_eq!(doc.matches(&q, &n(neutral)), matches, "{q:?} {neutral}");
+        }
+    }
+
+    #[test]
     fn a_remembered_query_follows_its_address() {
         let f = files(&[("a.mkv", 1)]);
         let item = Item {
@@ -1957,7 +2249,7 @@ mod tests {
                 now: 0,
             };
             let item = Item { hashes: &[[1; 20]], name: &name, files: &f, content_type: class.content_type };
-            let neutral: Vec<String> = if neutral { vec!["web".into(), "1080p".into()] } else { vec![] };
+            let neutral: Vec<String> = if neutral { ["web", "1080p", "x265", "show", "webdl"].iter().map(|w| neutral_key(w)).collect() } else { vec![] };
             let doc = Doc::new(&item, Some(&facts));
             let compiled = compile(&node);
             let full = doc.eval(&compiled, None, &neutral);

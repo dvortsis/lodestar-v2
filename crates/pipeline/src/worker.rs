@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout_at};
 
 use crate::coordinator::Coordinator;
+use crate::gate::{Excluded, GateStats};
 use crate::unix_now;
 use crate::writer::WriterStats;
 
@@ -55,6 +56,7 @@ pub(crate) struct WorkerFunnel {
     pub counts: Arc<FunnelCounts>,
     pub coordinator: Arc<Coordinator>,
     pub leases: Arc<WorkerLeases>,
+    pub gate: Arc<GateStats>,
 }
 
 impl Funnel for WorkerFunnel {
@@ -66,7 +68,13 @@ impl Funnel for WorkerFunnel {
 
     fn lost(&self, key: &InfoHash, _cohort: i64, _source: SourceId, loss: Loss) {
         match self.leases.take(key) {
-            Some(token) => self.coordinator.lost(key, token, loss),
+            Some(token) => {
+                // Counted where the lease ends, once per key: the pool
+                // gave it up on data that didn't hash to it.
+                if self.coordinator.lost(key, token, loss) && loss == Loss::Invalid {
+                    self.gate.exclude(Excluded::FailedVerification, 1);
+                }
+            }
             // Every key enters the pool under a lease; one without is a
             // bug, and counting it would unbalance the funnel.
             None => lodestar_log::log_event!(
@@ -109,6 +117,7 @@ pub(crate) struct PrepareStage {
     pub coordinator: Arc<Coordinator>,
     pub leases: Arc<WorkerLeases>,
     pub stats: Arc<WriterStats>,
+    pub gate: Arc<GateStats>,
     pub batch_max: usize,
     pub batch_wait: Duration,
 }
@@ -169,12 +178,14 @@ impl PrepareStage {
                         }
                     }
                     Err(loss) => {
-                        let counter = match loss {
-                            Loss::Blocked => &self.stats.blocked,
-                            _ => &self.stats.invalid,
+                        let (counter, excluded) = match loss {
+                            Loss::Blocked => (&self.stats.blocked, Excluded::Filtered),
+                            _ => (&self.stats.invalid, Excluded::InvalidMetainfo),
                         };
                         counter.fetch_add(1, Ordering::Relaxed);
-                        self.coordinator.lost(&fk.key, token, loss);
+                        if self.coordinator.lost(&fk.key, token, loss) {
+                            self.gate.exclude(excluded, 1);
+                        }
                     }
                 }
             }
@@ -268,4 +279,139 @@ pub(crate) async fn collect<T>(
         }
     }
     batch
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lodestar_bencode::{OwnedValue, to_vec};
+    use lodestar_cluster::{Claim, Claimed};
+    use lodestar_peer_wire::Fetched;
+    use lodestar_store::{Store, StoreConfig};
+
+    use crate::gate::Origin;
+
+    fn info(name: &str) -> Vec<u8> {
+        to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"name".to_vec(), OwnedValue::from(name)),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 18)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 80])),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+    }
+
+    /// The prepare stage's terminal losses reach the gate once each: the
+    /// floor's hash list as filtered, unusable metainfo as invalid, and a
+    /// usable one goes on to the writer uncounted.
+    #[tokio::test]
+    async fn prepare_losses_count_as_filtered_and_invalid_metainfo() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel.clone()));
+        let leases = Arc::new(WorkerLeases::default());
+        let gate = Arc::new(GateStats::new(0));
+        let filter = Arc::new(crate::default_filter());
+        let source = SourceId::new(1).unwrap();
+        // A dictionary that hashes to its key but isn't metainfo.
+        let raws = [info("Floor"), b"de".to_vec(), info("Fine")];
+        let keys: Vec<InfoHash> = raws
+            .iter()
+            .map(|r| InfoHash(lodestar_peer_wire::testing::Seed::v1(r.clone()).info_hash))
+            .collect();
+        filter.update(|core| {
+            core.cs
+                .add_hash(keys[0].0, lodestar_filter::Origin::Imported)
+        });
+        for k in &keys {
+            let claim = Claim {
+                key: *k,
+                source,
+                strategy: 0,
+                at: 0,
+            };
+            let Claimed::Granted(token) = coordinator.claim(WorkerId::LOCAL, claim, 0) else {
+                panic!("granted")
+            };
+            leases.insert(*k, token);
+        }
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let stage = PrepareStage {
+            preparer: store.preparer(),
+            filter,
+            coordinator: coordinator.clone(),
+            leases,
+            stats: Arc::default(),
+            gate: gate.clone(),
+            batch_max: 8,
+            batch_wait: Duration::from_millis(1),
+        };
+        let (in_tx, in_rx) = mpsc::channel(8);
+        let (out_tx, mut out_rx) = mpsc::channel(8);
+        for (key, raw) in keys.iter().zip(raws) {
+            in_tx
+                .send(FetchedKey {
+                    key: *key,
+                    fetched: Fetched {
+                        info: raw,
+                        v2: false,
+                        encrypted: false,
+                        pex: Vec::new(),
+                        client: None,
+                    },
+                    source,
+                    sources: 1 << source.get(),
+                    cohort: 0,
+                    strategy: 0,
+                    discovered_at: 0,
+                    private_source: false,
+                })
+                .await
+                .unwrap();
+        }
+        drop(in_tx);
+        stage.run(in_rx, out_tx).await;
+        let r = out_rx.recv().await.expect("the usable one");
+        assert_eq!(r.key, keys[2]);
+        assert_eq!(gate.excluded(Excluded::Filtered), 1);
+        assert_eq!(gate.excluded(Excluded::InvalidMetainfo), 1);
+        assert_eq!(gate.excluded(Excluded::FailedVerification), 0);
+        assert_eq!(gate.new_verified(Origin::Network), 0);
+    }
+
+    /// The pool's terminal loss to bad data counts once, under the
+    /// current lease only; other losses don't count here.
+    #[test]
+    fn a_verification_loss_counts_once_under_its_lease() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel.clone()));
+        let leases = Arc::new(WorkerLeases::default());
+        let gate = Arc::new(GateStats::new(0));
+        let wf = WorkerFunnel {
+            counts: funnel,
+            coordinator: coordinator.clone(),
+            leases: leases.clone(),
+            gate: gate.clone(),
+        };
+        let source = SourceId::new(1).unwrap();
+        for (i, loss) in [Loss::Invalid, Loss::NoPeers].into_iter().enumerate() {
+            let key = InfoHash([i as u8 + 1; 20]);
+            let claim = Claim {
+                key,
+                source,
+                strategy: 0,
+                at: 0,
+            };
+            let Claimed::Granted(token) = coordinator.claim(WorkerId::LOCAL, claim, 0) else {
+                panic!("granted")
+            };
+            leases.insert(key, token);
+            wf.lost(&key, 0, source, loss);
+            // A second report has no lease left.
+            wf.lost(&key, 0, source, loss);
+        }
+        assert_eq!(gate.excluded(Excluded::FailedVerification), 1);
+    }
 }

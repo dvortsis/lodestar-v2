@@ -17,6 +17,19 @@ lodestar_log::catalogue! {
         message: "DHT socket buffers",
         fields: { receive_requested: Size, send_requested: Size, receive: Size, send: Size, set_errors: Size, read_errors: Size },
     }
+    /// No configured bootstrap router could be queried or answered in a
+    /// bootstrap round: `configured` names, `resolved` addresses, and of
+    /// the last attempt's, `refused` by the outbound policy or the socket
+    /// and `throttled` by the query budget. Written once until a router
+    /// answers again. Fake-ip DNS and NAT64 answers are allowed; check DNS,
+    /// the firewall and the VPN.
+    BOOTSTRAP_UNREACHABLE {
+        id: "dht.bootstrap_unreachable",
+        component: Dht,
+        level: Warn,
+        message: "No DHT bootstrap router answered",
+        fields: { configured: Size, resolved: Size, refused: Size, throttled: Size },
+    }
     /// A key reached the harvest: from samples, someone's `get_peers`, an
     /// announce, or a lookup this node ran (`source`).
     KEY_HARVESTED {
@@ -27,13 +40,14 @@ lodestar_log::catalogue! {
         message: "Key harvested",
         fields: { torrent: Hash, source: Label, peers: Size },
     }
-    /// What the harvest found in the last `seconds`, by source, and the
-    /// keys dropped because the pipeline was behind.
+    /// What the harvest found since the last summary (`seconds` ago, about
+    /// a minute), by source, and the keys dropped because the pipeline was
+    /// behind.
     HARVEST_SUMMARY {
         id: "dht.harvest_summary",
         component: Dht,
         level: Info,
-        message: "DHT harvest in the last minute",
+        message: "DHT harvest since the last summary",
         fields: { seconds: Size, sample: Size, get_peers: Size, announce: Size, lookups: Size, dropped: Size },
     }
 }

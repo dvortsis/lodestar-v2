@@ -16,11 +16,15 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lodestar_update::semver::Version;
 use rustix::fs::{FlockOperation, OFlags};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+use super::log_events::UPDATE_DIR_SYNC_UNSUPPORTED;
 
 /// The largest state file read (`history.json` is the biggest).
 pub const MAX_STATE: u64 = 256 * 1024;
@@ -29,6 +33,9 @@ pub const MAX_STATE: u64 = 256 * 1024;
 #[derive(Debug, Clone)]
 pub struct Bin {
     dir: PathBuf,
+    /// The folder can't be fsynced (and that was logged): once per `Bin`,
+    /// which the engine opens once per run.
+    dir_sync_unsupported: Arc<AtomicBool>,
 }
 
 /// The exclusive lock on `<data>/bin/.lock`, held while the value lives.
@@ -104,7 +111,10 @@ impl Bin {
                 ))
             })?;
         }
-        Ok(Bin { dir })
+        Ok(Bin {
+            dir,
+            dir_sync_unsupported: Arc::default(),
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -145,12 +155,59 @@ impl Bin {
     /// Writes a state file durably (see [`write_atomic`]).
     /// Refused past [`MAX_STATE`], which a read would take for damage.
     pub fn write<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
-        let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
-        bytes.push(b'\n');
-        if bytes.len() as u64 > MAX_STATE {
-            return Err(io::Error::other(format!("{name} would be too large")));
+        write_atomic(&self.dir, name, &state_bytes(name, value)?)
+    }
+
+    /// [`Bin::write`] for a write that's acknowledged to the user: a
+    /// failed folder fsync is an error too, and `fault` can fail any step
+    /// (tests; `|_| Ok(())` otherwise).
+    pub fn write_acknowledged<T: Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+        fault: &dyn Fn(Step) -> io::Result<()>,
+    ) -> io::Result<()> {
+        write_steps(&self.dir, name, &state_bytes(name, value)?, fault)?;
+        self.sync_acknowledged(fault)
+    }
+
+    /// [`Bin::remove`] for a removal that's acknowledged to the user: a
+    /// failed folder fsync is an error too.
+    pub fn remove_acknowledged(
+        &self,
+        name: &str,
+        fault: &dyn Fn(Step) -> io::Result<()>,
+    ) -> io::Result<()> {
+        fault(Step::Rename)?;
+        match fs::remove_file(self.path(name)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
         }
-        write_atomic(&self.dir, name, &bytes)
+        self.sync_acknowledged(fault)
+    }
+
+    /// The folder fsync after an acknowledged change. A filesystem that
+    /// can't fsync a folder at all (`EINVAL`, `ENOTSUP`: some FUSE mounts,
+    /// such as Unraid's `/mnt/user`) leaves the rename standing, as every
+    /// other writer here does; that's logged once, without a path. Any
+    /// other error (`EIO`, …) fails the change.
+    fn sync_acknowledged(&self, fault: &dyn Fn(Step) -> io::Result<()>) -> io::Result<()> {
+        let dir = File::open(&self.dir)?;
+        match fault(Step::SyncDir).and_then(|()| dir.sync_all()) {
+            Err(e) if sync_unsupported(&e) => {
+                if !self.dir_sync_unsupported.swap(true, Ordering::Relaxed) {
+                    lodestar_log::log_event!(UPDATE_DIR_SYNC_UNSUPPORTED);
+                }
+                Ok(())
+            }
+            r => r,
+        }
+    }
+
+    /// Whether a folder fsync was found unsupported (and logged).
+    #[cfg(test)]
+    pub fn dir_sync_unsupported(&self) -> bool {
+        self.dir_sync_unsupported.load(Ordering::Relaxed)
     }
 
     /// Removes a state file (and makes that durable); fine if it's gone.
@@ -280,6 +337,50 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
 /// fsync, rename over the name, fsync the folder. A crash leaves the old
 /// file or the new one, never a mix.
 pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    write_steps(dir, name, bytes, &|_| Ok(()))?;
+    sync_dir(dir);
+    Ok(())
+}
+
+/// One step of [`Bin::write_acknowledged`], for a test to fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Midway through writing the temporary file.
+    Write,
+    /// Before its fsync.
+    Flush,
+    /// Before it's renamed over the name (or, removing, before the
+    /// file is removed).
+    Rename,
+    /// After the rename, before the folder's fsync.
+    SyncDir,
+}
+
+/// A folder fsync this filesystem doesn't support, rather than a failure.
+fn sync_unsupported(e: &io::Error) -> bool {
+    use rustix::io::Errno;
+    Errno::from_io_error(e)
+        .is_some_and(|n| n == Errno::INVAL || n == Errno::NOTSUP || n == Errno::OPNOTSUPP)
+}
+
+fn state_bytes<T: Serialize>(name: &str, value: &T) -> io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
+    bytes.push(b'\n');
+    if bytes.len() as u64 > MAX_STATE {
+        return Err(io::Error::other(format!("{name} would be too large")));
+    }
+    Ok(bytes)
+}
+
+/// Writes `dir/name` up to the rename: a new temporary file (`O_NOFOLLOW`,
+/// 0600), fsync, rename over the name, with `fault` asked before each
+/// step. A failure leaves the old file. The caller fsyncs the folder.
+fn write_steps(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    fault: &dyn Fn(Step) -> io::Result<()>,
+) -> io::Result<()> {
     let tmp = dir.join(format!(".{name}.tmp"));
     let _ = fs::remove_file(&tmp);
     let written = (|| {
@@ -289,16 +390,19 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
             .mode(0o600)
             .custom_flags(nofollow())
             .open(&tmp)?;
-        f.write_all(bytes)?;
+        let (head, tail) = bytes.split_at(bytes.len() / 2);
+        f.write_all(head)?;
+        fault(Step::Write)?;
+        f.write_all(tail)?;
+        fault(Step::Flush)?;
         f.sync_all()?;
+        fault(Step::Rename)?;
         fs::rename(&tmp, dir.join(name))
     })();
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    written?;
-    sync_dir(dir);
-    Ok(())
+    written
 }
 
 pub fn sync_dir(dir: &Path) {

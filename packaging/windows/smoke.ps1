@@ -119,8 +119,10 @@ if ($Msi) {
   $shortcut = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Lodestar\*" -Include '*.lnk', '*.url' -ErrorAction SilentlyContinue
   Assert ($null -ne $shortcut) 'Start-menu shortcut missing'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
-    $ex = @((Get-MpPreference).ExclusionPath)
-    Assert (-not ($ex -like "$dataDir*")) 'Defender exclusion was added without being asked'
+    # Read first, assert outside the try (see the uninstall check below).
+    $ex = $null
+    try { $ex = @((Get-MpPreference).ExclusionPath) } catch { Write-Host "::warning::could not read Defender settings after install: $_" }
+    if ($null -ne $ex) { Assert (-not ($ex -like "$dataDir*")) 'Defender exclusion was added without being asked' }
   }
 
   # --- the service itself: delayed automatic start, restart on failure, then really start it ---
@@ -268,7 +270,13 @@ if ($Msi) {
   }
   Assert (-not $left) 'REMOVE_DATA=1 left the data folder behind'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
-    try { Assert (-not (@((Get-MpPreference).ExclusionPath) -like "$dataDir*")) 'Defender exclusion left behind after uninstall' } catch [System.Management.Automation.RuntimeException] { throw } catch { }
+    # Read first, assert outside the try: under Stop an unreadable Defender
+    # (0x800106ba, the service is off on some runners) is a terminating error
+    # that the old catch-by-type rethrew, failing the smoke on a runner
+    # condition. Only a setting that was read can fail the assert.
+    $ex = $null
+    try { $ex = @((Get-MpPreference).ExclusionPath) } catch { Write-Host "::warning::could not read Defender settings after uninstall: $_" }
+    if ($null -ne $ex) { Assert (-not ($ex -like "$dataDir*")) 'Defender exclusion left behind after uninstall' }
   }
   Write-Host "msi ok: $Msi"
 }

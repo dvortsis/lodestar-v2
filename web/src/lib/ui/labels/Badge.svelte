@@ -4,10 +4,7 @@
 
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import IconInfo from '~icons/ph/info';
-	import IconSuccess from '~icons/ph/check-circle';
-	import IconWarning from '~icons/ph/warning';
-	import IconError from '~icons/ph/x-circle';
+	import { statusIcons as icons, statusInk as ink, statusBorder } from '../status';
 
 	interface Props {
 		variant?: BadgeVariant;
@@ -19,26 +16,16 @@
 	let { variant = 'neutral', children, class: className = '' }: Props = $props();
 
 	// Status is icon + text, never colour alone (§10.2). Neutral and accent are plain labels.
-	const icons = { info: IconInfo, success: IconSuccess, warning: IconWarning, error: IconError };
 	const tone = {
-		neutral: 'border-field-border text-base-content',
-		accent: 'border-primary bg-selected text-base-content',
-		info: 'border-info text-base-content',
-		success: 'border-success text-base-content',
-		warning: 'border-warning text-base-content',
-		error: 'border-error text-base-content'
-	};
-	const ink = {
-		info: 'text-info',
-		success: 'text-success',
-		warning: 'text-warning',
-		error: 'text-error'
+		neutral: 'border-field-border',
+		accent: 'border-primary bg-selected',
+		...statusBorder
 	};
 	const Icon = $derived(variant in icons ? icons[variant as keyof typeof icons] : null);
 </script>
 
 <span
-	class="inline-flex items-center gap-1 rounded-selector border px-1.5 text-caption {tone[
+	class="inline-flex items-center gap-1 rounded-selector border px-1.5 text-caption text-base-content {tone[
 		variant
 	]} {className}"
 >

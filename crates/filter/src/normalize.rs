@@ -190,6 +190,9 @@ pub struct Tokenizer {
     plans: Vec<Plan>,
     /// The plan of a word too long to keep.
     long: Plan,
+    /// [`paths_apart`]'s folders, kept so their buffers carry over
+    /// between torrents.
+    folders: [Paused; FOLDERS],
 }
 
 impl Tokenizer {
@@ -313,12 +316,14 @@ impl Tokenizer {
         let plan = if word.len() <= MAX_PLANNED_BYTES {
             let plan = &mut self.plans[slot(word)];
             if plan.key.as_bytes() != word.as_bytes() {
+                // The key last: a plan is never found before it's made,
+                // even if making it was cut short.
                 plan.key.clear();
-                plan.key.push_str(word);
                 plan.word.clear();
                 plan.word.push_str(word);
                 plan.word.make_ascii_lowercase();
                 make_plan(plan, &mut self.plain, &mut self.swapped);
+                plan.key.push_str(word);
             }
             plan
         } else {
@@ -333,6 +338,7 @@ impl Tokenizer {
             return;
         }
         let first = self.pos;
+        out.reserve(plan.tokens.len());
         for (t, guarded) in &plan.tokens {
             if !guarded || out.len() - self.start < MAX_TOKENS {
                 out.push(Token {
@@ -353,10 +359,15 @@ impl Tokenizer {
         }
     }
 
+    #[inline]
     fn flush_spelled(&mut self, out: &mut Vec<Token>) {
-        if self.spelled.is_empty() {
-            return;
+        if !self.spelled.is_empty() {
+            self.end_spelled(out);
         }
+    }
+
+    #[cold]
+    fn end_spelled(&mut self, out: &mut Vec<Token>) {
         if self.spelled.chars().count() >= MIN_SPELLED && self.room(out) {
             out.push(Token::new(self.spelled_at, &self.spelled));
         }
@@ -455,9 +466,175 @@ fn slot(word: &str) -> usize {
     (crate::hash::fmix64(mix) as usize) % PLANS
 }
 
+/// Runs `f` with this thread's tokenizer, or a new one if it's in use.
+///
+/// One tokenizer is kept per thread, for the core and keyword entries
+/// alike: a new one sets up its word plans on its first word and frees
+/// them after, which cost more than the words did, and the two read the
+/// same words (§20.8). A tokenizer's tokens never depend on what it read
+/// before (`same_tokens_when_reused`).
+pub(crate) fn with_tokenizer<R>(f: impl FnOnce(&mut Tokenizer) -> R) -> R {
+    thread_local! {
+        static TOKENIZER: std::cell::RefCell<Tokenizer> = Default::default();
+    }
+    let mut f = Some(f);
+    let reused = TOKENIZER.try_with(|t| {
+        t.try_borrow_mut()
+            .ok()
+            .map(|mut t| (f.take().expect("called once"))(&mut t))
+    });
+    match reused {
+        Ok(Some(r)) => r,
+        // A call inside `f` (the thread's tokenizer is borrowed) or during
+        // thread teardown gets a new tokenizer, silently: the same tokens,
+        // only without the cached plans, so a nested call is slow, never
+        // wrong. Callers keep their calls apart (`Doc::normalized` reads the
+        // name and then the paths, one call each).
+        _ => (f.take().expect("not called"))(&mut Tokenizer::default()),
+    }
+}
+
 /// Appends the tokens of `text` to `out`, positions starting at 0.
 pub fn tokens(text: &str, out: &mut Vec<Token>) {
-    Tokenizer::default().text(text, out);
+    with_tokenizer(|t| t.text(text, out));
+}
+
+/// A text read up to just after a `/`, so texts that start with it go
+/// on from there ([`Tokenizer::resume`]).
+#[derive(Debug, Default)]
+struct Paused {
+    tokens: Vec<Token>,
+    pos: u32,
+    spelled: String,
+    spelled_at: u32,
+    /// No spelled-out run was open at any of its `/`s, so a path in the
+    /// folder gets the same tokens with its segments read apart
+    /// ([`Tokenizer::path`]), as the core reads them.
+    apart: bool,
+}
+
+impl Tokenizer {
+    /// Reads `dirs` joined by `/` with a `/` after, the start of a text,
+    /// into `into`. It ends with a `/`, where no word goes on, so the
+    /// state between words is all there is to keep: the position and a
+    /// spelled-out run, which goes on over a `/` in one text. A `/` only
+    /// ends a word, as the end of a feed does, so each folder is fed on
+    /// its own, and whether a run is open at each `/` noted.
+    fn pause(&mut self, dirs: &[String], into: &mut Paused) {
+        into.tokens.clear();
+        self.begin(0, 0);
+        into.apart = true;
+        for d in dirs {
+            self.feed(d, &mut into.tokens);
+            into.apart &= self.spelled.is_empty();
+        }
+        into.pos = self.pos;
+        into.spelled.clear();
+        into.spelled.push_str(&self.spelled);
+        into.spelled_at = self.spelled_at;
+    }
+
+    /// Appends the tokens of the text `paused`'s prefix and then `rest`,
+    /// as [`Tokenizer::text`] gives them for the two joined. Compatibility
+    /// decomposition reads the two alike: it reorders only runs of
+    /// combining marks, and a `/` ends any run.
+    fn resume(&mut self, paused: &Paused, rest: &str, out: &mut Vec<Token>) {
+        let start = out.len();
+        out.extend_from_slice(&paused.tokens);
+        self.begin(start, paused.pos);
+        self.spelled.push_str(&paused.spelled);
+        self.spelled_at = paused.spelled_at;
+        self.segment(rest, out);
+    }
+}
+
+/// Folders [`paths`] remembers: a season's episodes and subtitles
+/// alternate between two.
+const FOLDERS: usize = 4;
+
+/// Appends the tokens of each path, its segments joined by `/`, as
+/// [`tokens`] gives them for that text, and the end of each in `out`
+/// to `ends`. Paths in one folder read its part once.
+pub fn paths<'p>(
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+) {
+    paths_apart(paths, out, ends, &mut Vec::new());
+}
+
+/// A torrent's name and paths in tokens, read once for keyword entries
+/// ([`paths_apart`]), for the core to reuse where it would read the same.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Read<'a> {
+    /// The name's, then each path's, in one buffer.
+    pub(crate) tokens: &'a [Token],
+    /// Where the name and each path end.
+    pub(crate) ends: &'a [usize],
+    /// Whether each path reads the same with its segments apart.
+    pub(crate) apart: &'a [bool],
+}
+
+impl<'a> Read<'a> {
+    /// The name's tokens, as [`Tokenizer::text`] gives them.
+    pub(crate) fn name(self) -> &'a [Token] {
+        &self.tokens[..self.ends[0]]
+    }
+
+    /// Path `i`'s tokens, if they're what [`Tokenizer::path`] gives for
+    /// its segments.
+    pub(crate) fn path(self, i: usize) -> Option<&'a [Token]> {
+        (self.apart.get(i) == Some(&true)).then(|| &self.tokens[self.ends[i]..self.ends[i + 1]])
+    }
+}
+
+/// [`paths`], and for each path whether its segments read apart
+/// ([`Tokenizer::path`]) give the same tokens: unless a spelled-out run
+/// is open at one of its `/`s, which goes on over it in one text and
+/// ends at it read apart.
+pub(crate) fn paths_apart<'p>(
+    paths: impl IntoIterator<Item = &'p [String]>,
+    out: &mut Vec<Token>,
+    ends: &mut Vec<usize>,
+    apart: &mut Vec<bool>,
+) {
+    with_tokenizer(|tok| {
+        let mut paused = std::mem::take(&mut tok.folders);
+        let mut dirs_of: [&[String]; FOLDERS] = [&[]; FOLDERS];
+        let (mut known, mut next) = (0, 0);
+        for path in paths {
+            match path.split_last() {
+                Some((name, dirs)) if !dirs.is_empty() => {
+                    let slot = match dirs_of[..known].iter().position(|d| *d == dirs) {
+                        Some(slot) => slot,
+                        None => {
+                            let slot = if known < FOLDERS {
+                                known += 1;
+                                known - 1
+                            } else {
+                                let slot = next;
+                                next = (next + 1) % FOLDERS;
+                                slot
+                            };
+                            dirs_of[slot] = dirs;
+                            tok.pause(dirs, &mut paused[slot]);
+                            slot
+                        }
+                    };
+                    tok.resume(&paused[slot], name, out);
+                    apart.push(paused[slot].apart);
+                }
+                // One segment is its own text; none is an empty one.
+                Some((name, _)) => {
+                    tok.text(name, out);
+                    apart.push(true);
+                }
+                None => apart.push(true),
+            }
+            ends.push(out.len());
+        }
+        tok.folders = paused;
+    });
 }
 
 #[cfg(test)]
@@ -536,5 +713,58 @@ mod tests {
         assert!(toks(&long).len() <= MAX_TOKENS);
         let huge = "x".repeat(100_000);
         assert_eq!(toks(&huge).len(), 1);
+    }
+
+    fn read_apart(paths: &[Vec<String>]) -> (Vec<Token>, Vec<usize>, Vec<bool>) {
+        let (mut out, mut ends, mut apart) = (Vec::new(), vec![0], Vec::new());
+        paths_apart(
+            paths.iter().map(|p| &p[..]),
+            &mut out,
+            &mut ends,
+            &mut apart,
+        );
+        (out, ends, apart)
+    }
+
+    /// A spelled-out run open at a `/` reads differently whole, and is
+    /// marked so; one that ends before it isn't.
+    #[test]
+    fn a_run_over_a_slash_is_marked() {
+        let path = |p: &str| p.split('/').map(String::from).collect::<Vec<_>>();
+        let (_, _, apart) = read_apart(&[path("l/e/x/a.mkv"), path("lexa/x.mkv"), path("a.b.c/d")]);
+        assert_eq!(apart, [false, true, false]);
+        let mut apart_read = Vec::new();
+        Tokenizer::default().path(&path("l/e/x/a.mkv"), &mut apart_read);
+        let (whole, ends, _) = read_apart(&[path("l/e/x/a.mkv")]);
+        assert_ne!(&whole[ends[0]..ends[1]], &apart_read[..]);
+    }
+
+    proptest::proptest! {
+        /// Wherever a path is marked, its segments read apart give the
+        /// tokens of its joined text: letters on both sides of a `/`,
+        /// look-alikes, combining marks, folders shared and forgotten.
+        #[test]
+        fn marked_paths_read_the_same_apart(
+            segs in proptest::collection::vec("([a-c]|[a-c]{4}|1|ⓐ|Ａ|e\u{301}|[@$]|x264)([ ./-]([a-c]|[a-c]{4}|1|ⓐ|Ａ|e\u{301}|[@$]|x264)){0,3}", 1..6),
+            layout in proptest::collection::vec((0usize..6, 0usize..6, 0usize..4), 0..14),
+        ) {
+            let paths: Vec<Vec<String>> = layout
+                .iter()
+                .map(|&(a, b, depth)| {
+                    let mut p: Vec<String> = (0..depth).map(|d| segs[(a + d) % segs.len()].clone()).collect();
+                    p.push(segs[b % segs.len()].clone());
+                    p
+                })
+                .collect();
+            let (whole, ends, apart) = read_apart(&paths);
+            proptest::prop_assert_eq!(apart.len(), paths.len());
+            for (i, p) in paths.iter().enumerate() {
+                let mut alone = Vec::new();
+                Tokenizer::default().path(p, &mut alone);
+                if apart[i] {
+                    proptest::prop_assert_eq!(&whole[ends[i]..ends[i + 1]], &alone[..], "{:?}", p);
+                }
+            }
+        }
     }
 }

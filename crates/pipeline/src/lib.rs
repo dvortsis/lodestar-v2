@@ -22,6 +22,7 @@ pub mod control;
 mod coordinator;
 mod dht;
 pub mod enrich;
+pub mod gate;
 mod have;
 pub mod health;
 pub mod log_events;
@@ -121,6 +122,10 @@ pub struct PipelineConfig {
     pub hot: Option<Arc<HotColumns>>,
     /// The scrape scheduler; `None` turns scraping off.
     pub health: Option<HealthSetup>,
+    /// A search index will report its commits to the gate
+    /// ([`gate::GateStats::searchable`]), so the writer hands new ids
+    /// over from its first commit. Off with search off.
+    pub gate_follows_index: bool,
 }
 
 /// What the scrape scheduler needs besides its settings.
@@ -155,6 +160,7 @@ impl Default for PipelineConfig {
             intake_capacity: 16_384,
             hot: None,
             health: None,
+            gate_follows_index: false,
         }
     }
 }
@@ -278,6 +284,7 @@ pub struct Monitor {
     health: Option<HealthHandle>,
     hot: Option<Arc<HotColumns>>,
     rollups: Arc<Rollups>,
+    gate: Arc<gate::GateStats>,
 }
 
 impl std::fmt::Debug for Monitor {
@@ -303,6 +310,11 @@ impl Monitor {
 
     pub fn writer_stats(&self) -> &WriterStats {
         &self.writer
+    }
+
+    /// The crawler gate's counters (owner-decisions §2.25).
+    pub fn gate(&self) -> &Arc<gate::GateStats> {
+        &self.gate
     }
 
     /// The coordinator's in-flight leases.
@@ -454,6 +466,10 @@ impl Pipeline {
         let funnel = Arc::new(FunnelCounts::default());
         let rollups = Arc::new(Rollups::default());
         let started_at = unix_now();
+        let gate = Arc::new(gate::GateStats::new(started_at));
+        if config.gate_follows_index {
+            gate.follow();
+        }
 
         // The coordinator's lease table. Keys saved in the queue were
         // leased in the last run; they're leased again here, without
@@ -583,6 +599,7 @@ impl Pipeline {
                     counts: funnel.clone(),
                     coordinator: coordinator.clone(),
                     leases: leases.clone(),
+                    gate: gate.clone(),
                 }),
                 shutdown: pool_shutdown,
             },
@@ -616,6 +633,7 @@ impl Pipeline {
                 coordinator: coordinator.clone(),
                 leases: leases.clone(),
                 stats: writer_stats.clone(),
+                gate: gate.clone(),
                 batch_max: 64,
                 batch_wait: Duration::from_millis(20),
             }
@@ -714,6 +732,7 @@ impl Pipeline {
             last_purge: 0,
             coordinator,
             stats: writer_stats.clone(),
+            gate: gate.clone(),
             hot: config.hot.clone(),
             health: health.clone(),
         };
@@ -740,6 +759,7 @@ impl Pipeline {
                 health,
                 hot: config.hot.clone(),
                 rollups: rollups_handle,
+                gate,
             },
             tasks,
             stop_plugins,

@@ -1,0 +1,1122 @@
+2026-10-24T14:44:50.814Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29248 get_peers=7 announce=0 lookups=41 dropped=0
+2026-10-24T14:45:11.657Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=23 timed_out=148 refused=33 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:45:51.240Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=45639 get_peers=4 announce=0 lookups=44 dropped=0
+2026-10-24T14:46:12.146Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=30 timed_out=216 refused=29 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:46:51.864Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=32840 get_peers=4 announce=0 lookups=42 dropped=0
+2026-10-24T14:47:11.632Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=48 timed_out=239 refused=24 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:47:52.305Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=34278 get_peers=1 announce=0 lookups=48 dropped=0
+2026-10-24T14:48:12.121Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=33 timed_out=253 refused=41 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:48:52.792Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=45177 get_peers=8 announce=0 lookups=41 dropped=0
+2026-10-24T14:49:11.622Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=23 timed_out=226 refused=42 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:49:52.877Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=40530 get_peers=3 announce=0 lookups=48 dropped=0
+2026-10-24T14:50:12.038Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=5 timed_out=113 refused=6 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:50:53.501Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=37848 get_peers=8 announce=0 lookups=48 dropped=0
+2026-10-24T14:51:24.280Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=72 unreachable=3 timed_out=36 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:51:53.618Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21389 get_peers=4 announce=2 lookups=29 dropped=0
+2026-10-24T14:52:54.631Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=44925 get_peers=7 announce=0 lookups=49 dropped=0
+2026-10-24T14:53:54.803Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=43690 get_peers=6 announce=0 lookups=48 dropped=0
+2026-10-24T14:54:55.211Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=38648 get_peers=5 announce=0 lookups=44 dropped=0
+2026-10-24T14:55:00.107Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=216 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:55:55.881Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=32261 get_peers=122 announce=2 lookups=43 dropped=0
+2026-10-24T14:56:42.215Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=102 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T14:56:56.427Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=42932 get_peers=4 announce=1 lookups=48 dropped=0
+2026-10-24T14:57:57.453Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=14909 get_peers=3 announce=1 lookups=19 dropped=0
+2026-10-24T14:58:57.832Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=36361 get_peers=4 announce=0 lookups=39 dropped=0
+2026-10-24T14:59:58.712Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=35222 get_peers=6 announce=0 lookups=40 dropped=0
+2026-10-24T15:00:10.411Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=208 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:00:59.392Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=32264 get_peers=5 announce=1 lookups=37 dropped=0
+2026-10-24T15:02:00.292Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=34871 get_peers=3 announce=0 lookups=43 dropped=0
+2026-10-24T15:03:01.217Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=38665 get_peers=4 announce=0 lookups=41 dropped=0
+2026-10-24T15:04:01.822Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=33507 get_peers=1 announce=0 lookups=42 dropped=0
+2026-10-24T15:04:51.541Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=282 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:05:02.117Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=35606 get_peers=7 announce=1 lookups=45 dropped=0
+2026-10-24T15:06:03.088Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=35896 get_peers=7 announce=0 lookups=44 dropped=0
+2026-10-24T15:06:32.234Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=100 unreachable=0 timed_out=0 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T15:07:04.078Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=33835 get_peers=4 announce=3 lookups=43 dropped=0
+2026-10-24T15:08:04.568Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=34662 get_peers=9 announce=0 lookups=38 dropped=0
+2026-10-24T15:09:04.860Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29183 get_peers=5 announce=0 lookups=44 dropped=0
+2026-10-24T15:09:53.799Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=202 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:10:04.892Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=32233 get_peers=7 announce=1 lookups=40 dropped=0
+2026-10-24T15:11:05.288Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30208 get_peers=5 announce=1 lookups=46 dropped=0
+2026-10-24T15:12:05.691Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26733 get_peers=2 announce=0 lookups=38 dropped=0
+2026-10-24T15:13:05.766Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28647 get_peers=8 announce=0 lookups=45 dropped=0
+2026-10-24T15:14:06.054Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28277 get_peers=4 announce=0 lookups=48 dropped=0
+2026-10-24T15:14:17.320Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=263 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:15:06.423Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28831 get_peers=6 announce=1 lookups=46 dropped=0
+2026-10-24T15:16:07.202Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30683 get_peers=6 announce=2 lookups=44 dropped=0
+2026-10-24T15:17:07.792Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=32869 get_peers=3 announce=0 lookups=41 dropped=0
+2026-10-24T15:18:08.204Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=32384 get_peers=6 announce=1 lookups=45 dropped=0
+2026-10-24T15:19:08.639Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29245 get_peers=12 announce=1 lookups=42 dropped=0
+2026-10-24T15:19:42.854Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=326 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:20:09.046Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30021 get_peers=17 announce=10 lookups=43 dropped=0
+2026-10-24T15:20:52.846Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=70 unreachable=0 timed_out=10 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:21:09.549Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30134 get_peers=8 announce=3 lookups=35 dropped=0
+2026-10-24T15:21:54.940Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:22:09.952Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29076 get_peers=16 announce=6 lookups=42 dropped=0
+2026-10-24T15:23:10.253Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30163 get_peers=15 announce=2 lookups=46 dropped=0
+2026-10-24T15:24:10.709Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29232 get_peers=8 announce=0 lookups=41 dropped=0
+2026-10-24T15:25:11.121Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28285 get_peers=2 announce=1 lookups=50 dropped=0
+2026-10-24T15:26:00.250Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=245 unreachable=0 timed_out=5 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:26:11.539Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29199 get_peers=5 announce=1 lookups=47 dropped=0
+2026-10-24T15:27:11.962Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28624 get_peers=9 announce=1 lookups=44 dropped=0
+2026-10-24T15:28:12.526Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27438 get_peers=3 announce=0 lookups=40 dropped=0
+2026-10-24T15:29:12.956Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27978 get_peers=9 announce=0 lookups=41 dropped=0
+2026-10-24T15:30:07.257Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=247 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:30:13.342Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27218 get_peers=9 announce=1 lookups=41 dropped=0
+2026-10-24T15:31:14.080Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25743 get_peers=8 announce=1 lookups=41 dropped=0
+2026-10-24T15:32:14.850Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28083 get_peers=10 announce=0 lookups=41 dropped=0
+2026-10-24T15:32:30.916Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=144 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:33:15.249Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27680 get_peers=8 announce=2 lookups=33 dropped=0
+2026-10-24T15:34:15.832Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27302 get_peers=4 announce=0 lookups=39 dropped=0
+2026-10-24T15:34:53.004Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=142 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:35:16.263Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25574 get_peers=15 announce=2 lookups=34 dropped=0
+2026-10-24T15:36:16.540Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24732 get_peers=6 announce=1 lookups=43 dropped=0
+2026-10-24T15:37:18.805Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24832 get_peers=10 announce=0 lookups=37 dropped=0
+2026-10-24T15:38:36.468Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=62 sample=17717 get_peers=5 announce=0 lookups=41 dropped=0
+2026-10-24T15:39:20.312Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=4974 get_peers=4 announce=0 lookups=15 dropped=0
+2026-10-24T15:40:23.167Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=62 sample=10313 get_peers=2 announce=0 lookups=31 dropped=0
+2026-10-24T15:41:25.356Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=62 sample=2813 get_peers=1 announce=0 lookups=18 dropped=0
+2026-10-24T15:42:11.411Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=438 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:42:32.774Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=13868 get_peers=5 announce=1 lookups=33 dropped=0
+2026-10-24T15:43:26.963Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21099 get_peers=4 announce=1 lookups=37 dropped=0
+2026-10-24T15:43:28.578Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=78 unreachable=0 timed_out=0 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T15:44:46.887Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=79 sample=12682 get_peers=2 announce=0 lookups=26 dropped=0
+2026-10-24T15:45:47.529Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=12534 get_peers=2 announce=0 lookups=23 dropped=0
+2026-10-24T15:46:31.804Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=183 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:46:47.862Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20950 get_peers=4 announce=2 lookups=38 dropped=0
+2026-10-24T15:47:48.684Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16482 get_peers=2 announce=0 lookups=38 dropped=0
+2026-10-24T15:48:12.378Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=100 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:48:49.467Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23630 get_peers=3 announce=1 lookups=37 dropped=0
+2026-10-24T15:49:50.309Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24165 get_peers=9 announce=0 lookups=36 dropped=0
+2026-10-24T15:50:50.697Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23653 get_peers=8 announce=0 lookups=33 dropped=0
+2026-10-24T15:51:51.163Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24290 get_peers=4 announce=0 lookups=35 dropped=0
+2026-10-24T15:52:26.097Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=254 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:52:51.945Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25066 get_peers=3 announce=1 lookups=27 dropped=0
+2026-10-24T15:53:52.095Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22811 get_peers=4 announce=0 lookups=36 dropped=0
+2026-10-24T15:54:49.071Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=143 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:54:52.989Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22938 get_peers=11 announce=1 lookups=42 dropped=0
+2026-10-24T15:55:52.685Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24639 get_peers=7 announce=1 lookups=23 dropped=0
+2026-10-24T15:56:31.104Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=102 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:56:53.434Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30319 get_peers=7 announce=1 lookups=31 dropped=0
+2026-10-24T15:57:54.132Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29405 get_peers=10 announce=2 lookups=30 dropped=0
+2026-10-24T15:58:31.608Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=121 unreachable=2 timed_out=8 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T15:58:55.410Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=26861 get_peers=13 announce=2 lookups=36 dropped=0
+2026-10-24T15:59:55.865Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28491 get_peers=12 announce=2 lookups=25 dropped=0
+2026-10-24T16:00:40.103Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=128 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:00:56.139Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26827 get_peers=9 announce=0 lookups=26 dropped=0
+2026-10-24T16:01:40.141Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=2 timed_out=17 refused=7 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:01:56.562Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28130 get_peers=7 announce=1 lookups=28 dropped=0
+2026-10-24T16:02:40.848Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=5 timed_out=37 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:02:56.912Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28389 get_peers=2 announce=0 lookups=29 dropped=0
+2026-10-24T16:03:57.378Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26319 get_peers=9 announce=1 lookups=26 dropped=0
+2026-10-24T16:04:42.722Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=122 unreachable=2 timed_out=19 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:04:57.774Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25965 get_peers=8 announce=1 lookups=31 dropped=0
+2026-10-24T16:05:58.113Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26241 get_peers=4 announce=1 lookups=26 dropped=0
+2026-10-24T16:06:13.724Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=91 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:06:58.645Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26210 get_peers=6 announce=0 lookups=24 dropped=0
+2026-10-24T16:07:15.471Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=3 timed_out=10 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:08:00.110Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24240 get_peers=1 announce=1 lookups=25 dropped=0
+2026-10-24T16:08:15.141Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=14 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:09:07.845Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=68 sample=6512 get_peers=2 announce=0 lookups=7 dropped=0
+2026-10-24T16:09:14.620Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=13 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:10:07.569Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18572 get_peers=3 announce=0 lookups=15 dropped=0
+2026-10-24T16:10:21.758Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=67 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:11:08.359Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17481 get_peers=1 announce=0 lookups=22 dropped=0
+2026-10-24T16:11:54.822Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=93 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:12:10.491Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21431 get_peers=3 announce=0 lookups=27 dropped=0
+2026-10-24T16:13:09.508Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23229 get_peers=6 announce=0 lookups=26 dropped=0
+2026-10-24T16:13:43.753Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=109 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:14:09.841Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23615 get_peers=5 announce=0 lookups=24 dropped=0
+2026-10-24T16:14:43.880Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=4 timed_out=9 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:15:10.219Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24686 get_peers=5 announce=0 lookups=25 dropped=0
+2026-10-24T16:15:48.113Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=64 unreachable=3 timed_out=9 refused=15 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:16:10.674Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25189 get_peers=3 announce=0 lookups=24 dropped=0
+2026-10-24T16:16:49.217Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=3 timed_out=13 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:17:11.455Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23116 get_peers=12 announce=1 lookups=24 dropped=0
+2026-10-24T16:17:49.429Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=4 timed_out=17 refused=7 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:18:12.214Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24861 get_peers=5 announce=3 lookups=22 dropped=0
+2026-10-24T16:19:12.787Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22116 get_peers=7 announce=0 lookups=23 dropped=0
+2026-10-24T16:19:19.914Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=91 unreachable=0 timed_out=13 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:20:12.938Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23466 get_peers=4 announce=0 lookups=22 dropped=0
+2026-10-24T16:20:33.343Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=73 unreachable=4 timed_out=8 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:21:14.012Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21923 get_peers=4 announce=0 lookups=21 dropped=0
+2026-10-24T16:21:34.138Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=5 timed_out=11 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:22:14.611Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21687 get_peers=3 announce=0 lookups=23 dropped=0
+2026-10-24T16:22:47.123Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=73 unreachable=4 timed_out=12 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:23:15.159Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21288 get_peers=5 announce=2 lookups=25 dropped=0
+2026-10-24T16:24:15.464Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22756 get_peers=5 announce=4 lookups=22 dropped=0
+2026-10-24T16:24:18.059Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=91 unreachable=0 timed_out=11 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:25:15.769Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22266 get_peers=5 announce=1 lookups=18 dropped=0
+2026-10-24T16:26:16.433Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21494 get_peers=2 announce=0 lookups=26 dropped=0
+2026-10-24T16:26:31.967Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=134 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:27:17.093Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21450 get_peers=5 announce=0 lookups=20 dropped=0
+2026-10-24T16:28:17.706Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21323 get_peers=6 announce=0 lookups=23 dropped=0
+2026-10-24T16:29:18.110Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20869 get_peers=3 announce=0 lookups=22 dropped=0
+2026-10-24T16:30:18.628Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22405 get_peers=7 announce=0 lookups=20 dropped=0
+2026-10-24T16:30:45.924Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=254 unreachable=1 timed_out=7 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:31:19.084Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21571 get_peers=3 announce=0 lookups=21 dropped=0
+2026-10-24T16:32:19.584Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20560 get_peers=3 announce=0 lookups=23 dropped=0
+2026-10-24T16:32:32.309Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=106 unreachable=1 timed_out=10 refused=21 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:33:20.061Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20438 get_peers=4 announce=3 lookups=19 dropped=0
+2026-10-24T16:34:20.467Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22891 get_peers=5 announce=0 lookups=24 dropped=0
+2026-10-24T16:35:03.905Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=152 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:35:20.966Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19057 get_peers=4 announce=0 lookups=22 dropped=0
+2026-10-24T16:36:21.478Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20050 get_peers=12 announce=0 lookups=23 dropped=0
+2026-10-24T16:36:41.118Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=97 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:37:21.930Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20789 get_peers=3 announce=3 lookups=19 dropped=0
+2026-10-24T16:37:42.043Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=2 timed_out=1 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T16:38:22.498Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19695 get_peers=4 announce=1 lookups=31 dropped=0
+2026-10-24T16:39:23.153Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18994 get_peers=7 announce=1 lookups=23 dropped=0
+2026-10-24T16:39:36.316Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=114 unreachable=6 timed_out=0 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:40:23.515Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22873 get_peers=2 announce=0 lookups=25 dropped=0
+2026-10-24T16:40:57.869Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=82 unreachable=1 timed_out=2 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T16:41:23.970Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26600 get_peers=7 announce=0 lookups=22 dropped=0
+2026-10-24T16:42:24.577Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23053 get_peers=5 announce=0 lookups=24 dropped=0
+2026-10-24T16:43:25.355Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24187 get_peers=6 announce=0 lookups=26 dropped=0
+2026-10-24T16:44:25.814Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24111 get_peers=7 announce=0 lookups=22 dropped=0
+2026-10-24T16:45:26.388Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24801 get_peers=8 announce=0 lookups=28 dropped=0
+2026-10-24T16:46:03.967Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=306 unreachable=2 timed_out=4 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:46:27.215Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23083 get_peers=8 announce=1 lookups=17 dropped=0
+2026-10-24T16:47:28.380Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23709 get_peers=9 announce=0 lookups=24 dropped=0
+2026-10-24T16:48:28.711Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24334 get_peers=2 announce=0 lookups=21 dropped=0
+2026-10-24T16:49:29.473Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21697 get_peers=13 announce=0 lookups=23 dropped=0
+2026-10-24T16:50:30.107Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23432 get_peers=7 announce=0 lookups=24 dropped=0
+2026-10-24T16:51:31.055Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22303 get_peers=6 announce=0 lookups=21 dropped=0
+2026-10-24T16:52:13.699Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=370 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:52:31.468Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21474 get_peers=2 announce=0 lookups=26 dropped=0
+2026-10-24T16:53:17.500Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=63 unreachable=1 timed_out=16 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:53:32.148Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20505 get_peers=7 announce=0 lookups=20 dropped=0
+2026-10-24T16:54:18.426Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=2 timed_out=11 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:54:32.218Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20820 get_peers=6 announce=3 lookups=24 dropped=0
+2026-10-24T16:55:32.767Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21197 get_peers=5 announce=1 lookups=22 dropped=0
+2026-10-24T16:56:27.912Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=130 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:56:33.141Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21246 get_peers=4 announce=0 lookups=26 dropped=0
+2026-10-24T16:57:33.984Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21058 get_peers=7 announce=0 lookups=26 dropped=0
+2026-10-24T16:58:34.573Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22810 get_peers=6 announce=0 lookups=23 dropped=0
+2026-10-24T16:59:11.226Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=163 unreachable=2 timed_out=8 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T16:59:34.863Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21246 get_peers=3 announce=1 lookups=22 dropped=0
+2026-10-24T17:00:17.284Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=66 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:00:35.439Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20644 get_peers=4 announce=1 lookups=23 dropped=0
+2026-10-24T17:01:36.020Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21036 get_peers=6 announce=0 lookups=25 dropped=0
+2026-10-24T17:02:36.350Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20296 get_peers=142 announce=0 lookups=18 dropped=0
+2026-10-24T17:02:42.242Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=145 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:03:37.070Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21086 get_peers=8 announce=3 lookups=22 dropped=0
+2026-10-24T17:04:37.488Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19903 get_peers=5 announce=0 lookups=26 dropped=0
+2026-10-24T17:05:26.213Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=164 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:05:37.857Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20041 get_peers=4 announce=1 lookups=21 dropped=0
+2026-10-24T17:06:38.137Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20755 get_peers=3 announce=0 lookups=20 dropped=0
+2026-10-24T17:07:38.549Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19159 get_peers=2 announce=0 lookups=26 dropped=0
+2026-10-24T17:07:51.636Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=146 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:08:39.188Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19271 get_peers=2 announce=0 lookups=27 dropped=0
+2026-10-24T17:08:53.603Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=1 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:09:39.620Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19812 get_peers=7 announce=0 lookups=20 dropped=0
+2026-10-24T17:09:53.914Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:10:40.166Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19796 get_peers=4 announce=0 lookups=27 dropped=0
+2026-10-24T17:11:40.527Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19132 get_peers=6 announce=0 lookups=21 dropped=0
+2026-10-24T17:12:41.149Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17158 get_peers=11 announce=0 lookups=19 dropped=0
+2026-10-24T17:12:45.413Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=171 unreachable=0 timed_out=7 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:13:41.619Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18846 get_peers=12 announce=1 lookups=22 dropped=0
+2026-10-24T17:14:42.134Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18040 get_peers=7 announce=0 lookups=20 dropped=0
+2026-10-24T17:14:56.493Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=131 unreachable=0 timed_out=5 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:15:42.657Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20113 get_peers=5 announce=1 lookups=20 dropped=0
+2026-10-24T17:16:43.147Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19640 get_peers=9 announce=0 lookups=15 dropped=0
+2026-10-24T17:17:43.466Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17767 get_peers=7 announce=0 lookups=24 dropped=0
+2026-10-24T17:17:55.806Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=180 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:18:44.105Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18909 get_peers=9 announce=0 lookups=25 dropped=0
+2026-10-24T17:19:30.195Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=94 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:19:44.804Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18243 get_peers=6 announce=0 lookups=23 dropped=0
+2026-10-24T17:20:29.735Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=8 timed_out=37 refused=3 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:20:45.480Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17935 get_peers=10 announce=0 lookups=23 dropped=0
+2026-10-24T17:21:45.919Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17574 get_peers=6 announce=0 lookups=16 dropped=0
+2026-10-24T17:22:10.585Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=101 unreachable=4 timed_out=7 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:22:46.345Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18679 get_peers=5 announce=1 lookups=28 dropped=0
+2026-10-24T17:23:46.776Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17866 get_peers=7 announce=0 lookups=19 dropped=0
+2026-10-24T17:24:47.428Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16948 get_peers=6 announce=0 lookups=23 dropped=0
+2026-10-24T17:25:43.909Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=213 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:25:47.817Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17792 get_peers=7 announce=0 lookups=18 dropped=0
+2026-10-24T17:26:45.431Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=2 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:26:48.216Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16664 get_peers=100 announce=1 lookups=22 dropped=0
+2026-10-24T17:27:48.648Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17140 get_peers=4 announce=0 lookups=27 dropped=0
+2026-10-24T17:28:49.085Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17643 get_peers=3 announce=0 lookups=23 dropped=0
+2026-10-24T17:28:53.096Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=128 unreachable=0 timed_out=14 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:29:49.538Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25145 get_peers=5 announce=1 lookups=20 dropped=0
+2026-10-24T17:29:55.306Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=4 timed_out=13 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:30:49.804Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24818 get_peers=4 announce=1 lookups=21 dropped=0
+2026-10-24T17:31:50.259Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25620 get_peers=3 announce=0 lookups=22 dropped=0
+2026-10-24T17:32:23.722Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=149 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:32:50.732Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23801 get_peers=9 announce=2 lookups=25 dropped=0
+2026-10-24T17:33:45.955Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=82 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:33:51.129Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24688 get_peers=10 announce=2 lookups=20 dropped=0
+2026-10-24T17:34:51.638Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23935 get_peers=8 announce=1 lookups=21 dropped=0
+2026-10-24T17:35:06.946Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=81 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:35:51.995Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24526 get_peers=5 announce=1 lookups=17 dropped=0
+2026-10-24T17:36:18.104Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=71 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:36:52.349Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23036 get_peers=6 announce=0 lookups=26 dropped=0
+2026-10-24T17:37:18.198Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=3 timed_out=30 refused=4 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:37:52.772Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23170 get_peers=7 announce=0 lookups=19 dropped=0
+2026-10-24T17:38:18.283Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=28 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:38:53.238Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23333 get_peers=5 announce=1 lookups=17 dropped=0
+2026-10-24T17:39:53.596Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23326 get_peers=4 announce=1 lookups=16 dropped=0
+2026-10-24T17:40:53.939Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21642 get_peers=3 announce=0 lookups=17 dropped=0
+2026-10-24T17:41:54.381Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23957 get_peers=2 announce=0 lookups=17 dropped=0
+2026-10-24T17:42:39.303Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=261 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T17:42:54.933Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22844 get_peers=8 announce=1 lookups=22 dropped=0
+2026-10-24T17:43:41.354Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=4 timed_out=9 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:43:55.363Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21389 get_peers=6 announce=0 lookups=25 dropped=0
+2026-10-24T17:44:55.743Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21635 get_peers=7 announce=1 lookups=17 dropped=0
+2026-10-24T17:45:56.064Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20210 get_peers=7 announce=0 lookups=20 dropped=0
+2026-10-24T17:46:10.601Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=150 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:46:56.459Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20910 get_peers=6 announce=1 lookups=17 dropped=0
+2026-10-24T17:47:22.943Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=72 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:47:57.069Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20160 get_peers=10 announce=1 lookups=18 dropped=0
+2026-10-24T17:48:25.514Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=0 timed_out=2 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:48:57.657Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21683 get_peers=10 announce=1 lookups=19 dropped=0
+2026-10-24T17:49:58.037Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21351 get_peers=4 announce=3 lookups=26 dropped=0
+2026-10-24T17:50:58.466Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19270 get_peers=5 announce=0 lookups=13 dropped=0
+2026-10-24T17:51:23.910Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=179 unreachable=0 timed_out=10 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:51:58.960Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20539 get_peers=5 announce=1 lookups=18 dropped=0
+2026-10-24T17:52:59.363Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21583 get_peers=8 announce=1 lookups=13 dropped=0
+2026-10-24T17:53:59.882Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20229 get_peers=6 announce=0 lookups=21 dropped=0
+2026-10-24T17:55:00.336Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20205 get_peers=3 announce=0 lookups=25 dropped=0
+2026-10-24T17:55:30.591Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=247 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:56:00.677Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19175 get_peers=9 announce=1 lookups=19 dropped=0
+2026-10-24T17:56:33.212Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=0 timed_out=16 refused=4 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T17:57:01.056Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19051 get_peers=6 announce=0 lookups=18 dropped=0
+2026-10-24T17:58:01.470Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18967 get_peers=11 announce=0 lookups=20 dropped=0
+2026-10-24T17:59:01.912Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19546 get_peers=7 announce=0 lookups=15 dropped=0
+2026-10-24T18:00:02.447Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19454 get_peers=7 announce=1 lookups=15 dropped=0
+2026-10-24T18:01:02.962Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16394 get_peers=6 announce=0 lookups=14 dropped=0
+2026-10-24T18:01:09.023Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=276 unreachable=0 timed_out=7 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:02:03.212Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=12195 get_peers=9 announce=3 lookups=15 dropped=0
+2026-10-24T18:03:03.364Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17047 get_peers=2 announce=0 lookups=16 dropped=0
+2026-10-24T18:04:04.491Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=24960 get_peers=8 announce=0 lookups=13 dropped=0
+2026-10-24T18:04:27.816Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=199 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:05:04.891Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16821 get_peers=5 announce=2 lookups=14 dropped=0
+2026-10-24T18:05:29.615Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:06:05.747Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19645 get_peers=5 announce=1 lookups=12 dropped=0
+2026-10-24T18:06:31.155Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=1 timed_out=0 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:07:05.966Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17352 get_peers=4 announce=0 lookups=14 dropped=0
+2026-10-24T18:07:43.669Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=73 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:08:06.455Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18986 get_peers=13 announce=4 lookups=15 dropped=0
+2026-10-24T18:09:07.299Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16845 get_peers=8 announce=0 lookups=21 dropped=0
+2026-10-24T18:09:16.608Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=93 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:10:07.302Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18007 get_peers=7 announce=1 lookups=14 dropped=0
+2026-10-24T18:10:41.705Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=85 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:11:08.178Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16825 get_peers=4 announce=0 lookups=19 dropped=0
+2026-10-24T18:11:51.829Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=70 unreachable=0 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:12:08.708Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15017 get_peers=6 announce=1 lookups=13 dropped=0
+2026-10-24T18:12:52.186Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=3 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:13:08.949Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16254 get_peers=4 announce=1 lookups=16 dropped=0
+2026-10-24T18:14:06.161Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=74 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:14:08.988Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14052 get_peers=4 announce=1 lookups=18 dropped=0
+2026-10-24T18:15:09.579Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14303 get_peers=7 announce=1 lookups=15 dropped=0
+2026-10-24T18:16:09.926Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16298 get_peers=5 announce=0 lookups=16 dropped=0
+2026-10-24T18:16:46.682Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=161 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:17:09.861Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16262 get_peers=5 announce=0 lookups=20 dropped=0
+2026-10-24T18:18:10.588Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15691 get_peers=3 announce=0 lookups=15 dropped=0
+2026-10-24T18:19:11.480Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17620 get_peers=4 announce=0 lookups=17 dropped=0
+2026-10-24T18:20:11.538Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24775 get_peers=7 announce=0 lookups=16 dropped=0
+2026-10-24T18:21:11.905Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25127 get_peers=1 announce=0 lookups=19 dropped=0
+2026-10-24T18:22:13.414Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=326 unreachable=8 timed_out=1 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:22:13.774Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=22848 get_peers=2 announce=0 lookups=16 dropped=0
+2026-10-24T18:23:13.891Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22048 get_peers=15 announce=1 lookups=15 dropped=0
+2026-10-24T18:24:14.526Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24451 get_peers=5 announce=1 lookups=20 dropped=0
+2026-10-24T18:25:02.938Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=170 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:25:15.044Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22889 get_peers=4 announce=1 lookups=12 dropped=0
+2026-10-24T18:26:15.493Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24943 get_peers=8 announce=0 lookups=17 dropped=0
+2026-10-24T18:27:16.440Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19423 get_peers=10 announce=0 lookups=15 dropped=0
+2026-10-24T18:28:16.259Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=193 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:28:17.270Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22073 get_peers=8 announce=0 lookups=14 dropped=0
+2026-10-24T18:29:17.709Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21632 get_peers=11 announce=1 lookups=16 dropped=0
+2026-10-24T18:29:18.642Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=63 unreachable=0 timed_out=18 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:30:18.105Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22013 get_peers=13 announce=0 lookups=12 dropped=0
+2026-10-24T18:31:18.660Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22552 get_peers=6 announce=0 lookups=14 dropped=0
+2026-10-24T18:32:18.015Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=179 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:32:19.026Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21004 get_peers=3 announce=0 lookups=21 dropped=0
+2026-10-24T18:33:18.371Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=4 timed_out=18 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:33:19.638Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21798 get_peers=4 announce=0 lookups=17 dropped=0
+2026-10-24T18:34:20.175Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21289 get_peers=4 announce=0 lookups=12 dropped=0
+2026-10-24T18:34:20.186Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=10 timed_out=15 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:35:20.653Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21371 get_peers=6 announce=0 lookups=14 dropped=0
+2026-10-24T18:35:25.665Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=66 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:36:21.145Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21492 get_peers=9 announce=0 lookups=13 dropped=0
+2026-10-24T18:37:21.457Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20033 get_peers=4 announce=0 lookups=13 dropped=0
+2026-10-24T18:38:06.420Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=160 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:38:22.076Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20636 get_peers=8 announce=1 lookups=11 dropped=0
+2026-10-24T18:39:22.491Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19755 get_peers=6 announce=0 lookups=14 dropped=0
+2026-10-24T18:40:22.987Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20640 get_peers=10 announce=0 lookups=14 dropped=0
+2026-10-24T18:41:23.314Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19517 get_peers=5 announce=0 lookups=14 dropped=0
+2026-10-24T18:42:23.760Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18109 get_peers=6 announce=2 lookups=10 dropped=0
+2026-10-24T18:42:48.036Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=282 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:43:24.112Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20092 get_peers=342 announce=1 lookups=13 dropped=0
+2026-10-24T18:44:24.773Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18253 get_peers=2 announce=0 lookups=9 dropped=0
+2026-10-24T18:45:23.891Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=156 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:45:25.324Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20513 get_peers=10 announce=1 lookups=11 dropped=0
+2026-10-24T18:46:25.752Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18561 get_peers=5 announce=0 lookups=10 dropped=0
+2026-10-24T18:46:46.647Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=83 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:47:26.108Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19486 get_peers=5 announce=1 lookups=9 dropped=0
+2026-10-24T18:48:26.363Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18600 get_peers=163 announce=0 lookups=12 dropped=0
+2026-10-24T18:49:06.271Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=139 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:49:26.842Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18213 get_peers=6 announce=2 lookups=11 dropped=0
+2026-10-24T18:50:11.757Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=66 unreachable=1 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:50:27.466Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17611 get_peers=9 announce=3 lookups=14 dropped=0
+2026-10-24T18:51:28.877Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18313 get_peers=6 announce=2 lookups=13 dropped=0
+2026-10-24T18:51:31.695Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=80 unreachable=0 timed_out=3 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:52:28.740Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17663 get_peers=3 announce=1 lookups=12 dropped=0
+2026-10-24T18:53:29.089Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18849 get_peers=1 announce=1 lookups=20 dropped=0
+2026-10-24T18:54:29.726Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17425 get_peers=5 announce=0 lookups=11 dropped=0
+2026-10-24T18:55:30.311Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19125 get_peers=11 announce=0 lookups=14 dropped=0
+2026-10-24T18:55:58.264Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=266 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:56:30.806Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16376 get_peers=4 announce=1 lookups=10 dropped=0
+2026-10-24T18:57:08.129Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=70 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:57:31.042Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16604 get_peers=5 announce=2 lookups=11 dropped=0
+2026-10-24T18:58:31.666Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17540 get_peers=5 announce=1 lookups=13 dropped=0
+2026-10-24T18:59:18.841Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=131 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T18:59:32.444Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17806 get_peers=16 announce=2 lookups=11 dropped=0
+2026-10-24T19:00:32.449Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17301 get_peers=12 announce=2 lookups=17 dropped=0
+2026-10-24T19:01:23.682Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=125 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:01:33.493Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17387 get_peers=10 announce=1 lookups=10 dropped=0
+2026-10-24T19:02:25.481Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=5 timed_out=6 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:02:33.756Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18175 get_peers=8 announce=2 lookups=12 dropped=0
+2026-10-24T19:03:27.443Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=3 timed_out=18 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:03:34.521Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17072 get_peers=3 announce=1 lookups=10 dropped=0
+2026-10-24T19:04:35.215Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17347 get_peers=5 announce=0 lookups=11 dropped=0
+2026-10-24T19:05:05.107Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=98 unreachable=0 timed_out=9 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:05:35.651Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16789 get_peers=8 announce=2 lookups=10 dropped=0
+2026-10-24T19:06:35.795Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=91 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:06:35.883Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16324 get_peers=6 announce=2 lookups=13 dropped=0
+2026-10-24T19:07:36.810Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16050 get_peers=7 announce=1 lookups=14 dropped=0
+2026-10-24T19:08:37.125Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16091 get_peers=1 announce=0 lookups=12 dropped=0
+2026-10-24T19:09:07.789Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=152 unreachable=0 timed_out=5 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:09:37.743Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16483 get_peers=4 announce=1 lookups=12 dropped=0
+2026-10-24T19:10:35.072Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=87 unreachable=0 timed_out=1 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:10:38.405Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16511 get_peers=8 announce=1 lookups=12 dropped=0
+2026-10-24T19:11:38.941Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24386 get_peers=5 announce=3 lookups=10 dropped=0
+2026-10-24T19:12:19.668Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=105 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:12:39.387Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26717 get_peers=3 announce=2 lookups=9 dropped=0
+2026-10-24T19:13:36.409Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=76 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:13:39.820Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25623 get_peers=3 announce=1 lookups=11 dropped=0
+2026-10-24T19:14:40.275Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26238 get_peers=4 announce=1 lookups=10 dropped=0
+2026-10-24T19:14:43.249Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=67 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:15:40.717Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25769 get_peers=8 announce=0 lookups=12 dropped=0
+2026-10-24T19:15:46.205Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=63 unreachable=6 timed_out=17 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:16:41.150Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24342 get_peers=6 announce=0 lookups=15 dropped=0
+2026-10-24T19:16:47.675Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=1 timed_out=27 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:17:41.517Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23771 get_peers=6 announce=0 lookups=10 dropped=0
+2026-10-24T19:18:40.080Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=112 unreachable=3 timed_out=8 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:18:42.007Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24105 get_peers=4 announce=1 lookups=9 dropped=0
+2026-10-24T19:19:40.816Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=4 timed_out=10 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:19:42.573Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22083 get_peers=115 announce=1 lookups=9 dropped=0
+2026-10-24T19:20:41.952Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=23 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:20:42.980Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23147 get_peers=17 announce=2 lookups=9 dropped=0
+2026-10-24T19:21:43.546Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23053 get_peers=4 announce=2 lookups=11 dropped=0
+2026-10-24T19:21:51.246Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=69 unreachable=1 timed_out=10 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:22:43.906Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23150 get_peers=13 announce=1 lookups=11 dropped=0
+2026-10-24T19:23:15.102Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=84 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:23:44.156Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20763 get_peers=15 announce=1 lookups=10 dropped=0
+2026-10-24T19:24:21.419Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=66 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:24:44.556Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22198 get_peers=24 announce=2 lookups=13 dropped=0
+2026-10-24T19:25:20.773Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:25:45.056Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21183 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T19:26:45.491Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20628 get_peers=10 announce=0 lookups=10 dropped=0
+2026-10-24T19:27:22.202Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=121 unreachable=2 timed_out=6 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:27:45.903Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21081 get_peers=15 announce=1 lookups=12 dropped=0
+2026-10-24T19:28:43.309Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=81 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:28:46.235Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21774 get_peers=17 announce=2 lookups=12 dropped=0
+2026-10-24T19:29:44.657Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=0 timed_out=20 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:29:46.688Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20820 get_peers=28 announce=1 lookups=11 dropped=0
+2026-10-24T19:30:47.175Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19430 get_peers=26 announce=0 lookups=11 dropped=0
+2026-10-24T19:31:47.524Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20187 get_peers=6 announce=0 lookups=11 dropped=0
+2026-10-24T19:32:13.243Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=148 unreachable=0 timed_out=11 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:32:48.003Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18597 get_peers=11 announce=1 lookups=11 dropped=0
+2026-10-24T19:33:48.505Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18620 get_peers=4 announce=0 lookups=9 dropped=0
+2026-10-24T19:34:13.308Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=120 unreachable=1 timed_out=0 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:34:48.865Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19970 get_peers=10 announce=1 lookups=11 dropped=0
+2026-10-24T19:35:14.455Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=16 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:35:49.224Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19607 get_peers=13 announce=2 lookups=12 dropped=0
+2026-10-24T19:36:14.695Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=1 timed_out=15 refused=6 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:36:49.845Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18820 get_peers=6 announce=2 lookups=10 dropped=0
+2026-10-24T19:37:22.885Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=68 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:37:49.948Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18335 get_peers=5 announce=2 lookups=13 dropped=0
+2026-10-24T19:38:38.945Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=76 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:38:50.322Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19004 get_peers=7 announce=2 lookups=10 dropped=0
+2026-10-24T19:39:49.146Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=70 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:39:50.729Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18296 get_peers=6 announce=2 lookups=9 dropped=0
+2026-10-24T19:40:51.085Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17344 get_peers=10 announce=2 lookups=10 dropped=0
+2026-10-24T19:41:39.128Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=110 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:41:51.608Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17839 get_peers=11 announce=2 lookups=7 dropped=0
+2026-10-24T19:42:52.094Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17407 get_peers=13 announce=2 lookups=12 dropped=0
+2026-10-24T19:42:59.918Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=81 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:43:52.676Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17947 get_peers=13 announce=5 lookups=17 dropped=0
+2026-10-24T19:44:00.413Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=5 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:44:52.815Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18758 get_peers=8 announce=2 lookups=10 dropped=0
+2026-10-24T19:45:53.353Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17555 get_peers=6 announce=0 lookups=12 dropped=0
+2026-10-24T19:46:53.820Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17166 get_peers=3 announce=0 lookups=15 dropped=0
+2026-10-24T19:47:54.207Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17639 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T19:48:26.214Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=266 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:48:54.535Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16865 get_peers=7 announce=2 lookups=10 dropped=0
+2026-10-24T19:49:55.090Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17385 get_peers=10 announce=1 lookups=12 dropped=0
+2026-10-24T19:50:29.729Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=124 unreachable=1 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:50:55.699Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16596 get_peers=8 announce=3 lookups=9 dropped=0
+2026-10-24T19:51:56.642Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17374 get_peers=8 announce=2 lookups=9 dropped=0
+2026-10-24T19:52:56.938Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16003 get_peers=6 announce=2 lookups=10 dropped=0
+2026-10-24T19:53:57.246Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16086 get_peers=6 announce=3 lookups=7 dropped=0
+2026-10-24T19:54:57.686Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16760 get_peers=8 announce=0 lookups=9 dropped=0
+2026-10-24T19:55:05.760Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=276 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:55:58.183Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16892 get_peers=283 announce=0 lookups=11 dropped=0
+2026-10-24T19:56:36.158Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=90 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:56:58.629Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15425 get_peers=40 announce=4 lookups=9 dropped=0
+2026-10-24T19:57:58.995Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16073 get_peers=9 announce=0 lookups=10 dropped=0
+2026-10-24T19:58:45.406Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=129 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:58:59.310Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15745 get_peers=8 announce=1 lookups=9 dropped=0
+2026-10-24T19:59:45.124Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T19:59:59.844Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15124 get_peers=11 announce=2 lookups=10 dropped=0
+2026-10-24T20:01:00.223Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15845 get_peers=6 announce=0 lookups=6 dropped=0
+2026-10-24T20:01:50.702Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=126 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:02:00.724Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15919 get_peers=11 announce=1 lookups=9 dropped=0
+2026-10-24T20:03:01.216Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25462 get_peers=5 announce=2 lookups=11 dropped=0
+2026-10-24T20:03:28.868Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=98 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:04:01.736Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26367 get_peers=6 announce=3 lookups=9 dropped=0
+2026-10-24T20:05:02.044Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24978 get_peers=13 announce=1 lookups=8 dropped=0
+2026-10-24T20:05:24.494Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=115 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:06:02.585Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24650 get_peers=361 announce=0 lookups=8 dropped=0
+2026-10-24T20:07:02.990Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23631 get_peers=10 announce=0 lookups=13 dropped=0
+2026-10-24T20:08:03.432Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23420 get_peers=4 announce=0 lookups=7 dropped=0
+2026-10-24T20:09:03.828Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23778 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T20:10:04.225Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23298 get_peers=4 announce=1 lookups=10 dropped=0
+2026-10-24T20:11:04.691Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22092 get_peers=4 announce=1 lookups=6 dropped=0
+2026-10-24T20:12:05.193Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21768 get_peers=7 announce=2 lookups=9 dropped=0
+2026-10-24T20:12:53.445Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=449 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:13:05.635Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23387 get_peers=7 announce=4 lookups=6 dropped=0
+2026-10-24T20:14:06.094Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21991 get_peers=7 announce=3 lookups=8 dropped=0
+2026-10-24T20:15:06.608Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21680 get_peers=2 announce=2 lookups=11 dropped=0
+2026-10-24T20:16:06.880Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20753 get_peers=8 announce=2 lookups=10 dropped=0
+2026-10-24T20:16:13.506Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=200 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:17:07.335Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20208 get_peers=9 announce=5 lookups=10 dropped=0
+2026-10-24T20:17:24.229Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=71 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:18:07.649Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19983 get_peers=7 announce=4 lookups=10 dropped=0
+2026-10-24T20:18:25.263Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=6 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:19:08.096Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19052 get_peers=9 announce=8 lookups=10 dropped=0
+2026-10-24T20:19:52.556Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=88 unreachable=2 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:20:08.603Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19832 get_peers=4 announce=2 lookups=10 dropped=0
+2026-10-24T20:21:07.957Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=75 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:21:08.858Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18856 get_peers=2 announce=1 lookups=11 dropped=0
+2026-10-24T20:22:09.315Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19948 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-24T20:22:09.365Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=6 timed_out=10 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:23:09.692Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18819 get_peers=18 announce=0 lookups=9 dropped=0
+2026-10-24T20:24:10.168Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19673 get_peers=16 announce=0 lookups=11 dropped=0
+2026-10-24T20:24:20.527Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=132 unreachable=0 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:25:10.585Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18492 get_peers=1 announce=1 lookups=11 dropped=0
+2026-10-24T20:25:22.135Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=1 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:26:10.945Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18205 get_peers=8 announce=0 lookups=12 dropped=0
+2026-10-24T20:27:11.603Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17838 get_peers=6 announce=0 lookups=7 dropped=0
+2026-10-24T20:27:42.053Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=140 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:28:12.100Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18899 get_peers=10 announce=2 lookups=7 dropped=0
+2026-10-24T20:28:43.070Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:29:12.498Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18582 get_peers=10 announce=5 lookups=12 dropped=0
+2026-10-24T20:30:09.038Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=86 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:30:12.947Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19108 get_peers=5 announce=2 lookups=11 dropped=0
+2026-10-24T20:31:13.370Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18262 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-24T20:31:34.950Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=86 unreachable=0 timed_out=1 refused=3 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:32:13.905Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17718 get_peers=5 announce=3 lookups=8 dropped=0
+2026-10-24T20:33:14.423Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17908 get_peers=6 announce=0 lookups=13 dropped=0
+2026-10-24T20:34:14.855Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16945 get_peers=11 announce=1 lookups=10 dropped=0
+2026-10-24T20:35:15.312Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17841 get_peers=6 announce=2 lookups=9 dropped=0
+2026-10-24T20:36:15.702Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17763 get_peers=8 announce=0 lookups=10 dropped=0
+2026-10-24T20:37:16.023Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18445 get_peers=51 announce=1 lookups=11 dropped=0
+2026-10-24T20:38:16.594Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15963 get_peers=132 announce=0 lookups=8 dropped=0
+2026-10-24T20:38:47.021Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=432 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:39:17.018Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16438 get_peers=57 announce=1 lookups=10 dropped=0
+2026-10-24T20:40:17.546Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16581 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-24T20:41:18.082Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16612 get_peers=276 announce=1 lookups=8 dropped=0
+2026-10-24T20:42:18.818Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16611 get_peers=3 announce=0 lookups=7 dropped=0
+2026-10-24T20:43:11.110Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=264 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:43:19.462Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16646 get_peers=8 announce=1 lookups=14 dropped=0
+2026-10-24T20:44:20.277Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15981 get_peers=29 announce=1 lookups=9 dropped=0
+2026-10-24T20:45:16.079Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=125 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:45:20.970Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15964 get_peers=7 announce=1 lookups=11 dropped=0
+2026-10-24T20:46:16.307Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=2 timed_out=23 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:46:21.505Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15494 get_peers=2 announce=0 lookups=9 dropped=0
+2026-10-24T20:47:16.829Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=13 timed_out=20 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:47:22.118Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17044 get_peers=2 announce=0 lookups=9 dropped=0
+2026-10-24T20:48:22.731Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15392 get_peers=5 announce=3 lookups=13 dropped=0
+2026-10-24T20:48:24.486Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=67 unreachable=3 timed_out=8 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:49:23.529Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17145 get_peers=7 announce=1 lookups=10 dropped=0
+2026-10-24T20:49:42.530Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=79 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:50:24.309Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16285 get_peers=5 announce=5 lookups=9 dropped=0
+2026-10-24T20:50:48.012Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=65 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T20:51:25.221Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16178 get_peers=10 announce=3 lookups=9 dropped=0
+2026-10-24T20:52:25.724Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16553 get_peers=4 announce=2 lookups=6 dropped=0
+2026-10-24T20:53:16.217Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=148 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T20:53:26.062Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16496 get_peers=5 announce=4 lookups=11 dropped=0
+2026-10-24T20:54:26.507Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19177 get_peers=6 announce=2 lookups=13 dropped=0
+2026-10-24T20:54:37.220Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=81 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:55:27.041Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28901 get_peers=3 announce=3 lookups=8 dropped=0
+2026-10-24T20:56:27.370Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28022 get_peers=1 announce=0 lookups=9 dropped=0
+2026-10-24T20:57:28.105Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28037 get_peers=3 announce=1 lookups=8 dropped=0
+2026-10-24T20:58:20.443Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=223 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T20:58:28.388Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27219 get_peers=6 announce=2 lookups=12 dropped=0
+2026-10-24T20:59:29.048Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28251 get_peers=6 announce=0 lookups=8 dropped=0
+2026-10-24T21:00:29.340Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28807 get_peers=3 announce=1 lookups=7 dropped=0
+2026-10-24T21:01:30.148Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28531 get_peers=0 announce=1 lookups=11 dropped=0
+2026-10-24T21:02:15.225Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=235 unreachable=0 timed_out=3 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:02:30.857Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28736 get_peers=5 announce=1 lookups=14 dropped=0
+2026-10-24T21:03:30.890Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27623 get_peers=2 announce=1 lookups=8 dropped=0
+2026-10-24T21:03:38.088Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=83 unreachable=0 timed_out=0 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T21:04:31.618Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28700 get_peers=4 announce=3 lookups=9 dropped=0
+2026-10-24T21:05:31.815Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=29848 get_peers=5 announce=1 lookups=10 dropped=0
+2026-10-24T21:05:50.298Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=132 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T21:06:32.809Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30413 get_peers=3 announce=2 lookups=10 dropped=0
+2026-10-24T21:07:33.493Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28847 get_peers=1 announce=1 lookups=10 dropped=0
+2026-10-24T21:08:34.137Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28951 get_peers=2 announce=0 lookups=11 dropped=0
+2026-10-24T21:09:34.719Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30863 get_peers=0 announce=0 lookups=10 dropped=0
+2026-10-24T21:10:35.456Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28272 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-24T21:11:18.375Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=328 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T21:11:36.011Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28187 get_peers=7 announce=1 lookups=10 dropped=0
+2026-10-24T21:12:36.463Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=30083 get_peers=5 announce=1 lookups=11 dropped=0
+2026-10-24T21:12:52.298Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=94 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:13:36.969Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27267 get_peers=21 announce=9 lookups=13 dropped=0
+2026-10-24T21:13:56.050Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=64 unreachable=0 timed_out=5 refused=9 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:14:37.406Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28679 get_peers=11 announce=9 lookups=10 dropped=0
+2026-10-24T21:15:37.706Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26552 get_peers=10 announce=1 lookups=10 dropped=0
+2026-10-24T21:15:40.153Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=104 unreachable=0 timed_out=2 refused=4 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:16:38.134Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26072 get_peers=5 announce=2 lookups=10 dropped=0
+2026-10-24T21:17:38.487Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25804 get_peers=4 announce=0 lookups=12 dropped=0
+2026-10-24T21:18:38.959Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25975 get_peers=5 announce=0 lookups=11 dropped=0
+2026-10-24T21:19:39.468Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25572 get_peers=8 announce=0 lookups=11 dropped=0
+2026-10-24T21:19:52.349Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=252 unreachable=0 timed_out=4 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:20:39.951Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24261 get_peers=9 announce=1 lookups=13 dropped=0
+2026-10-24T21:20:52.570Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=1 timed_out=4 refused=5 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:21:40.405Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25275 get_peers=6 announce=2 lookups=11 dropped=0
+2026-10-24T21:21:54.297Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=2 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:22:40.745Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24173 get_peers=3 announce=0 lookups=12 dropped=0
+2026-10-24T21:22:59.132Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=65 unreachable=0 timed_out=5 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:23:41.160Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22376 get_peers=11 announce=1 lookups=12 dropped=0
+2026-10-24T21:24:41.578Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23702 get_peers=6 announce=0 lookups=9 dropped=0
+2026-10-24T21:25:31.147Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=152 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:25:42.065Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23461 get_peers=7 announce=1 lookups=9 dropped=0
+2026-10-24T21:26:42.588Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22522 get_peers=5 announce=3 lookups=11 dropped=0
+2026-10-24T21:27:27.135Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=116 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:27:42.815Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21763 get_peers=8 announce=1 lookups=11 dropped=0
+2026-10-24T21:28:27.864Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=1 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:28:43.224Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22602 get_peers=10 announce=3 lookups=9 dropped=0
+2026-10-24T21:29:39.138Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=71 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:29:43.659Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22767 get_peers=14 announce=3 lookups=11 dropped=0
+2026-10-24T21:30:44.125Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21479 get_peers=5 announce=0 lookups=9 dropped=0
+2026-10-24T21:31:44.654Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20791 get_peers=8 announce=0 lookups=11 dropped=0
+2026-10-24T21:32:45.136Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22704 get_peers=3 announce=0 lookups=9 dropped=0
+2026-10-24T21:33:45.672Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27038 get_peers=2 announce=0 lookups=9 dropped=0
+2026-10-24T21:34:45.901Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27994 get_peers=2 announce=0 lookups=7 dropped=0
+2026-10-24T21:35:25.926Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=347 unreachable=1 timed_out=0 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:35:46.398Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28783 get_peers=6 announce=0 lookups=9 dropped=0
+2026-10-24T21:36:28.405Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=1 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:36:46.916Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=28066 get_peers=5 announce=0 lookups=9 dropped=0
+2026-10-24T21:37:28.530Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=15 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:37:47.221Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26930 get_peers=7 announce=1 lookups=13 dropped=0
+2026-10-24T21:38:47.624Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25902 get_peers=2 announce=1 lookups=8 dropped=0
+2026-10-24T21:39:48.078Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25930 get_peers=5 announce=1 lookups=10 dropped=0
+2026-10-24T21:40:48.579Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24982 get_peers=6 announce=1 lookups=7 dropped=0
+2026-10-24T21:40:53.024Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=204 unreachable=0 timed_out=0 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:41:49.212Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25738 get_peers=2 announce=1 lookups=9 dropped=0
+2026-10-24T21:42:27.528Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=95 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:42:49.587Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23798 get_peers=3 announce=0 lookups=8 dropped=0
+2026-10-24T21:43:49.945Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25320 get_peers=5 announce=1 lookups=10 dropped=0
+2026-10-24T21:44:50.333Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23911 get_peers=2 announce=0 lookups=11 dropped=0
+2026-10-24T21:45:50.714Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24600 get_peers=5 announce=0 lookups=10 dropped=0
+2026-10-24T21:46:08.742Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=221 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:46:51.237Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23960 get_peers=8 announce=1 lookups=11 dropped=0
+2026-10-24T21:47:09.515Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:47:51.698Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24026 get_peers=6 announce=2 lookups=11 dropped=0
+2026-10-24T21:48:52.046Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22445 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T21:49:52.433Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23097 get_peers=2 announce=0 lookups=7 dropped=0
+2026-10-24T21:50:32.239Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=203 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:50:52.727Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22479 get_peers=1 announce=1 lookups=12 dropped=0
+2026-10-24T21:51:53.257Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23465 get_peers=5 announce=0 lookups=8 dropped=0
+2026-10-24T21:52:53.763Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24886 get_peers=4 announce=0 lookups=6 dropped=0
+2026-10-24T21:53:54.202Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24066 get_peers=5 announce=0 lookups=12 dropped=0
+2026-10-24T21:54:52.137Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=260 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:54:54.633Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22228 get_peers=6 announce=3 lookups=11 dropped=0
+2026-10-24T21:55:54.962Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21859 get_peers=5 announce=3 lookups=9 dropped=0
+2026-10-24T21:56:38.086Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=106 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T21:56:55.448Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23588 get_peers=8 announce=3 lookups=11 dropped=0
+2026-10-24T21:57:56.004Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22156 get_peers=6 announce=1 lookups=10 dropped=0
+2026-10-24T21:58:00.062Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=82 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T21:58:56.352Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21775 get_peers=5 announce=2 lookups=8 dropped=0
+2026-10-24T21:59:56.783Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23146 get_peers=5 announce=0 lookups=10 dropped=0
+2026-10-24T22:00:57.306Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22897 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T22:01:57.820Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20932 get_peers=4 announce=0 lookups=7 dropped=0
+2026-10-24T22:02:58.207Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21194 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T22:03:58.634Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19313 get_peers=5 announce=0 lookups=9 dropped=0
+2026-10-24T22:04:59.016Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21551 get_peers=6 announce=0 lookups=11 dropped=0
+2026-10-24T22:05:59.382Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20108 get_peers=3 announce=0 lookups=11 dropped=0
+2026-10-24T22:07:00.043Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20840 get_peers=2 announce=0 lookups=10 dropped=0
+2026-10-24T22:08:00.468Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19831 get_peers=9 announce=0 lookups=9 dropped=0
+2026-10-24T22:09:00.878Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20584 get_peers=7 announce=0 lookups=9 dropped=0
+2026-10-24T22:10:01.297Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19482 get_peers=9 announce=0 lookups=8 dropped=0
+2026-10-24T22:11:01.816Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19128 get_peers=2 announce=0 lookups=9 dropped=0
+2026-10-24T22:12:02.137Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20435 get_peers=4 announce=0 lookups=9 dropped=0
+2026-10-24T22:12:35.392Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=875 unreachable=0 timed_out=1 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:13:02.559Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20003 get_peers=5 announce=0 lookups=13 dropped=0
+2026-10-24T22:14:03.154Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19388 get_peers=7 announce=1 lookups=8 dropped=0
+2026-10-24T22:15:03.553Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18618 get_peers=2 announce=0 lookups=10 dropped=0
+2026-10-24T22:15:22.784Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=168 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:16:03.951Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19166 get_peers=5 announce=1 lookups=8 dropped=0
+2026-10-24T22:16:36.723Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=74 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:17:04.405Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24326 get_peers=5 announce=3 lookups=9 dropped=0
+2026-10-24T22:17:55.293Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=78 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T22:18:05.105Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26005 get_peers=6 announce=1 lookups=8 dropped=0
+2026-10-24T22:18:54.727Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:19:05.556Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25283 get_peers=9 announce=2 lookups=12 dropped=0
+2026-10-24T22:20:06.097Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27312 get_peers=4 announce=0 lookups=8 dropped=0
+2026-10-24T22:21:06.406Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24763 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T22:21:10.753Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=136 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:22:06.937Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25562 get_peers=6 announce=1 lookups=8 dropped=0
+2026-10-24T22:22:45.191Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=94 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:23:07.343Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24528 get_peers=1 announce=0 lookups=11 dropped=0
+2026-10-24T22:24:07.849Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24576 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T22:25:08.281Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24527 get_peers=2 announce=0 lookups=7 dropped=0
+2026-10-24T22:26:08.765Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24265 get_peers=5 announce=0 lookups=9 dropped=0
+2026-10-24T22:27:09.134Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24201 get_peers=3 announce=0 lookups=11 dropped=0
+2026-10-24T22:28:09.630Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22800 get_peers=2 announce=0 lookups=8 dropped=0
+2026-10-24T22:29:09.959Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24148 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-24T22:29:38.169Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=413 unreachable=6 timed_out=7 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:30:10.420Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24435 get_peers=7 announce=0 lookups=8 dropped=0
+2026-10-24T22:30:39.859Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=5 timed_out=12 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:31:11.078Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21656 get_peers=2 announce=0 lookups=8 dropped=0
+2026-10-24T22:31:40.366Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=2 timed_out=14 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:32:11.539Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22919 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T22:32:42.318Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=5 timed_out=12 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:33:11.763Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22264 get_peers=14 announce=1 lookups=8 dropped=0
+2026-10-24T22:33:43.605Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=9 timed_out=19 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:34:12.549Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21700 get_peers=6 announce=1 lookups=10 dropped=0
+2026-10-24T22:34:55.544Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=72 unreachable=14 timed_out=14 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:35:12.761Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22910 get_peers=7 announce=1 lookups=4 dropped=0
+2026-10-24T22:36:13.188Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22884 get_peers=3 announce=1 lookups=6 dropped=0
+2026-10-24T22:36:32.518Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=97 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:37:13.689Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22224 get_peers=5 announce=1 lookups=5 dropped=0
+2026-10-24T22:37:35.810Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=63 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:38:13.794Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20766 get_peers=2 announce=1 lookups=11 dropped=0
+2026-10-24T22:39:07.576Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=92 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:39:14.827Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21433 get_peers=7 announce=2 lookups=11 dropped=0
+2026-10-24T22:40:15.634Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21946 get_peers=2 announce=0 lookups=11 dropped=0
+2026-10-24T22:41:06.618Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=119 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:41:16.439Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21337 get_peers=5 announce=1 lookups=8 dropped=0
+2026-10-24T22:42:16.764Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20508 get_peers=5 announce=0 lookups=10 dropped=0
+2026-10-24T22:43:00.118Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=113 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:43:17.280Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20230 get_peers=6 announce=1 lookups=7 dropped=0
+2026-10-24T22:44:17.903Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21007 get_peers=4 announce=0 lookups=9 dropped=0
+2026-10-24T22:44:49.812Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=110 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:45:17.810Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18732 get_peers=10 announce=2 lookups=10 dropped=0
+2026-10-24T22:46:18.617Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20182 get_peers=9 announce=0 lookups=9 dropped=0
+2026-10-24T22:47:19.504Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22050 get_peers=2 announce=0 lookups=8 dropped=0
+2026-10-24T22:48:19.813Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18432 get_peers=6 announce=0 lookups=11 dropped=0
+2026-10-24T22:48:53.896Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=244 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:49:20.253Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19313 get_peers=16 announce=2 lookups=9 dropped=0
+2026-10-24T22:50:20.728Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19778 get_peers=2 announce=1 lookups=9 dropped=0
+2026-10-24T22:50:30.299Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=96 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T22:51:21.356Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19096 get_peers=1 announce=1 lookups=10 dropped=0
+2026-10-24T22:51:54.447Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=84 unreachable=0 timed_out=8 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:52:21.652Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19142 get_peers=1 announce=1 lookups=12 dropped=0
+2026-10-24T22:53:21.986Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19619 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T22:53:26.125Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=92 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T22:54:22.420Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19995 get_peers=8 announce=3 lookups=11 dropped=0
+2026-10-24T22:55:22.895Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17627 get_peers=10 announce=6 lookups=10 dropped=0
+2026-10-24T22:56:23.381Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18256 get_peers=8 announce=5 lookups=10 dropped=0
+2026-10-24T22:57:23.779Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19863 get_peers=7 announce=0 lookups=9 dropped=0
+2026-10-24T22:58:24.153Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18585 get_peers=6 announce=0 lookups=9 dropped=0
+2026-10-24T22:59:24.532Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19447 get_peers=4 announce=0 lookups=9 dropped=0
+2026-10-24T23:00:24.992Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17505 get_peers=6 announce=3 lookups=12 dropped=0
+2026-10-24T23:00:39.070Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=433 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:01:25.392Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18712 get_peers=6 announce=4 lookups=9 dropped=0
+2026-10-24T23:02:02.055Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=83 unreachable=0 timed_out=6 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:02:25.818Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17204 get_peers=3 announce=1 lookups=9 dropped=0
+2026-10-24T23:03:26.278Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18447 get_peers=4 announce=1 lookups=10 dropped=0
+2026-10-24T23:04:26.608Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25278 get_peers=6 announce=0 lookups=6 dropped=0
+2026-10-24T23:05:27.024Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23989 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T23:06:17.223Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=255 unreachable=0 timed_out=1 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:06:27.488Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23023 get_peers=8 announce=0 lookups=10 dropped=0
+2026-10-24T23:07:27.905Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23520 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T23:08:04.319Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=107 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:08:28.395Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22668 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-24T23:09:28.821Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23873 get_peers=5 announce=0 lookups=10 dropped=0
+2026-10-24T23:09:51.280Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=107 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T23:10:29.217Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23380 get_peers=3 announce=1 lookups=10 dropped=0
+2026-10-24T23:11:15.096Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=84 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:11:29.816Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23240 get_peers=5 announce=3 lookups=9 dropped=0
+2026-10-24T23:12:30.300Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22217 get_peers=5 announce=0 lookups=10 dropped=0
+2026-10-24T23:13:30.782Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22660 get_peers=4 announce=1 lookups=9 dropped=0
+2026-10-24T23:13:33.053Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=138 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:14:31.056Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21055 get_peers=4 announce=1 lookups=10 dropped=0
+2026-10-24T23:15:31.600Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20865 get_peers=4 announce=0 lookups=11 dropped=0
+2026-10-24T23:15:36.066Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=123 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:16:31.973Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20658 get_peers=4 announce=2 lookups=9 dropped=0
+2026-10-24T23:17:00.214Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=84 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:17:32.597Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21267 get_peers=10 announce=1 lookups=8 dropped=0
+2026-10-24T23:18:01.284Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=1 timed_out=3 refused=3 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:18:33.381Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20568 get_peers=7 announce=1 lookups=9 dropped=0
+2026-10-24T23:19:33.551Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20156 get_peers=3 announce=0 lookups=9 dropped=0
+2026-10-24T23:20:34.114Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21498 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T23:21:28.070Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=207 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:21:35.033Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18868 get_peers=4 announce=1 lookups=11 dropped=0
+2026-10-24T23:22:31.313Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=63 unreachable=4 timed_out=22 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:22:35.635Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19878 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T23:23:30.711Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=5 timed_out=18 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:23:36.273Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20698 get_peers=1 announce=0 lookups=12 dropped=0
+2026-10-24T23:24:36.504Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18448 get_peers=7 announce=2 lookups=8 dropped=0
+2026-10-24T23:24:37.976Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=67 unreachable=0 timed_out=3 refused=1 encryption_failed=0 invalid=1 oversize=0
+2026-10-24T23:25:36.752Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17966 get_peers=5 announce=1 lookups=10 dropped=0
+2026-10-24T23:26:37.336Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19096 get_peers=5 announce=0 lookups=8 dropped=0
+2026-10-24T23:26:47.511Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=129 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:27:37.648Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19845 get_peers=2 announce=0 lookups=9 dropped=0
+2026-10-24T23:28:38.128Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19741 get_peers=4 announce=0 lookups=13 dropped=0
+2026-10-24T23:28:45.629Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=119 unreachable=0 timed_out=7 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:29:38.508Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18560 get_peers=1 announce=1 lookups=9 dropped=0
+2026-10-24T23:29:46.215Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=2 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:30:38.889Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19792 get_peers=1 announce=0 lookups=10 dropped=0
+2026-10-24T23:31:39.258Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18034 get_peers=4 announce=0 lookups=9 dropped=0
+2026-10-24T23:32:39.648Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18039 get_peers=2 announce=0 lookups=8 dropped=0
+2026-10-24T23:33:40.065Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18874 get_peers=2 announce=0 lookups=8 dropped=0
+2026-10-24T23:34:40.405Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18389 get_peers=2 announce=0 lookups=11 dropped=0
+2026-10-24T23:35:40.883Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17674 get_peers=7 announce=0 lookups=7 dropped=0
+2026-10-24T23:36:41.160Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17544 get_peers=4 announce=0 lookups=10 dropped=0
+2026-10-24T23:37:41.474Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17297 get_peers=1 announce=0 lookups=7 dropped=0
+2026-10-24T23:38:41.877Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18541 get_peers=4 announce=0 lookups=9 dropped=0
+2026-10-24T23:39:42.475Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16805 get_peers=4 announce=1 lookups=9 dropped=0
+2026-10-24T23:40:42.734Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16781 get_peers=3 announce=0 lookups=11 dropped=0
+2026-10-24T23:41:43.248Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16425 get_peers=5 announce=0 lookups=12 dropped=0
+2026-10-24T23:42:43.758Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16325 get_peers=7 announce=0 lookups=10 dropped=0
+2026-10-24T23:43:44.171Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16635 get_peers=1 announce=0 lookups=12 dropped=0
+2026-10-24T23:44:33.541Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=888 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:44:44.644Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17921 get_peers=3 announce=2 lookups=11 dropped=0
+2026-10-24T23:45:46.002Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15503 get_peers=3 announce=0 lookups=8 dropped=0
+2026-10-24T23:46:46.170Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15630 get_peers=3 announce=0 lookups=9 dropped=0
+2026-10-24T23:47:46.880Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15271 get_peers=2 announce=0 lookups=5 dropped=0
+2026-10-24T23:48:47.524Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16413 get_peers=4 announce=0 lookups=7 dropped=0
+2026-10-24T23:49:48.064Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15151 get_peers=8 announce=0 lookups=12 dropped=0
+2026-10-24T23:50:18.715Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=345 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:50:48.719Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16707 get_peers=4 announce=2 lookups=11 dropped=0
+2026-10-24T23:51:20.862Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=0 timed_out=2 refused=2 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:51:48.714Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15756 get_peers=7 announce=1 lookups=10 dropped=0
+2026-10-24T23:52:49.374Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15146 get_peers=3 announce=0 lookups=5 dropped=0
+2026-10-24T23:53:50.008Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17036 get_peers=4 announce=2 lookups=10 dropped=0
+2026-10-24T23:54:50.282Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15005 get_peers=9 announce=3 lookups=10 dropped=0
+2026-10-24T23:55:50.691Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14958 get_peers=4 announce=1 lookups=14 dropped=0
+2026-10-24T23:56:51.343Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22047 get_peers=5 announce=1 lookups=10 dropped=0
+2026-10-24T23:57:51.370Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23251 get_peers=6 announce=1 lookups=11 dropped=0
+2026-10-24T23:58:08.991Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=408 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:58:51.696Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22011 get_peers=3 announce=2 lookups=7 dropped=0
+2026-10-24T23:59:08.929Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=2 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-24T23:59:52.115Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23328 get_peers=3 announce=0 lookups=10 dropped=0
+2026-10-25T00:00:09.474Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=3 timed_out=13 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:00:52.513Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23059 get_peers=2 announce=0 lookups=7 dropped=0
+2026-10-25T00:01:13.852Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=65 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:01:53.002Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22084 get_peers=5 announce=0 lookups=6 dropped=0
+2026-10-25T00:02:53.501Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21307 get_peers=2 announce=1 lookups=5 dropped=0
+2026-10-25T00:03:53.881Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22051 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T00:04:54.239Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20620 get_peers=5 announce=0 lookups=5 dropped=0
+2026-10-25T00:05:54.624Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21373 get_peers=5 announce=0 lookups=5 dropped=0
+2026-10-25T00:06:55.124Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21838 get_peers=2 announce=0 lookups=2 dropped=0
+2026-10-25T00:07:55.604Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21040 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T00:08:07.787Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=414 unreachable=1 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:08:56.041Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19502 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T00:09:07.819Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=1 timed_out=17 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:09:56.657Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19402 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T00:10:07.956Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:10:56.997Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20370 get_peers=7 announce=0 lookups=4 dropped=0
+2026-10-25T00:11:57.459Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19735 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T00:12:58.083Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18117 get_peers=5 announce=0 lookups=5 dropped=0
+2026-10-25T00:13:16.410Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=188 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:13:58.457Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19682 get_peers=4 announce=1 lookups=2 dropped=0
+2026-10-25T00:14:59.035Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19209 get_peers=4 announce=0 lookups=5 dropped=0
+2026-10-25T00:15:59.414Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18883 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T00:16:59.870Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18091 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T00:17:54.045Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=278 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:18:00.553Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20068 get_peers=5 announce=1 lookups=3 dropped=0
+2026-10-25T00:19:01.140Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18877 get_peers=2 announce=1 lookups=3 dropped=0
+2026-10-25T00:20:01.595Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17593 get_peers=1 announce=0 lookups=6 dropped=0
+2026-10-25T00:21:02.017Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16961 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T00:22:02.450Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18188 get_peers=4 announce=0 lookups=5 dropped=0
+2026-10-25T00:23:03.056Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17665 get_peers=6 announce=2 lookups=4 dropped=0
+2026-10-25T00:24:03.642Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17065 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T00:25:04.365Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18628 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T00:26:04.734Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17464 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T00:27:05.187Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16743 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T00:28:05.553Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18101 get_peers=3 announce=0 lookups=5 dropped=0
+2026-10-25T00:29:05.883Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16010 get_peers=1 announce=0 lookups=6 dropped=0
+2026-10-25T00:30:06.466Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16467 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T00:31:02.689Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=789 unreachable=1 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:31:06.851Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16424 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T00:32:07.349Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16045 get_peers=3 announce=0 lookups=5 dropped=0
+2026-10-25T00:33:07.690Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15884 get_peers=618 announce=0 lookups=3 dropped=0
+2026-10-25T00:34:08.240Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15836 get_peers=24 announce=0 lookups=3 dropped=0
+2026-10-25T00:35:08.780Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16024 get_peers=4 announce=0 lookups=5 dropped=0
+2026-10-25T00:36:09.392Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15060 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T00:37:10.289Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15660 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T00:37:59.513Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=416 unreachable=3 timed_out=3 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:38:11.015Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15189 get_peers=8 announce=1 lookups=2 dropped=0
+2026-10-25T00:39:17.477Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15741 get_peers=5 announce=0 lookups=6 dropped=0
+2026-10-25T00:39:32.717Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=89 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:40:16.143Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14247 get_peers=6 announce=1 lookups=4 dropped=0
+2026-10-25T00:40:49.507Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=77 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:41:16.998Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15529 get_peers=7 announce=1 lookups=6 dropped=0
+2026-10-25T00:42:17.353Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15900 get_peers=2 announce=0 lookups=5 dropped=0
+2026-10-25T00:43:17.702Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15389 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T00:44:18.147Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14242 get_peers=7 announce=0 lookups=4 dropped=0
+2026-10-25T00:45:18.636Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15047 get_peers=1 announce=0 lookups=2 dropped=0
+2026-10-25T00:46:18.700Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=329 unreachable=0 timed_out=6 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:46:18.939Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15318 get_peers=28 announce=3 lookups=4 dropped=0
+2026-10-25T00:47:19.332Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14817 get_peers=64 announce=56 lookups=2 dropped=0
+2026-10-25T00:47:22.788Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=65 unreachable=0 timed_out=9 refused=22 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:48:19.830Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14585 get_peers=11 announce=27 lookups=3 dropped=0
+2026-10-25T00:48:22.762Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=13 refused=25 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:49:20.455Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14489 get_peers=7 announce=1 lookups=5 dropped=0
+2026-10-25T00:50:20.903Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14590 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T00:50:54.778Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=152 unreachable=0 timed_out=10 refused=11 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:51:21.406Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=13481 get_peers=3 announce=1 lookups=5 dropped=0
+2026-10-25T00:52:17.763Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=83 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:52:21.794Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15233 get_peers=87 announce=1 lookups=5 dropped=0
+2026-10-25T00:53:22.198Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20383 get_peers=66 announce=1 lookups=4 dropped=0
+2026-10-25T00:53:53.777Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=96 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:54:22.607Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21789 get_peers=216 announce=2 lookups=3 dropped=0
+2026-10-25T00:55:17.772Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=84 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:55:23.025Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21337 get_peers=8 announce=1 lookups=5 dropped=0
+2026-10-25T00:56:23.536Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22510 get_peers=4 announce=1 lookups=4 dropped=0
+2026-10-25T00:57:24.250Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21010 get_peers=8 announce=1 lookups=4 dropped=0
+2026-10-25T00:57:29.758Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=132 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:58:24.784Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22419 get_peers=9 announce=2 lookups=4 dropped=0
+2026-10-25T00:58:57.198Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=87 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T00:59:25.285Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21214 get_peers=11 announce=1 lookups=4 dropped=0
+2026-10-25T01:00:21.842Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=85 unreachable=0 timed_out=0 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:00:25.756Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19606 get_peers=7 announce=0 lookups=4 dropped=0
+2026-10-25T01:01:26.228Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20319 get_peers=9 announce=2 lookups=3 dropped=0
+2026-10-25T01:02:07.769Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=106 unreachable=0 timed_out=3 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:02:26.734Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20233 get_peers=8 announce=2 lookups=5 dropped=0
+2026-10-25T01:03:27.286Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20452 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T01:03:35.343Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=87 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:04:27.718Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19029 get_peers=4 announce=2 lookups=2 dropped=0
+2026-10-25T01:05:22.326Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=107 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:05:28.096Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19318 get_peers=9 announce=1 lookups=3 dropped=0
+2026-10-25T01:06:28.557Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18689 get_peers=66 announce=1 lookups=3 dropped=0
+2026-10-25T01:07:29.116Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18485 get_peers=4 announce=0 lookups=5 dropped=0
+2026-10-25T01:08:29.589Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18246 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T01:09:15.178Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=233 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:09:29.991Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19811 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T01:10:15.419Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=1 timed_out=8 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:10:30.414Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18320 get_peers=66 announce=0 lookups=5 dropped=0
+2026-10-25T01:11:16.119Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=0 timed_out=16 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:11:30.961Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16394 get_peers=4 announce=2 lookups=5 dropped=0
+2026-10-25T01:12:31.557Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17746 get_peers=5 announce=1 lookups=3 dropped=0
+2026-10-25T01:13:31.958Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16664 get_peers=7 announce=0 lookups=4 dropped=0
+2026-10-25T01:14:32.417Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16545 get_peers=6 announce=0 lookups=5 dropped=0
+2026-10-25T01:15:32.801Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18333 get_peers=3 announce=0 lookups=5 dropped=0
+2026-10-25T01:16:33.306Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17125 get_peers=3 announce=0 lookups=5 dropped=0
+2026-10-25T01:17:33.853Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17685 get_peers=10 announce=0 lookups=4 dropped=0
+2026-10-25T01:18:34.175Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16148 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T01:19:34.749Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17021 get_peers=2 announce=0 lookups=2 dropped=0
+2026-10-25T01:20:32.192Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=556 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:20:35.166Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16346 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T01:21:35.641Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=63 unreachable=1 timed_out=11 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:21:35.672Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16201 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T01:22:36.063Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17045 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T01:23:36.487Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16867 get_peers=8 announce=0 lookups=4 dropped=0
+2026-10-25T01:24:36.980Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16153 get_peers=5 announce=0 lookups=2 dropped=0
+2026-10-25T01:25:37.389Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16138 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T01:26:37.879Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14720 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T01:27:38.407Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15537 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T01:28:38.924Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16311 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T01:29:39.426Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15969 get_peers=8 announce=0 lookups=4 dropped=0
+2026-10-25T01:30:38.796Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=544 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:30:39.837Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14770 get_peers=8 announce=1 lookups=4 dropped=0
+2026-10-25T01:31:40.336Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15541 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T01:32:01.623Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=82 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:32:40.777Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15856 get_peers=9 announce=2 lookups=4 dropped=0
+2026-10-25T01:33:01.250Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=4 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:33:41.212Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15568 get_peers=9 announce=2 lookups=4 dropped=0
+2026-10-25T01:34:03.155Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=62 unreachable=4 timed_out=17 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:34:41.612Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15547 get_peers=7 announce=2 lookups=5 dropped=0
+2026-10-25T01:35:03.770Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=3 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:35:42.061Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15618 get_peers=2 announce=1 lookups=4 dropped=0
+2026-10-25T01:36:28.163Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=84 unreachable=0 timed_out=11 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:36:42.484Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15636 get_peers=3 announce=1 lookups=5 dropped=0
+2026-10-25T01:37:43.050Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15184 get_peers=4 announce=1 lookups=4 dropped=0
+2026-10-25T01:37:56.256Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=88 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:38:43.476Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14258 get_peers=2 announce=0 lookups=8 dropped=0
+2026-10-25T01:39:43.917Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14138 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T01:40:44.346Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14440 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T01:41:11.039Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=195 unreachable=0 timed_out=15 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:41:44.803Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=12157 get_peers=5 announce=1 lookups=3 dropped=0
+2026-10-25T01:42:45.431Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15520 get_peers=7 announce=1 lookups=3 dropped=0
+2026-10-25T01:43:06.144Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=115 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:43:45.882Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14410 get_peers=1 announce=2 lookups=4 dropped=0
+2026-10-25T01:44:46.313Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14525 get_peers=5 announce=0 lookups=3 dropped=0
+2026-10-25T01:44:56.254Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=110 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:45:46.739Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=13487 get_peers=6 announce=3 lookups=3 dropped=0
+2026-10-25T01:46:47.170Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14528 get_peers=2 announce=0 lookups=5 dropped=0
+2026-10-25T01:47:47.734Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=13738 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T01:48:48.204Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=12876 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T01:49:48.681Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=13740 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T01:50:49.125Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14757 get_peers=3 announce=0 lookups=2 dropped=0
+2026-10-25T01:51:49.606Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=13598 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T01:52:50.121Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21279 get_peers=0 announce=0 lookups=4 dropped=0
+2026-10-25T01:53:35.176Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=519 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:53:50.553Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22001 get_peers=4 announce=2 lookups=4 dropped=0
+2026-10-25T01:54:50.966Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22716 get_peers=7 announce=0 lookups=4 dropped=0
+2026-10-25T01:55:06.891Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=92 unreachable=0 timed_out=2 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T01:55:51.391Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22693 get_peers=5 announce=3 lookups=3 dropped=0
+2026-10-25T01:56:51.851Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21274 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T01:57:52.415Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22032 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T01:58:53.024Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20182 get_peers=6 announce=0 lookups=5 dropped=0
+2026-10-25T01:59:53.509Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20084 get_peers=5 announce=1 lookups=4 dropped=0
+2026-10-25T02:00:53.922Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19849 get_peers=2 announce=1 lookups=2 dropped=0
+2026-10-25T02:01:54.308Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19829 get_peers=9 announce=0 lookups=4 dropped=0
+2026-10-25T02:02:19.149Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=432 unreachable=0 timed_out=3 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:02:54.847Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19393 get_peers=7 announce=3 lookups=4 dropped=0
+2026-10-25T02:03:55.307Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19156 get_peers=7 announce=1 lookups=4 dropped=0
+2026-10-25T02:04:55.751Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18942 get_peers=239 announce=2 lookups=5 dropped=0
+2026-10-25T02:05:56.177Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19515 get_peers=8 announce=1 lookups=4 dropped=0
+2026-10-25T02:06:33.529Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=254 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:06:56.637Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18102 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T02:07:57.177Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19087 get_peers=4 announce=1 lookups=5 dropped=0
+2026-10-25T02:08:57.638Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17646 get_peers=9 announce=1 lookups=2 dropped=0
+2026-10-25T02:09:58.119Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18256 get_peers=4 announce=3 lookups=4 dropped=0
+2026-10-25T02:10:58.475Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20312 get_peers=5 announce=3 lookups=3 dropped=0
+2026-10-25T02:11:59.002Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18901 get_peers=15 announce=1 lookups=4 dropped=0
+2026-10-25T02:12:22.282Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=349 unreachable=5 timed_out=5 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:12:59.519Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18363 get_peers=9 announce=1 lookups=4 dropped=0
+2026-10-25T02:13:23.436Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=61 unreachable=2 timed_out=14 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:14:00.026Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18989 get_peers=9 announce=2 lookups=4 dropped=0
+2026-10-25T02:15:00.438Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18042 get_peers=3 announce=2 lookups=3 dropped=0
+2026-10-25T02:16:00.840Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16705 get_peers=3 announce=1 lookups=2 dropped=0
+2026-10-25T02:17:01.213Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18441 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T02:18:01.743Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17604 get_peers=17 announce=1 lookups=3 dropped=0
+2026-10-25T02:19:02.201Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17305 get_peers=6 announce=1 lookups=4 dropped=0
+2026-10-25T02:20:02.706Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17003 get_peers=7 announce=0 lookups=2 dropped=0
+2026-10-25T02:21:03.121Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17053 get_peers=8 announce=2 lookups=4 dropped=0
+2026-10-25T02:22:03.656Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16525 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T02:23:04.212Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16798 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T02:23:28.346Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=605 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:24:04.668Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16986 get_peers=5 announce=1 lookups=3 dropped=0
+2026-10-25T02:25:05.110Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=17626 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T02:26:05.528Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16252 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T02:26:30.321Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=182 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:27:06.004Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15393 get_peers=8 announce=1 lookups=4 dropped=0
+2026-10-25T02:28:06.571Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16121 get_peers=3 announce=0 lookups=2 dropped=0
+2026-10-25T02:29:07.015Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14995 get_peers=4 announce=0 lookups=6 dropped=0
+2026-10-25T02:30:07.459Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15359 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T02:31:07.852Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15439 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T02:32:08.409Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15993 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T02:33:08.853Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15836 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T02:34:09.256Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15808 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T02:35:09.645Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15699 get_peers=4 announce=0 lookups=5 dropped=0
+2026-10-25T02:36:10.087Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14229 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T02:37:10.511Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15250 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T02:38:10.938Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15781 get_peers=35 announce=0 lookups=4 dropped=0
+2026-10-25T02:39:11.370Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=16246 get_peers=47 announce=1 lookups=5 dropped=0
+2026-10-25T02:40:11.767Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14761 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T02:41:12.171Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14507 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T02:41:51.840Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=922 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:42:12.870Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14264 get_peers=4 announce=1 lookups=3 dropped=0
+2026-10-25T02:43:13.271Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=15066 get_peers=2 announce=2 lookups=3 dropped=0
+2026-10-25T02:44:13.877Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14545 get_peers=6 announce=0 lookups=6 dropped=0
+2026-10-25T02:44:35.884Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=164 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-25T02:45:14.662Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14884 get_peers=5 announce=1 lookups=2 dropped=0
+2026-10-25T02:45:42.093Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=66 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:46:15.310Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14393 get_peers=8 announce=1 lookups=3 dropped=0
+2026-10-25T02:46:41.868Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=60 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T02:47:15.635Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=13399 get_peers=7 announce=2 lookups=4 dropped=0
+2026-10-25T02:48:16.258Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14492 get_peers=7 announce=0 lookups=4 dropped=0
+2026-10-25T02:49:16.580Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=14171 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T02:50:17.033Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18537 get_peers=3 announce=0 lookups=2 dropped=0
+2026-10-25T02:51:17.354Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23683 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T02:52:18.028Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22428 get_peers=5 announce=0 lookups=3 dropped=0
+2026-10-25T02:53:18.374Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23182 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T02:54:18.894Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22352 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T02:55:19.354Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22343 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T02:56:19.742Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21932 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T02:57:20.107Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22552 get_peers=0 announce=0 lookups=5 dropped=0
+2026-10-25T02:58:20.530Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22122 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T02:59:38.640Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=78 sample=17372 get_peers=3 announce=0 lookups=2 dropped=0
+2026-10-25T03:00:45.542Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=61 sample=10812 get_peers=3 announce=0 lookups=2 dropped=0
+2026-10-25T03:00:53.511Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=851 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:01:40.651Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18307 get_peers=1 announce=1 lookups=5 dropped=0
+2026-10-25T03:02:52.333Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=71 sample=7550 get_peers=1 announce=0 lookups=0 dropped=0
+2026-10-25T03:04:03.817Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=70 sample=12106 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T03:05:16.250Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=6021 get_peers=0 announce=0 lookups=2 dropped=0
+2026-10-25T03:06:02.982Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=9259 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T03:07:04.274Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=7295 get_peers=2 announce=0 lookups=1 dropped=0
+2026-10-25T03:08:10.987Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=66 sample=769 get_peers=0 announce=1 lookups=0 dropped=0
+2026-10-25T03:08:19.418Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=446 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:09:13.032Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19629 get_peers=3 announce=0 lookups=3 dropped=0
+2026-10-25T03:10:12.556Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21815 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T03:11:13.157Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22351 get_peers=0 announce=0 lookups=4 dropped=0
+2026-10-25T03:12:13.572Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22805 get_peers=6 announce=0 lookups=3 dropped=0
+2026-10-25T03:12:54.357Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=275 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:13:14.013Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22479 get_peers=3 announce=1 lookups=3 dropped=0
+2026-10-25T03:14:14.474Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22684 get_peers=2 announce=1 lookups=4 dropped=0
+2026-10-25T03:15:15.064Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23812 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T03:16:15.394Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23276 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T03:17:15.708Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22775 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T03:18:16.185Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24320 get_peers=1 announce=0 lookups=4 dropped=0
+2026-10-25T03:19:16.719Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23755 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T03:20:17.224Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22593 get_peers=10 announce=0 lookups=4 dropped=0
+2026-10-25T03:21:17.739Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23455 get_peers=5 announce=0 lookups=5 dropped=0
+2026-10-25T03:22:18.140Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25037 get_peers=3 announce=0 lookups=4 dropped=0
+2026-10-25T03:23:18.588Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23757 get_peers=9 announce=0 lookups=5 dropped=0
+2026-10-25T03:23:21.612Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=627 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:24:19.119Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23766 get_peers=8 announce=0 lookups=3 dropped=0
+2026-10-25T03:25:19.689Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23725 get_peers=4 announce=0 lookups=2 dropped=0
+2026-10-25T03:26:06.105Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=165 unreachable=6 timed_out=8 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:26:20.221Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23017 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T03:27:20.555Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23702 get_peers=4 announce=0 lookups=1 dropped=0
+2026-10-25T03:28:13.975Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=128 unreachable=1 timed_out=14 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:28:20.892Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23789 get_peers=1 announce=1 lookups=2 dropped=0
+2026-10-25T03:29:21.355Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23535 get_peers=4 announce=1 lookups=2 dropped=0
+2026-10-25T03:29:44.294Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=90 unreachable=0 timed_out=2 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:30:21.953Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21517 get_peers=4 announce=2 lookups=5 dropped=0
+2026-10-25T03:31:22.647Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22160 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T03:32:22.870Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21080 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T03:33:23.263Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22361 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T03:34:02.477Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=258 unreachable=0 timed_out=1 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:34:23.750Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=20689 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T03:35:24.096Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21505 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T03:36:24.758Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19612 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T03:37:25.189Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19276 get_peers=0 announce=0 lookups=4 dropped=0
+2026-10-25T03:38:25.531Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18243 get_peers=2 announce=0 lookups=5 dropped=0
+2026-10-25T03:39:25.834Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=19645 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T03:40:26.386Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=18596 get_peers=2 announce=1 lookups=4 dropped=0
+2026-10-25T03:40:34.261Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=392 unreachable=1 timed_out=7 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:41:26.853Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21780 get_peers=2 announce=1 lookups=3 dropped=0
+2026-10-25T03:41:59.423Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=85 unreachable=10 timed_out=4 refused=0 encryption_failed=0 invalid=1 oversize=0
+2026-10-25T03:42:27.281Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27485 get_peers=8 announce=1 lookups=4 dropped=0
+2026-10-25T03:43:27.803Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=27838 get_peers=5 announce=0 lookups=3 dropped=0
+2026-10-25T03:44:28.108Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26280 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T03:45:28.521Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=26426 get_peers=1 announce=0 lookups=5 dropped=0
+2026-10-25T03:46:29.000Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25528 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T03:47:29.596Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25258 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T03:48:30.083Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25088 get_peers=2 announce=0 lookups=3 dropped=0
+2026-10-25T03:49:30.402Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23511 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T03:50:11.469Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=492 unreachable=1 timed_out=0 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:50:30.761Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=25113 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T03:51:31.293Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23998 get_peers=6 announce=0 lookups=4 dropped=0
+2026-10-25T03:52:08.071Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=117 unreachable=4 timed_out=6 refused=1 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:52:31.889Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=24285 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T03:53:22.089Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=74 unreachable=1 timed_out=0 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:53:32.357Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22986 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T03:54:32.802Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23463 get_peers=5 announce=0 lookups=3 dropped=0
+2026-10-25T03:55:33.256Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23031 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T03:56:33.651Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23553 get_peers=9 announce=0 lookups=2 dropped=0
+2026-10-25T03:57:34.260Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23444 get_peers=5 announce=0 lookups=4 dropped=0
+2026-10-25T03:57:38.273Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=256 unreachable=0 timed_out=4 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T03:58:34.764Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23212 get_peers=3 announce=1 lookups=2 dropped=0
+2026-10-25T03:59:35.271Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22339 get_peers=1 announce=0 lookups=5 dropped=0
+2026-10-25T04:00:35.585Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23033 get_peers=1 announce=0 lookups=3 dropped=0
+2026-10-25T04:01:36.067Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=23015 get_peers=2 announce=0 lookups=5 dropped=0
+2026-10-25T04:02:36.495Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21170 get_peers=2 announce=0 lookups=4 dropped=0
+2026-10-25T04:03:37.078Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21866 get_peers=4 announce=0 lookups=5 dropped=0
+2026-10-25T04:04:37.548Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21600 get_peers=6 announce=0 lookups=5 dropped=0
+2026-10-25T04:05:13.270Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=455 unreachable=3 timed_out=10 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T04:05:37.907Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21259 get_peers=7 announce=1 lookups=4 dropped=0
+2026-10-25T04:06:38.510Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=22285 get_peers=4 announce=0 lookups=4 dropped=0
+2026-10-25T04:07:38.725Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21629 get_peers=4 announce=0 lookups=3 dropped=0
+2026-10-25T04:07:50.278Z  INFO fetch.failed_summary: Metadata fetches that failed since the last summary seconds=157 unreachable=0 timed_out=1 refused=0 encryption_failed=0 invalid=0 oversize=0
+2026-10-25T04:08:39.239Z  INFO dht.harvest_summary: DHT harvest in the last minute seconds=60 sample=21260 get_peers=1 announce=1 lookups=4 dropped=0

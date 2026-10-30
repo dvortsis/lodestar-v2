@@ -55,6 +55,22 @@ jobs:
       # The merge-guard hook runs before every Bash call in every session; a
       # syntax error there would exit 2 and block them all.
       - run: bash -n .claude/hooks/merge-guard.sh
+      # main's history was rewritten on 2026-10-30 (docs/owner-decisions.md
+      # §2.25). A head that still contains the old root or the old main tip
+      # would merge the removed history back in, so it fails here.
+      - name: lineage guard
+        env:
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          # A head missing from the clone would read as "not an ancestor".
+          git cat-file -e "$HEAD^{commit}" || { echo "::error::$HEAD is not in the checkout."; exit 1; }
+          for old in 1562068349a6463990b5b07cfc810ff2680b1c03 2d5e761d30cb1b7947fb09493959668eabcb84ab; do
+            if git merge-base --is-ancestor "$old" "$HEAD" 2>/dev/null; then
+              echo "::error::$HEAD contains $old from the history before 2026-10-30. Rebuild the branch from the current main (docs/decisions/2026-10-30-master-plan.md)."
+              exit 1
+            fi
+          done
       - id: c
         env:
           EVENT: ${{ github.event_name }}
@@ -122,6 +138,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # DUR-26: the updater's persistence tests are Unix-only; a cfg that
+      # compiled them out must not pass as zero tests run.
+      - name: updater tests selected
+        if: runner.os == 'Linux'
+        run: |
+          n=$(cargo test -p lodestar --bin lodestar update:: -- --list | grep -c ': test$' || true)
+          echo "update:: selects $n tests"
+          if [ "$n" -eq 0 ]; then echo "::error::no updater tests selected"; exit 1; fi
       # The PUID/PGID drop only happens as root (tests/privdrop.rs skips
       # otherwise). Built as the runner user, so target/ stays theirs.
       - name: privilege drop as root
@@ -248,7 +272,7 @@ jobs:
           workspaces: fuzz
       # The prebuilt cargo-fuzz is a musl binary and would default to its
       # own target triple; build for the runner's glibc target instead.
-      - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=60
+      - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} $(test -d fuzz/seeds/${{ matrix.target }} && mkdir -p fuzz/corpus/${{ matrix.target }} && echo fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }}) -- -max_total_time=60
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

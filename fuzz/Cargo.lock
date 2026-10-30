@@ -1189,6 +1189,7 @@ name = "lodestar-dht"
 version = "0.0.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-log",
  "lodestar-metainfo",
  "rand 0.10.3",
  "sha1",
@@ -1204,9 +1205,9 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "lodestar-classify",
+ "lodestar-log",
  "lodestar-search",
  "lodestar-store",
- "tracing",
  "unicode-normalization",
 ]
 
@@ -1284,7 +1285,6 @@ dependencies = [
  "serde",
  "tantivy",
  "tantivy-fst",
- "tracing",
  "unicode-normalization",
 ]
 

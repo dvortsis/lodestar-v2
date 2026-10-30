@@ -21,9 +21,10 @@ use lodestar_api::dto::events::CrawlerEvent;
 use lodestar_api::events::{EventHub, EventSources, EventsConfig};
 use lodestar_filter::Sealer;
 use lodestar_filter::lists::SharedIps;
+use lodestar_pipeline::gate::GateStats;
 use lodestar_pipeline::health::HealthHandle;
 use lodestar_pipeline::{Control, DhtSource, HealthSetup, Pipeline, Rollups, metric};
-use lodestar_search::{LiveConfig, Ranking, SearchHandle, Serving, ServingConfig};
+use lodestar_search::{CommitHook, LiveConfig, Ranking, SearchHandle, Serving, ServingConfig};
 use lodestar_sources::SourcePlugin;
 use lodestar_store::{HotColumns, Store, hot};
 use tokio::net::TcpListener;
@@ -233,6 +234,8 @@ impl Services {
             plugins.push(dht);
         }
         pipeline_config.hot = Some(hot.clone());
+        // The gate's searchable count follows the serving index (below).
+        pipeline_config.gate_follows_index = serving.is_some();
         pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
             config: lodestar_pipeline::health::HealthConfig {
                 deny: Some(lodestar_tracker_scrape::Deny(denied.clone())),
@@ -309,6 +312,9 @@ impl Services {
             stats: s.stats(),
         });
         let paused_now = crawl.clone();
+        if let Some(s) = &serving {
+            follow_gate(pipeline.monitor().gate().clone(), s.commit_hook());
+        }
         // Insights (B11a): searchable time from the index's commits.
         let insights = Arc::new(insights::Insights::new(pipeline.monitor()));
         // What the stage pages read beside `OpsApi` (B11b).
@@ -528,16 +534,9 @@ impl Services {
         // Past the bound its connections are dropped: the tasks axum
         // spawned for them run on, detached, until the runtime ends, and
         // hold only the router's state, nothing `shutdown` waits on.
-        let served = tokio::select! {
-            served = serve => served,
-            () = forced_after(stopping, SHUTDOWN_GRACE) => {
-                lodestar_log::log_event!(
-                    crate::logging::events::APP_SHUTDOWN_FORCED,
-                    waited_s = SHUTDOWN_GRACE.as_secs()
-                );
-                Ok(())
-            }
-        };
+        let served = bounded(serve, stopping, SHUTDOWN_GRACE)
+            .await
+            .unwrap_or(Ok(()));
         // Saved and logged whatever `serve` returned: no error skips the
         // save or the required `app.stop`.
         events.close();
@@ -561,6 +560,26 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 /// never hang on one. With [`SHUTDOWN_GRACE`] and the saves, inside the
 /// update supervisor's and the SCM's 30 s.
 pub const RUNTIME_GRACE: Duration = Duration::from_secs(5);
+
+/// `serve`'s result, or `None` once `grace` has passed since `stopping`
+/// turned true: the future is dropped then, and `app.shutdown_forced` is
+/// logged.
+async fn bounded<T>(
+    serve: impl Future<Output = T>,
+    stopping: watch::Receiver<bool>,
+    grace: Duration,
+) -> Option<T> {
+    tokio::select! {
+        served = serve => Some(served),
+        () = forced_after(stopping, grace) => {
+            lodestar_log::log_event!(
+                crate::logging::events::APP_SHUTDOWN_FORCED,
+                waited_s = grace.as_secs()
+            );
+            None
+        }
+    }
+}
 
 /// Resolves `grace` after `stopping` turns true; never if it doesn't.
 async fn forced_after(mut stopping: watch::Receiver<bool>, grace: Duration) {
@@ -683,5 +702,205 @@ impl lodestar_api::ApiEvents for Events {
             metric::latency_bucket(took),
             1,
         );
+    }
+}
+
+/// The crawler gate's searchable count (CR-gate-metrics) follows the
+/// serving index's commits, which outlive a swap. The pipeline was
+/// started with `gate_follows_index` set from the same index, so the
+/// writer has handed ids over since its first commit.
+fn follow_gate(gate: Arc<GateStats>, hook: &CommitHook) {
+    hook.add(move |c| gate.searchable(c.max_torrent_id, c.at as i64));
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use std::net::SocketAddr;
+    use std::time::Instant;
+
+    use lodestar_metainfo::{Info, InfoHash};
+    use lodestar_peer_wire::{FailureKind, FetchStats, Fetched};
+    use lodestar_pipeline::PipelineConfig;
+    use lodestar_pipeline::gate::Origin;
+    use lodestar_sources::{
+        BoxFuture, Consent, Fetcher, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
+        SourceCtx,
+    };
+    use lodestar_store::StoreConfig;
+
+    use super::*;
+
+    static ONE: Manifest = Manifest {
+        id: "one",
+        name: "One key",
+        version: "1",
+        kinds: &[Kind::Discovery],
+        networks: &[Network::Bt],
+        endpoints: &[],
+        risk: Risk::Low,
+        consent: Consent::None,
+        default_priority: Priority::Normal,
+        enabled_by_default: true,
+    };
+
+    /// Reports one key, with a peer, then waits.
+    struct One(InfoHash);
+
+    impl SourcePlugin for One {
+        fn manifest(&self) -> &Manifest {
+            &ONE
+        }
+
+        fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
+            let found =
+                Found::key(self.0, 0).with_peers(vec![SocketAddr::from(([10, 0, 0, 1], 1))]);
+            Box::pin(async move {
+                ctx.emitter
+                    .emit(found)
+                    .await
+                    .map_err(|_| PluginError("closed".into()))?;
+                ctx.shutdown.requested().await;
+                Ok(())
+            })
+        }
+    }
+
+    /// Every peer serves the same verified dictionary.
+    struct Serves(Vec<u8>);
+
+    impl Fetcher for Serves {
+        fn fetch(
+            &self,
+            _peer: SocketAddr,
+            _key: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            let info = self.0.clone();
+            Box::pin(async move {
+                Ok(Fetched {
+                    info,
+                    v2: false,
+                    encrypted: false,
+                    pex: Vec::new(),
+                    client: None,
+                })
+            })
+        }
+    }
+
+    /// The wiring `start` uses: a network-new torrent reaches the gate's
+    /// searchable count through a real serving index's commit, so a
+    /// broken hook can't leave the gate's numerator at 0 unnoticed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_serving_index_commit_reaches_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        let serving = Serving::open_or_rebuild(
+            &dir.path().join("index"),
+            &db,
+            ServingConfig {
+                live: LiveConfig {
+                    heap_bytes: 15 << 20,
+                    poll: Duration::from_millis(20),
+                    commit_every: Duration::from_millis(50),
+                    ..LiveConfig::default()
+                },
+                ..ServingConfig::default()
+            },
+        )
+        .unwrap();
+        // A single-file info dictionary, bencoded by hand (keys sorted).
+        let mut raw =
+            b"d6:lengthi1048576e4:name14:Gate.Probe.mkv12:piece lengthi262144e6:pieces80:".to_vec();
+        raw.extend([0u8; 80]);
+        raw.push(b'e');
+        let key = Info::parse(&raw).unwrap().primary_hash();
+        let pipeline = Pipeline::start_with(
+            PipelineConfig {
+                flush_every: Duration::from_millis(100),
+                batch_wait: Duration::from_millis(10),
+                gate_follows_index: true,
+                ..PipelineConfig::default()
+            },
+            store,
+            vec![Arc::new(One(key))],
+            Arc::new(Serves(raw)),
+        )
+        .await
+        .unwrap();
+        let gate = pipeline.monitor().gate().clone();
+        follow_gate(gate.clone(), serving.commit_hook());
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while gate.searchable_new(Origin::Network) < 1 {
+            assert!(
+                Instant::now() < deadline,
+                "not searchable: {} new verified, {} indexed, watermark {}",
+                gate.new_verified(Origin::Network),
+                serving.stats().indexed.load(Ordering::Relaxed),
+                serving.stats().watermark.load(Ordering::Relaxed),
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(gate.new_verified(Origin::Network), 1);
+        assert_eq!(gate.latency.cumulative().last().copied(), Some(1));
+        let body = crate::metrics::render(&pipeline.monitor(), None, &FetchStats::default());
+        assert!(
+            body.contains("lodestar_searchable_new_total{origin=\"network\"} 1\n"),
+            "{body}"
+        );
+        pipeline.shutdown().await.unwrap();
+        serving.shutdown().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    /// Every case finishes well inside this; it only keeps a broken one
+    /// from hanging the suite.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    /// A serve future that never ends (a stalled client's) is dropped
+    /// once the bound has passed after the signal.
+    #[tokio::test]
+    async fn a_serve_that_never_ends_is_dropped_after_the_bound() {
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        let got = tokio::time::timeout(
+            DEADLINE,
+            bounded(std::future::pending::<()>(), rx, Duration::from_millis(50)),
+        )
+        .await
+        .expect("the bound ended it");
+        assert_eq!(got, None);
+    }
+
+    /// A serve future that ends wins, whatever the bound.
+    #[tokio::test]
+    async fn a_serve_that_ends_returns_its_result() {
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        let got = tokio::time::timeout(DEADLINE, bounded(async { 7 }, rx, DEADLINE * 2))
+            .await
+            .unwrap();
+        assert_eq!(got, Some(7));
+    }
+
+    /// Before the signal the bound never runs, even at zero: only `serve`
+    /// can end the race.
+    #[tokio::test]
+    async fn without_the_signal_the_bound_never_runs() {
+        let (_tx, rx) = watch::channel(false);
+        let (done, ended) = tokio::sync::oneshot::channel();
+        let serve = async move { ended.await.unwrap() };
+        let race = tokio::spawn(bounded(serve, rx, Duration::ZERO));
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        done.send("served").unwrap();
+        let got = tokio::time::timeout(DEADLINE, race).await.unwrap().unwrap();
+        assert_eq!(got, Some("served"));
     }
 }

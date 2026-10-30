@@ -416,6 +416,88 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 /// or [`COMMON`]. The test prints `rustc --version` to tell.
 const CALIB_REF_NS: f64 = 10_700.0;
 
+/// How long the engine takes on a hosted runner model, as a share of its
+/// time on the reference runner (an AMD EPYC 7763).
+struct EngineSpeed {
+    /// Matched against the CPU line's model name.
+    model: &'static str,
+    factor: f64,
+    /// The `filter budget` jobs it's derived from (run IDs) and the code
+    /// they ran.
+    runs: &'static [u64],
+    code: &'static str,
+}
+
+impl EngineSpeed {
+    /// Derived from fewer than three jobs: re-derive it once more exist.
+    fn provisional(&self) -> bool {
+        self.runs.len() < 3
+    }
+}
+
+/// The engine's speed on each hosted runner model seen. The calibration
+/// scales the engine unevenly across models: the engine's time ÷ the
+/// calibration's is 4.09 on the 7763 (3.96-4.43 over 9 jobs), 3.66 on the
+/// EPYC 9V45 (3.52-3.69, 5 jobs), and on the Xeon Platinum 8573C the
+/// calibration said 0.81× where the engine ran 0.90×
+/// (`docs/decisions/2026-10-30-F-filters-xcpu.md`). So a model listed here
+/// is scaled by the engine's own speed, and any other by [`calibrate`].
+///
+/// Each factor is the median raw time of the mixed set ([`mixed_rules`])
+/// on that model ÷ the median on the 7763 (45.3 µs over the 7763's runs
+/// below), at the same filter code and toolchain. To add a model, take its
+/// jobs' raw `mixed` µs and the 7763's from the same code. Re-derive them
+/// all when the toolchain or the engine's mix of work changes much: the
+/// test prints both ways of scaling, and warns when a listed model's two
+/// disagree by more than [`MODEL_DRIFT`].
+///
+/// Adding or changing an entry needs a `docs/decisions/` entry giving the
+/// runs and the arithmetic (runner, 2026-10-30): the table never moves to
+/// make a run pass.
+const ENGINE_SPEED: &[EngineSpeed] = &[
+    EngineSpeed {
+        model: "EPYC 7763",
+        factor: 1.0,
+        runs: &[
+            41027904941,
+            41024264027,
+            41022335477,
+            41018406044,
+            41016836536,
+            41011318136,
+            41004752665,
+            40845396409,
+            40289941026,
+        ],
+        code: "058d9937..8d7a24f6",
+    },
+    // 25.5 ÷ 45.3 µs.
+    EngineSpeed {
+        model: "EPYC 9V45",
+        factor: 0.563,
+        runs: &[
+            41028071535,
+            41025649623,
+            41024152492,
+            41014655186,
+            40660530001,
+        ],
+        code: "058d9937..8d7a24f6",
+    },
+    // 40.9 ÷ 45.3 µs.
+    EngineSpeed {
+        model: "8573C",
+        factor: 0.90,
+        runs: &[41015045891],
+        code: "a84c3681",
+    },
+];
+
+/// How far a listed model's factor and its calibration may disagree
+/// before the test warns that the factor may need re-deriving. It only
+/// warns: the table decides.
+const MODEL_DRIFT: f64 = 0.20;
+
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
 /// `filter budget` job): `cargo test --release -p lodestar-filter --test
@@ -425,20 +507,23 @@ const CALIB_REF_NS: f64 = 10_700.0;
 /// only as they would on ingest. The engine is measured with 1%, 10% and
 /// 25% of the rules built on words the torrents have, with a mixed set
 /// that adds the shapes the cheap check can't decide ([`mixed_rules`]),
-/// and with 10% of each such shape ([`Shape`]). The budget holds the
-/// core, 1%, 10% and the mixed set; 25% and each shape at 10% are
-/// measured and reported, not held. Every rule shape counts (§2.21,
+/// with 10% of each such shape ([`Shape`]), and with the mixed set and
+/// five common words neutralized. The budget holds the core, 1%, 10%,
+/// the mixed set and the mixed set neutralized; 25% and each shape at 10%
+/// are measured and reported, not held. Every rule shape counts (§2.21,
 /// owner-delegated, 2026-10-23).
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
 /// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
-/// by 1.5-1.9× in speed, so the test times [`calibrate`] before any
-/// filter code runs and again once the engine is gone, and divides each
-/// case's time by how much slower than [`CALIB_REF_NS`] its fastest pass
-/// ran. The calibration never runs beside filter state, so a regression
-/// can't slow it and hide itself, and noise only adds time, so the fastest
-/// pass can only make the gate stricter. Raw times and the runner's speed
-/// are printed too.
+/// by 1.5-1.9× in speed. On a model [`ENGINE_SPEED`] lists, each case's
+/// time is divided by its factor. On any other, the test divides by how
+/// much slower than [`CALIB_REF_NS`] [`calibrate`]'s fastest pass ran.
+/// [`calibrate`] runs either way, before any filter code runs and again
+/// once the engine is gone, to catch a runner whose speed changes under
+/// the test. Where it scales, it never runs beside filter state, so a
+/// regression can't slow it and hide itself, and noise only adds time, so
+/// its fastest pass can only make the gate stricter. Raw times, the
+/// divisor and where it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
 /// case under 50 µs passes (about +40% at 10% on today's code).
@@ -509,6 +594,7 @@ fn budget() {
         let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
         COMMON.iter().map(|w| hasher.hash_one(w)).collect()
     };
+    let model = ENGINE_SPEED.iter().find(|m| cpu.contains(m.model));
     let calib = |i: usize| {
         let (name, files) = std::hint::black_box(&set[i]);
         std::hint::black_box(calibrate(name, files, &common));
@@ -604,14 +690,36 @@ fn budget() {
             });
             cases.push((what, per, held));
         }
+        // The mixed set again with common words neutralized (CSX-5
+        // *Neutralize term*): every keyword entry reads the name and
+        // paths, and every text clause checks the words.
+        engine.rules = mixed_rules().into();
+        engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
+            .iter()
+            .zip(1..)
+            .map(|(w, id)| lodestar_filter::Override {
+                id,
+                what: lodestar_filter::Match::Keyword((*w).into()),
+                strength: lodestar_filter::Strength::Neutralize,
+                scope: None,
+                expires_at: None,
+                shadow_until: None,
+            })
+            .collect();
+        let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
+        let per = time(what, &|i| {
+            std::hint::black_box(engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0));
+        });
+        cases.push((what.to_owned(), per, true));
         drop(engine);
         let after = calibration("after");
 
         let calib_us = before.min(after);
-        // How many times the reference's time this runner takes.
-        let speed = calib_us * 1e3 / CALIB_REF_NS;
+        // How many times the reference's time this runner takes, by the
+        // calibration.
+        let calibrated = calib_us * 1e3 / CALIB_REF_NS;
         println!(
-            "calibration: {calib_us:.2} µs per torrent, {speed:.2}× the reference's {:.2} µs",
+            "calibration: {calib_us:.2} µs per torrent, {calibrated:.2}× the reference's {:.2} µs",
             CALIB_REF_NS / 1e3
         );
         let drift = before.max(after) / calib_us - 1.0;
@@ -626,14 +734,57 @@ fn budget() {
             continue;
         }
         assert!(
-            SPEED.contains(&speed),
-            "the runner took {speed:.2}× the reference's time to calibrate, outside \
+            SPEED.contains(&calibrated),
+            "the runner took {calibrated:.2}× the reference's time to calibrate, outside \
              {SPEED:?}: the measurement can't be trusted"
         );
+        let (speed, how) = match model {
+            Some(m) => {
+                println!(
+                    "CPU {cpu}: scaling by the engine's speed on the {}, {:.3}× the reference's \
+                     time, from {} jobs at {}{} (the calibration says {calibrated:.2}×)",
+                    m.model,
+                    m.factor,
+                    m.runs.len(),
+                    m.code,
+                    if m.provisional() { ", provisional" } else { "" },
+                );
+                // Annotations (`::warning::`), so these show on the check,
+                // not only in its log.
+                if (calibrated / m.factor - 1.0).abs() > MODEL_DRIFT {
+                    println!(
+                        "::warning::the {}'s factor ({:.3}) and its calibration ({calibrated:.2}) \
+                         disagree by more than {:.0}%: the factor may need re-deriving \
+                         (ENGINE_SPEED)",
+                        m.model,
+                        m.factor,
+                        MODEL_DRIFT * 100.0
+                    );
+                }
+                if m.provisional() {
+                    println!(
+                        "::warning::the {}'s factor is provisional, from {} job(s): re-derive it \
+                         once more exist (ENGINE_SPEED)",
+                        m.model,
+                        m.runs.len()
+                    );
+                }
+                let note = if m.provisional() { ", provisional" } else { "" };
+                (m.factor, format!("the {}'s factor{note}", m.model))
+            }
+            None => {
+                println!("CPU {cpu}: not in ENGINE_SPEED, so scaling by the calibration");
+                println!("::warning::{cpu} isn't in ENGINE_SPEED: scaled by the calibration");
+                (calibrated, "the calibration".to_owned())
+            }
+        };
         let mut over = Vec::new();
         for (what, raw, held) in cases {
             let per = raw / speed;
-            println!("{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here)");
+            println!(
+                "{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here \
+                 ÷ {speed:.3}, {how})"
+            );
             if per >= BUDGET_US {
                 if held {
                     over.push(format!("{what}: {per:.1} µs ({raw:.1} µs here)"));
@@ -653,4 +804,77 @@ fn budget() {
         "the runner's speed changed under the test on all {ATTEMPTS} attempts, so the \
          measurement can't be trusted: {drifted:?}"
     );
+}
+
+/// One judgment of each of the budget's torrents, for callgrind, whose
+/// instruction counts don't move with the runner (§20.8). `LODESTAR_PROFILE`
+/// picks the case: `core`, `mixed` (the default) or `neutralized`. A
+/// warm-up pass first, so the counts are a judgment's, not the index
+/// build's:
+/// `valgrind --tool=callgrind --toggle-collect='*profile_pass*' target/release/deps/props-* --ignored --exact profile`.
+#[test]
+#[ignore]
+fn profile() {
+    let set = torrents(512);
+    let classes: Vec<_> = set
+        .iter()
+        .map(|(n, f)| lodestar_classify::classify(n, f))
+        .collect();
+    let items: Vec<Item> = set
+        .iter()
+        .enumerate()
+        .map(|(i, (name, files))| Item {
+            hashes: std::slice::from_ref(Box::leak(Box::new([i as u8; 20]))),
+            name,
+            files,
+            content_type: classes[i].content_type,
+        })
+        .collect();
+    let facts: Vec<_> = classes
+        .iter()
+        .zip(&set)
+        .map(|(class, (_, f))| lodestar_filter::Facts {
+            class,
+            size: f.iter().map(|f| f.size).sum(),
+            piece_len: 1 << 22,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        })
+        .collect();
+    let case = std::env::var("LODESTAR_PROFILE").unwrap_or_else(|_| "mixed".into());
+    let mut engine = lodestar_filter::Engine::new(shipped());
+    if case != "core" {
+        engine.packs = lodestar_filter::PackSwitches::all();
+        engine.rules = mixed_rules().into();
+    }
+    if case == "neutralized" {
+        engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
+            .iter()
+            .zip(1..)
+            .map(|(w, id)| lodestar_filter::Override {
+                id,
+                what: lodestar_filter::Match::Keyword((*w).into()),
+                strength: lodestar_filter::Strength::Neutralize,
+                scope: None,
+                expires_at: None,
+                shadow_until: None,
+            })
+            .collect();
+    }
+    #[inline(never)]
+    fn profile_pass(
+        engine: &lodestar_filter::Engine,
+        items: &[Item],
+        facts: &[lodestar_filter::Facts],
+    ) {
+        for (item, facts) in items.iter().zip(facts) {
+            std::hint::black_box(engine.judge(std::hint::black_box(item), Some(facts), 0));
+        }
+    }
+    // The warm-up, outside the toggled function.
+    for (item, facts) in items.iter().zip(&facts) {
+        std::hint::black_box(engine.judge(item, Some(facts), 0));
+    }
+    profile_pass(&engine, &items, &facts);
 }

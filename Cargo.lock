@@ -1640,6 +1640,7 @@ dependencies = [
  "chardetng",
  "encoding_rs",
  "lodestar-bencode",
+ "lodestar-store",
  "proptest",
  "sha1",
  "sha2",
@@ -1685,7 +1686,6 @@ dependencies = [
  "proptest",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1712,7 +1712,6 @@ dependencies = [
  "tantivy",
  "tantivy-fst",
  "tempfile",
- "tracing",
  "unicode-normalization",
 ]
 

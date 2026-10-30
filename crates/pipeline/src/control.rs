@@ -480,9 +480,19 @@ impl Control {
         if self.state().paused == paused {
             return false;
         }
-        self.inner.monitor.pool().set_paused(paused).await;
+        // Pausing stops the pool first, so it asks the DHT nothing more.
+        // Resuming starts the DHT first: the node forwards the change ahead
+        // of any later peer request on the same command channel, so the
+        // pool's requeued lookups never reach a still-paused actor and wait
+        // out a refusal back-off.
+        if paused {
+            self.inner.monitor.pool().set_paused(true).await;
+        }
         if let Some(dht) = &self.inner.dht {
             dht.set_paused(paused);
+        }
+        if !paused {
+            self.inner.monitor.pool().set_paused(false).await;
         }
         {
             let mut st = self.state();

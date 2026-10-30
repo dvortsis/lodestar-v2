@@ -2,6 +2,7 @@
 //! store), and queries that are slow on purpose or cancel partway, for
 //! cancellation.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -67,6 +68,32 @@ pub(crate) fn append(index: &SearchIndex, ids: std::ops::Range<u64>, n: u64) {
         d.add_u64(f.files, 1 + i % 7);
         d.add_i64(f.discovered, 1_700_000_000 + i as i64);
         w.add_document(d).unwrap();
+    }
+    w.commit().unwrap();
+    reader.reload().unwrap();
+}
+
+thread_local! {
+    /// The query `SearchIndex::compile_cancelled` runs, once, for its next
+    /// `file:(…)` clause instead of the clause's own: a [`tripwire`] makes
+    /// the file scan cancel partway.
+    pub(crate) static FILE_QUERY: RefCell<Option<Box<dyn Query>>> = const { RefCell::new(None) };
+}
+
+/// Adds `per` files to each torrent in `ids`, in one new file-index
+/// segment, and makes them visible. Only the torrent id is set: enough
+/// for a scan of the file index.
+pub(crate) fn append_files(index: &SearchIndex, ids: std::ops::Range<u64>, per: u64) {
+    let f = *index.file_fields();
+    let (raw, reader) = index.raw_files();
+    let mut w: tantivy::IndexWriter = raw.writer_with_num_threads(1, 15 << 20).unwrap();
+    w.set_merge_policy(Box::new(NoMergePolicy));
+    for id in ids {
+        for _ in 0..per {
+            let mut d = TantivyDocument::new();
+            d.add_u64(f.torrent, id);
+            w.add_document(d).unwrap();
+        }
     }
     w.commit().unwrap();
     reader.reload().unwrap();
