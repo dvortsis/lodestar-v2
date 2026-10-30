@@ -21,8 +21,12 @@
 //!   [`feed_token`] on the routes that opt in (see [`crate::keys`]).
 
 mod guard;
+#[cfg(test)]
+mod hooks;
 mod http;
 mod limit;
+#[cfg(test)]
+mod lock_tests;
 pub mod log_events;
 pub mod proxy;
 
@@ -36,7 +40,7 @@ use std::io;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -110,6 +114,18 @@ struct AuthFile {
 /// saves it, and only then publishes it ([`Auth::commit`]), so a failed
 /// save leaves the credentials in effect as they were, now and after a
 /// restart.
+///
+/// **Locks, in the one order every path takes them** (each is optional):
+/// 1. `save_lock`: held by every change from its snapshot to its swap,
+///    across the disk write, so changes run one at a time and a check
+///    made against the snapshot still holds at the swap;
+/// 2. `setup_token`: held briefly, never across the disk or Argon2;
+/// 3. `state`: read briefly for a snapshot, written only for the swap.
+///
+/// Nothing takes `save_lock` while holding either of the others, and
+/// Argon2 runs with no lock held. Readers (`verify` on every request,
+/// `client_ip`, `proxy_signs_in`) take only `state` for reading, so a
+/// slow disk (a spun-down array disk on Unraid) never stalls them.
 #[derive(Debug, Clone)]
 struct State {
     password: Option<String>,
@@ -121,7 +137,10 @@ struct State {
 pub struct Auth {
     path: PathBuf,
     state: RwLock<State>,
+    /// Serialises changes; see [`State`] for the lock order.
+    save_lock: Mutex<()>,
     setup_token: Mutex<Option<String>>,
+    disk: Disk,
     /// Login, setup, password and fresh-password attempts, per IP.
     login: Buckets<IpAddr>,
     /// Failed API key and feed token checks, per IP.
@@ -137,6 +156,7 @@ impl Auth {
     /// Loads (or creates) `path`. Without a password, a setup token is
     /// generated: see [`Auth::setup_token`].
     pub fn load(path: &Path, secure_cookies: bool) -> io::Result<Auth> {
+        let disk = Disk::default();
         let file = match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str::<AuthFile>(&text).map_err(|e| {
                 io::Error::new(
@@ -150,7 +170,7 @@ impl Auth {
                     session_key: hex(&random::<32>()),
                     proxy: ProxyConfig::default(),
                 };
-                write_private(path, &f)?;
+                write_private(path, &f, &disk)?;
                 f
             }
             Err(e) => return Err(e),
@@ -180,7 +200,9 @@ impl Auth {
                 key,
                 proxy,
             }),
+            save_lock: Mutex::new(()),
             setup_token: Mutex::new(token),
+            disk,
             login: Buckets::new(BURST, REFILL_PER_SEC, LIMITER_MAX_IPS),
             key_failures: Buckets::new(KEY_FAIL_BURST, KEY_FAIL_REFILL_PER_SEC, LIMITER_MAX_IPS),
             key_requests: Buckets::new(KEY_BURST, KEY_REFILL_PER_SEC, crate::keys::MAX_KEYS),
@@ -235,15 +257,14 @@ impl Auth {
     pub fn set_proxy(&self, config: ProxyConfig) -> Result<ProxyConfig, SetProxyError> {
         let proxy = Proxy::compile(config).map_err(SetProxyError::Invalid)?;
         let wide = proxy.config.enabled && proxy.has_wide_range();
-        let mut state = self.state.write().expect("auth lock");
+        let saved = proxy.config.clone();
+        let writer = self.writer();
         let next = State {
             proxy,
-            ..state.clone()
+            ..self.snapshot()
         };
-        self.commit(&mut state, next)
-            .map_err(SetProxyError::Storage)?;
-        let saved = state.proxy.config.clone();
-        drop(state);
+        self.commit(&writer, next).map_err(SetProxyError::Storage)?;
+        drop(writer);
         // Once it applies, and outside the lock.
         if wide {
             lodestar_log::log_event!(log_events::AUTH_PROXY_WIDE_RANGE);
@@ -287,8 +308,7 @@ impl Auth {
     pub fn setup(&self, ip: IpAddr, token: &str, password: &str) -> Result<String, AuthError> {
         let result = (|| -> Result<String, AuthError> {
             self.allow(ip)?;
-            let mut pending = self.setup_token.lock().expect("token lock");
-            let Some(expected) = pending.as_deref() else {
+            let Some(expected) = self.setup_token() else {
                 return Err(AuthError::SetupDone);
             };
             let normalized = token.trim().to_uppercase();
@@ -296,18 +316,32 @@ impl Auth {
                 return Err(AuthError::BadToken);
             }
             check_strength(password)?;
+            // Argon2 before any lock.
             let encoded = hash_password(password);
-            let mut state = self.state.write().expect("auth lock");
+            let writer = self.writer();
+            // Another setup may have claimed the instance while this one
+            // hashed. Only setup spends the token, and it holds the save
+            // lock, so the token can't change again before the swap.
+            if self.setup_token().as_deref() != Some(expected.as_str()) {
+                return Err(AuthError::SetupDone);
+            }
             let next = State {
                 password: Some(encoded),
                 key: random::<32>(),
-                ..state.clone()
+                ..self.snapshot()
             };
-            self.commit(&mut state, next)?;
+            let key = next.key;
+            self.save(&next)?;
             // Spent only once the password is saved: after a failed save
             // the instance is still unclaimed, and the token still works.
+            // Spent and published together, so nobody sees the instance
+            // claimed with its token still pending.
+            let mut pending = self.setup_token.lock().expect("token lock");
+            self.publish(next);
             *pending = None;
-            Ok(self.cookie(&state.key))
+            drop(pending);
+            drop(writer);
+            Ok(self.cookie(&key))
         })();
         log_events::checked(ip, log_events::Check::Setup, &result);
         result
@@ -317,14 +351,16 @@ impl Auth {
     pub fn login(&self, ip: IpAddr, password: &str) -> Result<String, AuthError> {
         let result = (|| -> Result<String, AuthError> {
             self.allow(ip)?;
-            let state = self.state.read().expect("auth lock");
-            let Some(stored) = &state.password else {
+            let (stored, key) = self.credentials();
+            let Some(stored) = stored else {
                 return Err(AuthError::NotSetUp);
             };
-            if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
+            if password.len() > MAX_PASSWORD_BYTES || !verify_password(&stored, password) {
                 return Err(AuthError::BadPassword);
             }
-            Ok(self.cookie(&state.key))
+            // Signed with the key the password was checked with: if a
+            // change rotated it meanwhile, this cookie is already void.
+            Ok(self.cookie(&key))
         })();
         log_events::checked(ip, log_events::Check::SignIn, &result);
         result
@@ -336,11 +372,11 @@ impl Auth {
     pub fn confirm(&self, ip: IpAddr, password: &str) -> Result<(), AuthError> {
         let result = (|| -> Result<(), AuthError> {
             self.allow(ip)?;
-            let state = self.state.read().expect("auth lock");
-            let Some(stored) = &state.password else {
+            let (stored, _) = self.credentials();
+            let Some(stored) = stored else {
                 return Err(AuthError::NotSetUp);
             };
-            if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
+            if password.len() > MAX_PASSWORD_BYTES || !verify_password(&stored, password) {
                 return Err(AuthError::BadPassword);
             }
             Ok(())
@@ -353,22 +389,35 @@ impl Auth {
     pub fn change_password(&self, ip: IpAddr, old: &str, new: &str) -> Result<String, AuthError> {
         let result = (|| -> Result<String, AuthError> {
             self.allow(ip)?;
-            let mut state = self.state.write().expect("auth lock");
-            let ok = state
-                .password
+            // Both Argon2 runs (checking the old password, hashing the
+            // new one) happen before any lock.
+            let (checked, _) = self.credentials();
+            let ok = checked
                 .as_deref()
                 .is_some_and(|p| old.len() <= MAX_PASSWORD_BYTES && verify_password(p, old));
             if !ok {
                 return Err(AuthError::BadPassword);
             }
             check_strength(new)?;
+            let encoded = hash_password(new);
+            let writer = self.writer();
+            let state = self.snapshot();
+            // `old` was checked against `checked`. If another change
+            // landed since, `old` is no longer the password: of two
+            // changes racing from the same password, exactly one wins.
+            // Every writer holds the save lock, so a match here still
+            // holds at the swap.
+            if state.password != checked {
+                return Err(AuthError::BadPassword);
+            }
             let next = State {
-                password: Some(hash_password(new)),
+                password: Some(encoded),
                 key: random::<32>(),
-                ..state.clone()
+                ..state
             };
-            self.commit(&mut state, next)?;
-            Ok(self.cookie(&state.key))
+            let key = next.key;
+            self.commit(&writer, next)?;
+            Ok(self.cookie(&key))
         })();
         log_events::checked(ip, log_events::Check::PasswordChange, &result);
         result
@@ -378,16 +427,18 @@ impl Auth {
     /// returns a new cookie for this browser. Confirm the password first
     /// ([`require_fresh_password`]).
     pub fn rotate_sessions(&self) -> Result<String, AuthError> {
-        let mut state = self.state.write().expect("auth lock");
+        let writer = self.writer();
+        let state = self.snapshot();
         if state.password.is_none() {
             return Err(AuthError::NotSetUp);
         }
         let next = State {
             key: random::<32>(),
-            ..state.clone()
+            ..state
         };
-        self.commit(&mut state, next)?;
-        Ok(self.cookie(&state.key))
+        let key = next.key;
+        self.commit(&writer, next)?;
+        Ok(self.cookie(&key))
     }
 
     /// Whether a `Cookie` header carries a valid, unexpired session.
@@ -442,22 +493,53 @@ impl Auth {
         self.login.take(ip).map_err(|_| AuthError::RateLimited)
     }
 
-    /// Saves `next`, then publishes it in place of `state` (held under
-    /// the write lock). On a storage error nothing changes: not the file,
-    /// not what's in effect.
-    fn commit(&self, state: &mut State, next: State) -> Result<(), AuthError> {
+    /// Takes the save lock, first in the lock order (see [`State`]).
+    /// Every change holds it from its snapshot to its swap. It guards no
+    /// data, so a panic in another change leaves nothing to distrust.
+    fn writer(&self) -> MutexGuard<'_, ()> {
+        #[cfg(test)]
+        self.disk.hooks.at(hooks::Point::Locking);
+        self.save_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The state in effect, copied out under a brief read lock.
+    fn snapshot(&self) -> State {
+        self.state.read().expect("auth lock").clone()
+    }
+
+    /// The stored hash and session key, copied out so Argon2 runs with no
+    /// lock held.
+    fn credentials(&self) -> (Option<String>, [u8; 32]) {
+        let state = self.state.read().expect("auth lock");
+        (state.password.clone(), state.key)
+    }
+
+    /// Saves `next`, then publishes it. The save lock (`_writer`) is held
+    /// throughout; the write lock only for the swap, so readers never wait
+    /// on the disk. On a storage error nothing changes: not the file, not
+    /// what's in effect.
+    fn commit(&self, _writer: &MutexGuard<'_, ()>, next: State) -> Result<(), AuthError> {
         self.save(&next)?;
-        *state = next;
+        self.publish(next);
         Ok(())
     }
 
+    /// Swaps in a saved state, under the write lock for just the swap.
+    fn publish(&self, next: State) {
+        *self.state.write().expect("auth lock") = next;
+    }
+
     fn save(&self, state: &State) -> Result<(), AuthError> {
+        #[cfg(test)]
+        self.disk.hooks.at(hooks::Point::Saving);
         let file = AuthFile {
             password: state.password.clone(),
             session_key: hex(&state.key),
             proxy: state.proxy.config.clone(),
         };
-        write_private(&self.path, &file)
+        write_private(&self.path, &file, &self.disk)
             .map_err(|e| AuthError::Storage(format!("saving auth: {e}")))
     }
 }
@@ -641,9 +723,9 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
 /// Writes `file` readable by the owner only, atomically: `path` is
 /// either left as it was or replaced whole. A failed write doesn't leave
 /// the half-written secrets behind in the temporary file.
-fn write_private(path: &Path, file: &AuthFile) -> io::Result<()> {
+fn write_private(path: &Path, file: &AuthFile, disk: &Disk) -> io::Result<()> {
     let tmp = path.with_extension("json.tmp");
-    let result = write_and_rename(&tmp, path, file);
+    let result = write_and_rename(&tmp, path, file, disk);
     if result.is_err() {
         // Best effort: the error that matters is the one returned.
         let _ = std::fs::remove_file(&tmp);
@@ -651,7 +733,7 @@ fn write_private(path: &Path, file: &AuthFile) -> io::Result<()> {
     result
 }
 
-fn write_and_rename(tmp: &Path, path: &Path, file: &AuthFile) -> io::Result<()> {
+fn write_and_rename(tmp: &Path, path: &Path, file: &AuthFile, disk: &Disk) -> io::Result<()> {
     let text = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
     {
         // A leftover temporary file would keep its own permissions, and a
@@ -676,16 +758,62 @@ fn write_and_rename(tmp: &Path, path: &Path, file: &AuthFile) -> io::Result<()> 
     // Make the rename itself durable, so a power cut can't bring back the
     // old file. Best effort: the new file is already in place, and an
     // error here mustn't make the caller keep the old state in memory.
-    #[cfg(unix)]
     if let Some(dir) = path.parent() {
         let dir = if dir.as_os_str().is_empty() {
             Path::new(".")
         } else {
             dir
         };
-        let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+        disk.sync_dir(dir);
     }
     Ok(())
+}
+
+/// What a save needs besides the path: whether the directory-fsync
+/// warning was logged and, in unit tests, the seams that hold a save or
+/// fail its directory fsync ([`hooks`]).
+#[derive(Debug, Default)]
+struct Disk {
+    dir_sync_warned: AtomicBool,
+    #[cfg(test)]
+    hooks: hooks::Hooks,
+}
+
+impl Disk {
+    /// Flushes `dir`, best effort. A failure is logged once per run: it
+    /// would repeat on every save, and the save itself succeeded.
+    fn sync_dir(&self, dir: &Path) {
+        if self.dir_sync(dir).is_err() && !self.dir_sync_warned.swap(true, Ordering::Relaxed) {
+            lodestar_log::log_event!(log_events::AUTH_DIR_SYNC_FAILED);
+        }
+    }
+
+    #[cfg(test)]
+    fn dir_sync(&self, dir: &Path) -> io::Result<()> {
+        if self.hooks.fail_dir_sync.load(Ordering::Relaxed) {
+            return Err(io::Error::other("failed by the test"));
+        }
+        sync_dir(dir)
+    }
+
+    #[cfg(not(test))]
+    fn dir_sync(&self, dir: &Path) -> io::Result<()> {
+        sync_dir(dir)
+    }
+}
+
+/// Makes a rename in `dir` durable (Unix). Windows has no directory
+/// fsync through the standard library.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir).and_then(|d| d.sync_all())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

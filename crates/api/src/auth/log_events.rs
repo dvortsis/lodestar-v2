@@ -126,6 +126,16 @@ lodestar_log::catalogue! {
         message: "An API key's last use couldn't be recorded",
         fields: {},
     }
+    /// `auth.json` was saved, but its folder couldn't be flushed to disk,
+    /// so a power cut could still bring back the previous file. Logged
+    /// once per run; the change itself applied.
+    AUTH_DIR_SYNC_FAILED {
+        id: "auth.dir_sync_failed",
+        component: Auth,
+        level: Warn,
+        message: "auth.json was saved, but its folder couldn't be flushed to disk; a power cut could undo the change",
+        fields: {},
+    }
 }
 
 /// What a password check was for.
