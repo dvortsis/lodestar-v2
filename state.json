@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T21:49Z",
+ "updated_at": "2026-10-30T21:52Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -554,7 +554,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed"
+   "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note)"
   },
   "M-filters-dialogs": {
    "status": "merged",
