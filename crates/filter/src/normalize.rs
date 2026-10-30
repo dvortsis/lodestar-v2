@@ -190,6 +190,9 @@ pub struct Tokenizer {
     plans: Vec<Plan>,
     /// The plan of a word too long to keep.
     long: Plan,
+    /// [`paths_apart`]'s folders, kept so their buffers carry over
+    /// between torrents.
+    folders: [Paused; FOLDERS],
 }
 
 impl Tokenizer {
@@ -596,12 +599,13 @@ pub(crate) fn paths_apart<'p>(
     apart: &mut Vec<bool>,
 ) {
     with_tokenizer(|tok| {
-        let mut folders: [(&[String], Paused); FOLDERS] = Default::default();
+        let mut paused = std::mem::take(&mut tok.folders);
+        let mut dirs_of: [&[String]; FOLDERS] = [&[]; FOLDERS];
         let (mut known, mut next) = (0, 0);
         for path in paths {
             match path.split_last() {
                 Some((name, dirs)) if !dirs.is_empty() => {
-                    let slot = match folders[..known].iter().position(|(d, _)| *d == dirs) {
+                    let slot = match dirs_of[..known].iter().position(|d| *d == dirs) {
                         Some(slot) => slot,
                         None => {
                             let slot = if known < FOLDERS {
@@ -612,13 +616,13 @@ pub(crate) fn paths_apart<'p>(
                                 next = (next + 1) % FOLDERS;
                                 slot
                             };
-                            folders[slot].0 = dirs;
-                            tok.pause(dirs, &mut folders[slot].1);
+                            dirs_of[slot] = dirs;
+                            tok.pause(dirs, &mut paused[slot]);
                             slot
                         }
                     };
-                    tok.resume(&folders[slot].1, name, out);
-                    apart.push(folders[slot].1.apart);
+                    tok.resume(&paused[slot], name, out);
+                    apart.push(paused[slot].apart);
                 }
                 // One segment is its own text; none is an empty one.
                 Some((name, _)) => {
@@ -629,6 +633,7 @@ pub(crate) fn paths_apart<'p>(
             }
             ends.push(out.len());
         }
+        tok.folders = paused;
     });
 }
 
