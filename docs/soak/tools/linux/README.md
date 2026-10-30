@@ -5,9 +5,29 @@ Linux, in Docker (Unraid) or native. It writes the same evidence that
 `../cr0-soak.ps1` writes on Windows, so `../analyze_cr0.py` reads it unchanged.
 Python 3.10+ and the standard library only. Developer and operator doc.
 
-It **observes**; it does not launch Lodestar. Start a fresh Lodestar first (new
-data directory, default settings), then start the collector right after it, so the
-startup-suppression phase is recorded from the beginning.
+It **observes**; it does not launch Lodestar. Start Lodestar first, then start the
+collector right after it, so the startup-suppression phase is recorded from the
+beginning.
+
+## The v0.5.1 gate procedure (build-plan §0.4)
+
+The 24 h gate soak replaces the old pre-CR-0 container **on its existing Oct 22
+volume**, so it is also the upgrade test:
+
+1. Back up the old instance's data first: `lodestar backup --to <path>` (run it the
+   way you run other `lodestar` commands for that container). Keep the backup until
+   the soak is accepted.
+2. Stop the old container. Start the new image (the frozen rc build) on the same
+   volume. Note the start time.
+3. Start the collector right after Lodestar starts (command below). Sampling is
+   suppressed for 6 h after start, then there is a 30 min warm-up, then the 24 h
+   baseline (about 30.5 h in all).
+4. Don't restart the container mid-run. A restart is an identity change and ends
+   the run; runs are never stitched. A failed soak is a fix PR and a re-soak of a
+   frozen build.
+
+A run on a fresh volume (new data directory) is the secondary option, for
+rehearsals or comparison.
 
 ## What it does and does not do
 
@@ -18,6 +38,10 @@ startup-suppression phase is recorded from the beginning.
 - Refuses a run directory that is not empty. Writes evidence atomically
   (temporary file, then rename).
 - Aggregates only: no logs, torrent names, infohashes, peer addresses or tokens.
+  No personal paths or hostnames either: volumes are labelled by role
+  (`evidence`, `storage-1`, ...), the URL host is stored as a class (`loopback`,
+  `private`, `public` or `name`) plus the port, the image as its digest only, and
+  a custom Docker network as `custom`.
   Metrics snapshots keep only the series `analyze_cr0.py` reads, with plain
   enum-like labels. It stores chosen fields from `docker inspect`, never the
   environment or command line.
@@ -43,7 +67,10 @@ startup-suppression phase is recorded from the beginning.
 If the identity changes (the container restarted, the PID was reused) the run
 ends at once with reason `process_exited_identity_changed` and an
 `identity_change` entry in `result.json`. Samples from two identities are never
-joined. A container that exits ends the run with `process_exited_<code>`
+joined. If Lodestar itself restarts inside the same container (its
+`lodestar_start_time_seconds` changes) the run ends with
+`process_exited_instance_restarted`, before any row from the new start is written.
+A container that exits ends the run with `process_exited_<code>`
 (`oom_killed` is recorded). If the identity can't be read for three minutes the
 run ends with `collector_error`; shorter outages are left as gaps, which
 `analyze_cr0.py` reports.
@@ -92,9 +119,12 @@ docker run -d --name lodestar-soak-collector --restart no \
 - Running it on the host instead is the same command without `docker run`:
   `python3 collect.py --mode docker --container lodestar --root ... --commit ...`.
 - Native Lodestar: `--mode native --pid <pid>` instead of `--container`, run on
-  the host (or in a container with `--pid=host`). `--stop` is refused with a
-  `--proc-root` other than `/proc`, because the identity check and the signal
-  must share one PID namespace.
+  the host (or in a container with `--pid=host`). `--stop` signals through a
+  pidfd opened at attach and re-verified against the recorded start time, so a
+  recycled PID is never signalled; it is refused where pidfd isn't available
+  and with a `--proc-root` other than `/proc`. Docker IDs are not reused. A
+  restart between the identity check and `docker stop` is caught afterwards,
+  because the exit is read back and compared with the verified identity.
 - Stop early and keep the evidence: `touch <run>/stop.request`, or
   `docker stop -t 120 lodestar-soak-collector` (SIGTERM). Docker's default 10 s
   grace is too short when `--stop` is set: finalization can wait up to 90 s for
@@ -107,14 +137,30 @@ docker run -d --name lodestar-soak-collector --restart no \
   can't read the exit code of a process it didn't start, so it never reports a
   clean shutdown.
 
-## The gluetun leg (at least 2 hours)
+## The gluetun leg (a separate 2 h run)
 
-Run the Lodestar container with `network_mode: container:gluetun` (or
-`--network container:gluetun`), publish Lodestar's HTTP port on the gluetun
-container, and point `--url` at that published address. Add
-`--require-gluetun` so the collector refuses to start unless gluetun really is
-the network parent. Use a separate run directory for the leg, and record the
-VPN provider and region in your own notes, not in the evidence.
+Recreating the container under gluetun is an identity change, so the leg is its
+own run, with its own run directory and its own timeline: 6 h suppression,
+30 min warm-up, then a 2 h baseline (about 8.5 h in all). Run the Lodestar
+container with `network_mode: container:gluetun` (or `--network container:gluetun`),
+publish Lodestar's HTTP port on the gluetun container, and point `--url` at that
+published address.
+
+```sh
+docker run -d --name lodestar-soak-collector-gluetun --restart no --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock -v /sys/fs/cgroup:/host/cgroup:ro \
+  -v /mnt/user/appdata/lodestar-soak:/evidence -v /path/to/collect.py:/collect.py:ro \
+  python:3.12-slim python /collect.py --mode docker --container lodestar \
+    --url http://127.0.0.1:8484 --cgroup-root /host/cgroup --root /evidence/run-gluetun \
+    --commit <40-char source commit> --storage-path /evidence \
+    --require-gluetun --leg gluetun --baseline-hours 2
+```
+
+`--leg gluetun` is allowed only with `--require-gluetun` (the collector refuses to
+start unless gluetun really is the network parent) and permits `--baseline-hours 2`
+outside `--rehearsal` (the minimum is 2). The leg is written to `run.json` as
+`settings.leg` (`gluetun`, or `main` by default). Record the VPN provider and
+region in your own notes, not in the evidence.
 
 ## Windows-equivalent settings
 

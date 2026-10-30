@@ -17,6 +17,7 @@ Anything this host cannot provide is left out of the row, never invented.
 import argparse
 import hashlib
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -115,6 +116,21 @@ def ip_family_counters(text):
             bucket = found.setdefault(key, {})
             bucket[match[1]] = bucket.get(match[1], 0) + float(match[3])
     return found
+
+
+def host_class(host):
+    """Evidence keeps the kind of host, never the name or address."""
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return "loopback" if host == "localhost" else "name"
+    return "loopback" if ip.is_loopback else "private" if (ip.is_private or ip.is_link_local) else "public"
+
+
+def network_mode_class(mode):
+    if mode.startswith("container:"):
+        return "container"
+    return {"default": "bridge"}.get(mode, mode) if mode in ("host", "bridge", "none", "default") else "custom"
 
 
 def sha256_file(path):
@@ -250,8 +266,8 @@ class DockerInstance:
 
     def network(self):
         mode = (self.doc.get("HostConfig") or {}).get("NetworkMode") or "unknown"
-        info = {"mode": "container" if mode.startswith("container:") else mode,
-                "host_network": mode == "host", "gluetun_network_parent": False}
+        info = {"mode": network_mode_class(mode), "host_network": mode == "host",
+                "gluetun_network_parent": False}
         if self.parent_doc is not None:
             image = str((self.parent_doc.get("Config") or {}).get("Image", ""))
             info["gluetun_network_parent"] = "gluetun" in image.lower()
@@ -259,16 +275,15 @@ class DockerInstance:
         return info
 
     def describe(self):
-        config = self.doc.get("Config") or {}
-        info = {"container_id": self.id, "image": config.get("Image"),
-                "image_id": self.doc.get("Image"), "restart_count": self.doc.get("RestartCount")}
+        info = {"container_id": self.id, "image_id": self.doc.get("Image"),
+                "restart_count": self.doc.get("RestartCount")}
         image_hex = str(self.doc.get("Image", "")).removeprefix("sha256:")
         if re.fullmatch(r"[0-9a-f]{64}", image_hex):
             info["sha256"], info["sha256_kind"] = image_hex, "image_id"
         try:
             status, image = self.api.get("/images/" + urllib.parse.quote(str(self.doc.get("Image")), safe="") + "/json")
             if status == 200 and image.get("RepoDigests"):
-                info["image_digest"] = image["RepoDigests"][0]
+                info["image_digest"] = image["RepoDigests"][0].rsplit("@", 1)[-1]  # no registry host
         except (OSError, AttributeError, KeyError):
             pass
         return info
@@ -395,9 +410,13 @@ class NativeInstance:
     kind = "native"
 
     def __init__(self, pid, proc_root="/proc", clock=time.monotonic, sleep=time.sleep,
-                 kill=os.kill, clk_tck=None, stop_timeout=60):
+                 opener=None, signaller=None, clk_tck=None, stop_timeout=60):
         self.pid, self.proc = int(pid), Path(proc_root)
-        self.clock, self.sleep, self.kill = clock, sleep, kill
+        self.clock, self.sleep = clock, sleep
+        # Signals go through a pidfd opened at attach and re-verified, so a recycled PID is never hit.
+        self.opener = opener if opener is not None else getattr(os, "pidfd_open", None)
+        self.signaller, self.pidfd = signaller, None
+        self.real_signals = signaller is None
         self.clk_tck = clk_tck or os.sysconf("SC_CLK_TCK")
         self.stop_timeout = stop_timeout
         self.identity = self.start_ticks = self.comm = None
@@ -422,6 +441,38 @@ class NativeInstance:
         self.comm, self.start_ticks = stat[0], stat[2]
         self.boot = boot
         self.identity = f"{self.pid}:{boot}:{self.start_ticks}"
+        if self.opener is not None:
+            try:
+                fd = self.opener(self.pid)
+            except OSError:
+                fd = None
+            if fd is not None:
+                again = self._stat()  # the pid could have been recycled before the open
+                if again is None or again[2] != self.start_ticks:
+                    self._close(fd)
+                    raise SystemExit("Process identity changed while attaching.")
+                self.pidfd = fd
+
+    def _close(self, fd):
+        if self.signaller is None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def close(self):
+        if self.pidfd is not None:
+            self._close(self.pidfd)
+            self.pidfd = None
+
+    def can_signal(self):
+        return self.signaller is not None or self.pidfd is not None
+
+    def _signal(self, number):
+        if self.signaller is not None:
+            self.signaller(number)
+        else:
+            signal.pidfd_send_signal(self.pidfd, number)
 
     def network(self):
         return {"mode": "native_host", "host_network": True, "gluetun_network_parent": False}
@@ -476,9 +527,11 @@ class NativeInstance:
             outcome.update(exit_confirmed=True, stop_mode="already_exited_unknown")
         elif verdict.kind != "ok":
             outcome["errors"].append("process_identity_mismatch")
+        elif not self.can_signal():
+            outcome["errors"].append("pidfd_unavailable")
         else:
             try:
-                self.kill(self.pid, signal.SIGTERM)
+                self._signal(signal.SIGTERM)
                 outcome["signal_delivered"] = True
             except OSError:
                 outcome["errors"].append("signal_failed")
@@ -486,7 +539,7 @@ class NativeInstance:
                 outcome.update(exit_confirmed=True, stop_mode="exited_unknown")
             elif self.check().kind == "ok":  # identity re-verified before the forced stop
                 try:
-                    self.kill(self.pid, signal.SIGKILL)
+                    self._signal(signal.SIGKILL)
                 except OSError:
                     outcome["errors"].append("kill_failed")
                 outcome["stop_mode"] = "kill_unconfirmed"
@@ -520,18 +573,31 @@ def http_get(url, timeout=3, limit=8 << 20):
         return error.code, b""
 
 
-def statvfs_volumes(paths):
-    """Free and total bytes per distinct filesystem under the given paths."""
+def statvfs_volumes(labelled):
+    """Free and total bytes per distinct filesystem, labelled by role, never by path."""
     seen, out = set(), []
-    for path in paths:
+    for label, path in labelled:
         device = os.stat(path).st_dev
         if device in seen:
             continue
         seen.add(device)
         stat = os.statvfs(path)
-        out.append({"volume": str(path), "free_bytes": stat.f_bavail * stat.f_frsize,
+        out.append({"volume": label, "free_bytes": stat.f_bavail * stat.f_frsize,
                     "total_bytes": stat.f_blocks * stat.f_frsize})
     return out
+
+
+def fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def save_json(value, path):
@@ -542,6 +608,7 @@ def save_json(value, path):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
+        fsync_dir(path.parent)
     finally:
         try:
             temp.unlink()
@@ -557,6 +624,7 @@ def write_text(path, text):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
+        fsync_dir(path.parent)
     finally:
         try:
             temp.unlink()
@@ -621,12 +689,15 @@ class Collector:
 
     # -- launch
     def storage_paths(self):
-        return [self.root] + [Path(p) for p in self.args.storage_path]
+        return [("evidence", self.root)] + [(f"storage-{n}", Path(p)) for n, p in enumerate(self.args.storage_path, 1)]
 
     def prepare(self):
         a = self.args
-        if (a.warmup_minutes < 30 or a.baseline_hours < 24) and not a.rehearsal:
-            raise SystemExit("Baseline requires at least 30 minutes warmup and 24 measured hours.")
+        if a.leg == "gluetun" and not a.require_gluetun:
+            raise SystemExit("--leg gluetun requires --require-gluetun.")
+        hours = 2 if a.leg == "gluetun" else 24
+        if (a.warmup_minutes < 30 or a.baseline_hours < hours) and not a.rehearsal:
+            raise SystemExit(f"Baseline requires at least 30 minutes warmup and {hours} measured hours.")
         if not (0 < a.stop_free_bytes < a.warn_free_bytes <= a.min_free_bytes):
             raise SystemExit("Invalid storage guardrails.")
         parsed = urllib.parse.urlsplit(a.url)
@@ -637,13 +708,15 @@ class Collector:
             raise SystemExit("--commit must be a lowercase hex commit id (7 to 40 characters).")
         if self.root.exists() and (not self.root.is_dir() or any(self.root.iterdir())):
             raise SystemExit("Run directory is not empty; use a fresh directory.")
+        if (a.stop and self.instance.kind == "native" and self.instance.real_signals
+                and self.instance.proc.resolve() != Path("/proc").resolve()):
+            raise SystemExit("--stop needs the collector's own /proc: identity and signal must share a PID namespace.")
         try:
             self.instance.attach()
         except (OSError, KeyError, TypeError, AttributeError) as error:
             raise SystemExit(f"Cannot attach to the instance ({type(error).__name__}).") from None
-        if (a.stop and self.instance.kind == "native" and self.instance.kill is os.kill
-                and self.instance.proc.resolve() != Path("/proc").resolve()):
-            raise SystemExit("--stop needs the collector's own /proc: identity and signal must share a PID namespace.")
+        if a.stop and self.instance.kind == "native" and not self.instance.can_signal():
+            raise SystemExit("--stop needs pidfd support (Linux 5.3+ with Python 3.9+) on the target process.")
         if a.require_gluetun and not self.instance.network()["gluetun_network_parent"]:
             raise SystemExit("--require-gluetun: the instance's network parent is not a gluetun container.")
         self.root.mkdir(parents=True, exist_ok=True)
@@ -659,7 +732,7 @@ class Collector:
         collector = self.root / "collector.py"
         shutil.copyfile(os.path.abspath(__file__), collector)
         settings = {
-            "mode": inst.kind, "http_url": a.url, "warmup_minutes": a.warmup_minutes,
+            "mode": inst.kind, "leg": a.leg, "warmup_minutes": a.warmup_minutes,
             "baseline_hours": a.baseline_hours, "rehearsal": bool(a.rehearsal),
             "storage_guardrails": {"start_free_bytes": a.min_free_bytes, "warn_free_bytes": a.warn_free_bytes,
                                    "stop_free_bytes": a.stop_free_bytes, "check_seconds": WATCH_SECONDS,
@@ -667,7 +740,7 @@ class Collector:
             "stop_instance_at_end": bool(a.stop),
         }
         parsed = urllib.parse.urlsplit(a.url)
-        network = dict(inst.network(), http_url_host=parsed.hostname, http_port=parsed.port,
+        network = dict(inst.network(), http_host_class=host_class(parsed.hostname), http_port=parsed.port,
                        proxy_configured=bool(os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
                                              or os.environ.get("ALL_PROXY")))
         run = {
@@ -700,7 +773,7 @@ class Collector:
         bad_health = bad_metrics = bad_bounds = bad_memory = disk_failures = 0
         unverified_since = None
         last_completed, last_progress = 0.0, 0.0
-        self.verdict = None
+        self.verdict = self.start_time = None
         history, volumes = {}, self.volumes_now
         next_sample, next_watch = 5.0, 0.0
         self.shutdown = None
@@ -782,6 +855,15 @@ class Collector:
                     values, bad_metrics = {}, bad_metrics + 1
                     self.note("metrics unavailable or missing required fields")
                 if metrics_ok:
+                    start_time = values["start_time_seconds"]
+                    if self.start_time is None:
+                        self.start_time = start_time
+                    elif start_time != self.start_time:  # Lodestar restarted inside the same container
+                        self.verdict = Verdict("changed", "process_exited_instance_restarted",
+                                               expected_start_time_seconds=self.start_time,
+                                               observed_start_time_seconds=start_time)
+                        self.reason = self.verdict.reason
+                        break
                     snapshot = sanitize_snapshot(text)
                     self.write(self.root / "metrics" / f"{self.sample:05d}.prom", snapshot)
                     if values["dht_sample_suppression_seconds"] > 0:
@@ -889,6 +971,9 @@ class Collector:
         if self.finalization_errors:
             sys.stderr.write("Final evidence publication failed; completion remains uncertain.\n")
         self.note(f"done: {self.reason}; stop={self.shutdown['stop_mode']}")
+        close = getattr(self.instance, "close", None)
+        if close:
+            close()
 
     def exit_code(self):
         if self.reason != "baseline_window_complete" or self.finalization_errors:
@@ -944,6 +1029,8 @@ def build_parser():
     p.add_argument("--warn-free-bytes", type=int, default=20 * GIB)
     p.add_argument("--stop-free-bytes", type=int, default=10 * GIB)
     p.add_argument("--stop", action="store_true", help="Stop the verified instance when collection ends")
+    p.add_argument("--leg", choices=("main", "gluetun"), default="main",
+                   help="gluetun: the 2 h gluetun leg (needs --require-gluetun; baseline minimum 2 h)")
     p.add_argument("--require-gluetun", action="store_true", help="Refuse to start unless gluetun is the network parent")
     p.add_argument("--user-timezone", default="America/Denver")
     p.add_argument("--tick-seconds", type=float, default=1.0, help=argparse.SUPPRESS)

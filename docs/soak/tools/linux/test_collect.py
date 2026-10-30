@@ -218,7 +218,7 @@ def args_for(root, *extra, mode="docker", **kw):
 
 
 def fixed_volumes(free=100 * GIB):
-    return lambda paths: [{"volume": "/data", "free_bytes": free, "total_bytes": 200 * GIB}]
+    return lambda paths: [{"volume": "evidence", "free_bytes": free, "total_bytes": 200 * GIB}]
 
 
 class Base(unittest.TestCase):
@@ -293,7 +293,9 @@ class CleanRunTests(Base):
         self.assertEqual(run["container_id"], CONTAINER_ID)
         self.assertEqual(run["sha256"], "a" * 64)
         self.assertEqual(run["sha256_kind"], "image_id")
-        self.assertEqual(run["image_digest"], "lodestar@sha256:" + "f" * 64)
+        self.assertEqual(run["image_digest"], "sha256:" + "f" * 64)
+        self.assertEqual(run["settings"]["leg"], "main")
+        self.assertEqual(run["network"]["http_host_class"], "loopback")
         self.assertEqual(run["commit"], COMMIT)
         self.assertEqual(run["network"]["mode"], "bridge")
         self.assertFalse(run["network"]["host_network"])
@@ -593,7 +595,7 @@ class IdentityTests(Base):
         write_proc(proc, pid=777, start=5000)
         kills = []
         instance = collect.NativeInstance(777, proc, clock=self.clock.clock, sleep=self.clock.sleep,
-                                          kill=lambda *a: kills.append(a), clk_tck=100)
+                                          opener=lambda pid: None, signaller=kills.append, clk_tck=100)
         self.clock.at(200, lambda: write_proc(proc, pid=777, start=9999))  # same pid, new process
         c = self.collector(instance, "--stop")
         c.args.mode = "native"
@@ -618,8 +620,8 @@ class NativeTests(Base):
     def instance(self, kills, **kw):
         proc = self.tmp / "proc"
         write_proc(proc, **kw)
-        return collect.NativeInstance(777, proc, clock=self.clock.clock, sleep=self.clock.sleep,
-                                      kill=lambda pid, sig: kills.append((pid, sig)), clk_tck=100, stop_timeout=60)
+        return collect.NativeInstance(777, proc, clock=self.clock.clock, sleep=self.clock.sleep, opener=lambda pid: None,
+                                      signaller=kills.append, clk_tck=100, stop_timeout=60)
 
     def test_pid_plus_start_time_identity_and_proc_resources(self):
         kills = []
@@ -644,10 +646,10 @@ class NativeTests(Base):
     def test_stop_sends_term_after_identity_check(self):
         kills = []
         inst = self.instance(kills)
-        inst.kill = lambda pid, sig: (kills.append((pid, sig)), (self.tmp / "proc" / "777" / "stat").unlink())
+        inst.signaller = lambda sig: (kills.append(sig), (self.tmp / "proc" / "777" / "stat").unlink())
         c = self.collector(inst, "--stop")
         self.assertEqual(c.run(), 1)  # exit code of a non-child is unknown, so never "clean"
-        self.assertEqual(kills, [(777, signal.SIGTERM)])
+        self.assertEqual(kills, [signal.SIGTERM])
         shutdown = self.result()["shutdown"]
         self.assertEqual((shutdown["stop_mode"], shutdown["exit_confirmed"], shutdown["signal_delivered"]),
                          ("exited_unknown", True, True))
@@ -658,25 +660,25 @@ class NativeTests(Base):
         inst = self.instance(kills)
         inst.attach()
 
-        def kill(pid, sig):
+        def kill(sig):
             kills.append(sig)
             if sig == signal.SIGKILL:
                 (self.tmp / "proc" / "777" / "stat").unlink()
-        inst.kill = kill
+        inst.signaller = kill
         out = inst.stop()
         self.assertEqual(kills, [signal.SIGTERM, signal.SIGKILL])
         self.assertEqual(out["stop_mode"], "forced_kill")
         self.assertTrue(out["exit_confirmed"])
 
-    def test_stop_refuses_when_identity_changed_between_check_and_kill(self):
+    def test_stop_does_not_escalate_after_term_when_the_pid_was_reused(self):
         kills = []
         inst = self.instance(kills)
         inst.attach()
 
-        def kill(pid, sig):
+        def kill(sig):
             kills.append(sig)
             write_proc(self.tmp / "proc", pid=777, start=1)  # pid reused after SIGTERM
-        inst.kill = kill
+        inst.signaller = kill
         out = inst.stop()
         self.assertEqual(kills, [signal.SIGTERM])
         self.assertTrue(out["exit_confirmed"])
@@ -688,6 +690,35 @@ class NativeTests(Base):
         with self.assertRaises(SystemExit):
             self.collector(inst, "--stop").run()
         self.assertFalse(self.root.exists())
+
+    @unittest.skipUnless(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"), "needs pidfd")
+    def test_pidfd_closes_the_check_to_kill_window(self):
+        child = subprocess.Popen([sys.executable, "-I", "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        self.addCleanup(lambda: (child.poll() is None and child.kill(), child.wait(), child.stdin.close()))
+        inst = collect.NativeInstance(child.pid, clock=self.clock.clock, sleep=self.clock.sleep, stop_timeout=5)
+        inst.attach()
+        self.addCleanup(inst.close)
+        self.assertIsNotNone(inst.pidfd)
+        child.kill()
+        child.wait()  # reaped: the pid is free to be recycled
+        real, calls = inst.check, []
+
+        def check():  # the identity check passes, then the process dies before the signal
+            calls.append(1)
+            return collect.OK if len(calls) == 1 else real()
+        inst.check = check
+        out = inst.stop()
+        self.assertIn("signal_failed", out["errors"], "pidfd refuses a dead process instead of hitting a recycled pid")
+        self.assertFalse(out["signal_delivered"])
+        self.assertTrue(out["exit_confirmed"])
+
+    def test_native_stop_without_pidfd_is_refused(self):
+        proc = self.tmp / "proc"
+        write_proc(proc)
+        inst = collect.NativeInstance(777, proc, clk_tck=100, opener=lambda pid: None)
+        inst.real_signals = False  # skip the proc-root check; fake tree on purpose
+        with self.assertRaises(SystemExit):
+            self.collector(inst, "--stop").run()
 
     def test_stop_with_wrong_identity_does_nothing(self):
         kills = []
@@ -844,6 +875,25 @@ class LaunchGuardTests(Base):
             collect.Collector(args, self.docker()).prepare()
         self.assertFalse((self.tmp / "w").exists())
 
+    def test_gluetun_leg_rules(self):
+        base = ["--mode", "docker", "--root", str(self.tmp / "l"), "--commit", COMMIT, "--url", self.lodestar.url,
+                "--min-free-bytes", "3", "--warn-free-bytes", "2", "--stop-free-bytes", "1"]
+        parse = collect.build_parser().parse_args
+        with self.assertRaises(SystemExit):  # the leg needs --require-gluetun
+            collect.Collector(parse(base + ["--leg", "gluetun", "--baseline-hours", "2"]), self.docker(parent_image="gluetun")).prepare()
+        with self.assertRaises(SystemExit):  # and at least 2 h
+            collect.Collector(parse(base + ["--leg", "gluetun", "--require-gluetun", "--baseline-hours", "1"]),
+                              self.docker(parent_image="gluetun")).prepare()
+        collect.Collector(parse(base + ["--leg", "gluetun", "--require-gluetun", "--baseline-hours", "2"]),
+                          self.docker(parent_image="gluetun")).prepare()  # 2 h is allowed outside --rehearsal
+        with self.assertRaises(SystemExit):  # the main leg still needs 24 h
+            collect.Collector(parse(base + ["--baseline-hours", "2"]), self.docker()).prepare()
+
+    def test_leg_is_recorded(self):
+        c = self.collector(self.docker(parent_image="qmcgaw/gluetun"), "--require-gluetun", "--leg", "gluetun")
+        self.assertEqual(c.run(), 0)
+        self.assertEqual(json.loads((self.root / "run.json").read_text())["settings"]["leg"], "gluetun")
+
     def test_guardrails_must_be_ordered(self):
         args = args_for(self.tmp / "g", "--url", self.lodestar.url)
         args.stop_free_bytes, args.warn_free_bytes = 5, 4
@@ -906,6 +956,58 @@ class PublicationTests(Base):
             self.assertTrue(all(n.removeprefix("lodestar_") in collect.KEEP for n in names), names)
             self.assertIn('lodestar_fetch_failures_total{kind="timed_out"}', prom.read_text())
 
+    def test_lodestar_restart_inside_the_container_ends_the_run(self):
+        def metrics(t):
+            text = metrics_text(t)
+            return 200, (text.replace("lodestar_start_time_seconds 1000", "lodestar_start_time_seconds 5000") if t >= 200 else text).encode()
+        self.lodestar.metrics = metrics
+        c, rc = self.run_docker("--stop")
+        self.assertEqual(rc, 1)
+        result = self.result()
+        self.assertEqual(result["reason"], "process_exited_instance_restarted")
+        self.assertEqual(result["observed_start_time_seconds"], 5000)
+        self.assertEqual(self.api.posts(), [])
+        self.assertEqual({r["values"]["start_time_seconds"] for r in self.rows()}, {1000})
+        self.assertNotIn("identity_changes", self.report()["issues"])
+
+    def test_no_personal_paths_or_hostnames_in_evidence(self):
+        storage = self.tmp / "mnt" / "user" / "alice" / "appdata"
+        storage.mkdir(parents=True)
+        instance = self.docker()
+        self.api.container["Config"]["Image"] = "registry.nas.home.lan/alice/lodestar:1"
+        self.api.container["HostConfig"]["NetworkMode"] = "alices-private-net"
+        url = "http://nas.home.lan:" + self.lodestar.url.rsplit(":", 1)[1]
+        direct = lambda u: self.lodestar.respond("/" + u.rsplit("/", 1)[1])
+        args = args_for(self.root, "--url", url, "--storage-path", str(storage), "--stop")
+        c = collect.Collector(args, instance, clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,
+                              fetch=direct, volumes=lambda labelled: collect.statvfs_volumes(labelled))
+        self.assertEqual(c.run(), 0)
+        for path in self.root.rglob("*"):
+            if path.is_file() and path.name != "collector.py":
+                text = path.read_text()
+                for personal in ("alice", "nas.home.lan", str(self.tmp), "/mnt/user"):
+                    self.assertNotIn(personal, text, f"{personal!r} leaked into {path.name}")
+        run = json.loads((self.root / "run.json").read_text())
+        self.assertEqual(run["network"]["http_host_class"], "name")
+        self.assertEqual(run["network"]["mode"], "custom")
+        labels = {v["volume"] for v in run["settings"]["storage_guardrails"]["volumes"]}
+        self.assertTrue(labels <= {"evidence", "storage-1"}, labels)
+
+    def test_atomic_writes_fsync_their_directory(self):
+        with mock.patch.object(collect, "fsync_dir", wraps=collect.fsync_dir) as spy:
+            self.run_docker()
+        synced = {Path(c.args[0]) for c in spy.call_args_list}
+        self.assertEqual(synced, {self.root, self.root / "metrics"})
+        self.assertGreaterEqual(spy.call_count, 2)  # run.json and result.json at least
+
+    def test_host_and_network_classes(self):
+        for host, cls in (("127.0.0.1", "loopback"), ("[::1]", "loopback"), ("localhost", "loopback"),
+                          ("192.168.1.5", "private"), ("8.8.8.8", "public"), ("nas.home.lan", "name")):
+            self.assertEqual(collect.host_class(host), cls, host)
+        for mode, cls in (("host", "host"), ("bridge", "bridge"), ("container:abc", "container"),
+                          ("br0", "custom"), ("default", "bridge")):
+            self.assertEqual(collect.network_mode_class(mode), cls, mode)
+
     def test_native_run_records_process_name_not_command_line(self):
         proc = self.tmp / "proc"
         write_proc(proc)
@@ -928,9 +1030,10 @@ class PublicationTests(Base):
         self.assertEqual(collect.COUNTERS, analyze_cr0.COUNTERS)
 
     def test_required_metrics_match_the_windows_collector(self):
+        import re
         source = (HERE.parent / "cr0-soak.ps1").read_text()
-        for name in collect.REQUIRED:
-            self.assertIn(f"'{name}'", source)
+        block = next(b for b in re.findall(r"foreach \(\$name in @\((.*?)\)\) \{", source, re.S) if "start_time_seconds" in b)
+        self.assertEqual(set(re.findall(r"'([a-z_]+)'", block)), set(collect.REQUIRED))
 
     def test_analyzer_cli_reads_the_output_end_to_end(self):
         self.run_docker("--stop")
