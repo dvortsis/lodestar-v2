@@ -54,6 +54,20 @@ jobs:
       # The merge-guard hook runs before every Bash call in every session; a
       # syntax error there would exit 2 and block them all.
       - run: bash -n .claude/hooks/merge-guard.sh
+      # main's history was rewritten on 2026-10-30 (docs/owner-decisions.md
+      # §2.25). A head that still contains the old root or the old main tip
+      # would merge the removed history back in, so it fails here.
+      - name: lineage guard
+        env:
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          for old in 1562068349a6463990b5b07cfc810ff2680b1c03 2d5e761d30cb1b7947fb09493959668eabcb84ab; do
+            if git merge-base --is-ancestor "$old" "$HEAD" 2>/dev/null; then
+              echo "::error::$HEAD contains $old from the history before 2026-10-30. Rebuild the branch from the current main (docs/decisions/2026-10-30-master-plan.md)."
+              exit 1
+            fi
+          done
       - id: c
         env:
           EVENT: ${{ github.event_name }}
