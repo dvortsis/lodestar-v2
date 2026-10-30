@@ -10,6 +10,12 @@ import type { ProgressOverlay, StallReason } from './status';
  */
 export const STARTUP_SUPPRESSION_S = 6 * 60 * 60;
 
+/**
+ * `ingest_per_hour` is the last full UTC hour, which can start up to two hours back, so the
+ * zero-rate rule waits until that whole window lies after the suppression.
+ */
+const WINDOW_CLEAR_S = STARTUP_SUPPRESSION_S + 2 * 60 * 60;
+
 /** The progress facts the pill reads, taken from `GET /stats` and the Insights overview. */
 export interface ProgressSnapshot {
 	/** `fetched_per_hour` (`GET /stats`): server rate over its last 5 minutes; null = unmeasured. */
@@ -25,15 +31,15 @@ export interface ProgressSnapshot {
 const STALL_REASONS: readonly string[] = ['writer_stalled', 'cohort_stalled', 'index_lag'];
 
 /**
- * A stall while the crawler runs: a reason the API names, or a stored rate of 0 over the window it
- * reports with nothing being fetched either, once the startup suppression is over. A rate that
- * isn't known is not a stall.
+ * A stall while the crawler runs: a reason the API names, or a stored rate of 0 over a window the
+ * API reports that lies wholly after the startup suppression. A rate that isn't known is not a
+ * stall. Fetching that doesn't reach the store is exactly the stall to catch, so the fetch rate
+ * plays no part.
  */
 export function stallReason(p: ProgressSnapshot): StallReason | null {
 	const named = p.reasons.find((r) => STALL_REASONS.includes(r));
 	if (named) return named as StallReason;
-	const quiet = p.ingestPerHour === 0 && !((p.fetchedPerHour ?? 0) > 0);
-	return quiet && (p.uptimeS ?? 0) >= STARTUP_SUPPRESSION_S ? 'no_progress' : null;
+	return p.ingestPerHour === 0 && (p.uptimeS ?? 0) >= WINDOW_CLEAR_S ? 'no_progress' : null;
 }
 
 /** Under six hours up with nothing flowing yet (or nothing known): the quiet is expected. */
@@ -49,47 +55,57 @@ export function overlayOf(p: ProgressSnapshot): ProgressOverlay {
 	return startingUp(p) ? { kind: 'starting' } : null;
 }
 
-/** How often the pill asks the server for progress; the rates are the server's, never computed here. */
-const PROGRESS_EVERY_MS = 60_000;
-
+/** `/stats` is asked this often; the rates are the server's, never computed here. */
+const STATS_EVERY_MS = 60_000;
+/** The overview (a rollup query) is asked this often when `/stats` shows nothing odd. */
+const OVERVIEW_EVERY_MS = 5 * 60_000;
 /** The index is "lagging" past this (docs/metrics.md `index_lag`); the same bound the server uses. */
 const INDEX_LAG_S = 30;
 
 /**
- * `GET /stats` is cheap and always asked: the fetch rate and uptime. The Insights overview (stored
- * rate and the server's own stall reasons) is a rollup query, so it is asked only when `/stats`
- * shows something worth a second look: fetching at 0, or the index behind. A healthy install never
- * makes it. Either failing leaves its facts unknown (null), which is never a stall.
+ * `GET /stats` is cheap and asked every time: the fetch rate and uptime. The Insights overview
+ * (stored rate and the server's own stall reasons) is a rollup query: it is asked at once when
+ * `/stats` shows fetching at 0 or the index behind, and otherwise every few minutes, because a
+ * writer can stall while fetches still count. It is not asked while paused. Either failing leaves
+ * its facts unknown (null), which is never a stall.
  */
-export async function fetchProgress(): Promise<ProgressSnapshot | null> {
-	const stats = await api.get('/stats').catch(() => null);
-	const flowing =
-		stats !== null &&
-		stats.fetched_per_hour !== null &&
-		stats.fetched_per_hour > 0 &&
-		(stats.index_lag_s ?? 0) <= INDEX_LAG_S;
-	const o = flowing
-		? null
-		: await api.get('/insights/overview', { query: { range: '24h' } }).catch(() => null);
-	if (!stats && !o) return null;
-	const reasons: string[] = [];
-	if (o) {
-		if (o.kpi.health.reason) reasons.push(o.kpi.health.reason);
-		if (o.stale) reasons.push(o.stale.reason);
-		for (const e of o.exceptions) reasons.push(e.kind);
-	}
-	return {
-		fetchedPerHour: stats?.fetched_per_hour ?? null,
-		ingestPerHour: o ? o.ingest_per_hour : null,
-		uptimeS: stats?.uptime_s ?? null,
-		reasons
+export function createProgressSource() {
+	let lastOverview = Date.now();
+	let last: ProgressSnapshot | null = null;
+	return async function fetchProgress(now = Date.now()): Promise<ProgressSnapshot | null> {
+		const stats = await api.get('/stats').catch(() => null);
+		const odd =
+			stats !== null && (stats.fetched_per_hour === 0 || (stats.index_lag_s ?? 0) > INDEX_LAG_S);
+		const due = now - lastOverview >= OVERVIEW_EVERY_MS;
+		const o =
+			stats?.paused || !(odd || due)
+				? null
+				: await api.get('/insights/overview', { query: { range: '24h' } }).catch(() => null);
+		if (stats?.paused) last = null;
+		if (o) lastOverview = now;
+		if (!stats && !o) return null;
+		// Between overview calls the last stored-rate facts stand (they describe an hour, not a moment).
+		const keep = !o && !stats?.paused ? last : null;
+		const reasons: string[] = [];
+		if (o) {
+			if (o.kpi.health.reason) reasons.push(o.kpi.health.reason);
+			if (o.stale) reasons.push(o.stale.reason);
+			for (const e of o.exceptions) reasons.push(e.kind);
+		}
+		last = {
+			fetchedPerHour: stats?.fetched_per_hour ?? null,
+			ingestPerHour: o ? o.ingest_per_hour : (keep?.ingestPerHour ?? null),
+			uptimeS: stats?.uptime_s ?? null,
+			reasons: o ? reasons : (keep?.reasons ?? [])
+		};
+		return last;
 	};
 }
 
-/** Asks now and then every minute while the tab is visible; returns the stop. */
+/** Asks now, every minute while the tab is visible, and when it becomes visible; returns the stop. */
 export function startProgress(
 	set: (p: ProgressOverlay) => void,
-	source: () => Promise<ProgressSnapshot | null> = fetchProgress
+	source: () => Promise<ProgressSnapshot | null> = createProgressSource()
 ): () => void {
 	let gone = false;
 	const refresh = () => {
@@ -99,9 +115,11 @@ export function startProgress(
 		});
 	};
 	refresh();
-	const timer = setInterval(refresh, PROGRESS_EVERY_MS);
+	const timer = setInterval(refresh, STATS_EVERY_MS);
+	document.addEventListener('visibilitychange', refresh);
 	return () => {
 		gone = true;
 		clearInterval(timer);
+		document.removeEventListener('visibilitychange', refresh);
 	};
 }

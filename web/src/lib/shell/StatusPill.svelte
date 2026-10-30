@@ -52,7 +52,8 @@
 	// words alone say "Stalled"; this says what it means and where to look).
 	const help: Partial<Record<PillKind, () => string>> = {
 		starting: () => m.shell_status_starting_help(),
-		stalled: () => m.shell_status_stalled_help()
+		stalled: () =>
+			state.reason === 'index_lag' ? m.shell_status_lag_help() : m.shell_status_stalled_help()
 	};
 
 	const Icon = $derived(icons[state.kind]);

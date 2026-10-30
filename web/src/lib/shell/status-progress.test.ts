@@ -1,8 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import StatusPill from './StatusPill.svelte';
-import { STARTUP_SUPPRESSION_S, overlayOf, stallReason, type ProgressSnapshot } from './progress';
+import {
+	STARTUP_SUPPRESSION_S,
+	createProgressSource,
+	overlayOf,
+	stallReason,
+	startProgress,
+	type ProgressSnapshot
+} from './progress';
 import { pillState, type CrawlerSnapshot } from './status';
+
+const get = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/client', () => ({ api: { get } }));
+
+const CLEAR_S = STARTUP_SUPPRESSION_S + 2 * 3600;
 
 const crawler = (over: Partial<CrawlerSnapshot> = {}): CrawlerSnapshot => ({
 	at: 1,
@@ -48,15 +60,26 @@ describe('pill progress states', () => {
 		}
 	});
 
-	it('stalled: nothing stored for the reported window once the startup suppression is over', () => {
-		const s = pill(
-			progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: STARTUP_SUPPRESSION_S })
-		);
+	it('stalled: nothing stored for a reported window that lies after the startup suppression', () => {
+		const s = pill(progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: CLEAR_S }));
 		expect(s).toMatchObject({ kind: 'stalled', reason: 'no_progress' });
 	});
 
-	it('a zero stored hour while fetches are flowing is recovering, not stalled', () => {
-		expect(pill(progress({ ingestPerHour: 0, fetchedPerHour: 300 })).kind).toBe('crawling');
+	it('fetching that never reaches the store is a stall', () => {
+		expect(pill(progress({ ingestPerHour: 0, fetchedPerHour: 300, uptimeS: CLEAR_S })).kind).toBe(
+			'stalled'
+		);
+	});
+
+	it('the reported hour may still lie inside the suppression: not a stall yet', () => {
+		const s = pill(progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: CLEAR_S - 1 }));
+		expect(s.kind).toBe('crawling');
+	});
+
+	it('an idle crawler with a zero stored rate is idle, but a named reason still stalls', () => {
+		const idle = crawler({ fetch_active: 0, fetch_pending: 0 });
+		expect(pill(progress({ ingestPerHour: 0, uptimeS: CLEAR_S }), idle).kind).toBe('idle');
+		expect(pill(progress({ reasons: ['writer_stalled'] }), idle).kind).toBe('stalled');
 	});
 
 	it('starting: under six hours up with nothing flowing yet', () => {
@@ -79,7 +102,7 @@ describe('pill progress states', () => {
 	});
 
 	it('offline wins over everything', () => {
-		const s = pill(progress({ reasons: ['writer_stalled'] }), crawler(), 'offline' as never);
+		const s = pill(progress({ reasons: ['writer_stalled'] }), crawler(), 'offline' as 'live');
 		expect(s.kind).toBe('reconnecting');
 	});
 
@@ -113,5 +136,136 @@ describe('StatusPill progress states', () => {
 	it('the other states announce nothing extra', () => {
 		render(StatusPill, { state: { kind: 'crawling', ...none } });
 		expect(screen.getByTestId('status-pill-announce').textContent).toBe('');
+	});
+});
+
+describe('StatusPill other states', () => {
+	const none = { torrents: 5, done: null, total: null };
+	it.each([
+		['paused', 'Paused'],
+		['reconnecting', 'Reconnecting']
+	] as const)('%s reads as words and announces nothing extra', (kind, words) => {
+		render(StatusPill, { state: { kind, ...none } });
+		expect(screen.getByTestId('status-pill-text').textContent).toBe(words);
+		expect(screen.getByTestId('status-pill-announce').textContent).toBe('');
+	});
+
+	it('an index lag explains itself as lag, not as nothing arriving', () => {
+		render(StatusPill, { state: { kind: 'stalled', ...none, reason: 'index_lag' } });
+		expect(screen.getByTestId('status-pill-announce').textContent).toContain('index is behind');
+	});
+});
+
+describe('progress source', () => {
+	afterEach(() => {
+		get.mockReset();
+		vi.useRealTimers();
+	});
+	const stats = (over = {}) => ({
+		fetched_per_hour: 1200,
+		index_lag_s: 1,
+		paused: false,
+		uptime_s: DAY,
+		...over
+	});
+	const overview = (over = {}) => ({
+		ingest_per_hour: 900,
+		kpi: { health: { reason: null } },
+		stale: null,
+		exceptions: [],
+		...over
+	});
+	const route = (s: unknown, o: unknown) =>
+		get.mockImplementation((path: string) =>
+			path === '/stats'
+				? s instanceof Error
+					? Promise.reject(s)
+					: Promise.resolve(s)
+				: o instanceof Error
+					? Promise.reject(o)
+					: Promise.resolve(o)
+		);
+	const overviewCalls = () => get.mock.calls.filter((c) => c[0] === '/insights/overview').length;
+
+	it('does not ask the overview while fetching flows and the index is current', async () => {
+		route(stats(), overview());
+		const p = await createProgressSource()();
+		expect(overviewCalls()).toBe(0);
+		expect(p).toMatchObject({ fetchedPerHour: 1200, ingestPerHour: null, uptimeS: DAY });
+	});
+
+	it('asks at once when fetching is 0 or the index lags, and maps the reasons', async () => {
+		route(
+			stats({ fetched_per_hour: 0 }),
+			overview({
+				ingest_per_hour: 0,
+				kpi: { health: { reason: 'writer_stalled' } },
+				exceptions: [{ kind: 'cohort_stalled' }]
+			})
+		);
+		const p = await createProgressSource()();
+		expect(overviewCalls()).toBe(1);
+		expect(p).toMatchObject({ ingestPerHour: 0, reasons: ['writer_stalled', 'cohort_stalled'] });
+		get.mockClear();
+		route(stats({ index_lag_s: 99 }), overview());
+		await createProgressSource()();
+		expect(overviewCalls()).toBe(1);
+	});
+
+	it('does not treat an unmeasured (null) rate as odd, and skips the overview while paused', async () => {
+		route(stats({ fetched_per_hour: null }), overview());
+		await createProgressSource()();
+		route(stats({ fetched_per_hour: 0, paused: true }), overview());
+		await createProgressSource()();
+		expect(overviewCalls()).toBe(0);
+	});
+
+	it('asks the overview every few minutes even when /stats looks fine, and keeps its facts between', async () => {
+		route(stats(), overview({ ingest_per_hour: 0 }));
+		const source = createProgressSource();
+		const t0 = Date.now();
+		await source(t0);
+		expect(overviewCalls()).toBe(0);
+		const due = await source(t0 + 5 * 60_000);
+		expect(overviewCalls()).toBe(1);
+		expect(due?.ingestPerHour).toBe(0);
+		const between = await source(t0 + 6 * 60_000);
+		expect(overviewCalls()).toBe(1);
+		expect(between?.ingestPerHour).toBe(0);
+	});
+
+	it('a failed request leaves its facts unknown; both failing gives null', async () => {
+		route(new Error('down'), overview({ ingest_per_hour: 0 }));
+		const source = createProgressSource();
+		const p = await source(Date.now() + 10 * 60_000);
+		expect(p).toMatchObject({ fetchedPerHour: null, uptimeS: null, ingestPerHour: 0 });
+		route(new Error('down'), new Error('down'));
+		expect(await createProgressSource()(Date.now() + 10 * 60_000)).toBeNull();
+	});
+
+	it('polls every minute, skips a hidden tab, keeps the last overlay on null, and stops', async () => {
+		vi.useFakeTimers();
+		const set = vi.fn();
+		const answers: (ProgressSnapshot | null)[] = [
+			progress({ reasons: ['writer_stalled'] }),
+			null,
+			progress()
+		];
+		const source = vi.fn(() => Promise.resolve(answers.shift() ?? null));
+		const stop = startProgress(set, source);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(set).toHaveBeenCalledWith({ kind: 'stalled', reason: 'writer_stalled' });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(set).toHaveBeenCalledTimes(1); // null: nothing replaced
+		Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(source).toHaveBeenCalledTimes(2);
+		Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+		document.dispatchEvent(new Event('visibilitychange'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(set).toHaveBeenLastCalledWith(null);
+		stop();
+		await vi.advanceTimersByTimeAsync(120_000);
+		expect(source).toHaveBeenCalledTimes(3);
 	});
 });

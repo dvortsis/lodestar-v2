@@ -57,3 +57,12 @@ for (const width of [390, 1366]) {
 		});
 	});
 }
+
+test('a healthy overview shows no stalled warning on Insights', async ({ page, go, mock }) => {
+	await liveEvents(page);
+	mock.on('getStats', { ...stats, fetched_per_hour: 1200 });
+	mock.on('getInsightsOverview', overviewFixture());
+	await go('/insights');
+	await expect(page.getByTestId('insights-page')).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByTestId('insights-stalled')).toHaveCount(0);
+});

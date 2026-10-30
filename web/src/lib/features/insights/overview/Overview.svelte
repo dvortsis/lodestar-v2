@@ -7,7 +7,7 @@
 	import { formatDate } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { stallReason } from '$lib/shell/progress';
+	import { statusRef } from '$lib/shell/status-ref.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
@@ -131,21 +131,16 @@
 	};
 	const announcement = $derived(insights.notice ? notices[insights.notice]() : '');
 	const paused = $derived(overview?.kpi.health.state === 'paused');
-	// The same call as the status pill's (the server's reason, or nothing stored for the window it
-	// reports), from this response alone: no uptime here, so the quiet-window rule waits for `/stats`.
+	// The server's own reasons here (an index lag has its own exception and the writer stall has the
+	// stale banner); the no-progress call needs `uptime_s`, so it is the status pill's verdict.
 	const stalled = $derived(
 		!!overview &&
 			!paused &&
-			insights.crawler?.paused !== true &&
-			stallReason({
-				fetchedPerHour: null,
-				ingestPerHour: overview.ingest_per_hour,
-				uptimeS: null,
-				reasons: [
-					...(overview.kpi.health.reason ? [overview.kpi.health.reason] : []),
-					...overview.exceptions.map((e) => e.kind)
-				]
-			}) !== null
+			!overview.stale &&
+			(overview.kpi.health.reason === 'writer_stalled' ||
+				overview.exceptions.some((e) => e.kind === 'cohort_stalled') ||
+				(statusRef.current?.pill.kind === 'stalled' &&
+					statusRef.current.pill.reason === 'no_progress'))
 	);
 	const staleText: Record<string, () => string> = {
 		paused: () => m.insights_overview_stale_paused(),
@@ -200,13 +195,13 @@
 	{:else if !overview}
 		<Skeleton />
 	{:else}
-		<StageStrip stages={overview.stages} onjump={jump} />
-
 		{#if stalled}
 			<Banner kind="warning" title={m.insights_overview_stalled_title()}>
 				<span data-testid="insights-stalled">{m.insights_overview_stalled_body()}</span>
 			</Banner>
 		{/if}
+
+		<StageStrip stages={overview.stages} onjump={jump} />
 
 		{#if overview.stale}
 			<Banner kind="warning" title={m.insights_overview_stale_title()}>

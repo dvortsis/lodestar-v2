@@ -63,7 +63,7 @@
 	"insights_overview_stale_other": "Counting has stopped ({reason}).",
 	"insights_overview_stale_since": "Last updated",
 	"insights_overview_stalled_title": "The crawler looks stalled",
-	"insights_overview_stalled_body": "It is running, but nothing new is being stored. Check the stage strip below to see where it is stuck.",
+	"insights_overview_stalled_body": "It is running, but nothing new is being stored. The stage strip below shows where.",
 	"insights_overview_paused_title": "The crawler is paused",
 	"insights_overview_paused_body": "Nothing new is being discovered. The numbers below show what was collected before. Resume to start discovering again.",
 	"insights_overview_starting_title": "Your first discoveries will appear here within minutes",
