@@ -679,7 +679,7 @@ impl Core {
         if let Some(hit) = self.floor(item) {
             return Some(hit);
         }
-        self.patterns(item, &TermSet::default())
+        self.patterns(item, &TermSet::default(), None)
             .into_iter()
             .find(|h| h.on)
     }
@@ -692,7 +692,18 @@ impl Core {
     /// Every pattern rule's hit, switched on or not. `neutral` words are
     /// ignored as evidence (CSX-5 *Neutralize term*, §20.5.5).
     pub fn pattern_hits(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        self.patterns(item, neutral)
+        self.patterns(item, neutral, None)
+    }
+
+    /// [`Core::pattern_hits`], reusing `read`, the item's name and paths
+    /// already in tokens, where it reads the same as the core would.
+    pub(crate) fn pattern_hits_read(
+        &self,
+        item: &Item,
+        neutral: &TermSet,
+        read: Option<normalize::Read<'_>>,
+    ) -> Vec<Hit> {
+        self.patterns(item, neutral, read)
     }
 
     /// The floor's verdict on bare hashes, before anything is fetched.
@@ -709,7 +720,7 @@ impl Core {
     /// queue).
     pub fn hits(&self, item: &Item) -> Vec<Hit> {
         let mut hits: Vec<Hit> = self.floor(item).into_iter().collect();
-        hits.extend(self.patterns(item, &TermSet::default()));
+        hits.extend(self.patterns(item, &TermSet::default(), None));
         hits
     }
 
@@ -812,7 +823,7 @@ impl Core {
         s
     }
 
-    fn patterns(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
+    fn patterns(&self, item: &Item, neutral: &TermSet, read: Option<normalize::Read>) -> Vec<Hit> {
         thread_local! {
             // Kept per thread: its buffers carry over between torrents.
             static SCRATCH: std::cell::RefCell<Scratch> = Default::default();
@@ -821,8 +832,8 @@ impl Core {
         // over the same torrent just made (`normalize::with_tokenizer`).
         normalize::with_tokenizer(|tok| {
             SCRATCH.with(|s| match s.try_borrow_mut() {
-                Ok(mut scratch) => self.patterns_with(tok, &mut scratch, item, neutral),
-                Err(_) => self.patterns_with(tok, &mut Scratch::default(), item, neutral),
+                Ok(mut scratch) => self.patterns_with(tok, &mut scratch, item, neutral, read),
+                Err(_) => self.patterns_with(tok, &mut Scratch::default(), item, neutral, read),
             })
         })
     }
@@ -833,6 +844,7 @@ impl Core {
         scratch: &mut Scratch,
         item: &Item,
         neutral: &TermSet,
+        read: Option<normalize::Read>,
     ) -> Vec<Hit> {
         let Scratch {
             tokens,
@@ -842,7 +854,10 @@ impl Core {
         } = scratch;
         tokens.clear();
         flags.clear();
-        tok.text(item.name, tokens);
+        match read {
+            Some(r) => tokens.extend_from_slice(r.name()),
+            None => tok.text(item.name, tokens),
+        }
         self.flags_of(tokens, flags);
         let mut texts = vec![(Field::Name, self.signals(tokens, flags, neutral, at))];
         // Files in one folder share its tokens, and a few folders are
@@ -856,6 +871,19 @@ impl Core {
                 continue;
             };
             if f.padding {
+                continue;
+            }
+            // Read already, and the same as read here: the tokens of the
+            // path's segments read apart.
+            if let Some(path) = read.and_then(|r| r.path(i)) {
+                tokens.clear();
+                tokens.extend_from_slice(path);
+                flags.clear();
+                self.flags_of(tokens, flags);
+                let s = self.signals(tokens, flags, neutral, at);
+                if s.paired() {
+                    texts.push((Field::File(i as u32), s));
+                }
                 continue;
             }
             let slot = match dirs_of[..known].iter().position(|d| *d == dirs) {
@@ -1070,7 +1098,53 @@ mod tests {
             for adult in [false, true] {
                 let ct = if adult { ContentType::Adult } else { ContentType::Video };
                 let item = Item { content_type: ct, ..item };
-                prop_assert_eq!(c.patterns(&item, &none), c.judge(&texts, ct));
+                prop_assert_eq!(c.patterns(&item, &none, None), c.judge(&texts, ct));
+            }
+        }
+
+        /// Reusing keyword entries' read of the name and paths finds what
+        /// the core's own read finds: paths whose spelled-out letters
+        /// run on over a `/` (`y/o`), which read differently whole, are
+        /// read again, and padding files are skipped either way.
+        #[test]
+        fn reusing_the_whole_read_finds_the_same(
+            segs in prop::collection::vec(
+                prop::collection::vec(prop::sample::select(vec![
+                    "lexa", "rolea", "codex", "yo", "y", "o", "l", "e", "x", "a", "years",
+                    "old", "15", "12", "docu", "16yo", "ⓛⓔⓧⓐ", "Ｒｏｌｅａ", "c\u{301}",
+                ]), 1..5).prop_map(|w| w.join(".")),
+                1..7,
+            ),
+            layout in prop::collection::vec((0usize..7, 0usize..7, 0usize..4, any::<bool>()), 0..14),
+            name in 0usize..7,
+            neutral in prop::sample::subsequence(vec!["lexa", "rolea", "codex"], 0..2),
+        ) {
+            let c = core();
+            let files: Vec<FileInfo> = layout
+                .iter()
+                .map(|&(a, b, depth, padding)| {
+                    let mut path: Vec<String> =
+                        (0..depth).map(|d| segs[(a + d) % segs.len()].clone()).collect();
+                    path.push(segs[b % segs.len()].clone());
+                    let mut f = FileInfo::new(path, 1);
+                    f.padding = padding && b % 3 == 0;
+                    f
+                })
+                .collect();
+            let name = &segs[name % segs.len()];
+            let (mut tokens, mut apart) = (Vec::new(), Vec::new());
+            normalize::tokens(name, &mut tokens);
+            let mut ends = vec![tokens.len()];
+            normalize::paths_apart(files.iter().map(|f| &f.path[..]), &mut tokens, &mut ends, &mut apart);
+            let read = normalize::Read { tokens: &tokens, ends: &ends, apart: &apart };
+            let neutral = TermSet::of(&neutral);
+            for adult in [false, true] {
+                let ct = if adult { ContentType::Adult } else { ContentType::Video };
+                let item = Item { hashes: &[], name, files: &files, content_type: ct };
+                prop_assert_eq!(
+                    c.patterns(&item, &neutral, Some(read)),
+                    c.patterns(&item, &neutral, None)
+                );
             }
         }
     }

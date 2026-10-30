@@ -615,8 +615,9 @@ pub struct Doc<'a> {
     file_names: OnceCell<Vec<Text>>,
     titles: OnceCell<Vec<Text>>,
     /// The name and each path in the core's tokens, for keyword entries:
-    /// all in one buffer, with where each text ends.
-    normalized: OnceCell<(Vec<crate::normalize::Token>, Vec<usize>)>,
+    /// all in one buffer, with where each text ends, and whether each
+    /// path reads the same with its segments apart.
+    normalized: OnceCell<(Vec<crate::normalize::Token>, Vec<usize>, Vec<bool>)>,
     enrichment: OnceCell<Option<DocEnrichment>>,
     keys: OnceCell<DocKeys>,
     /// The rule set's NEAR terms, whose nearness the keys record.
@@ -788,11 +789,12 @@ impl<'a> Doc<'a> {
 
     /// The name, then each path, in the core's tokens.
     pub(crate) fn normalized(&self) -> impl Iterator<Item = &[crate::normalize::Token]> {
-        let (tokens, ends) = self.normalized.get_or_init(|| {
+        let (tokens, ends, _) = self.normalized.get_or_init(|| {
             let mut tokens = Vec::new();
             crate::normalize::tokens(self.item.name, &mut tokens);
             let mut ends = vec![tokens.len()];
-            crate::normalize::paths(
+            let mut apart = Vec::new();
+            crate::normalize::paths_apart(
                 self.item
                     .files
                     .iter()
@@ -800,13 +802,26 @@ impl<'a> Doc<'a> {
                     .map(|f| &f.path[..]),
                 &mut tokens,
                 &mut ends,
+                &mut apart,
             );
-            (tokens, ends)
+            (tokens, ends, apart)
         });
         std::iter::once(0)
             .chain(ends.iter().copied())
             .zip(ends)
             .map(|(from, to)| &tokens[from..*to])
+    }
+
+    /// The name and paths in the core's tokens, if keyword entries have
+    /// read them already, for the core to reuse.
+    pub(crate) fn read(&self) -> Option<crate::normalize::Read<'_>> {
+        self.normalized
+            .get()
+            .map(|(tokens, ends, apart)| crate::normalize::Read {
+                tokens,
+                ends,
+                apart,
+            })
     }
 
     fn enrichment(&self) -> Option<&DocEnrichment> {

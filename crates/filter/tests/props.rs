@@ -677,3 +677,76 @@ fn budget() {
          measurement can't be trusted: {drifted:?}"
     );
 }
+
+/// One judgment of each of the budget's torrents, for callgrind, whose
+/// instruction counts don't move with the runner (§20.8). `LODESTAR_PROFILE`
+/// picks the case: `core`, `mixed` (the default) or `neutralized`. A
+/// warm-up pass first, so the counts are a judgment's, not the index
+/// build's:
+/// `valgrind --tool=callgrind --toggle-collect='*profile_pass*' target/release/deps/props-* --ignored --exact profile`.
+#[test]
+#[ignore]
+fn profile() {
+    let set = torrents(512);
+    let classes: Vec<_> = set
+        .iter()
+        .map(|(n, f)| lodestar_classify::classify(n, f))
+        .collect();
+    let items: Vec<Item> = set
+        .iter()
+        .enumerate()
+        .map(|(i, (name, files))| Item {
+            hashes: std::slice::from_ref(Box::leak(Box::new([i as u8; 20]))),
+            name,
+            files,
+            content_type: classes[i].content_type,
+        })
+        .collect();
+    let facts: Vec<_> = classes
+        .iter()
+        .zip(&set)
+        .map(|(class, (_, f))| lodestar_filter::Facts {
+            class,
+            size: f.iter().map(|f| f.size).sum(),
+            piece_len: 1 << 22,
+            flags: 0,
+            discovered_at: 0,
+            now: 0,
+        })
+        .collect();
+    let case = std::env::var("LODESTAR_PROFILE").unwrap_or_else(|_| "mixed".into());
+    let mut engine = lodestar_filter::Engine::new(shipped());
+    if case != "core" {
+        engine.packs = lodestar_filter::PackSwitches::all();
+        engine.rules = mixed_rules().into();
+    }
+    if case == "neutralized" {
+        engine.overrides = ["web", "webrip", "hevc", "mkv", "sample"]
+            .iter()
+            .zip(1..)
+            .map(|(w, id)| lodestar_filter::Override {
+                id,
+                what: lodestar_filter::Match::Keyword((*w).into()),
+                strength: lodestar_filter::Strength::Neutralize,
+                scope: None,
+                expires_at: None,
+                shadow_until: None,
+            })
+            .collect();
+    }
+    #[inline(never)]
+    fn profile_pass(
+        engine: &lodestar_filter::Engine,
+        items: &[Item],
+        facts: &[lodestar_filter::Facts],
+    ) {
+        for (item, facts) in items.iter().zip(facts) {
+            std::hint::black_box(engine.judge(std::hint::black_box(item), Some(facts), 0));
+        }
+    }
+    // The warm-up, outside the toggled function.
+    for (item, facts) in items.iter().zip(&facts) {
+        std::hint::black_box(engine.judge(item, Some(facts), 0));
+    }
+    profile_pass(&engine, &items, &facts);
+}
