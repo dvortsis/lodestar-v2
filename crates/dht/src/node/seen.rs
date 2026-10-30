@@ -59,7 +59,7 @@ pub(crate) struct SeenFilter {
     previous: Bloom,
     capacity: usize,
     k: u32,
-    hasher: std::collections::hash_map::RandomState,
+    hasher: super::transport::SeenHasher,
 }
 
 impl SeenFilter {
@@ -77,7 +77,7 @@ impl SeenFilter {
             previous: Bloom::new(bits.max(64)),
             capacity,
             k,
-            hasher: std::collections::hash_map::RandomState::new(),
+            hasher: super::transport::SeenHasher::default(),
         }
     }
 

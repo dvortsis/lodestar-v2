@@ -66,3 +66,40 @@ pub(crate) type Set<T> = std::collections::HashSet<T>;
 pub(crate) type Map<K, V> = std::collections::BTreeMap<K, V>;
 #[cfg(feature = "testing")]
 pub(crate) type Set<T> = std::collections::BTreeSet<T>;
+
+/// The seen filter's hash keys. Production keys it randomly per process;
+/// under `testing` the keys are fixed, or a false positive (a dropped
+/// harvest) would land on different hashes in every run.
+#[cfg(not(feature = "testing"))]
+pub(crate) type SeenHasher = std::collections::hash_map::RandomState;
+#[cfg(feature = "testing")]
+pub(crate) type SeenHasher = std::hash::BuildHasherDefault<FixedHasher>;
+
+/// FNV-1a with a SplitMix64 finaliser: fixed, and defined here rather than
+/// by std, so the simulator's goldens survive toolchain updates.
+#[cfg(feature = "testing")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FixedHasher(u64);
+
+#[cfg(feature = "testing")]
+impl Default for FixedHasher {
+    fn default() -> FixedHasher {
+        FixedHasher(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+#[cfg(feature = "testing")]
+impl std::hash::Hasher for FixedHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}

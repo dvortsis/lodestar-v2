@@ -75,7 +75,7 @@ fn check_golden(s: &Scenario) {
             .lines()
             .zip(now.lines())
             .position(|(a, b)| a != b)
-            .unwrap_or_else(|| golden.lines().count().min(report.text.lines().count()));
+            .unwrap_or_else(|| golden.lines().count().min(now.lines().count()));
         panic!(
             "`{}` differs from {} at line {}:\n  golden: {:?}\n  now:    {:?}\n\nfull report:\n{}\n\
              If the change is intended, regenerate with CRAWLER_SIM_BLESS=1 and explain it in the PR.",
@@ -124,6 +124,26 @@ pub fn stored_over_seeds(s: &Scenario, seeds: std::ops::Range<u64>) -> (f64, u64
     let min = stored.iter().copied().min().unwrap_or(0);
     let max = stored.iter().copied().max().unwrap_or(0);
     (mean, min, max)
+}
+
+/// Stored metadata, "on" arm minus "off" arm, per seed. The network keys
+/// its luck per node and query, so the arms of one seed share their random
+/// numbers and the difference isolates the switch better than unpaired
+/// means do.
+#[allow(dead_code)] // For candidates' A/B tests (README, "A/B a candidate").
+pub fn paired_stored_difference(
+    off: &Scenario,
+    on: &Scenario,
+    seeds: std::ops::Range<u64>,
+) -> Vec<i64> {
+    seeds
+        .map(|seed| {
+            let (mut a, mut b) = (off.clone(), on.clone());
+            a.seed = seed;
+            b.seed = seed;
+            simulate(&b).stored as i64 - simulate(&a).stored as i64
+        })
+        .collect()
 }
 
 #[test]

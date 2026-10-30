@@ -263,6 +263,7 @@ pub async fn run(s: &Scenario) -> Report {
     // Measure at the boundary, then stop everything.
     let dht_final = node.stats();
     let pool_final = pool.stats();
+    let stored_at_end = stored.load(Ordering::Relaxed);
     let mut text = header(s, live, held, distinct);
     write_minutes(&mut text, &minutes);
     write_totals(&mut text, &dht_final, pool_final, &funnel);
@@ -283,14 +284,14 @@ pub async fn run(s: &Scenario) -> Report {
     let _ = writeln!(
         text,
         "fingerprint={:016x}",
-        hash(&[log.fnv.0, stored.load(Ordering::Relaxed)])
+        hash(&[log.fnv.0, stored_at_end])
     );
     Report {
         text,
         log: log.take_lines(),
         dht: dht_final,
         net: net_stats,
-        stored: stored.load(Ordering::Relaxed),
+        stored: stored_at_end,
     }
 }
 
@@ -361,6 +362,10 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
     t
 }
 
+/// Minutes before this are warmup: the first BEP 51 sweep and its
+/// synchronized retries. The steady-state line averages the rest.
+const WARMUP_MINUTES: usize = 3;
+
 fn write_minutes(t: &mut String, minutes: &[Minute]) {
     let _ = writeln!(
         t,
@@ -386,6 +391,18 @@ fn write_minutes(t: &mut String, minutes: &[Minute]) {
             g(m.pool_active)
         );
     }
+    let steady = minutes.get(WARMUP_MINUTES..).unwrap_or_default();
+    let n = steady.len().max(1) as f64;
+    let mean = |f: fn(&Minute) -> u64| steady.iter().map(f).sum::<u64>() as f64 / n;
+    let _ = writeln!(
+        t,
+        "steady (after {WARMUP_MINUTES} warmup min), per min: admitted={:.1} rejected={:.1} completed={:.1} fetched={:.1} stored={:.1}",
+        mean(|m| m.admitted),
+        mean(|m| m.rejected),
+        mean(|m| m.completed),
+        mean(|m| m.fetched),
+        mean(|m| m.stored)
+    );
 }
 
 fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &FunnelCounts) {
@@ -516,8 +533,16 @@ fn write_net(t: &mut String, n: &NetStats, glue_dropped: u64, queued_at_end: usi
     );
     let _ = writeln!(
         t,
-        "to_dead={} to_unknown={} lost={} rate_limited={} errors={} replies={} values_replies={}",
-        n.to_dead, n.to_unknown, n.lost, n.rate_limited, n.errors, n.replies, n.values_replies
+        "to_dead={} to_unknown={} lost={} rate_limited={} errors={} unsupported={} sample_early={} replies={} values_replies={}",
+        n.to_dead,
+        n.to_unknown,
+        n.lost,
+        n.rate_limited,
+        n.errors,
+        n.unsupported,
+        n.sample_early,
+        n.replies,
+        n.values_replies
     );
     let _ = writeln!(
         t,

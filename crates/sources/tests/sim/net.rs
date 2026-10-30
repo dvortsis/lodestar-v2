@@ -23,7 +23,7 @@ use lodestar_metainfo::InfoHash;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant, sleep_until};
 
-use crate::rng::Rng;
+use crate::rng::{Rng, hash};
 use crate::scenario::{NetConfig, SwarmConfig};
 
 /// Nodes a reply carries, and the holders of a hash (BEP 5's K).
@@ -41,7 +41,14 @@ struct SimNode {
     alive: bool,
     bep51: bool,
     held: Vec<InfoHash>,
-    cursor: usize,
+    /// Start of the window of `held` this node currently samples, and when
+    /// it moves on: until then it answers with the same window (BEP 51).
+    window: usize,
+    refresh_at: Option<Instant>,
+    /// This node's BEP 51 interval (the scenario's, jittered ±25%).
+    interval_s: u32,
+    /// Queries it has had from us: the index its random decisions key on.
+    asked: u64,
     /// (virtual second, queries answered in it).
     rate: (u64, u32),
 }
@@ -58,7 +65,13 @@ pub struct NetStats {
     pub to_unknown: u64,
     pub lost: u64,
     pub rate_limited: u64,
+    /// KRPC 202 replies (the scripted error rate).
     pub errors: u64,
+    /// KRPC 204 replies to `sample_infohashes` from non-BEP 51 nodes.
+    pub unsupported: u64,
+    /// `sample_infohashes` asked again before the node's interval: answered
+    /// with the same window, as a real node would.
+    pub sample_early: u64,
     pub replies: u64,
     pub values_replies: u64,
 }
@@ -68,7 +81,10 @@ type InFlight = Reverse<(Instant, u64, Vec<u8>, SocketAddr)>;
 
 pub struct Net {
     cfg: NetConfig,
-    rng: Rng,
+    /// Keys every per-packet decision, with the node and its query index,
+    /// so a change in what the crawler sends elsewhere doesn't reshuffle
+    /// this node's luck (A/B arms share their random numbers).
+    seed: u64,
     start: Instant,
     /// Sorted by id.
     nodes: Vec<SimNode>,
@@ -132,13 +148,21 @@ impl Net {
                 } else {
                     Vec::new()
                 };
+                let id = NodeId(rng.bytes20());
+                let addr = address(&mut rng, &mut taken, i);
+                let quarter = u64::from(cfg.sample_interval_s / 4);
+                let interval_s = (u64::from(cfg.sample_interval_s) - quarter
+                    + rng.below(2 * quarter + 1)) as u32;
                 SimNode {
-                    id: NodeId(rng.bytes20()),
-                    addr: address(&mut rng, &mut taken, i),
+                    id,
+                    addr,
                     alive,
                     bep51,
                     held,
-                    cursor: 0,
+                    window: 0,
+                    refresh_at: None,
+                    interval_s,
+                    asked: 0,
                     rate: (u64::MAX, 0),
                 }
             })
@@ -165,7 +189,7 @@ impl Net {
             .collect();
         let net = Net {
             cfg: cfg.clone(),
-            rng,
+            seed: rng.next_u64(),
             start,
             nodes,
             by_addr,
@@ -227,7 +251,12 @@ impl Net {
             self.stats.to_dead += 1;
             return;
         }
-        if self.rng.chance(self.cfg.loss_permille) {
+        let n = self.nodes[i].asked;
+        self.nodes[i].asked += 1;
+        let seed = self.seed;
+        let roll = move |purpose: u64| hash(&[seed, i as u64, n, purpose]);
+        let chance = move |purpose: u64, permille: u32| roll(purpose) % 1000 < u64::from(permille);
+        if chance(1, self.cfg.loss_permille) {
             self.stats.lost += 1;
             return;
         }
@@ -243,22 +272,22 @@ impl Net {
             }
             rate.1 += 1;
         }
-        let reply = if self.rng.chance(self.cfg.error_permille) {
+        let reply = if chance(2, self.cfg.error_permille) {
             self.stats.errors += 1;
             error(msg.transaction_id, error_code::SERVER, b"busy")
         } else {
             self.answer(i, msg.transaction_id, &query.method)
         };
         // The reply can be lost on the way back too.
-        if self.rng.chance(self.cfg.loss_permille) {
+        if roll(3) % 1000 < u64::from(self.cfg.loss_permille) {
             self.stats.lost += 1;
             return;
         }
         let l = self.cfg.latency;
-        let ms = if self.rng.chance(l.slow_permille) {
+        let ms = if roll(4) % 1000 < u64::from(l.slow_permille) {
             l.slow_ms
         } else {
-            l.base_ms + self.rng.below(l.jitter_ms + 1)
+            l.base_ms + roll(5) % (l.jitter_ms + 1)
         };
         self.seq += 1;
         self.stats.replies += 1;
@@ -296,17 +325,27 @@ impl Net {
             }
             Method::SampleInfohashes { target, .. } => {
                 if !self.nodes[i].bep51 {
-                    self.stats.errors += 1;
+                    self.stats.unsupported += 1;
                     return error(tid, error_code::METHOD_UNKNOWN, b"unknown method");
                 }
+                let now = Instant::now();
                 let node = &mut self.nodes[i];
                 let take = self.cfg.sample_size.min(node.held.len());
+                match node.refresh_at {
+                    Some(at) if now < at => self.stats.sample_early += 1,
+                    Some(_) => {
+                        node.window = (node.window + take) % node.held.len().max(1);
+                        node.refresh_at = Some(now + Duration::from_secs(node.interval_s.into()));
+                    }
+                    None => {
+                        node.refresh_at = Some(now + Duration::from_secs(node.interval_s.into()));
+                    }
+                }
                 samples = (0..take)
-                    .flat_map(|k| node.held[(node.cursor + k) % node.held.len()].0)
+                    .flat_map(|k| node.held[(node.window + k) % node.held.len()].0)
                     .collect::<Vec<u8>>();
-                node.cursor = (node.cursor + take) % node.held.len().max(1);
                 response.samples = Samples::new(&samples);
-                response.interval = Some(self.cfg.sample_interval_s);
+                response.interval = Some(node.interval_s);
                 response.num = Some(node.held.len() as u32);
                 nodes = encode_nodes(&self.closer(&target.0, i), false);
                 response.nodes = CompactNodes::v4(&nodes).expect("whole entries");
@@ -451,9 +490,10 @@ mod tests {
         }
     }
 
-    /// Samples rotate through what a node holds and wrap around.
-    #[tokio::test]
-    async fn samples_rotate_and_wrap() {
+    /// Samples rotate through what a node holds once per interval, and
+    /// wrap around; asking early gets the same window back.
+    #[tokio::test(start_paused = true)]
+    async fn samples_rotate_per_interval_and_wrap() {
         let mut n = net();
         let i = n.nodes.iter().position(|x| x.bep51).expect("a BEP 51 node");
         let held = n.nodes[i].held.len();
@@ -463,16 +503,28 @@ mod tests {
             want: Default::default(),
         };
         let mut seen = Vec::new();
-        for _ in 0..(held / size + 2) {
+        let interval = n.nodes[i].interval_s;
+        let base = n.cfg.sample_interval_s;
+        assert!((base - base / 4..=base + base / 4).contains(&interval));
+        let ask = |n: &mut Net| {
             let reply = n.answer(i, b"t1", &target);
             let msg = krpc::parse(&reply).unwrap();
             let Body::Response(r) = msg.body else {
                 panic!("expected a response")
             };
-            assert_eq!(r.interval, Some(n.cfg.sample_interval_s));
+            assert_eq!(r.interval, Some(interval));
             assert_eq!(r.num, Some(held as u32));
-            seen.extend(r.samples.unwrap().iter());
+            r.samples.unwrap().iter().collect::<Vec<_>>()
+        };
+        for _ in 0..(held / size + 2) {
+            let window = ask(&mut n);
+            // Early: the same window, counted.
+            tokio::time::advance(Duration::from_secs(u64::from(interval) - 1)).await;
+            assert_eq!(ask(&mut n), window);
+            tokio::time::advance(Duration::from_secs(1)).await;
+            seen.extend(window);
         }
+        assert_eq!(n.stats.sample_early, (held / size + 2) as u64);
         assert_eq!(&seen[..held], &n.nodes[i].held[..]);
         assert_eq!(seen[held], n.nodes[i].held[0], "wraps to the start");
     }
