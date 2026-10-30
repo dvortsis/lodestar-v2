@@ -704,7 +704,7 @@ impl Store {
         };
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
-            match purge_one(&snap, &live, since, now, hits_before, &[]) {
+            match purge_one(&snap, &live, since, now, hits_before, None) {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
                 Ok(Outcome::Skipped(why)) => {
@@ -843,16 +843,25 @@ fn settle_conn(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(true)
 }
 
-/// Applies the live purge to one snapshot, and merges `carry` (deletion
-/// journal rows) into its own journal when it has one, in one
-/// transaction.
+/// What a rollback carries into its copy from the store it replaces.
+struct Carry<'a> {
+    /// Deletion journal rows, merged into the copy's own journal when it
+    /// has one.
+    journal: &'a [([u8; 20], i64)],
+    /// The store, whose holds are merged into the copy's when both have
+    /// hold tables (V4+): see [`carry_holds`].
+    holds: &'a Connection,
+}
+
+/// Applies the live purge to one snapshot, and for a rollback's copy
+/// merges `carry` into it, in one transaction.
 fn purge_one(
     snap: &Snapshot,
     live: &Live,
     since: i64,
     now: i64,
     hits_before: i64,
-    carry: &[([u8; 20], i64)],
+    carry: Option<&Carry<'_>>,
 ) -> crate::Result<Outcome> {
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
@@ -963,16 +972,24 @@ fn purge_one(
     }
     // Journal rows the snapshot lacks, or holds at an older time.
     let mut journal = Vec::new();
-    if !carry.is_empty() && has_table(&conn, "snapshot_deletions")? {
+    let carried = carry.map_or(&[][..], |c| c.journal);
+    if !carried.is_empty() && has_table(&conn, "snapshot_deletions")? {
         let mut stmt = conn.prepare("SELECT at FROM snapshot_deletions WHERE hash = ?1")?;
-        for (h, at) in carry {
+        for (h, at) in carried {
             let held: Option<i64> = stmt.query_row([&h[..]], |r| r.get(0)).optional()?;
             if held.is_none_or(|held| held < *at) {
                 journal.push((h, *at));
             }
         }
     }
+    // The store's holds, for a copy with hold tables from a store that
+    // has them (both V4+, which adds all three).
+    let holds = match carry {
+        Some(c) if plan.filter && has_table(c.holds, "cs_hashes")? => Some(c.holds),
+        _ => None,
+    };
     if ids.is_empty()
+        && holds.is_none()
         && journal.is_empty()
         && candidates.is_empty()
         && unsealed.is_empty()
@@ -1007,6 +1024,11 @@ fn purge_one(
         let mut candidates_gone = 0;
         for h in &candidates {
             candidates_gone += tx.execute("DELETE FROM import_candidates WHERE hash = ?1", [h])?;
+        }
+        // Before the quarantine purge below, which then expires and
+        // unseals the merged rows as the store's own tick would.
+        if let Some(live) = holds {
+            carry_holds(&tx, live)?;
         }
         let mut quarantine = 0;
         if plan.filter {
@@ -1073,6 +1095,79 @@ fn purge_one(
     Ok(Outcome::Purged(result?))
 }
 
+/// How strong a tombstone or quarantine hold under `rule` is, in SQL with
+/// the floor's rules as `?1`–`?3` and the adult mark as `?4`: the floor's
+/// can't be released, then an adult hold (the one filtering can't
+/// rebuild, see `Store::purge_filter`), then any other.
+fn hold_rank(rule: &str) -> String {
+    format!(
+        "CASE WHEN {rule} IN (?1, ?2, ?3) THEN 2 \
+         WHEN substr({rule}, -length(?4)) = ?4 THEN 1 ELSE 0 END"
+    )
+}
+
+/// Merges the holds of `live` (the store a rollback replaces) into its
+/// copy, in the copy's transaction, so the restored store goes on
+/// refusing what was held after the snapshot (`docs/decisions`). Nothing
+/// is loosened: a hold only the copy has stays (a release since the
+/// snapshot is undone), and on a conflict
+/// - a CS-1 entry is kept as `add_cs_hashes` keeps it: your own
+///   confirmation or report outranks an import;
+/// - a tombstone or quarantine row keeps the stronger hold
+///   ([`hold_rank`]), then the later one, the store's on a tie.
+///
+/// Rows are copied as they are: a sealed name stays sealed, and the
+/// quarantine purge that follows expires or unseals them as the store
+/// did.
+fn carry_holds(tx: &Connection, live: &Connection) -> rusqlite::Result<()> {
+    let floor = crate::filter::FLOOR_RULES;
+    let mut add = tx.prepare(
+        "INSERT INTO cs_hashes (hash, origin, added_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT (hash) DO UPDATE SET origin = excluded.origin
+         WHERE cs_hashes.origin = ?4",
+    )?;
+    let mut stmt = live.prepare("SELECT hash, origin, added_at FROM cs_hashes")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let (hash, origin, at): (Vec<u8>, i64, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        add.execute(params![hash, origin, at, IMPORTED])?;
+    }
+    let mut add = tx.prepare(&format!(
+        "INSERT INTO tombstones (hash, rule, at) VALUES (?5, ?6, ?7)
+         ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
+         WHERE ({}, excluded.at) >= ({}, tombstones.at)",
+        hold_rank("excluded.rule"),
+        hold_rank("tombstones.rule"),
+    ))?;
+    let mut stmt = live.prepare("SELECT hash, rule, at FROM tombstones")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let (hash, rule, at): (Vec<u8>, String, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        add.execute(params![
+            floor[0], floor[1], floor[2], ADULT_HOLD, hash, rule, at
+        ])?;
+    }
+    let mut add = tx.prepare(&format!(
+        "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+         VALUES (?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, sealed = excluded.sealed,
+             at = excluded.at, expires_at = excluded.expires_at
+         WHERE ({}, excluded.at) >= ({}, quarantine.at)",
+        hold_rank("excluded.rule"),
+        hold_rank("quarantine.rule"),
+    ))?;
+    let mut stmt = live.prepare("SELECT hash, rule, sealed, at, expires_at FROM quarantine")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let (hash, rule, sealed, at, expires_at): (Vec<u8>, String, Option<Vec<u8>>, i64, i64) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+        add.execute(params![
+            floor[0], floor[1], floor[2], ADULT_HOLD, hash, rule, sealed, at, expires_at
+        ])?;
+    }
+    Ok(())
+}
+
 fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     Ok(conn
         .query_row(
@@ -1084,26 +1179,32 @@ fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
         .unwrap_or(false))
 }
 
-/// Applies the store's deletions to `staged`, a copy of a snapshot taken
-/// at `taken_at` that `lodestar rollback` is about to put in place of the
-/// store `live` (BB-1 for rollback, `docs/decisions`): the purge the
-/// writer's tick would apply to the snapshot, with the same matching
-/// (journal and holds by hash, from a day before `taken_at`; every row
-/// when that's unknown or ahead of `now`), and `live`'s whole journal
-/// merged into the copy's own, so the restored store goes on purging the
-/// other snapshots. One transaction; the copy ends as one file, with no
-/// WAL beside it.
+/// Applies the store's deletions to `staged`, a copy of a snapshot that
+/// `lodestar rollback` is about to put in place of the store `live` (BB-1
+/// for rollback, `docs/decisions`): the purge the writer's tick would
+/// apply to the snapshot, matching **every** journal and hold row by
+/// hash, whenever it was recorded. The tick's window (from a day before
+/// the snapshot's modification time) would let a deleted torrent back
+/// into a copy whose time is later than when it was taken (one copied
+/// without keeping its time); the cost is that a torrent deleted and
+/// fetched again since goes too, to be fetched again.
+///
+/// In the same transaction, `live`'s whole journal is merged into the
+/// copy's own, so the restored store goes on purging the other snapshots,
+/// and its holds into the copy's ([`carry_holds`]), so it goes on
+/// refusing what they hold. The copy ends as one file, with no WAL beside
+/// it.
 ///
 /// `Ok(None)` when the copy holds a schema this build can't purge: then
 /// it mustn't be restored.
 pub fn purge_for_restore(
     live: &Connection,
     staged: &Path,
-    taken_at: Option<i64>,
     now: i64,
 ) -> crate::Result<Option<usize>> {
-    let since = taken_at.filter(|t| *t <= now).map_or(i64::MIN, held_since);
-    let live = Live::read(live, since)?;
+    let since = i64::MIN;
+    let store = live;
+    let live = Live::read(store, since)?;
     let snap = Snapshot {
         path: staged.to_path_buf(),
         name: String::new(),
@@ -1113,7 +1214,11 @@ pub fn purge_for_restore(
     };
     // Filter hits aren't deletions: the restored store's own tick ages
     // them out.
-    let outcome = purge_one(&snap, &live, since, now, i64::MIN, &live.deleted)?;
+    let carry = Carry {
+        journal: &live.deleted,
+        holds: store,
+    };
+    let outcome = purge_one(&snap, &live, since, now, i64::MIN, Some(&carry))?;
     // `purge_one` checkpoints without checking: a WAL left beside the
     // copy would be lost with the rename, so it's folded in here.
     settle(staged)?;
@@ -1330,9 +1435,11 @@ mod tests {
         }
     }
 
-    /// A rollback's copy loses what the store deleted since the snapshot,
-    /// at any schema with a plan, keeps the journal when it has one, and
-    /// is refused at a schema without.
+    /// A rollback's copy loses what the store deleted, at any schema with
+    /// a plan, keeps the journal when it has one, and is refused at a
+    /// schema without. The whole journal applies, not only the rows from
+    /// a day before the copy's time: a snapshot copied without keeping
+    /// its time looks taken after deletions it still holds.
     #[test]
     fn purge_for_restore_applies_the_journal_to_a_copy() {
         let dir = tempfile::tempdir().unwrap();
@@ -1343,10 +1450,17 @@ mod tests {
             let copy = dir.path().join(format!("copy-v{version}.tmp"));
             let conn = fixture(&copy, version);
             insert_torrent(&conn, 1, [5; 20], "deleted since");
-            insert_torrent(&conn, 2, [6; 20], "fetched again");
+            insert_torrent(&conn, 2, [6; 20], "deleted before its time");
+            insert_torrent(&conn, 3, [7; 20], "kept");
             drop(conn);
-            let n = purge_for_restore(store.connection(), &copy, Some(T), T + DAY).unwrap();
-            assert_eq!(n, Some(1), "v{version}");
+            // Dated well after both deletions, as `cp` without `-p` dates it.
+            set_modified(&copy, T + 30 * DAY).unwrap();
+            let n = purge_for_restore(store.connection(), &copy, T + 31 * DAY).unwrap();
+            assert_eq!(n, Some(2), "v{version}");
+            assert!(
+                !contains(&copy, b"files of deleted before its time"),
+                "v{version}"
+            );
             assert!(!contains(&copy, b"files of deleted since"), "v{version}");
             assert!(!side(&copy, "-wal").exists());
             quick_check(&copy);
@@ -1358,7 +1472,7 @@ mod tests {
                 .unwrap()
                 .map(Result::unwrap)
                 .collect();
-            assert_eq!(names, ["fetched again"], "v{version}");
+            assert_eq!(names, ["kept"], "v{version}");
             if version >= 12 {
                 let rows: Vec<(Vec<u8>, i64)> = conn
                     .prepare("SELECT hash, at FROM snapshot_deletions ORDER BY hash")
@@ -1372,7 +1486,8 @@ mod tests {
                 assert_eq!(rows.len(), 2, "v{version}");
                 assert_eq!(rows[0].0, vec![5; 20]);
                 assert!(rows[0].1 >= T);
-                assert_eq!(rows[1], (vec![6; 20], T - 10 * DAY));
+                assert_eq!(rows[1].0, vec![6; 20]);
+                assert!(rows[1].1 >= T - 10 * DAY);
             }
         }
         let copy = dir.path().join("copy-new.tmp");
@@ -1385,13 +1500,13 @@ mod tests {
         .unwrap();
         drop(conn);
         assert!(!can_purge(Plan::KNOWN_THROUGH + 1));
-        let n = purge_for_restore(store.connection(), &copy, Some(T), T + DAY).unwrap();
+        let n = purge_for_restore(store.connection(), &copy, T + DAY).unwrap();
         assert_eq!(n, None);
     }
 
     /// A store rolled back already can be older than the copy: what its
-    /// schema lacks takes nothing from the copy, but its journal still
-    /// does.
+    /// schema lacks takes nothing from the copy, but its journal and holds
+    /// still do, and both are carried into the copy.
     #[test]
     fn purge_for_restore_from_an_older_store() {
         let dir = tempfile::tempdir().unwrap();
@@ -1404,6 +1519,13 @@ mod tests {
                 live.execute(
                     "INSERT INTO snapshot_deletions (hash, at) VALUES (?1, ?2)",
                     params![&[5u8; 20][..], T],
+                )
+                .unwrap();
+            }
+            if live_version >= 4 {
+                live.execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-3', ?2)",
+                    params![&[6u8; 20][..], T],
                 )
                 .unwrap();
             }
@@ -1423,14 +1545,178 @@ mod tests {
                 [T],
             )
             .unwrap();
+            insert_torrent(&conn, 2, [6; 20], "held since");
             drop(conn);
-            let n = purge_for_restore(&live, &copy, Some(T), T + DAY).unwrap();
-            assert_eq!(n, Some(usize::from(live_version >= 12)), "v{live_version}");
+            let n = purge_for_restore(&live, &copy, T + DAY).unwrap();
+            let expect = usize::from(live_version >= 12) + usize::from(live_version >= 4);
+            assert_eq!(n, Some(expect), "v{live_version}");
             let conn = Connection::open(&copy).unwrap();
             let logged: i64 = conn
                 .query_row("SELECT count(*) FROM query_log", [], |r| r.get(0))
                 .unwrap();
             assert_eq!(logged, 1, "v{live_version}");
+            let tombstones: Vec<Vec<u8>> = conn
+                .prepare("SELECT hash FROM tombstones")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let held = if live_version >= 4 {
+                vec![vec![6; 20]]
+            } else {
+                vec![]
+            };
+            assert_eq!(tombstones, held, "v{live_version}");
+            // The journal row is merged, at its time (the purge's own
+            // delete is journalled at the real one, which is earlier).
+            let rows: Vec<(Vec<u8>, i64)> = conn
+                .prepare("SELECT hash, at FROM snapshot_deletions WHERE hash = ?1")
+                .unwrap()
+                .query_map([&[5u8; 20][..]], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            if live_version >= 12 {
+                assert_eq!(rows.len(), 1, "v{live_version}");
+                assert!(rows[0].1 >= T, "v{live_version}");
+            } else {
+                assert!(rows.is_empty(), "v{live_version}");
+            }
+        }
+    }
+
+    /// Every table's rows, for comparing a copy's holds.
+    fn rows(path: &Path, sql: &str) -> Vec<String> {
+        let conn = Connection::open(path).unwrap();
+        let mut stmt = conn.prepare(sql).unwrap();
+        let n = stmt.column_count();
+        stmt.query_map([], |r| {
+            Ok((0..n)
+                .map(|i| match r.get_ref(i).unwrap() {
+                    rusqlite::types::ValueRef::Blob(b) if b.len() == 20 => format!("h{}", b[0]),
+                    rusqlite::types::ValueRef::Blob(b) => String::from_utf8_lossy(b).into(),
+                    rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into(),
+                    rusqlite::types::ValueRef::Integer(i) => i.to_string(),
+                    v => format!("{v:?}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" "))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// A rollback's copy gains the holds recorded since the snapshot
+    /// (CS-1 entries, imported ones too, tombstones and quarantine, its
+    /// sealed name still sealed), and the torrents they hold go. On a
+    /// conflict the stronger hold, then the later one, wins; a hold only
+    /// the copy has stays.
+    #[test]
+    fn purge_for_restore_carries_the_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _db) = live(dir.path());
+        let c = store.connection();
+        let tomb = |h: u8, rule: &str, at: i64| {
+            c.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                params![&[h; 20][..], rule, at],
+            )
+            .unwrap();
+        };
+        // New since the snapshot.
+        tomb(3, "CS-3", T + DAY);
+        quarantine(c, [4; 20], "CS-2a", b"sealed-new-name", T + 30 * DAY);
+        // Conflicts: a floor tombstone and an adult one outrank a later
+        // one; otherwise the later wins.
+        tomb(10, "CS-3", T + DAY);
+        tomb(11, "CS-4", T + DAY);
+        tomb(12, "CS-4", T + DAY);
+        quarantine(c, [13; 20], "CS-2a", b"sealed-requeued", T + 40 * DAY);
+        quarantine(c, [15; 20], "CS-2a", b"sealed-plain", T + 40 * DAY);
+        // Expired: carried, then turned into a tombstone as live.
+        quarantine(c, [16; 20], "CS-9+adult", b"sealed-expired", T);
+        store.add_cs_hashes(&[[1; 20]], 1, T + DAY).unwrap();
+        store.add_cs_hashes(&[[2; 20]], 2, T + DAY).unwrap();
+        store.add_cs_hashes(&[[7; 20]], 0, T + DAY).unwrap();
+        store.add_cs_hashes(&[[8; 20]], 2, T + DAY).unwrap();
+
+        for version in [3, 4, 9, 12, Plan::KNOWN_THROUGH] {
+            let copy = dir.path().join(format!("held-v{version}.tmp"));
+            let conn = fixture(&copy, version);
+            insert_torrent(&conn, 1, [3; 20], "tombstoned since");
+            insert_torrent(&conn, 2, [1; 20], "reported since");
+            insert_torrent(&conn, 3, [2; 20], "imported since");
+            insert_torrent(&conn, 4, [9; 20], "kept");
+            if version >= 4 {
+                let tomb = |h: u8, rule: &str, at: i64| {
+                    conn.execute(
+                        "INSERT INTO tombstones (hash, rule, at) VALUES (?1, ?2, ?3)",
+                        params![&[h; 20][..], rule, at],
+                    )
+                    .unwrap();
+                };
+                tomb(10, "CS-1a", T - DAY);
+                tomb(11, "CS-3", T - DAY);
+                tomb(12, "CS-3+adult", T - DAY);
+                tomb(14, "CS-3", T - DAY);
+                quarantine(&conn, [13; 20], "CS-2a", b"sealed-old", T + 5 * DAY);
+                quarantine(&conn, [15; 20], "CS-9+adult", b"sealed-adult", T + 5 * DAY);
+                for (h, origin) in [(7u8, 2i64), (8, 1)] {
+                    conn.execute(
+                        "INSERT INTO cs_hashes (hash, origin, added_at) VALUES (?1, ?2, ?3)",
+                        params![&[h; 20][..], origin, T - DAY],
+                    )
+                    .unwrap();
+                }
+            }
+            drop(conn);
+            let n = purge_for_restore(store.connection(), &copy, T + 2 * DAY).unwrap();
+            assert_eq!(n, Some(3), "v{version}");
+            quick_check(&copy);
+            assert_eq!(
+                rows(&copy, "SELECT name FROM torrents"),
+                ["kept"],
+                "v{version}"
+            );
+            if version < 4 {
+                // No hold tables: nothing is added to the schema.
+                let conn = Connection::open(&copy).unwrap();
+                assert!(!has_table(&conn, "tombstones").unwrap());
+                continue;
+            }
+            assert_eq!(
+                rows(&copy, "SELECT hash, origin FROM cs_hashes ORDER BY hash"),
+                ["h1 1", "h2 2", "h7 0", "h8 1"],
+                "v{version}"
+            );
+            let d = |n: i64| (T + n * DAY).to_string();
+            assert_eq!(
+                rows(&copy, "SELECT hash, rule, at FROM tombstones ORDER BY hash"),
+                [
+                    format!("h3 CS-3 {}", d(1)),
+                    format!("h10 CS-1a {}", d(-1)),
+                    format!("h11 CS-4 {}", d(1)),
+                    format!("h12 CS-3+adult {}", d(-1)),
+                    format!("h14 CS-3 {}", d(-1)),
+                    format!("h16 CS-9+adult {}", d(-30)),
+                ],
+                "v{version}"
+            );
+            assert_eq!(
+                rows(
+                    &copy,
+                    "SELECT hash, rule, sealed, expires_at FROM quarantine ORDER BY hash"
+                ),
+                [
+                    format!("h4 CS-2a sealed-new-name {}", d(30)),
+                    format!("h13 CS-2a sealed-requeued {}", d(40)),
+                    format!("h15 CS-9+adult sealed-adult {}", d(5)),
+                ],
+                "v{version}"
+            );
+            assert!(!contains(&copy, b"sealed-expired"), "v{version}");
         }
     }
 
