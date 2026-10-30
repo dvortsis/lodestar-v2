@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:38Z",
+ "updated_at": "2026-10-30T20:39Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2299,7 +2299,8 @@
   "2026-10-30T20:28Z #236 review MERGE at 4cf0ff6b (3 optional doc nits, carried by the runner); merge on green, then flag the owner (\u00a72.19) and archive the author.",
   "2026-10-30T20:33Z merged #236 CR-gate-hash-mismatch (e9768a11) on green ci-ok and the reviewer's MERGE; author archived; owner flag (\u00a72.19) added to owner_checklist. Docs follow-up fix/hash-mismatch-docs pushed.",
   "2026-10-30T20:36Z opened #238 fix/hash-mismatch-docs (the #236 optional nits); review by session_01MMjhn984M3k3UJXUCsEYPX. Told the owner via the dashboard session: \u00a72.19 flag for #236, and the rc.2 per-file hashes are blocked by network policy. #237 still in CI.",
-  "2026-10-30T20:38Z #238 review MERGE at 00188a18; merge on green ci-ok."
+  "2026-10-30T20:38Z #238 review MERGE at 00188a18; merge on green ci-ok.",
+  "2026-10-30T20:39Z merged #237 clippy MSRV 2b (faf3fd48); the collapsible_if and manual_is_multiple_of allows are gone. Only #238 (docs) is open."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
