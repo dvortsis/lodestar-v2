@@ -183,7 +183,7 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 ## 3.8 Restart without the six-hour wait
 <!-- index: safe restart; restart record; witness; six hours; Starting -->
 
-After every start, the crawler waits up to six hours before it samples the [DHT](glossary.md#dht) again. While it waits, the status pill says **Starting**. The wait is on purpose. Lodestar promises other DHT nodes to wait a while before asking them again, and it can't tell whether a restart kept those promises.
+After every start, the crawler waits up to six hours before it samples the [DHT](glossary.md#dht) again. While it waits, the status pill usually says **Starting**. The wait is on purpose. Lodestar promises other DHT nodes to wait a while before asking them again, and it can't tell whether a restart kept those promises.
 
 The [safe restart](glossary.md#safe-restart) switch removes the wait after a clean restart. When Lodestar stops cleanly, it writes a [restart record](glossary.md#restart-record): the promises still open and a check that the data folder is the same one. On the next start it checks the record and carries on at once. If anything doesn't add up, it waits the six hours as before. It is **off by default**.
 

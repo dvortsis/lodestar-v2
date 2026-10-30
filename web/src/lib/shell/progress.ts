@@ -65,8 +65,19 @@ const isYoung = (p: ProgressSnapshot) =>
 		? p.sampling !== null
 		: p.uptimeS !== null && p.uptimeS < STARTUP_SUPPRESSION_S;
 
-const quietCounts = (p: ProgressSnapshot) =>
-	!isYoung(p) && (p.uptimeS === null || p.uptimeS >= START_GRACE_S);
+/**
+ * Whether a "nothing stored" reason counts: not while sampling is held back, nor in the grace after
+ * the start or after sampling was last held back. `cohort_stalled` looks back over two full hours,
+ * so after a suppression it waits that long.
+ */
+const quietCounts = (p: ProgressSnapshot, reason: string) => {
+	if (isYoung(p)) return false;
+	const up = p.uptimeS;
+	if (up === null) return true;
+	if (up < START_GRACE_S) return false;
+	const grace = reason === 'cohort_stalled' ? REPORTED_HOUR_S : START_GRACE_S;
+	return p.sampledFromS == null || up - p.sampledFromS >= grace;
+};
 
 /** The stored-rate window lies wholly after the start, and after sampling was last held back. */
 const windowClear = (p: ProgressSnapshot) =>
@@ -83,9 +94,8 @@ const windowClear = (p: ProgressSnapshot) =>
  * there; `index_lag` always does.
  */
 export function stallReason(p: ProgressSnapshot): StallReason | null {
-	const quiet = quietCounts(p);
 	const named = STALL_REASONS.find(
-		(r) => p.reasons.includes(r) && (quiet || !QUIET_REASONS.includes(r))
+		(r) => p.reasons.includes(r) && (!QUIET_REASONS.includes(r) || quietCounts(p, r))
 	);
 	// A starved idle pipeline carries `writer_stalled` too (the writer skips empty commits), so the
 	// stored-rate verdict comes first or the idle rule would hide the very case it exists for.

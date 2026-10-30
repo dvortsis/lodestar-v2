@@ -174,6 +174,20 @@ describe('pill progress states', () => {
 			expect(lag).toMatchObject({ kind: 'stalled', reason: 'index_lag' });
 		});
 
+		it('after a suppression, quiet reasons wait their own window from when sampling began', () => {
+			const at = 30 * 3600;
+			const base = { sampling: null, sampledFromS: at };
+			const s = (reason: string, uptimeS: number) =>
+				pill(progress({ ...base, reasons: [reason], uptimeS }));
+			expect(s('writer_stalled', at + START_GRACE_S - 1).kind).toBe('crawling');
+			expect(s('writer_stalled', at + START_GRACE_S).kind).toBe('stalled');
+			expect(s('cohort_stalled', at + 2 * 3600 - 1).kind).toBe('crawling');
+			expect(s('cohort_stalled', at + 2 * 3600)).toMatchObject({
+				kind: 'stalled',
+				reason: 'cohort_stalled'
+			});
+		});
+
 		it('a stored rate of 0 counts only once its hour lies after sampling was held back', () => {
 			const at = 30 * 3600;
 			const base = { ...quiet, sampling: null, sampledFromS: at };
