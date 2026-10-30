@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T18:56Z",
+ "updated_at": "2026-10-30T18:58Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2127,7 +2127,10 @@
   "Branch cleanup: delete stale wip/CR-0d (runner's deletion was refused by the permission check); also the old-lineage branches per G6",
   {
    "item": "Freshness environment: confirm the main-only deployment-branch rule and that FRESHNESS_SIGNING_KEY is set (the key is passwordless, so FRESHNESS_SIGNING_KEY_PASSWORD can stay empty)",
-   "unblocks": "weekly freshness re-sign (#211); once envelopes exist, a missing key fails the job"
+   "unblocks": "weekly freshness re-sign (#211); once envelopes exist, a missing key fails the job",
+   "status": "closed",
+   "closed_at": "2026-10-30T18:58Z",
+   "resolution": "owner: env 25797126363 has custom_branch_policies main only (policy 64919659); FRESHNESS_SIGNING_KEY FCA9AFC5C8D864FE set 13:26:48Z; workflow_dispatch run 41109740959 on main passed"
   },
   {
    "item": "FYI (\u00a72.19): filter-budget gate method is now per-model skew on the calibration for non-reference CPUs (runner decision, X-filter-budget-8573C); the 50 us budget and the 7763 reference are unchanged",
@@ -2135,15 +2138,24 @@
   },
   {
    "item": "v0.5.1-rc.1 Release run 41062406135 waits for release-environment approval. rc.1 lacks the R-gauges you asked for (step 5). Recommended: reject or leave rc.1 and gate on rc.2 (gauges, cherry-picked in a few hours). Alternative: approve rc.1 for an early MSI/portable smoke only (those results do not count for rc.2 hashes)",
-   "unblocks": "v0.5.1 gate runs"
+   "unblocks": "v0.5.1 gate runs",
+   "status": "closed",
+   "closed_at": "2026-10-30T18:58Z",
+   "resolution": "owner rejected the release deployment on rc.1 run 41062406135 (8b67f269); rc.1 is not a gate candidate"
   },
   {
    "item": "Size limits (your numbers): Settings becoming a production route re-splits shared chunks, so three non-Settings entries go slightly over: Alerts route 29.03/29 KB (26 B), Alert route 45.75/45 KB, Detail sections 34.4/33.9 KB. The modules are the same; it's per-chunk overhead. Chunk grouping and code changes can't fix it without duplicating code (the author tried, and the reviewer confirmed). Choose: (a) raise them to 29.1 / 45.8 / 34.5 KB, or (b) keep #217 (one Settings implementation, every Settings budget passing) on hold",
-   "unblocks": "#217 Settings (one implementation, within its own budgets)"
+   "unblocks": "#217 Settings (one implementation, within its own budgets)",
+   "status": "closed",
+   "closed_at": "2026-10-30T18:58Z",
+   "resolution": "owner ruling: option (a), raise Alerts route 29.1 KB, Alert route 45.8 KB, Detail sections 34.5 KB; #217 author told to apply and record"
   },
   {
    "item": "Tag v0.5.1-rc.2 on release/v0.5.1 (6be95525) and approve the release environment; then run steps 3-5 in notes/v051-owner-steps.md. Reject or leave the rc.1 run 41062406135.",
-   "unblocks": "the v0.5.1 gate runs"
+   "unblocks": "the v0.5.1 gate runs",
+   "status": "closed",
+   "closed_at": "2026-10-30T18:58Z",
+   "resolution": "owner tagged annotated v0.5.1-rc.2 at 6be95525 (tag obj 1b3c13a1, verified); Release run 41110604990 in progress; owner approves the release env, then restarts the Unraid soak and runs the Windows MSI service + portable smoke on rc.2"
   },
   {
    "item": "FYI (\u00a72.19): CR-ADM (bounded admission, switch off by default) includes a runner refinement: with the switch on, eviction skips lookups that hold an admission permit (at most 32 per finder). CR-SIM screen +26-50% steady stored/min; live A/B pending",
@@ -2257,7 +2269,13 @@
   "2026-10-30T18:55Z opened #232 fix/dht-queued-cancel-count (runner-owned: dht_peer_queued_dropped_total{reason}, CR-SIM conservation, admission-pressure golden +2 lines); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #230/#221.",
   "2026-10-30T18:47Z heartbeat. Merged #221 X-welcome-focus (9b3951d6; ci-ok, playwright core, lighthouse, web green; reviewer MERGE); author archived. #230 MERGE, waits on ci-ok. #229 delta OK at 3d1321c3 and #231 delta OK at 2e18f07f; both wait on ci-ok. #227 waits on ci-ok at 9c99b688. #232 CHANGES fixed at 0ec7379a (third drop site in start_peer_request; folded in the filter-budget nits), same reviewer re-checking. Disk full at 18:40: cleared target/debug and scratchpad/l5-target.",
   "2026-10-30T19:00Z CR-gate-hash-mismatch scoped: multi-crate (FailureKind ripples into stats, metrics, log codes and goldens; Loss is persisted), so it's queued as a slice with a brief instead of a runner patch. The cli.rs port fix is ready locally as cf087f09 on top of #229, to push after #229 merges.",
-  "2026-10-30T18:56Z merged #227 CR-0d-2b-1 (fa836c4e) on green ci-ok at 9c99b688; reviewer archived. Author told to merge main into slice/CR-0d-2b-2 and open its PR. #232 re-check MERGE at 0ec7379a."
+  "2026-10-30T18:56Z merged #227 CR-0d-2b-1 (fa836c4e) on green ci-ok at 9c99b688; reviewer archived. Author told to merge main into slice/CR-0d-2b-2 and open its PR. #232 re-check MERGE at 0ec7379a.",
+  "2026-10-30T18:58Z owner replies (relayed by the owner's desktop dashboard session session_01MMjhnCw1haVpiSDpYLQQqm; rc.2 tag verified): rc.1 rejected, rc.2 tagged at 6be95525 and is the gate candidate; #217 limits option (a), owner ruling; freshness environment closed; the memory-gate fit (h12-24 private on #189) is still open."
  ],
- "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
+ "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
+ "release": {
+  "v0.5.1-rc.1": "rejected by owner (run 41062406135)",
+  "v0.5.1-rc.2": "gate candidate, tag at 6be95525, Release run 41110604990",
+  "gate_candidate": "v0.5.1-rc.2"
+ }
 }
