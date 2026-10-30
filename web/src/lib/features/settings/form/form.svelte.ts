@@ -2,20 +2,21 @@
 // component's lifetime (the `settings` subscription, ⌘/Ctrl+S, the leave guard) is wired by
 // `SettingsForm.svelte`, which calls `received`/`resync` and registers the default gate.
 //
-// The store's state and its own half are here; `saving.ts` holds the save pipeline (Undo, the
-// merge, drafts and validation). Two parts load on demand, once per page, and work on the same
-// `Engine`: `instant.ts` with the first instant change, `preview.ts` during the first preview's
-// debounce.
+// This file is what a section's first view needs: loading, the field view, staging an edit,
+// writing drafts, previews' and events' timing. The rest loads on demand, once per page, and
+// works on the same `Engine`: the edit chunk (`edit.ts`: the save pipeline in `saving.ts`, Undo,
+// the merge, reading and restoring drafts, validation, and the UI they show) with the first
+// edit, a stored draft, a `settings` event or a save (owner, 2026-10-24); `instant.ts` with the
+// first instant change; `preview.ts` during the first preview's debounce.
 //
 // The Maps and Sets here are bookkeeping that nothing renders; reactive state is `$state.raw`
 // records replaced on every change.
 /* eslint-disable svelte/prefer-svelte-reactivity */
 import { ApiError, isAbort, latest } from '$lib/api/client';
 import { m } from '$lib/paraglide/messages.js';
-import { draftOf, writeDraft, type Draft } from './draft';
+import { draftOf, hasDraft, writeDraft, type Draft } from './draft-store';
 import type { Instant } from './instant';
 import { getSection, type Batch } from './requests';
-import * as pipeline from './saving';
 import { devWarn, loadSettingsIndex } from './schema';
 import {
 	splitKey,
@@ -68,6 +69,8 @@ export interface SettingsForm {
 	/** The last save included a secret, which Undo leaves out. */
 	readonly undoSkipsSecrets: boolean;
 	readonly draft: null | { fields: number; dropped: number };
+	/** A draft is stored but the code that offers it didn't load: it's kept for a reload. */
+	readonly draftUnavailable: boolean;
 	/** The latest polite announcement; `id` changes with each one. */
 	readonly announcement: { id: number; text: string } | null;
 	/** The latest save's result, from any caller (the bar, ⌘/Ctrl+S, the wizard's Next). */
@@ -102,6 +105,7 @@ export interface SettingsForm {
 
 export type Sections = Record<string, SectionState>;
 
+let editMod: typeof import('./edit') | undefined;
 let previewMod: typeof import('./preview') | undefined;
 let instantMod: typeof import('./instant') | undefined;
 
@@ -119,20 +123,29 @@ const loadPreview = once(
 	() => import('./preview'),
 	(mod) => (previewMod = mod)
 );
+/** The edit chunk, loaded once (components show its parts). */
+export const loadEdit = once(
+	() => import('./edit'),
+	(mod) => (editMod = mod)
+);
+// Instant mode sends through the save pipeline: it comes along.
 const loadInstant = once(
-	() => import('./instant'),
+	() => Promise.all([import('./instant'), loadEdit()]).then(([mod]) => mod),
 	(mod) => (instantMod = mod)
 );
+const ignore = () => {};
 
-/** The preview chunk, if it has loaded (for the field's preview lines). */
+/** The edit chunk and the preview chunk, if they've loaded (for the parts components show). */
+export const loadedEdit = () => editMod;
 export const loadedPreview = () => previewMod;
 
 /**
- * Loads now what the engine otherwise loads on demand: previews, and with `instant` instant
- * mode. `SettingsForm.svelte` calls it on an instant form once the browser is idle.
+ * Loads now what the engine otherwise loads on demand: the edit chunk and previews, and with
+ * `instant` instant mode. `SettingsForm.svelte` calls it once the browser is idle after the
+ * first view.
  */
 export async function preloadSettingsForm(instant = true): Promise<void> {
-	await Promise.all([instant ? loadInstant() : undefined, loadPreview()]);
+	await Promise.all([instant ? loadInstant() : loadEdit(), loadPreview()]);
 }
 
 /** `SettingsForm`'s methods, bound to the instance. */
@@ -186,6 +199,7 @@ export class Engine implements SettingsForm {
 	undoSkipsSecrets = $state(false);
 	instantUndo = $state.raw<Record<string, { until: number; prev: SettingValue }>>({});
 	draft = $state.raw<null | { fields: number; dropped: number }>(null);
+	draftUnavailable = $state(false);
 	/** The preview code didn't load: previewed fields say so. */
 	previewFailed = $state(false);
 	announcement = $state.raw<{ id: number; text: string } | null>(null);
@@ -290,13 +304,23 @@ export class Engine implements SettingsForm {
 			this.byKey = new Map(list.map((s) => [s.key, s]));
 			this.specs = list;
 			const names = [...new Set(list.map((s) => s.section))];
+			// A stored draft is offered with the first view: its code loads with the values.
+			const offer =
+				this.useDrafts && hasDraft(this.id)
+					? loadEdit().then(
+							() => true,
+							() => false
+						)
+					: undefined;
 			const values = await Promise.all(names.map((s) => getSection(s)));
+			const offered = await offer;
 			if (this.destroyed) return;
 			const next: Sections = {};
 			for (const v of values) next[v.section] = fromValues(v);
 			this.sections = next;
 			this.status = 'ready';
-			if (this.useDrafts) pipeline.offerDraft(this);
+			if (offered) editMod!.offerDraft(this);
+			else if (offered === false) this.draftUnavailable = true;
 			this.schedulePreview();
 		} catch (e) {
 			if (this.destroyed || isAbort(e)) return;
@@ -341,7 +365,8 @@ export class Engine implements SettingsForm {
 		if (spec.writeOnly && f.mine === undefined) state.value = null;
 		const error = this.fieldErrors[key] ?? this.previewErrors[key];
 		if (error !== undefined) state.error = error;
-		if (f.note === 'locked') state.note = pipeline.lockedNote(f.saved);
+		// A note comes from the merge, so the pipeline that words it has loaded.
+		if (f.note === 'locked' && editMod) state.note = editMod.lockedNote(f.saved);
 		if (f.conflict) state.conflict = { ...f.conflict };
 		if (p) {
 			state.preview = {
@@ -367,11 +392,14 @@ export class Engine implements SettingsForm {
 		if (next === s) return;
 		this.setSection(next);
 		// A server error no longer applies once the value changes; a client one is re-checked.
-		if (this.fieldErrors[key] !== undefined) pipeline.recheck(this, key);
+		// Errors come from the save pipeline, so it has loaded, except a "couldn't load", which
+		// stays until a change gets through.
+		if (this.fieldErrors[key] !== undefined) editMod?.recheck(this, key);
 		if (this.previewErrors[key] !== undefined) {
 			this.previewErrors = without(this.previewErrors, key);
 		}
 		if (this.mode === 'instant') return this.scheduleInstant(spec);
+		if (!editMod) void loadEdit().catch(ignore);
 		this.scheduleDraft();
 		this.schedulePreview();
 	}
@@ -382,7 +410,14 @@ export class Engine implements SettingsForm {
 
 	/** Leaving a field validates it (§10.10.5). */
 	blur(key: FieldKey) {
-		pipeline.recheck(this, key);
+		const spec = this.byKey.get(key);
+		const [section, name] = splitKey(key);
+		const f = spec ? this.sec(section)?.fields[name] : undefined;
+		if (!spec || !f) return;
+		if (!isDirty(f)) this.setFieldError(key, undefined);
+		// A dirty field was edited, which loads the pipeline; it may still be on its way.
+		else if (editMod) editMod.recheck(this, key);
+		else void loadEdit().then(() => this.blur(key), ignore);
 	}
 
 	// --- drafts ------------------------------------------------------------------------------
@@ -390,8 +425,9 @@ export class Engine implements SettingsForm {
 	writeNow() {
 		clearTimeout(this.draftTimer);
 		this.draftTimer = undefined;
-		// An offered draft isn't overwritten before the user restores or discards it.
-		if (!this.useDrafts || this.draft || this.status === 'loading') return;
+		// An offered draft isn't overwritten before the user restores or discards it, nor one
+		// whose offer couldn't load.
+		if (!this.useDrafts || this.draft || this.draftUnavailable || this.status === 'loading') return;
 		writeDraft(this.id, draftOf(this.sections, this.specOf, Date.now()));
 	}
 
@@ -448,59 +484,86 @@ export class Engine implements SettingsForm {
 		);
 	}
 
+	/** The pipeline didn't load for a save: staged secrets aren't kept once tried (§10.10.4). */
+	dropSecrets() {
+		for (const spec of this.specs) {
+			const s = this.sec(spec.section);
+			if (!spec.writeOnly || s?.fields[spec.name]?.mine === undefined) continue;
+			this.setSection(stage(s, spec.name, undefined, spec));
+			this.setFieldError(spec.key, m.settings_form_chunk_failed());
+		}
+	}
+
 	// --- events ------------------------------------------------------------------------------
 
-	/** A `settings` event: one newer than what the form holds is refetched and merged. */
+	/** A `settings` event: one newer than what the form holds loads the pipeline to merge it. */
 	received(e: SettingsEvent) {
 		const s = this.sec(e.section);
 		if (!s || e.revision <= s.revision) return;
-		pipeline.received(this, e);
+		if (editMod) editMod.received(this, e);
+		else void loadEdit().then((mod) => mod.received(this, e), ignore);
 	}
 
 	/** Refetches a section and merges it (the pipeline's `refetch`). */
 	async refetch(section: string, force = false): Promise<void> {
 		try {
-			await pipeline.refetch(this, section, force);
+			await (editMod ?? (await loadEdit())).refetch(this, section, force);
 		} catch {
 			// Not shown: the next event or resync tries again.
 		}
 	}
 
-	// --- the rest of the API: the save pipeline's (`saving.ts`) --------------------------------
+	// --- the rest of the API: the save pipeline's (`saving.ts`), once it's loaded ---------------
 
-	save(): Promise<SaveResult> {
+	async save(): Promise<SaveResult> {
+		let pipeline = editMod;
+		try {
+			pipeline ??= await loadEdit();
+		} catch {
+			this.dropSecrets();
+			return { ok: false, reason: 'network' };
+		}
 		return pipeline.save(this);
 	}
 
+	/** Something to discard was staged, which loaded the pipeline. */
 	discard() {
-		pipeline.discard(this);
+		editMod?.discard(this);
 	}
 
 	async undo(key?: FieldKey): Promise<SaveResult> {
-		// An instant change's Undo is offered only after a change, which loaded instant mode.
+		// An Undo is offered only after a save or an instant change: its code has loaded.
 		const nothing: SaveResult = { ok: false, reason: 'nothing' };
 		if (this.mode === 'instant') return key && this.instant ? this.instant.undo(key) : nothing;
-		return pipeline.undo(this);
+		return editMod ? editMod.undo(this) : nothing;
 	}
 
+	// A conflict and an offered draft come from the pipeline, so it has loaded.
 	resolve(key: FieldKey, pick: 'mine' | 'theirs') {
-		pipeline.resolve(this, key, pick);
+		editMod?.resolve(this, key, pick);
 	}
 
 	restoreDraft() {
-		pipeline.restoreDraft(this);
+		editMod?.restoreDraft(this);
 	}
 
 	dropDraft() {
-		pipeline.dropDraft(this);
+		editMod?.dropDraft(this);
 	}
 
 	async retry() {
 		if (this.status === 'load-error') return this.load();
-		await pipeline.retry(this);
+		// Offline and save errors come from the pipeline.
+		await editMod?.retry(this);
 	}
 
-	removeSecret(key: FieldKey): Promise<SaveResult> {
+	async removeSecret(key: FieldKey): Promise<SaveResult> {
+		let pipeline = editMod;
+		try {
+			pipeline ??= await loadEdit();
+		} catch {
+			return { ok: false, reason: 'network' };
+		}
 		return pipeline.removeSecret(this, key);
 	}
 

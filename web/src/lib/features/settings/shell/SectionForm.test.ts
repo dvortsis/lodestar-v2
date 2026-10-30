@@ -22,7 +22,8 @@ const fields: FieldSpec[] = [
 	spec('crawler.paused', { kind: 'boolean', group: 'crawler' }),
 	spec('transport.utp', { kind: 'boolean', group: 'transport', advanced: true })
 ];
-const mount = (specs = fields) => render(SectionForm, { screen: screens[0]!, fields: specs });
+const mount = (specs = fields) =>
+	render(SectionForm, { screen: screens.find((s) => s.id === 'crawler')!, fields: specs });
 const loaded = () =>
 	waitFor(() => expect(screen.getByRole('switch', { name: 'Pause crawling' })).toBeTruthy(), {
 		timeout: 10_000
@@ -53,8 +54,11 @@ it('saves two API sections atomically with their own revisions', async () => {
 	const details = document.querySelector('details')!;
 	details.open = true;
 	await fireEvent(details, new Event('toggle'));
-	await fireEvent.click(screen.getByRole('switch', { name: 'Enable uTP' }));
-	await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+	await fireEvent.click(screen.getByRole('switch', { name: 'uTP (not active yet)' }));
+	// The save bar comes with the edit chunk, which the first edit loads.
+	await fireEvent.click(
+		await screen.findByRole('button', { name: 'Save changes' }, { timeout: 10_000 })
+	);
 	await waitFor(() => expect(server.requests('PATCH', '/settings')).toHaveLength(1), {
 		timeout: 10_000
 	});
@@ -96,7 +100,10 @@ it('reveals and focuses an Advanced deep link after loading', async () => {
 	state.page.url = new URL('http://localhost/settings/crawler#transport.utp');
 	mount();
 	await waitFor(
-		() => expect(document.activeElement).toBe(screen.getByRole('switch', { name: 'Enable uTP' })),
+		() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole('switch', { name: 'uTP (not active yet)' })
+			),
 		{ timeout: 10_000 }
 	);
 	expect(document.querySelector('details')!.open).toBe(true);

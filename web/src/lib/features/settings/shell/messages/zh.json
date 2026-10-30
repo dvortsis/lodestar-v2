@@ -35,5 +35,8 @@
 	"settings_shell_export_loading": "正在准备设置下载…",
 	"settings_shell_export_failed": "无法下载设置。请在 Lodestar 可用时重试。",
 	"settings_shell_export_started": "下载已开始。请查看浏览器的下载列表。",
-	"settings_shell_export_cancelled": "已取消设置下载。"
+	"settings_shell_export_cancelled": "已取消设置下载。",
+	"settings_shell_preferences": "偏好设置",
+	"settings_shell_connections": "连接",
+	"settings_shell_title": "设置"
 }

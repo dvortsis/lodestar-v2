@@ -132,17 +132,42 @@ const detailLazy = [
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
 // them: every control but the toggle and the text input (per type), instant mode, previews, the
-// field menu, the ⌘S registration, copy's toast and the confirmation dialog. S-settings-1's screen
-// route entry uses this list; "Settings controls (on demand)" gates what it leaves out.
+// field menu, the ⌘S registration, copy's toast and the confirmation dialog. The section entry uses
+// this list; "Settings controls (on demand)" gates what it leaves out.
 const settingsOnDemand = [
 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
 	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
 	/features\/settings\/form\/ConfirmDialog\.svelte$/
 ];
+// The edit chunk (owner, 2026-10-24; docs/decisions/2026-10-30-S-settings-reconcile.md): the save
+// pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
+// its own, so "Settings controls (on demand)" keeps measuring only the controls.
+const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 const settingsLazy = requireMeasuredJs(
 	'Settings controls (on demand)',
-	onDemandOf('/settings/[section]', settingsOnDemand)
+	onDemandOf('/settings/[section]', settingsOnDemand).filter(
+		(f) => !onDemandOf('/settings/[section]', settingsEdit).includes(f)
+	)
 );
+const settingsEditLazy = requireMeasuredJs(
+	'Settings edit chunk (on demand)',
+	onDemandOf('/settings/[section]', settingsEdit)
+);
+// Settings screens (S-settings-reconcile): the registry (shell/screens.ts) imports every screen.ts
+// eagerly, but a hand-built screen's body (`load`, e.g. Keyboard) and a screen's extras (`extra`,
+// General's export) are dynamic imports that run only on that screen. A section's first view is the
+// generated form; "Settings screen bodies (on demand)" gates the rest.
+const settingsScreensOnDemand = [
+	/features\/settings\/shell\/SettingsExport\.svelte$/,
+	/features\/(?!settings\/)[^/]+\/(?!screen\.ts$)/
+];
+const settingsFirstView = [...settingsOnDemand, ...settingsEdit, ...settingsScreensOnDemand];
+const settingsScreens = requireMeasuredJs('Settings screen bodies (on demand)', [
+	...new Set([
+		...onDemandOf('/settings', settingsScreensOnDemand),
+		...onDemandOf('/settings/[section]', settingsScreensOnDemand)
+	])
+]);
 
 // What another route can still add to /search's first load (runner, 2026-10-24):
 // - The route table: one import and one dictionary entry per route, about 27 B gzipped. The budget
@@ -257,15 +282,21 @@ export default [
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
-	entry('Settings overview (own JS + CSS)', own('/settings'), '45 KB'),
+	entry(
+		'Settings overview (own JS + CSS)',
+		own('/settings', { onDemand: settingsFirstView }),
+		'45 KB'
+	),
 	entry(
 		'Settings section (own JS + CSS)',
-		own('/settings/[section]', { onDemand: settingsOnDemand }),
+		own('/settings/[section]', { onDemand: settingsFirstView }),
 		'45 KB'
 	),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
+	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
+	entry('Settings screen bodies (on demand)', settingsScreens, '47 KB'),
 	entry(
 		'Alert dialogs (on demand)',
 		[

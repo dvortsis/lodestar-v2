@@ -4,17 +4,12 @@
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { withDensity, type Route } from '$lib/shell/nav';
-	import IconCrawler from '~icons/ph/broadcast';
-	import IconNetwork from '~icons/ph/globe';
-	import IconStorage from '~icons/ph/hard-drives';
-	import IconSearch from '~icons/ph/magnifying-glass';
-	import IconGeneral from '~icons/ph/gear';
+	import IconGear from '~icons/ph/gear';
 	import { groups, matchesScreen, screens } from './screens';
 	let { children }: { children: Snippet } = $props();
 	let query = $state('');
 	const overview = $derived(page.url.pathname.replace(/\/$/, '') === '/settings');
 	const matches = $derived(screens.filter((screen) => matchesScreen(screen, query)));
-	const icons = [IconCrawler, IconNetwork, IconStorage, IconSearch, IconGeneral];
 	const href = (path: string) => resolve(withDensity(path, page.url.searchParams) as Route);
 </script>
 
@@ -23,7 +18,7 @@
 		<a
 			class="ls-focus text-title font-semibold"
 			href={href('/settings')}
-			aria-current={overview ? 'page' : undefined}>{m.shell_nav_settings()}</a
+			aria-current={overview ? 'page' : undefined}>{m.settings_shell_title()}</a
 		>
 		<label class="flex flex-col gap-2 text-label">
 			{m.settings_shell_filter_sections()}
@@ -36,13 +31,13 @@
 					<div class="flex flex-col gap-2">
 						<h2 class="text-label text-muted-text">{group.label()}</h2>
 						{#each members as screen (screen.id)}
-							{@const Icon = icons[screens.indexOf(screen)]!}
+							{@const Icon = screen.icon ?? IconGear}
 							<a
 								class="settings-link ls-focus flex items-center gap-2 rounded-field px-3 py-2"
 								href={href(`/settings/${screen.id}`)}
 								aria-current={page.params.section === screen.id ? 'page' : undefined}
 							>
-								<Icon class="size-5 shrink-0" aria-hidden="true" />{screen.label()}
+								<Icon class="size-5 shrink-0" aria-hidden="true" />{screen.title()}
 							</a>
 						{/each}
 					</div>

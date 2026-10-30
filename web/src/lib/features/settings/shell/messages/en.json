@@ -35,5 +35,8 @@
 	"settings_shell_export_loading": "Preparing settings download…",
 	"settings_shell_export_failed": "Could not download settings. Try again when Lodestar is available.",
 	"settings_shell_export_started": "Download started. Check your browser’s downloads.",
-	"settings_shell_export_cancelled": "Settings download cancelled."
+	"settings_shell_export_cancelled": "Settings download cancelled.",
+	"settings_shell_preferences": "Preferences",
+	"settings_shell_connections": "Connections",
+	"settings_shell_title": "Settings"
 }

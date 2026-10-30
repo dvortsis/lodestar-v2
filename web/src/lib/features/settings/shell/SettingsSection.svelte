@@ -5,16 +5,16 @@
 	import { loadSettingsIndex, type SettingsIndexView } from '../form/schema';
 	import { screens, screenFields } from './screens';
 	import SectionForm from './SectionForm.svelte';
-	import SettingsExport from './SettingsExport.svelte';
 	let { section }: { section: string } = $props();
 	let index = $state<SettingsIndexView>();
 	let failed = $state(false);
 	let attempt = $state(0);
 	const screen = $derived(screens.find((screen) => screen.id === section));
+	const generated = $derived(!!screen?.sections?.length);
 	const fields = $derived(screen && index ? screenFields(screen, index) : []);
 	$effect(() => {
 		void attempt;
-		if (!screen) return;
+		if (!generated) return;
 		let live = true;
 		failed = false;
 		void loadSettingsIndex().then(
@@ -31,28 +31,54 @@
 	});
 </script>
 
-<svelte:head><title>{screen?.label() ?? m.shell_nav_settings()} · Lodestar</title></svelte:head>
-<h1 class="text-title font-semibold">{screen?.label() ?? m.shell_nav_settings()}</h1>
-{#if !screen}
-	<p>{m.settings_shell_unavailable()}</p>
-{:else}
-	<p class="text-muted-text">{screen.purpose()}</p>
-	{#if failed}
-		<Banner kind="error"
-			>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}
-					>{m.settings_form_retry()}</Button
-				>{/snippet}</Banner
-		>
-	{:else if !index}
+{#snippet chunkFailed()}
+	<Banner kind="error"
+		>{m.settings_form_chunk_failed()}{#snippet action()}<Button
+				dense
+				onclick={() => location.reload()}>{m.settings_form_reload()}</Button
+			>{/snippet}</Banner
+	>
+{/snippet}
+
+<svelte:head><title>{screen?.title() ?? m.settings_shell_title()} · Lodestar</title></svelte:head>
+{#if screen?.load}
+	{#await screen.load()}
 		<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
-	{:else if !fields.length}
-		<p>{m.settings_shell_server_unavailable()}</p>
+	{:then body}
+		<body.default />
+	{:catch}
+		<h1 class="text-title font-semibold">{screen.title()}</h1>
+		{@render chunkFailed()}
+	{/await}
+{:else}
+	<h1 class="text-title font-semibold">{screen?.title() ?? m.settings_shell_title()}</h1>
+	{#if !screen}
+		<p>{m.settings_shell_unavailable()}</p>
 	{:else}
-		{#if screen.id === 'network'}<Banner>{m.settings_shell_network_readonly()}</Banner>{/if}
-		{#if fields.some((field) => field.danger && field.danger !== 'disruptive')}<Banner
-				>{m.settings_shell_guarded_readonly()}</Banner
-			>{/if}
-		{#key screen.id}<SectionForm {screen} {fields} />{/key}
-		{#if screen.id === 'general'}<SettingsExport />{/if}
+		{#if screen.purpose}<p class="text-muted-text">{screen.purpose()}</p>{/if}
+		{#if failed}
+			<Banner kind="error"
+				>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}
+						>{m.settings_form_retry()}</Button
+					>{/snippet}</Banner
+			>
+		{:else if !index}
+			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
+		{:else if !fields.length}
+			<p>{m.settings_shell_server_unavailable()}</p>
+		{:else}
+			{#if screen.notice}<Banner>{screen.notice()}</Banner>{/if}
+			{#if fields.some((field) => field.danger && field.danger !== 'disruptive')}<Banner
+					>{m.settings_shell_guarded_readonly()}</Banner
+				>{/if}
+			{#key screen.id}<SectionForm {screen} {fields} />{/key}
+			{#if screen.extra}
+				{#await screen.extra() then extra}
+					<extra.default />
+				{:catch}
+					{@render chunkFailed()}
+				{/await}
+			{/if}
+		{/if}
 	{/if}
 {/if}

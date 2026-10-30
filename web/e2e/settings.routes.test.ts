@@ -170,7 +170,7 @@ test('direct Advanced field link opens its disclosure and focuses the control', 
 	page
 }) => {
 	await page.goto('/settings/crawler#transport.utp');
-	const control = page.getByRole('switch', { name: 'Enable uTP', exact: true });
+	const control = page.getByRole('switch', { name: 'uTP (not active yet)', exact: true });
 	await expect(control).toBeVisible();
 	await expect(control).toBeFocused();
 	await page.reload();
@@ -219,14 +219,16 @@ test('saves Crawler and Transport in one batch with separate revisions', async (
 	});
 	await go('/settings/crawler');
 	await page.getByRole('switch', { name: 'Pause crawling' }).click();
-	await page.getByRole('switch', { name: 'Enable uTP', exact: true }).click();
+	await page.getByRole('switch', { name: 'uTP (not active yet)', exact: true }).click();
 	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
 	await expect(page.getByTestId('save-bar-status')).toHaveText('Saved');
 	expect(mock.calls('patchSettingsBatch').map((request) => request.postDataJSON())).toEqual([
 		{ crawler: { paused: true, if_revision: 3 }, transport: { utp: true, if_revision: 7 } }
 	]);
 	await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeChecked();
-	await expect(page.getByRole('switch', { name: 'Enable uTP', exact: true })).toBeChecked();
+	await expect(
+		page.getByRole('switch', { name: 'uTP (not active yet)', exact: true })
+	).toBeChecked();
 });
 
 test('server validation reveals and focuses a collapsed Advanced field', async ({ page, mock }) => {
@@ -364,7 +366,7 @@ test('resync refreshes restart requirements and locks while preserving unrelated
 	}));
 	await go('/settings/crawler');
 	await expect(page.getByTestId('settings-restart-count')).toContainText('1');
-	await page.getByRole('switch', { name: 'Enable uTP', exact: true }).click();
+	await page.getByRole('switch', { name: 'uTP (not active yet)', exact: true }).click();
 	await expect
 		.poll(async () => (await events.requests()).length, { timeout: 10_000 })
 		.toBeGreaterThan(0);
@@ -373,7 +375,9 @@ test('resync refreshes restart requirements and locks while preserving unrelated
 	await events.send('resync', {});
 	await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeDisabled();
 	await expect(page.getByTestId('settings-restart-count')).toHaveCount(0);
-	await expect(page.getByRole('switch', { name: 'Enable uTP', exact: true })).toBeChecked();
+	await expect(
+		page.getByRole('switch', { name: 'uTP (not active yet)', exact: true })
+	).toBeChecked();
 	await expect(page.getByTestId('save-bar-status')).toContainText('1 unsaved change');
 	expect(mock.calls('patchSettingsBatch')).toHaveLength(0);
 });
