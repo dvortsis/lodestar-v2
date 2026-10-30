@@ -16,7 +16,7 @@ not built yet; don't rely on it. Unmarked statements describe the code on
 
 | Area | Today | Planned |
 |---|---|---|
-| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import-bitmagnet <postgres-url>`, `--version`, `--help` | `reindex`, `backup`, `rollback`, `import`, `vacuum`, `stats`, `companion`, `worker` |
+| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import-bitmagnet --host <host>`, `--version`, `--help` | `reindex`, `backup`, `rollback`, `import`, `vacuum`, `stats`, `companion`, `worker` |
 | Settings | `config.toml` and the `LODESTAR_*` variables below | Editing settings in the UI (milestone B2) |
 | Packaging | Unraid templates and a systemd unit (`packaging/`) | Docker image and compose file, release tarballs, Windows MSI |
 | Workers | — | Worker mode (`LODESTAR_JOIN`, `LODESTAR_TOKEN`, cluster port 8091), Lodestar v0.6+ |
@@ -236,11 +236,24 @@ split are **planned**.
   `seal.key`, `auth.json` and `config.toml`. The index can be rebuilt, so it
   can be skipped.
 - **Update notices** inside the app are planned. Lodestar sends no telemetry.
-- **Importing from bitmagnet:** stop Lodestar, then run
-  `lodestar import-bitmagnet postgres://user:pass@host/bitmagnet`. It reads
-  the bitmagnet database, can be resumed, and accepts `--limit N`. Start
-  Lodestar again afterwards; it indexes the imported torrents and re-fetches
-  incomplete file lists.
+- **Importing from bitmagnet:** stop Lodestar and bitmagnet, then run
+  `lodestar import-bitmagnet --host <host> --password-file <file>`. It reads
+  the bitmagnet database read-only, can be resumed, and accepts `--limit N`.
+  - **Connection:** `--port` (5432), `--dbname` (`bitmagnet`) and `--user`
+    (`bitmagnet_reader`, the read-only role from
+    `docs/operations/imports/bitmagnet-restore.md`).
+  - **Password:** from `--password-file` (keep it `chmod 600`) or the
+    `LODESTAR_IMPORT_PG_PASSWORD` variable. There's no `--password`, because
+    other users on the machine can see a command line.
+  - **TLS:** always used and verified, against the system's certificates or
+    the ones in `--ca-file`. To skip TLS for a database on the same machine
+    (a loopback address, or a socket folder such as
+    `--host /var/run/postgresql`), add `--allow-plaintext-loopback`.
+  - **A database that's still being written is refused.** Stop bitmagnet, or
+    import a restored copy.
+
+  Start Lodestar again afterwards; it indexes the imported torrents and
+  re-fetches incomplete file lists.
 
 ## 8. Troubleshooting
 

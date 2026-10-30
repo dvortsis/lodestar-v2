@@ -270,6 +270,8 @@ jobs:
           --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 15
     env:
       LODESTAR_TEST_POSTGRES: host=localhost port=5432 user=postgres dbname=postgres
+      # The PostgreSQL tests fail, not skip, when the server is missing.
+      LODESTAR_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

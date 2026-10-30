@@ -1748,11 +1748,15 @@ dependencies = [
  "lodestar-store",
  "proptest",
  "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
  "sha2",
  "tempfile",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
