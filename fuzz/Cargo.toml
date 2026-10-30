@@ -18,6 +18,7 @@ lodestar-filter = { path = "../crates/filter" }
 lodestar-metainfo = { path = "../crates/metainfo" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
+lodestar-sources-importers = { path = "../crates/sources-importers" }
 lodestar-store = { path = "../crates/store" }
 lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 lodestar-update = { path = "../crates/update", features = ["testing"] }
@@ -115,6 +116,13 @@ bench = false
 [[bin]]
 name = "dht_restart"
 path = "fuzz_targets/dht_restart.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "magnetico_row"
+path = "fuzz_targets/magnetico_row.rs"
 test = false
 doc = false
 bench = false

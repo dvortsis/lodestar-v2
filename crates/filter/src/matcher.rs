@@ -575,10 +575,10 @@ fn compiled(node: &Node) -> std::rc::Rc<Compiled> {
     let at = node as *const Node as usize;
     SEEN.with(|seen| {
         let mut seen = seen.borrow_mut();
-        if let Some((n, c)) = seen.get(&at) {
-            if n == node {
-                return c.clone();
-            }
+        if let Some((n, c)) = seen.get(&at)
+            && n == node
+        {
+            return c.clone();
         }
         if seen.len() >= 4096 {
             seen.clear();
@@ -890,10 +890,10 @@ impl<'a> Doc<'a> {
         self.exts.get_or_init(|| {
             let mut v = Vec::new();
             for f in self.item.files {
-                if let Some(e) = lodestar_classify::ext::extension(f.name()) {
-                    if !v.contains(&e) {
-                        v.push(e);
-                    }
+                if let Some(e) = lodestar_classify::ext::extension(f.name())
+                    && !v.contains(&e)
+                {
+                    v.push(e);
                 }
             }
             v
@@ -1398,17 +1398,16 @@ impl Places {
             whole: Vec::new(),
         };
         for t in &field.toks {
-            if let Some((head, tail)) = w.parts.split_first() {
-                if field.is(t, head.hash, &head.text)
-                    && tail.iter().zip(1..).all(|(x, i)| {
-                        field
-                            .at(t.position + i)
-                            .any(|t| field.is(t, x.hash, &x.text))
-                    })
-                {
-                    p.parts.push(t.position);
-                    continue;
-                }
+            if let Some((head, tail)) = w.parts.split_first()
+                && field.is(t, head.hash, &head.text)
+                && tail.iter().zip(1..).all(|(x, i)| {
+                    field
+                        .at(t.position + i)
+                        .any(|t| field.is(t, x.hash, &x.text))
+                })
+            {
+                p.parts.push(t.position);
+                continue;
             }
             if w.whole.iter().any(|x| field.is(t, x.hash, &x.text)) {
                 p.whole.push(t.position);

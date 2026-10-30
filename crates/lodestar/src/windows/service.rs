@@ -24,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::acl;
 use crate::config::Config;
 
 /// The service's name, for the installer and `sc.exe`.
@@ -56,17 +57,101 @@ pub fn default_data_dir_unless_set(config: &mut Config, default_dir: &Path) {
     }
 }
 
+/// CR-0d §1.5: with the restart proof on and no witness dir chosen (in the
+/// config file or `LODESTAR_DHT_WITNESS_DIR`), the service keeps its
+/// witness in `%ProgramData%\Lodestar-witness`: beside the data folder, so
+/// a backup of the data folder doesn't hold it, and not in the virtual
+/// account's profile. The service makes it private like the data folder;
+/// with the switch off nothing is created. An empty variable chooses
+/// nothing, as `Config::load` reads it. `env` reads the environment.
+pub fn default_witness_dir(
+    config: &Config,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Option<PathBuf> {
+    let chosen = config.layers.in_file("dht.restart_witness_dir")
+        || env("LODESTAR_DHT_WITNESS_DIR").is_some_and(|v| !v.is_empty());
+    (config.dht.safe_restart && !chosen).then(|| {
+        PathBuf::from(env("ProgramData").unwrap_or_else(|| r"C:\ProgramData".into()))
+            .join("Lodestar-witness")
+    })
+}
+
+/// Gives the service its [`default_witness_dir`] when that applies: made
+/// private with [`acl::secure_dir`], never weaker. When it can't be used
+/// the run has no witness (`no_witness`, safe: every restart suppresses),
+/// not the native default in the service account's profile, and this
+/// returns the folder and why, for a Warn event. A data folder set to
+/// ProgramData or the witness path would back the witness up with the
+/// data, so that counts as unusable too.
+pub fn apply_witness_default(
+    config: &mut Config,
+    env: &impl Fn(&str) -> Option<String>,
+    own: Option<&str>,
+    ops: &impl acl::Ops,
+) -> Option<(PathBuf, &'static str)> {
+    let w = default_witness_dir(config, env)?;
+    config.dht.restart_witness_dir = None;
+    if within(&w, &config.data_dir) {
+        return Some((w, "inside_data"));
+    }
+    match acl::secure_dir(&w, own, ops) {
+        Ok(()) => {
+            config.dht.restart_witness_dir = Some(w);
+            None
+        }
+        // secure_dir's message names the path: its step only.
+        Err(why) if why.starts_with("creating ") => Some((w, "create")),
+        Err(why) if why.starts_with("reading ") => Some((w, "inspect")),
+        Err(_) => Some((w, "not_private")),
+    }
+}
+
+/// Whether `inner` is `outer` or inside it, compared as [`same_dir`] does.
+pub fn within(inner: &Path, outer: &Path) -> bool {
+    let (i, o) = (norm(inner), norm(outer));
+    i == o || i.starts_with(&format!("{o}\\"))
+}
+
+/// A real path is verbatim (`\\?\C:\…`), so the prefix goes before
+/// comparing.
+fn norm(p: &Path) -> String {
+    let p = real(p);
+    let s = p.to_string_lossy().replace('/', "\\");
+    let s = match s.strip_prefix(r"\\?\") {
+        Some(rest) => match rest.strip_prefix(r"UNC\") {
+            Some(unc) => format!(r"\\{unc}"),
+            None => rest.to_string(),
+        },
+        None => s,
+    };
+    s.trim_end_matches('\\').to_lowercase()
+}
+
+/// `p` through its nearest existing folder's real path, with the rest
+/// appended: a folder not created yet (the witness) then compares with one
+/// that exists (the data folder), whatever 8.3 names or links lead there.
+fn real(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = p;
+    loop {
+        if let Ok(mut r) = std::fs::canonicalize(at) {
+            r.extend(rest.iter().rev());
+            return r;
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
 /// Whether two paths name the same folder, as Windows compares them: the
 /// real paths when both exist (so case, 8.3 names and `..` don't matter),
 /// else case-insensitively with `/` as `\` and no trailing separator.
 pub fn same_dir(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        p.to_string_lossy()
-            .replace('/', "\\")
-            .trim_end_matches('\\')
-            .to_lowercase()
-    };
     norm(a) == norm(b)
 }
 
@@ -209,7 +294,7 @@ mod scm {
                 log_refusal(&why);
                 REFUSED
             }
-            Ok((config, data_dir)) => {
+            Ok((config, data_dir, witness_refused)) => {
                 let _ = std::env::set_current_dir(&data_dir);
                 init_logging(
                     &data_dir,
@@ -219,6 +304,13 @@ mod scm {
                     crate::logging::events::SERVICE_STARTING,
                     path = lodestar_log::Path::new(&data_dir)
                 );
+                if let Some((w, why)) = &witness_refused {
+                    lodestar_log::log_event!(
+                        crate::logging::events::SERVICE_WITNESS_REFUSED,
+                        path = lodestar_log::Path::new(w),
+                        error = lodestar_log::Error::kind(why)
+                    );
+                }
                 match config
                     .map_err(BoxError::from)
                     .and_then(|c| serve(&c, stop_rx))
@@ -251,8 +343,19 @@ mod scm {
     /// private ([`acl`]) before anything in it is read, whenever it's used:
     /// for the config file when neither `--config` nor `LODESTAR_DATA_DIR`
     /// points elsewhere, and for the data when the config doesn't. An
-    /// error says why it's used and isn't private.
-    fn load(own: Option<&str>) -> Result<(Result<Config, String>, PathBuf), String> {
+    /// error says why it's used and isn't private. The third part is the
+    /// restart witness folder when it can't be used, and why.
+    #[allow(clippy::type_complexity)]
+    fn load(
+        own: Option<&str>,
+    ) -> Result<
+        (
+            Result<Config, String>,
+            PathBuf,
+            Option<(PathBuf, &'static str)>,
+        ),
+        String,
+    > {
         let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
         let secure = || acl::secure_dir(&default_dir, own, &acl::Windows { own_sid: own });
         let env = |k: &str| std::env::var(k).ok();
@@ -262,9 +365,12 @@ mod scm {
             secure()?;
         }
         let path = super::config_path(explicit, &default_dir, env);
+        let mut witness_refused = None;
         let config = Config::load(path.as_deref(), env)
             .map(|mut c| {
                 super::default_data_dir_unless_set(&mut c, &default_dir);
+                witness_refused =
+                    super::apply_witness_default(&mut c, &env, own, &acl::Windows { own_sid: own });
                 c
             })
             .map_err(|e| format!("config: {e}"));
@@ -275,7 +381,7 @@ mod scm {
         if elsewhere && super::same_dir(&data_dir, &default_dir) {
             secure()?;
         }
-        Ok((config, data_dir))
+        Ok((config, data_dir, witness_refused))
     }
 
     /// Appends a refusal's reason to `%SystemRoot%\Temp\lodestar-service.log`,
@@ -440,6 +546,188 @@ mod tests {
         ] {
             assert_eq!(command(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn the_service_witness_dir_is_a_sibling_only_when_the_switch_is_on() {
+        let off = |k: &str| (k == "ProgramData").then(|| r"D:\PD".to_string());
+        let c = Config::load(None, off).unwrap();
+        assert_eq!(default_witness_dir(&c, &off), None, "nothing while off");
+        // `None` leaves the variable unset; `Some("")` sets it empty.
+        let on = |witness: Option<&'static str>| {
+            move |k: &str| match k {
+                "ProgramData" => Some(r"D:\PD".to_string()),
+                "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
+                "LODESTAR_DHT_WITNESS_DIR" => witness.map(str::to_string),
+                _ => None,
+            }
+        };
+        let sibling = Some(PathBuf::from(r"D:\PD").join("Lodestar-witness"));
+        for unset in [None, Some("")] {
+            let env = on(unset);
+            let c = Config::load(None, env).unwrap();
+            assert_eq!(default_witness_dir(&c, &env), sibling, "{unset:?}");
+        }
+        // A dir chosen in the environment or the file wins.
+        let env = on(Some(r"E:\w"));
+        let c = Config::load(None, env).unwrap();
+        assert_eq!(default_witness_dir(&c, &env), None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nrestart_witness_dir = \"F:/w\"\n").unwrap();
+        let env = on(None);
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(default_witness_dir(&c, &env), None);
+    }
+
+    /// Scripted [`acl::Ops`]: what the folder looks like, and whether
+    /// creating it works.
+    struct Ops {
+        seen: Result<Option<acl::Inspection>, ()>,
+        create: bool,
+    }
+
+    impl acl::Ops for Ops {
+        fn inspect(&self, _: &Path) -> std::io::Result<Option<acl::Inspection>> {
+            self.seen
+                .clone()
+                .map_err(|()| std::io::Error::other("denied"))
+        }
+        fn create(&self, _: &Path) -> std::io::Result<()> {
+            if self.create {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("denied"))
+            }
+        }
+    }
+
+    const OWN: &str = "S-1-5-80-1-2-3-4-5";
+
+    fn private() -> Option<acl::Inspection> {
+        let item = |sddl: String| acl::Item {
+            name: String::new(),
+            link: false,
+            sddl,
+        };
+        Some(acl::Inspection {
+            folder: item(format!("O:SY{}", acl::private_sddl(Some(OWN)))),
+            entries: Vec::new(),
+            links: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn the_service_witness_is_private_or_none_at_all() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().to_string_lossy().into_owned();
+        let w = tmp.path().join("Lodestar-witness");
+        let on = |k: &str| match k {
+            "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
+            "ProgramData" => Some(pd.clone()),
+            _ => None,
+        };
+        let config = || {
+            let mut c = Config::load(None, on).unwrap();
+            c.data_dir = tmp.path().join("Lodestar");
+            // The native default it must never fall back to.
+            c.dht.restart_witness_dir = Some(PathBuf::from("profile"));
+            c
+        };
+        let ok = Ops {
+            seen: Ok(private()),
+            create: true,
+        };
+        let mut c = config();
+        assert_eq!(apply_witness_default(&mut c, &on, Some(OWN), &ok), None);
+        assert_eq!(c.dht.restart_witness_dir, Some(w.clone()));
+
+        let foreign = || {
+            let mut seen = private().unwrap();
+            seen.folder.sddl = "O:S-1-5-21-9-9-9-1001D:AI(A;OICIID;FA;;;BU)".into();
+            Some(seen)
+        };
+        for (ops, why) in [
+            (
+                Ops {
+                    seen: Ok(foreign()),
+                    create: true,
+                },
+                "not_private",
+            ),
+            (
+                Ops {
+                    seen: Ok(None),
+                    create: false,
+                },
+                "create",
+            ),
+            (
+                Ops {
+                    seen: Err(()),
+                    create: true,
+                },
+                "inspect",
+            ),
+        ] {
+            let mut c = config();
+            assert_eq!(
+                apply_witness_default(&mut c, &on, Some(OWN), &ops),
+                Some((w.clone(), why))
+            );
+            assert_eq!(c.dht.restart_witness_dir, None, "{why}");
+        }
+
+        // Never inside the data folder, which is backed up; the ACL
+        // isn't even looked at.
+        let unused = Ops {
+            seen: Err(()),
+            create: false,
+        };
+        for data in [tmp.path().to_path_buf(), w.clone()] {
+            let mut c = config();
+            c.data_dir = data;
+            assert_eq!(
+                apply_witness_default(&mut c, &on, Some(OWN), &unused),
+                Some((w.clone(), "inside_data"))
+            );
+            assert_eq!(c.dht.restart_witness_dir, None);
+        }
+
+        // Off, or a dir chosen: nothing changes.
+        let off = |k: &str| (k == "ProgramData").then(|| pd.clone());
+        let mut c = Config::load(None, off).unwrap();
+        let before = c.dht.restart_witness_dir.clone();
+        assert_eq!(
+            apply_witness_default(&mut c, &off, Some(OWN), &unused),
+            None
+        );
+        assert_eq!(c.dht.restart_witness_dir, before);
+    }
+
+    /// A folder not created yet is compared through its nearest existing
+    /// parent's real path, as the one that exists is: an 8.3 name
+    /// (`RUNNER~1`) on Windows, which the test above meets on CI, and a
+    /// link here.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_folder_compares_with_an_existing_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let other = tmp.path().join("other");
+        std::os::unix::fs::symlink(&data, &other).unwrap();
+        let w = other.join("Lodestar-witness").join("deeper");
+        assert!(within(&w, &data), "through the link");
+        assert!(!within(&tmp.path().join("data-witness"), &data));
+    }
+
+    #[test]
+    fn within_compares_whole_components() {
+        assert!(within(Path::new(r"C:\A\b"), Path::new(r"c:/a")));
+        assert!(within(Path::new(r"C:\A"), Path::new(r"C:\a\")));
+        assert!(!within(Path::new(r"C:\Ab"), Path::new(r"C:\A")));
+        assert!(!within(Path::new(r"C:\A"), Path::new(r"C:\A\b")));
     }
 
     #[test]

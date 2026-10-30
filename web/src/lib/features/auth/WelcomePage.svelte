@@ -53,7 +53,7 @@
 	});
 </script>
 
-<div bind:this={container}>
+<div bind:this={container} class="welcome">
 	{#if signedIn}
 		<AuthPage title={m.auth_welcome_title()} lead={m.auth_welcome_lead()}>
 			<div class="flex flex-col gap-3">
@@ -63,7 +63,9 @@
 		</AuthPage>
 	{:else}
 		<div class="mx-auto flex max-w-sm flex-col gap-4 px-4 py-8">
-			<h1 class="text-display font-semibold text-base-content">{m.auth_checking()}</h1>
+			<h1 class="w-fit max-w-full text-display font-semibold text-base-content">
+				{m.auth_checking()}
+			</h1>
 			{#if failed}
 				<Banner kind="error">{m.auth_error_network()}</Banner>
 				<Button onclick={() => void check()}>{m.auth_welcome_retry()}</Button>
@@ -71,3 +73,11 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	/* The heading takes focus on load; the ring hugs its text, like `.ins-heading`. */
+	.welcome :global(h1:focus-visible) {
+		outline: var(--focus-ring-width) solid var(--color-primary);
+		outline-offset: var(--focus-ring-offset);
+	}
+</style>

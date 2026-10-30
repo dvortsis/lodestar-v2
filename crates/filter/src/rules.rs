@@ -260,12 +260,12 @@ impl FromIterator<Override> for OverrideList {
 
 impl Exception {
     pub fn validate(&self) -> Result<(), Invalid> {
-        if let RuleRef::Core(r) = self.rule {
-            if r.floor() {
-                return Err(Invalid(
-                    "the locked floor has no exceptions: remove the CS-1 entry instead",
-                ));
-            }
+        if let RuleRef::Core(r) = self.rule
+            && r.floor()
+        {
+            return Err(Invalid(
+                "the locked floor has no exceptions: remove the CS-1 entry instead",
+            ));
         }
         if matches!(self.what, Match::Keyword(_)) {
             return Err(Invalid("exceptions match torrents, payloads or queries"));
