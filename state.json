@@ -1286,7 +1286,7 @@
    "session": "session_01MMjhnAXqNdYeYYFdttw8Zo",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww | 2026-10-30T10:21Z review FIX FIRST: B1 gluetun leg recipe (runner decision: --leg gluetun, >=2h baseline, own run), B2 README upgrade-on-existing-volume, I1 pidfd stop, I3 no personal paths/hosts; P1-P5. Reviewer session_01MMjhnAbgoJtA9x6eUfd9Ww re-checks delta. | 2026-10-30T10:29Z cb4ef42 all findings fixed; delta re-check by same reviewer",
+   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges | 2026-10-30T05:55Z ready aa912a5 (61+37 py tests; self-review 2B/4I fixed; ~2,050 lines mostly tests). Note: L5 CI job path list may need docs/soak/tools/linux. | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:17Z #197 89a2591 CI done; fresh Opus review session_01MMjhnAbgoJtA9x6eUfd9Ww | 2026-10-30T10:21Z review FIX FIRST: B1 gluetun leg recipe (runner decision: --leg gluetun, >=2h baseline, own run), B2 README upgrade-on-existing-volume, I1 pidfd stop, I3 no personal paths/hosts; P1-P5. Reviewer session_01MMjhnAbgoJtA9x6eUfd9Ww re-checks delta. | 2026-10-30T10:29Z cb4ef42 all findings fixed; delta re-check by same reviewer | 2026-10-30T10:31Z re-review MERGE at cb4ef42 (pidfd closes window; no paths/hosts). Merge on green CI.",
    "pr": 197
   },
   "CR-0f": {
