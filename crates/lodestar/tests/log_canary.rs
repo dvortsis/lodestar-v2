@@ -282,8 +282,9 @@ impl Server {
 
     /// `PATCH /settings/logging`, which must succeed.
     fn logging(&self, body: &str) {
-        // `follow` applies it on its own task, then logs the required
-        // `logging.kind_switched` / `logging.applied` event: wait for a new one.
+        // `follow` applies it on its own task, then logs `logging.kind_switched` for each kind
+        // it switched and `logging.applied` when the verbosity or data label changed (neither
+        // is skipped for the changes these tests make): wait for a new one of either.
         let events = |file: &str| {
             file.matches("\"event\":\"logging.kind_switched\"").count()
                 + file.matches("\"event\":\"logging.applied\"").count()
@@ -1057,8 +1058,21 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     // later changes aren't recorded.
     let before_off = open.text().len();
     let first = open.first_id().unwrap();
-    // Time passing for the code under test: the 4 s opt-in window must run out.
-    std::thread::sleep(Duration::from_secs(5));
+    // The window (`now() + 4`, whole seconds) runs out on its own: wait until the runtime logs
+    // the switch to "expired" for the filter-changes kind, whenever that is.
+    let start = Instant::now();
+    while !lines_of(&s.file(), "logging.kind_switched")
+        .iter()
+        .any(|l| l.contains("filter_changes") && l.contains("expired"))
+    {
+        let file = s.file();
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "the opt-in never expired; the file ends: {}",
+            file.get(file.len().saturating_sub(2000)..).unwrap_or(&file)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let mark = s.mark();
     s.exercise(22, false);
     s.settle();
