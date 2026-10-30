@@ -55,7 +55,8 @@ pub enum Excluded {
     Quarantined = 3,
     /// Hashed to the key but isn't usable metainfo.
     InvalidMetainfo = 4,
-    /// The pool gave the key up on data that didn't verify.
+    /// The pool gave the key up on invalid data on its final attempt: a
+    /// hash mismatch, or a protocol or handshake violation.
     FailedVerification = 5,
     /// A result under a lease that was no longer current: the key's
     /// current holder delivers it.
