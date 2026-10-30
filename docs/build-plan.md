@@ -1,6 +1,110 @@
 # Lodestar v2 build plan: M5 → 1.0, with helper-agent orchestration
 
 > Written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
+> **§0 (2026-10-30) is the current plan.** It sits above the phases below and reorders the work after the CR-0 soak. The phases keep their numbers. The owner's answers are in `docs/owner-decisions.md` §2.25, and the runner's choices are in `docs/decisions/2026-10-30-master-plan.md`.
+
+## 0. Status and plan from 2026-10-30
+
+### 0.1 Where things stand
+- **Built.** M0–M4 are merged, along with most of M5 (89 slices) and the M6 packaging slices. G-v05 passed on Oct 24.
+- **The v0.5.0 crawler was too slow.** It stored about 23 torrents an hour. The source had two defects, both reproduced offline (`docs/soak/2026-10-24-v0.5.0-metadata-throughput.md`):
+  - **S01:** stalled lookups held their slots;
+  - **S02:** the pool's and the DHT's request lifetimes diverged.
+- **CR-0 fixes both** (`docs/plan/dht-crawler-implementation-plan-2026-10-25.md`). A native Windows soak of CR-0 (build `744b84d6`) recorded this at its 16 h checkpoint:
+  - 717.5 stored per hour;
+  - no errors and no cap violations;
+  - 63.7M actor capacity rejections, with 98.9% of evictions happening before an accepted lookup.
+
+  This is not a controlled speedup. The v0.5.0 and CR-0 runs used different windows, and an external download overlapped the CR-0 run.
+- **The owner's local work is landing on the rewritten `main`.** It came from `fix/dht-cr0`, `work/soak-followups` and `work/soak-settings`. The owner force-pushed the rewritten history to `main` on 2026-10-30 (`058d9937`, §2.25), and it lands as L1–L7.
+- **Open findings that no branch fixes:**
+  - **A2-1 (security):** a failed `auth.json` save still swaps the credentials.
+  - **A3-1..3 (content safety):**
+    - one list's exceptions suppress other lists;
+    - reclassification tests run against an empty hash set;
+    - a neutralized term still counts inside phrases and NEAR.
+  - **A1-1..4:** metainfo parser edge cases (BEP 47 symlinks and padding, mixed `path.utf-8`, v2 symlink targets).
+  - **DUR-26:** updater write errors are swallowed.
+  - **S03/S04:** admission and uTP.
+
+### 0.2 Order of work
+At most four helper slices at a time in this phase (§2.25), filled in this order (the owner can reorder it):
+1. **L**, **F** and **CR-COL**, which the v0.5.1 Linux soak needs;
+2. the **v0.5.1 cut**;
+3. **C**;
+4. **I**;
+5. **S**;
+6. the M5 screen backlog (§3 P2);
+7. the v0.6 epics.
+
+**D** (docs) rides along. Sessions branch from `main`.
+
+| Lane | Slices | Notes |
+|---|---|---|
+| **L: land the owner's work** | L1–L7, contiguous commit ranges merged in order | Ranges and reviews are in the decisions file. A blocking review finding is fixed before merge, even in soaked code |
+| **F: release-blocking fixes** (Opus) | F-auth (A2-1), F-filters (A3-1..3, tightening, with property tests), F-metainfo (A1-1..4, golden corpus and fuzz), F-updater (DUR-26, a typed persistence error), F-status (stored/hour plus a stall warning; the uTP setting labelled "not active yet") | F-auth and F-filters get `/security-review` |
+| **C: crawler** (Opus; no live runs on the soak PC) | CR-SIM (deterministic replay), CR-ADM, CR-1a-H, CR-1a-S (each behind its own switch), CR-0d (crash-safe restart snapshot), the gate counters. CR-COL (Linux collector) is in this lane but launches with L and F | Merges behind switches. Not in v0.5.1 unless the release delta includes it |
+| **I: imports** (Opus for parsers and the store) | IMP-0 (PostgreSQL 16 restore runbook and checker, `SQL_ASCII` as raw bytes), IMP-1 (job table, **V13**), IMP-2 (Magnetico, read-only), IMP-3 (Bitmagnet adapter hardening), IMP-4 (merge, dedupe and CLI), IMP-5 (imported cohorts kept out of crawl-yield Insights) | V13 and later wait for the release branch. Recovery waits for CR-3 |
+| **S: Settings** | S-settings-reconcile: `848e10a0` as the base (after L6, which carries `9c065fcb`), plus the paused `S-settings-1` / `M-settings-form-3` | Budgets fixed by code splitting, never by raising limits |
+| **D: docs** | D-v051: release notes, the restart sampling delay, "the index grows over days", don't run `:nightly` on real data | Built from the release branch |
+
+### 0.3 After the CR-0 soak
+1. **Close out the soak:**
+   - collector stop and clean-shutdown evidence;
+   - `docs/soak/tools/analyze_cr0.py`;
+   - an acceptance review against the DUR terms (`docs/plan/2026-10-27-baseline-execution.md`);
+   - a published report.
+
+   A failure or an interruption means a fix and a fresh frozen soak; runs are never stitched together.
+2. **The old pre-CR-0 Docker crawler is never restarted.** The `v0.5.1-rc` image replaces it on the same volume.
+
+### 0.4 v0.5.1 gate
+- **Release branch and candidates.** Cut a release branch at a fixed SHA. Build `v0.5.1-rc.N` artifacts and record their hashes.
+- **Delta from the soak.** Map the changes since the soaked `744b84d6` to targeted tests. A non-trivial change to the crawler lifecycle, the sampler or the endpoint policy means another soak.
+- **Merged first:** L1–L7 and F-*.
+- **The CR-0 soak is accepted.**
+- **CI:** every workflow (`ci-ok`, Web, E2E with all-themes, Release) is dispatched on the cutoff SHA and green, with no regenerated baselines.
+- **Windows:** a ≥ 6 h **service-mode** run of the rc MSI, plus a portable smoke test.
+- **Linux:** a **24 h Docker soak on the owner's Unraid box** with CR-COL. It includes a ≥ 2 h gluetun leg and is the upgrade test of the Oct 22 volume.
+- **Updates** stay off unless real signing keys and a manifest exist.
+- **Release:** the owner tags `v0.5.1`, approves the release environment and publishes.
+
+### 0.5 Crawler program
+**Hypotheses for the next limiter:**
+- H1: lookup latency × the 32-request cap;
+- H2: admission and retry churn;
+- H3: reachability and transport.
+
+**Order:**
+1. Screen each candidate in CR-SIM.
+2. Run a 6 h measured A/B per candidate, in ABBA order with at least two repetitions:
+   1. CR-ADM;
+   2. CR-1a-H;
+   3. CR-1a-S;
+   4. then CR-1c (a cap sized to the intensity preset);
+   5. CR-1b (target prefixes);
+   6. CR-4 (uTP and IPv6);
+   7. CR-5.
+3. Combine the candidates that win.
+4. Run a 24 h acceptance soak.
+
+**Rules for the runs:**
+- Each run happens on the dedicated experiment host when one exists.
+- No imports run on that host during a run.
+- The bitmagnet comparator runs on separate days from fresh data.
+
+### 0.6 Gates added by this plan
+- **Crawler (gates v0.6):**
+  - **What counts:** unique infohashes fetched and verified from the network in this run, committed and searchable.
+  - **Where it's measured:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
+  - **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers also serve.
+  - **Thresholds proposed for the owner to confirm:** 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
+  - Politeness and network guardrails are never relaxed to reach it.
+- **Import scale:**
+  - pilots at 10k → 100k → 1M → 10M, each measured against §1.6's budgets, including about 2.3 KB per torrent all-in; any excess goes to the owner (the owner's ladder in §2.25 is 1M → 10M → 50M; 10k and 100k are runner smoke stages);
+  - then a measured 50M gate, whose numbers go to the owner;
+  - capacity is measured at each stage, never estimated (decisions file).
+  - After the gate: CR-3 recovery, then a subset of the wizard, then the other source families.
 
 ## Context
 M0–M3 are merged: the crawler with MSE fetch, store schema v3, the Tantivy torrent and file indexes, the query language, enrichment and the worker boundary. There's also a minimal API (setup, login, parse, search with offset paging, detail, files) and a 211-line status page.
@@ -307,6 +411,12 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 - **[M]** curated rule packs.
 - **[S]** ThePornDB/StashDB enrichment, following the plugin pattern.
 
+**v0.6 tag gate (§0.6):**
+- The single-node crawler gate passes.
+- The interface changes from the crawler program (CR-ADM, CR-1a) keep `crates/cluster` and its chaos and transport tests green.
+
+Feature work on workers, companions and sources continues in parallel; only the tag waits.
+
 ### P5: M7 / v0.7
 - **[M]**
   - The Torznab server.
@@ -333,7 +443,8 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 ### P7: M8 hardening → 1.0
 - **[M]**
   - The relevance judgment set and `relevance` bin, with an NDCG@10 gate.
-  - 10M performance and size gates on a dedicated runner.
+  - 10M performance and size gates on a dedicated runner, plus the owner-approved 50M import-scale numbers (§0.6).
+  - The crawler gate re-measured on the release candidate.
   - The Windows soak test.
   - A full-system security review.
   - Plugin politeness and purge audits.
