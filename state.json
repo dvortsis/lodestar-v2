@@ -1316,13 +1316,13 @@
    ]
   },
   "F-filters-neutral-perf": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnCKp7p5iJoFMiPvUdt",
-   "pr": null,
+   "pr": 192,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main | 2026-10-30T07:47Z neutralized 3.4x->1.08-1.11x mixed (callgrind 1.34M->0.51M instr). Runner: (a) land with neutralized case reported not held; (c) follow-up F-filters-xcpu"
+   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main | 2026-10-30T07:47Z neutralized 3.4x->1.08-1.11x mixed (callgrind 1.34M->0.51M instr). Runner: (a) land with neutralized case reported not held; (c) follow-up F-filters-xcpu | 2026-10-30T08:07Z #192 d9ef8fa8; budget base->branch neutralized ~180->57us, mixed ~65->53us (this VM); fresh review session_01MMjhnAbyAgKuzLGBs3b3rP"
   },
   "L4-followups": {
    "status": "pending",
@@ -1373,7 +1373,7 @@
    "model": "opus",
    "session": "session_01MMjhnCAnPjYNuyFZbX67yK",
    "pr": null,
-   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression)"
+   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191."
   },
   "CR-0": {
    "status": "awaiting-owner",
