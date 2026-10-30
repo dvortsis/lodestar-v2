@@ -1163,7 +1163,7 @@
    "status": "paused",
    "model": "sonnet",
    "deps": [],
-   "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge | 2026-10-23T21:14Z #147 review FIX: 1 blocking (settings save test-only hook via SettingsApi wrapper), 1 important (logs close poll vacuous), 3 polish. Web PR slice/X-sleeps-web ordered now (shortcuts.keyboard flake hit #149) | 2026-10-23T21:39Z #151 web (02dbc19) runner-reviewed OK, CI running | 2026-10-23T21:40Z #151 merged e9eb1cf (web waitForTimeout) | 2026-10-23T21:55Z #147 fixes 0a1e223 runner-checked OK (SignalSaves flag, chunk-stall wait); merge on green | 2026-10-23T22:29Z #147 merged 89610d7; next pool.rs + lodestar/tests | 2026-10-24T03:31Z paused (owner v0.5 priority, usage) | 2026-10-30T05:55Z old session told to port 7fcf111a,c272e0a2 onto new main as port/X-sleeps and open PR | 2026-10-30T07:14Z #188 opened 38f73cde; told to hold until #187 merges, then merge main and resolve log_canary | 2026-10-30T08:15Z told to merge main (post-#187) and push for review",
+   "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge | 2026-10-23T21:14Z #147 review FIX: 1 blocking (settings save test-only hook via SettingsApi wrapper), 1 important (logs close poll vacuous), 3 polish. Web PR slice/X-sleeps-web ordered now (shortcuts.keyboard flake hit #149) | 2026-10-23T21:39Z #151 web (02dbc19) runner-reviewed OK, CI running | 2026-10-23T21:40Z #151 merged e9eb1cf (web waitForTimeout) | 2026-10-23T21:55Z #147 fixes 0a1e223 runner-checked OK (SignalSaves flag, chunk-stall wait); merge on green | 2026-10-23T22:29Z #147 merged 89610d7; next pool.rs + lodestar/tests | 2026-10-24T03:31Z paused (owner v0.5 priority, usage) | 2026-10-30T05:55Z old session told to port 7fcf111a,c272e0a2 onto new main as port/X-sleeps and open PR | 2026-10-30T07:14Z #188 opened 38f73cde; told to hold until #187 merges, then merge main and resolve log_canary | 2026-10-30T08:15Z told to merge main (post-#187) and push for review | 2026-10-30T08:41Z #188 255e88d7 merged main; fresh review session_01MMjhnADoudEEXxq6H3tQTF",
    "session": "session_01EFQKtWTWkBGHK299HzziBZ",
    "pr": null,
    "review_rounds": 1
@@ -1228,7 +1228,7 @@
    "status": "review",
    "branch": "land/L5",
    "head": "e41f0cf3",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures). | 2026-10-30T06:35Z PR #184 opened (base land/L4); retarget to main after the range below merges | 2026-10-30T06:36Z when retargeting #184 to main: merge main into land/L5, resolve .gitattributes add/add as the union of 4 rules | 2026-10-30T06:54Z combined into #184 (land/L5 dcff7b99 = L5 + land/L3 6dc5514a + land/L4 467a10c4 + main); retargeted to main, full-ci, CI/Release/E2E dispatched | 2026-10-30T07:10Z fa6cff05: drawer entry 28.5->29 KB (event client via L3 visibility; decisions 2026-10-30-L3-L5-landing.md, \u00a72.19 flag) + .update-snapshots (welcome/settings baselines, 40 diffs, only failures); next: review bot PNGs, remove marker, merge on green | 2026-10-30T07:40Z bot baselines 51aeddb0. Review: welcome baseline = sign-in redirect (route lacks auth mock); settings baseline missing top-bar right controls -> L5-e2e session (fix/L5-e2e). shutdown.rs a_stalled_download deterministic on L5 (0.5s) vs main pass (11.7s): bisect running. Local vitest teardown fix pending push. | 2026-10-30T07:46Z shutdown.rs failure confirmed on main 42779e4a (race, not L5): bisect stopped. Comment on #184. | 2026-10-30T08:06Z pushed 6ed6fd0d (fix/L5-e2e + vitest teardown + all-themes heading wait); marker kept -> welcome baselines regenerate; next: review PNGs, remove marker | 2026-10-30T08:19Z merge main (with #191) into land/L5 in the marker-removal push",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures). | 2026-10-30T06:35Z PR #184 opened (base land/L4); retarget to main after the range below merges | 2026-10-30T06:36Z when retargeting #184 to main: merge main into land/L5, resolve .gitattributes add/add as the union of 4 rules | 2026-10-30T06:54Z combined into #184 (land/L5 dcff7b99 = L5 + land/L3 6dc5514a + land/L4 467a10c4 + main); retargeted to main, full-ci, CI/Release/E2E dispatched | 2026-10-30T07:10Z fa6cff05: drawer entry 28.5->29 KB (event client via L3 visibility; decisions 2026-10-30-L3-L5-landing.md, \u00a72.19 flag) + .update-snapshots (welcome/settings baselines, 40 diffs, only failures); next: review bot PNGs, remove marker, merge on green | 2026-10-30T07:40Z bot baselines 51aeddb0. Review: welcome baseline = sign-in redirect (route lacks auth mock); settings baseline missing top-bar right controls -> L5-e2e session (fix/L5-e2e). shutdown.rs a_stalled_download deterministic on L5 (0.5s) vs main pass (11.7s): bisect running. Local vitest teardown fix pending push. | 2026-10-30T07:46Z shutdown.rs failure confirmed on main 42779e4a (race, not L5): bisect stopped. Comment on #184. | 2026-10-30T08:06Z pushed 6ed6fd0d (fix/L5-e2e + vitest teardown + all-themes heading wait); marker kept -> welcome baselines regenerate; next: review PNGs, remove marker | 2026-10-30T08:19Z merge main (with #191) into land/L5 in the marker-removal push | 2026-10-30T08:41Z welcome baselines 223acd81 reviewed (real welcome page, all themes). Pushed 05203af0: marker removed + main (fafe2f89..8d7a24f6) merged; local fmt/clippy/search/store/settings golden OK; E2E dispatched (all-themes). Acceptance run. Follow-up: welcome h1 programmatic-focus ring visible/wider than text (UI polish).",
    "pr": 184
   },
   "L6": {
@@ -1279,7 +1279,7 @@
    "pr": 190,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk) | 2026-10-30T08:00Z local reviewer stopped (disk); fresh review moved to cloud session session_01MMjhnBvsF5kreeXyjjL3kB | 2026-10-30T08:21Z fresh review MERGE (0B/0I/2P). Merge blocked by conflict with main fafe2f89 (likely logs_catalog golden); author told to merge main + regenerate"
+   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk) | 2026-10-30T08:00Z local reviewer stopped (disk); fresh review moved to cloud session session_01MMjhnBvsF5kreeXyjjL3kB | 2026-10-30T08:21Z fresh review MERGE (0B/0I/2P). Merge blocked by conflict with main fafe2f89 (likely logs_catalog golden); author told to merge main + regenerate | 2026-10-30T08:41Z 95207bf4 conflict resolved (logs_catalog re-blessed); CI running"
   },
   "CR-COL": {
    "status": "ready-waiting-L5",
@@ -1316,13 +1316,13 @@
    ]
   },
   "F-filters-neutral-perf": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCKp7p5iJoFMiPvUdt",
    "pr": 192,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main | 2026-10-30T07:47Z neutralized 3.4x->1.08-1.11x mixed (callgrind 1.34M->0.51M instr). Runner: (a) land with neutralized case reported not held; (c) follow-up F-filters-xcpu | 2026-10-30T08:07Z #192 d9ef8fa8; budget base->branch neutralized ~180->57us, mixed ~65->53us (this VM); fresh review session_01MMjhnAbyAgKuzLGBs3b3rP"
+   "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main | 2026-10-30T07:47Z neutralized 3.4x->1.08-1.11x mixed (callgrind 1.34M->0.51M instr). Runner: (a) land with neutralized case reported not held; (c) follow-up F-filters-xcpu | 2026-10-30T08:07Z #192 d9ef8fa8; budget base->branch neutralized ~180->57us, mixed ~65->53us (this VM); fresh review session_01MMjhnAbyAgKuzLGBs3b3rP | 2026-10-30T08:41Z fresh review MERGE; #192 merged 8d7a24f6 (CI EPYC: neutralized 43.2us vs 132.2 on main; mixed 39.4)"
   },
   "L4-followups": {
    "status": "pending",
@@ -1369,11 +1369,11 @@
    "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7"
   },
   "X-flake-shutdown-percolator": {
-   "status": "running",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCAnPjYNuyFZbX67yK",
    "pr": null,
-   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191."
+   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191. | 2026-10-30T08:41Z #193 merged 18c1f324; Windows NRT measurement pending"
   },
   "CR-0": {
    "status": "awaiting-owner",
@@ -1390,9 +1390,10 @@
    "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values"
   },
   "F-filters-xcpu": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "notes": "2026-10-30T07:47Z queued: main filter-budget red = runner-type variance (mixed set 50.4us ref on Xeon 8573C @0.81x calib vs 39.3us EPYC 9V45). Speed the shared mixed path first; calibration method change only within \u00a72.20 (typical hardware; 50us unchanged), record+flag. Then hold the neutralized case."
+   "notes": "2026-10-30T07:47Z queued: main filter-budget red = runner-type variance (mixed set 50.4us ref on Xeon 8573C @0.81x calib vs 39.3us EPYC 9V45). Speed the shared mixed path first; calibration method change only within \u00a72.20 (typical hardware; 50us unchanged), record+flag. Then hold the neutralized case. | 2026-10-30T08:41Z launched; carries #192 review polish (decisions heading/wording, with_tokenizer comment)",
+   "session": "session_01MMjhnBFWdSTVf9zY1qSeMu"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1982,7 +1983,8 @@
   }
  },
  "followups": [
-  "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)"
+  "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
+  "2026-10-30T08:41Z UI polish: welcome page h1 (tabindex -1, focused on load) shows a focus ring wider than the text with a notch; consider :focus-visible handling for programmatic focus"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
