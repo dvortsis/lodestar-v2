@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:56Z",
+ "updated_at": "2026-10-30T20:58Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1522,6 +1522,13 @@
    "pr": 236,
    "notes": "launched 19:05Z; contract note first, code after #231/#232 merge",
    "merge": "e9768a11"
+  },
+  "CR-SIM-restart": {
+   "status": "queued",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "notes": "brief briefs/CR-SIM-restart.md (20:58Z); launch after #239 merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2188,7 +2195,6 @@
   "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
   "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
   "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
-  "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
   "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)"
