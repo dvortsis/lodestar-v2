@@ -1449,7 +1449,7 @@
    "deps": [
     "v051-cut"
    ],
-   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy",
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy | 2026-10-30T13:55Z review FIX FIRST: B1 legacy import path writes no quality row -> runner: option (b) (IMPORTED+no row = unknown; drop V13 backfill); I3 verified-upgrade writes verified row + signal or documented limitation; I4 candidate refile follow-up; polish 5-9 incl. candidates rowid table",
    "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx",
    "pr": 210
   },
@@ -2087,7 +2087,8 @@
   "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision)",
   "CR-0f counter contract: get_peers_queue.retain (dht actor.rs ~634) drops admitted requests whose caller closed while queued without counting them (admitted - completed - cancelled - active = 13 in CR-SIM admission-pressure); count them (e.g. as cancelled) and document",
   "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
-  "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs"
+  "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
+  "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
