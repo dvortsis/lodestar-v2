@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_dht::node::{Config, RestartConfig};
+use lodestar_dht::node::{Config, RestartConfig, testing};
 use lodestar_dht::restart::{Clock, Reason};
 use lodestar_sources::PoolConfig;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -26,13 +26,12 @@ use crate::rng::hash;
 use crate::run::{self, Leg, Report, Seeds, T0};
 use crate::scenario::{Restart, Scenario};
 
-/// The sampler's cooldown floor and ceiling (`node::sampler::MIN_INTERVAL`
-/// and `MAX_INTERVAL`, crate-private there). A reply's interval is clamped
+/// The sampler's cooldown floor and ceiling. A reply's interval is clamped
 /// to them; a timeout, an error or an unsupported reply cools for the
 /// ceiling, and so does a sample still in flight at a clean stop (sealed
 /// to the stop plus the ceiling plus the query timeout).
-const COOLDOWN_FLOOR: Duration = Duration::from_secs(60);
-const COOLDOWN_CEILING: Duration = Duration::from_secs(6 * 3600);
+const COOLDOWN_FLOOR: Duration = testing::SAMPLE_MIN_INTERVAL;
+const COOLDOWN_CEILING: Duration = testing::SAMPLE_MAX_INTERVAL;
 
 /// The simulated wall clock: a fixed base plus elapsed virtual time. Its
 /// `mono` is tokio's, the clock the sampler keeps; both carry across the

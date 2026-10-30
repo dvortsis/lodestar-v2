@@ -16,8 +16,8 @@ const MAX_FRONTIER: usize = 20_000;
 const MAX_KNOWN: usize = crate::restart::MAX_ENTRIES;
 const RECLAIM_PER_TICK: usize = 1024;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
-pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(60);
-pub(crate) const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
+pub const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 /// Tokens for records the restart proof made (CR-0d): restored at start or
 /// sealed at shutdown. Wire transaction ids start in the lower half and
 /// only count up, so they never reach this bit.
