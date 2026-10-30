@@ -260,6 +260,27 @@ lodestar_log::catalogue! {
             too_deep_left: Size,
         },
     }
+    /// The restart proof's witness directory (`LODESTAR_DHT_WITNESS_DIR`,
+    /// CR-0d) at start-up as root, handed to the target account
+    /// (`changed` entries).
+    SYSTEM_WITNESS_DIR {
+        id: "system.witness_dir",
+        component: System,
+        level: Info,
+        message: "The restart witness directory was handed to the target account",
+        fields: { path: Path, uid: Label, gid: Label, changed: Size },
+    }
+    /// CR-0d §1.5: the restart witness directory wasn't handed over (a
+    /// link, not a directory, `/`, other files in it), so with the restart
+    /// check on the run has no witness and every restart waits out the
+    /// sampling delay. The image sets the variable either way.
+    SYSTEM_WITNESS_DIR_LEFT {
+        id: "system.witness_dir_left",
+        component: System,
+        level: Warn,
+        message: "The restart witness directory was left as it is: if the restart check is on, restarts wait out the sampling delay",
+        fields: { path: Path, error: Error },
+    }
     /// Started as root and allowed to stay root.
     SYSTEM_ROOT {
         id: "system.running_as_root",
@@ -638,6 +659,16 @@ lodestar_log::catalogue! {
         level: Info,
         message: "service: stopped",
         fields: {},
+    }
+    /// CR-0d §1.5: the service's restart witness folder couldn't be made
+    /// private, so the DHT runs without one and suppresses after every
+    /// restart (`no_witness`).
+    SERVICE_WITNESS_REFUSED {
+        id: "service.witness_refused",
+        component: System,
+        level: Warn,
+        message: "service: no restart witness folder, so restarts wait out the sampling delay",
+        fields: { path: Path, error: Error },
     }
     /// The Windows service stopped on an error.
     SERVICE_FAILED {

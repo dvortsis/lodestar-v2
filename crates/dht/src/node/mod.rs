@@ -270,6 +270,8 @@ pub struct Stats {
     pub peer_ack_failed: AtomicU64,
     pub peer_command_full: AtomicU64,
     pub peer_command_closed: AtomicU64,
+    /// Admission permits (CR-ADM) returned, by [`PermitReturn`].
+    pub peer_permit_returns: [AtomicU64; PermitReturn::ALL.len()],
 
     pub peer_cancelled: AtomicU64,
     pub peer_active: AtomicU64,
@@ -344,6 +346,7 @@ impl Stats {
             peer_ack_failed: g(&self.peer_ack_failed),
             peer_command_full: g(&self.peer_command_full),
             peer_command_closed: g(&self.peer_command_closed),
+            peer_permit_returns: std::array::from_fn(|i| g(&self.peer_permit_returns[i])),
 
             peer_cancelled: g(&self.peer_cancelled),
             peer_active: g(&self.peer_active),
@@ -367,6 +370,62 @@ impl Stats {
             scrapes_dropped: g(&self.scrapes_dropped),
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
+        }
+    }
+}
+
+/// Where an admission permit (CR-ADM) went back to its finder's pool
+/// (`dht_peer_permit_returns_total{boundary}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermitReturn {
+    /// The last family leg finished and the caller had its answer.
+    Completed,
+    /// The caller dropped its receiver while the request was queued.
+    CancelledQueued,
+    /// The caller dropped its receiver while the request ran.
+    CancelledActive,
+    /// The pause dropped the queued request.
+    Paused,
+    /// Refused at admission: caller closed, paused or capacity.
+    Refused,
+    /// The admission acknowledgment couldn't be delivered.
+    AckFailed,
+    /// The command channel to the actor was full or closed.
+    HandoffFailed,
+    /// Still held when the actor stopped.
+    Shutdown,
+}
+
+impl PermitReturn {
+    pub const ALL: [PermitReturn; 8] = [
+        PermitReturn::Completed,
+        PermitReturn::CancelledQueued,
+        PermitReturn::CancelledActive,
+        PermitReturn::Paused,
+        PermitReturn::Refused,
+        PermitReturn::AckFailed,
+        PermitReturn::HandoffFailed,
+        PermitReturn::Shutdown,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermitReturn::Completed => "completed",
+            PermitReturn::CancelledQueued => "cancelled_queued",
+            PermitReturn::CancelledActive => "cancelled_active",
+            PermitReturn::Paused => "paused",
+            PermitReturn::Refused => "refused",
+            PermitReturn::AckFailed => "ack_failed",
+            PermitReturn::HandoffFailed => "handoff_failed",
+            PermitReturn::Shutdown => "shutdown",
+        }
+    }
+
+    /// Counts the return and drops the permit, if there is one.
+    pub(crate) fn release(self, stats: &Stats, permit: Option<PeerPermit>) {
+        if let Some(permit) = permit {
+            Stats::inc(&stats.peer_permit_returns[self as usize]);
+            drop(permit);
         }
     }
 }
@@ -439,6 +498,8 @@ pub struct StatsSnapshot {
     pub peer_ack_failed: u64,
     pub peer_command_full: u64,
     pub peer_command_closed: u64,
+    /// By [`PermitReturn::ALL`].
+    pub peer_permit_returns: [u64; 8],
 
     pub peer_cancelled: u64,
     pub peer_active: u64,
@@ -522,7 +583,7 @@ pub struct ExternalVotes {
 pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
     GetPeers(InfoHash),
-    RequestPeers(InfoHash, PeerAdmission),
+    RequestPeers(InfoHash, PeerAdmission, Option<PeerPermit>),
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
     SetIntensity(Intensity),
     SetPaused(bool),
@@ -533,6 +594,14 @@ pub(crate) enum Command {
 pub type PeerResult = oneshot::Receiver<Vec<SocketAddr>>;
 /// `None` means backpressure/paused; it must not consume a network attempt.
 pub type PeerAdmission = oneshot::Sender<Option<PeerResult>>;
+/// One owned request's slot, under coordinated admission (CR-ADM). The
+/// caller's semaphore holds [`PEER_REQUEST_CAPACITY`] of them; the actor
+/// keeps the permit for as long as the request holds a slot, and dropping
+/// it gives the slot back.
+pub type PeerPermit = tokio::sync::OwnedSemaphorePermit;
+/// Owned peer requests the actor runs or queues at once, across families:
+/// one slot per logical request, however many family legs it runs.
+pub const PEER_REQUEST_CAPACITY: usize = 32;
 
 /// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -558,17 +627,34 @@ impl NodeHandle {
     /// `true` means enqueued only; `Some` on the admission channel owns work.
     /// Dropping the returned terminal receiver cancels all family legs.
     pub fn request_peers(&self, hash: InfoHash, admit: PeerAdmission) -> bool {
-        match self.commands.try_send(Command::RequestPeers(hash, admit)) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                Stats::inc(&self.stats.peer_command_full);
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                Stats::inc(&self.stats.peer_command_closed);
-                false
-            }
+        self.request_peers_with(hash, admit, None)
+    }
+
+    /// [`request_peers`](Self::request_peers) carrying the request's
+    /// admission permit. The actor holds it while the request holds a slot;
+    /// a failed handoff returns it here.
+    pub fn request_peers_with(
+        &self,
+        hash: InfoHash,
+        admit: PeerAdmission,
+        permit: Option<PeerPermit>,
+    ) -> bool {
+        let (counter, cmd) = match self
+            .commands
+            .try_send(Command::RequestPeers(hash, admit, permit))
+        {
+            Ok(()) => return true,
+            Err(mpsc::error::TrySendError::Full(cmd)) => (&self.stats.peer_command_full, cmd),
+            Err(mpsc::error::TrySendError::Closed(cmd)) => (&self.stats.peer_command_closed, cmd),
+        };
+        Stats::inc(counter);
+        if let Command::RequestPeers(_, admit, permit) = cmd {
+            // The caller sees the closed admission before the permit is
+            // back, as with a refusal.
+            drop(admit);
+            PermitReturn::HandoffFailed.release(&self.stats, permit);
         }
+        false
     }
 
     /// Estimates a swarm's seeds and peers from the BEP 33 filters of the

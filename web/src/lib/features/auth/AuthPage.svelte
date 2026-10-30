@@ -45,7 +45,7 @@
 			/>
 		</picture>
 		<div class="flex flex-col gap-1">
-			<h1 class="text-display font-semibold text-base-content">{title}</h1>
+			<h1 class="w-fit max-w-full text-display font-semibold text-base-content">{title}</h1>
 			<p class="text-body text-muted-text">{lead}</p>
 		</div>
 		{@render children()}

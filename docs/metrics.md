@@ -677,6 +677,25 @@ peer/fetch flags; do not interpret eviction categories as complete cross-restart
 history. All absent measurements remain unknown.
 
 
+## Coordinated admission (CR-ADM, 2026-10-30)
+
+These series count only with `dht.coordinated_admission` on ([the decision](decisions/2026-10-30-CR-ADM.md)); with it off they're exported and stay 0. A permit is one logical peer request's slot at one finder, covering every address family; the DHT has 32. These are event counts, not unique hashes, network attempts or cohort conversion. The existing admission counters keep their meaning.
+
+| Series | Meaning |
+|---|---|
+| `fetch_admission_waits_total{kind}` | A key due a lookup that joined the permission queue instead of being granted at once. `kind` is `arrival` (a discovery or a restored key), `retry` (after back-off) or `requeue` (after a refusal, a lost acknowledgment or a pause drop). |
+| `fetch_admission_wait_cancelled_total{reason}` | Waiters that left without a request: `evicted`, or `peers` (peers arrived first). No network attempt is made. |
+| `fetch_admission_wakeups_total` | Times a permit returned while the pool was idle woke it. One wakeup can grant several waiters; a grant the pool makes on seeing a completion itself needs none. |
+| `fetch_admission_grants_total{kind,class}` | Requests granted permits, by `kind` as above and `class` `interactive` or `background`. |
+| `fetch_admission_refusals_total{reason}` | Requests that held permits but weren't accepted: `refused` (the actor answered no; its reason is in `dht_peer_rejection_reasons_total`) or `unacknowledged` (the handoff or acknowledgment was lost). Neither uses an attempt or a back-off. |
+| `fetch_admission_holds_total` | 1 s holds on a finder after a refusal. |
+| `fetch_admission_permit_returns_total{boundary}` | Permits returned in the pool: `finder_full` and `finder_closed` (granted, never delivered), and `unused` (never granted: kept back from a wakeup or a partial grant and given back on a hold, a pause, shutdown or an empty queue, or taken for a waiter that had run out of attempts). |
+| `dht_peer_permit_returns_total{boundary}` | Permits returned in the actor: `completed`, `cancelled_queued`, `cancelled_active`, `paused`, `refused`, `ack_failed`, `handoff_failed`, `shutdown`. |
+| `fetch_admission_waiters` | Gauge: keys waiting for a lookup now. |
+| `fetch_admission_permits_in_use` | Gauge: permits granted requests hold now, across finders. |
+
+With one finder (the DHT), `fetch_admission_grants_total` = `dht_peer_permit_returns_total` + `fetch_admission_permit_returns_total{boundary=~"finder_full|finder_closed"}` + `fetch_admission_permits_in_use`. A persistent gap means a leaked or duplicated permit; a brief one is a permit in transit between the pool and the actor. At shutdown, a request still in the DHT plugin's channel returns its permit without being counted.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

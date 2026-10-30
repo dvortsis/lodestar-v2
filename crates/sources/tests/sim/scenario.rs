@@ -94,15 +94,28 @@ pub struct FetchConfig {
 /// `Scenario { switches: Switches { my_candidate: true, ..Default::default() }, ..base }`.
 /// See `README.md` ("A/B a candidate").
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Switches {}
+pub struct Switches {
+    /// CR-ADM: `dht.coordinated_admission`.
+    pub coordinated_admission: bool,
+}
 
 impl Switches {
     /// Writes the switches into the real configs the run starts with.
-    pub fn apply(&self, _dht: &mut Config, _pool: &mut PoolConfig) {}
+    pub fn apply(&self, _dht: &mut Config, pool: &mut PoolConfig) {
+        if self.coordinated_admission {
+            // As the pipeline wires it (`crates/pipeline/src/lib.rs`).
+            pool.coordinated_admission = true;
+            pool.finder_capacity = lodestar_dht::node::PEER_REQUEST_CAPACITY;
+        }
+    }
 
     /// For the report header: `name=value` of every switch that's on.
     pub fn describe(&self) -> String {
-        "none".to_string()
+        if self.coordinated_admission {
+            "coordinated_admission=true".to_string()
+        } else {
+            "none".to_string()
+        }
     }
 }
 

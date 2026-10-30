@@ -939,10 +939,10 @@ fn migrate_with(
     if current == latest {
         return Ok(());
     }
-    if current > 0 {
-        if let Some(path) = path {
-            take_snapshot(conn, path, current + 1)?;
-        }
+    if current > 0
+        && let Some(path) = path
+    {
+        take_snapshot(conn, path, current + 1)?;
     }
     for (version, sql) in migrations.iter().filter(|(v, _)| *v > current) {
         let tx = conn.transaction()?;
