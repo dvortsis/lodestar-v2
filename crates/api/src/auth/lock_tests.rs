@@ -214,3 +214,41 @@ fn a_failed_directory_fsync_warns_once() {
     let restarted = Auth::load(&dir.path().join("auth.json"), false).unwrap();
     assert!(restarted.login(next_ip(), OLD).is_ok());
 }
+
+/// Setup's last check, that no password is in effect yet, is defensive:
+/// a pending token implies none today. The [`Point::Locking`] hook stands
+/// in for a future path that sets one while the token is still pending,
+/// so the check is reached: setup is refused, nothing is saved, and the
+/// password already in effect stays.
+#[test]
+fn setup_never_overwrites_a_password_already_in_effect() {
+    let (dir, auth) = fresh();
+    let token = auth.setup_token().unwrap();
+    let planted = "password set some other way";
+    let encoded = hash_password(planted);
+    let weak = Arc::downgrade(&auth);
+    let (points, seen) = mpsc::channel();
+    auth.disk.hooks.set(move |point| {
+        let _ = points.send(point);
+        if point == Point::Locking
+            && let Some(auth) = weak.upgrade()
+        {
+            auth.state.write().unwrap().password = Some(encoded.clone());
+        }
+    });
+
+    let result = auth.setup(next_ip(), &token, "the setup's own password");
+    assert_eq!(result, Err(AuthError::SetupDone));
+    let points: Vec<_> = seen.try_iter().collect();
+    assert_eq!(points, [Point::Locking], "refused before any save");
+    assert!(auth.confirm(next_ip(), planted).is_ok());
+    assert!(auth.confirm(next_ip(), "the setup's own password").is_err());
+    assert_eq!(auth.setup_token(), Some(token), "the token isn't spent");
+    assert!(
+        !dir.path().join("auth.json").exists()
+            || Auth::load(&dir.path().join("auth.json"), false)
+                .unwrap()
+                .needs_setup(),
+        "nothing claimed on disk"
+    );
+}

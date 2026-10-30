@@ -1471,6 +1471,79 @@ mod tests {
         assert_eq!(journal(&store), []);
     }
 
+    /// A snapshot whose time is unknown and whose file can't be looked at
+    /// (an error other than "not found") is left as it was, with a
+    /// warning, and holds back the journal rows it may still hold; a
+    /// later pass that can read it purges it and acknowledges them.
+    ///
+    /// Root bypasses permissions, so the failure is a path past the
+    /// system's limit: `list` reads the folder and sees a regular file,
+    /// but `metadata` on the full path fails with ENAMETOOLONG. SQLite
+    /// can't open a path that long, so the store is opened in a short
+    /// folder and only the first pass looks for its snapshots in the long
+    /// one; the fix moves the snapshot, under the same name, beside the
+    /// store. Linux and macOS only: Windows' long-path support reads the
+    /// file.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_snapshot_that_cannot_be_looked_at_holds_the_journal() {
+        // The longest path the system takes, without the terminating NUL.
+        const MAX: usize = if cfg!(target_os = "macos") {
+            1023
+        } else {
+            4095
+        };
+        const NAME: &str = "lodestar.pre-v10.db";
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, live_db) = live(dir.path());
+        // A folder whose own path fits, but not with the snapshot's name.
+        let target = MAX - 2;
+        let mut far = dir.path().join("far");
+        while far.as_os_str().len() < target {
+            // Each part adds its length and a separator; the last fills
+            // the rest exactly.
+            let rest = target - far.as_os_str().len();
+            far.push("d".repeat(if rest > 250 { 150 } else { rest - 1 }));
+        }
+        assert_eq!(far.as_os_str().len(), target);
+        assert!(far.join(NAME).as_os_str().len() > MAX);
+        std::fs::create_dir_all(&far).unwrap();
+        // The folder by a short path, to put files there.
+        let near = dir.path().join("near");
+        std::os::unix::fs::symlink(&far, &near).unwrap();
+
+        let hash = [81; 20];
+        insert_torrent(store.connection(), 1, hash, "unreadable-marker-9c4f");
+        let snap = take(&store, &live_db, 10, T);
+        assert_eq!(snap, dir.path().join(NAME));
+        std::fs::rename(&snap, near.join(NAME)).unwrap();
+        store.delete_torrents(&[hash]).unwrap();
+        stamp(&store, T + DAY / 2);
+        let held = journal(&store);
+        assert_eq!(held.len(), 1);
+
+        store.path = Some(far.join("lodestar.db"));
+        let snaps = list(&far.join("lodestar.db")).unwrap();
+        assert_eq!(paths(&snaps), vec![far.join(NAME)]);
+        assert_eq!(snaps[0].taken_at, None);
+        let r = store.purge_snapshots(T + DAY, 0);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        let failed = format!("reading the snapshot {} failed: ", far.join(NAME).display());
+        assert!(r.warnings[0].starts_with(&failed), "{:?}", r.warnings);
+        assert!(r.expired.is_empty() && r.purged.is_empty(), "{r:?}");
+        assert!(contains(&near.join(NAME), b"unreadable-marker-9c4f"));
+        assert_eq!(journal(&store), held, "not acknowledged");
+
+        std::fs::rename(near.join(NAME), &snap).unwrap();
+        store.path = Some(live_db);
+        let r = store.purge_snapshots(T + 2 * DAY, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.purged, vec![snap.clone()]);
+        assert_eq!(r.torrents, 1);
+        assert!(!contains(&snap, b"unreadable-marker-9c4f"));
+        assert_eq!(journal(&store), []);
+    }
+
     /// The brief's first test: a sealed name in a snapshot taken before
     /// its quarantine expired is gone from the snapshot's bytes once the
     /// purge runs. So is a torrent deleted since, and a sealed name the
