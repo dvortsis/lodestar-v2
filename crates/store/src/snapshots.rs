@@ -227,11 +227,12 @@ pub fn remove_stale_stages(db: &Path) -> Vec<(PathBuf, std::io::Error)> {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),
     };
-    let (Some(stem), Ok(entries)) = (
-        db.file_stem().and_then(|s| s.to_str()),
-        std::fs::read_dir(dir),
-    ) else {
+    let Some(stem) = db.file_stem().and_then(|s| s.to_str()) else {
         return Vec::new();
+    };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => return vec![(dir.to_path_buf(), e)],
     };
     let mut failed = Vec::new();
     for entry in entries.flatten() {
@@ -465,26 +466,95 @@ const USER_TABLES: [&str; 3] = ["api_keys", "saved_searches", "collections"];
 
 impl Live {
     /// Holds recorded before `since` (other than `reported`) aren't read.
+    ///
+    /// The writer's store has the newest schema; a rollback's may be older
+    /// (one rolled back already). A table its schema lacks reads as empty,
+    /// as it never recorded anything there, except the query log: one the
+    /// store never had says nothing of what a snapshot's should lose.
     fn read(conn: &Connection, since: i64) -> rusqlite::Result<Live> {
         let hash = |h: Vec<u8>| <[u8; 20]>::try_from(h).ok();
         let mut deleted = Vec::new();
-        let mut stmt = conn.prepare("SELECT hash, at FROM snapshot_deletions")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))?;
-        for row in rows {
-            let (h, at) = row?;
-            deleted.extend(hash(h).map(|h| (h, at)));
+        if has_table(conn, "snapshot_deletions")? {
+            let mut stmt = conn.prepare("SELECT hash, at FROM snapshot_deletions")?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (h, at) = row?;
+                deleted.extend(hash(h).map(|h| (h, at)));
+            }
         }
         let mut sealed = HashSet::new();
+        let mut reported = Vec::new();
+        let mut held = Vec::new();
+        // V4 adds cs_hashes, tombstones and quarantine together.
+        if has_table(conn, "cs_hashes")? {
+            Self::read_holds(conn, since, &mut sealed, &mut reported, &mut held)?;
+        }
+        let oldest_query = if has_table(conn, "query_log")? {
+            conn.query_row(
+                "SELECT at, id FROM query_log ORDER BY at, id LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+        } else {
+            // Before every row: nothing goes.
+            Some((i64::MIN, i64::MIN))
+        };
+        let mut user_ids = Vec::with_capacity(USER_TABLES.len());
+        // V10 adds them together; without them none goes (see `purge_one`).
+        if has_table(conn, "api_keys")? {
+            for table in USER_TABLES {
+                let seq: i64 = conn
+                    .query_row(
+                        "SELECT seq FROM sqlite_sequence WHERE name = ?1",
+                        [table],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0);
+                let mut stmt = conn.prepare(&format!("SELECT id FROM {table}"))?;
+                let ids = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<HashSet<i64>>>()?;
+                user_ids.push((seq, ids));
+            }
+        }
+        let revoked = if has_table(conn, "api_keys")? {
+            let mut stmt =
+                conn.prepare("SELECT id, revoked_at FROM api_keys WHERE revoked_at IS NOT NULL")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<HashMap<i64, i64>>>()?
+        } else {
+            HashMap::new()
+        };
+        Ok(Live {
+            deleted,
+            sealed,
+            reported,
+            held,
+            oldest_query,
+            user_ids,
+            revoked,
+        })
+    }
+
+    fn read_holds(
+        conn: &Connection,
+        since: i64,
+        sealed: &mut HashSet<[u8; 20]>,
+        reported: &mut Vec<[u8; 20]>,
+        held: &mut Vec<([u8; 20], i64)>,
+    ) -> rusqlite::Result<()> {
+        let hash = |h: Vec<u8>| <[u8; 20]>::try_from(h).ok();
         let mut stmt = conn.prepare("SELECT hash FROM quarantine WHERE sealed IS NOT NULL")?;
         for h in stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))? {
             sealed.extend(hash(h?));
         }
-        let mut reported = Vec::new();
         let mut stmt = conn.prepare("SELECT hash FROM cs_hashes WHERE origin != ?1")?;
         for h in stmt.query_map([IMPORTED], |r| r.get::<_, Vec<u8>>(0))? {
             reported.extend(hash(h?));
         }
-        let mut held = Vec::new();
         let mut stmt = conn.prepare(
             "SELECT hash, added_at FROM cs_hashes WHERE origin = ?2 AND added_at >= ?1
              UNION ALL SELECT hash, at FROM tombstones WHERE at >= ?1
@@ -497,43 +567,7 @@ impl Live {
             let (h, at) = row?;
             held.extend(hash(h).map(|h| (h, at)));
         }
-        let oldest_query = conn
-            .query_row(
-                "SELECT at, id FROM query_log ORDER BY at, id LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let mut user_ids = Vec::with_capacity(USER_TABLES.len());
-        for table in USER_TABLES {
-            let seq: i64 = conn
-                .query_row(
-                    "SELECT seq FROM sqlite_sequence WHERE name = ?1",
-                    [table],
-                    |r| r.get(0),
-                )
-                .optional()?
-                .unwrap_or(0);
-            let mut stmt = conn.prepare(&format!("SELECT id FROM {table}"))?;
-            let ids = stmt
-                .query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<HashSet<i64>>>()?;
-            user_ids.push((seq, ids));
-        }
-        let mut stmt =
-            conn.prepare("SELECT id, revoked_at FROM api_keys WHERE revoked_at IS NOT NULL")?;
-        let revoked = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<rusqlite::Result<HashMap<i64, i64>>>()?;
-        Ok(Live {
-            deleted,
-            sealed,
-            reported,
-            held,
-            oldest_query,
-            user_ids,
-            revoked,
-        })
+        Ok(())
     }
 }
 
@@ -1273,7 +1307,6 @@ mod tests {
         }
     }
 
-    /// A new migration must decide what its schema means for the purge.
     #[test]
     fn stage_names_are_only_a_rollbacks() {
         for name in [
@@ -1356,6 +1389,51 @@ mod tests {
         assert_eq!(n, None);
     }
 
+    /// A store rolled back already can be older than the copy: what its
+    /// schema lacks takes nothing from the copy, but its journal still
+    /// does.
+    #[test]
+    fn purge_for_restore_from_an_older_store() {
+        let dir = tempfile::tempdir().unwrap();
+        for live_version in [3, 9, 11, 12] {
+            let live = fixture(
+                &dir.path().join(format!("live-v{live_version}.db")),
+                live_version,
+            );
+            if live_version >= 12 {
+                live.execute(
+                    "INSERT INTO snapshot_deletions (hash, at) VALUES (?1, ?2)",
+                    params![&[5u8; 20][..], T],
+                )
+                .unwrap();
+            }
+            if live_version >= 10 {
+                // Its log isn't empty, so it wasn't cleared.
+                live.execute(
+                    "INSERT INTO query_log (at, query, latency_us) VALUES (?1, 'live', 0)",
+                    [T - DAY],
+                )
+                .unwrap();
+            }
+            let copy = dir.path().join(format!("copy-for-v{live_version}.tmp"));
+            let conn = fixture(&copy, Plan::KNOWN_THROUGH);
+            insert_torrent(&conn, 1, [5; 20], "deleted since");
+            conn.execute(
+                "INSERT INTO query_log (at, query, latency_us) VALUES (?1, 'kept', 0)",
+                [T],
+            )
+            .unwrap();
+            drop(conn);
+            let n = purge_for_restore(&live, &copy, Some(T), T + DAY).unwrap();
+            assert_eq!(n, Some(usize::from(live_version >= 12)), "v{live_version}");
+            let conn = Connection::open(&copy).unwrap();
+            let logged: i64 = conn
+                .query_row("SELECT count(*) FROM query_log", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(logged, 1, "v{live_version}");
+        }
+    }
+
     /// The tick deletes what an interrupted rollback left.
     #[test]
     fn the_tick_deletes_an_interrupted_rollbacks_copy() {
@@ -1367,6 +1445,7 @@ mod tests {
         assert!(!stage.exists());
     }
 
+    /// A new migration must decide what its schema means for the purge.
     #[test]
     fn every_known_schema_has_a_plan() {
         let latest = MIGRATIONS.last().unwrap().0;
