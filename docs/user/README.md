@@ -88,7 +88,7 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
 
 ## About this guide
 
-This guide covers Lodestar v0.5.1 (draft). Last updated 2026-10-30. Facts come from `packaging/unraid/lodestar.xml`, `packaging/unraid/lodestar-gluetun.xml`, `packaging/docker/README.md`, `docker-compose.yml`, `docs/operations.md` and `docs/architecture.md` §12. They are listed in [`docs/setup.facts.md`](../setup.facts.md). Form illustrations in Chapter 2 are generated from `packaging/unraid/lodestar.xml`; see [`images/SHOTLIST.md`](images/SHOTLIST.md) for live capture instructions.
+This guide covers Lodestar v0.5.1. Last updated 2026-10-30. Facts come from `packaging/unraid/lodestar.xml`, `packaging/unraid/lodestar-gluetun.xml`, `packaging/docker/README.md`, `docker-compose.yml`, `docs/operations.md` and `docs/architecture.md` §12. They are listed in [`docs/setup.facts.md`](../setup.facts.md). Form illustrations in Chapter 2 are generated from `packaging/unraid/lodestar.xml`; see [`images/SHOTLIST.md`](images/SHOTLIST.md) for live capture instructions.
 
 <!-- nav:start -->
 ---

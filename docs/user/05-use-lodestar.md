@@ -53,9 +53,12 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
 
 | State | What it means |
 |---|---|
-| **Crawling** | New torrents are arriving. |
+| **Crawling** | Lodestar is fetching torrent descriptions. |
 | **Starting** | Lodestar started less than 6 hours ago and nothing is flowing yet. Sampling waits up to 6 hours after every start. |
 | **Idle** | The crawler has nothing to do right now. |
+| **Paused** | You paused the crawler. Search still works. |
+| **Rebuilding index** | Lodestar is rebuilding the search index and shows its progress. |
+| **Reconnecting** | The page lost contact with Lodestar and is trying again. |
 | **Stalled** | The crawler is running, but nothing new has been stored for an hour. Or the search index is behind: new torrents are stored but can't be searched yet. |
 
 When the pill says **Stalled**, open **Insights**. A banner there says the crawler looks stalled, and the stage strip below it shows which stage is stuck.

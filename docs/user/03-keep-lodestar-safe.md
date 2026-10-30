@@ -100,7 +100,7 @@ The setup token is the one secret that appears in the log. It stops working once
 
 Updates are off until you choose them, because checking contacts GitHub. Automatic updates are not available in this release.
 
-If Lodestar can't save an update pause, it tells you (`updates_not_saved`) and holds updates until the next restart. An unreadable updater state file also holds updates until you save a pause or resume again. Check that the data folder has free space and can be written, then try again. Today you update by pulling a new image.
+If Lodestar can't save an update pause, it tells you (`updates_not_saved`) and holds updates until you save a pause or resume, or Lodestar restarts. An unreadable updater state file also holds updates until you save a pause or resume again. Check that the data folder has free space and can be written, then try again. Today you update by pulling a new image.
 
 | Option | What it means |
 |---|---|
