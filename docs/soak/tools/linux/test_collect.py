@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -163,8 +163,9 @@ class FakeDocker:
             return 200, {"RepoDigests": ["lodestar@sha256:" + "f" * 64]}
         return 404, {}
 
-    def post(self, path):
+    def post(self, path, timeout=None):
         self.calls.append(("POST", path))
+        self.post_timeout = timeout
         if path.startswith(f"/containers/{CONTAINER_ID}/stop"):
             self.container["State"].update(Running=False, ExitCode=self.stop_exit_code)
             return 204, None
@@ -306,6 +307,7 @@ class CleanRunTests(Base):
         c, rc = self.run_docker("--stop")
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.api.posts()), 1)
+        self.assertGreaterEqual(self.api.post_timeout, 90, "stop blocks until exit; it needs a long timeout")
         result = self.result()
         self.assertEqual(result["stop_mode"], "exited_0")
         self.assertTrue(result["shutdown"]["signal_delivered"])
@@ -346,8 +348,8 @@ class FaultInjectionTests(Base):
         self.assertEqual(rc, 0)
         failed = [r for r in self.rows() if r["health"] != 200]
         self.assertEqual(len(failed), 2)
-        self.assertEqual(self.report()["phases"]["startup"]["health_failed_samples"] + 
-                         self.report()["phases"]["warmup"]["health_failed_samples"], 2)
+        phases = self.report()["phases"]
+        self.assertEqual(sum(p["health_failed_samples"] for p in phases.values()), 2)
 
     def test_three_health_failures_end_the_run(self):
         self.clock.at(60, lambda: setattr(self.lodestar, "health", 0))  # connection dropped
@@ -498,7 +500,7 @@ class InterruptionTests(Base):
         self.assertEqual(self.api.posts(), [])
         report = self.report()
         self.assertEqual(report["stop_reason"], "operator_stop")
-        self.assertIn(report["baseline_status"], ("not_started", "interruption_exit_unknown"))
+        self.assertEqual(report["baseline_status"], "interruption_exit_unknown")
 
     def test_interrupted_after_baseline_start_with_stop(self):
         c = self.collector(self.docker(), "--stop")
@@ -536,7 +538,9 @@ class InterruptionTests(Base):
         self.assertEqual(result["stop_signal"], signal.Signals(signum).name)
         self.assertEqual(result["stop_mode"], "left_running")
         self.assertTrue(result["finalization_complete"])
-        self.assertEqual(analyze_cr0.analyze(self.root)["issues"].get("no_samples"), 1)
+        rows = [l for l in (self.root / "samples.jsonl").read_text().splitlines() if l]
+        self.assertEqual(result["samples"], len(rows))
+        analyze_cr0.analyze(self.root)
 
     def test_sigterm_writes_result(self):
         self._signal_subprocess(signal.SIGTERM)
@@ -676,6 +680,14 @@ class NativeTests(Base):
         out = inst.stop()
         self.assertEqual(kills, [signal.SIGTERM])
         self.assertTrue(out["exit_confirmed"])
+
+    def test_stop_is_refused_with_a_foreign_proc_root(self):
+        proc = self.tmp / "proc"
+        write_proc(proc)
+        inst = collect.NativeInstance(777, proc, clk_tck=100)  # real os.kill, fake proc tree
+        with self.assertRaises(SystemExit):
+            self.collector(inst, "--stop").run()
+        self.assertFalse(self.root.exists())
 
     def test_stop_with_wrong_identity_does_nothing(self):
         kills = []
@@ -849,6 +861,12 @@ class LaunchGuardTests(Base):
         api.fail = True
         with self.assertRaises(SystemExit):
             collect.DockerInstance(api, "lodestar").attach()
+
+    def test_prepare_failure_after_launch_publishes_a_result(self):
+        c = self.collector(self.docker())
+        with mock.patch.object(collect, "save_json", side_effect=OSError("read-only")):
+            self.assertEqual(c.run(), 1)
+        self.assertEqual(self.result()["reason"], "evidence_write_error")
 
     def test_cli_requires_target(self):
         for argv in (["--mode", "docker"], ["--mode", "native"]):

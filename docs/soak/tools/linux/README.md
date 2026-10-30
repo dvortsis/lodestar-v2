@@ -25,6 +25,13 @@ startup-suppression phase is recorded from the beginning.
   run with `result.json` reason `operator_stop` (and `stop_signal`).
 - A field this host cannot provide is left out, never invented. Docker mode has
   no `handles` (open files). Neither mode records `redirected_log_bytes`.
+- Docker mode: `threads` is the cgroup's task count (`pids.current`), `sha256`
+  is the image ID (the analyzer's report labels it "Binary SHA-256"; `run.json`
+  says `sha256_kind: image_id`), and `process_id` is the host PID Docker
+  reports, or `0` if it reports none, because the analyzer requires a number.
+- Start the collector within minutes of starting Lodestar. Attached to an
+  instance whose suppression already ended, it never sees the transition and
+  the run stays in `startup` until the overall deadline.
 
 ## Identity
 
@@ -51,16 +58,22 @@ with the families kept apart. Without such labels the field is absent.
 
 ## Run it on Unraid, next to the Lodestar container
 
-The collector needs: the Docker socket (read-only is enough unless you use
-`--stop`), the host cgroup tree, a place to write evidence, and a path to
-Lodestar's HTTP port.
+The collector needs: the Docker socket, the host cgroup tree, a place to write
+evidence, and a path to Lodestar's HTTP port.
+
+**The Docker socket is full control.** A `:ro` bind mount does not limit the
+Docker API, so anything in the collector's container can start, stop or remove
+any container. The collector only reads, and stops the instance only with
+`--stop`, but treat the mount as root access. To narrow it, put a socket proxy
+in front that allows only `GET` on containers and images (plus `POST` stop if
+you use `--stop`), and pass its socket as `--docker-socket`.
 
 ```sh
 # Evidence goes under /mnt/user/appdata/lodestar-soak. The run directory
 # (run-1 here) must not exist yet; use a new name for every run.
 docker run -d --name lodestar-soak-collector --restart no \
   --network host \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -v /sys/fs/cgroup:/host/cgroup:ro \
   -v /mnt/user/appdata/lodestar-soak:/evidence \
   -v /path/to/collect.py:/collect.py:ro \
@@ -78,14 +91,19 @@ docker run -d --name lodestar-soak-collector --restart no \
   refuse to start below 50 GB.
 - Running it on the host instead is the same command without `docker run`:
   `python3 collect.py --mode docker --container lodestar --root ... --commit ...`.
-- Native Lodestar: `--mode native --pid <pid>` instead of `--container`.
-- Stop early and keep the evidence: `docker stop lodestar-soak-collector`
-  (SIGTERM) or `touch <run>/stop.request`. Never restart into the same
+- Native Lodestar: `--mode native --pid <pid>` instead of `--container`, run on
+  the host (or in a container with `--pid=host`). `--stop` is refused with a
+  `--proc-root` other than `/proc`, because the identity check and the signal
+  must share one PID namespace.
+- Stop early and keep the evidence: `touch <run>/stop.request`, or
+  `docker stop -t 120 lodestar-soak-collector` (SIGTERM). Docker's default 10 s
+  grace is too short when `--stop` is set: finalization can wait up to 90 s for
+  the instance to exit. Never restart into the same
   directory. Start a new one.
 - Without `--stop`, `result.json` says `left_running`, so the analyzer reports
   `run_state: completion_unknown` and no clean-shutdown evidence. That is
-  expected for an observer. Add `--stop` (and a read-write socket mount) if
-  the final graceful shutdown should be part of the evidence. Native mode
+  expected for an observer. Add `--stop` if the final graceful shutdown
+  should be part of the evidence. Native mode
   can't read the exit code of a process it didn't start, so it never reports a
   clean shutdown.
 

@@ -182,8 +182,8 @@ class DockerAPI:
     def __init__(self, socket_path, timeout=5):
         self.socket_path, self.timeout = socket_path, timeout
 
-    def request(self, method, path):
-        conn = UnixHTTPConnection(self.socket_path, self.timeout)
+    def request(self, method, path, timeout=None):
+        conn = UnixHTTPConnection(self.socket_path, timeout or self.timeout)
         try:
             conn.request(method, path)
             response = conn.getresponse()
@@ -199,8 +199,8 @@ class DockerAPI:
     def get(self, path):
         return self.request("GET", path)
 
-    def post(self, path):
-        return self.request("POST", path)
+    def post(self, path, timeout=None):
+        return self.request("POST", path, timeout)
 
 
 class DockerInstance:
@@ -364,8 +364,10 @@ class DockerInstance:
                                      else "process_identity_unverified")
         else:
             try:
-                status, _ = self.api.post(f"/containers/{self.id}/stop?t={self.stop_timeout}")
-                outcome["signal_delivered"] = status in (204, 304)
+                # The stop call blocks until the container exits, so it outlives the default timeout.
+                status, _ = self.api.post(f"/containers/{self.id}/stop?t={self.stop_timeout}",
+                                          self.stop_timeout + 30)
+                outcome["signal_delivered"] = status == 204  # 304: it had already stopped
             except OSError:
                 outcome["errors"].append("stop_failed")
             deadline = self.clock() + self.stop_timeout + 30
@@ -440,7 +442,7 @@ class NativeInstance:
         stat = self._stat()
         if stat is None or stat[1] in ("Z", "X"):
             return Verdict("exited", "process_exited_unknown")
-        if stat[2] != self.start_ticks or stat[0] != self.comm:
+        if stat[2] != self.start_ticks:
             return Verdict("changed", "process_exited_identity_changed")
         return OK
 
@@ -635,7 +637,13 @@ class Collector:
             raise SystemExit("--commit must be a lowercase hex commit id (7 to 40 characters).")
         if self.root.exists() and (not self.root.is_dir() or any(self.root.iterdir())):
             raise SystemExit("Run directory is not empty; use a fresh directory.")
-        self.instance.attach()
+        try:
+            self.instance.attach()
+        except (OSError, KeyError, TypeError, AttributeError) as error:
+            raise SystemExit(f"Cannot attach to the instance ({type(error).__name__}).") from None
+        if (a.stop and self.instance.kind == "native" and self.instance.kill is os.kill
+                and self.instance.proc.resolve() != Path("/proc").resolve()):
+            raise SystemExit("--stop needs the collector's own /proc: identity and signal must share a PID namespace.")
         if a.require_gluetun and not self.instance.network()["gluetun_network_parent"]:
             raise SystemExit("--require-gluetun: the instance's network parent is not a gluetun container.")
         self.root.mkdir(parents=True, exist_ok=True)
@@ -680,8 +688,10 @@ class Collector:
     # -- main loop
     def run(self):
         a = self.args
-        self.prepare()
-        self.run_json()
+        try:
+            self.prepare()
+        except OSError as error:
+            raise SystemExit(f"Cannot prepare the run ({type(error).__name__}).") from None
         status_path, started = self.root / "status.json", self.clock()
         phase = "startup"
         self.sample = 0
@@ -696,6 +706,7 @@ class Collector:
         self.shutdown = None
         self.finalization_errors = 0
         try:
+            self.run_json()
             self.note(f"started identity={self.instance.identity}; waiting for sampling suppression to end")
             while True:
                 elapsed = self.clock() - started
