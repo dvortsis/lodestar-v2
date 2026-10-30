@@ -25,19 +25,65 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (12, V12),
 ];
 
-/// Deletion evidence outlives expiring/released fetch holds. Hash identity
-/// also survives rollback histories where local numeric ids can differ.
+/// The snapshot purge's deletion journal (`snapshots`): the hash of every
+/// torrent the store deletes, with when, so snapshots lose it even after
+/// the fetch hold that also recorded it expires or is released. Hashes,
+/// not ids: a snapshot from another rollback history numbers torrents
+/// differently. A hybrid's truncated v2 hash goes in as well, as
+/// `find_any` matches either.
+///
+/// `at` bounds the journal: a row is matched only in snapshots taken up
+/// to a day after it, and dropped once every such snapshot has expired
+/// (`RETAIN_SECS` plus that day). Deleting a hash again moves its time
+/// forward. The backfill keeps the holds that may stand for a deletion
+/// this version didn't see, at their own time, unless the torrent is live
+/// again: a snapshot copy of a live torrent isn't purged.
 const V12: &str = "
 CREATE TABLE snapshot_deletions (
-    hash BLOB PRIMARY KEY CHECK (length(hash) = 20)
+    hash BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    at   INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
--- Preserve extant evidence before the first expiry/release on this version.
-INSERT OR IGNORE INTO snapshot_deletions SELECT hash FROM quarantine;
-INSERT OR IGNORE INTO snapshot_deletions SELECT hash FROM tombstones;
+INSERT INTO snapshot_deletions (hash, at)
+    SELECT hash, max(at) FROM (
+        SELECT hash, at FROM quarantine UNION ALL SELECT hash, at FROM tombstones
+    )
+    WHERE hash NOT IN (SELECT info_hash FROM torrents)
+      AND hash NOT IN (
+          SELECT substr(info_hash_v2, 1, 20) FROM torrents WHERE info_hash_v2 IS NOT NULL
+      )
+    GROUP BY hash;
 CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
-    INSERT OR IGNORE INTO snapshot_deletions (hash) VALUES (old.info_hash);
-    INSERT OR IGNORE INTO snapshot_deletions (hash)
-        SELECT substr(old.info_hash_v2, 1, 20) WHERE old.info_hash_v2 IS NOT NULL;
+    INSERT INTO snapshot_deletions (hash, at) VALUES (old.info_hash, unixepoch())
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT substr(old.info_hash_v2, 1, 20), unixepoch() WHERE old.info_hash_v2 IS NOT NULL
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+END;
+";
+
+/// V12's pre-release shape repair. Builds from `a7c6d5c8` up to the fix
+/// that added `at` created `snapshot_deletions (hash)` with no time and a
+/// trigger that wrote none, and recorded V12 as applied, so V12 doesn't
+/// run again there. This brings such a store to V12's final shape, once:
+/// rows are dated now (the safe direction: they keep scrubbing snapshots
+/// for the journal's full 91 days rather than being dropped as old), a
+/// hash that's live again is dropped as V12's backfill skips it, and the
+/// trigger is replaced.
+const V12_REPAIR: &str = "
+ALTER TABLE snapshot_deletions ADD COLUMN at INTEGER NOT NULL DEFAULT 0;
+UPDATE snapshot_deletions SET at = unixepoch() WHERE at = 0;
+DELETE FROM snapshot_deletions
+    WHERE hash IN (SELECT info_hash FROM torrents)
+       OR hash IN (
+           SELECT substr(info_hash_v2, 1, 20) FROM torrents WHERE info_hash_v2 IS NOT NULL
+       );
+DROP TRIGGER snapshot_torrent_deleted;
+CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
+    INSERT INTO snapshot_deletions (hash, at) VALUES (old.info_hash, unixepoch())
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT substr(old.info_hash_v2, 1, 20), unixepoch() WHERE old.info_hash_v2 IS NOT NULL
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
 END;
 ";
 
@@ -664,7 +710,27 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
 /// newer version, and snapshots an existing database before changing it
 /// (architecture §12).
 pub(crate) fn migrate(conn: &mut Connection, path: Option<&Path>) -> Result<()> {
-    migrate_with(conn, path, MIGRATIONS)
+    migrate_with(conn, path, MIGRATIONS)?;
+    repair_v12(conn)
+}
+
+/// Applies [`V12_REPAIR`] to a store with V12's pre-release journal (no
+/// `at` column); does nothing otherwise.
+fn repair_v12(conn: &mut Connection) -> Result<()> {
+    let tx = crate::begin_write(conn)?;
+    let has = |column: &str| -> rusqlite::Result<bool> {
+        tx.query_row(
+            "SELECT count(*) FROM pragma_table_info('snapshot_deletions') WHERE name = ?1",
+            [column],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+    };
+    if has("hash")? && !has("at")? {
+        tx.execute_batch(V12_REPAIR)?;
+        tx.commit()?;
+    }
+    Ok(())
 }
 
 /// For read-only connections: the schema must be exactly this build's.
