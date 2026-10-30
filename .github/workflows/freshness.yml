@@ -18,7 +18,8 @@ permissions:
 concurrency:
   # Shared with any workflow that writes the `update-manifest` release
   # (E-M6's publisher must use the same group), so a re-sign never
-  # overwrites a manifest published while it runs.
+  # overwrites a manifest published while it runs. A newer pending run
+  # replaces an older pending one, so dispatch this job sparingly.
   group: update-manifest
   cancel-in-progress: false
 
@@ -62,7 +63,7 @@ jobs:
           fi
           channels=()
           for channel in stable beta nightly; do
-            if grep -qx "${channel}.json" <<<"$assets"; then
+            if grep -qxF "${channel}.json" <<<"$assets"; then
               channels+=("$channel")
             fi
           done
@@ -96,10 +97,15 @@ jobs:
           }
 
           failed=0
+          signed=()
           updated=()
           for channel in "${channels[@]}"; do
             env_file="$work/${channel}.json"
-            gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work" --clobber
+            if ! gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work" --clobber; then
+              echo "::error::Channel ${channel}: download failed; not refreshed."
+              failed=1
+              continue
+            fi
 
             case "$channel" in
               stable|beta) pub="packaging/keys/lodestar-release.pub" ;;
@@ -145,17 +151,24 @@ jobs:
               --arg fs "$fresh_sig" \
               '{manifest: .manifest, freshness: {body: $fb, minisig: $fs}}' \
               "$env_file" >"$work/${channel}.json.new"
+            signed+=("$channel")
+          done
 
-            # Skip the channel if its manifest changed while this run signed.
-            mkdir -p "$work/recheck"
-            gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work/recheck" --clobber
-            if [ "$(jq -c '.manifest' "$work/recheck/${channel}.json")" != "$(jq -c '.manifest' "$env_file")" ]; then
+          # Just before the upload, skip any channel whose manifest changed
+          # while this run signed.
+          mkdir -p "$work/recheck"
+          for channel in "${signed[@]}"; do
+            if ! gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work/recheck" --clobber; then
+              echo "::error::Channel ${channel}: re-check download failed; not refreshed."
+              failed=1
+              continue
+            fi
+            if [ "$(jq -c '.manifest' "$work/recheck/${channel}.json")" != "$(jq -c '.manifest' "$work/${channel}.json")" ]; then
               echo "::warning::Channel ${channel}: the manifest changed during this run; not refreshed."
               continue
             fi
-
-            mv "$work/${channel}.json.new" "$env_file"
-            updated+=("$env_file")
+            mv "$work/${channel}.json.new" "$work/${channel}.json"
+            updated+=("$work/${channel}.json")
           done
 
           if [ "${#updated[@]}" -gt 0 ]; then
