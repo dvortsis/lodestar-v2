@@ -25,4 +25,4 @@ Fixes for findings 1–4 of the v0.5 parser review (`docs/code-review/codex-revi
 
 - **Golden corpus:** `crates/metainfo/tests/golden/`, raw info dictionaries (the review's inputs plus the encoding and hybrid variants above) with their expected parse.
 - **Property tests** (`tests/bep47_props.rs`) mix overrides, GBK legacy paths and targets, symlinks with and without lengths and padding with and without paths, then round-trip the result through the store's file-tree codec. `lodestar-store` is a dev-dependency of `lodestar-metainfo` for this; only integration tests use it.
-- **Fuzz seeds** live in `fuzz/seeds/<target>/` (committed), since `fuzz/corpus/` is ignored. CI's fuzz job doesn't read them yet: it needs `fuzz/seeds/${{ matrix.target }}` added after the target name in `.github/workflows/ci.yml`, which this slice doesn't own.
+- **Fuzz seeds** live in `fuzz/seeds/<target>/` (committed), since `fuzz/corpus/` is ignored. CI's fuzz step passes the corpus and the seeds folder when a target has one, and runs as before when it doesn't (the runner extended this slice's ownership to that one line of `.github/workflows/ci.yml`).
