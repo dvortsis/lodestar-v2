@@ -2093,6 +2093,10 @@
     {
       "item": "Freshness environment: confirm the main-only deployment-branch rule and that FRESHNESS_SIGNING_KEY is set (the key is passwordless, so FRESHNESS_SIGNING_KEY_PASSWORD can stay empty)",
       "unblocks": "weekly freshness re-sign (#211); once envelopes exist, a missing key fails the job"
+    },
+    {
+      "item": "FYI (\u00a72.19): filter-budget gate method is now per-model skew on the calibration for non-reference CPUs (runner decision, X-filter-budget-8573C); the 50 us budget and the 7763 reference are unchanged",
+      "unblocks": "nothing; informational"
     }
   ],
   "external_gates": {
@@ -2137,12 +2141,14 @@
     },
     "X-freshness-hardening": {
       "branch": "slice/X-freshness-hardening",
-      "head": "3c6d8ad6",
+      "head": "869a5bb1",
       "reviewer": "session_01MMjhnC6uV1DEV9qmnqQ5M7",
-      "note": "runner-owned follow-up: #211 review findings 1-7; open PR after #211 merges"
+      "note": "runner-owned follow-up: #211 review findings 1-7; open PR after #211 merges",
+      "verdict": "3c6d8ad6 MERGE; 4 optional fixed in 869a5bb1; final look asked"
     }
   },
   "log": [
-    "2026-10-30T13:56Z S-settings-reconcile asked to confirm the edit-chunk decision; runner confirmed owner option A (2026-10-24) and told it to record and cite it, with the 45 KB budget unchanged"
+    "2026-10-30T13:56Z S-settings-reconcile asked to confirm the edit-chunk decision; runner confirmed owner option A (2026-10-24) and told it to record and cite it, with the 45 KB budget unchanged",
+    "2026-10-30T14:05Z X-filter-budget-8573C: data shows the 8573C runs on two host bands, and job 124095631213's neutralized 53.3 was host interference (callgrind: equal instructions). Runner approved (d), per-model skew on the calibration (7763 reference and 50 us unchanged), and listing 9V74 and 8370C (provisional n<5); flag to owner under \u00a72.19"
   ]
 }
