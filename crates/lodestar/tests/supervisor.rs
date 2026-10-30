@@ -29,17 +29,15 @@ struct Env {
 struct Running {
     child: Child,
     lines: mpsc::Receiver<String>,
+    /// Everything `log` has returned, for a failure's report.
+    seen: String,
 }
 
 impl Env {
     fn new() -> Env {
         let env = Env {
             dir: tempfile::tempdir().unwrap(),
-            port: std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port(),
+            port: test_port(),
             trust: TestTrust::default(),
         };
         let store = Store::open(env.db(), StoreConfig::default()).unwrap();
@@ -208,7 +206,11 @@ impl Env {
                 let _ = tx.send(line);
             }
         });
-        Running { child, lines }
+        Running {
+            child,
+            lines,
+            seen: String::new(),
+        }
     }
 
     /// Runs the supervisor until it exits on its own: its status and log.
@@ -280,7 +282,42 @@ impl Running {
             out.push_str(&l);
             out.push('\n');
         }
+        self.seen.push_str(&out);
         out
+    }
+
+    /// Waits for `needle` in the supervisor's log. Fails with what it saw
+    /// (the exit status, if it exited, and the log's tail) once the
+    /// supervisor exits without it or `within` passes.
+    fn wait_for_log(&mut self, what: &str, needle: &str, within: Duration) {
+        let start = Instant::now();
+        let mut log = String::new();
+        loop {
+            log.push_str(&self.log());
+            if log.contains(needle) {
+                return;
+            }
+            let exited = self.child.try_wait().unwrap();
+            if exited.is_some() {
+                // Whatever it wrote before exiting.
+                log.push_str(&self.log());
+                if log.contains(needle) {
+                    return;
+                }
+            }
+            let ended = match exited {
+                Some(status) => format!("the supervisor exited ({status})"),
+                None if start.elapsed() >= within => format!("after {} s", within.as_secs()),
+                None => continue,
+            };
+            panic!("{what} ({ended}); its log ends:\n{}", self.tail());
+        }
+    }
+
+    /// The last lines of everything `log` returned.
+    fn tail(&self) -> String {
+        let lines: Vec<&str> = self.seen.lines().collect();
+        lines[lines.len().saturating_sub(60)..].join("\n")
     }
 
     fn stop(mut self) -> i32 {
@@ -307,6 +344,36 @@ impl Running {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+/// A port for one test's server: never the same twice in this run, and
+/// below the ephemeral range, so no `bind(0)` or `connect` is handed it.
+/// A port picked by `bind(0)` and released isn't reserved: the child binds
+/// it seconds later, and again at each restart, and in between the kernel
+/// may give it to another test, whose child then holds it, and this
+/// supervisor's child fails to start.
+fn test_port() -> u16 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    // Linux starts its range at 32768 by default, macOS at 49152.
+    const FIRST: u32 = 20_000;
+    const COUNT: u32 = 10_000;
+    #[cfg(target_os = "linux")]
+    if let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") {
+        let low: u32 = range.split_whitespace().next().unwrap().parse().unwrap();
+        assert!(FIRST + COUNT <= low, "the ephemeral range starts at {low}");
+    }
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    // Spread by process, so copies of this binary run at once rarely meet.
+    let base = std::process::id() % 100 * 100;
+    for _ in 0..COUNT {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let port = (FIRST + (base + n) % COUNT) as u16;
+        // Something outside the tests may hold it.
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port in {FIRST}..{}", FIRST + COUNT);
 }
 
 fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
@@ -744,11 +811,7 @@ fn a_switch_needs_pending_written_first() {
     std::fs::write(env.bin(".pending.tmp").join("x"), b"x").unwrap();
     let o = env.overrides(json!({"fault": format!("child:switch={NEW}@{IMAGE}")}));
     let mut r = env.start(&o);
-    let mut log = String::new();
-    wait_until("no refusal", LONG, || {
-        log.push_str(&r.log());
-        log.contains("can't write pending")
-    });
+    r.wait_for_log("no refusal", "can't write pending", LONG);
     assert!(!env.bin("active").exists() && !env.bin("pending").exists());
     r.stop();
 
@@ -871,11 +934,7 @@ fn a_migrated_store_without_a_snapshot_is_never_rolled_back() {
 
     std::fs::remove_file(env.bin("halted.json")).unwrap();
     let mut r = env.start(&env.overrides(json!({"fault": format!("child:rollback@{NEW}")})));
-    let mut log = String::new();
-    wait_until("no refusal", LONG, || {
-        log.push_str(&r.log());
-        log.contains("not rolling")
-    });
+    r.wait_for_log("no refusal", "not rolling", LONG);
     assert_eq!(env.json("active").unwrap()["version"], NEW);
     assert!(env.json("skipped").is_none());
     wait_until("it didn't serve", LONG, || env.healthy());
@@ -908,11 +967,7 @@ fn a_switch_to_an_older_version_is_refused() {
     env.stage("0.7.0", None, now() + 86_400);
     env.activate(NEW, false);
     let mut r = env.start(&env.overrides(json!({"fault": format!("child:switch=0.7.0@{NEW}")})));
-    let mut log = String::new();
-    wait_until("no refusal", LONG, || {
-        log.push_str(&r.log());
-        log.contains("versions only go up")
-    });
+    r.wait_for_log("no refusal", "versions only go up", LONG);
     assert_eq!(env.json("active").unwrap()["version"], NEW);
     assert!(!env.bin("pending").exists());
     r.stop();
