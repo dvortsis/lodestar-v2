@@ -129,6 +129,8 @@ impl Services {
         // build's is the one `index_path` names.
         let index_path = config.index_path();
         let index_root = index_path.parent().unwrap_or(&index_path).to_path_buf();
+        // The storage sampler walks the same root (R-gauges).
+        let storage_index = index_root.clone();
         let heap = config.search.heap_mib.max(16) << 20;
         let filter = pipeline_config.filter.clone();
         let subs_config = config.subscriptions.clone();
@@ -379,7 +381,7 @@ impl Services {
         let sampler = crate::storage::spawn(
             crate::storage::Paths {
                 db: config.db_path(),
-                index: index_root.clone(),
+                index: storage_index,
             },
             storage.clone(),
             crate::storage::INTERVAL,
