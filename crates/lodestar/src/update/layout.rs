@@ -157,7 +157,9 @@ impl Bin {
         value: &T,
         fault: &dyn Fn(Step) -> io::Result<()>,
     ) -> io::Result<()> {
-        write_steps(&self.dir, name, &state_bytes(name, value)?, fault)
+        write_steps(&self.dir, name, &state_bytes(name, value)?, fault)?;
+        fault(Step::SyncDir)?;
+        File::open(&self.dir)?.sync_all()
     }
 
     /// [`Bin::remove`] for a removal that's acknowledged to the user: a
@@ -303,23 +305,7 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
 /// fsync, rename over the name, fsync the folder. A crash leaves the old
 /// file or the new one, never a mix.
 pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
-    let tmp = dir.join(format!(".{name}.tmp"));
-    let _ = fs::remove_file(&tmp);
-    let written = (|| {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(nofollow())
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        fs::rename(&tmp, dir.join(name))
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    written?;
+    write_steps(dir, name, bytes, &|_| Ok(()))?;
     sync_dir(dir);
     Ok(())
 }
@@ -347,9 +333,9 @@ fn state_bytes<T: Serialize>(name: &str, value: &T) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// [`write_atomic`] with every step reported, the folder fsync included.
-/// A failure before the rename leaves the old file; a failed folder fsync
-/// leaves the new one in place but perhaps not durable.
+/// Writes `dir/name` up to the rename: a new temporary file (`O_NOFOLLOW`,
+/// 0600), fsync, rename over the name, with `fault` asked before each
+/// step. A failure leaves the old file. The caller fsyncs the folder.
 fn write_steps(
     dir: &Path,
     name: &str,
@@ -377,9 +363,7 @@ fn write_steps(
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    written?;
-    fault(Step::SyncDir)?;
-    File::open(dir)?.sync_all()
+    written
 }
 
 pub fn sync_dir(dir: &Path) {

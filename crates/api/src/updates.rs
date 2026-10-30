@@ -213,7 +213,7 @@ pub(crate) async fn check(handle: Handle, headers: HeaderMap) -> ApiResult<Respo
         (status = 200, body = UpdatesStatus),
         (status = 404, description = "`unknown_version`.", body = ErrorEnvelope),
         (status = 409, description = "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).", body = ErrorEnvelope),
-        (status = 500, description = "`updates_not_saved`: the skip couldn't be saved, so it isn't in effect.", body = ErrorEnvelope),
+        (status = 500, description = "`updates_not_saved`: the skip isn't acknowledged. It may not survive a restart (if only the final folder sync failed, it may already be in effect).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]
@@ -269,7 +269,7 @@ pub(crate) async fn pause(
     responses(
         (status = 200, body = UpdatesStatus),
         (status = 409, description = "`updates_unavailable`: a fixture or Windows (see `GET /updates`).", body = ErrorEnvelope),
-        (status = 500, description = "`updates_not_saved`: the history couldn't be cleared durably.", body = ErrorEnvelope),
+        (status = 500, description = "`updates_not_saved`: the clear isn't acknowledged. It may not survive a restart (if only the final folder sync failed, the history may already be gone).", body = ErrorEnvelope),
         (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
     )
 )]

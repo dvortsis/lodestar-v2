@@ -48,6 +48,16 @@ lodestar_log::catalogue! {
         message: "An update setting couldn't be saved",
         fields: { file: Label, error: Error },
     }
+    /// `updater.json` was there but couldn't be read at start, so any
+    /// pause in it is unknown: automatic installs are held, and nothing
+    /// writes over it until a pause or resume is saved (DUR-26).
+    UPDATE_STATE_UNREADABLE {
+        id: "update.state_unreadable",
+        component: System,
+        level: Warn,
+        message: "The update settings couldn't be read; automatic updates are held",
+        fields: { error: Error },
+    }
     /// An entry in `<data>/bin` couldn't be read while the update check
     /// gathered the installed versions' trust; it's skipped.
     UPDATE_OVERLAY_UNREADABLE {

@@ -5233,9 +5233,10 @@ export interface components {
         Policy: {
             allow_reindex: boolean;
             /**
-             * @description A pause failed to save, so automatic installs are held in this
-             *     process only, until a pause or resume is saved or Lodestar
-             *     restarts. Releases then show `blocked_by` `held`.
+             * @description A pause failed to save (or the saved state couldn't be read at
+             *     start, notice `updater_unreadable`), so automatic installs are
+             *     held in this process only, until a pause or resume is saved or
+             *     Lodestar restarts. Releases then show `blocked_by` `held`.
              */
             held_in_process: boolean;
             /** @description `fixes`, `features` or `all`. */
@@ -7339,7 +7340,9 @@ export interface components {
              *     `pending_unwritable`, `bad_overlay`, `rolled_back`,
              *     `manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the
              *     last check's times couldn't be saved and won't survive a
-             *     restart), …
+             *     restart), `updater_unreadable` (the saved update state couldn't be
+             *     read, so automatic updates are held until a pause or resume is
+             *     saved), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];
@@ -11154,7 +11157,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `updates_not_saved`: the history couldn't be cleared durably. */
+            /** @description `updates_not_saved`: the clear isn't acknowledged. It may not survive a restart (if only the final folder sync failed, the history may already be gone). */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -11274,7 +11277,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `updates_not_saved`: the skip couldn't be saved, so it isn't in effect. */
+            /** @description `updates_not_saved`: the skip isn't acknowledged. It may not survive a restart (if only the final folder sync failed, it may already be in effect). */
             500: {
                 headers: {
                     [name: string]: unknown;

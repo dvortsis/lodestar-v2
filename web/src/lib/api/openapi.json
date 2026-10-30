@@ -5954,7 +5954,7 @@
             }
           },
           "500": {
-            "description": "`updates_not_saved`: the history couldn't be cleared durably.",
+            "description": "`updates_not_saved`: the clear isn't acknowledged. It may not survive a restart (if only the final folder sync failed, the history may already be gone).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6112,7 +6112,7 @@
             }
           },
           "500": {
-            "description": "`updates_not_saved`: the skip couldn't be saved, so it isn't in effect.",
+            "description": "`updates_not_saved`: the skip isn't acknowledged. It may not survive a restart (if only the final folder sync failed, it may already be in effect).",
             "content": {
               "application/json": {
                 "schema": {
@@ -14035,7 +14035,7 @@
           },
           "held_in_process": {
             "type": "boolean",
-            "description": "A pause failed to save, so automatic installs are held in this\nprocess only, until a pause or resume is saved or Lodestar\nrestarts. Releases then show `blocked_by` `held`."
+            "description": "A pause failed to save (or the saved state couldn't be read at\nstart, notice `updater_unreadable`), so automatic installs are\nheld in this process only, until a pause or resume is saved or\nLodestar restarts. Releases then show `blocked_by` `held`."
           },
           "level": {
             "type": "string",
@@ -18363,7 +18363,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), …"
+            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), `updater_unreadable` (the saved update state couldn't be\nread, so automatic updates are held until a pause or resume is\nsaved), …"
           },
           "pending": {
             "oneOf": [

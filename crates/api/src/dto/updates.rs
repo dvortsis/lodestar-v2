@@ -117,9 +117,10 @@ pub struct Policy {
     /// pause that failed to save.
     #[schema(required = true)]
     pub paused_until: Option<i64>,
-    /// A pause failed to save, so automatic installs are held in this
-    /// process only, until a pause or resume is saved or Lodestar
-    /// restarts. Releases then show `blocked_by` `held`.
+    /// A pause failed to save (or the saved state couldn't be read at
+    /// start, notice `updater_unreadable`), so automatic installs are
+    /// held in this process only, until a pause or resume is saved or
+    /// Lodestar restarts. Releases then show `blocked_by` `held`.
     pub held_in_process: bool,
     pub allow_reindex: bool,
 }
@@ -226,7 +227,9 @@ pub struct UpdatesStatus {
     /// `pending_unwritable`, `bad_overlay`, `rolled_back`,
     /// `manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the
     /// last check's times couldn't be saved and won't survive a
-    /// restart), …
+    /// restart), `updater_unreadable` (the saved update state couldn't be
+    /// read, so automatic updates are held until a pause or resume is
+    /// saved), …
     pub notices: Vec<String>,
     pub history: Vec<HistoryEntry>,
 }

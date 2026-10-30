@@ -51,7 +51,8 @@ use tokio::sync::watch;
 use super::check::{self, CheckError, Fetch};
 use super::layout::{Bin, Step};
 use super::log_events::{
-    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_OVERLAY_UNREADABLE, UPDATE_STATE_UNSAVED,
+    UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_OVERLAY_UNREADABLE, UPDATE_STATE_UNREADABLE,
+    UPDATE_STATE_UNSAVED,
 };
 use super::policy::{self, Block, Reason};
 use super::window::{When, Window};
@@ -109,9 +110,14 @@ struct State {
     /// scheduled from (so a `<data>/bin` that can't be written doesn't
     /// make the schedule check back to back), never written as they are.
     unsaved_check: Option<CheckTimes>,
-    /// A pause failed to save: automatic installs are held in this
-    /// process until a pause or resume is saved. Never written.
+    /// A pause failed to save, or `updater.json` couldn't be read at
+    /// start: automatic installs are held in this process until a pause
+    /// or resume is saved. Never written.
     held: bool,
+    /// `updater.json` was there but couldn't be read at start, so a pause
+    /// in it is unknown: nothing but an explicit pause or resume writes
+    /// over it (a check's times stay in memory).
+    unreadable: bool,
 }
 
 impl State {
@@ -238,10 +244,17 @@ impl Engine {
         Seams { clock, keys, fault }: Seams,
     ) -> Engine {
         let bin = Bin::open(&ctx.data_dir).ok();
-        let durable = bin
-            .as_ref()
-            .and_then(|b| b.read::<Updater>(UPDATER_FILE).ok().flatten())
-            .unwrap_or_default();
+        // An `updater.json` that's there but can't be read may hold a
+        // pause: fail closed (hold, and never write over it unasked)
+        // rather than start unpaused and let the next check erase it.
+        let (durable, unreadable) = match bin.as_ref().map(|b| b.read::<Updater>(UPDATER_FILE)) {
+            Some(Ok(u)) => (u.unwrap_or_default(), false),
+            Some(Err(e)) => {
+                log_event!(UPDATE_STATE_UNREADABLE, error = lodestar_log::Error::io(&e));
+                (Updater::default(), true)
+            }
+            None => (Updater::default(), false),
+        };
         Engine {
             inner: Arc::new(Inner {
                 ctx,
@@ -253,7 +266,9 @@ impl Engine {
                 found: Mutex::new(Found::default()),
                 updater: Mutex::new(State {
                     durable,
-                    ..State::default()
+                    unsaved_check: None,
+                    held: unreadable,
+                    unreadable,
                 }),
                 fault,
                 checking: tokio::sync::Mutex::new(()),
@@ -345,6 +360,10 @@ impl Engine {
     /// memory only, and the durable state (a pause) is untouched.
     fn save_check(&self, times: CheckTimes) {
         let mut state = lock(&self.inner.updater);
+        if state.unreadable {
+            state.unsaved_check = Some(times);
+            return;
+        }
         state.unsaved_check = match self.write_updater(&mut state, |u| times.apply(u)) {
             Ok(()) => None,
             Err(_) => Some(times),
@@ -380,11 +399,14 @@ impl Engine {
         let result = self.check_once(channel).await;
         let now = (self.inner.clock)();
         let next = now + EVERY.as_secs() as i64 + jitter();
-        self.save_check(CheckTimes {
+        let times = CheckTimes {
             checked_at: now,
             next_check_at: next,
             error: result.err().map(str::to_string),
-        });
+        };
+        // The write fsyncs: off the async workers.
+        let e = self.clone();
+        blocking(move || e.save_check(times)).await;
         match &result {
             Ok(()) => {
                 self.set_state(CheckState::Ok);
@@ -557,10 +579,22 @@ impl Engine {
         Reason::NotBuiltYet
     }
 
+    /// [`Engine::plan_with`] over the updater state now.
     fn plan(&self, settings: &Updates, now: i64) -> policy::Plan {
-        let updater = lock(&self.inner.updater);
-        let (paused_until, held_in_process) = (updater.durable.paused_until, updater.held);
-        drop(updater);
+        let state = lock(&self.inner.updater);
+        let held = (state.durable.paused_until, state.held);
+        drop(state);
+        self.plan_with(settings, now, held)
+    }
+
+    /// The policy's plan, given the durable pause and the hold (one
+    /// snapshot of them, so a response never mixes two).
+    fn plan_with(
+        &self,
+        settings: &Updates,
+        now: i64,
+        (paused_until, held_in_process): (Option<i64>, bool),
+    ) -> policy::Plan {
         let found = lock(&self.inner.found);
         let Some(c) = &found.checked else {
             return policy::Plan::default();
@@ -593,11 +627,16 @@ impl Engine {
         let settings = self.inner.settings.borrow().clone();
         let now = (self.inner.clock)();
         let ctx = &self.inner.ctx;
-        let (updater, check_unsaved, held_in_process) = {
+        let (updater, check_unsaved, held_in_process, unreadable) = {
             let state = lock(&self.inner.updater);
-            (state.effective(), state.unsaved_check.is_some(), state.held)
+            (
+                state.effective(),
+                state.unsaved_check.is_some(),
+                state.held,
+                state.unreadable,
+            )
         };
-        let plan = self.plan(&settings, now);
+        let plan = self.plan_with(&settings, now, (updater.paused_until, held_in_process));
         let found = lock(&self.inner.found);
         let reason = self.incapable(&settings, found.trust_damaged, self.skipped().is_some());
         let running_release = found.checked.as_ref().and_then(|c| {
@@ -616,6 +655,9 @@ impl Engine {
         }
         if check_unsaved {
             notices.push("check_not_saved".into());
+        }
+        if unreadable {
+            notices.push("updater_unreadable".into());
         }
         let history = self.history();
         if history.last().is_some_and(|h| h.result == "rolled_back") {
@@ -766,12 +808,20 @@ impl Engine {
         {
             // Under the updater's lock: one writer of its state at a time.
             let _state = lock(&self.inner.updater);
+            // Only a failed write is "not saved"; an unreadable list is
+            // damage, as before.
+            let mut writing = false;
             pending::skip_with(bin, version, "user", |list| {
+                writing = true;
                 bin.write_acknowledged(pending::SKIPPED, list, &*self.inner.fault)
             })
             .map_err(|e| {
-                unsaved(pending::SKIPPED, e);
-                UpdatesError::NotSaved
+                if writing {
+                    unsaved(pending::SKIPPED, e);
+                    UpdatesError::NotSaved
+                } else {
+                    UpdatesError::Internal(e.to_string())
+                }
             })?;
         }
         Ok(self.status())
@@ -788,8 +838,12 @@ impl Engine {
             match self.write_updater(&mut state, |u| {
                 u.paused_until = (days > 0).then(|| now + i64::from(days) * 86_400);
             }) {
-                // A saved pause or resume is the outcome now: no hold.
-                Ok(()) => state.held = false,
+                // A saved pause or resume is the outcome now: no hold,
+                // and an unreadable file has been replaced.
+                Ok(()) => {
+                    state.held = false;
+                    state.unreadable = false;
+                }
                 // Nothing installs without `<data>/bin` anyway, and
                 // retrying won't make one: no hold.
                 Err(SaveError::NoBin) => return Err(UpdatesError::BinUnavailable),
@@ -1020,6 +1074,8 @@ mod tests {
         clock: Arc<std::sync::atomic::AtomicI64>,
         /// Called at each step of a durable write; passes by default.
         fault: Arc<Mutex<Hook>>,
+        /// The engine's data folder (`dir`, or the one it was given).
+        data: PathBuf,
         engine: Engine,
     }
 
@@ -1042,6 +1098,7 @@ mod tests {
     /// `None`).
     fn env_in(mode: Mode, data: Option<PathBuf>) -> Env {
         let dir = tempfile::tempdir().unwrap();
+        let data = data.unwrap_or_else(|| dir.path().to_path_buf());
         let fake = Arc::new(Fake::default());
         let trust = Arc::new(TestTrust::default());
         let (settings, rx) = watch::channel(Updates {
@@ -1058,7 +1115,7 @@ mod tests {
         let hook = fault.clone();
         let engine = Engine::with(
             Context {
-                data_dir: data.unwrap_or_else(|| dir.path().to_path_buf()),
+                data_dir: data.clone(),
                 running: Version::new(0, 5, 0),
                 image: Version::new(0, 5, 0),
                 supervised: true,
@@ -1086,6 +1143,7 @@ mod tests {
             events,
             clock,
             fault,
+            data,
             engine,
         }
     }
@@ -1127,7 +1185,7 @@ mod tests {
         }
 
         fn bin(&self) -> PathBuf {
-            self.dir.path().join("bin")
+            self.data.join("bin")
         }
 
         /// `updater.json`'s bytes, if it exists.
@@ -1137,7 +1195,7 @@ mod tests {
 
         /// A fresh engine over the same data folder: a restart.
         fn restart(&self) -> Env {
-            env_in(Mode::Auto, Some(self.dir.path().to_path_buf()))
+            env_in(Mode::Auto, Some(self.data.clone()))
         }
     }
 
@@ -1780,6 +1838,83 @@ mod tests {
         assert!(e.engine.skip("0.6.0").unwrap().releases.is_empty());
         assert!(e.engine.clear_history().unwrap().history.is_empty());
         assert!(!e.bin().join(history::FILE).exists());
+    }
+
+    /// The residual for files read from disk: a skip or clear whose
+    /// folder fsync alone fails is refused, though the renamed (or
+    /// removed) file is already in effect, as the route docs say.
+    #[tokio::test]
+    async fn a_skip_or_clear_failing_at_the_folder_fsync_is_refused_but_may_apply() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 10 * 86_400, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        std::fs::write(
+            e.bin().join(history::FILE),
+            br#"{"entries":[{"version":"0.5.0","from":"image","at":1,"result":"installed"}]}"#,
+        )
+        .unwrap();
+        e.fail_at(Step::SyncDir);
+        assert_eq!(e.engine.skip("0.6.0"), Err(UpdatesError::NotSaved));
+        assert!(e.engine.status().releases.is_empty(), "already in effect");
+        assert_eq!(e.engine.clear_history(), Err(UpdatesError::NotSaved));
+        assert!(e.engine.status().history.is_empty(), "already in effect");
+    }
+
+    /// An unreadable skip list is damage, not a failed save: no
+    /// `updates_not_saved`, and nothing is written over it.
+    #[tokio::test]
+    async fn an_unreadable_skip_list_is_not_a_failed_save() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 10 * 86_400, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        std::fs::write(e.bin().join(pending::SKIPPED), b"[{").unwrap();
+        assert!(matches!(
+            e.engine.skip("0.6.0"),
+            Err(UpdatesError::Internal(_))
+        ));
+        assert_eq!(
+            std::fs::read(e.bin().join(pending::SKIPPED)).unwrap(),
+            b"[{"
+        );
+    }
+
+    /// An `updater.json` that's there but can't be read may hold a
+    /// pause: the engine fails closed. Installs are held, a check's times
+    /// stay in memory and never write over the file, and only an
+    /// explicit pause or resume replaces it and ends the hold.
+    #[tokio::test]
+    async fn an_unreadable_updater_file_holds_and_is_never_written_over_by_a_check() {
+        let scratch = env(Mode::Auto);
+        std::fs::create_dir_all(scratch.bin()).unwrap();
+        std::fs::write(scratch.bin().join(UPDATER_FILE), b"{ damaged").unwrap();
+        let e = scratch.restart();
+        let s = e.engine.status();
+        assert!(s.policy.held_in_process);
+        assert!(s.notices.contains(&"updater_unreadable".to_string()));
+        e.serve(NOW - 10 * 86_400, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        assert_eq!(e.updater_bytes().unwrap(), b"{ damaged", "not written over");
+        let s = e.engine.status();
+        assert_eq!(s.status.checked_at, Some(NOW), "kept in memory");
+        assert!(s.notices.contains(&"check_not_saved".to_string()));
+        assert!(
+            e.engine
+                .plan(&e.settings.borrow().clone(), NOW)
+                .releases
+                .iter()
+                .all(|a| !a.eligible)
+        );
+        // A failed resume changes nothing; a saved one ends it all.
+        e.fail_at(Step::Rename);
+        assert_eq!(e.engine.pause(0), Err(UpdatesError::NotSaved));
+        assert!(e.engine.status().policy.held_in_process);
+        e.heal();
+        let s = e.engine.pause(0).unwrap();
+        assert!(!s.policy.held_in_process);
+        assert!(!s.notices.contains(&"updater_unreadable".to_string()));
+        let restarted = e.restart();
+        assert!(!restarted.engine.status().policy.held_in_process);
+        assert_eq!(restarted.engine.updater().paused_until, None);
     }
 
     #[tokio::test]
