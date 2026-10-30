@@ -1,6 +1,8 @@
 // Every request the form engine makes, in one place.
-import { api } from '$lib/api/client';
+import { api, type ApiError } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
+import type { Engine } from './form.svelte';
+import type { FieldKey } from './types';
 
 /**
  * A batch body, `{section: {field: value, if_revision?, confirm_adult?}}`.
@@ -22,3 +24,20 @@ export const patchBatch = (batch: Batch) => api.patch('/settings', { body: body(
 
 export const previewBatch = (batch: Batch, signal?: AbortSignal) =>
 	api.post('/settings/preview', { body: body(batch), signal });
+
+// What a refusal names: shared by the save pipeline and previews, which load apart.
+
+/** The section a refusal names, or the batch's only one. */
+export function errorSection(err: ApiError, batch: Batch): string | undefined {
+	if (err.section) return err.section;
+	const names = Object.keys(batch);
+	return names.length === 1 ? names[0] : undefined;
+}
+
+/** The form's field a refusal names, if any. */
+export function errorKey(e: Engine, err: ApiError, batch: Batch): FieldKey | undefined {
+	const section = errorSection(err, batch);
+	if (!section || !err.field) return undefined;
+	const key = `${section}.${err.field}` as FieldKey;
+	return e.byKey.has(key) ? key : undefined;
+}

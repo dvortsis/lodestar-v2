@@ -50,7 +50,7 @@ describe('SettingsForm, cold', { timeout: 20_000 }, () => {
 		const summary = await screen.findByTestId('error-summary');
 		await until(() => expect(document.activeElement).toBe(within(summary).getByRole('heading')));
 		// Fixing the field hides the summary; a new bad value brings the error and the summary back.
-		const input = await screen.findByLabelText('timeout_secs', {}, { timeout: 10_000 });
+		const input = await screen.findByLabelText('Fetch timeout', {}, { timeout: 10_000 });
 		input.focus();
 		form.set('crawler.timeout_secs', 50);
 		await until(() => expect(screen.queryByTestId('error-summary')).toBeNull());

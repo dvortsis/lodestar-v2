@@ -1,5 +1,6 @@
 <script lang="ts">
-	import UnavailablePage from '$lib/features/shell/UnavailablePage.svelte';
+	import { page } from '$app/state';
+	import SettingsSection from '$lib/features/settings/shell/SettingsSection.svelte';
 </script>
 
-<UnavailablePage kind="settings" />
+<SettingsSection section={page.params.section ?? ''} />

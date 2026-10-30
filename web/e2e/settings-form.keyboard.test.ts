@@ -20,7 +20,7 @@ test.describe('keyboard: settings form', () => {
 		await kbd.tabTo(page.getByRole('radio', { name: 'balanced' }));
 		await kbd.press('ArrowDown'); // radios move with the arrows
 		await expect(page.getByRole('radio', { name: 'aggressive' })).toBeChecked();
-		await kbd.tabTo(page.getByLabel('http_bind', { exact: true }));
+		await kbd.tabTo(page.getByLabel('Web address', { exact: true }));
 		await kbd.press('Control+s');
 		await expect(page.getByTestId('save-bar')).toContainText('Saved');
 		expect(backend.patches).toEqual([{ crawler: { if_revision: 3, intensity: 'aggressive' } }]);
@@ -29,7 +29,7 @@ test.describe('keyboard: settings form', () => {
 	test('follows the error summary to the field', async ({ page, kbd }) => {
 		await kbd.tabTo(page.getByText('Advanced (1)'));
 		await kbd.press('Enter');
-		await kbd.tabTo(page.getByLabel('timeout_secs', { exact: true }));
+		await kbd.tabTo(page.getByLabel('Fetch timeout', { exact: true }));
 		await page.keyboard.type('0'); // Tab selected the value: now 0, out of bounds
 		await kbd.press('Control+s');
 		const summary = page.getByTestId('error-summary');
@@ -37,7 +37,7 @@ test.describe('keyboard: settings form', () => {
 		await kbd.press('Tab');
 		await expect(summary.getByRole('link')).toBeFocused();
 		await kbd.press('Enter');
-		await expect(page.getByLabel('timeout_secs', { exact: true })).toBeFocused();
+		await expect(page.getByLabel('Fetch timeout', { exact: true })).toBeFocused();
 		expect(backend.patches).toHaveLength(0);
 	});
 

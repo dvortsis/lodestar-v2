@@ -274,6 +274,8 @@ pub struct Stats {
     pub peer_permit_returns: [AtomicU64; PermitReturn::ALL.len()],
 
     pub peer_cancelled: AtomicU64,
+    /// Admitted requests dropped while still queued, by [`QueuedDrop`].
+    pub peer_queued_dropped: [AtomicU64; QueuedDrop::ALL.len()],
     pub peer_active: AtomicU64,
     pub peer_queued: AtomicU64,
     pub lookup_scheduled: AtomicU64,
@@ -349,6 +351,7 @@ impl Stats {
             peer_permit_returns: std::array::from_fn(|i| g(&self.peer_permit_returns[i])),
 
             peer_cancelled: g(&self.peer_cancelled),
+            peer_queued_dropped: std::array::from_fn(|i| g(&self.peer_queued_dropped[i])),
             peer_active: g(&self.peer_active),
             peer_queued: g(&self.peer_queued),
             lookup_scheduled: g(&self.lookup_scheduled),
@@ -371,6 +374,31 @@ impl Stats {
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
         }
+    }
+}
+
+/// Why an admitted request left the queue without starting
+/// (`dht_peer_queued_dropped_total{reason}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedDrop {
+    /// The caller dropped its receiver before the request started.
+    CallerClosed,
+    /// The pause dropped it.
+    Paused,
+}
+
+impl QueuedDrop {
+    pub const ALL: [QueuedDrop; 2] = [QueuedDrop::CallerClosed, QueuedDrop::Paused];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QueuedDrop::CallerClosed => "caller_closed",
+            QueuedDrop::Paused => "paused",
+        }
+    }
+
+    pub(crate) fn count(self, stats: &Stats) {
+        Stats::inc(&stats.peer_queued_dropped[self as usize]);
     }
 }
 
@@ -502,6 +530,8 @@ pub struct StatsSnapshot {
     pub peer_permit_returns: [u64; PermitReturn::ALL.len()],
 
     pub peer_cancelled: u64,
+    /// By [`QueuedDrop::ALL`].
+    pub peer_queued_dropped: [u64; QueuedDrop::ALL.len()],
     pub peer_active: u64,
     pub peer_queued: u64,
     pub lookup_scheduled: u64,

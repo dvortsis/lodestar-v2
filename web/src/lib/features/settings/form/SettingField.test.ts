@@ -107,7 +107,7 @@ const root = (key: FieldKey) => document.getElementById(key)!;
 describe('SettingField', () => {
 	it('labels the control, puts the unit inside it and links help', () => {
 		show('crawler.timeout_secs');
-		const input = screen.getByLabelText('timeout_secs') as HTMLInputElement;
+		const input = screen.getByLabelText('Fetch timeout') as HTMLInputElement;
 		expect(input.value).toBe('12');
 		expect(within(root('crawler.timeout_secs')).getByText('seconds')).toBeTruthy();
 		const described = input.getAttribute('aria-describedby')!.split(' ');
@@ -121,7 +121,7 @@ describe('SettingField', () => {
 
 	it('shows an error inline with aria-invalid, after blur', async () => {
 		show('crawler.timeout_secs');
-		const input = screen.getByLabelText('timeout_secs');
+		const input = screen.getByLabelText('Fetch timeout');
 		await fireEvent.input(input, { target: { value: '500' } });
 		await fireEvent.blur(input);
 		expect(input.getAttribute('aria-invalid')).toBe('true');
@@ -147,10 +147,12 @@ describe('SettingField', () => {
 		expect(env.textContent).toContain('Set by LODESTAR_DHT_PORT');
 		expect(env.textContent).toContain('container template');
 		expect(within(env).getByRole('button', { name: 'Copy LODESTAR_DHT_PORT' })).toBeTruthy();
-		expect((screen.getByLabelText('dht_port') as HTMLInputElement).disabled).toBe(true);
+		expect((screen.getByLabelText('DHT port') as HTMLInputElement).disabled).toBe(true);
 		show('general.data_dir');
 		const ro = within(root('general.data_dir')).getByTestId('status-read-only');
-		expect(within(ro).getByRole('button', { name: 'Copy the value of data_dir' })).toBeTruthy();
+		expect(
+			within(ro).getByRole('button', { name: 'Copy the value of Data directory' })
+		).toBeTruthy();
 		show('network.http_bind');
 		expect(within(root('network.http_bind')).getByTestId('status-file').textContent).toContain(
 			'From config.toml'
@@ -167,7 +169,7 @@ describe('SettingField', () => {
 
 	it('offers Reset only for a value saved in the app, and shows the keys', async () => {
 		show('crawler.timeout_secs');
-		await fireEvent.click(screen.getByRole('button', { name: 'Options for timeout_secs' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));
 		const items = await screen.findAllByRole('menuitem');
 		expect(items.map((i) => i.textContent?.trim())).toEqual([
 			'Reset to default',
@@ -181,14 +183,14 @@ describe('SettingField', () => {
 
 	it('hides Reset for a default, file or locked value', async () => {
 		show('network.http_bind');
-		await fireEvent.click(screen.getByRole('button', { name: 'Options for http_bind' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for Web address' }));
 		const items = await screen.findAllByRole('menuitem');
 		expect(items.map((i) => i.textContent?.trim())).toEqual(['Copy link to this setting']);
 	});
 
 	it('shows config.toml key and variable on request', async () => {
 		show('crawler.timeout_secs');
-		await fireEvent.click(screen.getByRole('button', { name: 'Options for timeout_secs' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for Fetch timeout' }));
 		await fireEvent.click(await screen.findByRole('menuitem', { name: /Show config.toml/ }));
 		expect((await screen.findByTestId('field-keys')).textContent).toContain('fetch.timeout_secs');
 	});
@@ -296,7 +298,7 @@ describe('SettingField', () => {
 
 	it('renders segmented, radio, toggle, chips and the JSON fallback', async () => {
 		show('crawler.intensity');
-		const seg = screen.getByRole('radiogroup', { name: 'intensity' });
+		const seg = screen.getByRole('radiogroup', { name: 'Crawl intensity' });
 		await fireEvent.click(within(seg).getByRole('radio', { name: 'low' }));
 		expect(form.field('crawler.intensity').value).toBe('low');
 
@@ -305,7 +307,7 @@ describe('SettingField', () => {
 		expect(form.field('crawler.encryption').value).toBe('require');
 
 		show('crawler.paused');
-		await fireEvent.click(screen.getByRole('switch', { name: 'paused' }));
+		await fireEvent.click(screen.getByRole('switch', { name: 'Pause crawling' }));
 		expect(form.field('crawler.paused').value).toBe(true);
 
 		show('logging.tags');
@@ -482,7 +484,7 @@ describe('SettingField', () => {
 		const inst = createSettingsForm({ id: 'inst', fields: SPECS, mode: 'instant' });
 		await waitFor(() => expect(inst.status).toBe('ready'));
 		render(SettingField, { form: inst, key: 'crawler.paused' });
-		await fireEvent.click(screen.getAllByRole('switch', { name: 'paused' }).at(-1)!);
+		await fireEvent.click(screen.getAllByRole('switch', { name: 'Pause crawling' }).at(-1)!);
 		const undo = await screen.findByRole('button', { name: 'Undo' });
 		expect(undo.closest('span')!.textContent).toContain('Changed.');
 		await fireEvent.click(undo);

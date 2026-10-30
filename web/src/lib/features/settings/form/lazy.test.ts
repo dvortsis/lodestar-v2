@@ -1,4 +1,5 @@
-// The parts the engine loads on demand (form.svelte.ts's header): instant mode and previews.
+// The parts the engine loads on demand (form.svelte.ts's header): the edit chunk, instant mode
+// and previews.
 // Each test starts from a fresh module graph, so nothing is loaded yet, and records which load.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DRAFT_PREFIX } from './draft';
@@ -12,7 +13,7 @@ let failing = new Set<string>();
 
 /** Records each on-demand module as it's evaluated. */
 function spyOnLoads() {
-	for (const name of ['instant', 'preview']) {
+	for (const name of ['edit', 'instant', 'preview']) {
 		vi.doMock(`./${name}`, async (original: () => Promise<unknown>) => {
 			if (failing.has(name)) throw new Error(`${name} failed to load`);
 			loads.push(name);
@@ -26,6 +27,14 @@ const SPECS: FieldSpec[] = [
 	spec('crawler.timeout_secs', { kind: 'integer', minimum: 1, maximum: 120 }),
 	spec('transport.utp', { kind: 'boolean' })
 ];
+/** A stored draft: intensity staged to `low` at the current revision. */
+const DRAFT = {
+	v: 1,
+	at: 1,
+	sections: {
+		crawler: { revision: 3, base: { intensity: 'balanced' }, mine: { intensity: 'low' }, reset: [] }
+	}
+};
 const PREVIEWED = spec('crawler.max_sockets', { kind: 'integer', auto: 0, preview: true });
 
 let server: ReturnType<typeof fakeServer>;
@@ -75,17 +84,77 @@ describe('a staged section', { timeout: 20_000 }, () => {
 		expect(loaded()).toEqual([]);
 	});
 
-	it('saves, writes drafts and merges events without loading anything', async () => {
+	it('loads the edit chunk with the first edit, and saves with it', async () => {
 		const form = await open();
 		form.set('crawler.intensity', 'low');
 		form.blur('crawler.intensity');
 		expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toBeNull(); // the draft's debounce
+		await until(() => expect(loaded()).toEqual(['edit']));
 		expect(await form.save()).toEqual({ ok: true, restart: [] });
 		expect(patches()).toEqual([{ crawler: { if_revision: 3, intensity: 'low' } }]);
+	});
+
+	it('validates a field left before the edit chunk is in', async () => {
+		const form = await open();
+		form.set('crawler.timeout_secs', 500);
+		form.blur('crawler.timeout_secs');
+		await until(() => expect(form.field('crawler.timeout_secs').error).toEqual(expect.any(String)));
+	});
+
+	it('loads it to merge a change made elsewhere', async () => {
+		const form = await open();
 		const revision = server.change('crawler', { timeout_secs: { value: 30, source: 'db' } });
 		form.received({ section: 'crawler', revision });
 		await until(() => expect(form.field('crawler.timeout_secs').value).toBe(30));
-		expect(loaded()).toEqual([]);
+		expect(loaded()).toEqual(['edit']);
+	});
+
+	it('drops a change made elsewhere when the form is destroyed before the chunk is in', async () => {
+		const form = await open();
+		const before = server.requests('GET', '/settings/crawler').length;
+		const revision = server.change('crawler', { timeout_secs: { value: 30, source: 'db' } });
+		form.received({ section: 'crawler', revision });
+		form.blur('crawler.timeout_secs');
+		form.destroy();
+		await until(() => expect(loaded()).toEqual(['edit']));
+		await import('./copy'); // one more cold import: anything the chunk started has run by now
+		expect(server.requests('GET', '/settings/crawler')).toHaveLength(before);
+		expect(form.field('crawler.timeout_secs').value).toBe(12);
+	});
+
+	it('loads it with the values when a draft is stored, and offers the draft with the fields', async () => {
+		sessionStorage.setItem(DRAFT_PREFIX + 'lazy', JSON.stringify(DRAFT));
+		const form = await open();
+		expect(form.draft).toEqual({ fields: 1, dropped: 0 });
+		expect(loaded()).toEqual(['edit']);
+		form.restoreDraft();
+		expect(form.field('crawler.intensity')).toMatchObject({ value: 'low', dirty: true });
+	});
+});
+
+describe('a staged section without its edit chunk', { timeout: 20_000 }, () => {
+	beforeEach(() => {
+		failing = new Set(['edit']);
+	});
+
+	it('keeps an edit as a draft, and a save says the network failed', async () => {
+		const form = await open();
+		form.set('crawler.intensity', 'low');
+		await until(() =>
+			expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toContain('"intensity":"low"')
+		);
+		expect(await form.save()).toEqual({ ok: false, reason: 'network' });
+		expect(patches()).toEqual([]);
+	});
+
+	it('keeps a stored draft whose offer can’t load, through edits and leaving', async () => {
+		const stored = JSON.stringify(DRAFT);
+		sessionStorage.setItem(DRAFT_PREFIX + 'lazy', stored);
+		const form = await open();
+		expect(form).toMatchObject({ draft: null, draftUnavailable: true });
+		form.set('crawler.timeout_secs', 30);
+		form.destroy();
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toBe(stored);
 	});
 
 	it('loads previews on their own, during the first one’s debounce', async () => {
@@ -102,7 +171,7 @@ describe('an instant section', { timeout: 20_000 }, () => {
 		expect(loaded()).toEqual([]);
 		form.set('transport.utp', false);
 		await until(() => expect(patches()).toEqual([{ transport: { if_revision: 7, utp: false } }]));
-		expect(loaded()).toEqual(['instant']);
+		expect(loaded()).toEqual(['edit', 'instant']);
 		expect(form.field('transport.utp')).toMatchObject({ value: false, dirty: false });
 		expect(await form.undo('transport.utp')).toMatchObject({ ok: true });
 	});

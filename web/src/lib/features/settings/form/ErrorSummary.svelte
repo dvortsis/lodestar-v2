@@ -7,6 +7,7 @@
 	import type { SettingsForm } from './form.svelte';
 	import { fieldLabel } from './messages';
 	import type { FieldKey } from './types';
+	import { focusSettingField } from './focus';
 
 	interface Props {
 		form: SettingsForm;
@@ -30,26 +31,10 @@
 		});
 	});
 
-	const CONTROL_SELECTORS = [
-		'input:checked',
-		'[role="radio"][aria-checked="true"]',
-		'input, select, textarea, [role="radio"], button'
-	];
-
 	async function reveal(key: FieldKey) {
 		await onReveal?.(key);
 		await tick();
-		// The field's control, never its header (the ⋯ menu): the label's target, else the checked
-		// option, else the first control inside the field's control area.
-		const root = document.getElementById(key);
-		const area = root?.querySelector<HTMLElement>('[data-control]');
-		const label = root?.querySelector<HTMLLabelElement>('label[for]');
-		const control =
-			(label?.htmlFor ? document.getElementById(label.htmlFor) : null) ??
-			// In order of preference (a selector list would match in document order instead).
-			CONTROL_SELECTORS.map((q) => area?.querySelector<HTMLElement>(q)).find(Boolean);
-		root?.scrollIntoView?.({ block: 'center' });
-		control?.focus();
+		focusSettingField(key);
 	}
 </script>
 

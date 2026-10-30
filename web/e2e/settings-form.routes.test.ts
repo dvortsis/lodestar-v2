@@ -41,7 +41,7 @@ test.describe('settings form', () => {
 		await go(PAGE);
 		await ready(page);
 		await page.getByText('Advanced (1)').click();
-		const timeout = page.getByLabel('timeout_secs', { exact: true });
+		const timeout = page.getByLabel('Fetch timeout', { exact: true });
 		await timeout.fill('0');
 		await timeout.blur();
 		await expect(page.getByText('Must be between 1 and 120 seconds.')).toBeVisible();
@@ -141,7 +141,7 @@ test.describe('settings form', () => {
 		await ready(page);
 		const field = page.locator('[data-field="network.dht_port"]');
 		await expect(field.getByTestId('status-env')).toContainText('Set by LODESTAR_DHT_PORT');
-		await expect(field.getByLabel('dht_port', { exact: true })).toBeDisabled();
+		await expect(field.getByLabel('DHT port', { exact: true })).toBeDisabled();
 	});
 
 	test('merges a two-context conflict: Keep mine, then Use theirs', async ({
@@ -188,7 +188,7 @@ test.describe('settings form', () => {
 	test('confirms a disruptive change, naming the new address', async ({ page, go }) => {
 		await go(PAGE);
 		await ready(page);
-		await page.getByLabel('http_bind', { exact: true }).fill('0.0.0.0:9000');
+		await page.getByLabel('Web address', { exact: true }).fill('0.0.0.0:9000');
 		await page.getByRole('button', { name: 'Save changes' }).click();
 		const dialog = page.getByRole('dialog', { name: 'Save this change?' });
 		await expect(dialog).toContainText(
@@ -221,7 +221,7 @@ for (const mode of ['light', 'dark'] as const) {
 				const bar = page.getByTestId('save-bar');
 				// The error summary and an inline error.
 				await page.getByText('Advanced (1)').click();
-				const timeout = page.getByLabel('timeout_secs', { exact: true });
+				const timeout = page.getByLabel('Fetch timeout', { exact: true });
 				await timeout.fill('500');
 				await bar.getByRole('button', { name: 'Save changes' }).click();
 				await expect(page.getByTestId('error-summary')).toBeVisible();
@@ -236,7 +236,7 @@ for (const mode of ['light', 'dark'] as const) {
 				await expectNoA11yViolations(page);
 				// The disruptive confirmation.
 				await page.getByRole('button', { name: 'Use theirs' }).click();
-				await page.getByLabel('http_bind', { exact: true }).fill('0.0.0.0:9000');
+				await page.getByLabel('Web address', { exact: true }).fill('0.0.0.0:9000');
 				await bar.getByRole('button', { name: 'Save changes' }).click();
 				await expect(page.getByRole('dialog', { name: 'Save this change?' })).toBeVisible();
 				await expectNoA11yViolations(page);
