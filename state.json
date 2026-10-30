@@ -2148,7 +2148,9 @@
     "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
     "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
     "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
-    "X-clippy-msrv part 2: filter, lodestar, dht, sources, store and update, then remove the 3 allows; after #210, #212, #213, #216, R-gauges and X-filter-budget land"
+    "X-clippy-msrv part 2: filter, lodestar, dht, sources, store and update, then remove the 3 allows; after #210, #212, #213, #216, R-gauges and X-filter-budget land",
+    "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
+    "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2201,6 +2203,9 @@
     "2026-10-30T15:08Z CR-ADM launched for Phase 1 design only (docs); Phase 2 code waits on the runner's go after #216 merges (actor.rs overlap)",
     "2026-10-30T15:10Z IMP-2 launched: contract note and fixtures now; reader code after #210 merges",
     "2026-10-30T15:12Z CORRECTION: the 14:20Z pruning of two follow-ups read a stale local branch. F-updater mutex: real on main; fixed in #220 (published reader View; test fails with the old reads); review session_01MMjhn9cE1V6f2F1S4RkUK2. Welcome h1 focus: the real page is web/src/lib/features/auth/WelcomePage.svelte (focuses its h1 on load); follow-up restored",
-    "2026-10-30T15:14Z X-welcome-focus launched (Sonnet, UI polish)"
+    "2026-10-30T15:14Z X-welcome-focus launched (Sonnet, UI polish)",
+    "2026-10-30T15:23Z merged #210 IMP-1 (b9c93080, round-4 MERGE), #218 clippy part 1 (c58b72eb, MERGE). #220 refused: ci-ok pending.",
+    "2026-10-30T15:23Z RUNNER ERROR: merged #213 (d8fe0376) WITHOUT a review verdict. Its reviewer had never started (wrong branch name: slice/X-flake-logdelete instead of fix/flake-logdelete). Post-merge review launched: session_01MMjhn8QeDxFG54Ku2jUGja. Lesson: confirm each verdict before merging, one PR at a time.",
+    "2026-10-30T15:25Z ReadNotifications backlog (23+5) processed. #214 MERGE (nits fixed by runner, 4b...). #215 CHANGES -> gap fix 944a1efe, re-check asked. #216 CHANGES (B1, B2) relayed. #217 CHANGES (Keyboard first view >45 KB) relayed; keep Keyboard; vendor comment. IMP-2 A/B/C answered (C: accept the WAL siblings, never delete, quiescence first). CR-ADM design OK; generation defect as its own unconditional PR fix/pool-generation; Phase 2 after #216. X-filter-budget spread rule accepted (no veto). #219 R-gauges review launched session_01MMjhnAQikEtXErXdw8L7yw."
   ]
 }
