@@ -70,6 +70,8 @@ pub struct Handles {
     percolator: Option<(watch::Sender<bool>, JoinHandle<()>)>,
     /// The update engine's scheduled checks (B-update).
     updates: Option<(watch::Sender<bool>, JoinHandle<()>)>,
+    /// The storage size sampler (R-gauges).
+    storage: (watch::Sender<bool>, JoinHandle<()>),
 }
 
 impl Services {
@@ -372,12 +374,24 @@ impl Services {
             insights: Some(insights),
         };
         settings::log::follow(settings.subscribe());
+        let storage = Arc::new(crate::storage::Gauges::default());
+        let (stop_storage, storage_stopped) = watch::channel(false);
+        let sampler = crate::storage::spawn(
+            crate::storage::Paths {
+                db: config.db_path(),
+                index: config.data_dir.join("index"),
+            },
+            storage.clone(),
+            crate::storage::INTERVAL,
+            storage_stopped,
+        );
         let http = http::AppState {
             monitor: pipeline.monitor(),
             dht: dht_stats,
             fetch: fetch_stats,
             reader,
             search: search_state,
+            storage: Some(storage),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and
@@ -462,6 +476,7 @@ impl Services {
                 insights: (stop_insights, recorder),
                 percolator,
                 updates: updates.task,
+                storage: (stop_storage, sampler),
             },
             listener,
             system,
@@ -597,6 +612,10 @@ impl Handles {
     /// batch), then the indexer, then the percolator.
     pub async fn shutdown(self) -> Result<(), BoxError> {
         lodestar_log::log_event!(crate::logging::events::APP_STOPPING);
+        // First, and never waits on a sample under way.
+        let (stop, sampler) = self.storage;
+        let _ = stop.send(true);
+        let _ = sampler.await;
         // A check under way is abandoned: it writes only after it's
         // verified, by rename, so nothing is left half-written.
         if let Some((stop, task)) = self.updates {

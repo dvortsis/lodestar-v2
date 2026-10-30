@@ -78,6 +78,10 @@ impl SegmentCache {
     pub fn clear(&self) {
         self.map.lock().expect("cache lock").clear();
     }
+
+    pub fn len(&self) -> usize {
+        self.map.lock().expect("cache lock").len()
+    }
 }
 
 /// Maps a fast value to a `u64` that sorts the same way.
