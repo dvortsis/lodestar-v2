@@ -1,5 +1,5 @@
 # crawler-sim scenario `admission-pressure`
-# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim
+# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-crawler-sim --test sim
 seed=1 minutes=10 intensity=Balanced switches=none
 net: nodes=2000 dead=150‰ loss=20‰ error=5‰ rate_limit=Some(20) latency=40+U(160)ms slow=30‰@1500ms bep51=900‰ interval=60s sample_size=20
 swarm: catalogue=200000 live=30001 held=303400 distinct_held=156323 max_peers=12

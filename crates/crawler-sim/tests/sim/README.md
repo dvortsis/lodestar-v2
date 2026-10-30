@@ -83,7 +83,11 @@ The run asserts, and the report's last sections show:
   still live at the restart (equal in the golden); and each leg's
   `samples_sent` equals the samples in the network's record (`Net::asks`),
   and `sample_failures` equals its errors and unanswered samples less those
-  still in flight at the stop (sealed, not failed; printed as `sealed=`). The proof's `sample_suppression_reason` is `resumed`.
+  still in flight at the stop (sealed, not failed; printed as `sealed=`).
+  `restart_obligations_refused` counts sampling candidates a restored
+  restriction turned away, not obligations, so it isn't in the sum and
+  can exceed `restored`. The proof's `sample_suppression_reason` is
+  `resumed`.
 - **The restart cost:** metadata stored in the first hour after the safe
   restart, against leg 1's first hour of a fresh 6 h suppression (zero:
   the simulated network sends no queries, so there are no passive
