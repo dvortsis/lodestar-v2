@@ -746,6 +746,155 @@ fn unc_paths_are_recognised() {
     }
 }
 
+/// Network and device paths are refused by their text, before any I/O.
+/// The server names don't resolve: had the adapter touched them, the
+/// refusal would be `not_found`, not the lexical one.
+#[cfg(windows)]
+#[test]
+fn network_and_device_paths_are_refused_before_any_io() {
+    let p = OpenPolicy::default();
+    for (path, want) in [
+        (r"\\.\pipe\lodestar-test", Refusal::NotAFile),
+        (r"\\.\NUL", Refusal::NotAFile),
+        (r"\\?\GLOBALROOT\Device\Null", Refusal::NotAFile),
+        (
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\db",
+            Refusal::NotAFile,
+        ),
+        (
+            r"\\lodestar-test.invalid\share\db.sqlite3",
+            Refusal::UncNotApproved,
+        ),
+        (
+            r"//lodestar-test.invalid/share/db.sqlite3",
+            Refusal::UncNotApproved,
+        ),
+        (
+            r"\\?\UNC\lodestar-test.invalid\share\db.sqlite3",
+            Refusal::UncNotApproved,
+        ),
+    ] {
+        assert_eq!(open(Path::new(path), &p).unwrap_err(), want, "{path}");
+    }
+    // Under an approved root, only `..` climbing out is refused lexically;
+    // the rest goes on to the filesystem.
+    let approved = OpenPolicy {
+        approved_unc_roots: vec![PathBuf::from(r"\\lodestar-test.invalid\share")],
+        ..OpenPolicy::default()
+    };
+    assert_eq!(
+        lexical(
+            Path::new(r"\\lodestar-test.invalid\share\..\other\db"),
+            &approved
+        ),
+        Err(Refusal::UncNotApproved)
+    );
+    assert_eq!(
+        lexical(Path::new("//lodestar-test.invalid/share/sub/db"), &approved),
+        Ok(())
+    );
+    assert_eq!(
+        lexical(
+            Path::new(r"\\?\UNC\Lodestar-Test.invalid\SHARE\db"),
+            &approved
+        ),
+        Ok(())
+    );
+    assert_eq!(lexical(Path::new(r"C:\data\db.sqlite3"), &p), Ok(()));
+    assert_eq!(lexical(Path::new(r"\\?\C:\data\db.sqlite3"), &p), Ok(()));
+}
+
+/// A local link whose target is a network path is refused from the link's
+/// text, before anything follows it.
+#[cfg(unix)]
+#[test]
+fn link_targets_are_checked_before_they_are_followed() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = fixture(dir.path(), "real", Layout::V3, &rows(1));
+    // A chain of links inside the folder is followed and accepted.
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    std::os::unix::fs::symlink(&real, &b).unwrap();
+    std::os::unix::fs::symlink("b", &a).unwrap();
+    open_ok(&a);
+    // A loop is refused, not followed for ever.
+    let x = dir.path().join("x");
+    let y = dir.path().join("y");
+    std::os::unix::fs::symlink("y", &x).unwrap();
+    std::os::unix::fs::symlink("x", &y).unwrap();
+    assert_eq!(
+        open(&x, &OpenPolicy::default()).unwrap_err(),
+        Refusal::SymlinkEscape
+    );
+}
+
+#[test]
+fn only_permission_errors_blame_the_folder() {
+    let err = |code| {
+        map_err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(code),
+            None,
+        ))
+    };
+    assert_eq!(err(3), Refusal::Unavailable("folder_not_writable")); // SQLITE_PERM
+    assert_eq!(
+        err(8 | (6 << 8)),
+        Refusal::Unavailable("folder_not_writable")
+    );
+    assert_eq!(
+        err(8 | (5 << 8)),
+        Refusal::Unavailable("folder_not_writable")
+    );
+    assert_eq!(err(8 | (1 << 8)), Refusal::Unavailable("open_failed")); // READONLY_RECOVERY
+    assert_eq!(err(8), Refusal::Unavailable("open_failed"));
+    assert_eq!(err(14), Refusal::Unavailable("open_failed")); // CANTOPEN
+    assert_eq!(err(18), Refusal::Unavailable("value_too_big"));
+    assert!(
+        Refusal::Unavailable("open_failed")
+            .to_string()
+            .contains("consistent copy")
+    );
+}
+
+#[test]
+fn the_batch_budget_counts_per_row_memory() {
+    // Many tiny file rows: their bytes are small, but each costs memory.
+    let dir = tempfile::tempdir().unwrap();
+    let files: Vec<(String, i64)> = (0..100_000).map(|i| (format!("a/b/{i}"), 1)).collect();
+    let files: Vec<(&str, i64)> = files.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+    let path = fixture(
+        dir.path(),
+        "tiny",
+        Layout::V3,
+        &[TorrentRow::good(1, &files), TorrentRow::good(2, &files)],
+    );
+    let mut src = open_ok(&path);
+    let (batches, _) = read_all(&mut src);
+    // 100,000 rows × (64 + 3 × 24 + ~16) bytes is about 15 MB: each
+    // parent is cut to its 8 MiB budget, so two can't share a batch.
+    assert_eq!(batches.len(), 2);
+    for b in &batches {
+        let t = torrent(b.records[0].clone());
+        assert!(t.files.len() < 100_000);
+        assert_eq!(t.completeness, Completeness::Partial);
+        assert!(b.source_bytes < 2 << 20, "{}", b.source_bytes);
+    }
+}
+
+#[test]
+fn identity_counts_rows_and_free_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = fixture(dir.path(), "a", Layout::V3, &rows(5));
+    let before = open_ok(&a).identity();
+    // Deleting the last-but-one row keeps the first and last ids.
+    let w = rusqlite::Connection::open(&a).unwrap();
+    w.execute("DELETE FROM torrents WHERE id = 4", []).unwrap();
+    w.close().unwrap();
+    let after = open_ok(&a).identity();
+    assert_ne!(before.dataset, after.dataset);
+    assert_eq!(before.schema_sig, after.schema_sig);
+}
+
 #[test]
 fn values_over_the_length_limit_become_findings_not_errors() {
     let dir = tempfile::tempdir().unwrap();

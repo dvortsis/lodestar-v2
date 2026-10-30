@@ -125,10 +125,15 @@ impl fmt::Display for Refusal {
                 "the database is in use or wasn't closed cleanly (a -wal or -journal file is \
                  beside it): stop magneticod, or import a consistent copy",
             ),
-            Refusal::Unavailable(why @ ("folder_not_writable" | "open_failed")) => write!(
+            Refusal::Unavailable(why @ "folder_not_writable") => write!(
                 f,
                 "the database can't be opened ({why}): make its folder writable (SQLite adds \
                  two small files beside it), or import a copy from a writable folder"
+            ),
+            Refusal::Unavailable(why @ "open_failed") => write!(
+                f,
+                "the database can't be opened ({why}): make sure magneticod has stopped \
+                 cleanly, or import a consistent copy"
             ),
             Refusal::Unavailable(why) => write!(
                 f,
@@ -679,6 +684,8 @@ pub struct Source {
     path: PathBuf,
     file_id: FileId,
     identity: Identity,
+    /// [`fingerprint`] at open, rechecked before every batch.
+    fingerprint: [u8; 32],
     files_sql: String,
     deadline: Deadline,
     cancel: Arc<AtomicBool>,
@@ -705,6 +712,12 @@ struct Deadline {
 
 /// A batch may take this many steps' time in all.
 const BATCH_STEPS: u32 = 10;
+/// The row count at open (one index scan) may take this many.
+const COUNT_STEPS: u32 = 20;
+/// Memory a kept value costs beyond its bytes: per row (the `Raw` values
+/// and their vectors) and per path segment (its `Vec`).
+const ROW_OVERHEAD: usize = 64;
+const SEGMENT_OVERHEAD: usize = 24;
 
 impl Deadline {
     fn millis(&self, after: Duration) -> u64 {
@@ -717,6 +730,15 @@ impl Deadline {
     /// Starts a batch's overall deadline.
     fn start_batch(&mut self) {
         self.batch = self.millis(self.step.saturating_mul(BATCH_STEPS));
+    }
+
+    /// Arms for one longer statement: `steps` steps' time, ignoring the
+    /// batch deadline (used only at open, outside any batch).
+    fn arm_for(&self, steps: u32) {
+        self.at.store(
+            self.millis(self.step.saturating_mul(steps)),
+            Ordering::Relaxed,
+        );
     }
 
     /// Re-arms before a statement or a row step.
@@ -843,12 +865,13 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
         SchemaError::Unsupported(missing) => Refusal::UnsupportedSchema(missing),
     })?;
     deadline.arm();
-    let identity = identity(&conn, &files_sql).map_err(map_err)?;
+    let (identity, fingerprint) = identity(&conn, &files_sql, &deadline).map_err(map_err)?;
     Ok(Source {
         conn,
         path: canonical,
         file_id,
         identity,
+        fingerprint,
         files_sql,
         deadline,
         cancel,
@@ -857,6 +880,10 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
 }
 
 fn validate(path: &Path, policy: &OpenPolicy) -> Result<(PathBuf, FileId), Refusal> {
+    // Before any filesystem call on it: on Windows, merely resolving a
+    // network path opens an SMB session (which can leak the account's
+    // NTLM hash), and a device path is opened by the metadata call.
+    ancestry(path, policy, 0)?;
     let link = fs::symlink_metadata(path).map_err(|_| Refusal::Unavailable("not_found"))?;
     let canonical = fs::canonicalize(path).map_err(|_| Refusal::Unavailable("not_found"))?;
     if link.file_type().is_symlink() {
@@ -890,6 +917,81 @@ fn is_unc(path: &Path) -> bool {
         path.components().next(),
         Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))
     )
+}
+
+/// `path` as Windows reads it, for the lexical check only: `/` as `\` (so
+/// `//server/share` parses as the UNC path it is), `\\?\UNC\` as `\\`, and
+/// lower case, so an approved root matches however it's written.
+fn windows_form(path: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return path.to_path_buf();
+    }
+    let mut s = path.to_string_lossy().replace('/', "\\");
+    if s.get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case(r"\\?\UNC\"))
+    {
+        s.replace_range(..8, r"\\");
+    }
+    PathBuf::from(s.to_lowercase())
+}
+
+/// Refuses network and device paths by their text alone, with no I/O: a
+/// UNC path not under an approved root (or climbing out of one with
+/// `..`), a device namespace path (`\\.\pipe\x`), and a verbatim path
+/// that isn't a drive (`\\?\Volume{…}`, `\\?\GLOBALROOT`).
+fn lexical(path: &Path, policy: &OpenPolicy) -> Result<(), Refusal> {
+    let path = windows_form(path);
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return Ok(());
+    };
+    match prefix.kind() {
+        Prefix::Disk(_) | Prefix::VerbatimDisk(_) => Ok(()),
+        Prefix::DeviceNS(_) | Prefix::Verbatim(_) => Err(Refusal::NotAFile),
+        Prefix::UNC(..) | Prefix::VerbatimUNC(..) => {
+            let climbs = path.components().any(|c| c == Component::ParentDir);
+            let approved = policy
+                .approved_unc_roots
+                .iter()
+                .map(|r| windows_form(r))
+                .any(|r| path.starts_with(&r));
+            if climbs || !approved {
+                return Err(Refusal::UncNotApproved);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Checks `path` lexically, then each of its components that's a link
+/// (a symlink, or on Windows a junction): the link's target is checked
+/// lexically before anything follows it, and so on down a chain of at
+/// most eight links. Reading a link doesn't follow it.
+fn ancestry(path: &Path, policy: &OpenPolicy, depth: u32) -> Result<(), Refusal> {
+    if depth > 8 {
+        return Err(Refusal::SymlinkEscape);
+    }
+    lexical(path, policy)?;
+    let mut prefix = PathBuf::new();
+    for c in path.components() {
+        prefix.push(c);
+        if !matches!(c, Component::Normal(_)) {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(&prefix) else {
+            // Missing: the open reports it.
+            return Ok(());
+        };
+        if meta.file_type().is_symlink() {
+            let target = fs::read_link(&prefix).map_err(|_| Refusal::Unavailable("not_found"))?;
+            lexical(&target, policy)?;
+            let resolved = match prefix.parent() {
+                Some(dir) if target.is_relative() => dir.join(&target),
+                _ => target,
+            };
+            ancestry(&resolved, policy, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
@@ -1067,7 +1169,34 @@ fn plan(conn: &Connection, sql: &str) -> rusqlite::Result<Vec<String>> {
     Ok(out)
 }
 
-fn identity(conn: &Connection, files_sql: &str) -> rusqlite::Result<Identity> {
+/// The source identity, computed once at open. The dataset is the cheap
+/// [`fingerprint`] plus the number of torrents, which needs one scan of
+/// the smallest index, so it isn't repeated per batch.
+fn identity(
+    conn: &Connection,
+    files_sql: &str,
+    deadline: &Deadline,
+) -> rusqlite::Result<(Identity, [u8; 32])> {
+    let (schema_sig, fingerprint) = fingerprint(conn, files_sql)?;
+    deadline.arm_for(COUNT_STEPS);
+    let rows: i64 = conn.query_row("SELECT count(*) FROM torrents", [], |r| r.get(0))?;
+    deadline.arm();
+    let mut data = Sha256::new();
+    data.update(b"lodestar-magnetico-dataset-v2\0");
+    data.update(fingerprint);
+    data.update(rows.to_be_bytes());
+    Ok((
+        Identity {
+            dataset: data.finalize().into(),
+            schema_sig,
+        },
+        fingerprint,
+    ))
+}
+
+/// The schema signature, and a fingerprint of the file's contents that's
+/// cheap enough to recompute before every batch.
+fn fingerprint(conn: &Connection, files_sql: &str) -> rusqlite::Result<([u8; 32], [u8; 32])> {
     let mut schema = Sha256::new();
     schema.update(b"lodestar-magnetico-schema-v1\0");
     for (table, _) in REQUIRED {
@@ -1091,9 +1220,9 @@ fn identity(conn: &Connection, files_sql: &str) -> rusqlite::Result<Identity> {
     schema.update(files_sql.as_bytes());
 
     let mut data = Sha256::new();
-    data.update(b"lodestar-magnetico-dataset-v1\0");
+    data.update(b"lodestar-magnetico-fingerprint-v1\0");
     let pragma = |name: &str| conn.pragma_query_value(None, name, |r| r.get::<_, i64>(0));
-    for name in ["user_version", "page_size", "page_count"] {
+    for name in ["user_version", "page_size", "page_count", "freelist_count"] {
         data.update(pragma(name)?.to_be_bytes());
     }
     let mut s = conn.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")?;
@@ -1130,19 +1259,28 @@ fn identity(conn: &Connection, files_sql: &str) -> rusqlite::Result<Identity> {
     )?;
     data.update(first.unwrap_or(0).to_be_bytes());
     data.update(last.unwrap_or(0).to_be_bytes());
-    Ok(Identity {
-        dataset: data.finalize().into(),
-        schema_sig: schema.finalize().into(),
-    })
+    Ok((schema.finalize().into(), data.finalize().into()))
 }
+
+const SQLITE_READONLY_CANTINIT: i32 = 8 | (5 << 8);
+const SQLITE_READONLY_DIRECTORY: i32 = 8 | (6 << 8);
 
 fn map_err(e: rusqlite::Error) -> Refusal {
     match e.sqlite_error_code() {
         Some(ErrorCode::OperationInterrupted) => Refusal::StatementTimeout,
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => Refusal::Corrupt,
-        Some(ErrorCode::CannotOpen | ErrorCode::ReadOnly | ErrorCode::PermissionDenied) => {
+        // Only a permission problem is the folder's; a stale `-shm`, a hot
+        // WAL needing recovery or any other open failure is the file's.
+        Some(ErrorCode::PermissionDenied) => Refusal::Unavailable("folder_not_writable"),
+        Some(ErrorCode::ReadOnly)
+            if matches!(
+                e.sqlite_error().map(|x| x.extended_code),
+                Some(SQLITE_READONLY_DIRECTORY | SQLITE_READONLY_CANTINIT)
+            ) =>
+        {
             Refusal::Unavailable("folder_not_writable")
         }
+        Some(ErrorCode::ReadOnly | ErrorCode::CannotOpen) => Refusal::Unavailable("open_failed"),
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => Refusal::NotQuiescent,
         Some(ErrorCode::TooBig) => Refusal::Unavailable("value_too_big"),
         _ => Refusal::Unavailable("read_failed"),
@@ -1175,7 +1313,10 @@ struct Parent {
     row: RawTorrent,
     files: Vec<RawFile>,
     overflow: u32,
+    /// Memory charged to the batch budget.
     bytes: usize,
+    /// Bytes read from the source.
+    source: usize,
     readme: u64,
 }
 
@@ -1245,8 +1386,8 @@ impl Source {
     /// the job began on.
     fn same_dataset(&self) -> Result<(), Refusal> {
         self.deadline.arm();
-        let now = identity(&self.conn, &self.files_sql).map_err(|e| self.refusal(e))?;
-        if now != self.identity {
+        let (sig, now) = fingerprint(&self.conn, &self.files_sql).map_err(|e| self.refusal(e))?;
+        if sig != self.identity.schema_sig || now != self.fingerprint {
             return Err(Refusal::SourceChanged);
         }
         Ok(())
@@ -1269,10 +1410,11 @@ impl Source {
                     total_size: Raw::from_row(r, 5)?,
                     discovered_on: Raw::from_row(r, 7)?,
                 };
-                let bytes = row.info_hash.len()
+                let source = row.info_hash.len()
                     + row.name.len()
                     + row.total_size.len()
                     + row.discovered_on.len();
+                let bytes = source + ROW_OVERHEAD;
                 if !parents.is_empty() && total + bytes > MAX_BATCH_BYTES {
                     break;
                 }
@@ -1282,6 +1424,7 @@ impl Source {
                     files: Vec::new(),
                     overflow: 0,
                     bytes,
+                    source,
                     readme: 0,
                 });
             }
@@ -1320,7 +1463,13 @@ impl Source {
                     path: Raw::from_row(r, 1)?,
                     size: Raw::from_row(r, 3)?,
                 };
-                let cost = f.path.len() + f.size.len();
+                let read = f.path.len() + f.size.len();
+                let segments = f
+                    .path
+                    .bytes()
+                    .map_or(0, |b| b.iter().filter(|c| **c == b'/').count() + 1);
+                let cost = read + ROW_OVERHEAD + segments * SEGMENT_OVERHEAD;
+                p.source += read;
                 // Rows are kept as a prefix: after the first one over the
                 // budget, every later one is dropped too.
                 if p.overflow == 0
@@ -1356,7 +1505,7 @@ impl Source {
         let records = parents
             .iter()
             .map(|p| {
-                source_bytes += p.bytes as u64;
+                source_bytes += p.source as u64;
                 findings.add(Finding::ReadmeNotImported, p.readme);
                 normaliser.torrent(&p.row, &p.files, p.overflow, &mut findings)
             })
