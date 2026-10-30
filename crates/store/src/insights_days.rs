@@ -1791,18 +1791,19 @@ mod tests {
         }
     }
 
-    /// The trigger's cost on a bulk delete (the brief's measurement):
+    /// The triggers' cost on a bulk delete (the brief's measurement):
     /// `cargo test -p lodestar-store --release -- --ignored trigger_cost
-    /// --nocapture`.
+    /// --nocapture`. Arms: no trigger, Insights' alone, and with V12's
+    /// snapshot deletion journal as well (as shipped).
     #[test]
     #[ignore]
     fn trigger_cost() {
-        let run = |with: bool, cached: bool| -> Duration {
+        let run = |drop: &[&str], cached: bool| -> Duration {
             let dir = tempfile::tempdir().unwrap();
             let mut s = Store::open(dir.path().join("t.db"), StoreConfig::default()).unwrap();
-            if !with {
+            for trigger in drop {
                 s.conn
-                    .execute_batch("DROP TRIGGER torrents_removed")
+                    .execute_batch(&format!("DROP TRIGGER {trigger}"))
                     .unwrap();
             }
             let n = 100_000;
@@ -1837,23 +1838,29 @@ mod tests {
             }
             t.elapsed()
         };
+        let arms: [(&str, &[&str]); 3] = [
+            (
+                "no trigger",
+                &["torrents_removed", "snapshot_torrent_deleted"],
+            ),
+            ("Insights' trigger", &["snapshot_torrent_deleted"]),
+            ("both triggers", &[]),
+        ];
         for cached in [false, true] {
-            let (mut without, mut with) = (Vec::new(), Vec::new());
-            for _ in 0..5 {
-                without.push(run(false, cached));
-                with.push(run(true, cached));
+            let mut medians = Vec::new();
+            for (name, drop) in arms {
+                let mut times: Vec<Duration> = (0..5).map(|_| run(drop, cached)).collect();
+                times.sort();
+                medians.push(format!("{name} {:?}", times[2]));
             }
-            without.sort();
-            with.sort();
             println!(
-                "{} of 100k, median of 5: without {:?}, with the trigger {:?}",
+                "{} of 100k, median of 5: {}",
                 if cached {
                     "a cached DELETE"
                 } else {
                     "delete_torrents"
                 },
-                without[2],
-                with[2]
+                medians.join(", ")
             );
         }
     }

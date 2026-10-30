@@ -25,19 +25,39 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (12, V12),
 ];
 
-/// Deletion evidence outlives expiring/released fetch holds. Hash identity
-/// also survives rollback histories where local numeric ids can differ.
+/// The snapshot purge's deletion journal (`snapshots`): the hash of every
+/// torrent the store deletes, with when, so snapshots lose it even after
+/// the fetch hold that also recorded it expires or is released. Hashes,
+/// not ids: a snapshot from another rollback history numbers torrents
+/// differently. A hybrid's truncated v2 hash goes in as well, as
+/// `find_any` matches either.
+///
+/// `at` bounds the journal: a row is matched only in snapshots taken up
+/// to a day after it, and dropped once every such snapshot has expired
+/// (`RETAIN_SECS` plus that day). Deleting a hash again moves its time
+/// forward. The backfill keeps the holds that may stand for a deletion
+/// this version didn't see, at their own time, unless the torrent is live
+/// again: a snapshot copy of a live torrent isn't purged.
 const V12: &str = "
 CREATE TABLE snapshot_deletions (
-    hash BLOB PRIMARY KEY CHECK (length(hash) = 20)
+    hash BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    at   INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
--- Preserve extant evidence before the first expiry/release on this version.
-INSERT OR IGNORE INTO snapshot_deletions SELECT hash FROM quarantine;
-INSERT OR IGNORE INTO snapshot_deletions SELECT hash FROM tombstones;
+INSERT INTO snapshot_deletions (hash, at)
+    SELECT hash, max(at) FROM (
+        SELECT hash, at FROM quarantine UNION ALL SELECT hash, at FROM tombstones
+    )
+    WHERE hash NOT IN (SELECT info_hash FROM torrents)
+      AND hash NOT IN (
+          SELECT substr(info_hash_v2, 1, 20) FROM torrents WHERE info_hash_v2 IS NOT NULL
+      )
+    GROUP BY hash;
 CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
-    INSERT OR IGNORE INTO snapshot_deletions (hash) VALUES (old.info_hash);
-    INSERT OR IGNORE INTO snapshot_deletions (hash)
-        SELECT substr(old.info_hash_v2, 1, 20) WHERE old.info_hash_v2 IS NOT NULL;
+    INSERT INTO snapshot_deletions (hash, at) VALUES (old.info_hash, unixepoch())
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT substr(old.info_hash_v2, 1, 20), unixepoch() WHERE old.info_hash_v2 IS NOT NULL
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
 END;
 ";
 
