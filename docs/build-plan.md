@@ -65,7 +65,7 @@ At most four helper slices at a time in this phase (§2.25), filled in this orde
 - **The CR-0 soak is accepted.** Done on 2026-10-30, with memory judged on baseline hours 12–24 (`docs/decisions/2026-10-30-CR-0-acceptance.md`).
 - **CI:** every workflow (`ci-ok`, Web, E2E with all-themes, Release) is dispatched on the cutoff SHA and green, with no regenerated baselines.
 - **Windows:** a ≥ 6 h **service-mode** run of the rc MSI, plus a portable smoke test.
-- **Linux:** a **24 h Docker soak on the owner's Unraid box** with CR-COL. It includes a ≥ 2 h gluetun leg and is the upgrade test of the Oct 22 volume. It is **the binding memory gate**: over hours 12–24 of the measured window, the upper 95% CI bound of the memory slope must be ≤ 2 MiB/h. Report the slope with its CI and the run's peak (owner, 2026-10-30, #189).
+- **Linux:** a **24 h Docker soak on the owner's Unraid box** with CR-COL. It includes a ≥ 2 h gluetun leg and is the upgrade test of the Oct 22 volume. It is **the binding memory gate**: over hours 12–24 of the measured window, the upper 95% CI bound of the slope of anonymous private memory (the collector's `private_bytes`; see `docs/decisions/2026-10-30-CR-0-acceptance.md`) must be ≤ 2 MiB/h. Report the slope with its CI and the run's peak (owner, 2026-10-30, #189).
 - **Updates** stay off unless real signing keys and a manifest exist.
 - **Release:** the owner tags `v0.5.1`, approves the release environment and publishes.
 
