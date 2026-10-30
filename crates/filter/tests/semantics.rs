@@ -344,6 +344,27 @@ fn a_neutralized_word_never_completes_a_clause() {
         // Neutralizing another word changes nothing.
         assert_eq!(judge(Some("delta")), Some(RuleRef::User(1)), "{q}");
     }
+    // Every spelling of a neutralized word is the word. A Neutralize
+    // term is one word (`webdl`; `web-dl` isn't) and acts on a torrent
+    // whose name has it, here as `WEBDL` or `AmberBeacon`.
+    for (neutral, name, q) in [
+        ("webdl", "Show WEBDL x264", "webdl"),
+        ("webdl", "Show WEBDL x264", "web-dl"),
+        ("webdl", "Show WEBDL x264", "webd*"),
+        ("webdl", "Show WEBDL x264", "web-dl NEAR/1 x264"),
+        ("webdl", "Show WEBDL x264", "\"show webdl\""),
+        ("amberbeacon", "AmberBeacon x264", "AmberBeacon"),
+        ("amberbeacon", "AmberBeacon x264", "amber.beacon"),
+        ("amberbeacon", "AmberBeacon x264", "amber-beacon"),
+        ("amberbeacon", "AmberBeacon x264", "amberb*"),
+        ("amberbeacon", "AmberBeacon x264", "\"amber.beacon x264\""),
+    ] {
+        assert!(hides(q, None, None, name), "{q} on {name}");
+        assert!(
+            !hides(q, None, Some(neutral), name),
+            "{q} on {name}: {neutral}"
+        );
+    }
 }
 
 #[test]
@@ -366,11 +387,20 @@ fn other_evidence_still_counts() {
     assert!(hides("amb*", None, Some("amber"), "Amber Ambient"));
     assert!(hides("~ambar", None, Some("amber"), "Amber Ambar"));
     // A whole or compound form is a token of its own: neutralizing `x`
-    // leaves the word `x265`, which a torrent has as one token too. A
-    // phrase reads parts only, so the `x` of `x265` can't complete it.
+    // leaves the word `x265`, which a torrent has as one token too, in a
+    // word, NEAR or phrase alike.
     assert!(hides("x265 beacon", None, Some("x"), "x265 Beacon"));
     assert!(hides("x265 NEAR/1 beacon", None, Some("x"), "x265 Beacon"));
-    assert!(!hides("\"x265 beacon\"", None, Some("x"), "x265 Beacon"));
+    assert!(hides("\"x265 beacon\"", None, Some("x"), "x265 Beacon"));
+    assert!(hides("\"1080p x264\"", None, Some("p"), "Show 1080p x264"));
+    assert!(hides("\"show web-dl\"", None, Some("web"), "Show WEB-DL"));
+    // The part on its own is the neutralized word: no whole form there.
+    assert!(!hides("\"x265 beacon\"", None, Some("x"), "x 265 Beacon"));
+    // The word `x265` matches "x 265" through its parts, as in search,
+    // until `x` is neutralized.
+    assert!(hides("x265", None, None, "x 265 Beacon"));
+    assert!(!hides("x265", None, Some("x"), "x 265 Beacon"));
+    assert!(!hides("\"show web-dl\"", None, Some("web"), "Show Web DL"));
     // A phrase is never one word: neutralizing `amberbeacon` leaves
     // `"amber beacon"` on a torrent that hasn't that word.
     assert!(hides(

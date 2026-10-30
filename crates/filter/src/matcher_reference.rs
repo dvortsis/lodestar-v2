@@ -129,8 +129,7 @@ impl<'a> Doc<'a> {
                     && texts(*field, &|t| has_word(&masked(t, neutral), word))
             }
             Node::Phrase { field, text } => {
-                !is_neutral(text, neutral)
-                    && texts(*field, &|t| has_phrase(&masked(t, neutral), text))
+                !is_neutral(text, neutral) && texts(*field, &|t| has_phrase(t, text, neutral))
             }
             Node::Near { field, words, slop } => {
                 !words.iter().any(|w| is_neutral(w, neutral))
@@ -140,9 +139,8 @@ impl<'a> Doc<'a> {
                 let p = folded(prefix);
                 !p.is_empty()
                     && texts(*field, &|t| {
-                        t.iter().any(|x| {
-                            x.text.starts_with(&p) && !super::neutral_token(&x.text, neutral)
-                        })
+                        t.iter()
+                            .any(|x| x.text.starts_with(&p) && !neutral.contains(&key(&x.text)))
                     })
             }
             Node::Fuzzy {
@@ -154,7 +152,7 @@ impl<'a> Doc<'a> {
                 texts(*field, &|t| {
                     t.iter().any(|x| {
                         edit_distance(&x.text, &w) <= usize::from(*distance)
-                            && !super::neutral_token(&x.text, neutral)
+                            && !neutral.contains(&key(&x.text))
                     })
                 })
             }
@@ -277,13 +275,33 @@ fn parts(text: &str) -> Vec<Tok> {
         .collect()
 }
 
-/// Whether a word, phrase or NEAR word has a run of parts that is a
-/// neutralized word ([`super::neutral_folds`]).
-fn is_neutral(word: &str, neutral: &[String]) -> bool {
-    super::neutralized(&super::neutral_folds(word), neutral)
+/// A text's parts, joined: what a neutralized word is compared by, so
+/// `web-dl`, `web.dl` and `webdl` compare alike.
+fn key(text: &str) -> String {
+    parts(text).into_iter().map(|t| t.text).collect()
 }
 
-/// A text without its tokens that are neutralized words.
+/// Whether a word, phrase or NEAR word has a neutralized word of several
+/// parts: two to eight parts in a row with no space between them.
+fn is_neutral(word: &str, neutral: &[String]) -> bool {
+    if neutral.is_empty() {
+        return false;
+    }
+    let p = parts(word);
+    (0..p.len()).any(|i| {
+        (i + 1..p.len().min(i + 8))
+            .take_while(|&j| {
+                let gap = p[j - 1].to.min(p[j].from)..p[j].from;
+                !word[gap].contains(char::is_whitespace)
+            })
+            .any(|j| {
+                let run: String = p[i..=j].iter().map(|t| t.text.as_str()).collect();
+                neutral.contains(&run)
+            })
+    })
+}
+
+/// A text without its tokens that are neutralized words, positions kept.
 fn masked<'t>(field: &'t [Tok], neutral: &[String]) -> std::borrow::Cow<'t, [Tok]> {
     if neutral.is_empty() {
         return std::borrow::Cow::Borrowed(field);
@@ -291,7 +309,7 @@ fn masked<'t>(field: &'t [Tok], neutral: &[String]) -> std::borrow::Cow<'t, [Tok
     std::borrow::Cow::Owned(
         field
             .iter()
-            .filter(|t| !super::neutral_token(&t.text, neutral))
+            .filter(|t| !neutral.contains(&key(&t.text)))
             .cloned()
             .collect(),
     )
@@ -334,12 +352,44 @@ fn sequence(field: &[Tok], words: &[&str]) -> bool {
     })
 }
 
-fn has_phrase(field: &[Tok], text: &str) -> bool {
+/// A phrase: its parts in a row. A word of it with a neutralized part
+/// matches only where the torrent has a form of it that isn't
+/// neutralized, a token covering all its parts, over its parts in a row.
+fn has_phrase(field: &[Tok], text: &str, neutral: &[String]) -> bool {
     let p = parts(text);
-    sequence(
-        field,
-        &p.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
-    )
+    let all: Vec<&str> = p.iter().map(|t| t.text.as_str()).collect();
+    if !p.iter().any(|t| neutral.contains(&key(&t.text))) {
+        return sequence(&masked(field, neutral), &all);
+    }
+    let live = masked(field, neutral);
+    let words: Vec<(Vec<String>, Vec<String>)> = text
+        .split_whitespace()
+        .map(|w| {
+            let q = tokenize(w);
+            let wp = parts(w);
+            let forms = match (wp.first(), wp.last()) {
+                (Some(a), Some(z)) => q
+                    .iter()
+                    .filter(|t| t.kind != TokKind::Part && t.from <= a.from && t.to >= z.to)
+                    .map(|t| t.text.clone())
+                    .collect(),
+                _ => Vec::new(),
+            };
+            (wp.into_iter().map(|t| t.text).collect::<Vec<_>>(), forms)
+        })
+        .filter(|(wp, _)| !wp.is_empty())
+        .collect();
+    field.iter().any(|start| {
+        let mut pos = start.position;
+        words.iter().all(|(wp, forms)| {
+            let here = wp.iter().enumerate().all(|(i, x)| at(field, pos + i, x));
+            let ok = here
+                && (!wp.iter().any(|x| neutral.contains(&key(x)))
+                    || forms.iter().any(|f| at(&live, pos, f)));
+            pos += wp.len();
+            ok
+        })
+    })
 }
 
 /// Every word within a window of `slop` extra positions, in any order.

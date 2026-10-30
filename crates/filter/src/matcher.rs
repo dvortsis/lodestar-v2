@@ -52,17 +52,17 @@ pub struct Facts<'a> {
 pub(crate) struct Term {
     hash: u64,
     text: Box<str>,
-    /// Its text as CSX-5 neutralizing compares it ([`folded`]), when
-    /// that differs from the text (a whole form like `x265`).
-    fold: Option<Box<str>>,
+    /// Its [`neutral_key`], when that differs from the text (a compound
+    /// form like `dd+`).
+    key: Option<Box<str>>,
 }
 
 impl Term {
     fn new(text: &str) -> Term {
-        let fold = folded(text);
+        let key = neutral_key(text);
         Term {
             hash: term_hash(text),
-            fold: (*fold != *text).then(|| fold.into()),
+            key: (*key != *text).then(|| key.into()),
             text: text.into(),
         }
     }
@@ -71,8 +71,8 @@ impl Term {
     /// same text then supplies no evidence, wherever it stands, so the
     /// query token can't be matched.
     fn dead(&self, neutral: &[String]) -> bool {
-        let f = self.fold.as_deref().unwrap_or(&self.text);
-        neutral.iter().any(|n| **n == *f)
+        let k = self.key.as_deref().unwrap_or(&self.text);
+        neutral.iter().any(|n| **n == *k)
     }
 }
 
@@ -96,6 +96,9 @@ pub(crate) enum Compiled {
         field: TextField,
         parts: Vec<Term>,
         folds: Box<[Box<str>]>,
+        /// Its words, as NEAR has them: for a word with a neutralized
+        /// part, a whole or compound form stands in ([`phrase_live`]).
+        words: Vec<Operand>,
     },
     Near {
         field: TextField,
@@ -207,40 +210,52 @@ fn folded(s: &str) -> String {
         .join("")
 }
 
+/// What CSX-5 *Neutralize term* compares: a text's parts, joined, so
+/// every spelling of a word compares alike (`web-dl`, `web.dl` and
+/// `webdl` are all `webdl`; `x265` is `x265`).
+pub(crate) fn neutral_key(text: &str) -> String {
+    let mut out = String::new();
+    for t in tokenize(text) {
+        if t.kind == TokKind::Part {
+            out.push_str(&t.text);
+        }
+    }
+    out
+}
+
 /// The most parts in a row [`neutral_folds`] reads as one word: a
 /// Neutralize term is one word, so a run of more can't be one.
 const NEUTRAL_RUN: usize = 8;
 
-/// What CSX-5 *Neutralize term* compares for the text of a query word,
-/// phrase or NEAR word, beside its single tokens ([`Term::dead`]): the
-/// fold of the whole text when it has no space, and of each run of two
-/// or more parts with no space between them (`x265`, `web-dl` in
-/// `web-dl.x264`). A neutralized word among them supplies no evidence, so
-/// the clause that needs it is false (§20.6). A torrent's word of several
-/// parts carries them as its own tokens too, so its parts match a query's
-/// in a row: this is where a neutralized `x265` is caught. A phrase as a
-/// whole is never one word: `"amber beacon"` isn't `amberbeacon`.
+/// The [`neutral_key`]s CSX-5 *Neutralize term* compares for the runs of
+/// two or more parts in a query word, phrase or NEAR word with no space
+/// between them (`x265`, `web-dl` and `web.dl` in `web-dl.x264` or
+/// `web.dl`), beside its single tokens ([`Term::dead`]). A neutralized
+/// word among them supplies no evidence, so the clause that needs it is
+/// false (§20.6). A torrent's word of several parts carries them as its
+/// own tokens too, so its parts match a query's in a row: this is where a
+/// neutralized `x265` is caught. A phrase as a whole is never one word:
+/// `"amber beacon"` isn't `amberbeacon`.
 pub(crate) fn neutral_folds(text: &str) -> Box<[Box<str>]> {
-    let mut out: Vec<Box<str>> = Vec::new();
-    if !text.chars().any(char::is_whitespace) {
-        out.push(folded(text).into());
-    }
-    let parts: Vec<(usize, usize)> = tokenize(text)
-        .iter()
+    let parts: Vec<Tok> = tokenize(text)
+        .into_iter()
         .filter(|t| t.kind == TokKind::Part)
-        .map(|t| (t.from, t.to))
         .collect();
+    let mut out: Vec<Box<str>> = Vec::new();
     for i in 0..parts.len() {
+        let mut key = parts[i].text.clone();
         for j in i + 1..parts.len().min(i + NEUTRAL_RUN) {
-            let Some(run) = text.get(parts[i].0..parts[j].1) else {
-                break;
-            };
-            if run.chars().any(char::is_whitespace) {
+            // Overlapping parts (CJK pairs) have nothing between them.
+            let gap = parts[j - 1].to.min(parts[j].from)..parts[j].from;
+            if text
+                .get(gap)
+                .is_none_or(|b| b.chars().any(char::is_whitespace))
+            {
                 break;
             }
-            let f = folded(run);
-            if !out.iter().any(|o| **o == *f) {
-                out.push(f.into());
+            key.push_str(&parts[j].text);
+            if !out.iter().any(|o| **o == *key) {
+                out.push(key.as_str().into());
             }
         }
     }
@@ -301,11 +316,63 @@ pub(crate) fn neutralized(folds: &[Box<str>], neutral: &[String]) -> bool {
 }
 
 /// Whether a token a prefix or fuzzy word matched is a neutralized word:
-/// it's no evidence either. Only asked once the token has matched.
+/// it's no evidence either. Only asked once the token has matched. A
+/// token of lowercase letters or of digits is one part, its own key, so
+/// it's compared as it is.
 pub(crate) fn neutral_token(text: &str, neutral: &[String]) -> bool {
-    !neutral.is_empty() && {
-        let f = folded(text);
-        neutral.contains(&f)
+    if neutral.is_empty() {
+        return false;
+    }
+    let b = text.as_bytes();
+    if b.iter().all(u8::is_ascii_lowercase) || b.iter().all(u8::is_ascii_digit) {
+        neutral.iter().any(|n| n == text)
+    } else {
+        neutral.contains(&neutral_key(text))
+    }
+}
+
+/// A phrase when some word of it has a neutralized part: that word
+/// matches where a live whole or compound form of it stands, over the
+/// torrent's own parts in a row (`"x265 beacon"` with `x` neutralized
+/// matches "x265 Beacon", not "x 265 Beacon"). The other words match
+/// their parts in a row, as in [`sequence`]. Neutralizing only takes
+/// matches away: every match here is one without it too.
+fn phrase_live(field: &Text, words: &[Operand], neutral: &[String]) -> bool {
+    let Some(head) = words.first().and_then(|w| w.parts.first()) else {
+        return false;
+    };
+    let at = |w: &Operand, p: u32| {
+        w.parts
+            .iter()
+            .zip(0..)
+            .all(|(x, i)| field.at(p + i).any(|t| field.is(t, x.hash, &x.text)))
+            && (!w.parts.iter().any(|x| x.dead(neutral))
+                || w.whole
+                    .iter()
+                    .any(|x| !x.dead(neutral) && field.at(p).any(|t| field.is(t, x.hash, &x.text))))
+    };
+    crate::work::tick(field.toks.len());
+    field
+        .toks
+        .iter()
+        .filter(|t| field.is(t, head.hash, &head.text))
+        .any(|start| {
+            let mut p = start.position;
+            words.iter().all(|w| {
+                let ok = at(w, p);
+                p += w.parts.len() as u32;
+                ok
+            })
+        })
+}
+
+/// A word of a NEAR or phrase, compiled.
+fn near_word(w: &str) -> Operand {
+    let (parts, whole) = near_operand(w);
+    Operand {
+        parts: parts.iter().map(|t| Term::new(t)).collect(),
+        whole: whole.iter().map(|t| Term::new(t)).collect(),
+        folds: neutral_folds(w),
     }
 }
 
@@ -359,20 +426,15 @@ pub(crate) fn compile(node: &Node) -> Compiled {
                     .map(|t| t.text),
             ),
             folds: neutral_folds(text),
+            words: text
+                .split_whitespace()
+                .map(near_word)
+                .filter(|w| !w.parts.is_empty())
+                .collect(),
         },
         Node::Near { field, words, slop } => Compiled::Near {
             field: *field,
-            words: words
-                .iter()
-                .map(|w| {
-                    let (parts, whole) = near_operand(w);
-                    Operand {
-                        parts: parts.iter().map(|t| Term::new(t)).collect(),
-                        whole: whole.iter().map(|t| Term::new(t)).collect(),
-                        folds: neutral_folds(w),
-                    }
-                })
-                .collect(),
+            words: words.iter().map(|w| near_word(w)).collect(),
             slop: *slop,
         },
         Node::Prefix { field, prefix } => {
@@ -1008,10 +1070,15 @@ impl<'a> Doc<'a> {
                 field,
                 parts,
                 folds,
+                words,
             } => {
-                !neutralized(folds, neutral)
-                    && !parts.iter().any(|p| p.dead(neutral))
-                    && texts(*field, &|t| sequence(t, parts))
+                if neutralized(folds, neutral) {
+                    false
+                } else if neutral.is_empty() || !parts.iter().any(|p| p.dead(neutral)) {
+                    texts(*field, &|t| sequence(t, parts))
+                } else {
+                    texts(*field, &|t| phrase_live(t, words, neutral))
+                }
             }
             Compiled::Near { field, words, slop } => {
                 if words.iter().any(|w| neutralized(&w.folds, neutral)) {
@@ -1590,10 +1657,11 @@ mod tests {
 
     #[test]
     fn neutral_folds_are_runs_of_parts() {
-        let has = |text: &str, w: &str| neutral_folds(text).iter().any(|f| **f == *folded(w));
-        assert!(has("amber", "amber"));
+        let has = |text: &str, w: &str| neutral_folds(text).iter().any(|f| **f == *neutral_key(w));
         assert!(has("amber.beacon", "amber.beacon"));
+        assert!(has("amber.beacon", "amberbeacon"));
         assert!(has("web-dl.x264", "web-dl"));
+        assert!(has("web.dl", "webdl"));
         assert!(has("x265 beacon", "x265"));
         assert!(has("ShowName", "ShowName"));
         // A phrase isn't one word, and single parts are tokens
@@ -1601,6 +1669,10 @@ mod tests {
         assert!(!has("amber beacon", "amberbeacon"));
         assert!(!has("amber beacon", "amber"));
         assert!(!has("x265 beacon", "x"));
+        // Every spelling of a word has one key.
+        for w in ["web-dl", "web.dl", "webdl", "WEB-DL"] {
+            assert_eq!(neutral_key(w), "webdl", "{w}");
+        }
     }
 
     #[test]
@@ -1613,7 +1685,7 @@ mod tests {
             content_type: ContentType::Video,
         };
         let doc = Doc::new(&item, None);
-        let n = |w: &str| vec![folded(w)];
+        let n = |w: &str| vec![neutral_key(w)];
         for (q, neutral, matches) in [
             // Its parts in a row are the torrent's own words.
             ("AmberBeacon", "amber", false),
@@ -1626,6 +1698,19 @@ mod tests {
             ("x265", "x", true),
             ("\"web dl\"", "web", false),
             ("x265", "x265", false),
+            // Another spelling of a neutralized word is the word.
+            ("webdl", "web-dl", false),
+            ("web.dl", "web-dl", false),
+            ("webd*", "web-dl", false),
+            ("amber.beacon", "amberbeacon", false),
+            ("AmberBeacon", "amberbeacon", false),
+            // A phrase is never one word.
+            ("\"amber beacon\"", "amberbeacon", true),
+            // A phrase word with a neutralized part matches its own
+            // whole token, never the part on its own.
+            ("\"web-dl x265\"", "x", true),
+            ("\"web-dl x265\"", "web", true),
+            ("\"amber beacon web-dl\"", "amber", false),
         ] {
             let q = parse(q).unwrap();
             assert_eq!(doc.matches(&q, &n(neutral)), matches, "{q:?} {neutral}");
@@ -2145,7 +2230,7 @@ mod tests {
                 now: 0,
             };
             let item = Item { hashes: &[[1; 20]], name: &name, files: &f, content_type: class.content_type };
-            let neutral: Vec<String> = if neutral { ["web", "1080p", "x265", "show"].iter().map(|w| folded(w)).collect() } else { vec![] };
+            let neutral: Vec<String> = if neutral { ["web", "1080p", "x265", "show", "webdl"].iter().map(|w| neutral_key(w)).collect() } else { vec![] };
             let doc = Doc::new(&item, Some(&facts));
             let compiled = compile(&node);
             let full = doc.eval(&compiled, None, &neutral);
