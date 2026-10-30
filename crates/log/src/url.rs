@@ -953,23 +953,28 @@ mod tests {
         assert!(scrub_text(&plain).contains(r#"path: "/announce""#));
     }
 
-    /// The time for `n` bytes of `unit` repeated: the least of a few runs.
-    fn time_for(unit: &str, n: usize) -> std::time::Duration {
-        let text = unit.repeat(n / unit.len());
-        (0..3)
-            .map(|_| {
+    /// The times for `small` and `large` bytes of `unit` repeated: the
+    /// least of several runs each, interleaved so a burst of load on the
+    /// machine slows both sizes rather than one.
+    fn times_for(unit: &str, small: usize, large: usize) -> [std::time::Duration; 2] {
+        let texts = [small, large].map(|n| unit.repeat(n / unit.len()));
+        let mut best = [std::time::Duration::MAX; 2];
+        for _ in 0..5 {
+            for (text, best) in texts.iter().zip(&mut best) {
                 let t = std::time::Instant::now();
-                std::hint::black_box(scrub_text(std::hint::black_box(&text)));
-                t.elapsed()
-            })
-            .min()
-            .unwrap()
+                std::hint::black_box(scrub_text(std::hint::black_box(text)));
+                *best = (*best).min(t.elapsed());
+            }
+        }
+        best
     }
 
     #[test]
     fn scrub_text_is_linear() {
-        // Linear is about 16x from 64 KiB to 1 MiB, quadratic about 256x:
-        // the ratio is what's checked, never the time alone.
+        // 16x the input takes about 16x the time if linear, 256x if
+        // quadratic; 64x splits them. Only the ratio is checked, never
+        // the time alone, and both sizes are large enough that timer and
+        // scheduler noise stays small next to them.
         for unit in [
             "a://",
             "magnet:",
@@ -979,12 +984,12 @@ mod tests {
             "a:// ",
             "x magnet:? ",
         ] {
-            let small = time_for(unit, 64 << 10).max(std::time::Duration::from_micros(50));
-            let large = time_for(unit, 1 << 20);
+            let [small, large] = times_for(unit, 256 << 10, 4 << 20);
+            let small = small.max(std::time::Duration::from_micros(50));
             let ratio = large.as_secs_f64() / small.as_secs_f64();
             assert!(
-                ratio <= 30.0,
-                "{unit:?}: {large:?} for 1 MiB, {small:?} for 64 KiB ({ratio:.1}x)"
+                ratio <= 64.0,
+                "{unit:?}: {large:?} for 4 MiB, {small:?} for 256 KiB ({ratio:.1}x)"
             );
         }
     }
