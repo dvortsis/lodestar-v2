@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T22:43Z",
+ "updated_at": "2026-10-30T22:44Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1257,13 +1257,14 @@
    "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges | 2026-10-30T10:25Z #186 retargeted to main; land/L7 merged main -> ca08002d (docs only); CI running | 2026-10-30T10:30Z #186 merged 1199430f. L1-L7 all on main."
   },
   "F-filters-packs": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhn9HZcFZGjzvAkoTomC",
    "pr": 240,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src) | 2026-10-30T21:45Z brief briefs/F-filters-packs.md; unblocked (#192 merged); launching | 22:19Z PR #240 head 43012ebb; reviewer session_01MMjhn8qZB2pn4AbkpKd1Li"
+   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src) | 2026-10-30T21:45Z brief briefs/F-filters-packs.md; unblocked (#192 merged); launching | 22:19Z PR #240 head 43012ebb; reviewer session_01MMjhn8qZB2pn4AbkpKd1Li",
+   "merge": "0cfaac67"
   },
   "X-ci-health": {
    "status": "merged",
@@ -2197,7 +2198,7 @@
   {
    "item": "FYI (\u00a72.19) on #240 merge: pack guards (FK-2 trailer/sample, SC-1 trainer/mod/offline) read the torrent as it is, so neutralizing never widens a pack rule; FK-2 (guard-only keywords) unchanged. LU-1's lure-file reason is a stated follow-up.",
    "at": "2026-10-30T22:20Z",
-   "status": "pending-merge"
+   "status": "merged #240 (0cfaac67); FYI flagged"
   }
  ],
  "external_gates": {
@@ -2342,7 +2343,8 @@
   "2026-10-30T22:21Z F-rollback-journal opened #241 (00bc89ed); fresh reviewer launched. Holds follow-up recorded.",
   "2026-10-30T22:41Z #241 review MERGE; merge on green. F-rollback-holds brief written (high priority).",
   "2026-10-30T22:42Z CR-SIM-restart opened #242 (19c08f88); fresh reviewer launched. #240 CI suite done; review pending.",
-  "2026-10-30T22:43Z S-appearance opened #243; reviewer launched. Open PRs: #240 (review), #241 (MERGE, CI), #242 (review), #243 (review)."
+  "2026-10-30T22:43Z S-appearance opened #243; reviewer launched. Open PRs: #240 (review), #241 (MERGE, CI), #242 (review), #243 (review).",
+  "2026-10-30T22:44Z merged #240 F-filters-packs (0cfaac67) on the reviewer's MERGE (2 mutations caught, floor untouched) and green CI incl. the filter budget. Author and reviewer archived. LU-1 lure-file follow-up stays in followups."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
