@@ -2144,11 +2144,12 @@
       "head": "869a5bb1",
       "reviewer": "session_01MMjhnC6uV1DEV9qmnqQ5M7",
       "note": "runner-owned follow-up: #211 review findings 1-7; open PR after #211 merges",
-      "verdict": "3c6d8ad6 MERGE; 4 optional fixed in 869a5bb1; final look asked"
+      "verdict": "869a5bb1 MERGE (final); reviewer archived; open PR after #211 merges"
     }
   },
   "log": [
     "2026-10-30T13:56Z S-settings-reconcile asked to confirm the edit-chunk decision; runner confirmed owner option A (2026-10-24) and told it to record and cite it, with the 45 KB budget unchanged",
-    "2026-10-30T14:05Z X-filter-budget-8573C: data shows the 8573C runs on two host bands, and job 124095631213's neutralized 53.3 was host interference (callgrind: equal instructions). Runner approved (d), per-model skew on the calibration (7763 reference and 50 us unchanged), and listing 9V74 and 8370C (provisional n<5); flag to owner under \u00a72.19"
+    "2026-10-30T14:05Z X-filter-budget-8573C: data shows the 8573C runs on two host bands, and job 124095631213's neutralized 53.3 was host interference (callgrind: equal instructions). Runner approved (d), per-model skew on the calibration (7763 reference and 50 us unchanged), and listing 9V74 and 8370C (provisional n<5); flag to owner under \u00a72.19",
+    "2026-10-30T14:06Z IMP-1 #210 round-2 fix 562450ae (N1 fold of multi-match candidates); re-check sent to session_01MMjhnCGd8sA1XL9cargxwy; the old run 41065412960 is superseded"
   ]
 }
