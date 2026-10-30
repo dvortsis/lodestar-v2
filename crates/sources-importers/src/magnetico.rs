@@ -919,28 +919,74 @@ fn is_unc(path: &Path) -> bool {
     )
 }
 
-/// `path` as Windows reads it, for the lexical check only: `/` as `\` (so
-/// `//server/share` parses as the UNC path it is), `\\?\UNC\` as `\\`, and
-/// lower case, so an approved root matches however it's written.
-fn windows_form(path: &Path) -> PathBuf {
-    if !cfg!(windows) {
-        return path.to_path_buf();
+/// A path's text as Windows reads it, for the lexical check only:
+/// - `/` as `\`, so `//server/share` parses as the UNC path it is;
+/// - the NT prefix `\??\` as `\\?\`: Win32 passes `\??\…` straight to the
+///   object manager, so `\??\UNC\server\…` reaches SMB and `\??\pipe\x` a
+///   pipe, while Rust would parse it as a plain root-relative path;
+/// - `\\?\UNC\` as `\\`, and lower case, so an approved root matches
+///   however it's written.
+fn windows_text(path: &str) -> String {
+    let mut s = path.replace('/', "\\");
+    if s.starts_with(r"\??\") {
+        s.replace_range(..4, r"\\?\");
     }
-    let mut s = path.to_string_lossy().replace('/', "\\");
     if s.get(..8)
         .is_some_and(|p| p.eq_ignore_ascii_case(r"\\?\UNC\"))
     {
         s.replace_range(..8, r"\\");
     }
-    PathBuf::from(s.to_lowercase())
+    s.to_lowercase()
+}
+
+fn windows_form(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(windows_text(&path.to_string_lossy()))
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// A Windows DOS device name, which opens the device whatever folder it's
+/// in: `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9` (with
+/// superscript digits too), `CONIN$` and `CONOUT$`, in any case, with
+/// trailing dots or spaces, and before Windows 11 with any extension or
+/// stream suffix.
+fn is_dos_device(component: &str) -> bool {
+    let base = component
+        .split(['.', ':'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches([' ', '.'])
+        .to_lowercase();
+    if matches!(
+        base.as_str(),
+        "con" | "prn" | "aux" | "nul" | "conin$" | "conout$"
+    ) {
+        return true;
+    }
+    let mut chars = base.chars();
+    let stem: String = chars.by_ref().take(3).collect();
+    let digit = chars.next();
+    (stem == "com" || stem == "lpt")
+        && chars.next().is_none()
+        && digit.is_some_and(|d| d.is_ascii_digit() || matches!(d, '¹' | '²' | '³'))
 }
 
 /// Refuses network and device paths by their text alone, with no I/O: a
 /// UNC path not under an approved root (or climbing out of one with
-/// `..`), a device namespace path (`\\.\pipe\x`), and a verbatim path
-/// that isn't a drive (`\\?\Volume{…}`, `\\?\GLOBALROOT`).
+/// `..`), a device namespace path (`\\.\pipe\x`), a verbatim path that
+/// isn't a drive (`\\?\Volume{…}`, `\\?\GLOBALROOT`), and on Windows a
+/// DOS device name in any component.
 fn lexical(path: &Path, policy: &OpenPolicy) -> Result<(), Refusal> {
     let path = windows_form(path);
+    if cfg!(windows)
+        && path
+            .components()
+            .any(|c| matches!(c, Component::Normal(n) if is_dos_device(&n.to_string_lossy())))
+    {
+        return Err(Refusal::NotAFile);
+    }
     let Some(Component::Prefix(prefix)) = path.components().next() else {
         return Ok(());
     };

@@ -746,6 +746,63 @@ fn unc_paths_are_recognised() {
     }
 }
 
+/// The text rewriting the Windows lexical check parses; pure, so it runs
+/// on every platform.
+#[test]
+fn windows_text_normalises_every_network_form() {
+    for (input, want) in [
+        (r"\??\UNC\Srv\Share\db", r"\\srv\share\db"),
+        (r"\??\pipe\x", r"\\?\pipe\x"),
+        (r"\??\C:\Data\db", r"\\?\c:\data\db"),
+        (r"\\?\unc\srv\share", r"\\srv\share"),
+        ("//srv/share/db", r"\\srv\share\db"),
+        (r"C:\Data\db", r"c:\data\db"),
+        // Not prefixes: left as they are, apart from case.
+        (r"\??x\db", r"\??x\db"),
+        (r"\\.\PIPE\x", r"\\.\pipe\x"),
+    ] {
+        assert_eq!(windows_text(input), want, "{input}");
+    }
+}
+
+#[test]
+fn dos_device_names_are_recognised_in_every_form() {
+    for name in [
+        "nul",
+        "NUL",
+        "Nul.txt",
+        "nul.tar.gz",
+        "con ",
+        "con. .",
+        "aux:stream",
+        "prn",
+        "COM0",
+        "com9",
+        "LPT1.db",
+        "com¹",
+        "lpt³",
+        "CONIN$",
+        "conout$.x",
+    ] {
+        assert!(is_dos_device(name), "{name}");
+    }
+    for name in [
+        "nul-ish",
+        "console",
+        "com10",
+        "com",
+        "lpt",
+        "comx",
+        "db.sqlite3",
+        "aux2",
+        "xnul",
+        "",
+        "conin",
+    ] {
+        assert!(!is_dos_device(name), "{name}");
+    }
+}
+
 /// Network and device paths are refused by their text, before any I/O.
 /// The server names don't resolve: had the adapter touched them, the
 /// refusal would be `not_found`, not the lexical one.
@@ -773,9 +830,27 @@ fn network_and_device_paths_are_refused_before_any_io() {
             r"\\?\UNC\lodestar-test.invalid\share\db.sqlite3",
             Refusal::UncNotApproved,
         ),
+        // The NT prefix, which Win32 passes straight through.
+        (
+            r"\??\UNC\lodestar-test.invalid\share\db",
+            Refusal::UncNotApproved,
+        ),
+        (r"\??\pipe\x", Refusal::NotAFile),
+        // DOS device names, in any folder, case or form.
+        (r"C:\lodestar-test\nul", Refusal::NotAFile),
+        (r"C:\lodestar-test\NUL.txt", Refusal::NotAFile),
+        (r"C:\lodestar-test\con \db.sqlite3", Refusal::NotAFile),
+        (r"C:\lodestar-test\COM1.sqlite3", Refusal::NotAFile),
+        (r"C:\lodestar-test\lpt9.", Refusal::NotAFile),
+        (r"C:\lodestar-test\CONOUT$", Refusal::NotAFile),
     ] {
         assert_eq!(open(Path::new(path), &p).unwrap_err(), want, "{path}");
     }
+    assert_eq!(lexical(Path::new(r"\??\C:\data\db.sqlite3"), &p), Ok(()));
+    assert_eq!(
+        lexical(Path::new(r"C:\console\nul-ish\com10\db.sqlite3"), &p),
+        Ok(())
+    );
     // Under an approved root, only `..` climbing out is refused lexically;
     // the rest goes on to the filesystem.
     let approved = OpenPolicy {
