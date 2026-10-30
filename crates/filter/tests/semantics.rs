@@ -734,3 +734,99 @@ fn the_floor_is_untouched() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// F-filters-packs: pack rules honour Neutralize terms (§20.5.5).
+
+/// The decision on a torrent with every pack on and `neutral` entries.
+fn pack_decision(name: &str, files: &[FileInfo], neutral: &[Override]) -> Option<RuleRef> {
+    let mut e = engine();
+    e.packs = lodestar_filter::PackSwitches::all();
+    e.overrides.extend(neutral.iter().cloned());
+    let class = classify(name, files);
+    let facts = Facts {
+        class: &class,
+        size: 0,
+        piece_len: 0,
+        flags: 0,
+        discovered_at: 0,
+        now: 0,
+    };
+    let it = Item {
+        files,
+        content_type: class.content_type,
+        ..item(&[H], name)
+    };
+    e.judge(&it, Some(&facts), 0).decision.map(|d| d.rule)
+}
+
+#[test]
+fn a_neutralized_word_is_no_pack_evidence() {
+    use lodestar_filter::PackRule;
+    let files = [FileInfo::new(vec!["readme.txt".into()], 90)];
+    let sc1 = Some(RuleRef::Pack(PackRule::Sc1));
+    assert_eq!(pack_decision("Free Robux Generator", &files, &[]), sc1);
+    // `robux` was the only service: nothing else catches it.
+    assert_eq!(
+        pack_decision("Free Robux Generator", &files, &[neutralize("Robux")]),
+        None
+    );
+    // `generator` still counts when `free` doesn't.
+    assert_eq!(
+        pack_decision("Free Robux Generator", &files, &[neutralize("free")]),
+        sc1
+    );
+    // An entry in shadow mode neutralizes nothing.
+    let shadow = Override {
+        shadow_until: Some(10),
+        ..neutralize("robux")
+    };
+    assert_eq!(
+        pack_decision("Free Robux Generator", &files, &[shadow]),
+        sc1
+    );
+    // A guard word neutralized still guards.
+    assert_eq!(
+        pack_decision(
+            "Free Robux Generator Offline",
+            &files,
+            &[neutralize("offline")]
+        ),
+        None
+    );
+}
+
+/// The floor holds against a Neutralize entry for every word of the
+/// torrent while packs are on.
+#[test]
+fn the_floor_is_untouched_by_pack_neutralizing() {
+    use lodestar_filter::{CoreRule, Origin};
+    let confirmed = [0x11; 20];
+    let mut e = engine();
+    e.packs = lodestar_filter::PackSwitches::all();
+    e.core.cs.add_hash(confirmed, Origin::Confirmed);
+    for w in ["free", "robux", "generator"] {
+        e.overrides.push(neutralize(w));
+    }
+    let files = [FileInfo::new(vec!["readme.txt".into()], 90)];
+    let class = classify("Free Robux Generator", &files);
+    let facts = Facts {
+        class: &class,
+        size: 0,
+        piece_len: 0,
+        flags: 0,
+        discovered_at: 0,
+        now: 0,
+    };
+    let hashes = [confirmed];
+    let it = Item {
+        files: &files,
+        ..item(&hashes, "Free Robux Generator")
+    };
+    let d = e.judge(&it, Some(&facts), 0).decision.unwrap();
+    assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs1a));
+    assert_eq!(
+        e.blocked_hash(&[confirmed]).unwrap().rule,
+        RuleRef::Core(CoreRule::Cs1a)
+    );
+}
