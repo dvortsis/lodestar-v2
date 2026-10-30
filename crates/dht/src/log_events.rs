@@ -7,6 +7,16 @@
 
 lodestar_log::catalogue! {
     "lodestar-dht";
+    /// Socket buffer requests and kernel readback, per bound socket. Zero
+    /// grants with read errors mean unknown, not a zero-sized buffer.
+    /// `send_requested=0` means the existing system default is retained.
+    SOCKET_BUFFERS {
+        id: "dht.socket_buffers",
+        component: Dht,
+        level: Info,
+        message: "DHT socket buffers",
+        fields: { receive_requested: Size, send_requested: Size, receive: Size, send: Size, set_errors: Size, read_errors: Size },
+    }
     /// A key reached the harvest: from samples, someone's `get_peers`, an
     /// announce, or a lookup this node ran (`source`).
     KEY_HARVESTED {
@@ -17,13 +27,14 @@ lodestar_log::catalogue! {
         message: "Key harvested",
         fields: { torrent: Hash, source: Label, peers: Size },
     }
-    /// What the harvest found in the last `seconds`, by source, and the
-    /// keys dropped because the pipeline was behind.
+    /// What the harvest found since the last summary (`seconds` ago, about
+    /// a minute), by source, and the keys dropped because the pipeline was
+    /// behind.
     HARVEST_SUMMARY {
         id: "dht.harvest_summary",
         component: Dht,
         level: Info,
-        message: "DHT harvest in the last minute",
+        message: "DHT harvest since the last summary",
         fields: { seconds: Size, sample: Size, get_peers: Size, announce: Size, lookups: Size, dropped: Size },
     }
 }

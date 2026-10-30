@@ -108,6 +108,8 @@ Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/inde
 
 The Mainline DHT crawler is **source plugin #1**. Every other discovery source, importer and network tier plugs into the same plugin API and crawl scheduler (§18).
 
+**CR-0 implementation (2026-10-25):** sample dispatch reserves bounded endpoint ownership and retains every unexpired cooldown. Each production start suppresses sampling for six hours plus query timeout; passive service and peer finding continue. Eight-byte transaction tokens never wrap in a process. Public outbound DHT and metadata endpoints share canonicalization and destination checks, with explicit local-fixture overrides. Socket-buffer grants and lookup/sampler ownership are observable. See [CR-0 decisions](decisions/2026-10-25-CR-0.md) for bounds, restart tradeoffs and exception semantics.
+
 - **Stack:** tokio and our own zero-copy bencode/KRPC codec. Spike reuse of `librqbit` crates (dht, peer-protocol, bencode) in M1; adopt them only if they support BEP 51 traversal and high fan-out without forking.
 - **BEPs:** 5 (DHT), 32 (IPv6), 42 (secure node IDs), 43 (read-only flag respected), **51 (`sample_infohashes`) as the primary, polite harvester**, 33 (DHT scrape bloom filters → seed/peer estimates).
 - **Harvest strategies** (each toggleable, with metrics per strategy):
@@ -3069,6 +3071,8 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | **v1.3** | **IPFS** (+ IPNI gossipsub, optional Kubo companion) | Directory listings are worth having, but each harvested CID yields little |
 
 ### 18.4 Crawl scheduler: priority, agents and budgets
+
+**Implemented peer-lookup contract (CR-0):** bounded admission is acknowledged before an attempt counts. Each accepted DHT request owns both configured families under shared concurrency/query/peer caps and returns a reliable terminal batch. Dropping the request's receiver cancels it; timeout, eviction or an alternate peer releases pool ownership once and causes actor cleanup. The actor caps queued plus active logical requests at 32. All iterative lookups have deadlines and scheduled continuations. Private keys with no peers wait for their own source under the existing pool/eviction cap, without fictitious public lookup attempts. Streaming and additional priority lanes remain future work in the [crawler implementation plan](plan/dht-crawler-implementation-plan-2026-10-25.md).
 **Yes, sources get priorities and agent counts, expressed as shares of one global budget rather than raw thread counts.** All sources compete for the same bottlenecks, and more raw concurrency can *lower* total yield: NAT/conntrack saturation, tracker bans, writer contention.
 
 - **Resource classes** (the global budget is set by the intensity preset, §5):

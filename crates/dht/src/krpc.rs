@@ -129,7 +129,7 @@ pub struct Response<'a> {
     pub values: Vec<SocketAddr>,
     pub token: Option<&'a [u8]>,
     /// BEP 51 `samples`: concatenated 20-byte info hashes.
-    pub samples: Samples<'a>,
+    pub samples: Option<Samples<'a>>,
     /// BEP 51: seconds before this node should be sampled again.
     pub interval: Option<u32>,
     /// BEP 51: how many info hashes the node holds.
@@ -305,8 +305,8 @@ fn parse_response<'a>(top: &Dict<'a>) -> Result<Response<'a>, ParseError> {
         None => Vec::new(),
     };
     let samples = match bytes(r, "samples")? {
-        Some(raw) => Samples::new(raw).ok_or(ParseError::Invalid("samples"))?,
-        None => Samples::default(),
+        Some(raw) => Some(Samples::new(raw).ok_or(ParseError::Invalid("samples"))?),
+        None => None,
     };
     let u32_field = |key: &str| {
         r.get(key.as_bytes())
@@ -503,8 +503,8 @@ fn encode_response(enc: Encoder<'_>, r: &Response<'_>) {
         if let Some(n) = r.num {
             d.entry(b"num").int(i64::from(n));
         }
-        if !r.samples.is_empty() {
-            d.entry(b"samples").bytes(r.samples.raw());
+        if let Some(samples) = r.samples {
+            d.entry(b"samples").bytes(samples.raw());
         }
         if let Some(t) = r.token {
             d.entry(b"token").bytes(t);
@@ -616,7 +616,7 @@ mod tests {
             body: Body::Response(Response {
                 id: NodeId([4; 20]),
                 nodes: CompactNodes::v4(&nodes).unwrap(),
-                samples: Samples::new(&samples).unwrap(),
+                samples: Some(Samples::new(&samples).unwrap()),
                 interval: Some(21_600),
                 num: Some(1234),
                 ..Default::default()
@@ -629,10 +629,30 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            r.samples.iter().collect::<Vec<_>>(),
+            r.samples.unwrap().iter().collect::<Vec<_>>(),
             [InfoHash([1; 20]), InfoHash([2; 20])]
         );
         assert_eq!(r.nodes.len(), 1);
+    }
+
+    #[test]
+    fn absent_and_empty_samples_are_distinct() {
+        for samples in [None, Some(Samples::default())] {
+            let msg = Message {
+                transaction_id: b"empty",
+                version: None,
+                ip: None,
+                read_only: false,
+                body: Body::Response(Response {
+                    id: NodeId([1; 20]),
+                    samples,
+                    ..Default::default()
+                }),
+            };
+            let bytes = msg.encode();
+            assert_eq!(parse(&bytes).unwrap(), msg);
+            assert_eq!(bytes.windows(7).any(|w| w == b"samples"), samples.is_some());
+        }
     }
 
     #[test]

@@ -13,6 +13,8 @@ async fn a_running_node_takes_a_new_intensity() {
         intensity: Intensity::Aggressive,
         bootstrap: Vec::new(),
         state_path: None,
+        sample_start_delay: Some(Duration::ZERO),
+        allow_private: true,
         tick: Duration::from_millis(50),
         ..Config::default()
     };

@@ -1578,6 +1578,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "proptest",
  "rand 0.10.3",
  "sha1",
@@ -1639,10 +1640,15 @@ dependencies = [
  "chardetng",
  "encoding_rs",
  "lodestar-bencode",
+ "lodestar-store",
  "proptest",
  "sha1",
  "sha2",
 ]
+
+[[package]]
+name = "lodestar-network-policy"
+version = "0.5.0"
 
 [[package]]
 name = "lodestar-peer-wire"
@@ -1651,6 +1657,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-log",
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-utp",
  "num-bigint",
@@ -1679,7 +1686,6 @@ dependencies = [
  "proptest",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1706,7 +1712,6 @@ dependencies = [
  "tantivy",
  "tantivy-fst",
  "tempfile",
- "tracing",
  "unicode-normalization",
 ]
 
@@ -1715,6 +1720,7 @@ name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
  "lodestar-metainfo",
+ "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-store",
  "tokio",

@@ -111,6 +111,7 @@ pub const TARGETS: &[(&str, Component)] = &[
     ("lodestar_bencode", Component::Pipeline),
     ("lodestar_search", Component::Search),
     ("lodestar_filter", Component::Filters),
+    ("lodestar_network_policy", Component::Filters),
     ("lodestar_integrations", Component::Integrations),
     ("lodestar_cluster", Component::Workers),
 ];

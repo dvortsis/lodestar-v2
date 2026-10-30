@@ -19,6 +19,8 @@ fn config(bootstrap: Vec<String>, paused: bool) -> Config {
         intensity: Intensity::Aggressive,
         bootstrap,
         state_path: None,
+        sample_start_delay: Some(Duration::ZERO),
+        allow_private: true,
         query_timeout: Duration::from_secs(1),
         tick: Duration::from_millis(50),
         paused,

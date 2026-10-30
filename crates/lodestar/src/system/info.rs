@@ -131,6 +131,7 @@ fn memory_bytes() -> Option<u64> {
 }
 
 /// `MemTotal:  16314252 kB` in bytes.
+#[cfg(any(target_os = "linux", test))]
 fn mem_total(meminfo: &str) -> Option<u64> {
     let line = meminfo.lines().find(|l| l.starts_with("MemTotal:"))?;
     let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;

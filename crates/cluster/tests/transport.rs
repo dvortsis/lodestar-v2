@@ -16,7 +16,9 @@ use lodestar_integrations::SecretStore;
 use lodestar_metainfo::InfoHash;
 use lodestar_store::{Store, StoreConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+#[cfg(target_os = "linux")]
+use tokio::net::TcpSocket;
+use tokio::net::{TcpListener, TcpStream};
 
 const GUARD: Duration = Duration::from_secs(60);
 const WAIT: Duration = Duration::from_secs(15);
@@ -466,6 +468,7 @@ async fn a_slow_handshake_is_cut_by_the_timeout() {
     .await;
 }
 
+#[cfg(target_os = "linux")]
 async fn from(ip: &str, addr: &str) -> TcpStream {
     let socket = TcpSocket::new_v4().unwrap();
     socket.bind(format!("{ip}:0").parse().unwrap()).unwrap();
@@ -473,6 +476,7 @@ async fn from(ip: &str, addr: &str) -> TcpStream {
 }
 
 /// Whether the server closed the connection without a word.
+#[cfg(target_os = "linux")]
 async fn closed(stream: &mut TcpStream) -> bool {
     let mut buf = [0u8; 1];
     matches!(

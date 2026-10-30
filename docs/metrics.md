@@ -620,3 +620,22 @@ separators removed, cut to 64 characters with `…`. Links are root-relative:
 `/insights?range=<24h|7d>&compare=1`, and an exception's `fix` as
 `/insights/<target>` (`stage`) or `/settings/<target>` (`settings`) only
 when `target` matches `^[a-z_]{1,32}$`.
+
+
+## CR-0 DHT operational diagnostics (2026-10-25)
+
+These Prometheus series are aggregate, without endpoint/hash labels. Gauges reflect the latest actor maintenance turn; counters are cumulative for the process.
+
+| Series | Meaning |
+|---|---|
+| `dht_sample_cooling`, `dht_sample_inflight` | Cooldown obligations (also indexed expiry entries) and reserved transactions; their sum stays at most 200,000. |
+| `dht_sample_frontier` | Queued sample candidates, at most 20,000. |
+| `dht_sample_suppression_seconds` | Startup suppression remaining. Zero permits sampling; it does not promise spare capacity. |
+| `dht_sample_deferred_total`, `dht_sample_stale_total` | Capacity deferrals and rejected sampler completion tokens. Deferrals are backpressure, not lost hashes. |
+| `dht_peer_admitted_total`, `dht_peer_rejected_total` | Actor ownership accepted/rejected. Source-command channel rejection happens before actor admission and is not in this actor counter. |
+| `dht_peer_active`, `dht_peer_queued` | Logical owned requests, across configured families; combined cap 32. |
+| `dht_peer_cancelled_total` | Active requests cleaned up after receiver drop; queued drops never become active. |
+| `dht_lookup_scheduled` | Lookup legs with a scheduled continuation, including those awaiting replies. |
+| `dht_lookup_deadlines_total` | Lookup legs terminated at their deadline, including maintenance/scrapes. |
+
+`dht_lookups_completed_total` includes terminal owned requests, including empty results and active cancellation; it is not a metadata-yield counter. The typed `dht.socket_buffers` startup event reports the existing 4 MiB receive-buffer request, `send_requested=0` (retain the system default), kernel readback for both buffers, and set/read errors per socket. Zero readback with `read_errors > 0` means unknown. OS accounting may differ; do not infer packet drops from grants. Kernel drop counts remain unavailable unless separately collected. The six-hour startup suppression must be excluded from a steady-state sample-yield comparison and reported separately.

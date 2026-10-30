@@ -12,7 +12,7 @@ use lodestar_classify::FileInfo;
 use lodestar_filter::{Core, CsList, Engine, Handle, Lists, Origin, Sealer, Switches, TermSet};
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
-use lodestar_pipeline::{Pipeline, PipelineConfig, event, metric, strategy};
+use lodestar_pipeline::{Pipeline, PipelineConfig, event, metric};
 use lodestar_sources::{
     BoxFuture, Consent, Found, Kind, Loss, Manifest, Network, PluginError, PoolConfig, Priority,
     Risk, SourceCtx, SourcePlugin, Stage,
@@ -112,11 +112,10 @@ impl SourcePlugin for PeerTable {
             loop {
                 tokio::select! {
                     _ = ctx.shutdown.requested() => return Ok(()),
-                    Some(key) = requests.recv() => {
-                        if let Some(peers) = self.peers.get(&key) {
-                            let replies = ctx.peer_replies.as_ref().expect("a peer finder gets replies");
-                            replies.try_emit(Found::key(key, strategy::LOOKUP).with_peers(peers.clone()));
-                        }
+                    Some(request) = requests.recv() => {
+                        let (done, rx) = tokio::sync::oneshot::channel();
+                        let _ = request.admit.send(Some(rx));
+                        let _ = done.send(self.peers.get(&request.key).cloned().unwrap_or_default());
                     }
                 }
             }
@@ -126,6 +125,10 @@ impl SourcePlugin for PeerTable {
 
 fn config() -> PipelineConfig {
     PipelineConfig {
+        fetch: lodestar_peer_wire::FetchOptions {
+            allow_private: true,
+            ..Default::default()
+        },
         pool: PoolConfig {
             lookup_wait: Duration::from_millis(300),
             retry_backoff: Duration::from_millis(100),

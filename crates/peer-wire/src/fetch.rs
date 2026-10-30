@@ -60,6 +60,8 @@ pub struct FetchOptions {
     pub stats: Arc<FetchStats>,
     /// Addresses never connected to, over any transport: subscribed IP blocklists (§20.13).
     pub deny: Option<Deny>,
+    /// Explicit opt-in for isolated/local workflows. Public discovery leaves false.
+    pub allow_private: bool,
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -98,7 +100,17 @@ impl Default for FetchOptions {
             utp: None,
             stats: Arc::new(FetchStats::default()),
             deny: None,
+            allow_private: false,
         }
+    }
+}
+
+impl FetchOptions {
+    /// Apply before retaining peers and again immediately before a dial.
+    pub fn allows(&self, addr: SocketAddr) -> bool {
+        let addr = lodestar_network_policy::normalize(addr);
+        lodestar_network_policy::allows(addr, self.allow_private)
+            && !self.deny.as_ref().is_some_and(|d| d.denies(addr.ip()))
     }
 }
 
@@ -135,13 +147,21 @@ pub async fn fetch(
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
     let r = fetch_any(addr, info_hash, opts).await;
-    // A blocklisted address is never contacted: not a failed fetch.
-    if let Err(e) = &r
-        && !matches!(e, Error::Denied)
-    {
-        crate::log_events::count(e.kind());
+    // Counted here only, once per fetch, whichever transports it tried.
+    if let Some(kind) = counted(&r) {
+        crate::log_events::count(kind);
     }
     r
+}
+
+/// What a fetch's result counts as in `fetch.failed_summary`: a failure's
+/// kind, or nothing for a success or a blocklisted address (never
+/// contacted).
+fn counted(r: &Result<Fetched, Error>) -> Option<crate::FailureKind> {
+    match r {
+        Err(Error::Denied) | Ok(_) => None,
+        Err(e) => Some(e.kind()),
+    }
 }
 
 /// [`fetch`], over uTP first and TCP as the fallback when allowed.
@@ -150,7 +170,8 @@ async fn fetch_any(
     info_hash: InfoHash,
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
-    if opts.deny.as_ref().is_some_and(|d| d.denies(addr.ip())) {
+    let addr = lodestar_network_policy::normalize(addr);
+    if !opts.allows(addr) {
         return Err(Error::Denied);
     }
     let deadline = Instant::now() + opts.timeout;
@@ -231,6 +252,9 @@ async fn attempt(
     encrypted: bool,
     connected: &AtomicBool,
 ) -> Result<Fetched, Error> {
+    if !opts.allows(addr) {
+        return Err(Error::Denied);
+    }
     let timed_out = || {
         opts.stats.connect_timed_out(transport);
         Error::Timeout
@@ -498,6 +522,31 @@ impl Assembly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fetch counts once, by its final result: a success or a
+    /// blocklisted address doesn't count, any other failure does by its
+    /// kind. Only `fetch` counts (not each transport's try), so a uTP
+    /// failure before a TCP success counts nothing.
+    #[test]
+    fn a_fetch_counts_by_its_final_result() {
+        let fetched = Fetched {
+            info: Vec::new(),
+            v2: false,
+            encrypted: false,
+            pex: Vec::new(),
+            client: None,
+        };
+        assert_eq!(counted(&Ok(fetched)), None);
+        assert_eq!(counted(&Err(Error::Denied)), None);
+        assert_eq!(
+            counted(&Err(Error::Timeout)),
+            Some(crate::FailureKind::TimedOut)
+        );
+        assert_eq!(
+            counted(&Err(Error::Rejected)),
+            Some(crate::FailureKind::Refused)
+        );
+    }
 
     #[tokio::test]
     async fn outbound_sockets_abort_on_windows_only() {

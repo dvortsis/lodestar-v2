@@ -125,6 +125,10 @@ pub struct Config {
     /// Where to keep `state.bin`; `None` disables persistence.
     pub state_path: Option<PathBuf>,
     pub query_timeout: Duration,
+    /// `None` suppresses samples for six hours plus `query_timeout` after
+    /// every start, protecting cooldowns lost on restart. Override only
+    /// for isolated fixtures or a caller guaranteeing no previous obligations.
+    pub sample_start_delay: Option<Duration>,
     /// Maintenance cadence (timeouts, refresh, pings).
     pub tick: Duration,
     pub save_every: Duration,
@@ -134,6 +138,8 @@ pub struct Config {
     /// Addresses never contacted or answered: subscribed IP blocklists
     /// (§20.13). Checked on every packet, so it must be cheap.
     pub deny: Option<Deny>,
+    /// Explicit local/fixture opt-in; production public discovery leaves false.
+    pub allow_private: bool,
     /// Start paused (the crawler's pause, which persists): see
     /// [`NodeHandle::set_paused`].
     pub paused: bool,
@@ -164,11 +170,13 @@ impl Default for Config {
             bootstrap: DEFAULT_BOOTSTRAP.iter().map(|s| s.to_string()).collect(),
             state_path: None,
             query_timeout: Duration::from_secs(4),
+            sample_start_delay: None,
             tick: Duration::from_secs(1),
             save_every: Duration::from_secs(600),
             read_only: false,
             harvest: HarvestConfig::default(),
             deny: None,
+            allow_private: false,
             paused: false,
         }
     }
@@ -209,6 +217,24 @@ pub struct Stats {
     pub samples_sent: AtomicU64,
     /// Nodes that answered sample_infohashes with an error or timed out.
     pub sample_failures: AtomicU64,
+    /// Gauge: unexpired sample obligations.
+    pub sample_cooling: AtomicU64,
+    /// Gauge: reserved sample requests.
+    pub sample_inflight: AtomicU64,
+    /// Ignored stale sampler completions.
+    pub sample_stale: AtomicU64,
+    /// Owned peer requests admitted.
+    pub peer_admitted: AtomicU64,
+    pub peer_rejected: AtomicU64,
+    pub peer_cancelled: AtomicU64,
+    pub peer_active: AtomicU64,
+    pub peer_queued: AtomicU64,
+    pub lookup_scheduled: AtomicU64,
+    pub lookup_deadlines: AtomicU64,
+    pub sample_frontier: AtomicU64,
+    pub sample_suppression_seconds: AtomicU64,
+    /// Sampling ticks/admissions deferred by capacity.
+    pub sample_deferred: AtomicU64,
     /// BEP 33 scrapes asked for, answered, and refused because the queue
     /// was full.
     pub scrapes_requested: AtomicU64,
@@ -250,6 +276,19 @@ impl Stats {
             harvest_dropped: g(&self.harvest_dropped),
             samples_sent: g(&self.samples_sent),
             sample_failures: g(&self.sample_failures),
+            sample_cooling: g(&self.sample_cooling),
+            sample_inflight: g(&self.sample_inflight),
+            sample_stale: g(&self.sample_stale),
+            peer_admitted: g(&self.peer_admitted),
+            peer_rejected: g(&self.peer_rejected),
+            peer_cancelled: g(&self.peer_cancelled),
+            peer_active: g(&self.peer_active),
+            peer_queued: g(&self.peer_queued),
+            lookup_scheduled: g(&self.lookup_scheduled),
+            lookup_deadlines: g(&self.lookup_deadlines),
+            sample_frontier: g(&self.sample_frontier),
+            sample_suppression_seconds: g(&self.sample_suppression_seconds),
+            sample_deferred: g(&self.sample_deferred),
             scrapes_requested: g(&self.scrapes_requested),
             scrapes_completed: g(&self.scrapes_completed),
             scrapes_dropped: g(&self.scrapes_dropped),
@@ -283,6 +322,19 @@ pub struct StatsSnapshot {
     pub harvest_dropped: u64,
     pub samples_sent: u64,
     pub sample_failures: u64,
+    pub sample_cooling: u64,
+    pub sample_inflight: u64,
+    pub sample_stale: u64,
+    pub peer_admitted: u64,
+    pub peer_rejected: u64,
+    pub peer_cancelled: u64,
+    pub peer_active: u64,
+    pub peer_queued: u64,
+    pub lookup_scheduled: u64,
+    pub lookup_deadlines: u64,
+    pub sample_frontier: u64,
+    pub sample_suppression_seconds: u64,
+    pub sample_deferred: u64,
     pub scrapes_requested: u64,
     pub scrapes_completed: u64,
     pub scrapes_dropped: u64,
@@ -350,10 +402,17 @@ pub struct ExternalVotes {
 pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
     GetPeers(InfoHash),
+    RequestPeers(InfoHash, PeerAdmission),
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
     SetIntensity(Intensity),
     SetPaused(bool),
 }
+
+/// An owned terminal result. Dropping the receiver cancels the request;
+/// the actor reclaims all RPCs no later than its next maintenance tick.
+pub type PeerResult = oneshot::Receiver<Vec<SocketAddr>>;
+/// `None` means backpressure/paused; it must not consume a network attempt.
+pub type PeerAdmission = oneshot::Sender<Option<PeerResult>>;
 
 /// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -366,13 +425,23 @@ pub struct DhtEstimate {
     pub responders: u8,
 }
 
-/// A cloneable handle for asking a running node to scrape.
+/// A cloneable handle for peer finding, scraping and node controls.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
     commands: mpsc::Sender<Command>,
 }
 
 impl NodeHandle {
+    /// Nonblocking, acknowledged peer lookup admission. There is no blind
+    /// internal backlog; a full command channel rejects by closing `admit`.
+    /// `true` means enqueued only; `Some` on the admission channel owns work.
+    /// Dropping the returned terminal receiver cancels all family legs.
+    pub fn request_peers(&self, hash: InfoHash, admit: PeerAdmission) -> bool {
+        self.commands
+            .try_send(Command::RequestPeers(hash, admit))
+            .is_ok()
+    }
+
     /// Estimates a swarm's seeds and peers from the BEP 33 filters of the
     /// nodes closest to `hash`. `None` when the scrape queue is full or
     /// the node has stopped. Only counts come back: no filters and no
@@ -395,7 +464,8 @@ impl NodeHandle {
 
     /// Pauses or resumes harvesting (the crawler's pause). Paused, the
     /// node sends no BEP 51 samples and starts no `get_peers` lookups or
-    /// scrapes (queued lookups wait; queued and new scrapes answer
+    /// scrapes (legacy queued lookups wait, owned queued requests finish
+    /// empty, and queued/new scrapes answer
     /// `None`), and reports no harvests. It keeps its routing table up
     /// and answers other nodes' queries. Lookups already running finish.
     /// `false` if the node has stopped.
@@ -425,7 +495,20 @@ fn bind(addr: SocketAddr) -> io::Result<(UdpSocket, std::net::UdpSocket)> {
         socket.set_only_v6(true)?;
     }
     // Room for bursts of replies; best effort, the OS may cap it.
-    let _ = socket.set_recv_buffer_size(4 << 20);
+    let requested = 4 << 20;
+    let set_errors = usize::from(socket.set_recv_buffer_size(requested).is_err());
+    let receive = socket.recv_buffer_size();
+    let send = socket.send_buffer_size();
+    let read_errors = usize::from(receive.is_err()) + usize::from(send.is_err());
+    lodestar_log::log_event!(
+        crate::log_events::SOCKET_BUFFERS,
+        receive_requested = requested,
+        send_requested = 0usize,
+        receive = receive.unwrap_or(0),
+        send = send.unwrap_or(0),
+        set_errors = set_errors,
+        read_errors = read_errors
+    );
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
     let std_socket: std::net::UdpSocket = socket.into();

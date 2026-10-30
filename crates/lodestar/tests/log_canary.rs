@@ -148,14 +148,27 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
+        Server::start_with(None)
+    }
+
+    /// With `dht`, the DHT runs on that loopback UDP port, bootstrapping
+    /// from nowhere: it only hears what a test sends it.
+    fn start_with(dht: Option<u16>) -> Server {
         let dir = tempfile::tempdir().unwrap();
         let hash = seed(dir.path());
+        if let Some(p) = dht {
+            std::fs::write(
+                dir.path().join("config.toml"),
+                format!("[dht]\nbind = [\"127.0.0.1:{p}\"]\nbootstrap = []\n"),
+            )
+            .unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
             .env_remove("LODESTAR_LOG")
             .env("LODESTAR_DATA_DIR", dir.path())
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-            .env("LODESTAR_DHT_PORT", "0")
-            .env("LODESTAR_DHT_ENABLED", "false")
+            .env("LODESTAR_DHT_PORT", dht.unwrap_or(0).to_string())
+            .env("LODESTAR_DHT_ENABLED", dht.is_some().to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -235,9 +248,14 @@ impl Server {
             body.len()
         )
         .ok()?;
-        let mut out = String::new();
-        c.read_to_string(&mut out).ok()?;
-        Some(out)
+        // What arrived, even if the read then fails: a server that answers
+        // before reading a request's body and closes can reset the
+        // connection, and macOS then fails the read after the answer.
+        let mut out = Vec::new();
+        if c.read_to_end(&mut out).is_err() && out.is_empty() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out).into_owned())
     }
 
     fn get(&self, path: &str) -> Option<String> {
@@ -860,6 +878,134 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
     s.stop();
 }
 
+/// A KRPC `get_peers` for `hash`, from a node id of its own.
+fn get_peers(hash: &[u8; 20]) -> Vec<u8> {
+    let mut m = b"d1:ad2:id20:".to_vec();
+    m.extend_from_slice(&[0x42; 20]);
+    m.extend_from_slice(b"9:info_hash20:");
+    m.extend_from_slice(hash);
+    m.extend_from_slice(b"e1:q9:get_peers1:t2:aa1:y1:qe");
+    m
+}
+
+/// The file's `dht.key_harvested` lines from a `get_peers` (not the
+/// pipeline's later `lookup` lines for the same key).
+fn get_peers_lines(file: &str) -> Vec<&str> {
+    lines_of(file, "dht.key_harvested")
+        .into_iter()
+        .filter(|l| l.contains(r#""value":"get_peers""#))
+        .collect()
+}
+
+/// Run 2's positive control for hashes: a `get_peers` sent to the DHT is
+/// harvested (`dht.key_harvested`, Trace, on with every event), and the
+/// key's hex is in the file only while the hash kind is on, never on the
+/// console.
+#[test]
+fn run_2_a_harvested_key_shows_only_while_the_hash_kind_is_on() {
+    // A free port to hand the DHT: if another test takes it first, the
+    // DHT can't bind and the wait below says so.
+    let dht = {
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let s = Server::start_with(Some(dht));
+    let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    // Waits for the condition on the file's new lines, failing after 30 s.
+    let wait = |mark: (usize, usize), what: &str, ok: &dyn Fn(&str) -> bool| {
+        let start = Instant::now();
+        loop {
+            let (_, file) = s.since(mark);
+            if ok(&file) {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "{what} (DHT on 127.0.0.1:{dht}): {}",
+                s.console()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    // Sends the query until this key's own `get_peers` line is in the
+    // file, and returns the phase's lines. Resends of a key are dropped as
+    // seen, so the wait is for the first line.
+    let harvest = |hash: [u8; 20]| {
+        let mark = s.mark();
+        let start = Instant::now();
+        loop {
+            client
+                .send_to(&get_peers(&hash), ("127.0.0.1", dht))
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            let (_, file) = s.since(mark);
+            if !get_peers_lines(&file).is_empty() {
+                return file;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "no get_peers harvest (DHT on 127.0.0.1:{dht}): {}",
+                s.console()
+            );
+        }
+    };
+    // Switches the hash kind and waits until the runtime says it switched
+    // (`logging.kind_switched`), never for a fixed time.
+    let switch = |body: &str, state: &str| {
+        let mark = s.mark();
+        s.logging(body);
+        wait(
+            mark,
+            &format!("the hash kind never switched {state}"),
+            &|file| {
+                lines_of(file, "logging.kind_switched").iter().any(|l| {
+                    l.contains(r#""value":"hash""#) && l.contains(&format!(r#""value":"{state}""#))
+                })
+            },
+        );
+    };
+    // `dht.key_harvested` is Trace and off by default, and a key's resends
+    // are dropped as seen before anything is logged: every event must be
+    // on before the first query, so wait until the runtime says it applied
+    // Everything.
+    let mark = s.mark();
+    s.every_event_on();
+    wait(mark, "every event never applied", &|file| {
+        lines_of(file, "logging.applied")
+            .iter()
+            .any(|l| l.contains(r#""value":"everything""#))
+    });
+    // Each phase is judged by its own lines: the pipeline's later lookup
+    // for a key logs it again (source `lookup`) under whatever the kind is
+    // by then.
+    let keys = [[0xa1; 20], [0xb2; 20], [0xc3; 20]];
+    let hexes: Vec<String> = keys.iter().map(|k| hex(k)).collect();
+    let private = harvest(keys[0]);
+    switch(&format!(r#"{{"kinds":{{"hash":{}}}}}"#, now() + 600), "on");
+    let on = harvest(keys[1]);
+    switch(r#"{"kinds":{}}"#, "off");
+    let off_again = harvest(keys[2]);
+    let (console, _) = s.stop();
+    // The off phases did harvest their key, as a reference.
+    for (phase, file) in [("Private", &private), ("off again", &off_again)] {
+        assert!(
+            get_peers_lines(file).iter().any(|l| l.contains("ref:")),
+            "{phase}: {file}"
+        );
+    }
+    absent(&[("file", &private)], &hexes, "Private");
+    assert!(
+        get_peers_lines(&on).iter().any(|l| l.contains(&hexes[1])),
+        "the hash kind on: {on}"
+    );
+    absent(&[("file", &off_again)], &hexes, "the hash kind off again");
+    absent(
+        &[("console", &console)],
+        &hexes,
+        "the console stays Private",
+    );
+}
+
 #[test]
 fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     let s = Server::start();
@@ -1118,7 +1264,10 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
             format!("{method} {path}?apikey={key} HTTP/1.0{json}"),
             format!("{method} {path}?token={token} HTTP/1.0{json}"),
         ] {
-            let r = s.request(&head, r#"{"which":"all"}"#).unwrap();
+            // No body: the guard refuses before reading one, and a body left
+            // unread makes the server's close a reset (macOS then loses
+            // the answer).
+            let r = s.request(&head, "").unwrap();
             assert!(r.starts_with("HTTP/1.0 401"), "{head}: {r}");
             assert!(r.contains("login_required"), "{r}");
         }
