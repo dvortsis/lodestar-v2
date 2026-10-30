@@ -1221,7 +1221,7 @@
    "status": "pending",
    "branch": "land/L4",
    "head": "5e1a53c0",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z runner fix 66152cee on land/L4: v4 fixture drops V12 objects; is_multiple_of -> % (MSRV). Same fixes already in L5."
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T04:55Z runner fix 66152cee on land/L4: v4 fixture drops V12 objects; is_multiple_of -> % (MSRV). Same fixes already in L5. | 2026-10-30T06:09Z pre-review FIX: B1 V12 tests; I1 V12 format (at column, 90d cap, taken_at match, unknown-schema skip no longer pins); P1/P4/P5/I5. L4-fix (Opus) session_01MMjhnAGcLJmNZKL55ZSjqC on land/L4. After push: F-updater merges land/L4 again; check L5-L7 merge."
   },
   "L5": {
    "status": "pending",
@@ -1315,6 +1315,15 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 \u00b5s/torrent on base (owner budget 50 \u00b5s, \u00a71.6/\u00a720.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner)."
+  },
+  "L4-followups": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1802,7 +1811,8 @@
   "plan_merged": "2026-10-30T05:23Z #176 merged 9f96d1f3: build-plan \u00a70, owner-decisions \u00a72.25, master-plan decisions, slices.yaml now on main",
   "next_branch": "2026-10-30T05:37Z deleted origin/next (main == 058d9937 lineage)",
   "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051.",
-  "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z"
+  "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z",
+  "cap_note": "2026-10-30T06:09Z working sessions briefly 5 (X-ci-health, CR-0f, X-sleeps, L3-fix, L4-fix); L-lane fixes are tier 1; X-sleeps lowest. Others idle waiting (F-updater, CR-COL, F-filters, F-metainfo)."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
