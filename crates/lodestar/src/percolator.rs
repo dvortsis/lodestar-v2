@@ -934,9 +934,10 @@ mod tests {
     }
 
     /// The task over a live index: a commit becomes alerts within the
-    /// 5 s target (§3), here with 200 active searches; and in fixture
-    /// mode it never starts. (What the events carry is tested with
-    /// `announce`, in the API's `tests/alerts.rs`.)
+    /// 5 s target (§3), here with 200 active searches, timed from the
+    /// commit that makes the new torrents searchable, as the percolator
+    /// hears of it; and in fixture mode it never starts. (What the events
+    /// carry is tested with `announce`, in the API's `tests/alerts.rs`.)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_task_turns_commits_into_alerts_quickly() {
         use lodestar_api::events::{EventSources, EventsConfig};
@@ -989,6 +990,16 @@ mod tests {
         noop.await.unwrap();
         assert!(format!("{:?}", serving.commit_hook()).contains("extra: 0"));
 
+        // When the commit carrying the new torrents is reported: through
+        // the hook the task listens on, after the reader has reloaded.
+        // Added before the task's sink, so it runs first.
+        let landed = Arc::new(std::sync::OnceLock::new());
+        let l = landed.clone();
+        serving.commit_hook().add(move |c| {
+            if c.max_torrent_id > mark {
+                let _ = l.set(Instant::now());
+            }
+        });
         let (stop, stopped) = watch::channel(false);
         let task = spawn(
             handle.clone(),
@@ -1009,10 +1020,18 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(30));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let took = start.elapsed();
-        // Store-to-alert, including up to one 2 s commit interval.
-        eprintln!("commit-to-alert at 200 searches: {took:?}");
-        assert!(took < Duration::from_secs(5), "{took:?}");
+        let alerted = Instant::now();
+        // Commit-to-alert. Store-to-commit (up to one 2 s commit interval
+        // and the commit itself) is the indexer's share, "new torrent →
+        // searchable", which `search-bench --gate` holds to 5 s on a quiet
+        // machine: reported here, not asserted (X-flake-shutdown-percolator).
+        let landed = *landed.get().expect("the commit was reported");
+        let (indexed, took) = (landed - start, alerted - landed);
+        eprintln!("at 200 searches: store-to-commit {indexed:?}, commit-to-alert {took:?}");
+        assert!(
+            took < Duration::from_secs(5),
+            "commit-to-alert {took:?} (store-to-commit {indexed:?})"
+        );
         // Every search got there; the last ones recorded too.
         let last = *searches.last().unwrap();
         while alert_ids(&store, last).len() < 10 {

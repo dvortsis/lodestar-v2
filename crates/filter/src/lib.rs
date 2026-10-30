@@ -45,7 +45,7 @@ pub use packs::{Pack, PackRule, PackSwitches};
 pub use payload::{PayloadSig, SPECIFIC_BYTES, SPECIFIC_FILES, payload_sig};
 pub use prefilter::RuleList;
 pub use rules::{
-    Allow, ClassRule, ClassRules, Exception, Invalid, MAX_CLASS_RULES, Match, Override, Strength,
-    UserRule,
+    Allow, ClassRule, ClassRules, Exception, Invalid, MAX_CLASS_RULES, Match, Override,
+    OverrideList, Strength, UserRule,
 };
 pub use seal::{SealError, Sealer};

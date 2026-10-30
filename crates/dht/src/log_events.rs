@@ -40,13 +40,14 @@ lodestar_log::catalogue! {
         message: "Key harvested",
         fields: { torrent: Hash, source: Label, peers: Size },
     }
-    /// What the harvest found in the last `seconds`, by source, and the
-    /// keys dropped because the pipeline was behind.
+    /// What the harvest found since the last summary (`seconds` ago, about
+    /// a minute), by source, and the keys dropped because the pipeline was
+    /// behind.
     HARVEST_SUMMARY {
         id: "dht.harvest_summary",
         component: Dht,
         level: Info,
-        message: "DHT harvest in the last minute",
+        message: "DHT harvest since the last summary",
         fields: { seconds: Size, sample: Size, get_peers: Size, announce: Size, lookups: Size, dropped: Size },
     }
 }
