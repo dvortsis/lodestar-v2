@@ -2241,6 +2241,7 @@
     "2026-10-30T17:15Z #227 CR-0d-2b-1 (witness packaging, ~610 lines) opened; runner fresh and security review session_01MMjhnBqY1uGE5su7ioUMTQ. 2b-2 started in parallel (disjoint files). #226 now at 13da98a5 (docs only; the earlier red ci-ok came from cancelled runs).",
     "2026-10-30T17:20Z #226 review MERGE at 13da98a5; waiting for ci-ok.",
     "2026-10-30T17:32Z merged #226 (b1f4511f, filter-budget per-model skew) and #224 (a332737b, clippy 2a; the re-run was green, and a \u00a72.18 comment was posted about the supervisor stall). #227 review CHANGES (blocking: switch-off chown on Docker -> runner chose (b), keep and record; plus 2-5 and a Windows CI failure) relayed. #225 re-review CHANGES (blocking: the \\??\\ prefix bypasses lexical()) relayed. #228 CR-ADM (~2.5k lines) review session_01MMjhnCJEcHjkR7GJNRTnaz.",
-    "2026-10-30T17:41Z #225 a1890137: the runner's diff check of the \\??\\ fix passes (windows_text rewrite before UNC normalisation; lexical-only use), as the reviewer allowed. MERGE pending green CI incl. Windows and the cfg(windows) test count."
+    "2026-10-30T17:41Z #225 a1890137: the runner's diff check of the \\??\\ fix passes (windows_text rewrite before UNC normalisation; lexical-only use), as the reviewer allowed. MERGE pending green CI incl. Windows and the cfg(windows) test count.",
+    "2026-10-30T17:50Z #228 CR-ADM review MERGE at cd824876 (4 mutations caught); waiting for ci-ok. The 5 optional findings go in a fix/cr-adm-polish follow-up after the merge."
   ]
 }
