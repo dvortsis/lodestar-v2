@@ -138,6 +138,12 @@ impl Snapshot {
     }
 }
 
+/// Whether this build can purge a snapshot holding schema `version`, as
+/// [`purge_for_restore`] must before `lodestar rollback` restores it.
+pub fn can_purge(version: i64) -> bool {
+    Plan::for_version(version).is_some()
+}
+
 /// When a snapshot taken at `taken_at` is deleted.
 pub fn expires_at(taken_at: i64) -> i64 {
     taken_at.saturating_add(RETAIN_SECS)
@@ -208,6 +214,59 @@ pub fn parse_name(stem: &str, name: &str) -> Option<Kind> {
         version: n.parse().ok()?,
         repeat: k.map_or(Some(0), |k| k.parse().ok())?,
     })
+}
+
+/// Deletes the copies `lodestar rollback` staged beside the store at `db`
+/// and never renamed into place (it was interrupted):
+/// `<stem>.rollback-<YYYYMMDD>-<HHMMSS>.tmp` and SQLite's side files. Each
+/// may be a snapshot copy the store's deletions weren't applied to yet.
+/// Run only while no rollback holds the store. The files that couldn't be
+/// deleted.
+pub fn remove_stale_stages(db: &Path) -> Vec<(PathBuf, std::io::Error)> {
+    let dir = match db.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let (Some(stem), Ok(entries)) = (
+        db.file_stem().and_then(|s| s.to_str()),
+        std::fs::read_dir(dir),
+    ) else {
+        return Vec::new();
+    };
+    let mut failed = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !is_stage(stem, &name) || !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => failed.push((entry.path(), e)),
+        }
+    }
+    failed
+}
+
+/// Whether `name` is a rollback's staged copy of the store `<stem>.db`, or
+/// a side file of one.
+fn is_stage(stem: &str, name: &str) -> bool {
+    let Some((stamp, side)) = name
+        .strip_prefix(stem)
+        .and_then(|r| r.strip_prefix(".rollback-"))
+        .and_then(|r| r.split_once(".tmp"))
+    else {
+        return false;
+    };
+    let b = stamp.as_bytes();
+    b.len() == 15
+        && b[8] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 8 || c.is_ascii_digit())
+        && ["", "-wal", "-shm", "-journal"].contains(&side)
 }
 
 /// The oldest held hash that can matter to a snapshot taken at `taken_at`.
@@ -508,6 +567,15 @@ impl Store {
         // Whether a snapshot may still hold a deletion this pass didn't
         // scrub: then the journal rows it read stay.
         let mut blocked = false;
+        // An unpurged copy an interrupted rollback left: no rollback runs
+        // while the store is open.
+        for (path, e) in remove_stale_stages(&db) {
+            blocked = true;
+            report.warnings.push(format!(
+                "deleting {}, left by an interrupted rollback, failed: {e}",
+                path.display()
+            ));
+        }
         let mut keep = Vec::new();
         // Snapshots dated ahead of the clock, redated to now this pass.
         let mut redated = HashSet::new();
@@ -602,7 +670,7 @@ impl Store {
         };
         for snap in keep {
             let (since, full) = since_for(&self.snapshot_marks, &snap);
-            match purge_one(&snap, &live, since, now, hits_before) {
+            match purge_one(&snap, &live, since, now, hits_before, &[]) {
                 // Not purged, so no mark; and never purged by this build,
                 // so it doesn't hold the journal back (see the module docs).
                 Ok(Outcome::Skipped(why)) => {
@@ -741,12 +809,16 @@ fn settle_conn(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(true)
 }
 
+/// Applies the live purge to one snapshot, and merges `carry` (deletion
+/// journal rows) into its own journal when it has one, in one
+/// transaction.
 fn purge_one(
     snap: &Snapshot,
     live: &Live,
     since: i64,
     now: i64,
     hits_before: i64,
+    carry: &[([u8; 20], i64)],
 ) -> crate::Result<Outcome> {
     let mut conn = open_rw(&snap.path)?;
     // A WAL left by an interrupted purge goes first, so it's either
@@ -760,14 +832,7 @@ fn purge_one(
             let _ = set_modified(&snap.path, taken);
         }
     };
-    let has_migrations: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'",
-            [],
-            |_| Ok(true),
-        )
-        .optional()?
-        .unwrap_or(false);
+    let has_migrations = has_table(&conn, "schema_migrations")?;
     let version: Option<i64> = if has_migrations {
         conn.query_row("SELECT max(version) FROM schema_migrations", [], |r| {
             r.get(0)
@@ -862,7 +927,19 @@ fn purge_one(
             }
         }
     }
+    // Journal rows the snapshot lacks, or holds at an older time.
+    let mut journal = Vec::new();
+    if !carry.is_empty() && has_table(&conn, "snapshot_deletions")? {
+        let mut stmt = conn.prepare("SELECT at FROM snapshot_deletions WHERE hash = ?1")?;
+        for (h, at) in carry {
+            let held: Option<i64> = stmt.query_row([&h[..]], |r| r.get(0)).optional()?;
+            if held.is_none_or(|held| held < *at) {
+                journal.push((h, *at));
+            }
+        }
+    }
     if ids.is_empty()
+        && journal.is_empty()
         && candidates.is_empty()
         && unsealed.is_empty()
         && expiring == 0
@@ -936,6 +1013,13 @@ fn purge_one(
                 [id, at],
             )?;
         }
+        for (h, at) in &journal {
+            tx.execute(
+                "INSERT INTO snapshot_deletions (hash, at) VALUES (?1, ?2)
+                 ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at)",
+                params![&h[..], at],
+            )?;
+        }
         tx.commit()?;
         Ok(Counts {
             torrents,
@@ -953,6 +1037,62 @@ fn purge_one(
     }
     restore_time(conn);
     Ok(Outcome::Purged(result?))
+}
+
+fn has_table(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1",
+            [name],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false))
+}
+
+/// Applies the store's deletions to `staged`, a copy of a snapshot taken
+/// at `taken_at` that `lodestar rollback` is about to put in place of the
+/// store `live` (BB-1 for rollback, `docs/decisions`): the purge the
+/// writer's tick would apply to the snapshot, with the same matching
+/// (journal and holds by hash, from a day before `taken_at`; every row
+/// when that's unknown or ahead of `now`), and `live`'s whole journal
+/// merged into the copy's own, so the restored store goes on purging the
+/// other snapshots. One transaction; the copy ends as one file, with no
+/// WAL beside it.
+///
+/// `Ok(None)` when the copy holds a schema this build can't purge: then
+/// it mustn't be restored.
+pub fn purge_for_restore(
+    live: &Connection,
+    staged: &Path,
+    taken_at: Option<i64>,
+    now: i64,
+) -> crate::Result<Option<usize>> {
+    let since = taken_at.filter(|t| *t <= now).map_or(i64::MIN, held_since);
+    let live = Live::read(live, since)?;
+    let snap = Snapshot {
+        path: staged.to_path_buf(),
+        name: String::new(),
+        kind: Kind::BeforeRollback,
+        // The copy's own time doesn't matter: it's never put back.
+        taken_at: None,
+    };
+    // Filter hits aren't deletions: the restored store's own tick ages
+    // them out.
+    let outcome = purge_one(&snap, &live, since, now, i64::MIN, &live.deleted)?;
+    // `purge_one` checkpoints without checking: a WAL left beside the
+    // copy would be lost with the rename, so it's folded in here.
+    settle(staged)?;
+    let mut wal = staged.as_os_str().to_os_string();
+    wal.push("-wal");
+    if Path::new(&wal).exists() {
+        return Err(crate::Error::Corrupt("the restored copy still has a WAL"));
+    }
+    Ok(match outcome {
+        Outcome::Skipped(_) => None,
+        Outcome::Unchanged => Some(0),
+        Outcome::Purged(n) => Some(n.torrents),
+    })
 }
 
 /// A snapshot's candidates under a hash, primary or truncated v2.
@@ -1134,6 +1274,99 @@ mod tests {
     }
 
     /// A new migration must decide what its schema means for the purge.
+    #[test]
+    fn stage_names_are_only_a_rollbacks() {
+        for name in [
+            "lodestar.rollback-20261030-120000.tmp",
+            "lodestar.rollback-20261030-120000.tmp-wal",
+            "lodestar.rollback-20261030-120000.tmp-shm",
+            "lodestar.rollback-20261030-120000.tmp-journal",
+        ] {
+            assert!(is_stage("lodestar", name), "{name}");
+        }
+        for name in [
+            "lodestar.db",
+            "lodestar.pre-v4.db",
+            "lodestar.rollback-20261030-120000.tmp.bak",
+            "lodestar.rollback-2026103-120000.tmp",
+            "lodestar.rollback-20261030x120000.tmp",
+            "other.rollback-20261030-120000.tmp",
+            "lodestar.before-rollback-20261030-120000.db",
+        ] {
+            assert!(!is_stage("lodestar", name), "{name}");
+        }
+    }
+
+    /// A rollback's copy loses what the store deleted since the snapshot,
+    /// at any schema with a plan, keeps the journal when it has one, and
+    /// is refused at a schema without.
+    #[test]
+    fn purge_for_restore_applies_the_journal_to_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _db) = live(dir.path());
+        journal_row(&store, [5; 20], T);
+        journal_row(&store, [6; 20], T - 10 * DAY);
+        for version in [3, 11, 12, Plan::KNOWN_THROUGH] {
+            let copy = dir.path().join(format!("copy-v{version}.tmp"));
+            let conn = fixture(&copy, version);
+            insert_torrent(&conn, 1, [5; 20], "deleted since");
+            insert_torrent(&conn, 2, [6; 20], "fetched again");
+            drop(conn);
+            let n = purge_for_restore(store.connection(), &copy, Some(T), T + DAY).unwrap();
+            assert_eq!(n, Some(1), "v{version}");
+            assert!(!contains(&copy, b"files of deleted since"), "v{version}");
+            assert!(!side(&copy, "-wal").exists());
+            quick_check(&copy);
+            let conn = Connection::open(&copy).unwrap();
+            let names: Vec<String> = conn
+                .prepare("SELECT name FROM torrents")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(names, ["fetched again"], "v{version}");
+            if version >= 12 {
+                let rows: Vec<(Vec<u8>, i64)> = conn
+                    .prepare("SELECT hash, at FROM snapshot_deletions ORDER BY hash")
+                    .unwrap()
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect();
+                // The purge's own delete is journalled at the real time,
+                // which the carried row's older one doesn't move back.
+                assert_eq!(rows.len(), 2, "v{version}");
+                assert_eq!(rows[0].0, vec![5; 20]);
+                assert!(rows[0].1 >= T);
+                assert_eq!(rows[1], (vec![6; 20], T - 10 * DAY));
+            }
+        }
+        let copy = dir.path().join("copy-new.tmp");
+        let conn = fixture(&copy, Plan::KNOWN_THROUGH);
+        insert_torrent(&conn, 1, [5; 20], "deleted since");
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 0)",
+            [Plan::KNOWN_THROUGH + 1],
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!can_purge(Plan::KNOWN_THROUGH + 1));
+        let n = purge_for_restore(store.connection(), &copy, Some(T), T + DAY).unwrap();
+        assert_eq!(n, None);
+    }
+
+    /// The tick deletes what an interrupted rollback left.
+    #[test]
+    fn the_tick_deletes_an_interrupted_rollbacks_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _db) = live(dir.path());
+        let stage = dir.path().join("lodestar.rollback-20261030-120000.tmp");
+        std::fs::write(&stage, b"copy").unwrap();
+        store.purge_snapshots(T, 0);
+        assert!(!stage.exists());
+    }
+
     #[test]
     fn every_known_schema_has_a_plan() {
         let latest = MIGRATIONS.last().unwrap().0;
