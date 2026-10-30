@@ -57,8 +57,8 @@ export function slug(name: string, taken: string[]): string {
 		(name
 			.toLowerCase()
 			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-|-$/g, '')
-			.slice(0, 40) || 'theme');
+			.slice(0, 40)
+			.replace(/^-|-$/g, '') || 'theme');
 	let id = base;
 	for (let n = 2; taken.includes(id); n++) id = `${base}-${n}`;
 	return id;

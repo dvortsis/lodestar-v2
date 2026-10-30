@@ -30,10 +30,6 @@
 	"appearance_adult_help": "Off by default. This applies to the whole server, not only to you.",
 	"appearance_adult_label": "Show adult content",
 	"appearance_adult_failed": "Couldn't change this setting.",
-	"appearance_adult_confirm_title": "Confirm your age",
-	"appearance_adult_confirm": "Adult content will appear in Search, Discover, Alerts and Insights. Turn it on only if you are 18 or older.",
-	"appearance_adult_confirm_yes": "I'm 18 or older, turn on",
-	"appearance_adult_confirm_no": "Cancel",
 	"appearance_filter_label": "Filter themes",
 	"appearance_filter_all": "All",
 	"appearance_filter_accessibility": "Accessibility",
@@ -49,7 +45,7 @@
 	"appearance_dark_label": "Dark mode theme",
 	"appearance_dark_same": "Same as the light theme",
 	"appearance_custom_warning": "Fails contrast",
-	"appearance_locked": "Some of these are set by the server and can't be changed here.",
+	"appearance_locked": "Set by the server and can't be changed here: {fields}.",
 	"appearance_picker_data_failed": "Couldn't load the themes. Check your connection and try again.",
 	"appearance_editor_title": "Custom theme",
 	"appearance_editor_name": "Theme name",
@@ -87,5 +83,7 @@
 	"appearance_create": "Create a custom theme",
 	"appearance_edit": "Edit custom theme",
 	"appearance_editor_failed": "Couldn't load the editor. Try again.",
-	"appearance_custom_missing": "This account uses a custom theme that isn't in this browser, so Riverstone is shown. Custom themes are kept per browser; export and import moves one."
+	"appearance_custom_missing": "This account uses a custom theme that isn't in this browser, so Riverstone is shown. Custom themes are kept per browser; export and import moves one.",
+	"appearance_adult_locked": "Set by the environment variable {variable}, so it can't be changed here.",
+	"appearance_editor_import_failed": "That isn't a valid theme file. Export one from here to see the format."
 }

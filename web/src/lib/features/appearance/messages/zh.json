@@ -30,10 +30,6 @@
 	"appearance_adult_help": "默认关闭。此设置对整个服务器生效，而不仅是你。",
 	"appearance_adult_label": "显示成人内容",
 	"appearance_adult_failed": "无法更改此设置。",
-	"appearance_adult_confirm_title": "确认年龄",
-	"appearance_adult_confirm": "成人内容将出现在搜索、发现、提醒和洞察中。仅在你年满 18 岁时开启。",
-	"appearance_adult_confirm_yes": "我已年满 18 岁，开启",
-	"appearance_adult_confirm_no": "取消",
 	"appearance_filter_label": "筛选主题",
 	"appearance_filter_all": "全部",
 	"appearance_filter_accessibility": "无障碍",
@@ -49,7 +45,7 @@
 	"appearance_dark_label": "深色模式主题",
 	"appearance_dark_same": "与浅色主题相同",
 	"appearance_custom_warning": "对比度不足",
-	"appearance_locked": "其中一些由服务器设置，无法在此更改。",
+	"appearance_locked": "由服务器设置，无法在此更改：{fields}。",
 	"appearance_picker_data_failed": "无法加载主题。请检查网络后重试。",
 	"appearance_editor_title": "自定义主题",
 	"appearance_editor_name": "主题名称",
@@ -87,5 +83,7 @@
 	"appearance_create": "创建自定义主题",
 	"appearance_edit": "编辑自定义主题",
 	"appearance_editor_failed": "无法加载编辑器。请重试。",
-	"appearance_custom_missing": "此账户使用的自定义主题不在此浏览器中，因此显示 Riverstone。自定义主题按浏览器保存；可通过导出和导入迁移。"
+	"appearance_custom_missing": "此账户使用的自定义主题不在此浏览器中，因此显示 Riverstone。自定义主题按浏览器保存；可通过导出和导入迁移。",
+	"appearance_adult_locked": "由环境变量 {variable} 设置，无法在此更改。",
+	"appearance_editor_import_failed": "这不是有效的主题文件。可先从此处导出一个以查看格式。"
 }

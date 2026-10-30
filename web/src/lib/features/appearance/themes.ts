@@ -19,6 +19,8 @@ export interface ThemeEntry {
 	warn?: boolean;
 	/** A custom theme's base palette, so it can be edited and exported. */
 	palette?: unknown;
+	/** The token names `values` line up with when it was saved. */
+	keys?: string[];
 }
 export interface ThemesFile {
 	v: 1;
@@ -45,14 +47,36 @@ export function loadThemes(): Promise<ThemesFile> {
 	return file;
 }
 
+const CUSTOM_ID = /^custom-[a-z0-9]+(-[a-z0-9]+)*-(light|dark)$/;
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Custom themes from storage; anything malformed is dropped (storage is untrusted input). */
 export function readCustom(): ThemeEntry[] {
 	try {
-		const raw = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? '[]');
-		return Array.isArray(raw) ? (raw as ThemeEntry[]).filter((t) => t && t.custom) : [];
+		const raw: unknown = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? '[]');
+		if (!Array.isArray(raw)) return [];
+		return raw.filter(
+			(t): t is ThemeEntry =>
+				!!t &&
+				t.custom === true &&
+				typeof t.id === 'string' &&
+				CUSTOM_ID.test(t.id) &&
+				typeof t.name === 'string' &&
+				typeof t.family === 'string' &&
+				(t.mode === 'light' || t.mode === 'dark') &&
+				Array.isArray(t.values) &&
+				t.values.every((v: unknown) => typeof v === 'string' && HEX.test(v)) &&
+				Array.isArray(t.keys) &&
+				t.keys.every((k: unknown) => typeof k === 'string')
+		);
 	} catch {
 		return [];
 	}
 }
+
+/** Whether a theme's values line up with this build's token names (a custom theme saved by an older build may not). */
+export const usable = (t: ThemeEntry, keys: string[]) =>
+	!t.custom || (t.keys?.length === keys.length && t.keys.every((k, i) => k === keys[i]));
 
 export function writeCustom(list: ThemeEntry[]) {
 	try {
@@ -77,7 +101,7 @@ export async function applyTheme(p: Appearance): Promise<{ missing: string[] }> 
 	let all: ThemesFile | undefined;
 	const needs = [familyFor(p, false), familyFor(p, true)].some((f) => f !== 'riverstone');
 	if (needs) all = await loadThemes();
-	const pool = [...(all?.themes ?? []), ...readCustom()];
+	const pool = [...(all?.themes ?? []), ...readCustom()].filter((x) => usable(x, all?.keys ?? []));
 	const keys = all?.keys ?? [];
 	for (const mode of MODES) {
 		const id = `${familyFor(p, mode === 'dark')}-${mode}`;
@@ -87,8 +111,7 @@ export async function applyTheme(p: Appearance): Promise<{ missing: string[] }> 
 	}
 	const mine = cache[dark ? 'dark' : 'light'] as { id: string; vars?: Record<string, string> };
 	const prev = root.getAttribute('style') ?? '';
-	for (const k of prev.match(/--(?:color|data|brand)-[a-z0-9-]+(?=:)/g) ?? [])
-		root.style.removeProperty(k);
+	for (const k of prev.match(/--(?!duration-)[a-z0-9-]+(?=:)/g) ?? []) root.style.removeProperty(k);
 	const ok = mine.vars !== undefined;
 	root.dataset.theme = ok ? mine.id : `riverstone-${dark ? 'dark' : 'light'}`;
 	root.style.colorScheme = dark ? 'dark' : 'light';

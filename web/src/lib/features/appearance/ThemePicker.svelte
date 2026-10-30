@@ -16,13 +16,15 @@
 		prefs: Appearance;
 		/** Whether the dark variant shows now (mode and the system's scheme). */
 		dark: boolean;
+		/** The theme preferences are set by the environment or read-only. */
+		locked?: boolean;
 		/** The shared `themes.json` loader and the browser's custom themes (themes.ts). */
 		themes: () => Promise<ThemesFile>;
 		custom: () => ThemeEntry[];
 		write: (list: ThemeEntry[]) => void;
 		onpick: (patch: Partial<Appearance>) => void;
 	}
-	let { prefs, dark, themes, custom, write, onpick }: Props = $props();
+	let { prefs, dark, locked = false, themes, custom, write, onpick }: Props = $props();
 
 	interface Family {
 		id: string;
@@ -36,8 +38,12 @@
 	let file = $state<ThemesFile>();
 	let Editor = $state<Component<ComponentProps<typeof import('./ThemeEditor.svelte').default>>>();
 	let editing = $state<string>();
+	let editorKey = $state(0);
 	let editorFailed = $state(false);
 	let keys = $state<string[]>([]);
+	/** A custom theme built for this build's tokens (themes.ts `usable`, inlined to keep chunks apart). */
+	const ok = (t: ThemeEntry) =>
+		t.keys?.length === keys.length && t.keys.every((k, i) => k === keys[i]);
 	let all = $state<ThemeEntry[]>([]);
 	let failed = $state(false);
 	let filter = $state('all');
@@ -46,7 +52,7 @@
 		try {
 			file = await themes();
 			keys = file.keys;
-			all = [...file.themes, ...custom()];
+			all = [...file.themes, ...custom().filter(ok)];
 		} catch {
 			failed = true;
 		}
@@ -91,6 +97,8 @@
 
 	async function openEditor(id?: string) {
 		editing = id;
+		editorKey++;
+		Editor = undefined;
 		editorFailed = false;
 		try {
 			Editor = (await import('./ThemeEditor.svelte')).default;
@@ -129,6 +137,7 @@
 							name="ap-theme"
 							value={f.id}
 							checked={prefs.theme === f.id}
+							disabled={locked}
 							onchange={() => onpick({ theme: f.id })}
 						/>
 						{f.name}
@@ -151,25 +160,27 @@
 		{/each}
 	</div>
 	<div class="ap-actions">
-		<Button onclick={() => void openEditor()}>{m.appearance_create()}</Button>
+		<Button disabled={locked} onclick={() => void openEditor()}>{m.appearance_create()}</Button>
 		{#if prefs.theme.startsWith('custom-')}
 			<Button onclick={() => void openEditor(prefs.theme)}>{m.appearance_edit()}</Button>
 		{/if}
 	</div>
 	{#if editorFailed}<Banner kind="error">{m.appearance_editor_failed()}</Banner>{/if}
 	{#if Editor && file}
-		<Editor
-			{file}
-			custom={custom()}
-			{write}
-			{editing}
-			onsave={(id) => {
-				all = [...file!.themes, ...custom()];
-				Editor = undefined;
-				onpick({ theme: id });
-			}}
-			onclose={() => (Editor = undefined)}
-		/>
+		{#key editorKey}
+			<Editor
+				{file}
+				custom={custom()}
+				{write}
+				{editing}
+				onsave={(id) => {
+					all = [...file!.themes, ...custom().filter(ok)];
+					Editor = undefined;
+					onpick({ theme: id });
+				}}
+				onclose={() => (Editor = undefined)}
+			/>
+		{/key}
 	{/if}
 	<Toggle
 		label={m.appearance_dark_other()}

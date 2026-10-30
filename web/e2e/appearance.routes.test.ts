@@ -73,10 +73,15 @@ test('Appearance asks for the 18+ confirmation before showing adult content', as
 	mock.on('patchSettings', { section: 'content', revision: 3, restart_required: [], fields: {} });
 	await go('/settings/appearance');
 	await page.getByRole('switch', { name: 'Show adult content' }).check();
-	await expect(page.getByText(/Turn it on only if you are 18 or older/)).toBeVisible();
+	const dialog = page.getByRole('dialog', { name: 'Show adult content?' });
+	await expect(dialog.getByText(/18 or older/)).toBeVisible();
 	expect(mock.calls('patchSettings')).toHaveLength(0);
-	await page.getByRole('button', { name: /18 or older/ }).click();
+	await dialog.getByRole('button', { name: 'Show adult content' }).click();
 	await expect.poll(() => mock.calls('patchSettings').length).toBe(1);
+	expect(await mock.calls('patchSettings')[0]!.postDataJSON()).toEqual({
+		show_adult: true,
+		confirm_adult: true
+	});
 });
 
 test('Appearance saves a custom theme in this browser and applies it', async ({

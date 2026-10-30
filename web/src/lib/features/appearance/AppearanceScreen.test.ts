@@ -35,6 +35,11 @@ const content = (on = false) => ({
 });
 
 beforeEach(() => {
+	vi.stubGlobal('matchMedia', () => ({
+		matches: false,
+		addEventListener() {},
+		removeEventListener() {}
+	}));
 	get
 		.mockReset()
 		.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
@@ -80,21 +85,113 @@ describe('AppearanceScreen', () => {
 		expect(document.documentElement.dataset.density).toBe('comfortable');
 	});
 
-	it('asks for the 18+ confirmation before turning adult content on', async () => {
+	it('sends confirm_adult with the real 18+ dialog, and nothing on Cancel', async () => {
 		render(AppearanceScreen);
+		const contentCalls = () =>
+			patch.mock.calls.filter(
+				(c) => c[0] === '/settings/{section}' && c[1].path.section === 'content'
+			);
 		await fireEvent.click(await screen.findByRole('switch', { name: 'Show adult content' }));
-		const calls = () => patch.mock.calls.filter((c) => c[1].path.section === 'content');
-		expect(calls()).toHaveLength(0);
-		await fireEvent.click(screen.getByRole('button', { name: /18 or older/ }));
-		await waitFor(() => expect(calls()).toHaveLength(1));
-		expect(calls()[0]![1].body).toEqual({ show_adult: true, if_revision: 2 });
+		await screen.findByRole('dialog', { name: 'Show adult content?' }, { timeout: 5000 });
+		await fireEvent.click(screen.getByTestId('adult-cancel'));
+		await waitFor(() => expect(screen.queryByTestId('adult-cancel')).toBeNull());
+		expect(contentCalls()).toHaveLength(0);
+		expect(
+			(screen.getByRole('switch', { name: 'Show adult content' }) as HTMLInputElement).checked
+		).toBe(false);
+		await fireEvent.click(screen.getByRole('switch', { name: 'Show adult content' }));
+		await screen.findByRole('dialog', { name: 'Show adult content?' }, { timeout: 5000 });
+		await fireEvent.click(screen.getByTestId('adult-show'));
+		await waitFor(() => expect(contentCalls()).toHaveLength(1));
+		expect(contentCalls()[0]![1].body).toEqual({ show_adult: true, confirm_adult: true });
 	});
 
-	it('cancelling the confirmation saves nothing', async () => {
+	it('shows the switch as the server has it when turning adult off fails', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content' ? content(true) : prefs()
+		);
+		patch.mockRejectedValue(new ApiError(500, 'internal', 'x'));
 		render(AppearanceScreen);
-		await fireEvent.click(await screen.findByRole('switch', { name: 'Show adult content' }));
-		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-		expect(patch).not.toHaveBeenCalled();
+		const toggle = await screen.findByRole('switch', { name: 'Show adult content' });
+		expect((toggle as HTMLInputElement).checked).toBe(true);
+		await fireEvent.click(toggle);
+		expect(await screen.findByText(/Couldn't change this setting/)).toBeTruthy();
+		await waitFor(() =>
+			expect(
+				(screen.getByRole('switch', { name: 'Show adult content' }) as HTMLInputElement).checked
+			).toBe(true)
+		);
+	});
+
+	it('locks adult content set by the environment', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content'
+				? {
+						...content(false),
+						fields: { show_adult: field(false, { env: 'LODESTAR_SHOW_ADULT' }) }
+					}
+				: prefs()
+		);
+		render(AppearanceScreen);
+		const toggle = await screen.findByRole('switch', { name: 'Show adult content' });
+		expect((toggle as HTMLInputElement).disabled).toBe(true);
+		expect(screen.getByText(/LODESTAR_SHOW_ADULT/)).toBeTruthy();
+	});
+
+	it('saves one change at a time, each with the revision the last one returned', async () => {
+		let release!: () => void;
+		patch.mockImplementationOnce(() => new Promise((r) => (release = () => r({ revision: 5 }))));
+		patch.mockResolvedValueOnce({ revision: 6 });
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }));
+		expect(patch).toHaveBeenCalledTimes(1);
+		release();
+		await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(patch.mock.calls[0]![1].body.if_revision).toBe(4);
+		expect(patch.mock.calls[1]![1].body.if_revision).toBe(5);
+	});
+
+	it('a failed save puts back only its own field', async () => {
+		patch.mockResolvedValueOnce({ revision: 5 });
+		patch.mockRejectedValueOnce(new ApiError(500, 'internal', 'x'));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Reduced' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+		await screen.findByText(/Couldn't save that change/);
+		expect(screen.getByRole('radio', { name: 'Reduced' }).getAttribute('aria-checked')).toBe(
+			'true'
+		);
+		expect(screen.getByRole('radio', { name: 'Comfortable' }).getAttribute('aria-checked')).toBe(
+			'true'
+		);
+	});
+
+	it('reloads on a stale revision', async () => {
+		patch.mockRejectedValueOnce(new ApiError(409, 'stale_revision', 'x'));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await waitFor(() =>
+			expect(get.mock.calls.filter((c) => c[1].path.section === 'preferences').length).toBe(2)
+		);
+	});
+
+	it('does not save a field the environment sets, and says which', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content'
+				? content()
+				: {
+						...prefs(),
+						fields: {
+							...prefs().fields,
+							density: field('comfortable', { env: 'LODESTAR_DENSITY' })
+						}
+					}
+		);
+		render(AppearanceScreen);
+		expect(await screen.findByText(/density \(LODESTAR_DENSITY\)/)).toBeTruthy();
+		const compact = screen.getByRole('radio', { name: 'Compact' }) as HTMLInputElement;
+		expect(compact.disabled).toBe(true);
 	});
 
 	it('shows a load failure', async () => {

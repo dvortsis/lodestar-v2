@@ -8,6 +8,7 @@
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
+	import { createAdultConfirm, setShowAdult, SHOW_ADULT_ENV } from '../filters/flows/adult.svelte';
 	import {
 		CONTENT,
 		DEFAULTS,
@@ -16,7 +17,6 @@
 		MOTIONS,
 		applyLook,
 		load,
-		prefersDark,
 		save,
 		type Appearance,
 		type Loaded,
@@ -30,18 +30,34 @@
 	let locks = $state<Loaded['locks']>({});
 	let revision = 0;
 	let failed = $state(false);
+	let themesFailed = $state(false);
 	let undo = $state<Partial<Appearance> | null>(null);
 	let picker = $state<Component<ComponentProps<typeof import('./ThemePicker.svelte').default>>>();
 	let pickerFailed = $state(false);
 	let missing = $state(false);
+	/** Saves go one at a time, each with the revision the last one returned. */
+	let queue: Promise<void> = Promise.resolve();
+	let systemDark = $state(false);
+	const dark = $derived(prefs.mode === 'dark' || (prefs.mode === 'system' && systemDark));
 
 	let adult = $state(false);
-	let adultRevision = 0;
-	let adultState = $state<'unknown' | 'ready' | 'asking' | 'failed'>('unknown');
+	let adultLock = $state<string | null>(null);
+	let adultKey = $state(0);
+	let adultState = $state<'unknown' | 'ready' | 'failed'>('unknown');
+	const confirm = createAdultConfirm();
+	let AdultDialog = $state<Component<{ confirm: typeof confirm }>>();
+
+	const locked = (n: Name) => n in locks;
+	const lockedNames = $derived(
+		Object.entries(locks)
+			.map(([n, env]) => (env ? `${n} (${env})` : n))
+			.join(', ')
+	);
 
 	const modeOptions = $derived(
 		MODES.map((v) => ({
 			value: v,
+			disabled: locked('mode'),
 			label: {
 				system: m.appearance_mode_system(),
 				light: m.appearance_mode_light(),
@@ -52,6 +68,7 @@
 	const densityOptions = $derived(
 		DENSITIES.map((v) => ({
 			value: v,
+			disabled: locked('density'),
 			label: {
 				compact: m.appearance_density_compact(),
 				comfortable: m.appearance_density_comfortable(),
@@ -62,6 +79,7 @@
 	const motionOptions = $derived(
 		MOTIONS.map((v) => ({
 			value: v,
+			disabled: locked('motion'),
 			label: {
 				system: m.appearance_motion_system(),
 				reduced: m.appearance_motion_reduced(),
@@ -73,9 +91,10 @@
 	async function apply(p: Appearance) {
 		applyLook(p);
 		try {
+			themesFailed = false;
 			missing = (await applyTheme(p)).missing.some((id) => id.startsWith('custom-'));
 		} catch {
-			failed = true;
+			themesFailed = true;
 		}
 	}
 
@@ -94,54 +113,61 @@
 		}
 	}
 
-	/** Applies a change at once, saves it, and keeps what undoes it. */
-	async function change(patch: Partial<Appearance>) {
-		if ((Object.keys(patch) as Name[]).some((k) => k in locks)) return;
-		const before = Object.fromEntries(
-			(Object.keys(patch) as Name[]).map((k) => [k, prefs[k]])
-		) as Partial<Appearance>;
-		const next = { ...$state.snapshot(prefs), ...patch } as Appearance;
-		prefs = next;
+	/** Applies a change at once, then saves it after any save already under way. */
+	function change(patch: Partial<Appearance>): Promise<void> {
+		const keys = Object.keys(patch) as Name[];
+		if (keys.some(locked)) return Promise.resolve();
+		const before = Object.fromEntries(keys.map((k) => [k, prefs[k]])) as Partial<Appearance>;
+		prefs = { ...$state.snapshot(prefs), ...patch } as Appearance;
 		failed = false;
-		void apply(next);
-		try {
-			revision = await save(patch, revision);
-			undo = before;
-		} catch (e) {
-			prefs = { ...next, ...before };
-			void apply(prefs);
-			if (e instanceof ApiError && e.code === 'stale_revision') await refresh();
-			failed = !(e instanceof ApiError && e.status === 401);
-		}
+		void apply(prefs);
+		queue = queue.then(async () => {
+			try {
+				revision = await save(patch, revision);
+				undo = before;
+			} catch (e) {
+				// Put back only the fields this change set, and only if nothing newer replaced them.
+				const now = $state.snapshot(prefs) as Record<Name, unknown>;
+				for (const k of keys) if (now[k] === patch[k]) now[k] = before[k];
+				prefs = now as unknown as Appearance;
+				void apply(prefs);
+				if (e instanceof ApiError && e.code === 'stale_revision') await refresh();
+				failed = !(e instanceof ApiError && e.status === 401);
+			}
+		});
+		return queue;
 	}
 
 	async function loadAdult() {
 		try {
 			const res = (await api.get('/settings/{section}', CONTENT)) as unknown as {
-				fields: { show_adult?: { value?: unknown } };
-				revision: number;
+				fields: { show_adult?: { value?: unknown; env?: string | null; read_only?: boolean } };
 			};
-			adult = res.fields.show_adult?.value === true;
-			adultRevision = res.revision;
+			const f = res.fields.show_adult;
+			adult = f?.value === true;
+			adultLock = f?.env ? f.env : f?.read_only ? SHOW_ADULT_ENV : null;
 			adultState = 'ready';
 		} catch {
 			adultState = 'failed';
 		}
 	}
 
-	async function setAdult(on: boolean) {
+	async function toggleAdult(on: boolean) {
+		adultState = 'ready';
 		try {
-			const res = await api.patch('/settings/{section}', {
-				...CONTENT,
-				body: { show_adult: on, if_revision: adultRevision } as unknown as Record<string, never>
-			});
-			adultRevision = (res as unknown as { revision: number }).revision;
-			adult = on;
-			adultState = 'ready';
-		} catch (e) {
-			if (e instanceof ApiError && e.code === 'stale_revision') await loadAdult();
-			else adultState = 'failed';
+			// The 18+ dialog (Bits UI overlays) loads with the first turn-on.
+			if (on && !AdultDialog)
+				AdultDialog = (await import('../filters/flows/AdultConfirmDialog.svelte')).default;
+		} catch {
+			adultState = 'failed';
+			adultKey++;
+			return;
 		}
+		const res = await setShowAdult(on, confirm);
+		if (res.ok) adult = on;
+		else if (res.error) adultState = 'failed';
+		// Cancelled or failed: the switch shows what the server has.
+		if (!res.ok) adultKey++;
 	}
 
 	async function openPicker() {
@@ -156,6 +182,15 @@
 	onMount(() => {
 		void refresh();
 		void loadAdult();
+		// "System" follows the device's colour scheme live (§10.18).
+		const query = matchMedia('(prefers-color-scheme: dark)');
+		systemDark = query.matches;
+		const follow = () => {
+			systemDark = query.matches;
+			if (prefs.mode === 'system') void apply(prefs);
+		};
+		query.addEventListener('change', follow);
+		return () => query.removeEventListener('change', follow);
 	});
 </script>
 
@@ -165,9 +200,11 @@
 	{#if status === 'failed'}
 		<Banner kind="error">{m.appearance_load_failed()}</Banner>
 	{:else if status === 'ready'}
-		{#if Object.keys(locks).length}<Banner kind="info">{m.appearance_locked()}</Banner>{/if}
+		{#if lockedNames}<Banner kind="info">{m.appearance_locked({ fields: lockedNames })}</Banner
+			>{/if}
 		{#if missing}<Banner kind="info">{m.appearance_custom_missing()}</Banner>{/if}
 		{#if failed}<Banner kind="error">{m.appearance_save_failed()}</Banner>{/if}
+		{#if themesFailed}<Banner kind="error">{m.appearance_picker_failed()}</Banner>{/if}
 		<div role="status" class="as-status">
 			{#if undo}
 				{m.appearance_saved()}
@@ -195,7 +232,8 @@
 				{@const Picker = picker}
 				<Picker
 					{prefs}
-					dark={prefersDark(prefs.mode)}
+					{dark}
+					locked={locked('theme') || locked('theme_dark')}
 					themes={loadThemes}
 					custom={readCustom}
 					write={writeCustom}
@@ -237,6 +275,7 @@
 			<Toggle
 				label={m.appearance_illustrations()}
 				checked={prefs.illustrations}
+				disabled={locked('illustrations')}
 				onchange={(e) => void change({ illustrations: e.currentTarget.checked })}
 			/>
 			<p class="as-text">{m.appearance_illustrations_help()}</p>
@@ -246,28 +285,20 @@
 			<h2 id="ap-adult" class="as-h2">{m.appearance_adult()}</h2>
 			<p class="as-text">{m.appearance_adult_help()}</p>
 			{#if adultState === 'failed'}<Banner kind="error">{m.appearance_adult_failed()}</Banner>{/if}
+			{#if adultLock}<p class="as-text">
+					{m.appearance_adult_locked({ variable: adultLock })}
+				</p>{/if}
 			{#if adultState !== 'unknown'}
-				<Toggle
-					label={m.appearance_adult_label()}
-					checked={adult || adultState === 'asking'}
-					onchange={(e) => {
-						if (!e.currentTarget.checked) void setAdult(false);
-						else adultState = 'asking';
-					}}
-				/>
+				{#key adultKey}
+					<Toggle
+						label={m.appearance_adult_label()}
+						checked={adult}
+						disabled={!!adultLock}
+						onchange={(e) => void toggleAdult(e.currentTarget.checked)}
+					/>
+				{/key}
 			{/if}
-			{#if adultState === 'asking'}
-				<div class="as-section" role="group" aria-label={m.appearance_adult_confirm_title()}>
-					<Banner kind="warning">{m.appearance_adult_confirm()}</Banner>
-					<div class="as-actions">
-						<Button variant="primary" onclick={() => void setAdult(true)}>
-							{m.appearance_adult_confirm_yes()}
-						</Button>
-						<Button onclick={() => (adultState = 'ready')}>{m.appearance_adult_confirm_no()}</Button
-						>
-					</div>
-				</div>
-			{/if}
+			{#if AdultDialog}<AdultDialog {confirm} />{/if}
 		</section>
 	{/if}
 </div>

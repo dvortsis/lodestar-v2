@@ -78,6 +78,7 @@
 
 	const palette = $derived(mode === 'light' ? light : dark);
 	const valid = (p: Palette) =>
+		Array.isArray(p.categorical) &&
 		[...COLOUR_FIELDS.map((k) => p[k]), ...p.categorical].every((c) => HEX.test(c));
 	const family = $derived<Family>({
 		id: 'custom',
@@ -122,9 +123,10 @@
 			name: `${name.trim()} ${md === 'light' ? 'Light' : 'Dark'}`,
 			family: name.trim(),
 			palette: md === 'light' ? clone(light) : clone(dark),
+			keys: file.keys,
 			...(failed.length ? { warn: true } : {})
 		}));
-		write([...custom.filter((t) => !t.id.startsWith(`${id}-`)), ...entries]);
+		write([...custom.filter((t) => t.id !== `${id}-light` && t.id !== `${id}-dark`), ...entries]);
 		onsave(id);
 	}
 
@@ -140,7 +142,7 @@
 	function importJson() {
 		const res = parseImport(text);
 		if (!res.family) {
-			notes = res.errors;
+			notes = [m.appearance_editor_import_failed()];
 			return;
 		}
 		name = res.family.name;
