@@ -761,8 +761,24 @@ impl FileSink {
 
 /// A free rotated name in `dir` for a file set aside now.
 fn rotated_name(dir: &Path) -> String {
-    let stamp = Stamp::now().compact();
-    let mut n = 1;
+    rotated_name_at(dir, &Stamp::now().compact())
+}
+
+/// A free rotated name in `dir` for `stamp`, numbered past every file
+/// already there with that stamp. (Not the lowest free `-N`: after a prune
+/// took `-1` but kept `-2`, a reused `-1` would sort as the oldest and go
+/// first in the next prune.)
+fn rotated_name_at(dir: &Path, stamp: &str) -> String {
+    let taken = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| LogName::parse(e.ok()?.file_name().to_str()?))
+        .filter_map(|name| match name {
+            LogName::Rotated { stamp: s, n, .. } if s == stamp => Some(n),
+            _ => None,
+        })
+        .max();
+    let mut n = taken.map_or(1, |n| n + 1);
     loop {
         let name = match n {
             1 => format!("lodestar-{stamp}.jsonl"),
@@ -1166,6 +1182,26 @@ mod tests {
         c.count = 2;
         prune(&c, &Mutex::new(Index::load(d)), SystemTime::now()).unwrap();
         assert_eq!(rotated(d).unwrap(), [names[3].clone(), names[2].clone()]);
+    }
+
+    #[test]
+    fn a_rotated_name_never_reuses_a_number_below_a_kept_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let t = "20261030T120000.000Z";
+        assert_eq!(rotated_name_at(d, t), format!("lodestar-{t}.jsonl"));
+        // A prune took the first of the millisecond and kept `-2`: the
+        // next is `-3`, so it sorts as the newest, not the oldest.
+        fs::write(d.join(format!("lodestar-{t}-2.jsonl.gz")), b"x\n").unwrap();
+        let next = rotated_name_at(d, t);
+        assert_eq!(next, format!("lodestar-{t}-3.jsonl"));
+        fs::write(d.join(&next), b"x\n").unwrap();
+        assert_eq!(rotated(d).unwrap()[0], next);
+        // Another millisecond's numbers don't count.
+        assert_eq!(
+            rotated_name_at(d, "20261030T120000.001Z"),
+            "lodestar-20261030T120000.001Z.jsonl"
+        );
     }
 
     #[test]

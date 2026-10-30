@@ -754,9 +754,10 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
     {
         std::thread::sleep(Duration::from_millis(10));
     }
+    let seen = lines.load(std::sync::atomic::Ordering::Relaxed);
     assert!(
-        lines.load(std::sync::atomic::Ordering::Relaxed) >= 600,
-        "the writer didn't rotate twice within 30 s"
+        seen >= 600,
+        "the writer didn't rotate twice within 30 s: {seen} of 600 lines"
     );
     let src = logs(rt);
     let done = src.delete(LogFilesWhich::All).unwrap();
@@ -769,9 +770,10 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
     {
         std::thread::sleep(Duration::from_millis(10));
     }
+    let seen = lines.load(std::sync::atomic::Ordering::Relaxed);
     assert!(
-        lines.load(std::sync::atomic::Ordering::Relaxed) >= after,
-        "the writer didn't write 600 more lines within 30 s"
+        seen >= after,
+        "the writer didn't write 600 more lines within 30 s: {seen} of {after} lines"
     );
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let written = writer.join().unwrap();
