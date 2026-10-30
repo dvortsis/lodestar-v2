@@ -29,8 +29,10 @@ struct Env {
 struct Running {
     child: Child,
     lines: mpsc::Receiver<String>,
-    /// Everything `log` has returned, for a failure's report.
+    /// Everything it logged, for a failure's report.
     seen: String,
+    /// What `log` hasn't returned yet.
+    unread: String,
 }
 
 impl Env {
@@ -210,6 +212,7 @@ impl Env {
             child,
             lines,
             seen: String::new(),
+            unread: String::new(),
         }
     }
 
@@ -276,14 +279,49 @@ impl Drop for Running {
 }
 
 impl Running {
+    /// What it logged since the last call.
     fn log(&mut self) -> String {
-        let mut out = String::new();
-        while let Ok(l) = self.lines.recv_timeout(Duration::from_millis(200)) {
-            out.push_str(&l);
-            out.push('\n');
+        self.drain();
+        std::mem::take(&mut self.unread)
+    }
+
+    /// Reads what has arrived, waiting up to 200 ms for more and at most a
+    /// second in all (a steady writer can't hold it past a deadline).
+    fn drain(&mut self) {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(1) {
+            let Ok(l) = self.lines.recv_timeout(Duration::from_millis(200)) else {
+                break;
+            };
+            for out in [&mut self.seen, &mut self.unread] {
+                out.push_str(&l);
+                out.push('\n');
+            }
         }
-        self.seen.push_str(&out);
-        out
+    }
+
+    /// Waits for `f`, failing after `within` with what it saw: the exit
+    /// status, if the supervisor exited, and the log's tail. It keeps
+    /// waiting after an exit, since some waits are for what follows one.
+    /// What it reads stays for the next `log`.
+    fn wait_until(&mut self, what: &str, within: Duration, mut f: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !f() {
+            if start.elapsed() >= within {
+                self.drain();
+                let exited = match self.child.try_wait().unwrap() {
+                    Some(status) => format!("; the supervisor exited ({status})"),
+                    None => String::new(),
+                };
+                panic!(
+                    "{what} (after {} s{exited}); its log ends:\n{}",
+                    within.as_secs(),
+                    self.tail()
+                );
+            }
+            // Paces the polling.
+            self.drain();
+        }
     }
 
     /// Waits for `needle` in the supervisor's log. Fails with what it saw
@@ -314,7 +352,7 @@ impl Running {
         }
     }
 
-    /// The last lines of everything `log` returned.
+    /// The last lines it logged.
     fn tail(&self) -> String {
         let lines: Vec<&str> = self.seen.lines().collect();
         lines[lines.len().saturating_sub(60)..].join("\n")
@@ -354,38 +392,42 @@ impl Running {
 /// supervisor's child fails to start.
 fn test_port() -> u16 {
     use std::sync::atomic::{AtomicU32, Ordering};
-    // Linux starts its range at 32768 by default, macOS at 49152.
-    const FIRST: u32 = 20_000;
     const COUNT: u32 = 10_000;
+    // Below Linux's default range (from 32768) and macOS's (from 49152);
+    // above a range that starts lower, if there's room.
     #[cfg(target_os = "linux")]
-    if let Ok(range) = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") {
-        let low: u32 = range.split_whitespace().next().unwrap().parse().unwrap();
-        assert!(FIRST + COUNT <= low, "the ephemeral range starts at {low}");
-    }
+    let first = match std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range") {
+        Ok(range) => {
+            let mut r = range.split_whitespace().map(|p| p.parse::<u32>().unwrap());
+            let (low, high) = (r.next().unwrap(), r.next().unwrap());
+            if low >= 20_000 + COUNT {
+                20_000
+            } else {
+                assert!(
+                    high + 1 + COUNT <= 65_536,
+                    "no room outside the ephemeral range {low}-{high}"
+                );
+                high + 1
+            }
+        }
+        Err(_) => 20_000,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let first = 20_000;
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    // Spread by process, so copies of this binary run at once rarely meet.
+    // Spread by process, so copies of this binary run at once (local
+    // sessions) mostly use different ports; when two share a block, the
+    // check below skips only the ports held at that moment.
     let base = std::process::id() % 100 * 100;
     for _ in 0..COUNT {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let port = (FIRST + (base + n) % COUNT) as u16;
+        let port = (first + (base + n) % COUNT) as u16;
         // Something outside the tests may hold it.
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
     }
-    panic!("no free port in {FIRST}..{}", FIRST + COUNT);
-}
-
-fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
-    let start = Instant::now();
-    while !f() {
-        assert!(
-            start.elapsed() < within,
-            "{what} (after {} s)",
-            within.as_secs()
-        );
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    panic!("no free port in {first}..{}", first + COUNT);
 }
 
 fn set_marker(store: &Store, v: &str) {
@@ -460,8 +502,8 @@ fn failed_probation_rolls_back() {
         env.stage(NEW, None, now() + 86_400);
         env.migrated_by(NEW);
         env.activate(NEW, true);
-        let r = env.start(&env.overrides(json!({"fault": format!("child:{fault}@{NEW}")})));
-        wait_until(&format!("{fault}: no rollback"), LONG, || {
+        let mut r = env.start(&env.overrides(json!({"fault": format!("child:{fault}@{NEW}")})));
+        r.wait_until(&format!("{fault}: no rollback"), LONG, || {
             env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
         });
         env.assert_rolled_back();
@@ -492,8 +534,8 @@ fn a_crash_at_every_journal_step_finishes_at_the_next_start() {
                 .unwrap();
             assert_eq!(out.status.code(), Some(3), "journal:{k}");
         }
-        let r = env.start(&env.overrides(json!({})));
-        wait_until(&format!("journal:{k}: not finished"), LONG, || {
+        let mut r = env.start(&env.overrides(json!({})));
+        r.wait_until(&format!("journal:{k}: not finished"), LONG, || {
             !env.bin("pending").exists() && env.healthy()
         });
         env.assert_rolled_back();
@@ -519,8 +561,8 @@ fn a_failing_restored_version_halts_until_a_newer_image() {
     );
     let (status, _) = env.run_to_exit(&env.overrides(json!({})), Duration::from_secs(20));
     assert_eq!(status, 1, "still halted");
-    let r = env.start(&env.overrides(json!({"version": "1.0.0"})));
-    wait_until("the newer image didn't start", LONG, || env.healthy());
+    let mut r = env.start(&env.overrides(json!({"version": "1.0.0"})));
+    r.wait_until("the newer image didn't start", LONG, || env.healthy());
     assert!(!env.bin("halted.json").exists());
     assert_eq!(r.stop(), 0);
 }
@@ -534,8 +576,8 @@ fn an_expired_overlay_starts_then_a_newer_image_wins() {
     env.stage(NEW, None, now() - 30 * 86_400);
     env.stage("0.4.0", None, now() + 86_400);
     env.activate(NEW, true);
-    let r = env.start(&env.overrides(json!({})));
-    wait_until("the overlay didn't pass", LONG, || {
+    let mut r = env.start(&env.overrides(json!({})));
+    r.wait_until("the overlay didn't pass", LONG, || {
         !env.bin("pending").exists() && env.healthy()
     });
     // What runs is the sealed in-memory copy that was verified, not the
@@ -561,8 +603,8 @@ fn an_expired_overlay_starts_then_a_newer_image_wins() {
         "older overlays go once probation passed"
     );
 
-    let r = env.start(&env.overrides(json!({"version": "1.0.0"})));
-    wait_until("the newer image didn't start", LONG, || env.healthy());
+    let mut r = env.start(&env.overrides(json!({"version": "1.0.0"})));
+    r.wait_until("the newer image didn't start", LONG, || env.healthy());
     assert!(!env.bin("active").exists());
     assert!(!env.bin(NEW).exists());
     assert_eq!(r.stop(), 0);
@@ -577,7 +619,7 @@ fn a_tampered_overlay_falls_back_to_the_image() {
     std::fs::write(env.bin(NEW).join("lodestar"), b"#!/bin/sh\nexit 9\n").unwrap();
     env.activate(NEW, false);
     let mut r = env.start(&env.overrides(json!({})));
-    wait_until("the image didn't start", LONG, || env.healthy());
+    r.wait_until("the image didn't start", LONG, || env.healthy());
     assert!(env.bin(&format!("{NEW}.bad")).join("lodestar").exists());
     let log = r.log();
     assert!(log.contains("failed verification"), "{log}");
@@ -590,8 +632,8 @@ fn a_tampered_overlay_falls_back_to_the_image() {
 fn one_supervisor_per_folder_and_the_status_passes_through() {
     let env = Env::new();
     let o = env.overrides(json!({}));
-    let r = env.start(&o);
-    wait_until("it didn't start", LONG, || env.healthy());
+    let mut r = env.start(&o);
+    r.wait_until("it didn't start", LONG, || env.healthy());
     let (status, log) = env.run_to_exit(&o, Duration::from_secs(20));
     assert_eq!(status, 3, "{log}");
     assert!(
@@ -624,7 +666,7 @@ fn one_supervisor_per_folder_and_the_status_passes_through() {
     let (usr1, usr2) = (30, 31);
     for (sig, n) in [("HUP", 1), ("USR1", usr1), ("USR2", usr2)] {
         let mut r = env.start(&o);
-        wait_until("it didn't start", LONG, || env.healthy());
+        r.wait_until("it didn't start", LONG, || env.healthy());
         let pid = r.child.id().to_string();
         assert!(
             Command::new("kill")
@@ -635,8 +677,8 @@ fn one_supervisor_per_folder_and_the_status_passes_through() {
         );
         assert_eq!(r.child.wait().unwrap().code(), Some(128 + n), "{sig}");
     }
-    let r = env.start(&o);
-    wait_until("it didn't start", LONG, || env.healthy());
+    let mut r = env.start(&o);
+    r.wait_until("it didn't start", LONG, || env.healthy());
     assert_eq!(r.stop(), 0, "a forwarded TERM stops the child cleanly");
 }
 
@@ -648,8 +690,8 @@ fn rollback_update_runs_offline_only() {
     env.stage(NEW, None, now() + 86_400);
     env.activate(NEW, false);
     let o = env.overrides(json!({}));
-    let r = env.start(&o);
-    wait_until("it didn't start", LONG, || env.healthy());
+    let mut r = env.start(&o);
+    r.wait_until("it didn't start", LONG, || env.healthy());
     let out = env
         .command(&o, &["rollback", "--update"])
         .stderr(Stdio::piped())
@@ -695,29 +737,29 @@ fn stops_and_restarts_in_probation_use_no_attempt() {
     let env = Env::new();
     env.stage(NEW, None, now() + 86_400);
     env.activate(NEW, true);
-    let r = env.start(
+    let mut r = env.start(
         &env.overrides(json!({"fault": format!("child:hang@{NEW}"), "probation_ms": 60_000})),
     );
-    wait_until("no attempt charged", LONG, || attempts(&env) == 1);
+    r.wait_until("no attempt charged", LONG, || attempts(&env) == 1);
     let pid = r.child.id();
-    wait_until("no child started", LONG, || children(pid).len() == 1);
+    r.wait_until("no child started", LONG, || children(pid).len() == 1);
     assert_eq!(r.stop(), 128 + 15, "the child's status passes through");
     assert_eq!(attempts(&env), 0, "the forwarded stop was refunded");
 
-    let r = env.start(
+    let mut r = env.start(
         &env.overrides(json!({"fault": format!("child:restart@{NEW}"), "probation_ms": 60_000})),
     );
     // Until three children have run: two supervised restarts.
     let pid = r.child.id();
     let mut seen = std::collections::BTreeSet::new();
-    wait_until("fewer than two restarts", LONG, || {
+    r.wait_until("fewer than two restarts", LONG, || {
         seen.extend(children(pid));
         seen.len() >= 3
     });
     // Checked and stopped while serving, not mid-start (when the
     // attempt is between its refund and the next charge, or TERM can
     // land before the child's handler).
-    wait_until("it didn't serve", LONG, || env.healthy());
+    r.wait_until("it didn't serve", LONG, || env.healthy());
     assert!(env.json("skipped").is_none(), "restarts aren't failures");
     assert_eq!(
         attempts(&env),
@@ -743,8 +785,8 @@ fn migrations_are_judged_by_their_heartbeat_and_cap() {
         env.activate(NEW, true);
         let mut o: Value = extra;
         o["fault"] = json!(format!("child:{fault}@{NEW}"));
-        let r = env.start(&env.overrides(o));
-        wait_until(&format!("{fault}: no rollback"), LONG, || {
+        let mut r = env.start(&env.overrides(o));
+        r.wait_until(&format!("{fault}: no rollback"), LONG, || {
             env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
         });
         assert!(!env.bin(NEW).exists(), "{fault}");
@@ -762,8 +804,8 @@ fn migrations_are_judged_by_their_heartbeat_and_cap() {
     env.activate(NEW, true);
     let o = json!({"fault": format!("child:migrate=8@{NEW}"), "beat_ms": 300,
                    "stall_ms": 3000, "probation_ms": 5000});
-    let r = env.start(&env.overrides(o));
-    wait_until("the long migration didn't pass", LONG, || {
+    let mut r = env.start(&env.overrides(o));
+    r.wait_until("the long migration didn't pass", LONG, || {
         !env.bin("pending").exists() && env.healthy()
     });
     assert!(env.bin("active").exists() && env.json("skipped").is_none());
@@ -780,7 +822,7 @@ fn a_stop_during_a_rollback_leaves_the_journal() {
     env.activate(NEW, true);
     let mut r =
         env.start(&env.overrides(json!({"fault": format!("child:crash@{NEW},journal:slow")})));
-    wait_until("no journal", LONG, || env.bin("rollback.json").exists());
+    r.wait_until("no journal", LONG, || env.bin("rollback.json").exists());
     let pid = r.child.id();
     assert!(
         Command::new("kill")
@@ -793,8 +835,8 @@ fn a_stop_during_a_rollback_leaves_the_journal() {
     assert_eq!(status.code(), Some(1), "{}", r.log());
     assert!(env.bin("rollback.json").exists());
     assert!(children(pid).is_empty());
-    let r = env.start(&env.overrides(json!({})));
-    wait_until("not finished", LONG, || {
+    let mut r = env.start(&env.overrides(json!({})));
+    r.wait_until("not finished", LONG, || {
         !env.bin("pending").exists() && env.healthy()
     });
     env.assert_rolled_back();
@@ -816,8 +858,8 @@ fn a_switch_needs_pending_written_first() {
     r.stop();
 
     std::fs::remove_dir_all(env.bin(".pending.tmp")).unwrap();
-    let r = env.start(&o);
-    wait_until("no switch", LONG, || {
+    let mut r = env.start(&o);
+    r.wait_until("no switch", LONG, || {
         env.json("active").is_some_and(|a| a["version"] == NEW)
             && !env.bin("pending").exists()
             && env.healthy()
@@ -850,7 +892,7 @@ fn revoked_and_not_newer_overlays_dont_run() {
         "statements": [rotation],
     }}));
     let mut r = env.start(&o);
-    wait_until("the image didn't start", LONG, || env.healthy());
+    r.wait_until("the image didn't start", LONG, || env.healthy());
     let log = r.log();
     assert!(log.contains("signed by a key this build revokes"), "{log}");
     assert_eq!(r.stop(), 0);
@@ -858,8 +900,8 @@ fn revoked_and_not_newer_overlays_dont_run() {
     let env = Env::new();
     env.stage(IMAGE, None, now() + 86_400);
     env.activate(IMAGE, false);
-    let r = env.start(&env.overrides(json!({})));
-    wait_until("it didn't start", LONG, || env.healthy());
+    let mut r = env.start(&env.overrides(json!({})));
+    r.wait_until("it didn't start", LONG, || env.healthy());
     assert!(!env.bin("active").exists() && !env.bin(IMAGE).exists());
     assert_eq!(r.stop(), 0);
 }
@@ -870,12 +912,12 @@ fn revoked_and_not_newer_overlays_dont_run() {
 #[test]
 fn orphans_are_reaped() {
     let env = Env::new();
-    let r = env.start(&env.overrides(json!({"fault": format!("child:orphan@{IMAGE}")})));
+    let mut r = env.start(&env.overrides(json!({"fault": format!("child:orphan@{IMAGE}")})));
     let pid = r.child.id();
-    wait_until("the orphan never came to the supervisor", LONG, || {
+    r.wait_until("the orphan never came to the supervisor", LONG, || {
         children(pid).len() == 2
     });
-    wait_until("the orphan wasn't reaped", LONG, || {
+    r.wait_until("the orphan wasn't reaped", LONG, || {
         children(pid).len() == 1
     });
     for kid in children(pid) {
@@ -937,7 +979,7 @@ fn a_migrated_store_without_a_snapshot_is_never_rolled_back() {
     r.wait_for_log("no refusal", "not rolling", LONG);
     assert_eq!(env.json("active").unwrap()["version"], NEW);
     assert!(env.json("skipped").is_none());
-    wait_until("it didn't serve", LONG, || env.healthy());
+    r.wait_until("it didn't serve", LONG, || env.healthy());
     assert_eq!(r.stop(), 0);
 }
 
@@ -949,7 +991,7 @@ fn a_migration_that_cant_be_recorded_never_starts() {
     env.stage(NEW, None, now() + 86_400);
     env.activate(NEW, true);
     let mut r = env.start(&env.overrides(json!({"fault": format!("child:unrecorded@{NEW}")})));
-    wait_until("no rollback", LONG, || {
+    r.wait_until("no rollback", LONG, || {
         env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
     });
     assert!(!env.bin(NEW).exists());
@@ -985,7 +1027,7 @@ fn an_active_downgrade_runs_the_image() {
     )
     .unwrap();
     let mut r = env.start(&env.overrides(json!({})));
-    wait_until("the image didn't start", LONG, || env.healthy());
+    r.wait_until("the image didn't start", LONG, || env.healthy());
     #[cfg(target_os = "linux")]
     {
         let exe = std::fs::read_link(format!("/proc/{}/exe", children(r.child.id())[0])).unwrap();
@@ -1011,7 +1053,7 @@ fn a_transient_error_keeps_the_overlay_and_an_oversize_binary_doesnt() {
     env.stage(NEW, None, now() + 86_400);
     env.activate(NEW, false);
     let mut r = env.start(&env.overrides(json!({"fault": "overlay:io"})));
-    wait_until("the image didn't start", LONG, || env.healthy());
+    r.wait_until("the image didn't start", LONG, || env.healthy());
     let log = r.log();
     assert!(log.contains("can't be checked right now"), "{log}");
     assert_eq!(r.stop(), 0);
@@ -1019,7 +1061,7 @@ fn a_transient_error_keeps_the_overlay_and_an_oversize_binary_doesnt() {
     assert!(!env.bin(&format!("{NEW}.bad")).exists());
 
     let mut r = env.start(&env.overrides(json!({"max_binary": 4096})));
-    wait_until("the image didn't start", LONG, || env.healthy());
+    r.wait_until("the image didn't start", LONG, || env.healthy());
     let log = r.log();
     assert!(log.contains("too large"), "{log}");
     assert_eq!(r.stop(), 0);
@@ -1038,7 +1080,7 @@ fn a_child_that_ignores_a_stop_is_killed() {
     })));
     let pid = r.child.id();
     // Until the child has its TERM handler (SigCgt bit 15).
-    wait_until("the child never caught TERM", LONG, || {
+    r.wait_until("the child never caught TERM", LONG, || {
         children(pid).first().is_some_and(|kid| {
             std::fs::read_to_string(format!("/proc/{kid}/status"))
                 .ok()
@@ -1067,11 +1109,11 @@ fn a_child_that_ignores_a_stop_is_killed() {
 fn the_child_stops_with_its_supervisor() {
     let env = Env::new();
     let mut r = env.start(&env.overrides(json!({})));
-    wait_until("it didn't start", LONG, || env.healthy());
+    r.wait_until("it didn't start", LONG, || env.healthy());
     let kid = children(r.child.id())[0];
     r.child.kill().unwrap();
     r.child.wait().unwrap();
-    wait_until("the child outlived its supervisor", LONG, || {
+    r.wait_until("the child outlived its supervisor", LONG, || {
         !std::fs::read_to_string(format!("/proc/{kid}/stat")).is_ok_and(|s| !s.contains(") Z "))
     });
 }
@@ -1084,8 +1126,8 @@ fn a_damaged_pending_starts_a_fresh_probation() {
     env.stage(NEW, None, now() + 86_400);
     env.activate(NEW, false);
     std::fs::write(env.bin("pending"), b"{ damaged").unwrap();
-    let r = env.start(&env.overrides(json!({"fault": format!("child:crash@{NEW}")})));
-    wait_until("no rollback", LONG, || {
+    let mut r = env.start(&env.overrides(json!({"fault": format!("child:crash@{NEW}")})));
+    r.wait_until("no rollback", LONG, || {
         env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
     });
     assert!(!env.bin(NEW).exists() && !env.bin("active").exists());
