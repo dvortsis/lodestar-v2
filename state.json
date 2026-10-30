@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:33Z",
+ "updated_at": "2026-10-30T20:36Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2192,8 +2192,7 @@
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
-  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
-  "#236 optional doc nits to carry in a runner PR: decisions heading '(#TBD)' -> #236; note the re-bless also wrote CR-ADM/#232 zero counters; 'on the final attempt' -> 'the last fetch failure before the pool gave the key up' (gate.rs doc, metrics.md, decisions file)"
+  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2298,7 +2297,8 @@
   "2026-10-30T20:16Z #237 review MERGE at cbd81a42 (let-chain temporaries and operand order verified); merge on green ci-ok after #235.",
   "2026-10-30T20:23Z merged #235 canary UDP port (ccff4000).",
   "2026-10-30T20:28Z #236 review MERGE at 4cf0ff6b (3 optional doc nits, carried by the runner); merge on green, then flag the owner (\u00a72.19) and archive the author.",
-  "2026-10-30T20:33Z merged #236 CR-gate-hash-mismatch (e9768a11) on green ci-ok and the reviewer's MERGE; author archived; owner flag (\u00a72.19) added to owner_checklist. Docs follow-up fix/hash-mismatch-docs pushed."
+  "2026-10-30T20:33Z merged #236 CR-gate-hash-mismatch (e9768a11) on green ci-ok and the reviewer's MERGE; author archived; owner flag (\u00a72.19) added to owner_checklist. Docs follow-up fix/hash-mismatch-docs pushed.",
+  "2026-10-30T20:36Z opened #238 fix/hash-mismatch-docs (the #236 optional nits); review by session_01MMjhn984M3k3UJXUCsEYPX. Told the owner via the dashboard session: \u00a72.19 flag for #236, and the rc.2 per-file hashes are blocked by network policy. #237 still in CI."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
