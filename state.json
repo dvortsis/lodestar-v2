@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T19:55Z",
+ "updated_at": "2026-10-30T20:05Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2183,11 +2183,11 @@
   "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
   "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
   "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
-  "X-clippy-msrv part 2: filter, lodestar, dht, sources, store and update, then remove the 3 allows; after #210, #212, #213, #216, R-gauges and X-filter-budget land",
   "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
   "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
-  "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)"
+  "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
+  "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2285,7 +2285,8 @@
   "2026-10-30T19:24Z merged #232 (58e62d09) DHT queued drops plus the filter-budget nits; the hash-mismatch slice was told to merge main. fix/canary-udp-port pushed (05211aa2, stacked on #234): PR after #234 merges.",
   "2026-10-30T19:30Z #217 post-merge runs all green (Web 41113005439, E2E 41113005344, smoke 41113005209); no fix needed. Author and reviewer archived.",
   "2026-10-30T19:51Z merged #234 cli test port (f3f66bd6). Opened #235 fix/canary-udp-port (test_port probes UDP too; log_canary uses it); review by session_01MMjhn984M3k3UJXUCsEYPX. #233 still in CI.",
-  "2026-10-30T19:55Z merged #233 CR-0d-2b-2 (5b0cd88c): ci-ok, Web, Playwright core, Lighthouse and smoke all green at 6dd24177. CR-0d complete; session archived. Open now: #235 (runner, canary UDP port) in review; CR-gate-hash-mismatch coding."
+  "2026-10-30T19:55Z merged #233 CR-0d-2b-2 (5b0cd88c): ci-ok, Web, Playwright core, Lighthouse and smoke all green at 6dd24177. CR-0d complete; session archived. Open now: #235 (runner, canary UDP port) in review; CR-gate-hash-mismatch coding.",
+  "2026-10-30T20:05Z opened #237 fix/clippy-msrv-2b (collapsible_if and manual_is_multiple_of fixed workspace-wide; two allows removed; chunks_exact_to_as_chunks stays); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #235."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
