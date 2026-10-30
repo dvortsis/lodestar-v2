@@ -15,7 +15,10 @@ mod lookup;
 mod peers;
 mod sampler;
 mod seen;
+#[cfg(feature = "testing")]
+pub mod testing;
 mod tokens;
+mod transport;
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -575,7 +578,11 @@ impl Node {
         }
         let mut sockets = Vec::new();
         for addr in &config.bind {
-            sockets.push(bind(*addr)?);
+            let (recv, send) = bind(*addr)?;
+            sockets.push((
+                transport::RecvSocket::Udp(recv),
+                transport::SendSocket::Udp(send),
+            ));
         }
         let local_addrs = sockets
             .iter()
@@ -584,9 +591,14 @@ impl Node {
         let stats = Arc::new(Stats::default());
         let (commands, command_rx) = mpsc::channel(64);
         let (shutdown, shutdown_rx) = watch::channel(false);
+        let rng = {
+            use rand::SeedableRng;
+            rand::rngs::StdRng::from_rng(&mut rand::rng())
+        };
         let task = tokio::spawn(actor::run(
             config,
             sockets,
+            rng,
             stats.clone(),
             command_rx,
             shutdown_rx,

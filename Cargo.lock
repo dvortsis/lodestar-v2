@@ -1720,9 +1720,11 @@ dependencies = [
 name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
+ "lodestar-dht",
  "lodestar-metainfo",
  "lodestar-network-policy",
  "lodestar-peer-wire",
+ "lodestar-sources",
  "lodestar-store",
  "tokio",
 ]

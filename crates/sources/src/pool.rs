@@ -31,6 +31,39 @@ use tokio::time::{Instant, sleep_until};
 use crate::funnel::{Funnel, Loss, Stage};
 use crate::plugin::{BoxFuture, Discovery, PeerRequest, Shutdown};
 
+/// Hashing for the owned-request map, the one map whose iteration order
+/// reaches scheduling (`poll_replies`). Production keeps the randomly keyed
+/// std hasher; the `testing` feature uses a fixed FNV-1a so the crawler
+/// simulator (`tests/sim`) repeats exactly, across toolchains too.
+#[cfg(not(feature = "testing"))]
+type RequestHasher = std::collections::hash_map::RandomState;
+#[cfg(feature = "testing")]
+type RequestHasher = std::hash::BuildHasherDefault<testing::Fnv>;
+
+#[cfg(feature = "testing")]
+mod testing {
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct Fnv(u64);
+
+    impl Default for Fnv {
+        fn default() -> Fnv {
+            Fnv(0xcbf2_9ce4_8422_2325)
+        }
+    }
+
+    impl std::hash::Hasher for Fnv {
+        fn write(&mut self, bytes: &[u8]) {
+            for b in bytes {
+                self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+
+        fn finish(&self) -> u64 {
+            self.0
+        }
+    }
+}
+
 /// Fetches one key from one peer.
 pub trait Fetcher: Send + Sync + 'static {
     fn allows(&self, _peer: SocketAddr) -> bool {
@@ -279,7 +312,7 @@ pub fn spawn(
         admitted: VecDeque::new(),
         lookup_backlog: VecDeque::new(),
         lookups: 0,
-        requests: HashMap::new(),
+        requests: HashMap::default(),
         per_ip: HashMap::new(),
         tasks: JoinSet::new(),
         task_keys: HashMap::new(),
@@ -379,7 +412,7 @@ struct Pool {
     admitted: VecDeque<InfoHash>,
     lookup_backlog: VecDeque<InfoHash>,
     lookups: usize,
-    requests: HashMap<InfoHash, Request>,
+    requests: HashMap<InfoHash, Request, RequestHasher>,
     per_ip: HashMap<IpAddr, usize>,
     tasks: JoinSet<Result<Fetched, FailureKind>>,
     /// What each fetch task is fetching, so even a panicked task is

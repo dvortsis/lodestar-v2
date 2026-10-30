@@ -1,0 +1,84 @@
+# crawler-sim scenario `healthy`
+# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim
+seed=1 minutes=10 intensity=Balanced switches=none
+net: nodes=2000 dead=150‰ loss=20‰ error=5‰ rate_limit=Some(20) latency=40+U(160)ms slow=30‰@1500ms bep51=600‰ interval=300s sample_size=20
+swarm: catalogue=20000 live=9101 held=60540 distinct_held=18965 max_peers=12 fetch=FetchConfig { unreachable_permille: 300, success_permille: 450, slow_permille: 100, refuse_permille: 250, success_ms: 900, slow_ms: 6000, refuse_ms: 80, timeout_ms: 8000 }
+pool: sockets=400 per_ip=2 max_pending=200000 max_lookups=256 lookup_wait=30s retry_backoff=120s max_attempts=4
+
+# per minute: counter deltas; gauges sampled each second as mean/max
+min admitted rejected completed peers_found fetch_started fetched stored harvested dht_active dht_queued pool_lookups pool_active
+  1 148 12076 148 55 127 44 44 12225 15/32 0/0 16/32 8/18
+  2 0 0 0 0 10 3 3 0 0/0 0/0 0/0 1/5
+  3 168 8760 167 52 122 47 47 64 17/32 0/0 18/32 8/17
+  4 12 0 6 0 2 2 2 10 0/10 0/0 1/10 0/2
+  5 143 8706 150 46 123 38 38 40 14/32 0/0 15/32 10/23
+  6 203 4213 195 91 204 75 75 4413 19/32 0/0 20/32 15/28
+  7 180 8710 188 72 151 63 63 103 19/32 0/0 20/32 10/16
+  8 205 4037 198 61 134 52 52 29 21/32 0/0 23/32 9/19
+  9 170 8649 177 56 118 50 50 13 17/32 0/0 18/32 7/15
+ 10 168 3971 166 59 145 50 50 15 18/32 0/0 19/32 10/21
+
+# DHT node stats at the end (node::StatsSnapshot)
+StatsSnapshot {
+    packets_in: 24495,
+    packets_out: 29122,
+    malformed_in: 0,
+    queries_in: 0,
+    queries_in_unsolicited: 0,
+    responses_in: 23741,
+    errors_in: 754,
+    queries_out: 29122,
+    timeouts: 4611,
+    throttled: 303,
+    replies_dropped: 0,
+    send_errors: 0,
+    spoofed: 0,
+    routing_nodes: 68,
+    outstanding: 16,
+    harvested_sample: 16912,
+    harvested_get_peers: 0,
+    harvested_announce: 0,
+    lookups_completed: 1395,
+    harvest_dropped: 0,
+    samples_sent: 2953,
+    sample_failures: 1081,
+    sample_cooling: 1998,
+    sample_inflight: 0,
+    sample_stale: 0,
+    peer_admitted: 1397,
+    peer_rejected: 59122,
+    peer_rejected_capacity: 59122,
+    peer_rejected_paused: 0,
+    peer_rejected_caller_closed: 0,
+    peer_ack_failed: 0,
+    peer_command_full: 13472,
+    peer_command_closed: 0,
+    peer_cancelled: 0,
+    peer_active: 2,
+    peer_queued: 0,
+    lookup_scheduled: 8,
+    lookup_deadlines: 0,
+    sample_frontier: 0,
+    sample_suppression_seconds: 0,
+    sample_deferred: 0,
+    scrapes_requested: 0,
+    scrapes_completed: 0,
+    scrapes_dropped: 0,
+    scrapes_with_responders: 0,
+    denied: 0,
+}
+
+# fetch pool stats at the end (PoolStats)
+pending=16488 active=3 waiting=16485 lookups=2 lookup_backlog=0
+fetched=424 duplicates=0 finder_full=0 finder_closed=0 lookup_unaccepted=72594 retry_unaccepted=56330
+failures: unreachable=355 timed_out=166 refused=188 encryption=0 invalid=0 oversize=0
+lost: NoPeers=0 TimedOut=0 Refused=0 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=0 GaveUp=0 Unreachable=0
+evicted_service: unaccepted=0 lookup=0 peers=0 fetch=0
+funnel: Harvested=16912 PeerFound=492 Fetched=424 Lost=0
+
+# scripted network
+NetStats { queries: 29122, ping: 0, find_node: 7643, get_peers: 18526, sample: 2953, other: 0, to_dead: 3622, to_unknown: 0, lost: 1005, rate_limited: 0, errors: 772, replies: 24495, values_replies: 3408 }
+discoveries_dropped=0 pool_queue_at_end=16488
+
+outcome_log events=18472 fnv64=5466a112a92494b7
+fingerprint=39e6faddf99d9505

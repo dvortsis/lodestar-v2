@@ -2,10 +2,11 @@
 //! ones, at most [`ALPHA`] queries in flight, until the [`K`] closest
 //! nodes that are still answering have all answered.
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
 
-use std::time::Instant;
+use tokio::time::Instant;
+
+use super::transport::Set;
 
 use lodestar_metainfo::InfoHash;
 
@@ -42,7 +43,7 @@ pub(crate) struct Lookup {
     pub family: usize,
     candidates: Vec<Candidate>,
     in_flight: usize,
-    pub peers: HashSet<SocketAddr>,
+    pub peers: Set<SocketAddr>,
     /// Queries sent outside the candidate list (e.g. to bootstrap
     /// routers, whose ids we don't know yet).
     pub extra_in_flight: usize,
@@ -61,7 +62,7 @@ impl Lookup {
             family,
             candidates: Vec::new(),
             in_flight: 0,
-            peers: HashSet::new(),
+            peers: Set::default(),
             extra_in_flight: 0,
             info_hash: None,
             scrape: false,
