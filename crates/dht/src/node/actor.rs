@@ -2795,3 +2795,192 @@ mod tests {
         assert!(b.try_take(t0 + Duration::from_secs(4)));
     }
 }
+
+/// CR-0d at the wire: a run samples real peers with mixed intervals and
+/// stops cleanly; the next run resumes and, on a paused clock, no peer
+/// receives a `sample_infohashes` before its restored deadline (§6 item 6).
+#[cfg(test)]
+mod restart_wire {
+    use super::*;
+    use crate::restart::Clock;
+    use rand::SeedableRng;
+    use tokio::time::advance;
+
+    #[derive(Debug)]
+    struct SimClock {
+        base: Duration,
+        start: Instant,
+    }
+
+    impl Clock for SimClock {
+        fn wall(&self) -> Duration {
+            self.base + Instant::now().duration_since(self.start)
+        }
+        fn mono(&self) -> Instant {
+            Instant::now()
+        }
+    }
+
+    fn node(dir: &std::path::Path, clock: &Arc<SimClock>) -> (Actor, Vec<SendSocket>) {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let addr = socket.local_addr().unwrap();
+        let cfg = Config {
+            bind: vec![addr],
+            bootstrap: vec![],
+            allow_private: true,
+            state_path: Some(dir.join("data").join("dht-state.bin")),
+            restart: Some(super::super::RestartConfig {
+                witness_dir: Some(dir.join("witness")),
+                clock: clock.clone(),
+                inline_io: true,
+            }),
+            ..Default::default()
+        };
+        let actor = Actor::new(
+            cfg,
+            Arc::new(Stats::default()),
+            vec![addr],
+            None,
+            vec![],
+            None,
+            Instant::now(),
+            StdRng::seed_from_u64(3),
+        );
+        (actor, vec![SendSocket::Udp(socket)])
+    }
+
+    /// `sample_infohashes` datagrams each peer has received since last asked.
+    fn samples_received(peers: &[std::net::UdpSocket]) -> Vec<usize> {
+        let mut buf = [0u8; 2048];
+        peers
+            .iter()
+            .map(|p| {
+                let mut n = 0;
+                while let Ok((len, _)) = p.recv_from(&mut buf) {
+                    if let Ok(m) = crate::krpc::parse(&buf[..len])
+                        && let Body::Query(q) = m.body
+                        && matches!(q.method, Method::SampleInfohashes { .. })
+                    {
+                        n += 1;
+                    }
+                }
+                n
+            })
+            .collect()
+    }
+
+    /// One maintenance turn with every peer offered as a candidate.
+    fn turn(a: &mut Actor, sockets: &[SendSocket], peers: &[SocketAddr]) {
+        for p in peers {
+            a.sampler.offer(
+                NodeInfo {
+                    id: NodeId([42; 20]),
+                    addr: *p,
+                },
+                Instant::now(),
+            );
+        }
+        a.maintain(sockets);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_restored_peer_is_sampled_before_its_deadline() {
+        let root = std::env::temp_dir().join(format!("lodestar-wire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let clock = Arc::new(SimClock {
+            base: Duration::from_secs(1_700_000_000),
+            start: Instant::now(),
+        });
+        let peer_sockets: Vec<std::net::UdpSocket> = (0..40)
+            .map(|_| {
+                let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                s.set_nonblocking(true).unwrap();
+                s
+            })
+            .collect();
+        let peers: Vec<SocketAddr> = peer_sockets
+            .iter()
+            .map(|s| s.local_addr().unwrap())
+            .collect();
+
+        // Run 1: first start suppresses; after the window, sample every
+        // peer once and give each a different interval, 1 min to 6 h.
+        let (mut a, sockets) = node(&root, &clock);
+        turn(&mut a, &sockets, &peers);
+        assert!(samples_received(&peer_sockets).iter().all(|&n| n == 0));
+        advance(sampler::MAX_INTERVAL + a.cfg.query_timeout).await;
+        for _ in 0..20 {
+            turn(&mut a, &sockets, &peers);
+            advance(a.cfg.tick).await;
+        }
+        assert!(
+            samples_received(&peer_sockets).iter().all(|&n| n == 1),
+            "each sampled once"
+        );
+        let tids: Vec<(u64, SocketAddr)> = a
+            .pending
+            .iter()
+            .filter(|(_, p)| matches!(p.purpose, Purpose::Sample))
+            .map(|(t, p)| (*t, p.to))
+            .collect();
+        for (i, (tid, to)) in tids.into_iter().enumerate() {
+            // The last few stay in flight: they're sealed for the horizon.
+            if i >= peers.len() - 4 {
+                continue;
+            }
+            let wait = Duration::from_secs(60 + (i as u64) * 547);
+            a.take_pending(tid);
+            assert!(a.sampler.complete(to, tid, wait, Instant::now()));
+        }
+        let stop = Instant::now();
+        a.finish().unwrap();
+        // The truth: run 1's table at the stop, after S8 sealed what was
+        // still in flight. Some samples timed out during run 1 and cool
+        // for 6 h from their timeout; the rest have their interval.
+        let truth: Map<SocketAddr, Instant> = a.sampler.restrictions(stop).collect();
+        assert_eq!(truth.len(), peers.len(), "every peer has a restriction");
+
+        // Run 2, a minute later: resumes, and the wire shows every
+        // restriction held to the instant.
+        advance(Duration::from_secs(60)).await;
+        let (mut b, sockets) = node(&root, &clock);
+        b.maintain(&sockets);
+        assert_eq!(b.proof.reason(), crate::restart::Reason::Resumed);
+        let sealed = stop + sampler::MAX_INTERVAL + b.cfg.query_timeout;
+        let deadline = |p: &SocketAddr| truth[p];
+        let mut first_seen: Map<SocketAddr, Instant> = Map::default();
+        let step = Duration::from_secs(30);
+        let end = sealed + Duration::from_secs(120);
+        while Instant::now() < end {
+            turn(&mut b, &sockets, &peers);
+            // Answer nothing: timed-out samples back off, which only
+            // delays later ones.
+            for (i, n) in samples_received(&peer_sockets).into_iter().enumerate() {
+                if n > 0 {
+                    first_seen.entry(peers[i]).or_insert(Instant::now());
+                }
+            }
+            advance(step).await;
+        }
+        for p in &peers {
+            let seen = first_seen.get(p).copied();
+            let due = deadline(p);
+            assert!(
+                seen.is_none_or(|t| t >= due),
+                "{p} sampled at {:?}, before its deadline {:?}",
+                seen.map(|t| t.duration_since(stop)),
+                due.duration_since(stop)
+            );
+            assert!(
+                seen.is_some(),
+                "{p} was never sampled again after its deadline"
+            );
+        }
+        let counts = b.sampler.restored_counts();
+        assert_eq!(counts.0, 0, "every restored restriction has expired");
+        assert!(counts.1 > 0, "restored restrictions turned candidates away");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
