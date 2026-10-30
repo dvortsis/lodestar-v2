@@ -109,6 +109,19 @@ describe('a staged section', { timeout: 20_000 }, () => {
 		expect(loaded()).toEqual(['edit']);
 	});
 
+	it('drops a change made elsewhere when the form is destroyed before the chunk is in', async () => {
+		const form = await open();
+		const before = server.requests('GET', '/settings/crawler').length;
+		const revision = server.change('crawler', { timeout_secs: { value: 30, source: 'db' } });
+		form.received({ section: 'crawler', revision });
+		form.blur('crawler.timeout_secs');
+		form.destroy();
+		await until(() => expect(loaded()).toEqual(['edit']));
+		await import('./copy'); // one more cold import: anything the chunk started has run by now
+		expect(server.requests('GET', '/settings/crawler')).toHaveLength(before);
+		expect(form.field('crawler.timeout_secs').value).toBe(12);
+	});
+
 	it('loads it with the values when a draft is stored, and offers the draft with the fields', async () => {
 		sessionStorage.setItem(DRAFT_PREFIX + 'lazy', JSON.stringify(DRAFT));
 		const form = await open();

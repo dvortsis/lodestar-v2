@@ -1,14 +1,23 @@
+<script lang="ts" module>
+	import type { Component } from 'svelte';
+	// Loaded bodies, so a return visit renders at once instead of showing the loading line again.
+	const bodies = new WeakMap<object, Component>();
+</script>
+
 <script lang="ts">
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { loadSettingsIndex, type SettingsIndexView } from '../form/schema';
-	import { screens, screenFields } from './screens';
-	import SectionForm from './SectionForm.svelte';
+	import { screens, screenFields, type Screen } from './screens';
 	let { section }: { section: string } = $props();
 	let index = $state<SettingsIndexView>();
 	let failed = $state(false);
 	let attempt = $state(0);
+	// The form engine is a generated screen's: a hand-built screen's first view never loads it.
+	let SectionForm =
+		$state<Component<{ screen: Screen; fields: ReturnType<typeof screenFields> }>>();
+	let formFailed = $state(false);
 	const screen = $derived(screens.find((screen) => screen.id === section));
 	const generated = $derived(!!screen?.sections?.length);
 	const fields = $derived(screen && index ? screenFields(screen, index) : []);
@@ -17,6 +26,16 @@
 		if (!generated) return;
 		let live = true;
 		failed = false;
+		// Both start at once, so the form's code never waits on the index (or the other way round).
+		if (!SectionForm)
+			void import('./SectionForm.svelte').then(
+				(mod) => {
+					SectionForm = mod.default;
+				},
+				() => {
+					formFailed = true;
+				}
+			);
 		void loadSettingsIndex().then(
 			(value) => {
 				if (live) index = value;
@@ -29,6 +48,11 @@
 			live = false;
 		};
 	});
+	const loadBody = (screen: Screen) =>
+		screen.load!().then((mod) => {
+			bodies.set(screen, mod.default);
+			return mod.default;
+		});
 </script>
 
 {#snippet chunkFailed()}
@@ -42,15 +66,20 @@
 
 <svelte:head><title>{screen?.title() ?? m.settings_shell_title()} · Lodestar</title></svelte:head>
 {#if screen?.load}
-	{#await screen.load()}
-		<h1 class="text-title font-semibold">{screen.title()}</h1>
-		<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
-	{:then body}
-		<body.default />
-	{:catch}
-		<h1 class="text-title font-semibold">{screen.title()}</h1>
-		{@render chunkFailed()}
-	{/await}
+	{@const Body = bodies.get(screen)}
+	{#if Body}
+		<Body />
+	{:else}
+		{#await loadBody(screen)}
+			<h1 class="text-title font-semibold">{screen.title()}</h1>
+			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
+		{:then Loaded}
+			<Loaded />
+		{:catch}
+			<h1 class="text-title font-semibold">{screen.title()}</h1>
+			{@render chunkFailed()}
+		{/await}
+	{/if}
 {:else}
 	<h1 class="text-title font-semibold">{screen?.title() ?? m.settings_shell_title()}</h1>
 	{#if !screen}
@@ -63,7 +92,9 @@
 						>{m.settings_form_retry()}</Button
 					>{/snippet}</Banner
 			>
-		{:else if !index}
+		{:else if formFailed}
+			{@render chunkFailed()}
+		{:else if !index || !SectionForm}
 			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 		{:else if !fields.length}
 			<p>{m.settings_shell_server_unavailable()}</p>

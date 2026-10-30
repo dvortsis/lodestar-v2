@@ -154,24 +154,68 @@ const settingsEditLazy = requireMeasuredJs(
 	onDemandOf('/settings/[section]', settingsEdit)
 );
 // Settings screens (S-settings-reconcile): the registry (shell/screens.ts) imports every screen.ts
-// eagerly, but a hand-built screen's body (`load`, named `*Screen.svelte`, e.g. Keyboard's) and a
-// screen's extras (`extra`, General's export) are dynamic imports that run only on that screen. A
-// section's first view is the generated form and stops at exactly these files; each body is then
-// measured beyond that first view, so shared chunks are never counted twice.
-const settingsScreensOnDemand = [
-	/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/,
-	/features\/settings\/shell\/SettingsExport\.svelte$/
+// eagerly. A generated screen's form (`SectionForm`, with the engine) and a hand-built screen's body
+// (`load`, named `*Screen.svelte`, e.g. Keyboard's) are dynamic imports made at mount on their own
+// kind of screen; a screen's extras (`extra`, General's export) load after the form.
+// - "Settings section" is a generated screen's first view: the route, the form and the engine.
+// - Each hand-built screen's first view is the route without the form, plus its body: gated against
+//   the 45 KB route cap (§10.1), one entry per body, so a later screen is gated the moment it lands.
+// - "Settings screen extras (on demand)" gates the extras beyond the section's first view.
+const SECTION_FORM = 'src/lib/features/settings/shell/SectionForm.svelte';
+const settingsBodies = [/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/];
+const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
+// What a hand-built body loads only on an interaction: Keyboard's shortcut sheet (opened with ?) and
+// its single-key toggle command (S-keys' boot.ts). Gated with the extras.
+const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|toggle\.ts)$/];
+const settingsFirstView = [
+	...settingsOnDemand,
+	...settingsEdit,
+	...settingsBodies,
+	...settingsExtras
 ];
-const settingsFirstView = [...settingsOnDemand, ...settingsEdit, ...settingsScreensOnDemand];
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
-const settingsScreens = requireMeasuredJs('Settings screen bodies (on demand)', [
-	...new Set(
-		Object.keys(manifest)
-			.filter((key) => settingsScreensOnDemand.some((re) => re.test(key)))
-			.flatMap((key) =>
-				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsSectionView)
+const settingsShellView = own('/settings/[section]', {
+	onDemand: [...settingsFirstView, new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)]
+});
+// Never leave out code a page loads statically: every body or extra the patterns match must be a
+// dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
+const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
+const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
+const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
+	(chunk.imports ?? [])
+		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+		.map((key) => `${from} -> ${key}`)
+);
+if (staticHits.length)
+	throw new Error(
+		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
+	);
+const settingsHandBuilt = bodyKeys.map((key) => ({
+	name: key
+		.split('/')
+		.at(-1)
+		.replace(/\.svelte$/, ''),
+	files: requireMeasuredJs(`Settings ${key} (first view)`, [
+		...new Set([
+			...settingsShellView,
+			...ownChunk(
+				key,
+				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				false,
+				settingsShellView
 			)
-	)
+		])
+	])
+}));
+const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
+	...new Set([
+		...extraKeys.flatMap((key) =>
+			ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsSectionView)
+		),
+		...bodyKeys.flatMap((key) =>
+			ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions], true)
+		)
+	])
 ]);
 
 // What another route can still add to /search's first load (runner, 2026-10-24):
@@ -179,10 +223,11 @@ const settingsScreens = requireMeasuredJs('Settings screen bodies (on demand)', 
 //   allows 1.26 KB (measured with only / and /search) plus 40 B a route, so a route that adds
 //   more fails here.
 // - The vendor chunk holds only modules /search reaches (the stray check above), but it is shared,
-//   so another route that uses more of those modules' exports keeps them in it. Fully used, those
-//   modules measured 31.07 KB (a build without tree-shaking, against 30.42 KB with every route on
-//   main). The budget is that ceiling: another route can't pass it, and only a new dependency of
-//   /search's own can (raise it then, on purpose).
+//   so another route that uses more of those modules' exports keeps them in it. Measured 31.09 KB
+//   with S-settings-reconcile (2026-10-30): the Settings form engine and Keyboard's screen use more of
+//   the Svelte runtime than any earlier route (30.42 KB with every route before them, 30.81 KB with
+//   848e10a0's Settings). The 31.1 KB budget is the ceiling: a route that passes it goes to the owner,
+//   and only a new dependency of /search's own raises it, on purpose.
 const routeCount = existsSync('.svelte-kit/generated/client-optimized/app.js')
 	? (readFileSync('.svelte-kit/generated/client-optimized/app.js', 'utf8')
 			.match(/dictionary = (\{[\s\S]*?\});/)?.[1]
@@ -296,9 +341,14 @@ export default [
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
-	// Keyboard's body (with its shortcut sheet and Bits UI's dialog code) and General's export panel,
-	// beyond the section's first view: 35.29 KB (limit = measured + 10%).
-	entry('Settings screen bodies (on demand)', settingsScreens, '38.9 KB'),
+	// Each hand-built screen's first view (the route without the form, plus its body), against the
+	// 45 KB route cap (§10.1).
+	...settingsHandBuilt.map(({ name, files }) =>
+		entry(`Settings ${name} (first view)`, files, '45 KB')
+	),
+	// General's export panel beyond the section's first view, and what a hand-built body loads on an
+	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
+	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',

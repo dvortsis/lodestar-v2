@@ -417,7 +417,10 @@ export class Engine implements SettingsForm {
 		if (!isDirty(f)) this.setFieldError(key, undefined);
 		// A dirty field was edited, which loads the pipeline; it may still be on its way.
 		else if (editMod) editMod.recheck(this, key);
-		else void loadEdit().then(() => this.blur(key), ignore);
+		else
+			void loadEdit().then(() => {
+				if (!this.destroyed) this.blur(key);
+			}, ignore);
 	}
 
 	// --- drafts ------------------------------------------------------------------------------
@@ -501,7 +504,10 @@ export class Engine implements SettingsForm {
 		const s = this.sec(e.section);
 		if (!s || e.revision <= s.revision) return;
 		if (editMod) editMod.received(this, e);
-		else void loadEdit().then((mod) => mod.received(this, e), ignore);
+		else
+			void loadEdit().then((mod) => {
+				if (!this.destroyed) mod.received(this, e);
+			}, ignore);
 	}
 
 	/** Refetches a section and merges it (the pipeline's `refetch`). */

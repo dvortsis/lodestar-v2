@@ -29,11 +29,12 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
 
 | Entry | Before (848e10a0 on main) | Now | Limit |
 |---|---|---|---|
-| Settings overview (own JS + CSS) | 9.9 KB | 11.18 KB | 45 KB |
-| Settings section (own JS + CSS) | 50.67 KB | 40.55 KB | 45 KB |
-| Settings controls (on demand) | 56.5 KB | 35.9 KB | 38 KB |
-| Settings edit chunk (on demand), **new** | — | 10.26 KB | 11.3 KB |
-| Settings screen bodies (on demand), **new** | — | 35.29 KB | 38.9 KB |
+| Settings overview (own JS + CSS) | 9.9 KB | 11.19 KB | 45 KB |
+| Settings section (own JS + CSS) | 50.67 KB | 41.32 KB | 45 KB |
+| Settings controls (on demand) | 56.5 KB | 35.91 KB | 38 KB |
+| Settings edit chunk (on demand), **new** | — | 10.25 KB | 11.3 KB |
+| Settings KeyboardScreen (first view), **new** | — | 34.92 KB | 45 KB (the §10.1 route cap) |
+| Settings screen extras (on demand), **new** | — | 22.7 KB | 25 KB |
 
 - **The save pipeline loads on demand, as one edit chunk (owner, 2026-10-24: option A, relayed by the runner).**
   - The runner checked this against the owner's own session and recorded it in runner-state's `state.json` (`owner_decision_settings_split`): "draft/conflict code loads on first edit; 45 KB limit kept".
@@ -45,11 +46,16 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
   - Writing drafts stays eager (`draft-store.ts`).
   - A chunk that doesn't load shows a Reload banner, or a "couldn't load" draft offer with Retry. The form README has the details.
 - **The edit chunk has its own entry.** It's new code, so its limit follows the "measured + 10%" rule (10.26 KB → 11.3 KB). "Settings controls (on demand)" leaves the edit chunk out, so it keeps measuring only the controls under its existing 38 KB.
-- **A screen's body and extras are measured on their own (§2.19).**
-  - The registry imports every `screen.ts` eagerly, so a section's first view would otherwise count every hand-built screen's dynamic `load` (Keyboard's 5.9 KB) and General's export panel, which only load on their own screen.
-  - `settingsFirstView` stops at exactly those files, and nothing else. A hand-built screen's body is named `*Screen.svelte` (the registry's doc comment says so); the export panel is named by path. A broader pattern could hide code a section loads statically.
-  - "Settings screen bodies (on demand)" measures each of them with `ownChunk`, beyond the section's first view, so shared chunks aren't counted twice. It's 35.29 KB: Keyboard's body with its shortcut sheet and Bits UI's dialog code, plus the export panel. Its limit is measured + 10%, rounded up (38.9 KB).
-  - A later hand-built screen adds its body to this entry, measured the same way, and raises its limit by measured + 10% in its own PR, or adds an entry of its own.
+- **Each kind of screen has its own first view, and each is gated (§2.19; runner's review, 2026-10-30).**
+  - The registry imports every `screen.ts` eagerly. What a screen shows is a dynamic import made at mount: `SectionForm`, with the form engine, on a generated screen, and the body (`load`, named `*Screen.svelte`) on a hand-built one. `SettingsSection` starts the form's import alongside `loadSettingsIndex()`, so there's no extra waterfall. A hand-built screen never loads the engine.
+  - **"Settings section"** is a generated screen's first view: the route, the form and the engine's first view (41.32 KB).
+  - **"Settings `<Body>` (first view)"** is a hand-built screen's first view: the route without the form, plus the body's own code. There's one entry per body, generated from the manifest, all against the 45 KB route cap, so a later hand-built screen is gated the moment it lands. Keyboard's is 34.92 KB.
+  - **"Settings screen extras (on demand)"** gates General's export panel beyond the section's first view, plus what a body loads only on an interaction: Keyboard's shortcut sheet and its single-key toggle (S-keys' `boot.ts`). It's 22.7 KB, so its limit is measured + 10% (25 KB).
+  - **The bodies and extras are named, never pattern-guessed:** a body is `*Screen.svelte`, and the extras are listed by path. `.size-limit.mjs` refuses to measure if any of them is imported statically, so a regex can never hide first-view code from these gates.
+  - **The vendor chunk's comment is updated to the measurement:**
+    - It is 31.09 KB with this PR (30.81 KB with `848e10a0` merged alone, 30.42 KB before Settings), against the 31.1 KB budget.
+    - The growth is Svelte runtime the form engine and Keyboard use (runner's review: not reasonably avoidable). Keyboard stays in the navigation (runner, 2026-10-30).
+    - A later route that passes the budget goes to the owner.
 - **Measured but not fixed here: three routes outside Settings go over their limits.**
   - Alerts route is at 29.03 KB (limit 29), Alert route at 45.77 KB (limit 45), and Detail sections at 34.41 KB (limit 33.9). On `main` they measure 28.38, 44.95 and 33.82 KB.
   - The cause, from sourcemaps: Settings is now a production route, and Rolldown splits shared chunks by importer set. `ui/fields/Toggle.svelte` leaves the alerts chunk, `format/bytes.ts` is split the same way (the form's memory estimate uses it), and the shared Svelte input-bindings chunk grows. The modules are the same; the extra cost is per-chunk overhead.
@@ -72,7 +78,11 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
   - a hand-built screen's loading state, which shows its title as the `<h1>`, and its body taking over with exactly one `<h1>`;
   - its load failure, which keeps the title and shows the Reload banner;
   - a generated screen with its purpose, notice, form and extra, and an extra that fails;
+  - a body already loaded renders at once on a return visit, without the loading line;
   - switching from a hand-built screen to a generated one;
   - an unknown id, which loads nothing.
+- **`shell/SettingsSection.failure.test.ts`:** a generated screen whose form code can't load shows Reload.
+- **`lazy.test.ts`** adds: an event, then a blur, on a form destroyed before the edit chunk is in fetches nothing afterwards. The engine's deferred `blur` and `received` now return early once the form is destroyed.
 - **Playwright:** `settings.routes.test.ts` runs at 390 and 1366 px. That includes opening Keyboard from the Settings navigation, with one `<h1>`, no horizontal scroll and axe. The `settings-form` specs (routes, fixture, keyboard; axe in Riverstone light and dark at 390 and 1366) and the shortcuts and boot-shell specs pass. No `waitForTimeout`.
-- **No visual change beyond the merged screens and Keyboard's new navigation item,** so all-themes isn't rerun here.
+- **The Settings navigation changed visually** (the merged Overview, the Preferences group and Keyboard). The `smoke settings` baselines were regenerated by CI (`web/e2e/.update-snapshots`, all themes) and reviewed.
+- **`soak-followups.routes.test.ts`** asserted the old "not available in this build" placeholder at `/settings`. It now checks the Overview's sections and the Back to Settings path at 390 px.

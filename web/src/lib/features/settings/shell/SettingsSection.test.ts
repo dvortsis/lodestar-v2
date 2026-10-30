@@ -14,6 +14,13 @@ const registry = vi.hoisted(() => ({
 vi.mock('./screens', () => ({
 	screens: [
 		{ id: 'keys', group: 'preferences', title: () => 'Keys', load: () => registry.load() },
+		{ id: 'slow', group: 'preferences', title: () => 'Slow', load: () => registry.load() },
+		{
+			id: 'broken',
+			group: 'preferences',
+			title: () => 'Broken',
+			load: () => Promise.reject(new Error('chunk'))
+		},
 		{
 			id: 'disk',
 			group: 'library',
@@ -58,8 +65,8 @@ afterEach(() => vi.restoreAllMocks());
 it('titles a hand-built screen while it loads, then shows only its own body', async () => {
 	const pending = deferred<{ default: Component }>();
 	registry.load = () => pending.promise;
-	render(SettingsSection, { section: 'keys' });
-	expect(screen.getByRole('heading', { level: 1, name: 'Keys' })).toBeTruthy();
+	render(SettingsSection, { section: 'slow' });
+	expect(screen.getByRole('heading', { level: 1, name: 'Slow' })).toBeTruthy();
 	expect(screen.getByRole('status').textContent).toContain('Loading settings');
 	pending.resolve(body('Keyboard body'));
 	await until(() =>
@@ -70,12 +77,11 @@ it('titles a hand-built screen while it loads, then shows only its own body', as
 });
 
 it('keeps the title and offers Reload when a hand-built screen cannot load', async () => {
-	registry.load = () => Promise.reject(new Error('chunk'));
 	const reload = vi.fn();
 	vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, reload });
-	render(SettingsSection, { section: 'keys' });
+	render(SettingsSection, { section: 'broken' });
 	const button = await screen.findByRole('button', { name: 'Reload' }, { timeout: 10_000 });
-	expect(screen.getByRole('heading', { level: 1, name: 'Keys' })).toBeTruthy();
+	expect(screen.getByRole('heading', { level: 1, name: 'Broken' })).toBeTruthy();
 	expect(document.body.textContent).toContain("Part of this page couldn't load");
 	await fireEvent.click(button);
 	expect(reload).toHaveBeenCalledOnce();
@@ -98,6 +104,18 @@ it('keeps the form when its extra cannot load, and says so', async () => {
 	render(SettingsSection, { section: 'disk' });
 	await screen.findByRole('button', { name: 'Reload' }, { timeout: 10_000 });
 	expect(screen.getByTestId('stub').textContent).toBe('Stub');
+});
+
+it('renders a loaded body at once on a return visit', async () => {
+	const first = render(SettingsSection, { section: 'keys' });
+	await until(() => expect(screen.getByText('Keyboard body')).toBeTruthy());
+	first.unmount();
+	const load = vi.fn(() => Promise.resolve(body('Keyboard body')));
+	registry.load = load;
+	render(SettingsSection, { section: 'keys' });
+	expect(screen.getByText('Keyboard body')).toBeTruthy();
+	expect(screen.queryByRole('status')).toBeNull();
+	expect(load).not.toHaveBeenCalled();
 });
 
 it('switches from a hand-built screen to a generated one', async () => {
