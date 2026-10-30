@@ -354,24 +354,24 @@ fn rule(w: &[W]) -> Option<(usize, Made)> {
     // Year ranges: "between 2000 and 2010", "from 2000 to 2010",
     // "2000 to 2010", "2000-2010".
     if matches!(a, "between" | "from") {
-        if let (Some(lo), true, Some(hi)) = (year(b), matches!(c, "and" | "to" | "-"), year(d)) {
-            if lo <= hi {
-                return node(4, years(lo, hi));
-            }
+        if let (Some(lo), true, Some(hi)) = (year(b), matches!(c, "and" | "to" | "-"), year(d))
+            && lo <= hi
+        {
+            return node(4, years(lo, hi));
         }
         if let Some((lo, hi)) = year_span(b) {
             return node(2, years(lo, hi));
         }
-        if a == "between" {
-            if let Some((n, sizes)) = size_between(&w[1..]) {
-                return node(1 + n, sizes);
-            }
+        if a == "between"
+            && let Some((n, sizes)) = size_between(&w[1..])
+        {
+            return node(1 + n, sizes);
         }
     }
-    if let (Some(lo), true, Some(hi)) = (year(a), matches!(b, "to" | "-"), year(c)) {
-        if lo <= hi {
-            return node(3, years(lo, hi));
-        }
+    if let (Some(lo), true, Some(hi)) = (year(a), matches!(b, "to" | "-"), year(c))
+        && lo <= hi
+    {
+        return node(3, years(lo, hi));
     }
     if let Some((lo, hi)) = year_span(a) {
         return node(1, years(lo, hi));
@@ -397,10 +397,10 @@ fn rule(w: &[W]) -> Option<(usize, Made)> {
         if let Some((m, bytes)) = size(rest) {
             return node(n + m, range(NumField::Size, cmp, bytes, false));
         }
-        if let (Some(k), Some(f)) = (rest.first().and_then(|x| count(&x.low)), rest.get(1)) {
-            if matches!(f.low.as_str(), "files" | "file") {
-                return node(n + 2, range(NumField::Files, cmp, k, true));
-            }
+        if let (Some(k), Some(f)) = (rest.first().and_then(|x| count(&x.low)), rest.get(1))
+            && matches!(f.low.as_str(), "files" | "file")
+        {
+            return node(n + 2, range(NumField::Files, cmp, k, true));
         }
         return None;
     }
@@ -438,15 +438,16 @@ fn rule(w: &[W]) -> Option<(usize, Made)> {
         (["season", "seasons"], NumField::Season),
         (["episode", "episodes"], NumField::Episode),
     ] {
-        if words.contains(&a) {
-            if let Some(x) = count(b).filter(|x| *x <= 5000) {
-                if let (true, Some(y)) = (matches!(c, "to" | "-" | "through"), count(d)) {
-                    if x <= y && y <= 5000 {
-                        return num(field, 4, x, y);
-                    }
-                }
-                return num(field, 2, x, x);
+        if words.contains(&a)
+            && let Some(x) = count(b).filter(|x| *x <= 5000)
+        {
+            if let (true, Some(y)) = (matches!(c, "to" | "-" | "through"), count(d))
+                && x <= y
+                && y <= 5000
+            {
+                return num(field, 4, x, y);
             }
+            return num(field, 2, x, x);
         }
     }
     // Subtitles.

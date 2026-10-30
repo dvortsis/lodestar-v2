@@ -137,11 +137,11 @@ pub(crate) fn tokenize(text: &str) -> Tokens<'_> {
             depth += 1;
         } else if is_close(c) && depth > 0 {
             depth -= 1;
-            if depth == 0 {
-                if let Some(b) = current.take() {
-                    brackets[b].end = toks.len();
-                    brackets[b].inner_to = i;
-                }
+            if depth == 0
+                && let Some(b) = current.take()
+            {
+                brackets[b].end = toks.len();
+                brackets[b].inner_to = i;
             }
         }
     }

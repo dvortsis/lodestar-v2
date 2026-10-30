@@ -535,11 +535,11 @@ pub(crate) fn rerank(
                 }
             }
             parts.score = parts.text;
-            if let (Some(p), Some((ids, junk))) = (priors, &columns) {
-                if let Some(id) = ids.first(addr.doc_id) {
-                    let junk = junk.as_ref().and_then(|j| j.first(addr.doc_id));
-                    p.apply(id, junk, parts);
-                }
+            if let (Some(p), Some((ids, junk))) = (priors, &columns)
+                && let Some(id) = ids.first(addr.doc_id)
+            {
+                let junk = junk.as_ref().and_then(|j| j.first(addr.doc_id));
+                p.apply(id, junk, parts);
             }
             i += 1;
         }
