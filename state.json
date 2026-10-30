@@ -1402,14 +1402,15 @@
    "pr": 196
   },
   "CR-COL-2": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "deps": [
     "CR-0f",
     "CR-COL"
    ],
-   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main",
-   "session": "session_01MMjhnBZWMru5fftMnr9Yf7"
+   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main | 2026-10-30T12:50Z #207 (155 lines); runner review MERGE; Windows gate_evidence false accepted; valid-interval coverage confirmed",
+   "session": "session_01MMjhnBZWMru5fftMnr9Yf7",
+   "pr": 207
   },
   "T-v051-gaps": {
    "status": "merged",
@@ -1436,7 +1437,7 @@
    "model": "opus",
    "attempt": 1,
    "pr": 206,
-   "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both",
+   "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both | 2026-10-30T12:50Z review: #206 MERGE (merge on green CI); #201 FIX FIRST (material lint 4 failed: word limit, RELEASE_ACTION x3; draft markers; updater hold wording; SHOTLIST); sent to D-v051",
    "review_session": "session_01MMjhnCfFuShScq5SLixE9d"
   },
   "IMP-1": {
@@ -2069,7 +2070,8 @@
   "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
   "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
   "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)",
-  "X-clippy-msrv: after CR-0d-1 merges and PR traffic is quiet, run cargo clippy --fix for collapsible_if (let-chains) and manual_is_multiple_of across ~60 files via the landing lane, then remove the two workspace allows (Haiku/Sonnet mechanical)"
+  "X-clippy-msrv: after CR-0d-1 merges and PR traffic is quiet, run cargo clippy --fix for collapsible_if (let-chains) and manual_is_multiple_of across ~60 files via the landing lane, then remove the two workspace allows (Haiku/Sonnet mechanical)",
+  "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
