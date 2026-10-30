@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:39Z",
+ "updated_at": "2026-10-30T20:56Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1469,12 +1469,13 @@
    "merge": "5f1deef5"
   },
   "X-crawler-sim-crate": {
-   "status": "queued",
-   "model": "opus",
+   "status": "review",
+   "model": "opus (runner)",
    "deps": [
     "CR-0d-2a"
    ],
-   "notes": "brief written; launch after CR-0d-2a merges"
+   "notes": "runner-built 20:55Z; goldens byte-identical; review by session_01MMjhn984M3k3UJXUCsEYPX",
+   "pr": 239
   },
   "X-clippy-msrv": {
    "status": "queued",
@@ -2185,11 +2186,9 @@
   "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
   "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)",
   "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
-  "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
   "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
   "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
   "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
-  "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
   "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
   "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
   "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)"
@@ -2300,7 +2299,8 @@
   "2026-10-30T20:33Z merged #236 CR-gate-hash-mismatch (e9768a11) on green ci-ok and the reviewer's MERGE; author archived; owner flag (\u00a72.19) added to owner_checklist. Docs follow-up fix/hash-mismatch-docs pushed.",
   "2026-10-30T20:36Z opened #238 fix/hash-mismatch-docs (the #236 optional nits); review by session_01MMjhn984M3k3UJXUCsEYPX. Told the owner via the dashboard session: \u00a72.19 flag for #236, and the rc.2 per-file hashes are blocked by network policy. #237 still in CI.",
   "2026-10-30T20:38Z #238 review MERGE at 00188a18; merge on green ci-ok.",
-  "2026-10-30T20:39Z merged #237 clippy MSRV 2b (faf3fd48); the collapsible_if and manual_is_multiple_of allows are gone. Only #238 (docs) is open."
+  "2026-10-30T20:39Z merged #237 clippy MSRV 2b (faf3fd48); the collapsible_if and manual_is_multiple_of allows are gone. Only #238 (docs) is open.",
+  "2026-10-30T20:56Z opened #239 X-crawler-sim-crate (runner-built): sim moved to crates/crawler-sim, sources drops its testing self-dev-dep, CI tests dht and sources without seams; goldens byte-identical. Review by session_01MMjhn984M3k3UJXUCsEYPX. #238 waits on ci-ok."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
