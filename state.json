@@ -1526,11 +1526,11 @@
       "merge": "e9768a11"
     },
     "CR-SIM-restart": {
-      "status": "review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhn9zPWSCmVk1uqpWy9M",
       "pr": 242,
-      "notes": "launched 21:37Z"
+      "notes": "launched 21:37Z | 2026-10-30T23:08Z merged #242 (1b117d37); tidy follow-up #244 (runner) review MERGE"
     },
     "F-rollback-journal": {
       "status": "merged",
@@ -1546,6 +1546,10 @@
       "session": "session_01MMjhnCSUiGHzqBGRGbDTLj",
       "pr": null,
       "notes": "brief briefs/F-rollback-holds.md (from the #241 review: holds plus O1/O2/O3); launch after #241 merges; high priority, content safety"
+    },
+    "CR-1a-H": {
+      "status": "launching",
+      "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2222,7 +2226,6 @@
     "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
     "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
     "F-filters-packs LU-1: the lure-file junk reason (lodestar-classify keyword matches) still ignores Neutralize; fails safe, but \u00a720.5.5 says every pack rule (#240 decisions)",
-    "CR-SIM tidy (after #242): fix each golden's 'Regenerate:' line (-p lodestar-crawler-sim) and re-bless; README: gloss restart_obligations_refused (counts turned-away candidates, not obligations) and fix the wrap; pin COOLDOWN_FLOOR/CEILING to sampler::MIN/MAX_INTERVAL via a testing re-export (#242 review a/b/d)",
     "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (\u00a710.18 lists them; deferred in #243, \u00a72.19 owner flag)"
   ],
   "main_health": [
