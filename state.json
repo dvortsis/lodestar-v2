@@ -1233,7 +1233,7 @@
    "status": "pending",
    "branch": "land/L6",
    "head": "d63799fc",
-   "notes": "branch created at owner commit; PR after swap, in order"
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:24Z pre-review FIX -> runner 210426ad (owner quote 'Ok. Go.' removed; PIDs redacted in md; zip kept for manifest hashes). Size 6.57 MB (zip 6.08 MB, per-minute .prom predates policy; state in PR)."
   },
   "F-updater": {
    "status": "running",
@@ -1251,7 +1251,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks)."
+   "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6."
   },
   "F-filters-packs": {
    "status": "pending",
@@ -1263,10 +1263,11 @@
    "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters."
   },
   "X-ci-health": {
-   "status": "running",
+   "status": "review",
    "session": "session_01MMjhnD1tsoWPsM4TCda718",
    "model": "opus",
-   "notes": " | 2026-10-30T05:23Z launched: tantivy PhraseScorer seek_danger debug panic via suggest proptest (q=-\"e,h\"~*\u00e90, deterministic with seed cc 275f6bcb\u2026) + rtorrent port-reuse flake. 5th session while F-updater idles waiting on L4 (runner call)."
+   "notes": " | 2026-10-30T05:23Z launched: tantivy PhraseScorer seek_danger debug panic via suggest proptest (q=-\"e,h\"~*\u00e90, deterministic with seed cc 275f6bcb\u2026) + rtorrent port-reuse flake. 5th session while F-updater idles waiting on L4 (runner call). | 2026-10-30T06:24Z #181 24e7cf59 runner-reviewed SeekGuard OK; asked to add aria2/deluge/qbit/transmission refused_addr; merge on green",
+   "pr": 181
   },
   "F-auth-lock": {
    "status": "pending",
