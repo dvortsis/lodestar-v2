@@ -1,17 +1,15 @@
 //! The node's event loop. See the module docs in `node/mod.rs`.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use rand::RngExt;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
-use std::net::UdpSocket as StdUdpSocket;
-
-use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::Instant;
 
 use lodestar_metainfo::InfoHash;
 
@@ -20,6 +18,7 @@ use super::peers::PeerStore;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
+use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
     Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, Snapshot, Source, Stats,
 };
@@ -160,7 +159,7 @@ impl TokenBucket {
 
 /// A reporter's network: its /24 (IPv4) or /64 (IPv6). One network
 /// gets one say, so a few hosts in one range can't outvote the rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Network(u8, u64);
 
 fn network(ip: IpAddr) -> Network {
@@ -265,7 +264,7 @@ impl ExternalIp {
 /// When each network last sent us an unsolicited query: the newest
 /// [`UNSOLICITED_SOURCES`] networks.
 #[derive(Default)]
-struct UnsolicitedFrom(HashMap<Network, Instant>);
+struct UnsolicitedFrom(Map<Network, Instant>);
 
 impl UnsolicitedFrom {
     fn note(&mut self, ip: IpAddr, now: Instant) {
@@ -315,7 +314,7 @@ struct PeerRequest {
     remaining: usize,
     inflight: usize,
     sent: usize,
-    peers: HashSet<SocketAddr>,
+    peers: Set<SocketAddr>,
     started: Instant,
 }
 
@@ -325,11 +324,11 @@ struct Actor {
     ids: Vec<NodeId>,
     external: ExternalIp,
     tokens: Tokens,
-    pending: HashMap<u64, Pending>,
+    pending: Map<u64, Pending>,
     /// Queries in flight per address, for cheap "already asked?" checks.
-    pending_addrs: HashMap<SocketAddr, u32>,
+    pending_addrs: Map<SocketAddr, u32>,
     next_tid: u64,
-    lookups: HashMap<u32, Lookup>,
+    lookups: Map<u32, Lookup>,
     next_lookup: u32,
     query_rate: TokenBucket,
     reply_rate: TokenBucket,
@@ -339,7 +338,7 @@ struct Actor {
     bootstrap: Vec<SocketAddr>,
     last_bootstrap: Option<Instant>,
     /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
-    seed_tids: HashSet<u64>,
+    seed_tids: Set<u64>,
     /// The last bootstrap's routers refused (policy or socket) and throttled
     /// at send, and whether any router answered this round.
     seed_refused: usize,
@@ -356,13 +355,13 @@ struct Actor {
     sampler: Sampler,
     recent: VecDeque<InfoHash>,
     get_peers_queue: VecDeque<(InfoHash, Option<oneshot::Sender<Vec<SocketAddr>>>)>,
-    peer_requests: HashMap<u32, PeerRequest>,
+    peer_requests: Map<u32, PeerRequest>,
     next_request: u32,
     active_get_peers: usize,
     scrape_queue: VecDeque<(InfoHash, oneshot::Sender<Option<DhtEstimate>>)>,
     active_scrapes: usize,
     /// Who's waiting for each running scrape lookup.
-    scrape_waiters: HashMap<u32, oneshot::Sender<Option<DhtEstimate>>>,
+    scrape_waiters: Map<u32, oneshot::Sender<Option<DhtEstimate>>>,
     scrape_rate: TokenBucket,
     /// Scrape lookups that ran out of query budget, to drive next tick.
     stalled: Vec<u32>,
@@ -378,19 +377,19 @@ struct Actor {
 
 pub(crate) async fn run(
     cfg: Config,
-    sockets: Vec<(UdpSocket, StdUdpSocket)>,
+    sockets: Vec<(RecvSocket, SendSocket)>,
+    rng: StdRng,
     stats: Arc<Stats>,
     mut commands: mpsc::Receiver<Command>,
     mut shutdown: watch::Receiver<bool>,
     harvest: Option<mpsc::Sender<Harvest>>,
 ) -> Result<(), StateError> {
     let now = Instant::now();
-    let rng = StdRng::from_rng(&mut rand::rng());
     let saved = match &cfg.state_path {
         Some(path) => State::load(path).unwrap_or_default(),
         None => None,
     };
-    let (recv, sockets): (Vec<UdpSocket>, Vec<StdUdpSocket>) = sockets.into_iter().unzip();
+    let (recv, sockets): (Vec<RecvSocket>, Vec<SendSocket>) = sockets.into_iter().unzip();
     let local_addrs = recv.iter().filter_map(|s| s.local_addr().ok()).collect();
     let bootstrap = resolve(&cfg.bootstrap).await;
     let mut actor = Actor::new(
@@ -437,7 +436,7 @@ pub(crate) async fn run(
 }
 
 async fn recv_second(
-    sockets: &[UdpSocket],
+    sockets: &[RecvSocket],
     buf: &mut [u8],
 ) -> std::io::Result<(usize, SocketAddr)> {
     sockets[1].recv_from(buf).await
@@ -516,11 +515,11 @@ impl Actor {
                 current: saved.and_then(|s| s.external_ip),
                 ..ExternalIp::default()
             },
-            pending: HashMap::new(),
-            pending_addrs: HashMap::new(),
+            pending: Map::default(),
+            pending_addrs: Map::default(),
             // The lower half leaves 2^63 tokens before exhaustion.
             next_tid: rng.random::<u64>() >> 1,
-            lookups: HashMap::new(),
+            lookups: Map::default(),
             next_lookup: 0,
             stats,
             rng,
@@ -530,7 +529,7 @@ impl Actor {
                 .map(lodestar_network_policy::normalize)
                 .collect(),
             last_bootstrap: None,
-            seed_tids: HashSet::new(),
+            seed_tids: Set::default(),
             seed_refused: 0,
             seed_throttled: 0,
             seed_answered: false,
@@ -544,12 +543,12 @@ impl Actor {
             sampler: Sampler::default(),
             recent: VecDeque::with_capacity(RECENT_SAMPLES),
             get_peers_queue: VecDeque::new(),
-            peer_requests: HashMap::new(),
+            peer_requests: Map::default(),
             next_request: 0,
             active_get_peers: 0,
             scrape_queue: VecDeque::new(),
             active_scrapes: 0,
-            scrape_waiters: HashMap::new(),
+            scrape_waiters: Map::default(),
             scrape_rate: scrape_bucket(cfg.intensity, now),
             stalled: Vec::new(),
             last_summary: (now, [0; 5]),
@@ -743,7 +742,7 @@ impl Actor {
 
     fn send(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         to: SocketAddr,
         msg: &Message<'_>,
@@ -775,7 +774,7 @@ impl Actor {
     /// Sends a query if the rate limit and outstanding cap allow it.
     fn query(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         to: SocketAddr,
         node: Option<NodeId>,
@@ -788,7 +787,7 @@ impl Actor {
     /// [`Actor::query`], telling a throttled query from a failed send.
     fn try_query(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         to: SocketAddr,
         node: Option<NodeId>,
@@ -812,7 +811,7 @@ impl Actor {
     /// check still apply. Anything else gets the full policy.
     fn query_seed(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         to: SocketAddr,
         method: Method<'_>,
@@ -841,7 +840,7 @@ impl Actor {
     /// returns its transaction id.
     fn dispatch_query(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         to: SocketAddr,
         node: Option<NodeId>,
@@ -917,7 +916,7 @@ impl Actor {
                 r.inflight = r.inflight.saturating_sub(1);
             }
         }
-        if let std::collections::hash_map::Entry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
+        if let MapEntry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
             *e.get_mut() -= 1;
             if *e.get() == 0 {
                 e.remove();
@@ -926,13 +925,7 @@ impl Actor {
         p
     }
 
-    fn on_packet(
-        &mut self,
-        sockets: &[StdUdpSocket],
-        family: usize,
-        data: &[u8],
-        from: SocketAddr,
-    ) {
+    fn on_packet(&mut self, sockets: &[SendSocket], family: usize, data: &[u8], from: SocketAddr) {
         Stats::inc(&self.stats.packets_in);
         if self.cfg.deny.as_ref().is_some_and(|d| d.denies(from.ip())) {
             Stats::inc(&self.stats.denied);
@@ -983,7 +976,7 @@ impl Actor {
 
     fn on_query(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         msg: &Message<'_>,
         q: &Query<'_>,
@@ -1143,7 +1136,7 @@ impl Actor {
 
     fn on_response(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         msg: &Message<'_>,
         r: Option<&Response<'_>>,
@@ -1276,7 +1269,7 @@ impl Actor {
                             && endpoint_allowed(cfg, n.addr)
                             && !Actor::is_self(ids, local, n)
                     });
-                let mut unique = HashSet::new();
+                let mut unique = Set::default();
                 let peers: Vec<_> = r
                     .values
                     .iter()
@@ -1329,7 +1322,7 @@ impl Actor {
 
     fn start_peer_request(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         hash: InfoHash,
         reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
     ) {
@@ -1350,7 +1343,7 @@ impl Actor {
                 remaining: self.families.len(),
                 inflight: 0,
                 sent: 0,
-                peers: HashSet::new(),
+                peers: Set::default(),
                 started: Instant::now(),
             },
         );
@@ -1372,7 +1365,7 @@ impl Actor {
     /// finishes.
     fn start_scrape(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         hash: InfoHash,
         reply: oneshot::Sender<Option<DhtEstimate>>,
     ) {
@@ -1413,7 +1406,7 @@ impl Actor {
     /// (addresses whose ids we don't know yet).
     fn start_lookup(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         target: NodeId,
         known: &[NodeInfo],
@@ -1428,7 +1421,7 @@ impl Actor {
     #[allow(clippy::too_many_arguments)]
     fn start_lookup_as(
         &mut self,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         family: usize,
         target: NodeId,
         known: &[NodeInfo],
@@ -1513,7 +1506,7 @@ impl Actor {
         }
     }
 
-    fn drive_lookup(&mut self, sockets: &[StdUdpSocket], lid: u32) {
+    fn drive_lookup(&mut self, sockets: &[SendSocket], lid: u32) {
         if self.finish_if_due(lid, Instant::now()) {
             return;
         }
@@ -1651,7 +1644,7 @@ impl Actor {
     }
 
     /// Self-lookups seeded with saved nodes and the bootstrap routers.
-    fn start_bootstrap(&mut self, sockets: &[StdUdpSocket], saved: Vec<NodeInfo>) {
+    fn start_bootstrap(&mut self, sockets: &[SendSocket], saved: Vec<NodeInfo>) {
         self.last_bootstrap = Some(Instant::now());
         if self.seed_tids.is_empty() {
             // A new round; one still in flight carries on.
@@ -1697,7 +1690,7 @@ impl Actor {
         );
     }
 
-    fn maintain(&mut self, sockets: &[StdUdpSocket]) {
+    fn maintain(&mut self, sockets: &[SendSocket]) {
         let now_i = Instant::now();
         let now = self.now_secs();
 
@@ -1833,7 +1826,7 @@ impl Actor {
     /// One tick of BEP 33 scraping: resume lookups that ran short of
     /// queries, answer the ones past their deadline with what they have,
     /// and start queued scrapes as the budget allows.
-    fn scrape_tick(&mut self, sockets: &[StdUdpSocket], now_i: Instant) {
+    fn scrape_tick(&mut self, sockets: &[SendSocket], now_i: Instant) {
         let ids: Vec<_> = self.lookups.keys().copied().collect();
         for lid in ids {
             self.finish_if_due(lid, now_i);
@@ -1862,7 +1855,7 @@ impl Actor {
     /// sample_infohashes queries to nodes that are due, refilling the
     /// frontier from the routing tables and exploring a random region of
     /// the keyspace when it runs low.
-    fn sample_tick(&mut self, sockets: &[StdUdpSocket], now_i: Instant) {
+    fn sample_tick(&mut self, sockets: &[SendSocket], now_i: Instant) {
         if now_i.duration_since(self.epoch)
             < self
                 .cfg
@@ -1955,9 +1948,10 @@ fn source_label(s: Source) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
 
-    fn fixture() -> (Actor, Vec<StdUdpSocket>) {
-        let socket = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+    fn fixture() -> (Actor, Vec<SendSocket>) {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();
         let addr = socket.local_addr().unwrap();
         let cfg = Config {
@@ -1977,7 +1971,7 @@ mod tests {
             Instant::now(),
             StdRng::seed_from_u64(3),
         );
-        (actor, vec![socket])
+        (actor, vec![SendSocket::Udp(socket)])
     }
 
     fn candidate(addr: SocketAddr) -> NodeInfo {
@@ -1987,7 +1981,7 @@ mod tests {
         }
     }
 
-    fn reply(a: &mut Actor, sockets: &[StdUdpSocket], tid: u64, peers: Vec<SocketAddr>) {
+    fn reply(a: &mut Actor, sockets: &[SendSocket], tid: u64, peers: Vec<SocketAddr>) {
         let pending = &a.pending[&tid];
         let (family, addr, id) = (pending.family, pending.to, pending.id.unwrap());
         deliver_reply(a, sockets, tid, family, addr, id, peers);
@@ -1995,7 +1989,7 @@ mod tests {
 
     fn deliver_reply(
         a: &mut Actor,
-        sockets: &[StdUdpSocket],
+        sockets: &[SendSocket],
         tid: u64,
         family: usize,
         addr: SocketAddr,
@@ -2072,11 +2066,11 @@ mod tests {
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
             // Skipped where the host has no IPv6.
-            let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
+            let Ok(v6) = std::net::UdpSocket::bind("[::1]:0") else {
                 return;
             };
             v6.set_nonblocking(true).unwrap();
-            sockets.push(v6);
+            sockets.push(SendSocket::Udp(v6));
             a.families.push(Family {
                 table: RoutingTable::new(a.ids[0], true),
                 ipv6: true,
@@ -2169,7 +2163,7 @@ mod tests {
     }
 
     /// A fixture that applies the public outbound policy, as in production.
-    fn public_fixture(seeds: Vec<SocketAddr>) -> (Actor, Vec<StdUdpSocket>) {
+    fn public_fixture(seeds: Vec<SocketAddr>) -> (Actor, Vec<SendSocket>) {
         let (mut a, sockets) = fixture();
         a.cfg.allow_private = false;
         a.bootstrap = seeds;
@@ -2227,9 +2221,9 @@ mod tests {
         assert!(!endpoint_allowed(&a.cfg, nat64), "special range");
         // An IPv6 family. Its socket is an IPv4 stand-in, so the send fails
         // on every host, after the policy and with the packet encoded.
-        let stand_in = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let stand_in = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         stand_in.set_nonblocking(true).unwrap();
-        sockets.push(stand_in);
+        sockets.push(SendSocket::Udp(stand_in));
         a.families.push(Family {
             table: RoutingTable::new(a.ids[0], true),
             ipv6: true,
@@ -2531,11 +2525,11 @@ mod tests {
     fn dual_stack_cancellation_cleans_shared_rpc_ownership() {
         let (mut a, mut sockets) = fixture();
         // Skipped where the host has no IPv6.
-        let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
+        let Ok(v6) = std::net::UdpSocket::bind("[::1]:0") else {
             return;
         };
         v6.set_nonblocking(true).unwrap();
-        sockets.push(v6);
+        sockets.push(SendSocket::Udp(v6));
         a.families.push(Family {
             table: RoutingTable::new(a.ids[0], true),
             ipv6: true,
@@ -2582,7 +2576,7 @@ mod tests {
     #[test]
     fn sample_restart_suppression_and_wire_exhaustion_do_not_block_replies() {
         let (mut a, sockets) = fixture();
-        let peer = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let peer = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = peer.local_addr().unwrap();
         a.sampler.offer(candidate(to), Instant::now());
         a.cfg.sample_start_delay = None;

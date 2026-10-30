@@ -15,7 +15,10 @@ mod lookup;
 mod peers;
 mod sampler;
 mod seen;
+#[cfg(feature = "testing")]
+pub mod testing;
 mod tokens;
+mod transport;
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -575,30 +578,51 @@ impl Node {
         }
         let mut sockets = Vec::new();
         for addr in &config.bind {
-            sockets.push(bind(*addr)?);
+            let (recv, send) = bind(*addr)?;
+            sockets.push((
+                transport::RecvSocket::Udp(recv),
+                transport::SendSocket::Udp(send),
+            ));
         }
         let local_addrs = sockets
             .iter()
             .map(|(recv, _)| recv.local_addr())
             .collect::<io::Result<Vec<_>>>()?;
+        let rng = {
+            use rand::SeedableRng;
+            rand::rngs::StdRng::from_rng(&mut rand::rng())
+        };
+        Ok(Node::spawn(config, sockets, local_addrs, rng, harvest))
+    }
+
+    /// Starts the actor on bound sockets. Shared by [`Node::start`] and the
+    /// simulator's `testing::start`, so both get the same wiring.
+    fn spawn(
+        config: Config,
+        sockets: Vec<(transport::RecvSocket, transport::SendSocket)>,
+        local_addrs: Vec<SocketAddr>,
+        rng: rand::rngs::StdRng,
+        harvest: Option<mpsc::Sender<Harvest>>,
+    ) -> Node {
         let stats = Arc::new(Stats::default());
         let (commands, command_rx) = mpsc::channel(64);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(actor::run(
             config,
             sockets,
+            rng,
             stats.clone(),
             command_rx,
             shutdown_rx,
             harvest,
         ));
-        Ok(Node {
+        Node {
             commands,
             shutdown,
             stats,
             local_addrs,
             task,
-        })
+        }
     }
 
     pub fn local_addrs(&self) -> &[SocketAddr] {
