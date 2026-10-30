@@ -2125,7 +2125,7 @@
       "unblocks": "v0.5.1 gate runs"
     },
     {
-      "item": "Size limits (your numbers): Settings becoming a production route re-splits shared chunks, so two non-Settings entries go slightly over: Alert route 45.77/45 KB, Detail sections 34.41/33.9 KB (same modules; per-chunk overhead). Chunk grouping cannot fix it. Choose: (a) raise those two limits to 45.8 / 34.5 KB, or (b) hold #217 while the reviewer looks for a code-level fix",
+      "item": "Size limits (your numbers): Settings becoming a production route re-splits shared chunks, so three non-Settings entries go slightly over: Alerts route 29.03/29 KB (26 B), Alert route 45.75/45 KB, Detail sections 34.4/33.9 KB. The modules are the same; it's per-chunk overhead. Chunk grouping and code changes can't fix it without duplicating code (the author tried, and the reviewer confirmed). Choose: (a) raise them to 29.1 / 45.8 / 34.5 KB, or (b) keep #217 (one Settings implementation, every Settings budget passing) on hold",
       "unblocks": "#217 Settings (one implementation, within its own budgets)"
     }
   ],
@@ -2152,7 +2152,8 @@
     "CR-SIM scenario for CR-0d restored restrictions (from CR-0d-2a)",
     "X-crawler-sim-crate: now after CR-ADM (runner, 15:25Z)",
     "logging: the second wait in delete_while_writers_run... (source_tests.rs ~772), and the older one above it, should report how many lines they saw (standards \u00a72) (#213 post-merge review)",
-    "logging: rotated_name (file.rs:763) reuses the lowest free N, so a reused name in the same ms after a prune sorts as the oldest; take max N+1 instead, with a gap test (pre-existing, rare)"
+    "logging: rotated_name (file.rs:763) reuses the lowest free N, so a reused name in the same ms after a prune sorts as the oldest; take max N+1 instead, with a gap test (pre-existing, rare)",
+    "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2211,6 +2212,7 @@
     "2026-10-30T15:25Z ReadNotifications backlog (23+5) processed. #214 MERGE (nits fixed by runner, 4b...). #215 CHANGES -> gap fix 944a1efe, re-check asked. #216 CHANGES (B1, B2) relayed. #217 CHANGES (Keyboard first view >45 KB) relayed; keep Keyboard; vendor comment. IMP-2 A/B/C answered (C: accept the WAL siblings, never delete, quiescence first). CR-ADM design OK; generation defect as its own unconditional PR fix/pool-generation; Phase 2 after #216. X-filter-budget spread rule accepted (no veto). #219 R-gauges review launched session_01MMjhnAQikEtXErXdw8L7yw.",
     "2026-10-30T15:32Z merged #214 (9fcdbad5, CR-0 acceptance) and #215 (40935f89, memory-gate fit), each with a MERGE verdict in hand and CI green. #221 X-welcome-focus: review CHANGES (welcome baselines need regenerating); relayed. #220 waits on the Windows test.",
     "2026-10-30T15:40Z merged #220 (d241e3a1) and #219 R-gauges (9dbff7a8), each with MERGE in hand and CI green. Opened #222: cherry-pick R-gauges onto release/v0.5.1 for rc.2, with the delta map updated. Sessions archived: the R-gauges author, and the #219, #220, #214 and #215 reviewers.",
-    "2026-10-30T15:44Z #213 post-merge review: OK (root cause right, ordering total, tests catch the old code, no Windows issue); no revert. #217 fixes 4dcba77f sent to the same reviewer; Alerts route now passes, so only Alert route and Detail sections wait on the owner."
+    "2026-10-30T15:44Z #213 post-merge review: OK (root cause right, ordering total, tests catch the old code, no Windows issue); no revert. #217 fixes 4dcba77f sent to the same reviewer; Alerts route now passes, so only Alert route and Detail sections wait on the owner.",
+    "2026-10-30T15:54Z #216 re-check MERGE at d3a57912, but it conflicts with main (#218, #219, #220); author told to merge main plus 2 optional items, then a delta check and merge. #217 re-check MERGE pending the owner; the reviewer measured Alerts at 29.03/29 again (26 B over), so all three limits go to the owner."
   ]
 }
