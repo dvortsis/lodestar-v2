@@ -7341,8 +7341,8 @@ export interface components {
              *     `manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the
              *     last check's times couldn't be saved and won't survive a
              *     restart), `updater_unreadable` (the saved update state couldn't be
-             *     read, so automatic updates are held until a pause or resume is
-             *     saved), …
+             *     read, so automatic updates are held; pausing or resuming saves a
+             *     new state, which rewrites the file and ends the hold), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];
