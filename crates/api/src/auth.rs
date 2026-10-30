@@ -325,10 +325,16 @@ impl Auth {
             if self.setup_token().as_deref() != Some(expected.as_str()) {
                 return Err(AuthError::SetupDone);
             }
+            let state = self.snapshot();
+            // A pending token implies no password; checked anyway, so a
+            // future path that sets one can't let the token overwrite it.
+            if state.password.is_some() {
+                return Err(AuthError::SetupDone);
+            }
             let next = State {
                 password: Some(encoded),
                 key: random::<32>(),
-                ..self.snapshot()
+                ..state
             };
             let key = next.key;
             self.save(&next)?;
