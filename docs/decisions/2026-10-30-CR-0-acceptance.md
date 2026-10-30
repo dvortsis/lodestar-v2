@@ -11,7 +11,7 @@ Owner, 2026-10-30, with the runner's refinements marked as such. The owner's rul
 - **The memory report doesn't use the earlier, withdrawn slope figure.**
 - **The 24 h Linux Docker soak is the binding memory gate for v0.5.1.** It uses the same report (the slope over hours 12–24 with its 95% CI, plus the run's peak) and the same bar. This is added to build-plan §0.4.
 - **Storage and cache gauges go into the rc.** DB, WAL and index sizes, plus cache sizes, are sampled periodically, so a persistent ramp can be explained. The change must not touch the crawler lifecycle, the sampler or the endpoint policy, because that would force another soak.
-- **The v0.5.1 delta mapping proceeds** once the fit settles the gate. It has: see below.
+- **The v0.5.1 delta mapping proceeds** once the fit settles the gate. The fit below settles it.
 
 ## The fit
 These figures come from the 1,428 full-resolution baseline rows of the frozen soak `744b84d6` (r21) on the soak host. Only the aggregates are published. The raw samples stay private.
@@ -27,9 +27,10 @@ These figures come from the 1,428 full-resolution baseline rows of the frozen so
 
 ## Runner refinements (§2.19, flagged to the owner)
 - **Linux gated series: anonymous private memory, the collector's `private_bytes` field.**
-  - Under Docker this is cgroup v2 `memory.stat` `anon`, or `anon` from the Docker stats API when the cgroup tree isn't mounted. On a native run it's `RssAnon` from `/proc/<pid>/status`. Total resident memory (`working_set_bytes`) is recorded beside it for context, but it isn't gated.
+  - Under Docker this is cgroup v2 `memory.stat` `anon`, or `anon` from the Docker stats API when the cgroup tree isn't mounted. On a native run it's `RssAnon` from `/proc/<pid>/status`. Resident or working-set memory (`working_set_bytes`: VmRSS natively, `memory.current` minus `inactive_file` under Docker) is recorded beside it for context, but it isn't gated.
   - **Reason:** the bar was calibrated on Windows private bytes, which is committed anonymous memory.
   - Linux resident set and cgroup usage also count file-backed pages. The search index is memory-mapped, so those figures grow as the index grows and the page cache warms, with no heap growth. They could fail the bar spuriously, or a shrinking cache could hide real growth.
+  - On a cgroup v1 host or an older Docker daemon, `anon` isn't reported, so `private_bytes` is missing. The analyzer then refuses the fit (#215), and the gate is unmeasured, not passed.
   - Swap isn't counted. If the soak host swaps the process, the report says so, and the runner takes it to the owner.
 - **Gauge cadence:** the gauges are sampled every 60 s, by a background task. `/metrics` reads cached values.
 - **Delta class:** the gauges are class B/C in the v0.5.1 delta map. They're metrics only, with no change to shipped crawler behaviour.
