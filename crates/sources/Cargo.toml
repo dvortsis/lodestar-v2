@@ -9,8 +9,8 @@ publish.workspace = true
 repository.workspace = true
 
 [features]
-# Fixed hash keys for the deterministic crawler simulator (tests/sim). No
-# production build enables it.
+# Fixed hash keys for the deterministic crawler simulator
+# (crates/crawler-sim). Only that crate enables it.
 testing = []
 
 [dependencies]
@@ -24,6 +24,4 @@ tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 workspace = true
 
 [dev-dependencies]
-lodestar-dht = { workspace = true, features = ["testing"] }
-lodestar-sources = { path = ".", features = ["testing"] }
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros", "test-util"] }

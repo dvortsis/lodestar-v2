@@ -10,7 +10,7 @@ repository.workspace = true
 
 [features]
 # Test-only seams for the deterministic crawler simulator
-# (crates/sources/tests/sim): an in-memory socket, a seeded RNG, ordered
+# (crates/crawler-sim): an in-memory socket, a seeded RNG, ordered
 # maps and fixed seen-filter keys. No production build enables it.
 testing = []
 

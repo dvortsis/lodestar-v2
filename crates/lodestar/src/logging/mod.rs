@@ -98,6 +98,8 @@ pub const TARGETS: &[(&str, Component)] = &[
     ("lodestar_bench", Component::System),
     ("lodestar_api", Component::Api),
     ("lodestar_dht", Component::Dht),
+    // The crawler simulator: test-only, it runs the DHT actor and pool.
+    ("lodestar_crawler_sim", Component::Dht),
     ("lodestar_peer_wire", Component::Fetch),
     ("lodestar_utp", Component::Fetch),
     ("lodestar_sources", Component::Sources),

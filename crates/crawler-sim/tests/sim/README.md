@@ -19,10 +19,10 @@ Ten simulated minutes take one to five seconds of wall time.
 ## Run
 
 ```sh
-cargo test -p lodestar-sources --test sim                 # all baselines vs goldens
-CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim matches_golden   # regenerate goldens
-CRAWLER_SIM_LOG=/tmp/sim cargo test -p lodestar-sources --test sim healthy     # also write the full outcome log
-cargo test -p lodestar-sources --test sim -- --ignored --nocapture   # the 60-minute stress run and the noise floor
+cargo test -p lodestar-crawler-sim --test sim                 # all baselines vs goldens
+CRAWLER_SIM_BLESS=1 cargo test -p lodestar-crawler-sim --test sim matches_golden   # regenerate goldens
+CRAWLER_SIM_LOG=/tmp/sim cargo test -p lodestar-crawler-sim --test sim healthy     # also write the full outcome log
+cargo test -p lodestar-crawler-sim --test sim -- --ignored --nocapture   # the 60-minute stress run and the noise floor
 ```
 
 A golden mismatch prints the first differing line and the whole new report.
@@ -73,7 +73,7 @@ It has four parts:
 
 - **One scheduler:** a current-thread runtime with the clock paused, and every `select!` in the harness `biased`.
 - **Seeded, order-free outcomes:** all randomness comes from the scenario seed. Each packet's loss, error and latency are a hash of (seed, node, that node's query index), and each fetch's outcome a hash of (seed, peer, hash). So nothing depends on the order the real code asks, and a switch that changes one send doesn't reshuffle the luck of every other node.
-- **The `testing` cargo feature** on `lodestar-dht` and `lodestar-sources` (dev-only, never enabled by a production build) supplies three things:
+- **The `testing` cargo feature** on `lodestar-dht` and `lodestar-sources` (enabled only by this crate, `lodestar-crawler-sim`, so neither those crates' own tests nor any production build has it) supplies these:
   - an in-memory socket for the actor;
   - a seeded actor RNG;
   - B-tree maps and sets in place of the actor's hash tables and the pool's request map, whose iteration order reaches scheduling;
