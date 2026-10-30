@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:50Z",
+ "updated_at": "2026-10-30T21:02Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2307,7 +2307,8 @@
   "2026-10-30T20:38Z #238 review MERGE at 00188a18; merge on green ci-ok.",
   "2026-10-30T20:39Z merged #237 clippy MSRV 2b (faf3fd48); the collapsible_if and manual_is_multiple_of allows are gone. Only #238 (docs) is open.",
   "2026-10-30T20:56Z opened #239 X-crawler-sim-crate (runner-built): sim moved to crates/crawler-sim, sources drops its testing self-dev-dep, CI tests dht and sources without seams; goldens byte-identical. Review by session_01MMjhn984M3k3UJXUCsEYPX. #238 waits on ci-ok.",
-  "2026-10-30T20:50Z #239 review MERGE at 25ecb199; the optional stale README line is carried into the CR-SIM-restart brief."
+  "2026-10-30T20:50Z #239 review MERGE at 25ecb199; the optional stale README line is carried into the CR-SIM-restart brief.",
+  "2026-10-30T21:02Z owner: rc.2 published (image + draft prerelease with SHA256SUMS and minisig); per-file hashes recorded. Owner asked whether to switch the Unraid soak to rc.2 (restore the cold pre-v0.5.1 backup for the in-place upgrade test) and run the Windows MSI service and portable smokes: runner said yes, with the gate conditions. #239: fixed the targets_cover_every_crate failure (TARGETS entry for lodestar_crawler_sim)."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
@@ -2322,8 +2323,17 @@
     "package-linux-aarch64 (13004575289)": "sha256:717ce8f661fe958911ddc6120bdc04f813fd5f891b8c7a0bc9b25da5bf87d672",
     "package-windows (13005076777)": "sha256:56d9422f295cda36c97989fe8abe35d51c5cf03401ea61a5855033624881c6dd"
    },
-   "per_file_hashes": "NOT recorded by the runner: the environment's network policy denies productionresultssa19.blob.core.windows.net (artifact downloads). Owner: copy SHA256SUMS from the draft release into notes/v051-owner-steps.md, or allow that host.",
-   "package_artifacts_expire": "2026-11-13 (the draft release keeps its assets)"
+   "per_file_hashes": {
+    "lodestar-0.5.1-rc.2-x86_64-linux-musl.tar.gz": "6348fad5e6466beaca93e9573af3810c39c84e3f3097af533e572818e3e2a92a",
+    "lodestar-0.5.1-rc.2-aarch64-linux-musl.tar.gz": "26590dd87ee9e073a9491ec7610e3335e50b92b36bfe6fae4bee88cf01d09aca",
+    "lodestar-0.5.1-x86_64.msi": "99c2fbcb92401297f477e1f15e625dd5366278e78a2453eda14dd3afffca0dd8",
+    "lodestar-0.5.1-rc.2-x86_64-windows-portable.zip": "bf32947908d10995d9faa58d28e237409e3df9f4d848b8cc7f17d739f6d959d3",
+    "SHA256SUMS": "25c736520cd851d8112e7057ec868ed6bd6ef98eea607d0aefa141627074f5ba",
+    "SHA256SUMS.minisig": "6da0ecb03bb7ae150d47f5f9ea07d043ce7968c560ba13a5284c13b96655d13d",
+    "source": "owner, 2026-10-30 ~21:00Z, from the draft release"
+   },
+   "package_artifacts_expire": "2026-11-13 (the draft release keeps its assets)",
+   "image": "ghcr.io/dvortsis/lodestar-v2:0.5.1-rc.2 published"
   }
  }
 }
