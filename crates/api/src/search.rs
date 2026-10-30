@@ -719,7 +719,7 @@ fn seal_cursor(c: &Cursor) -> String {
 
 /// Checks a cursor's form, epoch, tag and search, in that order.
 pub(crate) fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
-    if text.len() > MAX_CURSOR || text.len() % 2 != 0 {
+    if text.len() > MAX_CURSOR || !text.len().is_multiple_of(2) {
         return Err(bad_cursor());
     }
     let bytes: Option<Vec<u8>> = (0..text.len())

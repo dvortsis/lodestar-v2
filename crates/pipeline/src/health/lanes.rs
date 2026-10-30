@@ -95,10 +95,10 @@ impl Lanes {
             return;
         }
         self.queues[i].push_back(id);
-        if self.queues[i].len() > LANE_CAP {
-            if let Some(old) = self.queues[i].pop_front() {
-                self.queued[i].remove(&old);
-            }
+        if self.queues[i].len() > LANE_CAP
+            && let Some(old) = self.queues[i].pop_front()
+        {
+            self.queued[i].remove(&old);
         }
     }
 

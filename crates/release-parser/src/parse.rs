@@ -190,14 +190,12 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
             return;
         }
-        if toks.first().is_some_and(|t| t.low.ends_with("www")) {
-            if let Some(j) = (1..toks.len().min(5))
+        if toks.first().is_some_and(|t| t.low.ends_with("www"))
+            && let Some(j) = (1..toks.len().min(5))
                 .find(|&j| toks[j].sep == "." && lexicon::is_tld(&toks[j].low))
-            {
-                if j + 1 < toks.len() {
-                    self.start = j + 1;
-                }
-            }
+            && j + 1 < toks.len()
+        {
+            self.start = j + 1;
         }
     }
 
@@ -317,30 +315,29 @@ impl<'t, 'a> Parser<'t, 'a> {
         if let Some((season, rest)) = lead_num(low, "s", 4) {
             if rest.is_empty() {
                 let next = self.tok(i + 1);
-                if let Some(n) = next.filter(|n| n.tight_dash()) {
-                    if let Some(last) = lead_num(&n.low, "s", 4)
+                if let Some(n) = next.filter(|n| n.tight_dash())
+                    && let Some(last) = lead_num(&n.low, "s", 4)
                         .filter(|(_, r)| r.is_empty())
                         .map(|(s, _)| s)
                         .or_else(|| n.number().filter(|_| n.low.len() <= 2))
-                    {
-                        let span = span(season, last)?;
-                        return Self::mark(i, i + 2, strong, ep, vec![Hit::Season(span)]);
-                    }
+                {
+                    let span = span(season, last)?;
+                    return Self::mark(i, i + 2, strong, ep, vec![Hit::Season(span)]);
                 }
-                if let Some(n) = next.filter(|n| n.dot_or_space()) {
-                    if let Some((e, "")) = lead_num(&n.low, "e", 4) {
-                        let (end, last) = self.episode_range(i + 2, e);
-                        return Self::mark(
-                            i,
-                            end,
-                            strong,
-                            ep,
-                            vec![
-                                Hit::Season(Span::one(season as u16)),
-                                Hit::Episode(span(e, last)?),
-                            ],
-                        );
-                    }
+                if let Some(n) = next.filter(|n| n.dot_or_space())
+                    && let Some((e, "")) = lead_num(&n.low, "e", 4)
+                {
+                    let (end, last) = self.episode_range(i + 2, e);
+                    return Self::mark(
+                        i,
+                        end,
+                        strong,
+                        ep,
+                        vec![
+                            Hit::Season(Span::one(season as u16)),
+                            Hit::Episode(span(e, last)?),
+                        ],
+                    );
                 }
                 return Self::mark(
                     i,
@@ -375,19 +372,19 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
 
         // 1x02
-        if let Some((s, rest)) = lead_num(low, "", 2) {
-            if let Some((e, "")) = lead_num(rest, "x", 3) {
-                return Self::mark(
-                    i,
-                    i + 1,
-                    strong,
-                    ep,
-                    vec![
-                        Hit::Season(Span::one(s as u16)),
-                        Hit::Episode(Span::one(e as u16)),
-                    ],
-                );
-            }
+        if let Some((s, rest)) = lead_num(low, "", 2)
+            && let Some((e, "")) = lead_num(rest, "x", 3)
+        {
+            return Self::mark(
+                i,
+                i + 1,
+                strong,
+                ep,
+                vec![
+                    Hit::Season(Span::one(s as u16)),
+                    Hit::Episode(Span::one(e as u16)),
+                ],
+            );
         }
 
         // E05, Ep05
@@ -437,10 +434,10 @@ impl<'t, 'a> Parser<'t, 'a> {
             };
             return Self::mark(i, end, strong, ep, vec![hit]);
         }
-        if let Some(n) = ordinal(low) {
-            if self.tok(i + 1).is_some_and(|t| t.low == "season") {
-                return Self::mark(i, i + 2, strong, ep, vec![Hit::Season(Span::one(n as u16))]);
-            }
+        if let Some(n) = ordinal(low)
+            && self.tok(i + 1).is_some_and(|t| t.low == "season")
+        {
+            return Self::mark(i, i + 2, strong, ep, vec![Hit::Season(Span::one(n as u16))]);
         }
         None
     }
@@ -462,10 +459,8 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn number_range(&self, i: usize, first: u32) -> (usize, u32) {
         if let Some(n) = self.tok(i) {
             let joined = n.sep.trim() == "-" || n.sep.trim() == "~";
-            if joined {
-                if let Some(last) = n.number().filter(|&l| l > first && l < 10_000) {
-                    return (i + 1, last);
-                }
+            if joined && let Some(last) = n.number().filter(|&l| l > first && l < 10_000) {
+                return (i + 1, last);
             }
         }
         (i, first)
@@ -513,19 +508,18 @@ impl<'t, 'a> Parser<'t, 'a> {
         let y = t
             .number()
             .filter(|y| t.low.len() == 4 && YEARS.contains(y))?;
-        if let Some(n) = self.tok(i + 1).filter(|n| n.tight_dash()) {
-            if let Some(last) = n
+        if let Some(n) = self.tok(i + 1).filter(|n| n.tight_dash())
+            && let Some(last) = n
                 .number()
                 .filter(|l| n.low.len() == 4 && YEARS.contains(l) && *l > y)
-            {
-                return Self::mark(
-                    i,
-                    i + 2,
-                    Strength::Strong,
-                    Kind::Year,
-                    vec![Hit::Year(span(y, last)?)],
-                );
-            }
+        {
+            return Self::mark(
+                i,
+                i + 2,
+                Strength::Strong,
+                Kind::Year,
+                vec![Hit::Year(span(y, last)?)],
+            );
         }
         Self::mark(
             i,
@@ -678,15 +672,14 @@ impl<'t, 'a> Parser<'t, 'a> {
         // 24-96, 16-44.
         if let (Some(depth @ (16 | 24 | 32)), Some(n)) =
             (t.number(), next.filter(|n| n.tight_dash()))
+            && let Some(hz) = n.number().and_then(sample_rate)
         {
-            if let Some(hz) = n.number().and_then(sample_rate) {
-                return Self::tech(
-                    i,
-                    i + 2,
-                    strong,
-                    vec![Hit::Bits(depth as u8), Hit::Sample(hz)],
-                );
-            }
+            return Self::tech(
+                i,
+                i + 2,
+                strong,
+                vec![Hit::Bits(depth as u8), Hit::Sample(hz)],
+            );
         }
 
         // 96kHz, 44.1kHz, 48 kHz.
@@ -694,22 +687,22 @@ impl<'t, 'a> Parser<'t, 'a> {
             if rest == "khz" {
                 return Self::tech(i, i + 1, strong, vec![Hit::Sample(sample_rate(k)?)]);
             }
-            if rest.is_empty() {
-                if let Some(n) = next {
-                    if n.sep == "." && matches!(n.low.as_str(), "1khz" | "2khz" | "4khz") {
-                        return Self::tech(i, i + 2, strong, vec![Hit::Sample(sample_rate(k)?)]);
-                    }
-                    if n.low == "khz" {
-                        return Self::tech(i, i + 2, strong, vec![Hit::Sample(sample_rate(k)?)]);
-                    }
-                    if n.low == "kbps" && (32..=1411).contains(&k) {
-                        return Self::tech(
-                            i,
-                            i + 2,
-                            strong,
-                            vec![Hit::Bitrate(Bitrate::Kbps(k as u16))],
-                        );
-                    }
+            if rest.is_empty()
+                && let Some(n) = next
+            {
+                if n.sep == "." && matches!(n.low.as_str(), "1khz" | "2khz" | "4khz") {
+                    return Self::tech(i, i + 2, strong, vec![Hit::Sample(sample_rate(k)?)]);
+                }
+                if n.low == "khz" {
+                    return Self::tech(i, i + 2, strong, vec![Hit::Sample(sample_rate(k)?)]);
+                }
+                if n.low == "kbps" && (32..=1411).contains(&k) {
+                    return Self::tech(
+                        i,
+                        i + 2,
+                        strong,
+                        vec![Hit::Bitrate(Bitrate::Kbps(k as u16))],
+                    );
                 }
             }
             if rest == "kbps" && (32..=1411).contains(&k) {
@@ -723,17 +716,19 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
 
         // Sizes: 999MB, 4.37GB.
-        if let Some((_, unit)) = lead_num(low, "", 5) {
-            if matches!(unit, "mb" | "gb" | "tb" | "mib" | "gib") {
-                return Self::tech(i, i + 1, Strength::Weak, vec![Hit::Noise]);
-            }
+        if let Some((_, unit)) = lead_num(low, "", 5)
+            && matches!(unit, "mb" | "gb" | "tb" | "mib" | "gib")
+        {
+            return Self::tech(i, i + 1, Strength::Weak, vec![Hit::Noise]);
         }
 
         // MULTi13: a multi-language release with 13 languages.
-        if let Some(n) = low.strip_prefix("multi") {
-            if !n.is_empty() && n.len() <= 2 && n.bytes().all(|b| b.is_ascii_digit()) {
-                return Self::tech(i, i + 1, strong, vec![Hit::Lang("multi")]);
-            }
+        if let Some(n) = low.strip_prefix("multi")
+            && !n.is_empty()
+            && n.len() <= 2
+            && n.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Self::tech(i, i + 1, strong, vec![Hit::Lang("multi")]);
         }
 
         // 75th Anniversary (Edition).
@@ -809,16 +804,15 @@ impl<'t, 'a> Parser<'t, 'a> {
         };
         let mut end = i + 1;
         // MP3 320: a bare bitrate after the codec.
-        if matches!(hits[..], [Hit::Audio(AudioCodec::Mp3 | AudioCodec::Aac)]) {
-            if let Some(k) = self
+        if matches!(hits[..], [Hit::Audio(AudioCodec::Mp3 | AudioCodec::Aac)])
+            && let Some(k) = self
                 .tok(i + 1)
                 .filter(|n| n.dot_or_space())
                 .and_then(Tok::number)
                 .filter(|k| matches!(k, 64 | 96 | 128 | 160 | 192 | 224 | 256 | 320))
-            {
-                hits.push(Hit::Bitrate(Bitrate::Kbps(k as u16)));
-                end += 1;
-            }
+        {
+            hits.push(Hit::Bitrate(Bitrate::Kbps(k as u16)));
+            end += 1;
         }
         Self::tech(i, end, strength, hits)
     }
@@ -1165,11 +1159,11 @@ impl<'t, 'a> Parser<'t, 'a> {
             r.resolution = Some(Resolution::R2160p);
         }
         // `MP3 V2` is a LAME preset, not a version.
-        if r.audio.contains(&AudioCodec::Mp3) {
-            if let Some(v @ ("1" | "2")) = r.version.as_deref() {
-                r.bitrate = Some(Bitrate::Vbr(v.parse().unwrap_or(0)));
-                r.version = None;
-            }
+        if r.audio.contains(&AudioCodec::Mp3)
+            && let Some(v @ ("1" | "2")) = r.version.as_deref()
+        {
+            r.bitrate = Some(Bitrate::Vbr(v.parse().unwrap_or(0)));
+            r.version = None;
         }
 
         let mut parts = split_alt(&title);

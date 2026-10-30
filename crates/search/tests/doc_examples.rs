@@ -21,10 +21,10 @@ fn examples_parse_as_documented() {
                 Some(_) => None,
                 None => Some(tag.trim()),
             };
-            if let Some(tag) = lang {
-                if !matches!(tag, "query" | "query-fail" | "mermaid" | "text") {
-                    problems.push(format!("line {at}: code block tagged {tag:?}"));
-                }
+            if let Some(tag) = lang
+                && !matches!(tag, "query" | "query-fail" | "mermaid" | "text")
+            {
+                problems.push(format!("line {at}: code block tagged {tag:?}"));
             }
             continue;
         }

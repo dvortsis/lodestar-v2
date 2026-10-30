@@ -443,7 +443,7 @@ mod tests {
             .enumerate()
             .filter(|(i, n)| {
                 let id = *i as u64 + 1;
-                n.contains("Half") && 1000 + *i as u64 > 1500 && id % 7 != 0
+                n.contains("Half") && 1000 + *i as u64 > 1500 && !id.is_multiple_of(7)
             })
             .count();
         assert_eq!(exact(&s, &c, &cancel).unwrap(), want);
