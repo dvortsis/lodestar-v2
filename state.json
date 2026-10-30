@@ -1742,7 +1742,8 @@
    "2026-10-30T04:56Z F-updater: unreadable updater.json fails closed (hold)",
    "2026-10-30T04:56Z F-filters: neutralize applies at token level (dotted/joined/prefix/fuzzy) - content-safety adjacent; floor untouched",
    "2026-10-30T04:56Z F-metainfo: per-file path.utf-8; pathless padding -> .pad/padding; decode-to-UTF-8 fallback loses legacy raw bytes when no lossless re-encode (arch \u00a76/\u00a716)"
-  ]
+  ],
+  "review_round_1": "2026-10-30T05:07Z: fresh review #174 MERGE (+polish: cat-file guard pushed); #175 L1 FIX -> runner commit on land/L1 (labels, Torznab, v0.5.0, PID; CSV exception stated); #176 FIX -> 768327be (owner confirmation of tree diffs recorded in \u00a72.25; 4-slot cap recorded as approved-plan; 2.3KB binds pilots; CR-COL in tier 1 + G-v051; L owns = range files; dep/own fixes). #177 F-metainfo FIX: fuzz bound vs case-3 decode growth -> enforce limit on output; polish sent."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
