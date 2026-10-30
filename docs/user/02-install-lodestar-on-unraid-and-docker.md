@@ -2,9 +2,6 @@
 
 This chapter installs Lodestar from the Unraid template or with Docker Compose, then takes you through first run.
 
-> [!IMPORTANT]
-> The Lodestar image is published from the first release, v0.5.1. If **Apply** or `docker compose up` fails with "manifest unknown", the release isn't published yet; check again later. <!-- confirm at release cut -->
-
 > [!WARNING]
 > Don't run the `nightly` image on real data. It is built daily from `main` and untested, and it can apply database migrations that the release can't read. Once that happens, you can't go back to the release without a backup. Use `nightly` only for a throwaway try-out, and take a backup first ([section 3.7](03-keep-lodestar-safe.md#37-back-up-and-restore)) if you ever ran it on data you want to keep.
 
@@ -177,7 +174,7 @@ To install with the named volume:
     docker compose up -d
     ```
 
-   **Result:** Docker pulls the image and starts the container `lodestar`. If it fails with "manifest unknown", the release isn't published yet.
+   **Result:** Docker pulls the image and starts the container `lodestar`.
 4. Check that it is healthy:
 
     ```bash
@@ -217,7 +214,7 @@ To keep the data in a folder you own instead:
 
 Do not use `network_mode: host` unless you need it. It skips Docker's network translation for better DHT reach, but it exposes port `8090` on every host interface.
 
-Pin an exact version such as `x.y.z` instead of `latest` once releases exist, if you want updates only when you decide.
+Pin an exact version such as `x.y.z` instead of `latest`, if you want updates only when you decide.
 
 ## 2.5 Create the admin password
 <!-- index: setup token; admin password; first run -->
