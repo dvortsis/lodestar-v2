@@ -2242,6 +2242,8 @@
     "2026-10-30T17:20Z #226 review MERGE at 13da98a5; waiting for ci-ok.",
     "2026-10-30T17:32Z merged #226 (b1f4511f, filter-budget per-model skew) and #224 (a332737b, clippy 2a; the re-run was green, and a \u00a72.18 comment was posted about the supervisor stall). #227 review CHANGES (blocking: switch-off chown on Docker -> runner chose (b), keep and record; plus 2-5 and a Windows CI failure) relayed. #225 re-review CHANGES (blocking: the \\??\\ prefix bypasses lexical()) relayed. #228 CR-ADM (~2.5k lines) review session_01MMjhnCJEcHjkR7GJNRTnaz.",
     "2026-10-30T17:41Z #225 a1890137: the runner's diff check of the \\??\\ fix passes (windows_text rewrite before UNC normalisation; lexical-only use), as the reviewer allowed. MERGE pending green CI incl. Windows and the cfg(windows) test count.",
-    "2026-10-30T17:50Z #228 CR-ADM review MERGE at cd824876 (4 mutations caught); waiting for ci-ok. The 5 optional findings go in a fix/cr-adm-polish follow-up after the merge."
-  ]
+    "2026-10-30T17:50Z #228 CR-ADM review MERGE at cd824876 (4 mutations caught); waiting for ci-ok. The 5 optional findings go in a fix/cr-adm-polish follow-up after the merge.",
+    "2026-10-30T18:04Z merged #228 CR-ADM (39706b3b; switch off by default). The fix/cr-adm-polish follow-up has started. #227 fixes e262b6e2 sent for re-check (the Windows failure was an 8.3-name overlap miss, now fixed). #225 waits on ci-ok. NOTE: session metadata shows a seven-day usage warning (allowed_warning), so the runner is going frugal: no new slices beyond those in flight, same-reviewer or runner delta checks, and longer polling."
+  ],
+  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
 }
