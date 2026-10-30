@@ -2202,6 +2202,9 @@
     },
     "PR215-X-soak-memory-fit": {
       "reviewer": "session_01MMjhnBkxvdSzAfCFK7KQ7t"
+    },
+    "PR227": {
+      "reviewer": "session_01MMjhnBqY1uGE5su7ioUMTQ"
     }
   },
   "log": [
@@ -2236,6 +2239,7 @@
     "2026-10-30T16:35Z release/v0.5.1 at 6be95525: CI, E2E (all-themes) and Release all green (runs 41086517863, 41086522694, 41086528117). Owner notified: rc.2 ready to tag. #224 clippy part 2a (store, filter) opened; review session_01MMjhnBD2JUvEUux92reztx.",
     "2026-10-30T16:58Z #224: review MERGE, but CI ubuntu failed in supervisor::a_switch_to_an_older_version_is_refused (120 s stall). The PR touches only store and filter, with a semantically identical migrate_with let-chain. Locally: the single test passes 3/3 and the full suite 4/4. One re-run is pending while the workflow is still running (403). Root-cause slice X-flake-supervisor-switch launched. #225 IMP-2 opened (~3.4k lines; fuzz split offered).",
     "2026-10-30T17:02Z CR-ADM Phase 2: one PR (~2.19k lines) approved. The evict_one exemption for permit-holding lookups (switch-on only) is approved as a \u00a72.19 runner refinement, with pinning and bound tests and a protocol-review focus. CR-SIM screen, steady stored/min off -> on: admission-pressure 29.8 -> 38.3 (+29%), healthy 76.0 -> 113.7 (+50%), high-latency 33.1 -> 41.7 (+26%); every seed better. The live A/B is still required. #225 IMP-2 fresh review session_01MMjhn9AWgi7FVXFtBZ6UHR.",
-    "2026-10-30T17:07Z #224: the one re-run of the failed jobs is queued (run 41091029121). #225 IMP-2 review CHANGES (blocking: UNC/device paths touched before refusal, an NTLM leak on Windows); author told to fix, plus optional items 2-4 in the same push. #226 X-filter-budget: (b) accept the replay, no more dispatches; spread rule accepted; review session_01MMjhn93kPfFmyyUAqgBgNr."
+    "2026-10-30T17:07Z #224: the one re-run of the failed jobs is queued (run 41091029121). #225 IMP-2 review CHANGES (blocking: UNC/device paths touched before refusal, an NTLM leak on Windows); author told to fix, plus optional items 2-4 in the same push. #226 X-filter-budget: (b) accept the replay, no more dispatches; spread rule accepted; review session_01MMjhn93kPfFmyyUAqgBgNr.",
+    "2026-10-30T17:15Z #227 CR-0d-2b-1 (witness packaging, ~610 lines) opened; runner fresh and security review session_01MMjhnBqY1uGE5su7ioUMTQ. 2b-2 started in parallel (disjoint files). #226 now at 13da98a5 (docs only; the earlier red ci-ok came from cancelled runs)."
   ]
 }
