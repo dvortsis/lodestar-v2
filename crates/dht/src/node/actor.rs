@@ -1373,6 +1373,8 @@ impl Actor {
         permit: Option<PeerPermit>,
     ) {
         if reply.as_ref().is_some_and(|r| r.is_closed()) {
+            // Its caller went while it was queued: it never starts.
+            QueuedDrop::CallerClosed.count(&self.stats);
             PermitReturn::CancelledQueued.release(&self.stats, permit);
             return;
         }
@@ -2397,8 +2399,9 @@ mod tests {
     }
 
     /// Every admitted request is counted where it ends, with no permit
-    /// (coordinated admission off): one dropped queued by its caller, one
-    /// by the pause, one cancelled while active.
+    /// (coordinated admission off): two dropped queued by their callers
+    /// (one seen by the queue's sweep, one as the turn would start it),
+    /// one by the pause, one cancelled while active.
     #[test]
     fn queued_drops_are_counted_without_a_permit() {
         let (mut a, sockets) = fixture();
@@ -2414,9 +2417,14 @@ mod tests {
             a.on_command(Command::RequestPeers(InfoHash([7; 20]), tx, None));
             rx.try_recv().unwrap().unwrap()
         };
-        // Queued, then its caller goes before the next turn starts it.
+        // Queued, then its caller goes: the sweep drops it.
         drop(ask(&mut a));
         a.drop_cancelled_queued();
+        // Queued, then its caller goes: the next turn pops it to start it,
+        // and drops it instead.
+        drop(ask(&mut a));
+        a.maintain(&sockets);
+        assert!(a.get_peers_queue.is_empty() && a.peer_requests.is_empty());
         // Queued, then the pause drops it.
         let _paused = ask(&mut a);
         a.on_command(Command::SetPaused(true));
@@ -2431,8 +2439,8 @@ mod tests {
         assert!(a.peer_requests.is_empty() && a.get_peers_queue.is_empty());
         assert_eq!(a.active_get_peers, 0);
         let s = a.stats.snapshot();
-        assert_eq!(s.peer_admitted, 3);
-        assert_eq!(s.peer_queued_dropped, [1, 1]);
+        assert_eq!(s.peer_admitted, 4);
+        assert_eq!(s.peer_queued_dropped, [2, 1]);
         assert_eq!(s.peer_cancelled, 1);
         assert_eq!(s.lookups_completed, 0);
         assert_eq!(s.peer_permit_returns, [0; PermitReturn::ALL.len()]);
