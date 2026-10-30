@@ -69,10 +69,11 @@ fn check_golden(s: &Scenario) {
         })
         // A Windows checkout may have turned LF into CRLF.
         .replace("\r\n", "\n");
-    if golden != report.text {
+    let now = comparable(&golden, &report.text);
+    if golden != now {
         let first = golden
             .lines()
-            .zip(report.text.lines())
+            .zip(now.lines())
             .position(|(a, b)| a != b)
             .unwrap_or_else(|| golden.lines().count().min(report.text.lines().count()));
         panic!(
@@ -82,10 +83,47 @@ fn check_golden(s: &Scenario) {
             path.display(),
             first + 1,
             golden.lines().nth(first).unwrap_or("<end>"),
-            report.text.lines().nth(first).unwrap_or("<end>"),
+            now.lines().nth(first).unwrap_or("<end>"),
             report.text
         );
     }
+}
+
+/// The report minus counters the golden doesn't know that read 0: a new
+/// counter added by a candidate stays 0 with its switch off, so the
+/// golden still proves the switch inert.
+fn comparable(golden: &str, report: &str) -> String {
+    let known: std::collections::HashSet<&str> = golden
+        .lines()
+        .filter_map(|l| l.split_once('=').map(|(name, _)| name))
+        .collect();
+    let mut out = String::new();
+    for line in report.lines() {
+        let new_zero = line
+            .split_once('=')
+            .is_some_and(|(name, v)| v == "0" && !name.contains(' ') && !known.contains(name));
+        if !new_zero {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Metadata stored over `seeds` seeds of one scenario: (mean, min, max).
+/// One seed is inside the simulator's noise; compare arms over several.
+pub fn stored_over_seeds(s: &Scenario, seeds: std::ops::Range<u64>) -> (f64, u64, u64) {
+    let stored: Vec<u64> = seeds
+        .map(|seed| {
+            let mut s = s.clone();
+            s.seed = seed;
+            simulate(&s).stored
+        })
+        .collect();
+    let mean = stored.iter().sum::<u64>() as f64 / stored.len().max(1) as f64;
+    let min = stored.iter().copied().min().unwrap_or(0);
+    let max = stored.iter().copied().max().unwrap_or(0);
+    (mean, min, max)
 }
 
 #[test]
@@ -130,6 +168,29 @@ fn healthy_run_is_plausible() {
     assert!(r.dht.peer_active + r.dht.peer_queued <= 32, "{}", r.text);
 }
 
+/// A golden check ignores new zero counters but nothing else.
+#[test]
+fn comparison_tolerates_only_new_zero_counters() {
+    let golden = "a=1\nb=2\n";
+    assert_eq!(comparable(golden, "a=1\nnew=0\nb=2\n"), golden);
+    assert_ne!(comparable(golden, "a=1\nnew=3\nb=2\n"), golden);
+    assert_ne!(comparable(golden, "a=0\nb=2\n"), golden);
+}
+
+/// A remote rate limit drops our queries, and the node sees them time out.
+#[test]
+fn rate_limits_drop_queries() {
+    let mut s = scenario::healthy();
+    s.minutes = 2;
+    s.net.rate_limit_qps = None;
+    let open = simulate(&s);
+    s.net.rate_limit_qps = Some(1);
+    let limited = simulate(&s);
+    assert_eq!(open.net.rate_limited, 0);
+    assert!(limited.net.rate_limited > 0, "{}", limited.text);
+    assert!(limited.dht.timeouts > open.dht.timeouts, "{}", limited.text);
+}
+
 /// An hour of the admission-pressure network: too slow for every CI run.
 /// `cargo test -p lodestar-sources --test sim -- --ignored`
 #[test]
@@ -139,4 +200,25 @@ fn admission_pressure_hour() {
     s.minutes = 60;
     let r = simulate(&s);
     println!("{}", r.text);
+    assert!(r.stored > 0, "{}", r.text);
+    assert!(r.dht.peer_active + r.dht.peer_queued <= 32, "{}", r.text);
+}
+
+/// The noise floor A/B comparisons have to clear: each baseline's stored
+/// count over seeds 1..=8. `cargo test -p lodestar-sources --test sim noise_floor -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: about 15 s of wall time"]
+fn noise_floor() {
+    for s in [
+        scenario::healthy(),
+        scenario::high_latency(),
+        scenario::admission_pressure(),
+    ] {
+        let (mean, min, max) = stored_over_seeds(&s, 1..9);
+        println!(
+            "noise {}: stored mean={mean:.1} min={min} max={max} spread={:.1}%",
+            s.name,
+            100.0 * (max - min) as f64 / mean.max(1.0)
+        );
+    }
 }

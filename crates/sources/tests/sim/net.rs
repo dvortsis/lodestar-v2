@@ -388,3 +388,92 @@ fn error(tid: &[u8], code: i64, message: &[u8]) -> Vec<u8> {
     }
     .encode()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenario;
+
+    fn net() -> Net {
+        let s = scenario::healthy();
+        let me = SocketAddr::from(([81, 2, 3, 4], 6881));
+        Net::build(&s.net, &s.swarm, 9, me, Instant::now()).0
+    }
+
+    /// Following `closer` from any node reaches the target's holders in
+    /// about log₈(N) hops, getting nearer in rank every hop.
+    #[tokio::test]
+    async fn lookups_converge_on_the_holders() {
+        let n = net();
+        let mut rng = Rng::new(5);
+        let bound = (n.nodes.len() as f64).log(8.0).ceil() as usize + 2;
+        for _ in 0..200 {
+            let target = rng.bytes20();
+            let pos = n.rank(&target);
+            let mut at = rng.below(n.nodes.len() as u64) as usize;
+            let mut hops = 0;
+            while !n.is_holder(&target, at) {
+                let next = n.closer(&target, at);
+                assert_eq!(next.len(), K);
+                let best = next
+                    .iter()
+                    .map(|ni| n.by_addr[&ni.addr])
+                    .min_by_key(|&j| j.abs_diff(pos))
+                    .expect("nodes");
+                assert!(
+                    best.abs_diff(pos) < at.abs_diff(pos) || n.closest(&target).contains(&best),
+                    "hop {hops} did not get closer"
+                );
+                at = best;
+                hops += 1;
+                assert!(hops <= bound, "{hops} hops > {bound}");
+            }
+        }
+    }
+
+    /// The holders are the XOR-closest in the target's window.
+    #[tokio::test]
+    async fn holders_are_xor_closest_in_the_window() {
+        let n = net();
+        let target = [0x5a; 20];
+        let holders = n.closest(&target);
+        assert_eq!(holders.len(), K);
+        let worst = holders
+            .iter()
+            .map(|&j| xor(&n.nodes[j].id.0, &target))
+            .max()
+            .unwrap();
+        let pos = n.rank(&target);
+        for j in pos.saturating_sub(WINDOW)..(pos + WINDOW).min(n.nodes.len()) {
+            if !holders.contains(&j) {
+                assert!(xor(&n.nodes[j].id.0, &target) > worst);
+            }
+        }
+    }
+
+    /// Samples rotate through what a node holds and wrap around.
+    #[tokio::test]
+    async fn samples_rotate_and_wrap() {
+        let mut n = net();
+        let i = n.nodes.iter().position(|x| x.bep51).expect("a BEP 51 node");
+        let held = n.nodes[i].held.len();
+        let size = n.cfg.sample_size;
+        let target = Method::SampleInfohashes {
+            target: NodeId([0; 20]),
+            want: Default::default(),
+        };
+        let mut seen = Vec::new();
+        for _ in 0..(held / size + 2) {
+            let reply = n.answer(i, b"t1", &target);
+            let msg = krpc::parse(&reply).unwrap();
+            let Body::Response(r) = msg.body else {
+                panic!("expected a response")
+            };
+            assert_eq!(r.interval, Some(n.cfg.sample_interval_s));
+            assert_eq!(r.num, Some(held as u32));
+            seen.extend(r.samples.unwrap().iter());
+        }
+        assert_eq!(&seen[..held], &n.nodes[i].held[..]);
+        assert_eq!(seen[held], n.nodes[i].held[0], "wraps to the start");
+    }
+}

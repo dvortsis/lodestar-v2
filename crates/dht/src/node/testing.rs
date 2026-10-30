@@ -9,14 +9,13 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, mpsc};
 
 use super::transport::{RecvSocket, SendSocket};
-use super::{Config, Harvest, Node, Stats, actor};
+use super::{Config, Harvest, Node};
 
 /// A datagram the node sent: destination and bytes.
 pub type Outbound = (SocketAddr, Vec<u8>);
@@ -82,25 +81,13 @@ pub fn start(
         }),
         SendSocket::Sim(SimSend(out_tx)),
     )];
-    let stats = Arc::new(Stats::default());
-    let (commands, command_rx) = mpsc::channel(64);
-    let (shutdown, shutdown_rx) = watch::channel(false);
-    let task = tokio::spawn(actor::run(
+    let node = Node::spawn(
         config,
         sockets,
+        vec![local],
         StdRng::seed_from_u64(seed),
-        stats.clone(),
-        command_rx,
-        shutdown_rx,
         harvest,
-    ));
-    let node = Node {
-        commands,
-        shutdown,
-        stats,
-        local_addrs: vec![local],
-        task,
-    };
+    );
     (
         node,
         SimPort {

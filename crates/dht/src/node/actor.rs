@@ -159,7 +159,7 @@ impl TokenBucket {
 
 /// A reporter's network: its /24 (IPv4) or /64 (IPv6). One network
 /// gets one say, so a few hosts in one range can't outvote the rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Network(u8, u64);
 
 fn network(ip: IpAddr) -> Network {
@@ -848,10 +848,10 @@ impl Actor {
                 r.inflight = r.inflight.saturating_sub(1);
             }
         }
-        if let std::collections::hash_map::Entry::Occupied(mut e) = self.pending_addrs.entry(p.to) {
-            *e.get_mut() -= 1;
-            if *e.get() == 0 {
-                e.remove();
+        if let Some(n) = self.pending_addrs.get_mut(&p.to) {
+            *n -= 1;
+            if *n == 0 {
+                self.pending_addrs.remove(&p.to);
             }
         }
         p

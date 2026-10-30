@@ -80,8 +80,11 @@ pub struct FetchConfig {
     pub success_ms: u64,
     pub slow_ms: u64,
     pub refuse_ms: u64,
-    /// When a timeout or unreachable peer gives up (peer-wire's 4 s
-    /// connect / 8 s total).
+    /// When an unreachable peer's connect gives up (peer-wire's
+    /// `connect_timeout`, 4 s).
+    pub connect_timeout_ms: u64,
+    /// The whole fetch's deadline (peer-wire's `timeout`, 8 s): a peer
+    /// that would answer later, slow ones included, times out here.
     pub timeout_ms: u64,
 }
 
@@ -138,6 +141,7 @@ pub fn base(name: &'static str) -> Scenario {
                 success_ms: 900,
                 slow_ms: 6_000,
                 refuse_ms: 80,
+                connect_timeout_ms: 4_000,
                 timeout_ms: 8_000,
             },
         },

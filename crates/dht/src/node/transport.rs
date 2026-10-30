@@ -52,38 +52,17 @@ impl RecvSocket {
     }
 }
 
-/// `HashMap`/`HashSet` hashing for the node's state. Production keeps the
-/// randomly keyed std hasher (hash-flooding resistance); the simulator
-/// needs iteration order to repeat across runs and toolchains, so `testing`
-/// uses a fixed FNV-1a (std's `DefaultHasher` may change between releases).
+/// Maps and sets for the node's state. Production keeps the randomly
+/// keyed std hash tables (hash-flooding resistance). The simulator needs
+/// iteration order to repeat across runs, platforms and toolchains; a fixed
+/// hasher isn't enough, since the table layout differs by SIMD width and
+/// std release. So `testing` swaps in B-trees, whose order is `Ord` alone.
+/// Only the methods both types share are used.
 #[cfg(not(feature = "testing"))]
-pub(crate) type Hasher = std::collections::hash_map::RandomState;
+pub(crate) type Map<K, V> = std::collections::HashMap<K, V>;
+#[cfg(not(feature = "testing"))]
+pub(crate) type Set<T> = std::collections::HashSet<T>;
 #[cfg(feature = "testing")]
-pub(crate) type Hasher = std::hash::BuildHasherDefault<Fnv>;
-
+pub(crate) type Map<K, V> = std::collections::BTreeMap<K, V>;
 #[cfg(feature = "testing")]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Fnv(u64);
-
-#[cfg(feature = "testing")]
-impl Default for Fnv {
-    fn default() -> Fnv {
-        Fnv(0xcbf2_9ce4_8422_2325)
-    }
-}
-
-#[cfg(feature = "testing")]
-impl std::hash::Hasher for Fnv {
-    fn write(&mut self, bytes: &[u8]) {
-        for b in bytes {
-            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
-pub(crate) type Map<K, V> = std::collections::HashMap<K, V, Hasher>;
-pub(crate) type Set<T> = std::collections::HashSet<T, Hasher>;
+pub(crate) type Set<T> = std::collections::BTreeSet<T>;

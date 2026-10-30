@@ -20,7 +20,7 @@ Ten simulated minutes take one to three seconds of wall time.
 cargo test -p lodestar-sources --test sim                 # all baselines vs goldens
 CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim matches_golden   # regenerate goldens
 CRAWLER_SIM_LOG=/tmp/sim cargo test -p lodestar-sources --test sim healthy     # also write the full outcome log
-cargo test -p lodestar-sources --test sim -- --ignored    # the 60-minute stress run (about a minute)
+cargo test -p lodestar-sources --test sim -- --ignored --nocapture   # the 60-minute stress run and the noise floor
 ```
 
 A golden mismatch prints the first differing line and the whole new report.
@@ -60,20 +60,22 @@ Every number comes from the counters production exports: `node::StatsSnapshot`,
 - **The `testing` cargo feature** on `lodestar-dht` and `lodestar-sources` (dev-only, never enabled by a production build) supplies three things:
   - an in-memory socket for the actor;
   - a seeded actor RNG;
-  - a fixed FNV hasher for the actor's maps and the pool's request map, whose iteration order reaches scheduling. Production keeps `RandomState`.
-- **Platforms:** the hash of a `SocketAddr` uses native integer width and byte order, so the goldens hold on 64-bit little-endian targets, which is every CI runner.
+  - B-tree maps and sets in place of the actor's hash tables and the pool's request map, whose iteration order reaches scheduling. Production keeps the randomly keyed std hash tables.
+- **Platforms and toolchains:** a fixed hasher would not be enough. A hash table's layout depends on its SIMD group width (16 on x86_64, 8 on arm64) and on the std release, and changing only the hash keys moves every golden. B-tree order depends on `Ord` alone, so the goldens hold on every CI runner and across toolchain updates.
+- **Golden fields are listed explicitly**, not printed with `Debug`. A report line `name=0` that the golden doesn't have is ignored, so a candidate's new counter, which reads 0 with its switch off, leaves the golden matching.
 
 ## A/B a candidate
 
 Each candidate (CR-ADM, CR-1a-H, CR-1a-S, CR-1c, CR-1b, CR-4) ships its runtime switch, default off, in the real `Config` or `PoolConfig`. To screen it here:
 
 1. Add a field to `Switches` in `scenario.rs` (for example `bounded_admission: bool`), and map it onto the real config in `Switches::apply`. List it in `Switches::describe` so the report header names it.
-2. Add a test that runs a baseline twice, once with the switch off (it must still match the golden) and once on, then compares the totals:
+2. Compare the arms over several seeds, never one. Across seeds 1–8, stored metadata spreads 20–28% of its mean (min to max; run the ignored `noise_floor` test to re-measure). A single-seed difference is inside that noise. Use `stored_over_seeds` and require the "on" arm's worst seed to beat the "off" arm's best, or report both spreads:
    ```rust
    let off = scenario::admission_pressure();
    let on = Scenario { switches: Switches { bounded_admission: true }, ..off.clone() };
-   let (a, b) = (simulate(&off), simulate(&on));
-   assert!(b.stored >= a.stored, "{}\n{}", a.text, b.text);
+   let (off_mean, off_min, off_max) = stored_over_seeds(&off, 1..9);
+   let (on_mean, on_min, on_max) = stored_over_seeds(&on, 1..9);
+   println!("off {off_mean:.1} [{off_min}..{off_max}]  on {on_mean:.1} [{on_min}..{on_max}]");
    ```
    Optionally, check in `golden/<scenario>+<switch>.txt` for the "on" arm.
 3. Off must leave every existing golden unchanged. That is the proof the switch is inert by default.
@@ -90,6 +92,7 @@ Screening here is a filter, not the acceptance test. The live A/B runs in the ma
   - no inbound queries from other nodes, so passive `get_peers`/`announce_peer` harvests are zero;
   - no uTP;
   - no NAT or kernel buffer limits: the in-memory socket never returns `WouldBlock`.
+- **Fetch timing:** an unreachable peer fails at the 4 s connect timeout, and anything slower than the 8 s fetch deadline times out there, as in peer-wire. There's no per-phase handshake model.
 - **Routing:** an approximation on numerically sorted ids. Lookups converge in about log₈(N) hops, and the 8 XOR-closest ids in a ±16-rank window hold a swarm.
 
 Add any of these as a scenario knob when a candidate needs it.

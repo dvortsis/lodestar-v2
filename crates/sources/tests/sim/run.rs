@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_dht::node::{Config, Harvest, Source, StatsSnapshot, testing};
+use lodestar_peer_wire::FailureKind;
 use lodestar_sources::pool::spawn;
 use lodestar_sources::{
     Discovery, FetchedKey, Found, FunnelCounts, Loss, PeerRequest, PoolIo, PoolStats, Shutdown,
@@ -39,6 +40,7 @@ pub struct Report {
     /// The full outcome log, when `CRAWLER_SIM_LOG` asked for it.
     pub log: Option<String>,
     pub dht: StatsSnapshot,
+    pub net: NetStats,
     pub stored: u64,
 }
 
@@ -85,12 +87,13 @@ struct Totals {
     harvested: u64,
 }
 
+/// `crates/pipeline/src/dht.rs`'s strategy codes.
 fn strategy(source: Source) -> u8 {
     match source {
-        Source::Sample => 1,
-        Source::GetPeers => 2,
-        Source::Announce => 3,
-        Source::Lookup => 4,
+        Source::Sample => 0,
+        Source::GetPeers => 1,
+        Source::Announce => 2,
+        Source::Lookup => 3,
     }
 }
 
@@ -286,6 +289,7 @@ pub async fn run(s: &Scenario) -> Report {
         text,
         log: log.take_lines(),
         dht: dht_final,
+        net: net_stats,
         stored: stored.load(Ordering::Relaxed),
     }
 }
@@ -325,8 +329,22 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
     let w = &s.swarm;
     let _ = writeln!(
         t,
-        "swarm: catalogue={} live={} held={} distinct_held={} max_peers={} fetch={:?}",
-        w.catalogue, live, held, distinct, w.max_peers, w.fetch
+        "swarm: catalogue={} live={} held={} distinct_held={} max_peers={}",
+        w.catalogue, live, held, distinct, w.max_peers
+    );
+    let f = &w.fetch;
+    let _ = writeln!(
+        t,
+        "fetch: unreachable={}‰ ok={}‰@{}ms slow={}‰@{}ms refuse={}‰@{}ms connect_timeout={}ms timeout={}ms",
+        f.unreachable_permille,
+        f.success_permille,
+        f.success_ms,
+        f.slow_permille,
+        f.slow_ms,
+        f.refuse_permille,
+        f.refuse_ms,
+        f.connect_timeout_ms,
+        f.timeout_ms
     );
     let p = &s.pool;
     let _ = writeln!(
@@ -371,8 +389,54 @@ fn write_minutes(t: &mut String, minutes: &[Minute]) {
 }
 
 fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &FunnelCounts) {
-    let _ = writeln!(t, "\n# DHT node stats at the end (node::StatsSnapshot)");
-    let _ = writeln!(t, "{d:#?}");
+    let _ = writeln!(
+        t,
+        "\n# DHT node stats at the end (node::StatsSnapshot), one per line"
+    );
+    // An explicit list, not `Debug`: a candidate adding a counter must not
+    // move the golden with its switch off (a new `name=0` line is ignored).
+    let dht = [
+        ("packets_in", d.packets_in),
+        ("packets_out", d.packets_out),
+        ("malformed_in", d.malformed_in),
+        ("queries_in", d.queries_in),
+        ("responses_in", d.responses_in),
+        ("errors_in", d.errors_in),
+        ("queries_out", d.queries_out),
+        ("timeouts", d.timeouts),
+        ("throttled", d.throttled),
+        ("send_errors", d.send_errors),
+        ("spoofed", d.spoofed),
+        ("routing_nodes", d.routing_nodes),
+        ("outstanding", d.outstanding),
+        ("harvested_sample", d.harvested_sample),
+        ("harvest_dropped", d.harvest_dropped),
+        ("lookups_completed", d.lookups_completed),
+        ("samples_sent", d.samples_sent),
+        ("sample_failures", d.sample_failures),
+        ("sample_cooling", d.sample_cooling),
+        ("sample_inflight", d.sample_inflight),
+        ("sample_stale", d.sample_stale),
+        ("sample_frontier", d.sample_frontier),
+        ("sample_deferred", d.sample_deferred),
+        ("peer_admitted", d.peer_admitted),
+        ("peer_rejected", d.peer_rejected),
+        ("peer_rejected_capacity", d.peer_rejected_capacity),
+        ("peer_rejected_paused", d.peer_rejected_paused),
+        ("peer_rejected_caller_closed", d.peer_rejected_caller_closed),
+        ("peer_ack_failed", d.peer_ack_failed),
+        ("peer_command_full", d.peer_command_full),
+        ("peer_command_closed", d.peer_command_closed),
+        ("peer_cancelled", d.peer_cancelled),
+        ("peer_active", d.peer_active),
+        ("peer_queued", d.peer_queued),
+        ("lookup_scheduled", d.lookup_scheduled),
+        ("lookup_deadlines", d.lookup_deadlines),
+        ("denied", d.denied),
+    ];
+    for (name, v) in dht {
+        let _ = writeln!(t, "{name}={v}");
+    }
     let l = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     let _ = writeln!(t, "\n# fetch pool stats at the end (PoolStats)");
     let _ = writeln!(
@@ -394,18 +458,17 @@ fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &Funne
         l(&p.lookup_unaccepted),
         l(&p.retry_unaccepted)
     );
-    let names = [
-        "unreachable",
-        "timed_out",
-        "refused",
-        "encryption",
-        "invalid",
-        "oversize",
+    let kinds = [
+        FailureKind::Unreachable,
+        FailureKind::TimedOut,
+        FailureKind::Refused,
+        FailureKind::EncryptionFailed,
+        FailureKind::Invalid,
+        FailureKind::Oversize,
     ];
-    let failures: Vec<String> = names
+    let failures: Vec<String> = kinds
         .iter()
-        .zip(&p.failures)
-        .map(|(n, c)| format!("{n}={}", l(c)))
+        .map(|k| format!("{k:?}={}", p.failure_count(*k)))
         .collect();
     let _ = writeln!(t, "failures: {}", failures.join(" "));
     let losses = [
@@ -446,7 +509,16 @@ fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &Funne
 
 fn write_net(t: &mut String, n: &NetStats, glue_dropped: u64, queued_at_end: usize) {
     let _ = writeln!(t, "\n# scripted network");
-    let _ = writeln!(t, "{n:?}");
+    let _ = writeln!(
+        t,
+        "queries={} ping={} find_node={} get_peers={} sample={} other={}",
+        n.queries, n.ping, n.find_node, n.get_peers, n.sample, n.other
+    );
+    let _ = writeln!(
+        t,
+        "to_dead={} to_unknown={} lost={} rate_limited={} errors={} replies={} values_replies={}",
+        n.to_dead, n.to_unknown, n.lost, n.rate_limited, n.errors, n.replies, n.values_replies
+    );
     let _ = writeln!(
         t,
         "discoveries_dropped={glue_dropped} pool_queue_at_end={queued_at_end}"
