@@ -1238,7 +1238,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code."
+   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions."
   },
   "L7": {
    "status": "pending",
