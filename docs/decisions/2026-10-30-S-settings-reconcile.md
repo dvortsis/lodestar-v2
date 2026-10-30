@@ -35,7 +35,11 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
 | Settings edit chunk (on demand), **new** | — | 10.26 KB | 11.3 KB |
 | Settings screen bodies (on demand), **new** | — | 42.56 KB | 47 KB |
 
-- **The save pipeline loads on demand, as one edit chunk** (owner, 2026-10-24, option A, relayed by the runner; it was recorded in M-settings-form-3's unmerged decisions file, `runner-state:ports/M-settings-form-3.patch`). It supersedes the "no async seams" note in `2026-10-23-M-settings-form.md`, and the 45 KB route budget stays. The engine change is M-settings-form-3's, applied unchanged:
+- **The save pipeline loads on demand, as one edit chunk (owner, 2026-10-24: option A, relayed by the runner).**
+  - The runner checked this against the owner's own session and recorded it in runner-state's `state.json` (`owner_decision_settings_split`): "draft/conflict code loads on first edit; 45 KB limit kept".
+  - It supersedes the "no async seams on the merge and the draft restore" note in `2026-10-23-M-settings-form.md` and its follow-up in `2026-10-23-M-settings-form-2.md`. The 45 KB route budget stays.
+  - A stored draft's offer appears once the chunk has loaded, and the merge and the restore stay synchronous after that.
+  - The engine change is M-settings-form-3's, applied unchanged:
   - `form/edit.ts` holds `saving.ts`, the merge, validation, reading and restoring drafts, and the UI they show (save bar, error summary, notice, draft offer, conflict and saved lines, questions).
   - It loads with the first edit, a stored draft, a newer `settings` event or a save, and the browser prefetches it when idle.
   - Writing drafts stays eager (`draft-store.ts`).
@@ -48,7 +52,11 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
 - **Measured but not fixed here: three routes outside Settings go over their limits.**
   - Alerts route is at 29.03 KB (limit 29), Alert route at 45.77 KB (limit 45), and Detail sections at 34.41 KB (limit 33.9). On `main` they measure 28.38, 44.95 and 33.82 KB.
   - The cause, from sourcemaps: Settings is now a production route, and Rolldown splits shared chunks by importer set. `ui/fields/Toggle.svelte` leaves the alerts chunk, `format/bytes.ts` is split the same way (the form's memory estimate uses it), and the shared Svelte input-bindings chunk grows. The modules are the same; the extra cost is per-chunk overhead.
-  - The fix is in shared files this slice doesn't own (`vite.config.ts`, `scripts/first-load.mjs`) or in those routes' limits. It went to the runner (see the PR).
+  - **Chunk grouping can't fix it (runner, 2026-10-30: try `vite.config.ts` groups first, with no growth on /search).** Every variant was built and measured, then reverted:
+    - A group holding Toggle and bytes, or Toggle alone, with dependencies included (Rolldown's default): the group must take Svelte's `bindings/input.js`, which `Button`, `Input` and `Select` import, so /search's first load imports the group chunk. The stray check fails.
+    - The same group without dependencies (`includeDependenciesRecursively: false`): Rolldown refuses the build alongside SvelteKit's `preserveEntrySignatures: "strict"`.
+    - Moving Toggle back into the Alerts chunk would make Settings load Alerts code.
+  - **These three limits wait on the owner (the runner's fallback).** No limit changed in this PR.
 
 ## Tests
 
