@@ -35,8 +35,9 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
 ///   verified and complete. Existing imports get a row with verification
 ///   unknown, and nothing is scheduled for them.
 /// - Candidates never hold an empty name or a zero size. One whose hash is
-///   tombstoned or quarantined is deleted, and its hash journalled so
-///   snapshots lose it too; one whose hash becomes a torrent is deleted.
+///   tombstoned, quarantined or added to the floor's hash list is deleted,
+///   and its hash journalled so snapshots lose it too; one whose hash
+///   becomes a torrent is deleted.
 const V13: &str = "
 CREATE TABLE import_sources (
     id         INTEGER PRIMARY KEY,
@@ -57,7 +58,7 @@ CREATE TABLE import_jobs (
     phase         INTEGER NOT NULL CHECK (phase BETWEEN 0 AND 6),
     -- none, paused, blocked, cancelled, failed.
     control       INTEGER NOT NULL CHECK (control BETWEEN 0 AND 4),
-    reason        INTEGER,
+    reason        INTEGER CHECK (reason IS NULL OR reason BETWEEN 0 AND 5),
     options       BLOB NOT NULL CHECK (length(options) <= 4096),
     -- A sealed secret's name, never the secret.
     credential    TEXT CHECK (credential IS NULL OR (length(credential) BETWEEN 1 AND 64
@@ -141,6 +142,17 @@ CREATE TRIGGER import_candidate_tombstoned AFTER INSERT ON tombstones BEGIN
         WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash;
 END;
 CREATE TRIGGER import_candidate_quarantined AFTER INSERT ON quarantine BEGIN
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT hash, unixepoch() FROM import_candidates WHERE hash = new.hash
+        UNION ALL
+        SELECT hash, unixepoch() FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    DELETE FROM import_candidates WHERE hash = new.hash;
+    DELETE FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash;
+END;
+CREATE TRIGGER import_candidate_floored AFTER INSERT ON cs_hashes BEGIN
     INSERT INTO snapshot_deletions (hash, at)
         SELECT hash, unixepoch() FROM import_candidates WHERE hash = new.hash
         UNION ALL
@@ -1365,9 +1377,6 @@ mod tests {
         }
     }
 
-    /// A crash mid-`VACUUM INTO` leaves only a `.tmp`, never a file under
-    /// a snapshot's name; the next migration removes it and takes a whole
-    /// snapshot. A snapshot that can't be written stops the migration.
     /// V13 on a V12 store: each existing import gets a quality row with
     /// verification unknown (completeness partial only where the file
     /// list was flagged partial, privacy private only where the info dict
@@ -1454,6 +1463,9 @@ mod tests {
         );
     }
 
+    /// A crash mid-`VACUUM INTO` leaves only a `.tmp`, never a file under
+    /// a snapshot's name; the next migration removes it and takes a whole
+    /// snapshot. A snapshot that can't be written stops the migration.
     #[test]
     fn the_snapshot_is_written_aside_then_renamed() {
         let dir = tempfile::tempdir().unwrap();

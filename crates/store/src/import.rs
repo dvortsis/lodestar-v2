@@ -190,7 +190,8 @@ pub struct ImportCounters {
     pub filtered: u64,
     pub quarantined: u64,
     pub invalid: u64,
-    /// Malformed child rows under a valid parent.
+    /// Malformed child rows the adapter dropped, whatever became of their
+    /// parents.
     pub files_dropped: u64,
     /// New rows stored with a partial file list.
     pub partial: u64,
@@ -268,8 +269,8 @@ impl fmt::Debug for ImportJob {
     }
 }
 
-/// A job to create.
-#[derive(Debug, Clone, Copy)]
+/// A job to create. Its `Debug` gives the options' length only.
+#[derive(Clone, Copy)]
 pub struct NewImportJob<'a> {
     /// The stable adapter name: `[a-z0-9_]`, at most 32 bytes.
     pub adapter: &'a str,
@@ -282,6 +283,17 @@ pub struct NewImportJob<'a> {
     /// A sealed secret's name: `[a-z0-9_-]`, at most 64 bytes.
     pub credential: Option<&'a str>,
     pub at: i64,
+}
+
+impl fmt::Debug for NewImportJob<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NewImportJob")
+            .field("adapter", &self.adapter)
+            .field("adapter_ver", &self.adapter_ver)
+            .field("options_len", &self.options.len())
+            .field("credential", &self.credential)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the engine found when it checked a job before resuming it.
@@ -325,8 +337,11 @@ pub struct ImportTorrent<'a> {
     pub privacy: Privacy,
     /// [`repair`] bits.
     pub repair: i64,
-    /// The source's own date; `None` when unknown or a sentinel.
+    /// The source's own date; `None` when unknown or a sentinel. It dates
+    /// the row only when it's positive and not after the batch.
     pub source_at: Option<i64>,
+    /// Malformed child rows dropped from this record by the adapter,
+    /// counted whatever happens to the record.
     pub files_dropped: u32,
     pub decision: Decision<'a>,
 }
@@ -353,8 +368,8 @@ pub enum ImportRecord<'a> {
     Invalid,
 }
 
-/// One destination batch.
-#[derive(Debug, Clone, Copy)]
+/// One destination batch. Its `Debug` gives the position's length only.
+#[derive(Clone, Copy)]
 pub struct ImportBatch<'a> {
     pub job: i64,
     /// The cursor's `seq` plus one.
@@ -369,6 +384,17 @@ pub struct ImportBatch<'a> {
     /// under, as [`crate::WriteBatch::class_gen`].
     pub class_gen: Option<i64>,
     pub records: &'a [ImportRecord<'a>],
+}
+
+impl fmt::Debug for ImportBatch<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ImportBatch")
+            .field("job", &self.job)
+            .field("seq", &self.seq)
+            .field("position_len", &self.position.len())
+            .field("records", &self.records.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// What happened to one record.
@@ -783,10 +809,19 @@ impl Store {
         if batch.position.len() > MAX_POSITION {
             return Err(Error::Invalid("import cursor position is too long"));
         }
+        if batch.seq == 0 {
+            return Err(Error::Invalid("import batches are numbered from 1"));
+        }
         let Store { conn, codec, .. } = self;
         let tx = begin_write(conn)?;
         let job = load(&tx, batch.job)?;
         if batch.seq <= job.seq {
+            // The last batch again must resume where it left off: else the
+            // adapter's numbering has drifted, and acknowledging would
+            // lose a batch.
+            if batch.seq == job.seq && batch.position != job.position {
+                return Err(Error::Invalid("a replayed batch doesn't match the cursor"));
+            }
             return Ok(BatchCommitted::Replayed {
                 counters: job.counters,
             });
@@ -797,7 +832,7 @@ impl Store {
         if job.control != Control::Running
             || !matches!(job.phase, Phase::Reading | Phase::Committing)
         {
-            return Err(Error::Invalid("the import job isn't taking batches"));
+            return Err(Error::ImportNotRunning);
         }
         let mut c = ImportCounters {
             read: batch.records.len() as u64,
@@ -1051,7 +1086,12 @@ fn commit_torrent(
         } else {
             0
         };
-    let discovered_at = t.source_at.unwrap_or(batch.at);
+    // A source date in the future or not positive is a sentinel: the
+    // row is dated by the import instead (`source_at` keeps it as given).
+    let discovered_at = t
+        .source_at
+        .filter(|at| (1..=batch.at).contains(at))
+        .unwrap_or(batch.at);
     let id = insert_new(tx, p, flags, discovered_at, batch.at, batch.source)?;
     if let Some(e) = &p.enrichment {
         write_enrichment(tx, id, e)?;
@@ -1172,18 +1212,21 @@ pub(crate) fn sticky_private(conn: &Connection, id: i64) -> Result<bool> {
 }
 
 /// A partial import whose info dict was fetched and verified: its quality
-/// becomes verified and complete, and the repair reasons the fetch
-/// resolved are cleared.
-pub(crate) fn verified_upgrade(conn: &Connection, id: i64) -> Result<()> {
+/// becomes verified and complete, the repair reasons the fetch resolved
+/// are cleared, and a private info dict makes it private (never public).
+pub(crate) fn verified_upgrade(conn: &Connection, id: i64, private: bool) -> Result<()> {
     conn.prepare_cached(
-        "UPDATE import_quality SET verification = ?2, completeness = ?3, repair = repair & ~?4
+        "UPDATE import_quality SET verification = ?2, completeness = ?3, repair = repair & ~?4,
+             privacy = CASE WHEN ?5 THEN ?6 ELSE privacy END
          WHERE torrent_id = ?1",
     )?
     .execute(params![
         id,
         Verification::Verified.code(),
         Completeness::ReportedComplete.code(),
-        repair::ALL
+        repair::ALL,
+        private,
+        Privacy::Private.code()
     ])?;
     Ok(())
 }
@@ -1364,6 +1407,58 @@ mod tests {
         };
         assert!(store.commit_import_batch(&batch).is_err());
         assert_eq!(state(&store, job.id).1, 0);
+    }
+
+    /// A candidate under a pure v2 torrent's truncated hash goes when the
+    /// torrent is stored, by any path, and isn't journalled.
+    #[test]
+    fn a_stored_torrent_replaces_its_candidate() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("magnetico", "1", T).unwrap();
+        let job = reading(&mut store);
+        let candidates: Vec<ImportRecord<'_>> = [[1u8; 20], [2; 20]]
+            .into_iter()
+            .map(|h| {
+                ImportRecord::Candidate(ImportCandidate {
+                    hash: InfoHash(h),
+                    hash_v2: None,
+                    name: Some(b"c"),
+                    size: None,
+                    privacy: Privacy::Unknown,
+                    source_at: None,
+                    decision: PASS,
+                })
+            })
+            .collect();
+        store
+            .commit_import_batch(&ImportBatch {
+                job: job.id,
+                seq: 1,
+                position: b"",
+                source: src,
+                source_bytes: 0,
+                at: T,
+                class_gen: None,
+                records: &candidates,
+            })
+            .unwrap();
+        let mut v2 = [0u8; 32];
+        v2[..20].copy_from_slice(&[2; 20]);
+        for (id, hash, v2) in [(1, [1u8; 20], None), (2, [7; 20], Some(v2))] {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO torrents (id, info_hash, info_hash_v2, name, size, piece_len,
+                         piece_count, file_count, info_size, flags, discovered_at, metadata_at,
+                         last_seen_at)
+                     VALUES (?1, ?2, ?3, 'x', 1, 1, 1, 1, 1, 0, 0, 0, 0)",
+                    params![id, &hash[..], v2.as_ref().map(|v| &v[..])],
+                )
+                .unwrap();
+        }
+        let n = |sql: &str| -> i64 { store.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(n("SELECT count(*) FROM import_candidates"), 0);
+        assert_eq!(n("SELECT count(*) FROM snapshot_deletions"), 0);
     }
 
     #[test]

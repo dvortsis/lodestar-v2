@@ -10,7 +10,7 @@ use lodestar_store::import::{
     Verification, repair,
 };
 use lodestar_store::{
-    Filtered, Held, NewTorrent, Prepared, PreparedTorrent, SourceId, Store, StoreConfig,
+    Error, Filtered, Held, NewTorrent, Prepared, PreparedTorrent, SourceId, Store, StoreConfig,
     WriteBatch, flags,
 };
 use proptest::prelude::*;
@@ -243,12 +243,68 @@ fn a_replayed_batch_writes_nothing_and_counts_nothing() {
     assert_eq!(job(&store, j.id), before);
     assert_eq!(store.count().unwrap(), 1);
     assert!(
+        matches!(
+            store.commit_import_batch(&batch(j.id, 3, src, &records)),
+            Err(Error::Invalid(_))
+        ),
+        "a gap is refused, and isn't 'not running'"
+    );
+    assert!(
         store
-            .commit_import_batch(&batch(j.id, 3, src, &records))
+            .commit_import_batch(&batch(j.id, 0, src, &records))
             .is_err(),
-        "a gap is refused"
+        "batches are numbered from 1"
+    );
+    let drifted = ImportBatch {
+        position: b"elsewhere",
+        ..batch(j.id, 1, src, &records)
+    };
+    assert!(
+        store.commit_import_batch(&drifted).is_err(),
+        "the last batch replayed from another position has drifted"
     );
     assert_eq!(job(&store, j.id), before);
+}
+
+#[test]
+fn block_and_fail_keep_committed_work() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let j = reading(&mut store, b"ds-1");
+    let a = prepared(&store, "Alpha");
+    store
+        .commit_import_batch(&batch(j.id, 1, src, &[torrent(&a, Privacy::Public)]))
+        .unwrap();
+    let blocked = store
+        .block_import_job(j.id, j.revision, Reason::SourceUnavailable, T)
+        .unwrap();
+    assert_eq!(
+        (blocked.control, blocked.reason),
+        (Control::Blocked, Some(Reason::SourceUnavailable))
+    );
+    assert!(
+        store
+            .block_import_job(j.id, blocked.revision, Reason::NoSpace, T)
+            .is_err(),
+        "only a running job is blocked"
+    );
+    assert!(matches!(
+        store.commit_import_batch(&batch(j.id, 2, src, &[])),
+        Err(Error::ImportNotRunning)
+    ));
+    let failed = store
+        .fail_import_job(j.id, blocked.revision, Reason::StoreError, T)
+        .unwrap();
+    assert_eq!(
+        (failed.control, failed.reason),
+        (Control::Failed, Some(Reason::StoreError))
+    );
+    assert!(failed.is_finished() && failed.finished_at.is_some());
+    assert!(
+        store.cancel_import_job(j.id, failed.revision, T).is_err(),
+        "failed is final"
+    );
+    assert_eq!((store.count().unwrap(), failed.counters.new), (1, 1));
 }
 
 #[test]
@@ -261,11 +317,10 @@ fn pause_and_cancel_are_truthful() {
 
     let paused = store.pause_import_job(j.id, j.revision, T).unwrap();
     assert_eq!(paused.control, Control::Paused);
-    assert!(
-        store
-            .commit_import_batch(&batch(j.id, 1, src, &records))
-            .is_err()
-    );
+    assert!(matches!(
+        store.commit_import_batch(&batch(j.id, 1, src, &records)),
+        Err(Error::ImportNotRunning)
+    ));
     assert_eq!(store.count().unwrap(), 0, "nothing commits once paused");
     assert!(
         store.pause_import_job(j.id, j.revision, T).is_err(),
@@ -315,6 +370,19 @@ fn one_unfinished_job_per_source_and_credentials_are_references() {
     assert!(store.create_import_job(&j).is_err());
     let debug = format!("{:?}", job(&store, 1));
     assert!(!debug.contains("batch"), "options aren't printed: {debug}");
+    let debug = format!("{:?}", new_job(b"ds-1"));
+    assert!(!debug.contains("batch"), "options aren't printed: {debug}");
+    let debug = format!(
+        "{:?}",
+        ImportBatch {
+            position: b"secret-position",
+            ..batch(1, 1, DHT, &[])
+        }
+    );
+    assert!(
+        !debug.contains("secret"),
+        "the position isn't printed: {debug}"
+    );
 }
 
 #[test]
@@ -353,6 +421,21 @@ fn phases_move_forward_and_complete_after_indexing() {
         .unwrap();
     assert_eq!(j.phase, Phase::CompleteWithIssues, "it has a candidate");
     assert!(j.is_finished());
+
+    // Without issues it's plain complete, and phases may skip forward.
+    let k = store.create_import_job(&new_job(b"ds-2")).unwrap();
+    let k = store
+        .set_import_phase(k.id, k.revision, Phase::Indexing, T)
+        .unwrap();
+    let k = store
+        .set_import_phase(k.id, k.revision, Phase::Complete, T)
+        .unwrap();
+    assert_eq!(k.phase, Phase::Complete);
+    assert!(
+        store
+            .set_import_phase(k.id, k.revision, Phase::CompleteWithIssues, T)
+            .is_err()
+    );
 }
 
 #[test]
@@ -759,6 +842,82 @@ fn a_held_candidate_is_deleted_and_journalled() {
     hold(&mut store, [2; 20], Held::Quarantine);
     assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 0);
     assert_eq!(count(&store, "SELECT count(*) FROM snapshot_deletions"), 2);
+}
+
+/// Reported as abuse, or added by a floor list file: the hash goes into
+/// the floor's list without a tombstone, and its candidate goes too.
+#[test]
+fn a_floored_candidate_is_deleted_and_journalled() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let j = reading(&mut store, b"ds-1");
+    store
+        .commit_import_batch(&batch(
+            j.id,
+            1,
+            src,
+            &[candidate([4; 20], Some(b"Four"), None)],
+        ))
+        .unwrap();
+    store.add_cs_hashes(&[[4; 20]], 1, T).unwrap();
+    assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 0);
+    assert_eq!(count(&store, "SELECT count(*) FROM snapshot_deletions"), 1);
+}
+
+/// A candidate with a v2 hash goes when its truncated v2 hash is held.
+#[test]
+fn a_candidate_is_held_by_its_truncated_v2_hash() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let j = reading(&mut store, b"ds-1");
+    let v2 = lodestar_metainfo::InfoHashV2([6; 32]);
+    let records: Vec<ImportRecord<'_>> = [[5u8; 20], [8; 20]]
+        .into_iter()
+        .map(|h| {
+            ImportRecord::Candidate(ImportCandidate {
+                hash_v2: Some(lodestar_metainfo::InfoHashV2([h[0] + 1; 32])),
+                ..match candidate(h, Some(b"Hybrid"), None) {
+                    ImportRecord::Candidate(c) => c,
+                    _ => unreachable!(),
+                }
+            })
+        })
+        .collect();
+    store
+        .commit_import_batch(&batch(j.id, 1, src, &records))
+        .unwrap();
+    hold(&mut store, v2.truncated().0, Held::Tombstone);
+    store.add_cs_hashes(&[[9; 20]], 1, T).unwrap();
+    assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 0);
+    let journal: Vec<Vec<u8>> = store
+        .connection()
+        .prepare("SELECT hash FROM snapshot_deletions ORDER BY hash")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        journal,
+        [vec![5; 20], vec![8; 20]],
+        "journalled by primary hash"
+    );
+    // Held by the truncated v2 hash, a new record is refused too.
+    let again = ImportRecord::Candidate(ImportCandidate {
+        hash_v2: Some(v2),
+        ..match candidate([5; 20], Some(b"Hybrid"), None) {
+            ImportRecord::Candidate(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    assert_eq!(
+        outcomes(
+            store
+                .commit_import_batch(&batch(j.id, 2, src, &[again]))
+                .unwrap()
+        ),
+        [RecordOutcome::Filtered]
+    );
 }
 
 #[test]

@@ -124,6 +124,11 @@ pub enum Error {
     /// A row the call names doesn't exist (say, adding an unknown torrent
     /// to a collection).
     NotFound(&'static str),
+    /// An import batch for a job that isn't running (paused, blocked,
+    /// finished, or not reading): nothing was written, and the batch is
+    /// sent again after the job resumes. Unlike a sequence gap, it isn't
+    /// a fault.
+    ImportNotRunning,
 }
 
 impl fmt::Display for Error {
@@ -140,6 +145,7 @@ impl fmt::Display for Error {
             Error::TooManySources => write!(f, "all {MAX_SOURCES} source ids are in use"),
             Error::Invalid(what) => write!(f, "invalid: {what}"),
             Error::NotFound(what) => write!(f, "not found: {what}"),
+            Error::ImportNotRunning => write!(f, "the import job isn't taking batches"),
         }
     }
 }
@@ -1239,7 +1245,7 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
         )?
         .execute([id])?;
     }
-    import::verified_upgrade(conn, id)?;
+    import::verified_upgrade(conn, id, p.flags & flags::PRIVATE != 0)?;
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;
     Ok(())
