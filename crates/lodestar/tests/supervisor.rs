@@ -290,8 +290,15 @@ impl Running {
     fn drain(&mut self) {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(1) {
-            let Ok(l) = self.lines.recv_timeout(Duration::from_millis(200)) else {
-                break;
+            let l = match self.lines.recv_timeout(Duration::from_millis(200)) {
+                Ok(l) => l,
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                // Every writer has exited: nothing more comes, and the
+                // wait still paces its polling.
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    break;
+                }
             };
             for out in [&mut self.seen, &mut self.unread] {
                 out.push_str(&l);
