@@ -1413,6 +1413,11 @@
    "status": "running",
    "model": "opus",
    "notes": "2026-10-30T10:37Z launched: targeted tests for delta items B2 (snapshot metadata() failure blocks ack) and E1 (setup guard, only if seam exists)"
+  },
+  "CR-0d": {
+   "status": "running",
+   "model": "opus",
+   "notes": "2026-10-30T10:40Z brief written; phase 1 design (docs) launched; code after CR-0f #200 merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
