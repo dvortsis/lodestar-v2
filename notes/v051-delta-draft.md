@@ -277,3 +277,21 @@ Decision files for the above are in `docs/decisions/` (2026-10-24-B-log1b-r6, 20
 - The plan's rule names crawler lifecycle, the sampler and endpoint policy. Whether the V12 repair and the D1-D4 changes need another soak is not decided by that rule; that is the plan owner's call.
 - D2/D3 touch content-safety behaviour; the F-filters decision file records the runner's flag to the owner (§2.19).
 - Open PRs #198, #200, #196, #199 are not covered; #196 changes the same neutralize budget case as D4.
+
+## Addendum 2026-10-30T12:10Z: merges after 1199430f (main at 5d28164f)
+
+Shipped artifacts build only `-p lodestar --bin lodestar` (Dockerfile line 82; release.yml lines 478 and 546). Other crates' binaries don't ship.
+
+| PR | What | Shipped change? | Class | Evidence |
+|---|---|---|---|---|
+| #197 CR-COL | Linux soak collector | No (docs/soak/tools) | C | soak-tools unittest job |
+| #196 F-filters-xcpu | Per-CPU filter budget factors | No (tests, CI annotations) | C | filter budget job |
+| #199 CR-gate-metrics | `metadata_new_verified_total`, `searchable_new_total`, exclusions, latency | Yes: counting hooks in pipeline writer/worker/coordinator, `gate.rs`, `/metrics` | B (observability on the ingest hot path; no decision changes) | `gate.rs` unit tests, `services::gate_tests::a_serving_index_commit_reaches_the_gate` (mutation-checked), pipeline tests; covered live by the Unraid rc soak |
+| #205 smoke Defender | Warn when Defender unreadable | No (CI script) | C | MSI smoke green |
+| #204 T-v051-gaps | Tests for B2 (snapshot metadata error) and E1 (setup SetupDone) | No (tests) | C | closes the two no-test items above |
+| #198 F-updater | DUR-26: typed `updates_not_saved`, process hold, fail-closed unreadable state, fsync best-effort on EINVAL/ENOTSUP | Yes: `update/` (Unix only), API DTO | B (updater only; not crawler) | 86 `update::` tests, CI step asserting non-zero Unix selection, macOS full-ci |
+| #202 F-status | Progress-aware status pill, stall banner, uTP/fallback "not active yet" | Yes: web UI only | B (UI) | vitest 2360, status e2e, all-themes |
+| #203 IMP-0 | Bitmagnet restore runbook + `bitmagnet_check` | No (`sources-importers` bin not shipped; docs) | C | PG job 9/9 incl. reader-role test |
+| #200 CR-0f (pending merge) | Narrow seed exemption, NAT64 seeds (WKP /96 + local-use /96), resume order DHT before pool, collector `--intensity` | Yes: dht, network-policy, pipeline control | **A** | re-soak: the Unraid rc soak (gate item) |
+
+Delta conclusion so far: one class-A change (#200), already planned to be soaked by the Unraid 24 h rc soak plus the gluetun leg. No other change needs a soak; class B items are test-covered and exercised by the same rc soak.
