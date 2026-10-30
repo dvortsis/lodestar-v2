@@ -2128,6 +2128,10 @@
     {
       "item": "Size limits (your numbers): Settings becoming a production route re-splits shared chunks, so three non-Settings entries go slightly over: Alerts route 29.03/29 KB (26 B), Alert route 45.75/45 KB, Detail sections 34.4/33.9 KB. The modules are the same; it's per-chunk overhead. Chunk grouping and code changes can't fix it without duplicating code (the author tried, and the reviewer confirmed). Choose: (a) raise them to 29.1 / 45.8 / 34.5 KB, or (b) keep #217 (one Settings implementation, every Settings budget passing) on hold",
       "unblocks": "#217 Settings (one implementation, within its own budgets)"
+    },
+    {
+      "item": "Tag v0.5.1-rc.2 on release/v0.5.1 (6be95525) and approve the release environment; then run steps 3-5 in notes/v051-owner-steps.md. Reject or leave the rc.1 run 41062406135.",
+      "unblocks": "the v0.5.1 gate runs"
     }
   ],
   "external_gates": {
@@ -2217,6 +2221,7 @@
     "2026-10-30T15:54Z #216 re-check MERGE at d3a57912, but it conflicts with main (#218, #219, #220); author told to merge main plus 2 optional items, then a delta check and merge. #217 re-check MERGE pending the owner; the reviewer measured Alerts at 29.03/29 again (26 B over), so all three limits go to the owner.",
     "2026-10-30T16:06Z merged #222 into release/v0.5.1 (6be95525: R-gauges carried for rc.2). Dispatched CI, E2E (all-themes) and Release on release/v0.5.1; Web is unchanged since the cut. #223 fix/pool-generation opened; review session_01MMjhn9hV1psq7df6CTgYVb. #216: the merge-main delta was checked by the runner (both sides kept in metrics.rs; test-only hold; decisions line); merge on green.",
     "2026-10-30T16:22Z heartbeat and check-in: merged #223 (a9091bc3, pool-wide generations; MERGE, CI green). #216 waits on ci-ok. Release branch 6be95525: E2E (all-themes) green; CI and Release running. Heartbeat and check-in prompts refreshed (ReadNotifications first).",
-    "2026-10-30T16:28Z merged #216 CR-0d-2a (f409f214). CR-0d told to start 2b (packaging witness defaults, GET /stats sampling_blocked and pill, docs, /security-review). CR-ADM told to start Phase 2. #216 reviewer archived."
+    "2026-10-30T16:28Z merged #216 CR-0d-2a (f409f214). CR-0d told to start 2b (packaging witness defaults, GET /stats sampling_blocked and pill, docs, /security-review). CR-ADM told to start Phase 2. #216 reviewer archived.",
+    "2026-10-30T16:35Z release/v0.5.1 at 6be95525: CI, E2E (all-themes) and Release all green (runs 41086517863, 41086522694, 41086528117). Owner notified: rc.2 ready to tag. #224 clippy part 2a (store, filter) opened; review session_01MMjhnBD2JUvEUux92reztx."
   ]
 }

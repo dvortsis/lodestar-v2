@@ -7,10 +7,10 @@ You accepted CR-0 on #189. Your hours 12–24 fit passed: the upper 95% bound wa
 
 The Linux soak in step 3 is now **the binding memory gate**. It uses the same fit on anonymous private memory, and `analyze_cr0.py` computes it (#215).
 
-## 2. Tag the release candidate: rc.2, when the runner says it's ready
+## 2. Tag the release candidate: rc.2 is ready (`release/v0.5.1` at `6be95525`, all workflows green)
 You tagged `v0.5.1-rc.1` (`8b67f269`), and its Release run is waiting for your approval. **rc.1 doesn't have the storage and cache gauges you asked for** in your ruling.
 
-The runner carries them onto `release/v0.5.1` (R-gauges), runs every workflow there, and tells you when to tag:
+They're now on `release/v0.5.1` (#222). CI, E2E with all-themes, and Release are green on `6be95525`, and `web/` is unchanged since the cut, which was Web-green. Tag it:
 ```sh
 git fetch origin release/v0.5.1
 git tag -a v0.5.1-rc.2 origin/release/v0.5.1 -m "v0.5.1-rc.2"
