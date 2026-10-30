@@ -25,9 +25,11 @@ BOUNDS = {
     "peer_requests": (("dht_peer_active", "dht_peer_queued"), 32),
     "sampler_states": (("dht_sample_cooling", "dht_sample_inflight"), 200000),
     "sample_frontier": (("dht_sample_frontier",), 20000),
-    "outstanding_rpcs": (("dht_outstanding",), 1024),
+    "outstanding_rpcs": (("dht_outstanding",), None),
     "pool_lookups": (("fetch_lookups",), 256),
 }
+# The actor's outstanding-RPC cap per intensity preset (`Intensity::max_outstanding`).
+OUTSTANDING_RPCS = {"low": 256, "balanced": 1024, "aggressive": 4096}
 GAUGES = ("working_set_bytes", "private_bytes", "handles", "threads", "cpu_seconds")
 CORE_COUNTERS = ("writer_stored_total", "writer_errors_total", "fetch_attempts_total",
                  "fetch_success_total", "dht_peer_admitted_total", "dht_peer_rejected_total",
@@ -78,7 +80,10 @@ def number(value):
 
 def read_json(path):
     with path.open(encoding="utf-8-sig") as stream:
-        value = json.load(stream)
+        try:
+            value = json.load(stream)
+        except RecursionError:
+            raise ValueError(f"Malformed {path.name}: nested too deeply") from None
     if not isinstance(value, dict):
         raise ValueError(f"Expected an object in {path.name}")
     return value
@@ -109,6 +114,8 @@ def load_rows(root, issues):
     for index, line in enumerate(lines):
         try:
             row = json.loads(line)
+        except RecursionError:
+            raise ValueError(f"Malformed samples.jsonl line {index + 1}") from None
         except json.JSONDecodeError:
             if index == len(lines) - 1 and not line.endswith("\n"):
                 issues["incomplete_tail_ignored"] += 1
@@ -151,7 +158,26 @@ def usable(row):
     return row.get("metrics_ok") is True and number(identity(row)[1])
 
 
-def summarize(rows, max_gap):
+def bounds_for(intensity):
+    limits = {name: limit for name, (_, limit) in BOUNDS.items()}
+    limits["outstanding_rpcs"] = OUTSTANDING_RPCS[intensity]
+    return limits
+
+
+def run_intensity(run, override, issues):
+    """The preset from --intensity, else run.json's settings. Evidence without
+    one is from the collector that always ran Balanced, and is flagged."""
+    value = override if override is not None else run.get("settings", {}).get("intensity")
+    if value is None:
+        issues["intensity_assumed_balanced"] += 1
+        return "balanced"
+    if not isinstance(value, str) or value.lower() not in OUTSTANDING_RPCS:
+        raise ValueError("Unknown intensity preset")
+    return value.lower()
+
+
+def summarize(rows, max_gap, intensity="balanced"):
+    limits = bounds_for(intensity)
     issues = Counter()
     phases = {}
     for phase in PHASES:
@@ -171,9 +197,9 @@ def summarize(rows, max_gap):
                                 if number(r.get("working_set_bytes"))), default=None),
             "rss_change_mib": None,
             "rss_change_mib_per_hour": None,
-            "bounds": {name: {"limit": limit, "observed_samples": 0, "max": None,
+            "bounds": {name: {"limit": limits[name], "observed_samples": 0, "max": None,
                               "at_capacity_samples": 0, "over_capacity_samples": 0}
-                       for name, (_, limit) in BOUNDS.items()},
+                       for name in BOUNDS},
             "breakdowns": {}, "hourly": {},
             "counters": {name: {"delta": 0, "covered_seconds": 0, "per_hour": None}
                          for name in COUNTERS},
@@ -185,7 +211,8 @@ def summarize(rows, max_gap):
             suppression = row["values"].get("dht_sample_suppression_seconds")
             if phase == "baseline" and number(suppression) and suppression > 0:
                 issues["baseline_during_suppression"] += 1
-            for name, (fields, limit) in BOUNDS.items():
+            for name, (fields, _) in BOUNDS.items():
+                limit = limits[name]
                 if all(number(row["values"].get(f)) for f in fields):
                     total = sum(row["values"][f] for f in fields)
                     bound = p["bounds"][name]
@@ -333,14 +360,14 @@ def disk_summary(root, issues):
                             bucket["max_redirected_log_bytes"] = max(bucket["max_redirected_log_bytes"] or 0, size)
                     summary["read_failure_observations"] += bool(row.get("read_failures"))
                     summary["observations"] += 1
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, RecursionError):
                     issues["invalid_disk_observations"] += 1
     except OSError:
         issues["unreadable_disk_observations"] += 1
     return summary
 
 
-def analyze(root, max_gap=90, now=None):
+def analyze(root, max_gap=90, now=None, intensity=None):
     run = read_json(root / "run.json")
     if not isinstance(run.get("settings", {}), dict):
         raise ValueError("Invalid run settings")
@@ -348,6 +375,7 @@ def analyze(root, max_gap=90, now=None):
     # conservatively presented as completion unknown, never prematurely done.
     result_path = root / "result.json"
     issues = Counter()
+    intensity = run_intensity(run, intensity, issues)
     try:
         result = read_json(result_path) if result_path.exists() else None
         if result is not None and not isinstance(result.get("reason"), str):
@@ -364,7 +392,7 @@ def analyze(root, max_gap=90, now=None):
         if result.get("publication_failures"):
             issues["publication_failures"] += 1
     rows = load_rows(root, issues)
-    phases, intervals = summarize(rows, max_gap)
+    phases, intervals = summarize(rows, max_gap, intensity)
     issues.update(intervals)
     hours = run.get("settings", {}).get("baseline_hours", 24)
     if not number(hours) or hours == 0:
@@ -394,7 +422,7 @@ def analyze(root, max_gap=90, now=None):
     core_coverage = {name: baseline["measurement_coverage"][name]["fraction"]
                      for name in CORE_COUNTERS + GAUGES}
     return {
-        "schema_version": 2, "provenance": provenance,
+        "schema_version": 2, "provenance": provenance, "intensity": intensity,
         "run_state": result_state(result),
         "observation_state": freshness(rows, now or datetime.now(timezone.utc)),
         "disk": disk_summary(root, issues),
@@ -432,6 +460,7 @@ def markdown(report):
            f"Commit: `{report['provenance'].get('commit', 'unknown')}`.",
            f"Binary SHA-256: `{report['provenance'].get('sha256', 'unknown')}`.", "",
            f"Run: {report['run_state']}. Baseline: {report['baseline_status']}.", "",
+           f"Intensity: {report['intensity']}.", "",
            f"Stop reason: {report['stop_reason'] or 'not recorded'}. Clean shutdown: {shutdown}.", "",
            "| Phase | Samples | Span (h) | Covered (h) | Health failures | Metrics failures | Peak RSS (MiB) | RSS change (MiB/h) |",
            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
@@ -468,13 +497,15 @@ def main():
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     parser.add_argument("--output", type=Path, help="New report path outside the evidence directory")
     parser.add_argument("--max-gap-seconds", type=float, default=90)
+    parser.add_argument("--intensity", choices=sorted(OUTSTANDING_RPCS),
+                        help="Preset whose outstanding-RPC cap applies (default: run.json settings)")
     args = parser.parse_args()
     if not math.isfinite(args.max_gap_seconds) or args.max_gap_seconds <= 0:
         parser.error("--max-gap-seconds must be positive and finite")
     if args.output and args.output.resolve().is_relative_to(args.root.resolve()):
         parser.error("Report output must be outside the evidence directory")
     try:
-        report = analyze(args.root, args.max_gap_seconds)
+        report = analyze(args.root, args.max_gap_seconds, intensity=args.intensity)
         rendered = (json.dumps(report, indent=2, allow_nan=False) + "\n"
                     if args.format == "json" else markdown(report))
         if args.output:

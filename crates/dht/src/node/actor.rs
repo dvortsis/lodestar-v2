@@ -338,6 +338,13 @@ struct Actor {
     epoch: Instant,
     bootstrap: Vec<SocketAddr>,
     last_bootstrap: Option<Instant>,
+    /// Bootstrap-router queries in flight, for `dht.bootstrap_unreachable`.
+    seed_tids: HashSet<u64>,
+    /// The current round's routers refused at send, and whether any answered.
+    seed_refused: usize,
+    seed_answered: bool,
+    /// The warning was written; re-armed when a router answers.
+    seed_warned: bool,
     last_save: Instant,
     out: Vec<u8>,
     local_addrs: Vec<SocketAddr>,
@@ -509,14 +516,22 @@ impl Actor {
             },
             pending: HashMap::new(),
             pending_addrs: HashMap::new(),
-            next_tid: rng.random(),
+            // The lower half leaves 2^63 tokens before exhaustion.
+            next_tid: rng.random::<u64>() >> 1,
             lookups: HashMap::new(),
             next_lookup: 0,
             stats,
             rng,
             epoch: now,
-            bootstrap,
+            bootstrap: bootstrap
+                .into_iter()
+                .map(lodestar_network_policy::normalize)
+                .collect(),
             last_bootstrap: None,
+            seed_tids: HashSet::new(),
+            seed_refused: 0,
+            seed_answered: false,
+            seed_warned: false,
             last_save: now,
             out: Vec::with_capacity(1500),
             local_addrs,
@@ -589,16 +604,11 @@ impl Actor {
             Command::SetPaused(paused) => {
                 self.paused = paused;
                 if paused {
-                    // Waiting callers hear "no estimate" now rather than
-                    // after the pause.
-                    self.get_peers_queue.retain_mut(|(_, reply)| {
-                        if let Some(reply) = reply.take() {
-                            let _ = reply.send(Vec::new());
-                            false
-                        } else {
-                            true
-                        }
-                    });
+                    // Queued, accepted requests are dropped unanswered: the
+                    // closed receiver tells the pool the work was cancelled,
+                    // not attempted, so the pause costs no attempt. Running
+                    // ones finish and still answer.
+                    self.get_peers_queue.retain(|(_, reply)| reply.is_none());
                     for (_, reply) in self.scrape_queue.drain(..) {
                         let _ = reply.send(None);
                     }
@@ -783,7 +793,54 @@ impl Actor {
         purpose: Purpose,
     ) -> Sent {
         let to = lodestar_network_policy::normalize(to);
-        if !endpoint_allowed(&self.cfg, to) || self.families[family].ipv6 != to.is_ipv6() {
+        if !endpoint_allowed(&self.cfg, to) {
+            Stats::inc(&self.stats.denied);
+            return Sent::Failed;
+        }
+        self.dispatch_query(sockets, family, to, node, method, purpose)
+    }
+
+    /// A find_node to a resolved bootstrap router. Fake-ip DNS and NAT64
+    /// answer router names inside special ranges, so only these addresses
+    /// skip that check; the blocklist and the port, multicast and scope
+    /// checks still apply. Anything else gets the full policy.
+    fn query_seed(
+        &mut self,
+        sockets: &[StdUdpSocket],
+        family: usize,
+        to: SocketAddr,
+        method: Method<'_>,
+        lid: u32,
+    ) -> Sent {
+        let to = lodestar_network_policy::normalize(to);
+        if !self.bootstrap.contains(&to) {
+            return self.try_query(sockets, family, to, None, method, Purpose::Lookup(lid));
+        }
+        if !lodestar_network_policy::allows_seed(to, self.cfg.allow_private)
+            || self.cfg.deny.as_ref().is_some_and(|d| d.denies(to.ip()))
+        {
+            Stats::inc(&self.stats.denied);
+            return Sent::Failed;
+        }
+        let sent = self.dispatch_query(sockets, family, to, None, method, Purpose::Lookup(lid));
+        if sent == Sent::Yes {
+            // `dispatch_query` used `next_tid` for this query.
+            self.seed_tids.insert(self.next_tid);
+        }
+        sent
+    }
+
+    /// Sends a query whose destination already passed a policy check.
+    fn dispatch_query(
+        &mut self,
+        sockets: &[StdUdpSocket],
+        family: usize,
+        to: SocketAddr,
+        node: Option<NodeId>,
+        method: Method<'_>,
+        purpose: Purpose,
+    ) -> Sent {
+        if self.families[family].ipv6 != to.is_ipv6() {
             Stats::inc(&self.stats.denied);
             return Sent::Failed;
         }
@@ -839,6 +896,9 @@ impl Actor {
 
     fn take_pending(&mut self, tid: u64) -> Pending {
         let p = self.pending.remove(&tid).expect("caller checked the tid");
+        if self.seed_tids.remove(&tid) {
+            self.end_seed_round_if_done();
+        }
         if let Purpose::Lookup(lid) = p.purpose {
             if let Some(r) = self
                 .lookups
@@ -1092,6 +1152,11 @@ impl Actor {
             Stats::inc(&self.stats.spoofed);
             return;
         }
+        if self.seed_tids.contains(&tid) {
+            // A response or an error: the router is reachable.
+            self.seed_answered = true;
+            self.seed_warned = false;
+        }
         let pending = self.take_pending(tid);
         self.stats
             .outstanding
@@ -1108,7 +1173,10 @@ impl Actor {
             _ => true,
         };
         let responder = r.map(|r| r.id).or(pending.id);
-        if let (Some(id), true, false) = (responder, consistent, msg.read_only) {
+        // A bootstrap router reached through the seed exemption answers,
+        // but isn't routed to or handed to other nodes.
+        let routable = endpoint_allowed(&self.cfg, from);
+        if let (Some(id), true, false, true) = (responder, consistent, msg.read_only, routable) {
             let inserted = self.families[family].table.insert(
                 NodeInfo { id, addr: from },
                 Contact::Response,
@@ -1390,18 +1458,19 @@ impl Actor {
         }
         self.lookups.insert(lid, lookup);
         for addr in seeds {
-            let sent = self.query(
+            let sent = self.query_seed(
                 sockets,
                 family,
                 *addr,
-                None,
                 Method::FindNode {
                     target,
                     want: Want::default(),
                 },
-                Purpose::Lookup(lid),
+                lid,
             );
-            if sent {
+            if sent != Sent::Yes {
+                self.seed_refused += 1;
+            } else {
                 if let Some(l) = self.lookups.get_mut(&lid) {
                     l.extra_in_flight += 1;
                 }
@@ -1559,11 +1628,13 @@ impl Actor {
                 let mut peers: Vec<_> = r.peers.into_iter().collect();
                 peers.sort_unstable();
                 if let Some(reply) = r.reply {
+                    // A cancelled request isn't a completed lookup.
                     if reply.is_closed() {
                         Stats::inc(&self.stats.peer_cancelled);
+                    } else {
+                        Stats::inc(&self.stats.lookups_completed);
+                        let _ = reply.send(peers);
                     }
-                    Stats::inc(&self.stats.lookups_completed);
-                    let _ = reply.send(peers);
                 } else {
                     self.harvest_hash(r.hash, Source::Lookup, peers);
                 }
@@ -1574,6 +1645,11 @@ impl Actor {
     /// Self-lookups seeded with saved nodes and the bootstrap routers.
     fn start_bootstrap(&mut self, sockets: &[StdUdpSocket], saved: Vec<NodeInfo>) {
         self.last_bootstrap = Some(Instant::now());
+        if self.seed_tids.is_empty() {
+            // A new round; one still in flight carries on.
+            self.seed_answered = false;
+            self.seed_refused = 0;
+        }
         for f in 0..self.families.len() {
             let ipv6 = self.families[f].ipv6;
             let known: Vec<NodeInfo> = saved
@@ -1590,6 +1666,26 @@ impl Actor {
             let target = self.ids[0];
             self.start_lookup(sockets, f, target, &known, &routers, None);
         }
+        // Every router refused at send, or none resolved.
+        self.end_seed_round_if_done();
+    }
+
+    /// Warns once when a round ends with no bootstrap router answering.
+    fn end_seed_round_if_done(&mut self) {
+        if self.cfg.bootstrap.is_empty()
+            || !self.seed_tids.is_empty()
+            || self.seed_answered
+            || self.seed_warned
+        {
+            return;
+        }
+        self.seed_warned = true;
+        lodestar_log::log_event!(
+            crate::log_events::BOOTSTRAP_UNREACHABLE,
+            configured = self.cfg.bootstrap.len(),
+            resolved = self.bootstrap.len(),
+            refused = self.seed_refused
+        );
     }
 
     fn maintain(&mut self, sockets: &[StdUdpSocket]) {
@@ -1875,6 +1971,18 @@ mod tests {
         (actor, vec![socket])
     }
 
+    /// An IPv6 loopback socket, or `None` (the test skips) on a host
+    /// without IPv6.
+    fn loopback_v6() -> Option<StdUdpSocket> {
+        match StdUdpSocket::bind("[::1]:0") {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("skipped: no IPv6 loopback ({e})");
+                None
+            }
+        }
+    }
+
     fn candidate(addr: SocketAddr) -> NodeInfo {
         NodeInfo {
             id: NodeId([42; 20]),
@@ -1955,14 +2063,20 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), Vec::<SocketAddr>::new());
         assert_peer_ownership_drained(&a);
         assert_eq!(a.stats.snapshot().peer_cancelled, 1);
-        assert_eq!(a.stats.snapshot().lookups_completed, 2);
+        assert_eq!(
+            a.stats.snapshot().lookups_completed,
+            1,
+            "the cancelled request isn't a completed lookup"
+        );
     }
 
     #[test]
     fn dual_stack_completion_and_deadline_drain_both_family_orders() {
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
-            let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+            let Some(v6) = loopback_v6() else {
+                return;
+            };
             v6.set_nonblocking(true).unwrap();
             sockets.push(v6);
             a.families.push(Family {
@@ -2031,10 +2145,192 @@ mod tests {
         let mut done = rx.try_recv().unwrap().unwrap();
         assert_eq!(a.get_peers_queue.len(), 1);
         a.on_command(Command::SetPaused(true));
-        assert!(done.try_recv().unwrap().is_empty());
+        // Dropped, not answered: the pool sees a cancel, not an attempt.
+        assert_eq!(done.try_recv(), Err(oneshot::error::TryRecvError::Closed));
         assert!(a.get_peers_queue.is_empty());
         a.maintain(&sockets);
         assert_peer_ownership_drained(&a);
+        assert_eq!(a.stats.snapshot().lookups_completed, 0);
+    }
+
+    #[test]
+    fn transaction_ids_start_in_the_lower_half() {
+        for seed in 0..64 {
+            let a = Actor::new(
+                Config::default(),
+                Arc::new(Stats::default()),
+                vec![],
+                None,
+                vec![],
+                None,
+                Instant::now(),
+                StdRng::seed_from_u64(seed),
+            );
+            assert!(a.next_tid < 1 << 63, "{seed}: {}", a.next_tid);
+        }
+    }
+
+    /// A fixture that applies the public outbound policy, as in production.
+    fn public_fixture(seeds: Vec<SocketAddr>) -> (Actor, Vec<StdUdpSocket>) {
+        let (mut a, sockets) = fixture();
+        a.cfg.allow_private = false;
+        a.bootstrap = seeds;
+        (a, sockets)
+    }
+
+    #[test]
+    fn fake_ip_and_nat64_seeds_pass_the_policy_learned_nodes_do_not() {
+        let fake_ip: SocketAddr = "198.18.0.7:6881".parse().unwrap();
+        let nat64: SocketAddr = "[64:ff9b::5db8:d822]:6881".parse().unwrap();
+        let (mut a, sockets) = public_fixture(vec![fake_ip, nat64]);
+        for seed in [fake_ip, nat64] {
+            assert!(!endpoint_allowed(&a.cfg, seed), "special range: {seed}");
+        }
+        a.start_bootstrap(&sockets, Vec::new());
+        // The fake-ip seed (on the only, IPv4, family) reached the socket:
+        // sent, or refused by this host's routes, never by the policy.
+        let s = a.stats.snapshot();
+        assert_eq!(s.denied, 0);
+        assert_eq!(s.queries_out + s.send_errors, 1);
+        // The same address learned from the network is refused.
+        let before = a.stats.snapshot().denied;
+        // (The bootstrap lookup may already be over; no lookup is needed.)
+        let lid = u32::MAX;
+        assert!(!a.query(
+            &sockets,
+            0,
+            fake_ip,
+            Some(NodeId([7; 20])),
+            Method::Ping,
+            Purpose::Ping,
+        ));
+        assert_eq!(a.stats.snapshot().denied, before + 1);
+        // So is an unconfigured address sent as a seed.
+        let other: SocketAddr = "198.18.0.8:6881".parse().unwrap();
+        assert_eq!(
+            a.query_seed(&sockets, 0, other, Method::Ping, lid),
+            Sent::Failed
+        );
+        assert_eq!(a.stats.snapshot().denied, before + 2);
+        // The blocklist still applies to seeds.
+        let denied_ip = fake_ip.ip();
+        a.cfg.deny = Some(super::super::Deny(Arc::new(move |ip| ip == denied_ip)));
+        assert_eq!(
+            a.query_seed(&sockets, 0, fake_ip, Method::Ping, lid),
+            Sent::Failed
+        );
+        assert_eq!(a.stats.snapshot().denied, before + 3);
+    }
+
+    #[test]
+    fn a_special_range_router_bootstraps_and_its_learned_nodes_get_the_full_policy() {
+        // Loopback is a special range too, so a local router stands in for
+        // a fake-ip or NAT64 answer.
+        let router = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        router
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let router_addr = router.local_addr().unwrap();
+        let (mut a, sockets) = public_fixture(vec![router_addr]);
+        a.start_bootstrap(&sockets, Vec::new());
+        let mut buf = [0u8; 1500];
+        let (n, _) = router.recv_from(&mut buf).expect("the router was queried");
+        let query = krpc::parse(&buf[..n]).unwrap();
+        assert!(matches!(
+            query.body,
+            Body::Query(Query {
+                method: Method::FindNode { .. },
+                ..
+            })
+        ));
+        let tid = u64::from_be_bytes(query.transaction_id.try_into().unwrap());
+        assert!(a.seed_tids.contains(&tid));
+
+        let learned_fake_ip = NodeInfo {
+            id: NodeId([0x31; 20]),
+            addr: "198.18.1.1:6881".parse().unwrap(),
+        };
+        let learned_public = NodeInfo {
+            id: NodeId([0x32; 20]),
+            addr: "8.8.8.8:6881".parse().unwrap(),
+        };
+        let raw = compact::encode_nodes(&[learned_fake_ip, learned_public], false);
+        let response = Response {
+            id: NodeId([0x30; 20]),
+            nodes: CompactNodes::v4(&raw).unwrap(),
+            ..Default::default()
+        };
+        let msg = Message {
+            transaction_id: query.transaction_id,
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Response(response.clone()),
+        };
+        let before = a.stats.snapshot();
+        let frontier = a.sampler.frontier_len();
+        a.on_response(&sockets, 0, &msg, Some(&response), router_addr);
+        assert!(a.seed_answered && a.seed_tids.is_empty());
+        // Only the public node is a sampling candidate or gets queried.
+        assert_eq!(a.sampler.frontier_len(), frontier + 1);
+        let after = a.stats.snapshot();
+        let tried = |s: &super::super::StatsSnapshot| s.queries_out + s.send_errors + s.denied;
+        assert_eq!(tried(&after), tried(&before) + 1);
+        assert!(!a.pending_addrs.contains_key(&learned_fake_ip.addr));
+        // The router isn't routed to or handed to other nodes.
+        assert_eq!(a.families[0].table.len(), 0);
+    }
+
+    #[test]
+    fn every_refused_or_silent_router_warns_once_per_outage() {
+        use crate::log_events::BOOTSTRAP_UNREACHABLE;
+        let count = || BOOTSTRAP_UNREACHABLE::EVENT.count();
+        // The only test with configured routers, so the count is its own.
+        let (mut a, sockets) = public_fixture(vec![
+            "224.0.0.1:6881".parse().unwrap(),
+            "198.18.0.7:0".parse().unwrap(),
+        ]);
+        a.cfg.bootstrap = vec!["router.example:6881".into()];
+        let start = count();
+        a.start_bootstrap(&sockets, Vec::new());
+        assert_eq!(a.seed_refused, 2);
+        assert_eq!(count(), start + 1, "every router refused");
+        a.start_bootstrap(&sockets, Vec::new());
+        assert_eq!(count(), start + 1, "once, not every round");
+
+        // A router answers: re-armed. Then it goes silent and times out.
+        let router = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let router_addr = router.local_addr().unwrap();
+        a.bootstrap = vec![router_addr];
+        a.start_bootstrap(&sockets, Vec::new());
+        let tid = *a.seed_tids.iter().next().unwrap();
+        let bytes = tid.to_be_bytes();
+        let msg = Message {
+            transaction_id: &bytes,
+            version: None,
+            ip: None,
+            read_only: false,
+            body: Body::Error(ErrorBody {
+                code: error_code::GENERIC,
+                message: b"busy",
+            }),
+        };
+        a.on_response(&sockets, 0, &msg, None, router_addr);
+        assert!(!a.seed_warned, "an error reply proves the router is there");
+        a.start_bootstrap(&sockets, Vec::new());
+        assert_eq!(a.seed_tids.len(), 1);
+        a.cfg.query_timeout = Duration::ZERO;
+        a.maintain(&sockets);
+        assert!(a.seed_tids.is_empty());
+        assert_eq!(count(), start + 2, "every router timed out");
+        a.start_bootstrap(&sockets, Vec::new());
+        a.maintain(&sockets);
+        assert_eq!(count(), start + 2);
+
+        // No configured routers: nothing to warn about.
+        let (mut quiet, sockets) = public_fixture(vec![]);
+        quiet.start_bootstrap(&sockets, Vec::new());
+        assert_eq!(count(), start + 2);
     }
 
     #[test]
@@ -2168,7 +2464,9 @@ mod tests {
     #[test]
     fn dual_stack_cancellation_cleans_shared_rpc_ownership() {
         let (mut a, mut sockets) = fixture();
-        let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+        let Some(v6) = loopback_v6() else {
+            return;
+        };
         v6.set_nonblocking(true).unwrap();
         sockets.push(v6);
         a.families.push(Family {

@@ -358,6 +358,10 @@ enum FinderReply {
 struct Request {
     generation: u32,
     accepted: bool,
+    /// An accepted finder answered. Accepted with none answering means the
+    /// finders dropped the work (a pause, a shutdown): cancelled, and the
+    /// attempt isn't used.
+    answered: bool,
     replies: Vec<FinderReply>,
 }
 
@@ -709,6 +713,7 @@ impl Pool {
             Request {
                 generation,
                 accepted: false,
+                answered: false,
                 replies,
             },
         );
@@ -760,6 +765,7 @@ impl Pool {
             if let FinderReply::Completion(rx) = &mut reply {
                 match rx.try_recv() {
                     Ok(found) => {
+                        request.answered = true;
                         for p in found.into_iter().map(lodestar_network_policy::normalize) {
                             if peers.len() >= self.cfg.max_peers_per_key {
                                 break;
@@ -779,6 +785,10 @@ impl Pool {
         if finished && !request.accepted {
             self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
         }
+        if finished && request.accepted && !request.answered {
+            self.requeue_cancelled(key);
+            return;
+        }
         self.requests.insert(key, request);
         self.add_peers(key, &peers);
         if finished
@@ -791,6 +801,23 @@ impl Pool {
             self.lookups -= 1;
             self.entries.get_mut(&key).expect("present").state = State::Backoff;
             self.back_off(key);
+        }
+    }
+
+    /// Every accepting finder dropped the request unanswered: give the
+    /// attempt back and queue the key for the next lookup slot, with no
+    /// back-off. A paused pool holds it until it resumes.
+    fn requeue_cancelled(&mut self, key: InfoHash) {
+        self.lookups -= 1;
+        let e = self.entries.get_mut(&key).expect("present");
+        e.attempts = e.attempts.saturating_sub(1);
+        // It was accepted, so its retry isn't a retry of unaccepted work.
+        e.lookup_requested = false;
+        e.state = State::LookupQueued;
+        if e.interest {
+            self.lookup_backlog.push_front(key);
+        } else {
+            self.lookup_backlog.push_back(key);
         }
     }
 
@@ -1187,5 +1214,117 @@ mod diagnostic_cost {
         // Preselected conservative microcheck ceiling, not an application SLA.
         // Measures uncontended atomic overhead only; no network/throughput claim.
         assert!(diagnostic[4] - baseline[4] < 100.0);
+    }
+}
+
+#[cfg(test)]
+mod pause_cancel {
+    use super::*;
+    use crate::funnel::FunnelCounts;
+    use crate::plugin::Found;
+
+    struct NoFetch;
+
+    impl Fetcher for NoFetch {
+        fn fetch(
+            &self,
+            _: SocketAddr,
+            _: InfoHash,
+        ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
+            Box::pin(async { Err(FailureKind::Refused) })
+        }
+    }
+
+    /// Waits for `done`, polling, for at most 10 s.
+    async fn until(what: &str, mut done: impl AsyncFnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done().await {
+            assert!(Instant::now() < deadline, "timed out waiting: {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_finder_dropping_accepted_work_on_pause_costs_no_attempt_or_back_off() {
+        let (disc, discoveries) = mpsc::channel(4);
+        let (finder, mut requests) = mpsc::channel::<PeerRequest>(4);
+        let (out, _results) = mpsc::channel(4);
+        let (stop, shutdown) = Shutdown::new();
+        let config = PoolConfig {
+            lookup_wait: Duration::from_secs(600),
+            // Far beyond the 10 s deadline: a back-off would fail the test.
+            retry_backoff: Duration::from_secs(3600),
+            max_attempts: 3,
+            ..PoolConfig::default()
+        };
+        let (handle, task) = spawn(
+            config,
+            Arc::new(NoFetch),
+            PoolIo {
+                discoveries,
+                peer_finders: vec![finder],
+                out,
+                funnel: Arc::new(FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let source = SourceId::new(0).unwrap();
+        for n in [1u8, 2] {
+            disc.send(Discovery {
+                source,
+                found: Found::key(InfoHash([n; 20]), 0),
+                at: 1_700_000_000,
+                reply: false,
+            })
+            .await
+            .unwrap();
+        }
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            let request = tokio::time::timeout(Duration::from_secs(10), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let (done, rx) = oneshot::channel::<Vec<SocketAddr>>();
+            request.admit.send(Some(rx)).unwrap();
+            held.push(done);
+        }
+        until("both accepted", async || {
+            handle.snapshot().await.len() == 2
+                && handle.stats().lookups.load(Ordering::Relaxed) == 2
+        })
+        .await;
+        // The crawler's pause: the pool pauses, the actor drops its queue.
+        handle.set_paused(true).await;
+        drop(held);
+        until("both cancelled", async || {
+            handle.stats().lookups.load(Ordering::Relaxed) == 0
+        })
+        .await;
+        assert!(handle.snapshot().await.iter().all(|q| q.attempts == 0));
+        assert_eq!(handle.stats().lookup_unaccepted.load(Ordering::Relaxed), 0);
+        assert!(requests.try_recv().is_err(), "a paused pool asks nothing");
+
+        handle.set_paused(false).await;
+        for _ in 0..2 {
+            let request = tokio::time::timeout(Duration::from_secs(10), requests.recv())
+                .await
+                .expect("asked again at once, not after a back-off")
+                .unwrap();
+            let (done, rx) = oneshot::channel();
+            request.admit.send(Some(rx)).unwrap();
+            done.send(Vec::new()).unwrap();
+        }
+        until("the retries finished", async || {
+            handle.stats().lookups.load(Ordering::Relaxed) == 0
+        })
+        .await;
+        // Answered work still counts its attempt.
+        assert!(handle.snapshot().await.iter().all(|q| q.attempts == 1));
+        assert_eq!(handle.stats().retry_unaccepted.load(Ordering::Relaxed), 0);
+        stop.send(true).unwrap();
+        task.await.unwrap();
     }
 }
