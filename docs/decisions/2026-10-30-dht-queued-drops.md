@@ -1,4 +1,4 @@
-# DHT queued drops are counted (#PR)
+# DHT queued drops are counted (#232)
 
 A follow-up from CR-SIM, which found the DHT actor's owned-request counters didn't balance: admitted − completed − cancelled − active came out 13 in the `admission-pressure` scenario (runner, 2026-10-30).
 
