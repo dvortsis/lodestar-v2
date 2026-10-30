@@ -122,6 +122,11 @@ const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
 	/features\/detail\/(Contents|ErrorState|parsed\/Parsed)\.svelte$/,
+	// Clipboard failure is an interaction, not part of opening the detail view.
+	// Its UI and mount runtime remain included in the on-demand budget below.
+	/features\/detail\/manual-mount\.ts$/,
+	/features\/detail\/magnet\.ts$/,
+	/^chunk:magnet$/,
 	/features\/detail\/commands\.ts$/
 ];
 

@@ -9,7 +9,7 @@ it('subscribes once and invalidates for content settings from any tab and every 
 	watchDetailVisibility();
 	watchDetailVisibility();
 	expect(on).toHaveBeenCalledTimes(1);
-	const [topic, received, options] = on.mock.calls[0];
+	const [topic, received, options] = on.mock.calls[0]!;
 	expect(topic).toBe('settings');
 	cacheDetail(HASH, torrentDetail());
 	received({ section: 'network' });

@@ -18,7 +18,7 @@ const word = (w: string): Ast => ({ op: 'word', field: 'any', word: w });
 const res = (v: string): Ast => ({ op: 'tag', key: 'res', any: [v] });
 
 /** The fake server: `(` is a syntax error at its byte; "down" fails the network; `res:` parses. */
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: ReturnType<typeof vi.fn<(input: string, init?: RequestInit) => Promise<Response>>>;
 let searchBodies: unknown[];
 function server() {
 	searchBodies = [];
@@ -281,9 +281,22 @@ describe('the active-filter strip', { timeout: 20_000 }, () => {
 			LAZY
 		);
 		const second = screen.getByRole('button', { name: 'Remove filter: Resolution: 2160p' });
-		// The second press comes before the server answers the first.
+		// Hold both responses explicitly: fireEvent itself awaits Svelte work, so
+		// an immediately resolved fake response would replace the second button.
+		const respond = fetchMock.getMockImplementation()!;
+		const replies: (() => void)[] = [];
+		fetchMock.mockImplementation((input: string, init?: RequestInit) => {
+			if (!input.includes('/search')) return respond(input, init);
+			const response = Promise.resolve(respond(input, init));
+			return new Promise<Response>((resolve) => {
+				replies.push(() => void response.then(resolve));
+			});
+		});
 		await fireEvent.click(first);
 		await fireEvent.click(second);
+		expect(replies).toHaveLength(2);
+		replies[1]!();
+		replies[0]!();
 		await wait(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
 		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
 		await wait(() =>

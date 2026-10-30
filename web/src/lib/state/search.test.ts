@@ -28,6 +28,30 @@ function fakeNav(start = 'http://x/search') {
 	};
 }
 
+it('cancels a pending draft and an in-flight answer without navigating after unmount', async () => {
+	const { nav, calls } = fakeNav();
+	const state = createSearchState(nav);
+	state.setText('abandoned');
+	state.cancelPending();
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(fetchMock).not.toHaveBeenCalled();
+	expect(calls).toEqual([]);
+	let finish!: (response: Response) => void;
+	fetchMock.mockImplementation(
+		() =>
+			new Promise<Response>((resolve) => {
+				finish = resolve;
+			})
+	);
+	state.setText('late');
+	const submitted = state.submit();
+	state.cancelPending();
+	finish(json({ ast: word('late'), canonical: 'late' }));
+	await submitted;
+	expect(calls).toEqual([]);
+	expect(state.parsing).toBe(false);
+});
+
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -111,6 +135,16 @@ describe('search state', () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(s.queryReady).toBe(false);
 		expect(s.ast).toBeNull();
+	});
+
+	it('treats a non-canonical deep link as ready once its own text has parsed', async () => {
+		const f = fakeNav('http://x/search?q=Lantern');
+		const s = createSearchState(f.nav);
+		expect(s.queryReady).toBe(false);
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(s.ast).toEqual(word('Lantern'));
+		expect(s.queryReady).toBe(true);
 	});
 
 	it('preserves explicit browsing through sort/filter edits and removes it on reset', async () => {

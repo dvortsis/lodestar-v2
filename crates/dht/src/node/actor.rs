@@ -629,9 +629,19 @@ impl Actor {
                     if admit.send(Some(rx)).is_ok() {
                         Stats::inc(&self.stats.peer_admitted);
                         self.get_peers_queue.push_back((hash, Some(tx)));
+                    } else {
+                        Stats::inc(&self.stats.peer_ack_failed);
                     }
                 } else {
                     Stats::inc(&self.stats.peer_rejected);
+                    // Exclusive precedence; keep the existing total's boundary.
+                    if admit.is_closed() {
+                        Stats::inc(&self.stats.peer_rejected_caller_closed);
+                    } else if self.paused {
+                        Stats::inc(&self.stats.peer_rejected_paused);
+                    } else {
+                        Stats::inc(&self.stats.peer_rejected_capacity);
+                    }
                     let _ = admit.send(None);
                 }
             }
@@ -1952,7 +1962,10 @@ mod tests {
     fn dual_stack_completion_and_deadline_drain_both_family_orders() {
         for v6_first in [false, true] {
             let (mut a, mut sockets) = fixture();
-            let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+            // Skipped where the host has no IPv6.
+            let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
+                return;
+            };
             v6.set_nonblocking(true).unwrap();
             sockets.push(v6);
             a.families.push(Family {
@@ -2087,6 +2100,19 @@ mod tests {
         let (tx, mut rx) = oneshot::channel();
         a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
         assert!(rx.try_recv().unwrap().is_none());
+        assert_eq!(a.stats.snapshot().peer_rejected_capacity, 1);
+        a.on_command(Command::SetPaused(true));
+        let (tx, mut rx) = oneshot::channel();
+        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+        assert!(rx.try_recv().unwrap().is_none());
+        let (tx, rx) = oneshot::channel();
+        drop(rx);
+        a.on_command(Command::RequestPeers(InfoHash([1; 20]), tx));
+        let stats = a.stats.snapshot();
+        assert_eq!(stats.peer_rejected, 3);
+        assert_eq!(stats.peer_rejected_paused, 1);
+        assert_eq!(stats.peer_rejected_caller_closed, 1);
+        assert_eq!(stats.peer_ack_failed, 0);
         drop(held);
         a.maintain(&sockets);
         assert!(a.get_peers_queue.is_empty());
@@ -2145,7 +2171,10 @@ mod tests {
     #[test]
     fn dual_stack_cancellation_cleans_shared_rpc_ownership() {
         let (mut a, mut sockets) = fixture();
-        let v6 = StdUdpSocket::bind("[::1]:0").unwrap();
+        // Skipped where the host has no IPv6.
+        let Ok(v6) = StdUdpSocket::bind("[::1]:0") else {
+            return;
+        };
         v6.set_nonblocking(true).unwrap();
         sockets.push(v6);
         a.families.push(Family {

@@ -30,6 +30,28 @@ afterEach(() => {
 });
 
 describe('installAuthHandlers', () => {
+	it('does not repeat in-flight detail work when the initial session is confirmed', async () => {
+		setSession('unknown');
+		const invalidated = vi.fn();
+		const off = onDetailInvalidated(invalidated);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => json(200, { ok: true }))
+		);
+		try {
+			await api.get('/filters');
+			expect(currentSession()).toBe('signed_in');
+			expect(invalidated).not.toHaveBeenCalled();
+			setSession('signed_out');
+			expect(invalidated).toHaveBeenLastCalledWith(false);
+			await api.post('/login', { body: { password: 'x' } });
+			expect(invalidated).toHaveBeenLastCalledWith(true);
+			expect(invalidated).toHaveBeenCalledTimes(2);
+		} finally {
+			off();
+		}
+	});
+
 	it('sends an expired session to sign-in with the current URL as next', async () => {
 		vi.stubGlobal(
 			'fetch',
@@ -50,6 +72,18 @@ describe('installAuthHandlers', () => {
 		expect(nav.toSetup).toHaveBeenCalledOnce();
 		expect(nav.toLoginFrom).not.toHaveBeenCalled();
 		expect(currentSession()).toBe('setup_required');
+	});
+
+	it('does not invalidate the detail caches on the first answer, only on a later change', () => {
+		setSession('unknown');
+		const seen = vi.fn();
+		const off = onDetailInvalidated(seen);
+		setSession('signed_in');
+		expect(seen).not.toHaveBeenCalled();
+		setSession('signed_out');
+		setSession('signed_in');
+		expect(seen).toHaveBeenLastCalledWith(true);
+		off();
 	});
 
 	it('marks the session signed in after any request that worked', async () => {

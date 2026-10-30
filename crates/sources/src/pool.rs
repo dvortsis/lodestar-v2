@@ -141,6 +141,13 @@ pub struct PoolStats {
     /// Keys lost, by [`Loss`] code (index = code).
     pub lost: [AtomicU64; 11],
     pub duplicates: AtomicU64,
+    pub finder_full: AtomicU64,
+    pub finder_closed: AtomicU64,
+    /// Requests completed or timed out without observed accepted ownership.
+    pub lookup_unaccepted: AtomicU64,
+    pub retry_unaccepted: AtomicU64,
+    /// Eviction service reached this process: unaccepted, lookup, peers, fetch.
+    pub evicted_service: [AtomicU64; 4],
 }
 
 impl PoolStats {
@@ -321,6 +328,9 @@ struct Entry {
     tried: usize,
     attempts: u16,
     had_peers: bool,
+    /// Transient diagnostics only; never affects scheduling or persistence.
+    lookup_requested: bool,
+    fetch_started: bool,
     last_failure: Option<FailureKind>,
     state: State,
     /// Bumped on every state change, to invalidate old timers.
@@ -493,6 +503,7 @@ impl Pool {
         if self.entries.len() >= self.cfg.max_pending && !self.evict_one() {
             let cohort = d.at.div_euclid(3600);
             self.funnel.admitted(&key, cohort, d.source);
+            self.stats.evicted_service[0].fetch_add(1, Ordering::Relaxed);
             self.lose_untracked(&key, cohort, d.source, Loss::Evicted);
             return;
         }
@@ -512,6 +523,8 @@ impl Pool {
                 tried: 0,
                 attempts: 0,
                 had_peers: false,
+                lookup_requested: false,
+                fetch_started: false,
                 last_failure: None,
                 state: State::Backoff,
                 generation: 0,
@@ -554,6 +567,8 @@ impl Pool {
                 tried: 0,
                 attempts: q.attempts,
                 had_peers: false,
+                lookup_requested: false,
+                fetch_started: false,
                 last_failure: None,
                 state: State::Backoff,
                 generation: 0,
@@ -657,6 +672,10 @@ impl Pool {
             }
             return;
         }
+        if e.lookup_requested && e.attempts == 0 {
+            self.stats.retry_unaccepted.fetch_add(1, Ordering::Relaxed);
+        }
+        e.lookup_requested = true;
         e.state = State::Lookup;
         let generation = e.generation;
         // Private keys wait for their own source; no public request is made.
@@ -664,12 +683,19 @@ impl Pool {
         if !e.private {
             for finder in &self.finders {
                 let (admit, rx) = oneshot::channel();
-                if finder.try_send(PeerRequest { key, admit }).is_ok() {
-                    replies.push(FinderReply::Admission(rx));
+                match finder.try_send(PeerRequest { key, admit }) {
+                    Ok(()) => replies.push(FinderReply::Admission(rx)),
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        self.stats.finder_full.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        self.stats.finder_closed.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
         }
         if replies.is_empty() {
+            self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
             e.state = State::Backoff;
             self.schedule(
                 Instant::now() + self.cfg.retry_backoff.max(Duration::from_secs(1)),
@@ -750,6 +776,9 @@ impl Pool {
         }
         request.replies = waiting;
         let finished = request.replies.is_empty();
+        if finished && !request.accepted {
+            self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
+        }
         self.requests.insert(key, request);
         self.add_peers(key, &peers);
         if finished
@@ -788,7 +817,9 @@ impl Pool {
                 State::Lookup => {
                     // No peers turned up in time.
                     self.lookups -= 1;
-                    self.requests.remove(&key);
+                    if self.requests.remove(&key).is_some_and(|r| !r.accepted) {
+                        self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
+                    }
                     e.state = State::Backoff;
                     self.back_off(key);
                 }
@@ -840,6 +871,7 @@ impl Pool {
             let peer = e.peers[e.tried];
             e.tried += 1;
             e.state = State::Fetching;
+            e.fetch_started = true;
             e.generation = e.generation.wrapping_add(1);
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
             let handle = self.tasks.spawn(self.fetcher.fetch(peer, key));
@@ -1012,6 +1044,18 @@ impl Pool {
 
     fn lose(&mut self, key: InfoHash, loss: Loss) {
         let e = self.entries.remove(&key).expect("present");
+        if loss == Loss::Evicted {
+            let stage = if e.fetch_started {
+                3
+            } else if e.had_peers {
+                2
+            } else if e.attempts > 0 {
+                1
+            } else {
+                0
+            };
+            self.stats.evicted_service[stage].fetch_add(1, Ordering::Relaxed);
+        }
         if e.state == State::Lookup {
             self.requests.remove(&key);
             self.lookups -= 1;
@@ -1057,5 +1101,91 @@ impl Pool {
         s.lookups.store(self.lookups as u64, Ordering::Relaxed);
         s.lookup_backlog
             .store(self.lookup_backlog.len() as u64, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_cost {
+    use super::*;
+    use std::mem::{align_of, size_of};
+
+    // Exact entry field types at the prepared-fix base 5e1a53c0, before the two
+    // diagnostic flags. Measure compiler padding on the target, not just payload.
+    #[allow(dead_code)]
+    struct PreviousEntry {
+        source: SourceId,
+        sources: u64,
+        cohort: i64,
+        strategy: u8,
+        discovered_at: i64,
+        private: bool,
+        interest: bool,
+        peers: Vec<SocketAddr>,
+        tried: usize,
+        attempts: u16,
+        had_peers: bool,
+        last_failure: Option<FailureKind>,
+        state: State,
+        generation: u32,
+    }
+
+    #[test]
+    fn diagnostic_entry_storage_is_bounded() {
+        let delta = size_of::<Entry>().saturating_sub(size_of::<PreviousEntry>());
+        // Two inline bools may consume one alignment unit; no heap owner is new.
+        assert!(delta <= align_of::<Entry>());
+        println!(
+            "entry_before={} entry_after={} added_at_200000={} pool_stats={} pool_counter_payload_added={}",
+            size_of::<PreviousEntry>(),
+            size_of::<Entry>(),
+            delta * 200_000,
+            size_of::<PoolStats>(),
+            8 * size_of::<AtomicU64>()
+        );
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    #[ignore = "isolated release microcheck; run after other validation stops"]
+    fn diagnostic_atomic_cost_report() {
+        use std::hint::black_box;
+        const N: u64 = 1_000_000;
+        let old = AtomicU64::new(0);
+        let category = AtomicU64::new(0);
+        let mut baseline = Vec::new();
+        let mut diagnostic = Vec::new();
+        for round in 0..9 {
+            // Alternate order to reduce consistent warm-cache/order bias.
+            for added in [round % 2 == 0, round % 2 != 0] {
+                let start = std::time::Instant::now();
+                for _ in 0..N {
+                    black_box(&old).fetch_add(1, Ordering::Relaxed);
+                    if added {
+                        black_box(&category).fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                let ns = start.elapsed().as_secs_f64() * 1e9 / N as f64;
+                if added {
+                    diagnostic.push(ns);
+                } else {
+                    baseline.push(ns);
+                }
+            }
+        }
+        assert_eq!(old.load(Ordering::Relaxed), 18 * N);
+        assert_eq!(category.load(Ordering::Relaxed), 9 * N);
+        baseline.sort_by(f64::total_cmp);
+        diagnostic.sort_by(f64::total_cmp);
+        println!(
+            "atomic_ns_per_event baseline_median={:.2} classified_median={:.2} added_median={:.2} classified_range={:.2}..{:.2}",
+            baseline[4],
+            diagnostic[4],
+            diagnostic[4] - baseline[4],
+            diagnostic[0],
+            diagnostic[8]
+        );
+        // Preselected conservative microcheck ceiling, not an application SLA.
+        // Measures uncontended atomic overhead only; no network/throughput claim.
+        assert!(diagnostic[4] - baseline[4] < 100.0);
     }
 }

@@ -14,15 +14,27 @@
 //! - **deletes snapshots older than [`RETAIN_SECS`]** (90 days, the
 //!   rollback window), going by the file's modification time, which
 //!   `VACUUM INTO` sets when it writes the snapshot and this module puts
-//!   back after each purge;
+//!   back after each purge. A snapshot whose time can't be read is
+//!   deleted too: nothing shows it's inside the window. One dated ahead
+//!   of the clock is redated to now, so it goes 90 days after it's first
+//!   seen;
 //! - **applies the live purge to the others**, matched to the schema the
 //!   snapshot holds ([`Plan::for_version`]): expired quarantine (adult
 //!   holds become tombstones, as live), sealed names the live store no
 //!   longer holds, filter hits past their retention, and torrents the live
 //!   store has deleted since the snapshot was taken (by hash: every
-//!   deletion records its hash in `snapshot_deletions`, independently
-//!   of temporary fetch holds). A snapshot of a schema this build doesn't know is left
-//!   alone, with a warning.
+//!   deletion records its hash and time in `snapshot_deletions`,
+//!   independently of temporary fetch holds). A snapshot of a schema this
+//!   build doesn't know is left alone, with a warning.
+//!
+//! **The deletion journal is bounded.** A journal row is looked up only in
+//! snapshots taken up to [`TAKEN_MARGIN`] after it, so a hash deleted and
+//! fetched again stays in snapshots taken since. Rows older than
+//! [`RETAIN_SECS`] plus that margin are dropped on every pass: every
+//! snapshot they could match has expired. A pass that scrubbed every
+//! snapshot it could also drops the rows it read. A snapshot of an unknown
+//! schema doesn't hold them back (this build can never purge it, and it
+//! expires at 90 days like the rest); a failed purge or unlink does.
 //!
 //! Writes use `secure_delete` and the WAL, then a TRUNCATE checkpoint and
 //! a switch back to the rollback journal, so no pre-image of a purged page
@@ -46,10 +58,14 @@ pub const RETAIN_DAYS: i64 = 90;
 /// [`RETAIN_DAYS`] in seconds.
 pub const RETAIN_SECS: i64 = RETAIN_DAYS * 86_400;
 
-/// Held hashes are looked for in a snapshot if they were recorded up to
-/// this long before it was taken: a big store's `VACUUM INTO` takes a
-/// while, and the modification time is set when it ends.
+/// Held and deleted hashes are looked for in a snapshot if they were
+/// recorded up to this long before it was taken: a big store's `VACUUM
+/// INTO` takes a while, and the modification time is set when it ends.
 const TAKEN_MARGIN: i64 = 86_400;
+
+/// Deletion journal rows older than this are dropped: they match only
+/// snapshots taken before `now - RETAIN_SECS`, which have expired.
+const JOURNAL_SECS: i64 = RETAIN_SECS + TAKEN_MARGIN;
 
 /// After a pass over a snapshot, the next one looks up only holds
 /// recorded since, less this much: a hold written on another connection
@@ -267,7 +283,9 @@ impl Plan {
             // Insights' day tables, its state and the removal trigger: a
             // torrent the purge deletes is counted as removed in the
             // snapshot, and its import comes off the total, as it did
-            // live (B11b's decisions).
+            // live (B11b's decisions). V12 adds the live store's deletion
+            // journal and its trigger: a V12 snapshot's own journal gains
+            // the rows the purge deletes, which a rollback to it keeps.
             10..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,
@@ -320,7 +338,12 @@ impl Marks {
     /// The oldest hold recorded at or after which `snap` still needs a
     /// lookup at `now`, and whether that's a full pass.
     fn since(&self, snap: &Snapshot, now: i64) -> (i64, bool) {
-        let taken = snap.taken_at.map_or(i64::MIN, held_since);
+        // A time ahead of the clock says nothing of when it was taken:
+        // look up everything, as for an unknown one.
+        let taken = snap
+            .taken_at
+            .filter(|t| *t <= now)
+            .map_or(i64::MIN, held_since);
         match self.0.get(&snap.path) {
             Some(m)
                 if m.taken_at == snap.taken_at
@@ -336,8 +359,8 @@ impl Marks {
 
 /// What the live store holds, read once per tick.
 struct Live {
-    /// Durable deletion evidence, independent of released/expired holds.
-    deleted: Vec<[u8; 20]>,
+    /// The deletion journal: hashes the store deleted, with when.
+    deleted: Vec<([u8; 20], i64)>,
     /// Quarantined hashes that still have a sealed name.
     sealed: HashSet<[u8; 20]>,
     /// Hashes you confirmed or reported as CS-1: looked up in every pass,
@@ -365,12 +388,14 @@ const USER_TABLES: [&str; 3] = ["api_keys", "saved_searches", "collections"];
 impl Live {
     /// Holds recorded before `since` (other than `reported`) aren't read.
     fn read(conn: &Connection, since: i64) -> rusqlite::Result<Live> {
-        let deleted = conn
-            .prepare("SELECT hash FROM snapshot_deletions")?
-            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
-            .map(|h| h.and_then(|h| h.try_into().map_err(|_| rusqlite::Error::InvalidQuery)))
-            .collect::<rusqlite::Result<Vec<[u8; 20]>>>()?;
         let hash = |h: Vec<u8>| <[u8; 20]>::try_from(h).ok();
+        let mut deleted = Vec::new();
+        let mut stmt = conn.prepare("SELECT hash, at FROM snapshot_deletions")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))?;
+        for row in rows {
+            let (h, at) = row?;
+            deleted.extend(hash(h).map(|h| (h, at)));
+        }
         let mut sealed = HashSet::new();
         let mut stmt = conn.prepare("SELECT hash FROM quarantine WHERE sealed IS NOT NULL")?;
         for h in stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))? {
@@ -461,15 +486,53 @@ impl Store {
         self.snapshot_marks
             .0
             .retain(|path, _| all.iter().any(|s| &s.path == path));
+        // Whether a snapshot may still hold a deletion this pass didn't
+        // scrub: then the journal rows it read stay.
+        let mut blocked = false;
         let mut keep = Vec::new();
-        for snap in all {
-            if snap.expires_at().is_none_or(|at| now < at) {
+        // Snapshots dated ahead of the clock, redated to now this pass.
+        let mut redated = HashSet::new();
+        for mut snap in all {
+            // A time ahead of the clock (taken while it ran fast, say before
+            // NTP synced) would keep the file past 90 days: it's redated to
+            // now, so it expires 90 days after it was first seen.
+            if snap.taken_at.is_some_and(|t| t > now) && set_modified(&snap.path, now).is_ok() {
+                self.snapshot_marks.0.remove(&snap.path);
+                snap.taken_at = Some(now);
+                redated.insert(snap.path.clone());
+            }
+            if snap.expires_at().is_some_and(|at| now < at) {
                 keep.push(snap);
                 continue;
+            }
+            if snap.taken_at.is_none() {
+                match std::fs::metadata(&snap.path) {
+                    // Can't be looked at now (or gone): next pass.
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            blocked = true;
+                            report.warnings.push(format!(
+                                "reading the snapshot {} failed: {e}",
+                                snap.path.display()
+                            ));
+                        }
+                        continue;
+                    }
+                    // The safe bound for a time that can't be read: the
+                    // file can't be shown to be inside the window, and
+                    // keeping it would keep what it holds past the
+                    // journal's 91 days.
+                    Ok(_) => report.warnings.push(format!(
+                        "the snapshot {} has no readable modification time, so its age is \
+                         unknown; it's deleted as if {RETAIN_DAYS} days old",
+                        snap.path.display()
+                    )),
+                }
             }
             self.snapshot_marks.0.remove(&snap.path);
             let (gone, failed) = remove_snapshot(&snap.path);
             for (path, e) in failed {
+                blocked = true;
                 report.warnings.push(format!(
                     "deleting the expired snapshot file {} failed: {e}",
                     path.display()
@@ -479,16 +542,30 @@ impl Store {
                 report.expired.push(snap);
             }
         }
+        if let Err(e) = self.conn.execute(
+            "DELETE FROM snapshot_deletions WHERE at < ?1",
+            [now.saturating_sub(JOURNAL_SECS)],
+        ) {
+            report.warnings.push(format!(
+                "dropping old snapshot deletion evidence failed: {e}"
+            ));
+        }
+        // A redated snapshot's real time is unknown: everything is looked
+        // up in it this pass.
+        let since_for = |marks: &Marks, s: &Snapshot| {
+            if redated.contains(&s.path) {
+                (i64::MIN, true)
+            } else {
+                marks.since(s, now)
+            }
+        };
         let Some(since) = keep
             .iter()
-            .map(|s| self.snapshot_marks.since(s, now).0)
+            .map(|s| since_for(&self.snapshot_marks, s).0)
             .min()
         else {
-            // Only discard evidence if every snapshot is absent or expired
-            // successfully. A failed unlink still needs this journal.
-            if report.warnings.is_empty()
-                && let Err(e) = self.conn.execute("DELETE FROM snapshot_deletions", [])
-            {
+            // No snapshot left to hold a deletion, unless an unlink failed.
+            if !blocked && let Err(e) = self.conn.execute("DELETE FROM snapshot_deletions", []) {
                 report
                     .warnings
                     .push(format!("clearing snapshot deletion evidence failed: {e}"));
@@ -505,8 +582,10 @@ impl Store {
             }
         };
         for snap in keep {
-            let (since, full) = self.snapshot_marks.since(&snap, now);
+            let (since, full) = since_for(&self.snapshot_marks, &snap);
             match purge_one(&snap, &live, since, now, hits_before) {
+                // Not purged, so no mark; and never purged by this build,
+                // so it doesn't hold the journal back (see the module docs).
                 Ok(Outcome::Skipped(why)) => {
                     report.warnings.push(why);
                     continue;
@@ -520,6 +599,7 @@ impl Store {
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
+                    blocked = true;
                     report.warnings.push(format!(
                         "purging the snapshot {} failed (it was left as it was): {e}",
                         snap.path.display()
@@ -540,16 +620,17 @@ impl Store {
                 },
             );
         }
-        // Acknowledge only the hashes this pass saw, after ALL snapshots have
-        // succeeded. Concurrent deletions must remain for the next pass.
-        if report.warnings.is_empty() {
+        // Every snapshot that could hold them has lost the rows read. A
+        // row added or moved forward meanwhile (by time) stays.
+        if !blocked {
             let acknowledged = (|| -> rusqlite::Result<()> {
-                let tx = self.conn.transaction()?;
+                let tx = crate::begin_write(&mut self.conn)?;
                 {
-                    let mut delete =
-                        tx.prepare_cached("DELETE FROM snapshot_deletions WHERE hash = ?1")?;
-                    for hash in &live.deleted {
-                        delete.execute([&hash[..]])?;
+                    let mut delete = tx.prepare_cached(
+                        "DELETE FROM snapshot_deletions WHERE hash = ?1 AND at = ?2",
+                    )?;
+                    for (hash, at) in &live.deleted {
+                        delete.execute(params![&hash[..], at])?;
                     }
                 }
                 tx.commit()
@@ -689,10 +770,9 @@ fn purge_one(
     // its modification time touched).
     let mut ids = BTreeSet::new();
     if plan.torrents {
-        for hash in &live.deleted {
-            ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*hash)))?);
-        }
-        let recent = live.held.iter().filter(|(_, at)| *at >= since);
+        // `since` is no earlier than a day before the snapshot was taken:
+        // a hash deleted before that and fetched again stays in it.
+        let recent = (live.held.iter().chain(&live.deleted)).filter(|(_, at)| *at >= since);
         for h in live.reported.iter().chain(recent.map(|(h, _)| h)) {
             ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*h)))?);
         }
@@ -938,6 +1018,39 @@ mod tests {
         conn
     }
 
+    /// The deletion journal, by hash.
+    fn journal(store: &Store) -> Vec<([u8; 20], i64)> {
+        let mut stmt = store
+            .connection()
+            .prepare("SELECT hash, at FROM snapshot_deletions ORDER BY hash")
+            .unwrap();
+        stmt.query_map([], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?.try_into().unwrap(), r.get(1)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// Dates the whole journal `at` on the tests' clock: the trigger uses
+    /// the real one.
+    fn stamp(store: &Store, at: i64) {
+        store
+            .connection()
+            .execute("UPDATE snapshot_deletions SET at = ?1", [at])
+            .unwrap();
+    }
+
+    fn journal_row(store: &Store, hash: [u8; 20], at: i64) {
+        store
+            .connection()
+            .execute(
+                "INSERT INTO snapshot_deletions (hash, at) VALUES (?1, ?2)",
+                params![&hash[..], at],
+            )
+            .unwrap();
+    }
+
     fn live(dir: &Path) -> (Store, PathBuf) {
         let db = dir.join("lodestar.db");
         (Store::open(&db, StoreConfig::default()).unwrap(), db)
@@ -1008,6 +1121,7 @@ mod tests {
             let snap = take(&store, &db, 12, T);
             quarantine(store.connection(), hash, "U-1", b"sealed", T + 30 * DAY);
             store.delete_torrents(&[hash]).unwrap();
+            stamp(&store, T + 30 * DAY);
             if release {
                 store.release(&hash).unwrap();
             }
@@ -1027,11 +1141,7 @@ mod tests {
             assert_eq!(report.torrents, 1);
             assert!(!contains(&snap, b"purged ordinary quarantine"));
             assert!(contains(&snap, b"keep this torrent"));
-            let pending: i64 = store
-                .connection()
-                .query_row("SELECT count(*) FROM snapshot_deletions", [], |r| r.get(0))
-                .unwrap();
-            assert_eq!(pending, 0);
+            assert_eq!(journal(&store), []);
             quick_check(&snap);
         }
     }
@@ -1049,6 +1159,7 @@ mod tests {
         drop(conn);
         set_modified(&snap, T).unwrap();
         store.delete_torrents(&[hash]).unwrap();
+        stamp(&store, T + DAY / 2);
         let report = store.purge_snapshots(T + DAY, 0);
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(report.torrents, 1);
@@ -1065,11 +1176,299 @@ mod tests {
             .connection()
             .execute_batch("BEGIN; DELETE FROM torrents; ROLLBACK;")
             .unwrap();
-        let n: i64 = store
-            .connection()
-            .query_row("SELECT count(*) FROM snapshot_deletions", [], |r| r.get(0))
+        assert_eq!(journal(&store), []);
+    }
+
+    fn set_v2(conn: &Connection, id: i64, v2: [u8; 32]) {
+        conn.execute(
+            "UPDATE torrents SET info_hash_v2 = ?2 WHERE id = ?1",
+            params![id, &v2[..]],
+        )
+        .unwrap();
+    }
+
+    /// V12's backfill: the holds of a V11 store go in at their own time
+    /// (the later of a hash's two), except a hash that's live again,
+    /// by its v1 hash or its truncated v2 one.
+    #[test]
+    fn migrating_v11_journals_holds_at_their_time_except_live_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let conn = fixture(&db, 11);
+        let tomb = |h: u8, at: i64| {
+            conn.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'FK-4', ?2)",
+                params![&[h; 20][..], at],
+            )
             .unwrap();
-        assert_eq!(n, 0);
+        };
+        quarantine(&conn, [1; 20], "CS-3", b"s", 100 + 30 * DAY);
+        tomb(2, 200);
+        quarantine(&conn, [3; 20], "CS-3+adult", b"s", 300 + 30 * DAY);
+        tomb(3, 400);
+        quarantine(&conn, [4; 20], "CS-3", b"s", 500 + 30 * DAY);
+        insert_torrent(&conn, 1, [4; 20], "live by v1");
+        tomb(5, 600);
+        insert_torrent(&conn, 2, [6; 20], "live by v2");
+        let mut v2 = [5; 32];
+        v2[20..].fill(9);
+        set_v2(&conn, 2, v2);
+        drop(conn);
+
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        assert_eq!(
+            journal(&store),
+            [([1; 20], 100), ([2; 20], 200), ([3; 20], 400)]
+        );
+    }
+
+    /// A store at V12's pre-release shape (builds from `a7c6d5c8` until
+    /// `at` was added: no time column, a trigger that wrote none) is
+    /// repaired when opened: rows dated now, live hashes dropped, the
+    /// trigger replaced, and the purge runs. Opening again changes nothing.
+    #[test]
+    fn opening_a_pre_release_v12_store_repairs_its_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let conn = fixture(&db, 11);
+        conn.execute_batch(
+            "CREATE TABLE snapshot_deletions (
+                 hash BLOB PRIMARY KEY CHECK (length(hash) = 20)
+             ) STRICT, WITHOUT ROWID;
+             CREATE TRIGGER snapshot_torrent_deleted AFTER DELETE ON torrents BEGIN
+                 INSERT OR IGNORE INTO snapshot_deletions (hash) VALUES (old.info_hash);
+                 INSERT OR IGNORE INTO snapshot_deletions (hash)
+                     SELECT substr(old.info_hash_v2, 1, 20) WHERE old.info_hash_v2 IS NOT NULL;
+             END;
+             INSERT INTO schema_migrations (version, applied_at) VALUES (12, 0);",
+        )
+        .unwrap();
+        insert_torrent(&conn, 1, [81; 20], "live again");
+        insert_torrent(&conn, 2, [82; 20], "deleted-marker-0c5f");
+        conn.execute("DELETE FROM torrents WHERE id = 2", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO snapshot_deletions (hash) VALUES (?1)",
+            [&[81u8; 20][..]],
+        )
+        .unwrap();
+        drop(conn);
+        let clock = || {
+            let t = std::time::SystemTime::now().duration_since(UNIX_EPOCH);
+            i64::try_from(t.unwrap().as_secs()).unwrap()
+        };
+
+        let before = clock();
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let after = clock();
+        let rows = journal(&store);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, [82; 20]);
+        assert!((before..=after).contains(&rows[0].1), "{rows:?}");
+        let trigger = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name = 'snapshot_torrent_deleted'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let fresh = Store::open_in_memory(StoreConfig::default()).unwrap();
+        assert_eq!(trigger(store.connection()), trigger(fresh.connection()));
+        store.delete_torrents(&[[81; 20]]).unwrap();
+        let rows = journal(&store);
+        assert_eq!(rows[0].0, [81; 20]);
+        assert!(rows[0].1 >= before, "{rows:?}");
+
+        // The purge reads the column; a snapshot from before the deletion
+        // loses the torrent.
+        let snap = crate::schema::snapshot_path(&db, 12);
+        let conn = fixture(&snap, 11);
+        insert_torrent(&conn, 2, [82; 20], "deleted-marker-0c5f");
+        drop(conn);
+        set_modified(&snap, before - DAY).unwrap();
+        let r = store.purge_snapshots(after, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.torrents, 1);
+        assert!(!contains(&snap, b"deleted-marker-0c5f"));
+        journal_row(&store, [83; 20], 7);
+        drop(store);
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        assert_eq!(journal(&store), [([83; 20], 7)], "repaired once");
+    }
+
+    /// The trigger journals a hybrid's v1 hash and its truncated v2 one,
+    /// at the time of the delete; deleting a hash again moves it forward.
+    #[test]
+    fn a_hybrid_delete_journals_both_hashes_and_a_repeat_moves_the_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = live(dir.path());
+        let v1 = [21; 20];
+        let mut v2 = [22; 32];
+        v2[20..].fill(23);
+        insert_torrent(store.connection(), 1, v1, "hybrid");
+        set_v2(store.connection(), 1, v2);
+        let clock = || {
+            let t = std::time::SystemTime::now().duration_since(UNIX_EPOCH);
+            i64::try_from(t.unwrap().as_secs()).unwrap()
+        };
+        let before = clock();
+        store.delete_torrents(&[v1]).unwrap();
+        let after = clock();
+        let rows = journal(&store);
+        assert_eq!(
+            rows.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
+            [v1, [22; 20]]
+        );
+        for (_, at) in &rows {
+            assert!(
+                (before..=after).contains(at),
+                "{at} not in {before}..={after}"
+            );
+        }
+
+        stamp(&store, 5);
+        insert_torrent(store.connection(), 2, v1, "fetched again");
+        store.delete_torrents(&[v1]).unwrap();
+        let rows = journal(&store);
+        assert!(rows[0].1 >= before, "{rows:?}");
+        assert_eq!(rows[1], ([22; 20], 5), "untouched");
+    }
+
+    /// With no snapshot left, the journal goes, unless an expired one
+    /// couldn't be deleted in full: then it stays for the next pass.
+    #[test]
+    fn with_no_snapshots_left_the_journal_clears_only_after_a_clean_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        journal_row(&store, [31; 20], T);
+        let r = store.purge_snapshots(T + DAY, 0);
+        assert_eq!(r, PurgeReport::default());
+        assert_eq!(journal(&store), []);
+
+        journal_row(&store, [32; 20], T);
+        let snap = take(&store, &db, 10, T);
+        std::fs::create_dir(side(&snap, "-journal")).unwrap();
+        let r = store.purge_snapshots(T + RETAIN_SECS, 0);
+        assert_eq!(paths(&r.expired), vec![snap.clone()]);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert_eq!(journal(&store), [([32; 20], T)], "a failed unlink keeps it");
+
+        std::fs::remove_dir(side(&snap, "-journal")).unwrap();
+        let r = store.purge_snapshots(T + RETAIN_SECS + 1, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(journal(&store), []);
+    }
+
+    /// A snapshot of a schema this build can't purge doesn't hold the
+    /// journal back, and gets no mark: it's looked at afresh each pass.
+    #[test]
+    fn an_unknown_schema_neither_holds_the_journal_nor_takes_a_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let hash = [41; 20];
+        insert_torrent(store.connection(), 1, hash, "deleted-marker-3b1e");
+        let known = take(&store, &db, 12, T);
+        let unknown = crate::schema::snapshot_path(&db, 100);
+        let conn = fixture(&unknown, 11);
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (99, 0)",
+            [],
+        )
+        .unwrap();
+        insert_torrent(&conn, 1, hash, "deleted-marker-3b1e");
+        drop(conn);
+        set_modified(&unknown, T).unwrap();
+        store.delete_torrents(&[hash]).unwrap();
+        stamp(&store, T + DAY);
+
+        let r = store.purge_snapshots(T + 2 * DAY, 0);
+        assert_eq!(r.torrents, 1);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("schema v99"), "{:?}", r.warnings);
+        assert!(!contains(&known, b"deleted-marker-3b1e"));
+        assert!(contains(&unknown, b"deleted-marker-3b1e"));
+        assert_eq!(journal(&store), []);
+        assert!(store.snapshot_marks.0.contains_key(&known));
+        assert!(!store.snapshot_marks.0.contains_key(&unknown));
+    }
+
+    /// A row is looked up only in snapshots taken up to a day after it:
+    /// a hash deleted and fetched again stays in snapshots taken since.
+    /// A snapshot dated ahead of the clock is redated to now and matched
+    /// against every row, then expires 90 days after it was first seen.
+    #[test]
+    fn a_deletion_matches_only_snapshots_taken_up_to_a_day_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let hash = [51; 20];
+        insert_torrent(store.connection(), 1, hash, "refetched-marker-6d02");
+        let before = take(&store, &db, 10, T);
+        let edge = take(&store, &db, 10, T + 5 * DAY);
+        let after = take(&store, &db, 10, T + 5 * DAY + 1);
+        let ahead = take(&store, &db, 10, T + 50 * DAY);
+        // Deleted at T + 4 days, then fetched again (live, not in the
+        // journal's way).
+        store.delete_torrents(&[hash]).unwrap();
+        stamp(&store, T + 4 * DAY);
+        insert_torrent(store.connection(), 2, hash, "refetched-marker-6d02");
+
+        let r = store.purge_snapshots(T + 6 * DAY, 0);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.purged, vec![before.clone(), edge.clone(), ahead.clone()]);
+        for p in [&before, &edge, &ahead] {
+            assert!(!contains(p, b"refetched-marker-6d02"), "{}", p.display());
+        }
+        assert!(contains(&after, b"refetched-marker-6d02"));
+        assert_eq!(modified(&ahead), Some(T + 6 * DAY));
+        let r = store.purge_snapshots(T + 6 * DAY + RETAIN_SECS, 0);
+        assert_eq!(paths(&r.expired), vec![before, edge, after, ahead]);
+    }
+
+    /// Rows past the window go on every pass, even one that keeps the
+    /// rest because a snapshot couldn't be purged.
+    #[test]
+    fn rows_older_than_the_window_go_on_every_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let snap = take(&store, &db, 10, T);
+        let now = T + DAY;
+        journal_row(&store, [61; 20], now - JOURNAL_SECS - 1);
+        journal_row(&store, [62; 20], now - JOURNAL_SECS);
+        journal_row(&store, [63; 20], T);
+        let locked = Connection::open(&snap).unwrap();
+        locked.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let r = store.purge_snapshots(now, 0);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert_eq!(
+            journal(&store),
+            [([62; 20], now - JOURNAL_SECS), ([63; 20], T)]
+        );
+        locked.execute_batch("ROLLBACK").unwrap();
+    }
+
+    /// A snapshot whose time can't be read (here, before 1970) can't be
+    /// shown to be inside the window: it's deleted, with a warning, and
+    /// doesn't hold the journal back.
+    #[test]
+    fn a_snapshot_with_an_unreadable_time_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let snap = take(&store, &db, 10, T);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&snap)
+            .unwrap()
+            .set_modified(UNIX_EPOCH - Duration::from_secs(86_400))
+            .unwrap();
+        assert_eq!(list(&db).unwrap()[0].taken_at, None);
+        journal_row(&store, [71; 20], T);
+        let r = store.purge_snapshots(T + DAY, 0);
+        assert_eq!(paths(&r.expired), vec![snap.clone()]);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("no readable modification time"));
+        assert!(!snap.exists());
+        assert_eq!(journal(&store), []);
     }
 
     /// The brief's first test: a sealed name in a snapshot taken before

@@ -73,6 +73,8 @@ export function createSearchState(nav: Nav = kitNav) {
 	let text = $state('');
 	let ast = $state.raw<Ast | null>(null);
 	let parsedQuery = $state<string | null>(null);
+	/** The input text that produced `ast`; a deep link need not be in canonical form. */
+	let parsedFrom = $state<string | null>(null);
 	let parseError = $state.raw<ParseError | null>(null);
 	let parsing = $state(false);
 
@@ -95,6 +97,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			if (t !== text) return undefined;
 			ast = r.ast;
 			parsedQuery = r.canonical;
+			parsedFrom = t;
 			parseError = null;
 			parsing = false;
 			return r.canonical;
@@ -119,6 +122,13 @@ export function createSearchState(nav: Nav = kitNav) {
 	}
 
 	return {
+		/** Stop pending work when the query editor leaves; the state can be mounted again. */
+		cancelPending() {
+			clearTimeout(timer);
+			slot.cancel();
+			parsing = false;
+			written = undefined;
+		},
 		get text() {
 			return text;
 		},
@@ -127,7 +137,12 @@ export function createSearchState(nav: Nav = kitNav) {
 		},
 		/** Prevent an old AST (including match-all) being dispatched for a new URL query. */
 		get queryReady() {
-			return ast !== null && !parsing && !parseError && parsedQuery === url().q;
+			return (
+				ast !== null &&
+				!parsing &&
+				!parseError &&
+				(parsedFrom === url().q || parsedQuery === url().q)
+			);
 		},
 		get parseError() {
 			return parseError;
@@ -203,6 +218,7 @@ export function createSearchState(nav: Nav = kitNav) {
 				if (text !== draft) return; // typed meanwhile: the newer draft wins
 				ast = next;
 				parsedQuery = r.canonical;
+				parsedFrom = r.canonical;
 				parseError = null;
 				parsing = false;
 				text = r.canonical;
@@ -225,6 +241,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			text = '';
 			ast = null;
 			parsedQuery = null;
+			parsedFrom = null;
 			parseError = null;
 			parsing = false;
 			await commit('', true, { sort: DEFAULT_SORT, hidden: false, exact: false, browse: false });

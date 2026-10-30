@@ -79,7 +79,10 @@
 		}
 		if (takeSubmit()) submit();
 	});
-	onDestroy(() => editor?.destroy());
+	onDestroy(() => {
+		editor?.destroy();
+		s.cancelPending();
+	});
 
 	const blank = $derived(!s.text.trim());
 	/** Still the text that was parsed: on an error W5 keeps the raw text in the URL. */

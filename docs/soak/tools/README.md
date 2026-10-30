@@ -1,7 +1,7 @@
 # Offline CR-0 soak analysis
 
 `analyze_cr0.py` reads the aggregate evidence written by `cr0-soak.ps1`.
-It uses Python 3.10+ and the standard library; no packages or services are required.
+It uses Python 3.12+ and the standard library; no packages or services are required.
 It does not connect to the crawler, inspect its database, read process logs, or
 change the collector or evidence. It works during startup and after termination.
 
@@ -61,3 +61,78 @@ torrents, or peer addresses. Keep original process logs private.
 
 The baseline must still be reviewed against the implementation plan and deployment
 requirements. This tool does not authorize restarting the older Docker crawler.
+
+## Collector failure rehearsal
+
+Run these from the integration checkout in PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File docs/soak/tools/test_cr0_collector.ps1
+pwsh -NoProfile -File docs/soak/tools/test_cr0_rehearsal.ps1 -OutputRoot target/rehearsal-new
+python -m unittest discover -s docs/soak/tools -p 'test_*.py' -v
+```
+
+Choose a new output directory each time. The integrated rehearsal copies the
+production collector unchanged and appends test adapters to its private common
+dependency. Its executable is an invalid text fixture, process and HTTP calls are
+fake, and clock advancement is simulated. Never copy `rehearsal-adapters.ps1` into
+a launch packet. Rehearsal evidence is test data, not elapsed soak coverage.
+
+The 21 integrated cases cover preflight refusal; falling space in each phase;
+repeated capacity-read failures; redirected-log growth; readable metrics with
+unwritable evidence; status, result and informational-log failures; child exit;
+signal failure and forced stop; stale process identity; failed cleanup-adapter
+creation; health/metrics failures; an exact 24-hour endpoint; an unreadable endpoint
+followed by a valid later sample; an unhealthy endpoint with valid metrics; and refusing restart into existing evidence.
+The smaller injection suite separately exercises locked atomic replacement,
+unique temporary files, independently guarded final writes and bounded waits.
+Python fixtures cover malformed/truncated evidence, missing snapshots, resets,
+label changes and collection gaps. No test fills the disk or deletes old evidence.
+
+Real Windows Ctrl+C delivery is a separate `smoke_windows.ps1` check against a
+fresh offline application fixture. The supervisor clears the inheritable
+ignore-Ctrl+C flag before spawning the child. `cr0-signal.ps1` verifies PID/start
+time, joins the child's console from a separate helper and records signal
+generation; cleanup still requires confirmed process exit. A successful signal
+alone does not establish graceful shutdown. Keep the signal helper alongside the
+collector and common module in the frozen run directory.
+
+The operator stop interface is a new empty `stop.request` file in the **new run's**
+directory. It triggers protected shutdown and a failing collector exit because
+collection is interrupted. Preserve the directory afterward; do not restart into
+it. A stale identity or unconfirmed cleanup is an unknown process state requiring
+operator investigation, never permission to kill a PID without checking its start
+identity. Original logs and databases remain private.
+
+## Preparing a source-qualified Windows package
+
+After source review and the applicable validation gates, commit the integration
+checkout locally. Keep unrelated root and Settings work separate. Then run:
+
+```powershell
+python docs/soak/tools/prepare_windows.py --output target/launch-candidate-r17
+python docs/soak/tools/prepare_windows.py --output target/launch-candidate-r17 --verify
+```
+
+The output must be a new direct child of this checkout's `target`. Preparation
+refuses dirty source, records the commit and tree, builds the frontend before
+Rust, checks unchanged bundle budgets, freezes the UI and collector dependencies,
+and exercises an isolated offline smoke. It uses existing offline dependencies,
+four Cargo jobs and the bounded cache; it performs no cleanup or public crawl.
+Source identity is checked again after building and after the smoke. Any failed
+directory remains diagnostic evidence and must not be reused.
+
+`build-record.json` binds the executable and index hashes to that source and
+toolchain. `manifest.json` is written only after successful preparation and lists
+every packaged executable, collector dependency and UI file hash. Verification
+detects missing/modified files and inconsistent build identity. Keep the entire
+directory private: the smoke's separate fixture logs can contain a setup token.
+Only the aggregate manifest and smoke result are suitable for reporting.
+
+The manifest is **packaging evidence**, not launch authorization or soak acceptance.
+Recheck Docker stopped, available ports, storage growth and available space before
+launching. Choose a separate, nonexistent run directory: the collector refuses
+to use the package directory or any previous run as its evidence root. The frozen
+collector's arguments are `-Exe <package>/lodestar.exe -Root <new-run> -Commit
+<recorded-source-commit> -Ui embedded -BuildRecord <package>/build-record.json`.
+Keep the default suppression, warmup, baseline duration and disk guardrails.

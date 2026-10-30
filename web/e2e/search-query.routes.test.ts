@@ -184,6 +184,15 @@ test('Enter pushes the search; back and forward walk them', async ({ page, go })
 	await expect(editor(page).locator('.qt-field')).toHaveText('res:');
 });
 
+test('a deep link whose query is not canonical still loads results', async ({ go, mock }) => {
+	await go('/search?q=lantern++res%3A1080p'); // the server prints one space
+	await expect
+		.poll(() => mock.calls('searchPost').some((r) => r.postDataJSON().limit === 50), {
+			timeout: 10_000
+		})
+		.toBe(true);
+});
+
 test('chips render from the server AST; removing one goes through the server', async ({
 	page,
 	go,

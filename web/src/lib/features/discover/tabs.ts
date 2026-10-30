@@ -1,6 +1,7 @@
 // The Newest tabs (§10.7): one per content type, in the glossary's order. The server decides what
 // a type holds (and whether Adult shows at all); the client only names the tabs and builds links.
 import { m } from '$lib/paraglide/messages.js';
+import { TYPE_LABELS } from '$lib/util/content-labels';
 
 export const TYPES = [
 	'movie',
@@ -21,23 +22,8 @@ export type ContentType = (typeof TYPES)[number];
 /** A tab is a content type, or null for All. */
 export type Tab = ContentType | null;
 
-const LABELS: Record<ContentType | 'all', () => string> = {
-	all: () => m.discover_type_all(),
-	movie: () => m.content_type_movie(),
-	tv: () => m.content_type_tv(),
-	music: () => m.content_type_music(),
-	audiobook: () => m.content_type_audiobook(),
-	ebook: () => m.content_type_ebook(),
-	comic: () => m.content_type_comic(),
-	software: () => m.content_type_software(),
-	game: () => m.content_type_game(),
-	images: () => m.content_type_images(),
-	video: () => m.content_type_video(),
-	other: () => m.content_type_other(),
-	adult: () => m.content_type_adult()
-};
-
-export const tabLabel = (tab: Tab): string => LABELS[tab ?? 'all']();
+export const tabLabel = (tab: Tab): string =>
+	tab === null ? m.discover_type_all() : TYPE_LABELS[tab]!();
 
 /** The `type` parameter as sent: a known tab, a value the server will reject, or null for All. */
 export function typeParam(search: URLSearchParams): string | null {

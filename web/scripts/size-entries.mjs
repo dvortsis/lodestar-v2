@@ -2,6 +2,7 @@
 // budgets only count what that route loads (not every chunk in the app).
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { routeNodes } from './first-load.mjs';
 
 const at = (p) => fileURLToPath(new URL(p, new URL('..', import.meta.url)));
 
@@ -11,9 +12,13 @@ function closure(manifest, keys) {
 	const js = new Set();
 	const css = new Set();
 	const visit = (key) => {
-		if (!key || seen.has(key) || !manifest[key]) return;
+		if (seen.has(key)) return;
+		if (!Object.hasOwn(manifest, key))
+			throw new Error(`size-entries: missing manifest import ${key}`);
 		seen.add(key);
 		const chunk = manifest[key];
+		if (typeof chunk.file !== 'string' || !chunk.file)
+			throw new Error(`size-entries: missing output file for ${key}`);
 		js.add(chunk.file);
 		for (const c of chunk.css ?? []) css.add(c);
 		for (const i of chunk.imports ?? []) visit(i);
@@ -23,26 +28,45 @@ function closure(manifest, keys) {
 }
 
 /**
- * JS and CSS loaded for `route` on first visit: the client entry (start + app), the root
- * layout node (0) and the route's own node. Returns empty lists before a build exists.
+ * JS and CSS loaded for `route` on first visit, including nested layouts and error nodes.
+ * Missing build inputs are errors: a budget must never pass by measuring an empty route.
  */
 export function routeFiles(route) {
 	const manifestPath = at('.svelte-kit/output/client/.vite/manifest.json');
 	const appPath = at('.svelte-kit/generated/client-optimized/app.js');
-	if (!existsSync(manifestPath) || !existsSync(appPath)) return { js: [], css: [] };
+	if (!existsSync(manifestPath) || !existsSync(appPath))
+		throw new Error('size-entries: production build missing; build the frontend before measuring');
 
 	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-	const dictionary = readFileSync(appPath, 'utf8').match(/dictionary = (\{[\s\S]*?\});/);
-	const nodes = dictionary ? JSON.parse(dictionary[1].replace(/,\s*}/, '}'))[route] : undefined;
-	if (!nodes) throw new Error(`size-entries: route ${route} not found in ${appPath}`);
+	return routeFilesFrom(manifest, readFileSync(appPath, 'utf8'), route);
+}
 
-	const byFile = (suffix) => Object.keys(manifest).filter((k) => k.endsWith(suffix));
+/** Pure resolver shared by the real build reader and disposable manifest fixtures. */
+export function routeFilesFrom(manifest, appJs, route) {
+	const nodes = routeNodes(appJs, route);
+	const byFile = (suffix) => {
+		const matches = Object.keys(manifest).filter((key) => key.endsWith(suffix));
+		if (matches.length !== 1)
+			throw new Error(
+				`size-entries: expected one manifest entry for ${suffix}, found ${matches.length}`
+			);
+		return matches[0];
+	};
 	const keys = [
-		...byFile('/client-optimized/app.js'),
+		byFile('/client-optimized/app.js'),
 		'node_modules/@sveltejs/kit/src/runtime/client/entry.js',
-		...[0, ...nodes].flatMap((n) => byFile(`/client-optimized/nodes/${n}.js`))
+		...nodes.map((n) => byFile(`/client-optimized/nodes/${n}.js`))
 	];
 	const { js, css } = closure(manifest, keys);
 	const abs = (f) => `build/${f}`.replaceAll('\\', '/');
 	return { js: js.map(abs), css: css.map(abs) };
+}
+
+/** Required measured families must survive module moves and chunk renaming. */
+export function requireMeasuredJs(name, files) {
+	if (!files.some((file) => file.endsWith('.js')))
+		throw new Error(
+			`size-entries: ${name} has no measured JavaScript; check its manifest boundaries`
+		);
+	return files;
 }

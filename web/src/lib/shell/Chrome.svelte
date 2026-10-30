@@ -7,7 +7,7 @@
 	import { onMount } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { toasts } from '$lib/ui/feedback/toasts.svelte';
-	import { shell } from './shell.svelte';
+	import { shell } from './shell-state.svelte';
 	import { statusRef } from './status-ref.svelte';
 	import TopBar from './TopBar.svelte';
 

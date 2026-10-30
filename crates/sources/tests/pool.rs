@@ -204,6 +204,262 @@ fn config() -> PoolConfig {
 }
 
 #[tokio::test(start_paused = true)]
+async fn finder_channel_failures_do_not_consume_attempts() {
+    for closed in [false, true] {
+        let (disc, discoveries) = mpsc::channel(4);
+        let (finder, requests) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+        // Either leave a full channel with its receiver alive, or close it.
+        let (admit, _admission) = tokio::sync::oneshot::channel();
+        finder
+            .try_send(lodestar_sources::PeerRequest {
+                key: key(99),
+                admit,
+            })
+            .unwrap();
+        let _requests = if closed {
+            drop(requests);
+            None
+        } else {
+            Some(requests)
+        };
+        let (out, _results) = mpsc::channel(4);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            config(),
+            Arc::new(Fake(Arc::new(FakeState::default()))),
+            PoolIo {
+                discoveries,
+                peer_finders: vec![finder],
+                out,
+                funnel: Arc::new(FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        disc.send(found(0, 1, vec![])).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.stats().lookup_unaccepted.load(Ordering::Relaxed) == 0 {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            handle.stats().finder_closed.load(Ordering::Relaxed),
+            u64::from(closed)
+        );
+        assert_eq!(
+            handle.stats().finder_full.load(Ordering::Relaxed),
+            u64::from(!closed)
+        );
+        assert_eq!(handle.stats().lookup_unaccepted.load(Ordering::Relaxed), 1);
+        assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(handle.snapshot().await[0].attempts, 0);
+        stop.send(true).unwrap();
+        assert_eq!(task.await.unwrap()[0].attempts, 0);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn eviction_diagnostics_distinguish_unserved_and_fetch_work() {
+    for fetched in [false, true] {
+        let h = Harness::start(
+            PoolConfig {
+                max_pending: 1,
+                paused: !fetched,
+                ..config()
+            },
+            &[],
+            vec![],
+        );
+        h.script(peer(1, 1), 1, Err(FailureKind::Refused));
+        if fetched {
+            h.send(found(0, 1, vec![peer(1, 1)]));
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while h
+                    .handle
+                    .stats()
+                    .failures
+                    .iter()
+                    .all(|n| n.load(Ordering::Relaxed) == 0)
+                {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        } else {
+            h.send(found(0, 1, vec![]));
+        }
+        h.send(found(0, 2, vec![]));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while h.handle.stats().lost[Loss::Evicted as usize].load(Ordering::Relaxed) == 0 {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let stages: Vec<_> = h
+            .handle
+            .stats()
+            .evicted_service
+            .iter()
+            .map(|n| n.load(Ordering::Relaxed))
+            .collect();
+        assert_eq!(
+            stages,
+            if fetched {
+                vec![0, 0, 0, 1]
+            } else {
+                vec![1, 0, 0, 0]
+            }
+        );
+        assert_eq!(h.stop().await[0].info_hash, key(2));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn rejected_rediscovery_is_distinct_from_a_retained_entry_retry() {
+    for rediscover in [true, false] {
+        let (disc, discoveries) = mpsc::channel(16);
+        let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+        let (out, _results) = mpsc::channel(16);
+        let (stop, shutdown) = Shutdown::new();
+        let (handle, task) = spawn(
+            PoolConfig {
+                max_pending: 2,
+                ..config()
+            },
+            Arc::new(Fake(Arc::new(FakeState::default()))),
+            PoolIo {
+                discoveries,
+                peer_finders: vec![finder],
+                out,
+                funnel: Arc::new(FunnelCounts::default()),
+                shutdown,
+            },
+            HashMap::new(),
+            vec![],
+        );
+        let arrivals: &[u32] = if rediscover { &[1, 2, 3, 1] } else { &[1, 1] };
+        for (index, &id) in arrivals.iter().enumerate() {
+            if rediscover || index == 0 {
+                disc.send(found(0, id, vec![])).await.unwrap();
+            }
+            // In the retained case paused time advances to the existing retry
+            // timer. No second discovery is sent, so this is an actual retry.
+            let request = tokio::time::timeout(Duration::from_secs(120), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(request.key, key(id));
+            request.admit.send(None).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while handle.stats().lookup_unaccepted.load(Ordering::Relaxed) != (index + 1) as u64
+                {
+                    sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(handle.snapshot().await.iter().all(|row| row.attempts == 0));
+        }
+        assert_eq!(
+            handle.stats().retry_unaccepted.load(Ordering::Relaxed),
+            u64::from(!rediscover)
+        );
+        let evictions = if rediscover { 2 } else { 0 };
+        assert_eq!(handle.stats().lost_count(Loss::Evicted), evictions);
+        assert_eq!(
+            handle.stats().evicted_service[0].load(Ordering::Relaxed),
+            evictions
+        );
+        assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(handle.stats().active.load(Ordering::Relaxed), 0);
+        stop.send(true).unwrap();
+        let saved = task.await.unwrap();
+        let expected = if rediscover {
+            vec![key(1), key(3)]
+        } else {
+            vec![key(1)]
+        };
+        assert_eq!(
+            saved.iter().map(|row| row.info_hash).collect::<Vec<_>>(),
+            expected
+        );
+        assert!(requests.recv().await.is_none(), "finder ownership drains");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn churn_evicts_an_accepted_lookup_and_cancels_its_ownership() {
+    let (disc, discoveries) = mpsc::channel(16);
+    let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
+    let (out, _results) = mpsc::channel(16);
+    let (stop, shutdown) = Shutdown::new();
+    let (handle, task) = spawn(
+        PoolConfig {
+            max_pending: 2,
+            ..config()
+        },
+        Arc::new(Fake(Arc::new(FakeState::default()))),
+        PoolIo {
+            discoveries,
+            peer_finders: vec![finder],
+            out,
+            funnel: Arc::new(FunnelCounts::default()),
+            shutdown,
+        },
+        HashMap::new(),
+        vec![],
+    );
+    disc.send(found(0, 1, vec![])).await.unwrap();
+    let request = requests.recv().await.unwrap();
+    assert_eq!(request.key, key(1));
+    let (mut done, rx) = tokio::sync::oneshot::channel();
+    request.admit.send(Some(rx)).unwrap();
+    // A repeat sighting polls A's admission before mutating the entry. Waiting
+    // for its duplicate counter is an explicit acknowledgment-processing fence.
+    disc.send(found(0, 1, vec![])).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while handle.stats().duplicates.load(Ordering::Relaxed) != 1 {
+            sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for (index, id) in [2, 3].into_iter().enumerate() {
+        disc.send(found(0, id, vec![])).await.unwrap();
+        let request = requests.recv().await.unwrap();
+        assert_eq!(request.key, key(id));
+        request.admit.send(None).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.stats().lookup_unaccepted.load(Ordering::Relaxed) != (index + 1) as u64 {
+                sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(10), done.closed())
+        .await
+        .unwrap();
+    assert!(done.send(vec![peer(1, 1)]).is_err());
+    assert_eq!(handle.stats().lost_count(Loss::Evicted), 1);
+    assert_eq!(handle.stats().evicted_service[1].load(Ordering::Relaxed), 1);
+    assert_eq!(handle.stats().evicted_service[0].load(Ordering::Relaxed), 0);
+    assert_eq!(handle.stats().retry_unaccepted.load(Ordering::Relaxed), 0);
+    assert_eq!(handle.stats().lookups.load(Ordering::Relaxed), 0);
+    assert_eq!(handle.stats().active.load(Ordering::Relaxed), 0);
+    stop.send(true).unwrap();
+    let saved = task.await.unwrap();
+    assert_eq!(saved.len(), 2);
+    assert!(saved.iter().all(|row| row.attempts == 0));
+    assert!(requests.recv().await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
 async fn admission_rejection_empty_completion_and_cancellation_are_owned() {
     let (disc, discoveries) = mpsc::channel(16);
     let (finder, mut requests) = mpsc::channel::<lodestar_sources::PeerRequest>(1);
@@ -240,7 +496,9 @@ async fn admission_rejection_empty_completion_and_cancellation_are_owned() {
         0,
         "rejected work is not attempted"
     );
+    assert_eq!(handle.stats().lookup_unaccepted.load(Ordering::Relaxed), 1);
     let request = requests.recv().await.unwrap();
+    assert_eq!(handle.stats().retry_unaccepted.load(Ordering::Relaxed), 1);
     let (done, rx) = tokio::sync::oneshot::channel();
     request.admit.send(Some(rx)).unwrap();
     done.send(vec![]).unwrap();

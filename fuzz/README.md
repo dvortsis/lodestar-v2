@@ -20,4 +20,10 @@ cargo +nightly fuzz run metainfo -- -max_total_time=300
 | `utp` | No panics in the uTP packet parser, and parsed packets round-trip. A connection fed hostile packets and local events keeps its buffers bounded and only sends packets that parse. |
 | `update` | No panics in the update envelope, manifest, key statement, freshness, minisign and trust-state parsers, or in `verify::check` against a fixed test trust (also on bodies the fuzzer's bytes become once signed with a test key). A document that verifies re-verifies identically, as a refetch on the state it produced, and that state reloads. |
 
+`seeds/<target>/` holds hand-made inputs a target should start from, such as the BEP 47 padding, symlink and mixed `path.utf-8` shapes for `metainfo` and their blobs for `filetree`. Pass the folder after the corpus so libFuzzer reads it but writes new finds to the (ignored) corpus:
+
+```sh
+cargo +nightly fuzz run metainfo fuzz/corpus/metainfo fuzz/seeds/metainfo -- -max_total_time=600
+```
+
 CI runs each target for a short time on every pull request (`fuzz` job). Crashes land in `fuzz/artifacts/<target>/`. Minimise one with `cargo +nightly fuzz tmin <target> <file>`, then add it as a regression test in the owning crate.

@@ -47,6 +47,7 @@ jobs:
       importer: ${{ steps.c.outputs.importer }}
       log_bench: ${{ steps.c.outputs.log_bench }}
       fuzz: ${{ steps.c.outputs.fuzz }}
+      soak_tools: ${{ steps.c.outputs.soak_tools }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +55,22 @@ jobs:
       # The merge-guard hook runs before every Bash call in every session; a
       # syntax error there would exit 2 and block them all.
       - run: bash -n .claude/hooks/merge-guard.sh
+      # main's history was rewritten on 2026-10-30 (docs/owner-decisions.md
+      # §2.25). A head that still contains the old root or the old main tip
+      # would merge the removed history back in, so it fails here.
+      - name: lineage guard
+        env:
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          # A head missing from the clone would read as "not an ancestor".
+          git cat-file -e "$HEAD^{commit}" || { echo "::error::$HEAD is not in the checkout."; exit 1; }
+          for old in 1562068349a6463990b5b07cfc810ff2680b1c03 2d5e761d30cb1b7947fb09493959668eabcb84ab; do
+            if git merge-base --is-ancestor "$old" "$HEAD" 2>/dev/null; then
+              echo "::error::$HEAD contains $old from the history before 2026-10-30. Rebuild the branch from the current main (docs/decisions/2026-10-30-master-plan.md)."
+              exit 1
+            fi
+          done
       - id: c
         env:
           EVENT: ${{ github.event_name }}
@@ -255,7 +272,7 @@ jobs:
           workspaces: fuzz
       # The prebuilt cargo-fuzz is a musl binary and would default to its
       # own target triple; build for the runner's glibc target instead.
-      - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=60
+      - run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} $(test -d fuzz/seeds/${{ matrix.target }} && mkdir -p fuzz/corpus/${{ matrix.target }} && echo fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }}) -- -max_total_time=60
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -269,9 +286,43 @@ jobs:
   # log-bench is the exception the runner approved (B-log1b): its gates take
   # the best of several runs and compare like with like (the same threads on
   # isolated events), so a shared runner's noise doesn't fail it.
+  # The soak analyzer and collectors decide soak acceptance (build-plan §0.4),
+  # so their tests gate like any other code. Standard library only, on the
+  # oldest Python the tools document (3.12: hashlib.file_digest, is_junction).
+  soak-tools:
+    name: soak tools
+    needs: changes
+    if: needs.changes.outputs.soak_tools == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s docs/soak/tools -p 'test_*.py' -v
+      # The Linux/Docker collector (CR-COL) lands under linux/ later.
+      - name: Linux collector
+        run: |
+          if [ -d docs/soak/tools/linux ]; then
+            python -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
+          fi
+
+  # The Windows collector's own fault-injection test: PID reuse, bounded
+  # retries, safe binds. The rehearsal script needs a real crawler and stays
+  # on the owner's PC.
+  soak-collector-windows:
+    name: soak collector (Windows)
+    needs: changes
+    if: needs.changes.outputs.soak_tools == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: ./docs/soak/tools/test_cr0_collector.ps1
+
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench]
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench, soak-tools, soak-collector-windows]
     if: always()
     runs-on: ubuntu-latest
     steps:

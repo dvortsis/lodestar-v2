@@ -153,7 +153,7 @@
    narrow panels. Density remains the user's choice. */
 @container result-row (max-width: 480px) {
 	.rr-raw,
-	.rr-facts > :not(.rr-size):not(.rr-swarm),
+	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-extra),
 	.rr-leechers,
 	.rr-action-label {
 		display: none;
@@ -163,6 +163,9 @@
 	}
 	.rr-size {
 		order: -2;
+	}
+	.rr-extra {
+		order: -3;
 	}
 	.rr-swarm {
 		order: -1;

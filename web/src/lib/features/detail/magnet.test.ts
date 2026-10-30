@@ -58,6 +58,36 @@ describe('copyMagnet', () => {
 		expect(toasts.items[0]!.kind).toBe('error');
 	});
 
+	it('drops a delayed clipboard fallback after visibility changes', async () => {
+		let finish!: (value: string) => void;
+		copyText.mockImplementation(() => new Promise<string>((resolve) => (finish = resolve)));
+		const copying = copyMagnet({ magnet: MAGNET });
+		clearDetailCaches(false);
+		finish('manual');
+		expect(await copying).toBe('failed');
+		expect(manual.magnet).toBeNull();
+		expect(toasts.items).toEqual([]);
+	});
+
+	it('clears an open manual field on visibility invalidation', async () => {
+		copyText.mockResolvedValue('manual');
+		await copyMagnet({ magnet: MAGNET });
+		expect(manual.magnet).toBe(MAGNET);
+		clearDetailCaches(false);
+		expect(manual.magnet).toBeNull();
+	});
+
+	it('mounts only one fallback for concurrent copy failures', async () => {
+		copyText.mockResolvedValue('manual');
+		await Promise.all([copyMagnet({ magnet: MAGNET }), copyMagnet({ magnet: MAGNET })]);
+		await vi.waitFor(
+			() => {
+				expect(document.querySelectorAll('[data-testid="detail-magnet-field"]')).toHaveLength(1);
+			},
+			{ timeout: 10_000 }
+		);
+	});
+
 	it('revalidates the magnet for each hash action (a row without a drawer)', async () => {
 		get.mockResolvedValue(detail(MAGNET));
 		copyText.mockResolvedValue('copied');

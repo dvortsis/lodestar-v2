@@ -16,8 +16,12 @@ export function currentSession(): SessionStatus {
 /** Records what a request showed about the session (the forms and the hooks below call it). */
 export function setSession(status: SessionStatus): void {
 	if (session.status === status) return;
+	// The first successful request establishes this tab's existing session. It
+	// must not invalidate and repeat the very request that established it. Actual
+	// sign-out/setup transitions still clear data, and subsequent sign-in reloads.
+	const initialConfirmation = session.status === 'unknown' && status === 'signed_in';
 	session.status = status;
-	clearDetailCaches(status === 'signed_in');
+	if (!initialConfirmation) clearDetailCaches(status === 'signed_in');
 }
 
 /**
