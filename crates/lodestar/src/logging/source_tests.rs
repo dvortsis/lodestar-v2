@@ -802,7 +802,9 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
 /// A deletion queued behind a compression whose prune sees newer files
 /// (rotated meanwhile) finds what it named already pruned by count: it
 /// reports nothing deleted, skips nothing, and leaves nothing at or older
-/// than the file it set aside. With no prune by count it takes both.
+/// than the file it set aside. With no prune by count it takes both. It
+/// shows the delete test's old flake; the prune's own order (a newer
+/// `-N` kept over an older name) is `the_count_keeps_the_newest_of_one_millisecond`.
 #[test]
 fn a_prune_queued_ahead_can_take_what_a_deletion_names() {
     fn run(count: u32) -> (lodestar_api::logs::LogFilesDeleted, Vec<String>, String) {
