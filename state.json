@@ -1245,7 +1245,7 @@
    "pr": 198,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears). | 2026-10-30T07:14Z merged land/L5 dcff7b9 -> 397b013 green (891 tests; update:: 85); holding for #184 | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #198 d9c96f9; full-ci + CI dispatched; fresh security review session_01MMjhn8LXfftTgrUx6g7rdp | 2026-10-30T10:41Z fresh security review MERGE (0 blocking). Runner takes IMPORTANT before merge: folder-fsync EINVAL/ENOTSUP -> best effort (warn once), EIO fatal (Unraid FUSE primary). + polish NoBin notice, held golden."
+   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears). | 2026-10-30T07:14Z merged land/L5 dcff7b9 -> 397b013 green (891 tests; update:: 85); holding for #184 | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #198 d9c96f9; full-ci + CI dispatched; fresh security review session_01MMjhn8LXfftTgrUx6g7rdp | 2026-10-30T10:41Z fresh security review MERGE (0 blocking). Runner takes IMPORTANT before merge: folder-fsync EINVAL/ENOTSUP -> best effort (warn once), EIO fatal (Unraid FUSE primary). + polish NoBin notice, held golden. | 2026-10-30T10:55Z fixes ab6acc9 (fsync EINVAL/ENOTSUP best-effort, once-per-run warn; no-bin no notice; held golden); runner delta check OK; merge on green"
   },
   "L7": {
    "status": "merged",
@@ -1362,7 +1362,7 @@
    "session": "session_01MMjhnABUWdrF5PzgVK6oqa",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #199 6eaf198; fresh review session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T10:41Z review FIX FIRST: failed_verification wording (Invalid incl. handshake/protocol), services wiring test, startup-window clause, already_stored wording. One push requested.",
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #199 6eaf198; fresh review session_01MMjhnBqFeP1XhFeu33jRDv | 2026-10-30T10:41Z review FIX FIRST: failed_verification wording (Invalid incl. handshake/protocol), services wiring test, startup-window clause, already_stored wording. One push requested. | 2026-10-30T10:55Z fixes 19f5156; delta re-check asked of session_01MMjhnBqFeP1XhFeu33jRDv",
    "pr": 199
   },
   "D-v051": {
@@ -1418,7 +1418,7 @@
   "CR-0d": {
    "status": "running",
    "model": "opus",
-   "notes": "2026-10-30T10:40Z brief written; phase 1 design (docs) launched; code after CR-0f #200 merges | 2026-10-30T10:50Z design 007f607a OK in principle; runner: witness option A (+optional state volume follow-up), accept \u00a73.3 residual, no shutdown grace; protocol review session_01MMjhn8sD8WwZ8ZTvs6mEKZ; code waits on review + CR-0f"
+   "notes": "2026-10-30T10:40Z brief written; phase 1 design (docs) launched; code after CR-0f #200 merges | 2026-10-30T10:50Z design 007f607a OK in principle; runner: witness option A (+optional state volume follow-up), accept \u00a73.3 residual, no shutdown grace; protocol review session_01MMjhn8sD8WwZ8ZTvs6mEKZ; code waits on review + CR-0f | 2026-10-30T10:55Z ack 7bfbeb6b: Windows witness at C:\\ProgramData\\Lodestar-witness (MSI data dir is C:\\ProgramData\\Lodestar); shared edits Dockerfile, privdrop.rs, main.wxs; docs: back up the data folder itself"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
