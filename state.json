@@ -2139,6 +2139,10 @@
     {
       "item": "Tag v0.5.1-rc.2 on release/v0.5.1 (6be95525) and approve the release environment; then run steps 3-5 in notes/v051-owner-steps.md. Reject or leave the rc.1 run 41062406135.",
       "unblocks": "the v0.5.1 gate runs"
+    },
+    {
+      "item": "FYI (\u00a72.19): CR-ADM (bounded admission, switch off by default) includes a runner refinement: with the switch on, eviction skips lookups that hold an admission permit (at most 32 per finder). CR-SIM screen +26-50% steady stored/min; live A/B pending",
+      "unblocks": "nothing; informational"
     }
   ],
   "external_gates": {
@@ -2230,6 +2234,7 @@
     "2026-10-30T16:22Z heartbeat and check-in: merged #223 (a9091bc3, pool-wide generations; MERGE, CI green). #216 waits on ci-ok. Release branch 6be95525: E2E (all-themes) green; CI and Release running. Heartbeat and check-in prompts refreshed (ReadNotifications first).",
     "2026-10-30T16:28Z merged #216 CR-0d-2a (f409f214). CR-0d told to start 2b (packaging witness defaults, GET /stats sampling_blocked and pill, docs, /security-review). CR-ADM told to start Phase 2. #216 reviewer archived.",
     "2026-10-30T16:35Z release/v0.5.1 at 6be95525: CI, E2E (all-themes) and Release all green (runs 41086517863, 41086522694, 41086528117). Owner notified: rc.2 ready to tag. #224 clippy part 2a (store, filter) opened; review session_01MMjhnBD2JUvEUux92reztx.",
-    "2026-10-30T16:58Z #224: review MERGE, but CI ubuntu failed in supervisor::a_switch_to_an_older_version_is_refused (120 s stall). The PR touches only store and filter, with a semantically identical migrate_with let-chain. Locally: the single test passes 3/3 and the full suite 4/4. One re-run is pending while the workflow is still running (403). Root-cause slice X-flake-supervisor-switch launched. #225 IMP-2 opened (~3.4k lines; fuzz split offered)."
+    "2026-10-30T16:58Z #224: review MERGE, but CI ubuntu failed in supervisor::a_switch_to_an_older_version_is_refused (120 s stall). The PR touches only store and filter, with a semantically identical migrate_with let-chain. Locally: the single test passes 3/3 and the full suite 4/4. One re-run is pending while the workflow is still running (403). Root-cause slice X-flake-supervisor-switch launched. #225 IMP-2 opened (~3.4k lines; fuzz split offered).",
+    "2026-10-30T17:02Z CR-ADM Phase 2: one PR (~2.19k lines) approved. The evict_one exemption for permit-holding lookups (switch-on only) is approved as a \u00a72.19 runner refinement, with pinning and bound tests and a protocol-review focus. CR-SIM screen, steady stored/min off -> on: admission-pressure 29.8 -> 38.3 (+29%), healthy 76.0 -> 113.7 (+50%), high-latency 33.1 -> 41.7 (+26%); every seed better. The live A/B is still required. #225 IMP-2 fresh review session_01MMjhn9AWgi7FVXFtBZ6UHR."
   ]
 }
