@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T19:24Z",
+ "updated_at": "2026-10-30T19:30Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1463,7 +1463,10 @@
    "notes": " | 2026-10-30T13:45Z launched: logging source_tests delete_while_writers_run_and_a_compression_is_in_flight deleted 0 under load (reported by IMP-1)"
   },
   "S-settings-reconcile": {
-   "notes": " | 2026-10-30T14:25Z launched (opus) from main; base 848e10a0 + ports; budgets by splitting"
+   "notes": " | 2026-10-30T14:25Z launched (opus) from main; base 848e10a0 + ports; budgets by splitting",
+   "status": "merged",
+   "pr": 217,
+   "merge": "5f1deef5"
   },
   "X-crawler-sim-crate": {
    "status": "queued",
@@ -2279,7 +2282,8 @@
   "2026-10-30T19:16Z #233 CR-0d-2b-2 (head 6dd24177): runner review MERGE (sampling_blocked live-only, pill fallback, grace logic, zh present) plus the author's fresh reviewer MERGE at c4765d60; merge on green. #217 head 1f562194 with the owner's limits; delta re-check sent to session_01MMjhn9gGM84v8QVWEjT6EV. #231 author archived (IPv6 test reached its asserts on ubuntu and windows). Safety check-in re-armed for 20:10Z.",
   "2026-10-30T19:17Z merged #217 S-settings-reconcile (5f1deef5) on the reviewer's delta MERGE at 1f562194 and green ci-ok. ERROR: its web (check+test+build+size), Playwright core, Lighthouse and Docker smoke runs were still in progress (runs 41113005439, 41113005344, 41113005209); the ruleset only requires ci-ok. Watching them; on any failure, fix forward on main at once. Lesson: for PRs touching web/, check that the Web and E2E runs are green before merging (owner item OC9 would enforce it).",
   "2026-10-30T19:21Z #234 review MERGE at d3d85d7f; merge on green ci-ok. #232 still in CI.",
-  "2026-10-30T19:24Z merged #232 (58e62d09) DHT queued drops plus the filter-budget nits; the hash-mismatch slice was told to merge main. fix/canary-udp-port pushed (05211aa2, stacked on #234): PR after #234 merges."
+  "2026-10-30T19:24Z merged #232 (58e62d09) DHT queued drops plus the filter-budget nits; the hash-mismatch slice was told to merge main. fix/canary-udp-port pushed (05211aa2, stacked on #234): PR after #234 merges.",
+  "2026-10-30T19:30Z #217 post-merge runs all green (Web 41113005439, E2E 41113005344, smoke 41113005209); no fix needed. Author and reviewer archived."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
