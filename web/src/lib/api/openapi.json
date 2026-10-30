@@ -5953,6 +5953,16 @@
               }
             }
           },
+          "500": {
+            "description": "`updates_not_saved`: the history couldn't be cleared durably.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "`updates_unavailable`: this process serves no update engine.",
             "content": {
@@ -5979,7 +5989,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Pauses automatic installs for 1, 7 or 30 days; 0 resumes. Checks and\nInstall now carry on.",
+        "summary": "Pauses automatic installs for 1, 7 or 30 days; 0 resumes. Checks and\nInstall now carry on. A pause that couldn't be saved is refused, yet\nholds automatic installs in this process (`policy.held_in_process`)\nuntil a pause or resume is saved; a resume that couldn't be saved\nkeeps the pause and any hold.",
         "operationId": "pauseUpdates",
         "requestBody": {
           "content": {
@@ -6003,7 +6013,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "description": "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6014,6 +6024,16 @@
           },
           "422": {
             "description": "`invalid_value` for any other number of days.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`updates_not_saved`: the change couldn't be saved and isn't acknowledged.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6083,6 +6103,16 @@
           },
           "409": {
             "description": "`updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`updates_not_saved`: the skip couldn't be saved, so it isn't in effect.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7456,7 +7486,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "`mode`, `level`, `manual_steps`, `reindex`, `wait`, `paused`,\n`not_current`, `upgrade_path` or `capability`."
+            "description": "`mode`, `level`, `manual_steps`, `reindex`, `wait`, `paused`,\n`held`, `not_current`, `upgrade_path` or `capability`."
           },
           "reason": {
             "type": [
@@ -13996,11 +14026,16 @@
           "window_zone",
           "next_window_at",
           "paused_until",
+          "held_in_process",
           "allow_reindex"
         ],
         "properties": {
           "allow_reindex": {
             "type": "boolean"
+          },
+          "held_in_process": {
+            "type": "boolean",
+            "description": "A pause failed to save, so automatic installs are held in this\nprocess only, until a pause or resume is saved or Lodestar\nrestarts. Releases then show `blocked_by` `held`."
           },
           "level": {
             "type": "string",
@@ -14024,7 +14059,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Updates are paused until then."
+            "description": "Updates are paused until then: the saved pause only, never a\npause that failed to save."
           },
           "security_fixes": {
             "type": "boolean",
@@ -18328,7 +18363,7 @@
             "items": {
               "type": "string"
             },
-            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, …"
+            "description": "`revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,\n`pending_unwritable`, `bad_overlay`, `rolled_back`,\n`manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the\nlast check's times couldn't be saved and won't survive a\nrestart), …"
           },
           "pending": {
             "oneOf": [

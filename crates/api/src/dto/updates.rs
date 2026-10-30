@@ -113,9 +113,14 @@ pub struct Policy {
     /// When the window next opens (or now, while it's open).
     #[schema(required = true)]
     pub next_window_at: Option<i64>,
-    /// Updates are paused until then.
+    /// Updates are paused until then: the saved pause only, never a
+    /// pause that failed to save.
     #[schema(required = true)]
     pub paused_until: Option<i64>,
+    /// A pause failed to save, so automatic installs are held in this
+    /// process only, until a pause or resume is saved or Lodestar
+    /// restarts. Releases then show `blocked_by` `held`.
+    pub held_in_process: bool,
     pub allow_reindex: bool,
 }
 
@@ -123,7 +128,7 @@ pub struct Policy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Blocked {
     /// `mode`, `level`, `manual_steps`, `reindex`, `wait`, `paused`,
-    /// `not_current`, `upgrade_path` or `capability`.
+    /// `held`, `not_current`, `upgrade_path` or `capability`.
     pub code: String,
     /// The time it lifts (`wait`, `paused`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,7 +224,9 @@ pub struct UpdatesStatus {
     pub rollback: RollbackInfo,
     /// `revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,
     /// `pending_unwritable`, `bad_overlay`, `rolled_back`,
-    /// `manifest_lapsed`, `channel_unavailable`, …
+    /// `manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the
+    /// last check's times couldn't be saved and won't survive a
+    /// restart), …
     pub notices: Vec<String>,
     pub history: Vec<HistoryEntry>,
 }

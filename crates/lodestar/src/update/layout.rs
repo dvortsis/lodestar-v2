@@ -145,12 +145,35 @@ impl Bin {
     /// Writes a state file durably (see [`write_atomic`]).
     /// Refused past [`MAX_STATE`], which a read would take for damage.
     pub fn write<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
-        let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
-        bytes.push(b'\n');
-        if bytes.len() as u64 > MAX_STATE {
-            return Err(io::Error::other(format!("{name} would be too large")));
+        write_atomic(&self.dir, name, &state_bytes(name, value)?)
+    }
+
+    /// [`Bin::write`] for a write that's acknowledged to the user: a
+    /// failed folder fsync is an error too, and `fault` can fail any step
+    /// (tests; `|_| Ok(())` otherwise).
+    pub fn write_acknowledged<T: Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+        fault: &dyn Fn(Step) -> io::Result<()>,
+    ) -> io::Result<()> {
+        write_steps(&self.dir, name, &state_bytes(name, value)?, fault)
+    }
+
+    /// [`Bin::remove`] for a removal that's acknowledged to the user: a
+    /// failed folder fsync is an error too.
+    pub fn remove_acknowledged(
+        &self,
+        name: &str,
+        fault: &dyn Fn(Step) -> io::Result<()>,
+    ) -> io::Result<()> {
+        fault(Step::Rename)?;
+        match fs::remove_file(self.path(name)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
         }
-        write_atomic(&self.dir, name, &bytes)
+        fault(Step::SyncDir)?;
+        File::open(&self.dir)?.sync_all()
     }
 
     /// Removes a state file (and makes that durable); fine if it's gone.
@@ -299,6 +322,64 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     written?;
     sync_dir(dir);
     Ok(())
+}
+
+/// One step of [`Bin::write_acknowledged`], for a test to fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Midway through writing the temporary file.
+    Write,
+    /// Before its fsync.
+    Flush,
+    /// Before it's renamed over the name (or, removing, before the
+    /// file is removed).
+    Rename,
+    /// After the rename, before the folder's fsync.
+    SyncDir,
+}
+
+fn state_bytes<T: Serialize>(name: &str, value: &T) -> io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
+    bytes.push(b'\n');
+    if bytes.len() as u64 > MAX_STATE {
+        return Err(io::Error::other(format!("{name} would be too large")));
+    }
+    Ok(bytes)
+}
+
+/// [`write_atomic`] with every step reported, the folder fsync included.
+/// A failure before the rename leaves the old file; a failed folder fsync
+/// leaves the new one in place but perhaps not durable.
+fn write_steps(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    fault: &dyn Fn(Step) -> io::Result<()>,
+) -> io::Result<()> {
+    let tmp = dir.join(format!(".{name}.tmp"));
+    let _ = fs::remove_file(&tmp);
+    let written = (|| {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(nofollow())
+            .open(&tmp)?;
+        let (head, tail) = bytes.split_at(bytes.len() / 2);
+        f.write_all(head)?;
+        fault(Step::Write)?;
+        f.write_all(tail)?;
+        fault(Step::Flush)?;
+        f.sync_all()?;
+        fault(Step::Rename)?;
+        fs::rename(&tmp, dir.join(name))
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written?;
+    fault(Step::SyncDir)?;
+    File::open(dir)?.sync_all()
 }
 
 pub fn sync_dir(dir: &Path) {

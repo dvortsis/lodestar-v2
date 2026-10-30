@@ -38,6 +38,16 @@ lodestar_log::catalogue! {
         message: "The update check failed",
         fields: { error: Label },
     }
+    /// An updater state file (`updater.json`, `skipped`, `history.json`)
+    /// couldn't be saved durably, so the change wasn't acknowledged
+    /// (DUR-26). `file` is its name, never a path.
+    UPDATE_STATE_UNSAVED {
+        id: "update.state_unsaved",
+        component: System,
+        level: Warn,
+        message: "An update setting couldn't be saved",
+        fields: { file: Label, error: Error },
+    }
     /// An entry in `<data>/bin` couldn't be read while the update check
     /// gathered the installed versions' trust; it's skipped.
     UPDATE_OVERLAY_UNREADABLE {

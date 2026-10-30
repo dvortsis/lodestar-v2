@@ -28,6 +28,10 @@ struct FakeEngine {
     checks: Mutex<u32>,
     skipped: Mutex<Vec<String>>,
     paused: Mutex<Option<u32>>,
+    /// Saves fail (DUR-26): a pause or resume is `updates_not_saved`.
+    fail_saves: Mutex<bool>,
+    /// A failed pause's process-only hold.
+    held: Mutex<bool>,
 }
 
 fn status(e: &FakeEngine) -> UpdatesStatus {
@@ -98,6 +102,7 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
                 .unwrap()
                 .filter(|&d| d > 0)
                 .map(|d| 1_792_677_600 + i64::from(d) * 86_400),
+            held_in_process: *e.held.lock().unwrap(),
             allow_reindex: true,
         },
         releases,
@@ -149,7 +154,14 @@ impl UpdatesApi for FakeEngine {
 
     fn pause(&self, days: u32) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         Box::pin(async move {
+            if *self.fail_saves.lock().unwrap() {
+                if days > 0 {
+                    *self.held.lock().unwrap() = true;
+                }
+                return Err(UpdatesError::NotSaved);
+            }
             *self.paused.lock().unwrap() = Some(days);
+            *self.held.lock().unwrap() = false;
             Ok(status(self))
         })
     }
@@ -166,6 +178,7 @@ impl UpdatesApi for FakeEngine {
 struct Fixture {
     app: Router,
     auth: Arc<Auth>,
+    engine: Option<Arc<FakeEngine>>,
     _dir: tempfile::TempDir,
 }
 
@@ -189,13 +202,15 @@ fn fixture_with(engine: bool) -> Fixture {
         events: None,
     });
     let mut app = Router::new().nest("/api/v1", api);
-    if engine {
-        let e: Arc<dyn UpdatesApi> = Arc::new(FakeEngine::default());
+    let engine = engine.then(|| Arc::new(FakeEngine::default()));
+    if let Some(e) = &engine {
+        let e: Arc<dyn UpdatesApi> = e.clone();
         app = app.layer(Extension(e));
     }
     Fixture {
         app,
         auth,
+        engine,
         _dir: dir,
     }
 }
@@ -396,6 +411,51 @@ async fn updates_golden() {
     )
     .await;
     assert_eq!(cleared["history"], json!([]));
+}
+
+/// DUR-26: a pause that couldn't be saved is `500 updates_not_saved`
+/// with the fixed sentence, and `GET /updates` then reports the
+/// process-only hold, never a saved pause; a saved resume ends the hold.
+#[tokio::test]
+async fn a_pause_that_isnt_saved_is_refused_and_held() {
+    let f = fixture_with(true);
+    let c = session(&f);
+    let engine = f.engine.clone().unwrap();
+    *engine.fail_saves.lock().unwrap() = true;
+    let refused = golden(
+        &f,
+        "pause_not_saved",
+        req(
+            "POST",
+            "/api/v1/updates/pause",
+            Some(&c),
+            Some(json!({"days": 7})),
+        ),
+    )
+    .await;
+    assert_eq!(refused["error"]["code"], "updates_not_saved");
+    let s = golden(
+        &f,
+        "status_held",
+        req("GET", "/api/v1/updates", Some(&c), None),
+    )
+    .await;
+    assert_eq!(s["policy"]["held_in_process"], true);
+    assert_eq!(s["policy"]["paused_until"], Value::Null);
+    *engine.fail_saves.lock().unwrap() = false;
+    let (status, _, body) = send(
+        &f,
+        req(
+            "POST",
+            "/api/v1/updates/pause",
+            Some(&c),
+            Some(json!({"days": 0})),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["policy"]["held_in_process"], false);
 }
 
 #[tokio::test]

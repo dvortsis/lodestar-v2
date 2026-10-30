@@ -1866,7 +1866,10 @@ export interface paths {
         put?: never;
         /**
          * Pauses automatic installs for 1, 7 or 30 days; 0 resumes. Checks and
-         *     Install now carry on.
+         *     Install now carry on. A pause that couldn't be saved is refused, yet
+         *     holds automatic installs in this process (`policy.held_in_process`)
+         *     until a pause or resume is saved; a resume that couldn't be saved
+         *     keeps the pause and any hold.
          */
         post: operations["pauseUpdates"];
         delete?: never;
@@ -2359,7 +2362,7 @@ export interface components {
         Blocked: {
             /**
              * @description `mode`, `level`, `manual_steps`, `reindex`, `wait`, `paused`,
-             *     `not_current`, `upgrade_path` or `capability`.
+             *     `held`, `not_current`, `upgrade_path` or `capability`.
              */
             code: string;
             /** @description The capability reason (`capability`). */
@@ -5229,6 +5232,12 @@ export interface components {
         /** @description The policy in effect, as the settings and the clock make it. */
         Policy: {
             allow_reindex: boolean;
+            /**
+             * @description A pause failed to save, so automatic installs are held in this
+             *     process only, until a pause or resume is saved or Lodestar
+             *     restarts. Releases then show `blocked_by` `held`.
+             */
+            held_in_process: boolean;
             /** @description `fixes`, `features` or `all`. */
             level: string;
             /** @description `off`, `notify`, `auto` or `image`. */
@@ -5240,7 +5249,8 @@ export interface components {
             next_window_at: number | null;
             /**
              * Format: int64
-             * @description Updates are paused until then.
+             * @description Updates are paused until then: the saved pause only, never a
+             *     pause that failed to save.
              */
             paused_until: number | null;
             /**
@@ -7327,7 +7337,9 @@ export interface components {
             /**
              * @description `revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,
              *     `pending_unwritable`, `bad_overlay`, `rolled_back`,
-             *     `manifest_lapsed`, `channel_unavailable`, …
+             *     `manifest_lapsed`, `channel_unavailable`, `check_not_saved` (the
+             *     last check's times couldn't be saved and won't survive a
+             *     restart), …
              */
             notices: string[];
             pending: null | components["schemas"]["PendingInstall"];
@@ -11142,6 +11154,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `updates_not_saved`: the history couldn't be cleared durably. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `updates_unavailable`: this process serves no update engine. */
             503: {
                 headers: {
@@ -11175,7 +11196,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            /** @description `updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11186,6 +11207,15 @@ export interface operations {
             };
             /** @description `invalid_value` for any other number of days. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_not_saved`: the change couldn't be saved and isn't acknowledged. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11237,6 +11267,15 @@ export interface operations {
             };
             /** @description `updates_unavailable` (a fixture or Windows; see `GET /updates`), or `bin_unavailable` (the update files can't be written). */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_not_saved`: the skip couldn't be saved, so it isn't in effect. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
