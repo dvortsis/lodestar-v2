@@ -2,11 +2,11 @@
 //!
 //! `crates/update/keys/` holds copies of `packaging/keys/*.pub`, because
 //! the Docker build context has only `crates/`; a test fails on any
-//! difference. The nightly and freshness keys don't exist yet
-//! (`docs/owner-decisions.md` §2.21): until the owner creates them, the
-//! Nightly channel verifies nothing and freshness statements are refused,
-//! each reported as a reason. Either their `.pub` is copied in here and
-//! added below, or a recovery-signed statement introduces the role.
+//! difference. The freshness key is generation 0 (`FCA9AFC5C8D864FE`).
+//! The nightly key doesn't exist yet (`docs/owner-decisions.md` §2.21):
+//! until the owner creates it, the Nightly channel verifies nothing,
+//! reported as a reason. Either its `.pub` is copied in here and added
+//! below, or a recovery-signed statement introduces the role.
 
 use crate::Error;
 use crate::doc::{self, SignedStatement};

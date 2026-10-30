@@ -16,7 +16,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: freshness-${{ github.ref }}
+  # Shared with any workflow that writes the `update-manifest` release
+  # (E-M6's publisher must use the same group), so a re-sign never
+  # overwrites a manifest published while it runs. A newer pending run
+  # replaces an older pending one, so dispatch this job sparingly.
+  group: update-manifest
   cancel-in-progress: false
 
 jobs:
@@ -36,6 +40,9 @@ jobs:
             crates/update/keys
           persist-credentials: false
 
+      # A failed run leaves the envelopes it didn't reach as they were; re-run
+      # it by dispatch. Each channel that can't be refreshed fails the run, but
+      # never stops the other channels.
       - name: Re-sign published channel envelopes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,13 +51,30 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ -z "$FRESHNESS_SIGNING_KEY" ]; then
-            echo "::notice::Freshness re-sign skipped: FRESHNESS_SIGNING_KEY is not set."
+          # A missing release is "nothing published yet"; any other error
+          # (auth, network, rate limit) fails the step.
+          if ! assets=$(gh release view update-manifest --repo "$REPO" --json assets --jq '.assets[].name' 2>"$RUNNER_TEMP/view.err"); then
+            if grep -q 'release not found' "$RUNNER_TEMP/view.err"; then
+              echo "::notice::No update-manifest release published yet; nothing to re-sign."
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/view.err" >&2
+            exit 1
+          fi
+          channels=()
+          for channel in stable beta nightly; do
+            if grep -qxF "${channel}.json" <<<"$assets"; then
+              channels+=("$channel")
+            fi
+          done
+          if [ "${#channels[@]}" -eq 0 ]; then
+            echo "::notice::update-manifest has no channel envelopes yet."
             exit 0
           fi
-          if ! gh release view update-manifest --repo "$REPO" >/dev/null 2>&1; then
-            echo "::notice::No update-manifest release published yet; nothing to re-sign."
-            exit 0
+          # Envelopes exist, so a missing key would let them lapse.
+          if [ -z "$FRESHNESS_SIGNING_KEY" ]; then
+            echo "::error::FRESHNESS_SIGNING_KEY is not set; published envelopes will lapse after 30 days."
+            exit 1
           fi
 
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign jq
@@ -64,26 +88,42 @@ jobs:
           expires=$((now + 30 * 86400))
           statements=$(jq -c '.' crates/update/keys/statements.json)
 
+          sign() {
+            if [ -n "$FRESHNESS_SIGNING_KEY_PASSWORD" ]; then
+              printf '%s\n' "$FRESHNESS_SIGNING_KEY_PASSWORD" | minisign -S -s "$work/freshness.key" "$@"
+            else
+              minisign -S -s "$work/freshness.key" "$@" </dev/null
+            fi
+          }
+
+          failed=0
+          signed=()
           updated=()
-          for channel in stable beta nightly; do
+          for channel in "${channels[@]}"; do
             env_file="$work/${channel}.json"
-            if ! gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work" --clobber 2>/dev/null; then
-              echo "Channel ${channel}: no ${channel}.json in update-manifest; skipping."
+            if ! gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work" --clobber; then
+              echo "::error::Channel ${channel}: download failed; not refreshed."
+              failed=1
               continue
             fi
-
-            jq -r '.manifest.body' "$env_file" | base64 -d >"$work/${channel}.manifest.body"
-            jq -r '.manifest.minisig' "$env_file" >"$work/${channel}.manifest.minisig"
 
             case "$channel" in
               stable|beta) pub="packaging/keys/lodestar-release.pub" ;;
               nightly)     pub="packaging/keys/lodestar-nightly.pub" ;;
             esac
             if [ ! -f "$pub" ]; then
-              echo "::error::Missing public key $pub for channel $channel"
-              exit 1
+              echo "::warning::Channel ${channel}: no public key $pub; clients can't verify this channel, so it isn't refreshed."
+              failed=1
+              continue
             fi
-            minisign -V -p "$pub" -m "$work/${channel}.manifest.body" -x "$work/${channel}.manifest.minisig"
+
+            jq -r '.manifest.body' "$env_file" | base64 -d >"$work/${channel}.manifest.body"
+            jq -r '.manifest.minisig' "$env_file" >"$work/${channel}.manifest.minisig"
+            if ! minisign -V -p "$pub" -m "$work/${channel}.manifest.body" -x "$work/${channel}.manifest.minisig"; then
+              echo "::error::Channel ${channel}: the published manifest doesn't verify against $pub; not refreshed."
+              failed=1
+              continue
+            fi
 
             manifest_sha256=$(sha256sum "$work/${channel}.manifest.body" | awk '{print $1}')
             jq -n -c \
@@ -95,11 +135,9 @@ jobs:
               '{type:"lodestar-freshness",channel:$ch,manifest_sha256:$sha,timestamp:$ts,expires:$exp,statements:$stmts}' \
               | tr -d '\n' >"$work/${channel}.freshness.body"
 
-            printf '%s\n' "$FRESHNESS_SIGNING_KEY_PASSWORD" |
-              minisign -S -s "$work/freshness.key" \
-                -t "lodestar ${channel} freshness ${now}" \
-                -m "$work/${channel}.freshness.body" \
-                -x "$work/${channel}.freshness.minisig"
+            sign -t "lodestar ${channel} freshness ${now}" \
+              -m "$work/${channel}.freshness.body" \
+              -x "$work/${channel}.freshness.minisig"
 
             minisign -V -p packaging/keys/lodestar-freshness.pub \
               -m "$work/${channel}.freshness.body" \
@@ -113,14 +151,27 @@ jobs:
               --arg fs "$fresh_sig" \
               '{manifest: .manifest, freshness: {body: $fb, minisig: $fs}}' \
               "$env_file" >"$work/${channel}.json.new"
-            mv "$work/${channel}.json.new" "$env_file"
-            updated+=("$env_file")
+            signed+=("$channel")
           done
 
-          if [ "${#updated[@]}" -eq 0 ]; then
-            echo "::notice::update-manifest has no channel envelopes yet."
-            exit 0
+          # Just before the upload, skip any channel whose manifest changed
+          # while this run signed.
+          mkdir -p "$work/recheck"
+          for channel in "${signed[@]}"; do
+            if ! gh release download update-manifest --repo "$REPO" --pattern "${channel}.json" --dir "$work/recheck" --clobber; then
+              echo "::error::Channel ${channel}: re-check download failed; not refreshed."
+              failed=1
+              continue
+            fi
+            if [ "$(jq -c '.manifest' "$work/recheck/${channel}.json")" != "$(jq -c '.manifest' "$work/${channel}.json")" ]; then
+              echo "::warning::Channel ${channel}: the manifest changed during this run; not refreshed."
+              continue
+            fi
+            mv "$work/${channel}.json.new" "$work/${channel}.json"
+            updated+=("$work/${channel}.json")
+          done
+
+          if [ "${#updated[@]}" -gt 0 ]; then
+            gh release upload update-manifest --repo "$REPO" --clobber "${updated[@]}"
           fi
-
-          gh release upload update-manifest --repo "$REPO" --clobber "${updated[@]}"
-
+          exit "$failed"
