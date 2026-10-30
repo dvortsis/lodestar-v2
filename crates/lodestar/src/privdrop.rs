@@ -86,7 +86,8 @@ pub enum Line {
         dir: PathBuf,
         ids: Ids,
         changed: u64,
-        skipped: Option<String>,
+        /// Why it was left: a kind for the log, and the reason.
+        skipped: Option<(&'static str, String)>,
     },
 }
 
@@ -150,7 +151,7 @@ impl std::fmt::Display for Line {
             ),
             Line::Witness {
                 dir,
-                skipped: Some(why),
+                skipped: Some((_, why)),
                 ..
             } => write!(
                 f,
@@ -216,14 +217,23 @@ impl Line {
                 dir,
                 ids,
                 changed,
-                skipped,
+                skipped: None,
             } => log_event!(
                 events::SYSTEM_WITNESS_DIR,
                 path = LogPath::new(dir),
                 uid = id(ids.uid),
                 gid = id(ids.gid),
-                changed = *changed,
-                handed_over = skipped.is_none()
+                changed = *changed
+            ),
+            // The reason can name a path: its kind only.
+            Line::Witness {
+                dir,
+                skipped: Some((kind, _)),
+                ..
+            } => log_event!(
+                events::SYSTEM_WITNESS_DIR_LEFT,
+                path = LogPath::new(dir),
+                error = lodestar_log::Error::kind(kind)
             ),
         }
     }
@@ -556,23 +566,25 @@ mod imp {
     /// Hands the restart witness directory to `ids`: the directory and the
     /// regular `.gen` files directly in it, nothing else, nothing deeper.
     /// Unlike the data directory it holds no `lodestar.db`, so
-    /// [`looks_like_data`] can't vouch for it; the narrow scope does
-    /// instead. Every entry is opened without following links and changed
-    /// through that descriptor, as in [`chown_tree`]. A problem leaves the
+    /// [`looks_like_data`] can't vouch for it. A directory holding
+    /// anything but `.gen` names isn't one, so a mistyped
+    /// `LODESTAR_DHT_WITNESS_DIR` (`/etc`, a share) is never handed over.
+    /// Every entry is opened without following links and changed through
+    /// that descriptor, as in [`chown_tree`]. A problem leaves the
     /// directory as it is and says why: the run then has no witness and
     /// suppresses, which is safe.
     pub(super) fn chown_witness_dir(dir: &Path, ids: Ids) -> Line {
-        let left = |why: String| Line::Witness {
+        let left = |kind: &'static str, why: String| Line::Witness {
             dir: dir.to_path_buf(),
             ids,
             changed: 0,
-            skipped: Some(why),
+            skipped: Some((kind, why)),
         };
         match std::fs::symlink_metadata(dir) {
-            Ok(m) if m.file_type().is_symlink() => return left("it is a symlink".into()),
-            Ok(m) if !m.is_dir() => return left("it is not a directory".into()),
+            Ok(m) if m.file_type().is_symlink() => return left("link", "it is a symlink".into()),
+            Ok(m) if !m.is_dir() => return left("not_dir", "it is not a directory".into()),
             Ok(_) => {}
-            Err(e) => return left(e.to_string()),
+            Err(e) => return left("open", e.to_string()),
         }
         let fd = match rustix::fs::open(
             dir,
@@ -580,27 +592,44 @@ mod imp {
             Mode::empty(),
         ) {
             Ok(fd) => fd,
-            Err(e) => return left(format!("opening it: {e}")),
+            Err(e) => return left("open", format!("opening it: {e}")),
         };
         let (Ok(st), Ok(root)) = (rustix::fs::fstat(&fd), rustix::fs::stat("/")) else {
-            return left("it can't be examined".into());
+            return left("open", "it can't be examined".into());
         };
         if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
-            return left("it is the filesystem root".into());
+            return left("root", "it is the filesystem root".into());
+        }
+        // Every name first: nothing changes unless all are witnesses.
+        let Ok(mut entries) = Dir::read_from(&fd) else {
+            return left("open", "it can't be read".into());
+        };
+        let mut names = Vec::new();
+        while let Some(entry) = entries.read() {
+            let Ok(entry) = entry else {
+                return left("open", "it can't be read".into());
+            };
+            let name = entry.file_name();
+            if matches!(name.to_bytes(), b"." | b"..") {
+                continue;
+            }
+            if !name.to_bytes().ends_with(b".gen") {
+                return left(
+                    "foreign",
+                    format!(
+                        "it holds {}, not only restart witnesses (*.gen)",
+                        name.to_string_lossy()
+                    ),
+                );
+            }
+            names.push(name.to_owned());
         }
         let (uid, gid) = (Uid::from_raw(ids.uid), Gid::from_raw(ids.gid));
         let mut changed = 0;
-        let Ok(mut entries) = Dir::read_from(&fd) else {
-            return left("it can't be read".into());
-        };
-        while let Some(Ok(entry)) = entries.read() {
-            let name = entry.file_name();
-            if !name.to_bytes().ends_with(b".gen") {
-                continue;
-            }
+        for name in &names {
             let Ok(f) = rustix::fs::openat(
                 &fd,
-                name,
+                name.as_c_str(),
                 OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             ) else {
@@ -620,7 +649,7 @@ mod imp {
         }
         if (st.st_uid, st.st_gid) != (ids.uid, ids.gid) {
             if let Err(e) = rustix::fs::fchown(&fd, Some(uid), Some(gid)) {
-                return left(format!("chown: {e}"));
+                return left("chown", format!("chown: {e}"));
             }
             changed += 1;
         }
@@ -990,10 +1019,9 @@ mod tests {
             let outside = tmp.path().join("outside.gen");
             std::fs::write(&outside, b"secret").unwrap();
             let w = tmp.path().join("witness");
-            std::fs::create_dir_all(w.join("sub")).unwrap();
+            std::fs::create_dir_all(w.join("sub.gen")).unwrap();
             std::fs::write(w.join("a.gen"), b"").unwrap();
-            std::fs::write(w.join("notes.txt"), b"").unwrap();
-            std::fs::write(w.join("sub/deep.gen"), b"").unwrap();
+            std::fs::write(w.join("sub.gen/deep.gen"), b"").unwrap();
             symlink(&outside, w.join("link.gen")).unwrap();
             std::fs::hard_link(&outside, w.join("hard.gen")).unwrap();
             let ids = Ids {
@@ -1004,13 +1032,26 @@ mod tests {
             assert!(line.contains("2 entries changed to 4242:4343"), "{line}");
             assert_eq!(owner(&w), (4242, 4343));
             assert_eq!(owner(&w.join("a.gen")), (4242, 4343));
-            for untouched in ["notes.txt", "sub", "sub/deep.gen", "link.gen", "hard.gen"] {
+            for untouched in ["sub.gen", "sub.gen/deep.gen", "link.gen", "hard.gen"] {
                 assert_eq!(owner(&w.join(untouched)), (0, 0), "{untouched}");
             }
             assert_eq!(owner(&outside), (0, 0));
             // Already theirs: nothing changes.
             let again = chown_witness_dir(&w, ids).to_string();
             assert!(again.contains("0 entries changed"), "{again}");
+            // Any other name: not a witness dir, so nothing changes.
+            let other = tmp.path().join("other");
+            std::fs::create_dir(&other).unwrap();
+            std::fs::write(other.join("a.gen"), b"").unwrap();
+            std::fs::write(other.join("passwd"), b"").unwrap();
+            let line = chown_witness_dir(&other, ids).to_string();
+            assert!(
+                line.contains("left as it is") && line.contains("passwd"),
+                "{line}"
+            );
+            for untouched in ["", "a.gen", "passwd"] {
+                assert_eq!(owner(&other.join(untouched)), (0, 0), "{untouched}");
+            }
         }
 
         /// Root-only: chown is a privileged call. The tree is root's; the

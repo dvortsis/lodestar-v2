@@ -40,6 +40,7 @@ journalctl -u lodestar | grep "setup token"
   resume sampling at once. Its record lives in `/var/lib/lodestar-witness`,
   a second state directory beside the data directory. Back up
   `/var/lib/lodestar`, never the two together: restoring both would hide
-  the restore.
+  the restore. With `DynamicUser=` both really live under
+  `/var/lib/private/`, so don't back up `/var/lib/private` as a whole.
 - **Check the unit:** `systemd-analyze verify lodestar.service` (the binary
   path must exist for the check to pass).

@@ -261,15 +261,24 @@ lodestar_log::catalogue! {
         },
     }
     /// The restart proof's witness directory (`LODESTAR_DHT_WITNESS_DIR`,
-    /// CR-0d) at start-up as root: handed to the target account
-    /// (`changed` entries), or left as it is (`handed_over=false`), in
-    /// which case the DHT has no witness and suppresses after restarts.
+    /// CR-0d) at start-up as root, handed to the target account
+    /// (`changed` entries).
     SYSTEM_WITNESS_DIR {
         id: "system.witness_dir",
         component: System,
         level: Info,
-        message: "The restart witness directory was checked for the target account",
-        fields: { path: Path, uid: Label, gid: Label, changed: Size, handed_over: Label },
+        message: "The restart witness directory was handed to the target account",
+        fields: { path: Path, uid: Label, gid: Label, changed: Size },
+    }
+    /// CR-0d §1.5: the restart witness directory wasn't handed over (a
+    /// link, not a directory, `/`, other files in it), so the run has no
+    /// witness and every restart waits out the sampling delay.
+    SYSTEM_WITNESS_DIR_LEFT {
+        id: "system.witness_dir_left",
+        component: System,
+        level: Warn,
+        message: "The restart witness directory was left as it is, so restarts wait out the sampling delay",
+        fields: { path: Path, error: Error },
     }
     /// Started as root and allowed to stay root.
     SYSTEM_ROOT {
@@ -657,7 +666,7 @@ lodestar_log::catalogue! {
         id: "service.witness_refused",
         component: System,
         level: Warn,
-        message: "service: the restart witness folder isn't private, so restarts wait out the sampling delay",
+        message: "service: no restart witness folder, so restarts wait out the sampling delay",
         fields: { path: Path, error: Error },
     }
     /// The Windows service stopped on an error.
