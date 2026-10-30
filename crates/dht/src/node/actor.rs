@@ -1444,11 +1444,14 @@ impl Actor {
                 started: Instant::now(),
             },
         );
-        let hinted = self.peer_requests[&owner].reply.is_some();
+        // Hints serve pool requests only, not the legacy harvest-only
+        // lookup. A request without hints takes the hinted path too, which
+        // then starts its legs exactly as the loop below does.
+        let has_caller = self.peer_requests[&owner].reply.is_some();
         if let Some(found) = self
             .hints
             .as_mut()
-            .filter(|_| hinted)
+            .filter(|_| has_caller)
             .map(|h| h.take(&hash))
         {
             self.start_hinted_request(sockets, hash, owner, found);
@@ -1862,6 +1865,7 @@ impl Actor {
                         self.stats
                             .peer_lookup_millis
                             .fetch_add(u64::try_from(ms).unwrap_or(u64::MAX), Ordering::Relaxed);
+                        Stats::inc(&self.stats.peer_lookups_answered);
                         // The slot is free before the caller hears, so a
                         // permit it gets back always finds room.
                         PermitReturn::Completed.release(&self.stats, r.permit);

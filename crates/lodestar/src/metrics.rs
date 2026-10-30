@@ -961,6 +961,12 @@ fn render_hints(o: &mut Out, d: &StatsSnapshot) {
         format_args!("{:.3}", d.peer_lookup_millis as f64 / 1000.0),
     );
     o.one(
+        "dht_peer_lookups_answered_total",
+        "counter",
+        "Peer requests answered to a waiting caller.",
+        d.peer_lookups_answered,
+    );
+    o.one(
         "dht_hints_captured_total",
         "counter",
         "Sample responders kept as hints for a new hash.",
@@ -1286,6 +1292,7 @@ mod tests {
         let out = o.0;
         let mut d = StatsSnapshot {
             peer_lookup_millis: 2_500,
+            peer_lookups_answered: 10,
             hints_captured: 1,
             hints_expired: 9,
             hint_queries: 2,
@@ -1301,6 +1308,7 @@ mod tests {
         render_hints(&mut h, &d);
         for line in [
             "lodestar_dht_peer_lookup_seconds_total 2.500",
+            "lodestar_dht_peer_lookups_answered_total 10",
             "lodestar_dht_hints_captured_total 1",
             "lodestar_dht_hints_expired_total 9",
             "lodestar_dht_hint_capture_rejected_total{reason=\"full\"} 7",

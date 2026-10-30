@@ -313,6 +313,8 @@ pub struct Stats {
     pub denied: AtomicU64,
     /// Sum of owned requests' run times, admission to answer, in ms.
     pub peer_lookup_millis: AtomicU64,
+    /// Owned requests answered to a waiting caller: the time sum's count.
+    pub peer_lookups_answered: AtomicU64,
     /// CR-1a-H: hints kept, and refused at capture by [`HintReject`].
     pub hints_captured: AtomicU64,
     pub hint_capture_rejected: [AtomicU64; HintReject::ALL.len()],
@@ -397,6 +399,7 @@ impl Stats {
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
             peer_lookup_millis: g(&self.peer_lookup_millis),
+            peer_lookups_answered: g(&self.peer_lookups_answered),
             hints_captured: g(&self.hints_captured),
             hint_capture_rejected: std::array::from_fn(|i| g(&self.hint_capture_rejected[i])),
             hints_expired: g(&self.hints_expired),
@@ -679,6 +682,7 @@ pub struct StatsSnapshot {
     pub scrapes_with_responders: u64,
     pub denied: u64,
     pub peer_lookup_millis: u64,
+    pub peer_lookups_answered: u64,
     pub hints_captured: u64,
     /// By [`HintReject::ALL`].
     pub hint_capture_rejected: [u64; HintReject::ALL.len()],

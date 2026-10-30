@@ -273,6 +273,13 @@ async fn guard_saturation_evicts_nothing_and_ordinary_work_continues() {
     assert_eq!(get(&a.stats.hint_guard_entries), 0);
 }
 
+/// The spec's "Private key" case, at the actor. The guarantee that a
+/// private key's lookup never reaches the public DHT is the pool's
+/// (`crates/sources/src/pool.rs`, `!e.private` in `request_peers`, tested
+/// by `private_keys_bypass_admission_and_survive_a_pause`); and the very
+/// harvest that captures a hint is a public sighting, which makes the key
+/// public there. What the actor owes is shown here: an unrequested hint is
+/// never sent and expires, and the harvest carries nothing hint-derived.
 #[tokio::test(start_paused = true)]
 async fn private_key_work_gets_no_public_dispatch_or_provenance() {
     let (mut a, sockets, mut rx) = actor(true);

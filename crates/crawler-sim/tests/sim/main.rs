@@ -501,7 +501,7 @@ fn responder_hints_screen() {
                 let r = simulate(&s);
                 let d = &r.dht;
                 let f = d.hint_fallbacks;
-                let lookup_ms = d.peer_lookup_millis as f64 / d.lookups_completed.max(1) as f64;
+                let lookup_ms = d.peer_lookup_millis as f64 / d.peer_lookups_answered.max(1) as f64;
                 println!(
                     "{seed} | {} | {} | {} | {:.0} | {} | {} | {} | {} | {}/{}/{}/{} | {} | {} | {:.1}",
                     ["off", "on"][arm],

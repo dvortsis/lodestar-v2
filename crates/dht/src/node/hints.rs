@@ -143,14 +143,9 @@ impl Hints {
             Some(r) if r.live(now) => Err(HintFallback::Throttled),
             Some(_) => Ok(()),
             None if self.guard.len() < GUARD_CAPACITY => Ok(()),
-            None => {
-                self.prune_guard(now);
-                if self.guard.len() < GUARD_CAPACITY {
-                    Ok(())
-                } else {
-                    Err(HintFallback::GuardFull)
-                }
-            }
+            // Full: the tick's prune frees expired entries, so a full guard
+            // costs no scan per attempt.
+            None => Err(HintFallback::GuardFull),
         }
     }
 
@@ -203,8 +198,10 @@ impl Hints {
                 }
             }
         }
-        // Used hints leave stale order entries; keep that bounded too.
-        if self.order.len() > 2 * HINT_CAPACITY {
+        // Used hints leave stale order entries; keep that bounded too. Live
+        // ones are at most 2 × the cap (two families), so compacting at 4 ×
+        // leaves room before the next compaction.
+        if self.order.len() > 4 * HINT_CAPACITY {
             let by_key = &self.by_key;
             self.order.retain(|(at, key, s)| {
                 by_key
@@ -330,9 +327,10 @@ mod tests {
         assert!((0..GUARD_CAPACITY as u32).all(|i| h.restricts(ip(i), t0)));
         // Ordinary routing to the new IP isn't restricted.
         assert!(!h.restricts(new, t0));
-        // Expiry frees the whole table.
-        assert_eq!(h.admit(new, t0 + HINT_NOT_BEFORE), Ok(()));
+        // Expiry frees the whole table at the next prune.
+        h.prune(t0 + HINT_NOT_BEFORE);
         assert_eq!(h.guard_len(), 0);
+        assert_eq!(h.admit(new, t0 + HINT_NOT_BEFORE), Ok(()));
     }
 
     #[test]
@@ -361,7 +359,7 @@ mod tests {
                 h.take(&k);
             }
             h.prune(t0 + HINT_TTL);
-            assert!(h.order.len() <= 2 * HINT_CAPACITY);
+            assert!(h.order.len() <= 4 * HINT_CAPACITY);
         }
     }
 

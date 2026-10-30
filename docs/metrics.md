@@ -699,16 +699,17 @@ With one finder (the DHT), `fetch_admission_grants_total` = `dht_peer_permit_ret
 
 ## Responder hints (CR-1a-H, 2026-10-30)
 
-These series count only with `dht.responder_hints` on ([the decision](decisions/2026-10-30-CR-1a-H.md)); with it off they're exported and stay 0, except `dht_peer_lookup_seconds_total`, which always counts. A hint is the BEP 51 responder that listed a hash new to us, kept for one direct `get_peers` before ordinary routing. No series has an infohash or endpoint label. Counts are per family leg, not per logical lookup.
+These series count only with `dht.responder_hints` on ([the decision](decisions/2026-10-30-CR-1a-H.md)); with it off they're exported and stay 0, except `dht_peer_lookup_seconds_total` and `dht_peer_lookups_answered_total`, which always count. A hint is the BEP 51 responder that listed a hash new to us, kept for one direct `get_peers` before ordinary routing. No series has an infohash or endpoint label. Counts are per family leg, not per logical lookup.
 
 | Series | Meaning |
 |---|---|
-| `dht_peer_lookup_seconds_total` | Run time of completed owned peer requests, admission to answer. Divide its rate by `dht_lookups_completed_total`'s for the mean lookup duration. |
+| `dht_peer_lookup_seconds_total` | Run time of owned peer requests answered to a waiting caller, admission to answer. |
+| `dht_peer_lookups_answered_total` | Those requests. The ratio of the two rates is the mean lookup duration. |
 | `dht_hints_captured_total` | Responders kept as a hint (at most one per address family per hash, never refreshed). |
 | `dht_hint_capture_rejected_total{reason}` | Responders not kept: `invalid` (port 0, unsupported encoding), `private` (private, reserved or blocklisted), `family` (no socket of its family), `full` (20,000 hashes already hold fresh hints). |
 | `dht_hints_expired_total` | Hints that reached 60 s before any lookup asked for their hash, dropped unused. |
 | `dht_hint_queries_total` | Hinted `get_peers` sent. |
-| `dht_hint_fallbacks_total{reason}` | Hints a leg didn't use, going straight to ordinary routing: `expired` (age ≥ 60 s), `invalid`, `private`, `family` (the checks repeated at send), `throttled` (the per-IP guard, the request's RPC budget, the query rate or the outstanding cap), `guard_full` (20,000 unexpired restrictions), `send_failed`. |
+| `dht_hint_fallbacks_total{reason}` | Hints a leg didn't use, going straight to ordinary routing: `expired` (age ≥ 60 s), `invalid`, `private`, `family` (the checks repeated at send), `throttled` (the per-IP guard, the request's RPC budget, the query rate or the outstanding cap), `guard_full` (20,000 restrictions, until the next tick prunes expired ones), `send_failed`. |
 | `dht_hint_useful_total` | Hinted replies that carried peers. |
 | `dht_hint_guard_skips_total` | Ordinary lookup queries not sent because their IP holds a retained hint restriction. |
 | `dht_hints_held` | Gauge: hashes holding hints now. |
