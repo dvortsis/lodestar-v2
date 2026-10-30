@@ -1188,13 +1188,13 @@
    "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z 8c5a0b91 ready; runner OK'd: unless raw; token-level neutralize (\u00a72.19 content-safety flag, floor test); allow-both tightening; packs gap -> F-filters-packs | 2026-10-30T05:58Z round 2 bd8d2a43 (I-2 one neutral_key; P-1 phrase_live; P-2 bench+fast path; P-3 independent reference, CJK overlap fix) runner-checked OK; merge on green | 2026-10-30T06:32Z #179 merged f898813b"
   },
   "F-metainfo": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCT9tGHWq3HgcYR3Vm",
    "attempt": 1,
    "review_rounds": 0,
    "base": "next",
-   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z PR #177 head bd131a8d; fresh reviewer running; ci.yml fuzz-seeds line granted to slice; \u00a72.19 flags: per-file path.utf-8, .pad/padding, decode fallback (loosens arch \u00a76/\u00a716 raw bytes) | 2026-10-30T05:24Z 207866e8 delta OK (enforce_path_limits, golden, hint filter); Windows golden CRLF failure -> granted .gitattributes line (-text) + LF-agnostic compare",
+   "notes": "launched 2026-10-30T03:34Z; PR waits for ext:history-swap | 2026-10-30T04:56Z PR #177 head bd131a8d; fresh reviewer running; ci.yml fuzz-seeds line granted to slice; \u00a72.19 flags: per-file path.utf-8, .pad/padding, decode fallback (loosens arch \u00a76/\u00a716 raw bytes) | 2026-10-30T05:24Z 207866e8 delta OK (enforce_path_limits, golden, hint filter); Windows golden CRLF failure -> granted .gitattributes line (-text) + LF-agnostic compare | 2026-10-30T06:36Z #177 merged a84c3681 (creates .gitattributes on main)",
    "pr": 177
   },
   "L1": {
@@ -1228,7 +1228,7 @@
    "status": "review",
    "branch": "land/L5",
    "head": "e41f0cf3",
-   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures). | 2026-10-30T06:35Z PR #184 opened (base land/L4); retarget to main after the range below merges",
+   "notes": "branch created at owner commit; PR after swap, in order | 2026-10-30T06:27Z pre-review MERGE (no runtime change). Runner 97b32ed1 (soak-tools CI) + 591c2a3f (Windows collector test job, pin py3.12, docs 3.12+) - Windows pwsh test unverified until PR CI. .gitattributes add/add with #177: union of 4 rules. Polish P1-P6 recorded (private-key counters, metrics render test, analyzer fixtures). | 2026-10-30T06:35Z PR #184 opened (base land/L4); retarget to main after the range below merges | 2026-10-30T06:36Z when retargeting #184 to main: merge main into land/L5, resolve .gitattributes add/add as the union of 4 rules",
    "pr": 184
   },
   "L6": {
