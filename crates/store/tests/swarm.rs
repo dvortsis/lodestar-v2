@@ -410,7 +410,12 @@ fn migrates_a_v4_database_with_data() {
         store
             .connection()
             .execute_batch(
-                "DROP TRIGGER snapshot_torrent_deleted; DROP TABLE snapshot_deletions;
+                "DROP TRIGGER import_candidate_tombstoned; DROP TRIGGER import_candidate_quarantined;
+                 DROP TRIGGER import_candidate_floored; DROP TRIGGER import_candidate_stored;
+                 DROP TABLE import_quality; DROP TABLE import_candidates;
+                 DROP TABLE import_membership; DROP TABLE import_cursors; DROP TABLE import_jobs;
+                 DROP TABLE import_sources;
+                 DROP TRIGGER snapshot_torrent_deleted; DROP TABLE snapshot_deletions;
                  DROP TRIGGER torrents_removed; DROP TABLE rollup_day; DROP TABLE cohort_day;
                  DROP TABLE insights_state;
                  DROP TABLE api_keys; DROP TABLE alerts; DROP TABLE saved_searches;

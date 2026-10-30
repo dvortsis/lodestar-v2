@@ -164,10 +164,10 @@ impl TorrentDoc {
             let Some((name, parents)) = segments.split_last() else {
                 continue;
             };
-            if let Some(ext) = extension(name) {
-                if !exts.contains(&ext) {
-                    exts.push(ext);
-                }
+            if let Some(ext) = extension(name)
+                && !exts.contains(&ext)
+            {
+                exts.push(ext);
             }
             for d in parents {
                 if seen_dirs.insert(d.as_str().to_owned()) {

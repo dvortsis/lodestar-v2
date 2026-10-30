@@ -498,6 +498,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Seconds of startup sampling suppression remaining.",
             d.sample_suppression_seconds,
         );
+        render_restart(&mut o, d);
         o.one(
             "dht_sample_cooling",
             "gauge",
@@ -829,6 +830,160 @@ pub fn render_hot(out: &mut String, hot: &HotColumns) {
     *out = o.0;
 }
 
+/// CR-0d's restart-proof families (docs/metrics.md).
+fn render_restart(o: &mut Out, d: &StatsSnapshot) {
+    // CR-0d: why sampling is or isn't running, one label set to 1.
+    o.family(
+        "dht_sample_suppression_reason",
+        "gauge",
+        "Why this run is or isn't sampling yet (1 for the current reason).",
+    );
+    for r in lodestar_dht::restart::Reason::ALL {
+        o.value(
+            "dht_sample_suppression_reason",
+            &format!("reason=\"{}\"", r.as_str()),
+            u64::from(r == d.sample_suppression_reason),
+        );
+    }
+    o.one(
+        "dht_restart_obligations_restored",
+        "gauge",
+        "Restrictions restored from the last clean stop.",
+        d.restart_obligations_restored,
+    );
+    o.one(
+        "dht_restart_obligations_pending",
+        "gauge",
+        "Restored restrictions still cooling.",
+        d.restart_obligations_pending,
+    );
+    o.one(
+        "dht_restart_obligations_refused_total",
+        "counter",
+        "Sample candidates a restored restriction turned away.",
+        d.restart_obligations_refused,
+    );
+    o.one(
+        "dht_restart_obligations_honoured_total",
+        "counter",
+        "Restored restrictions that expired unsampled.",
+        d.restart_obligations_honoured,
+    );
+    o.family(
+        "dht_restart_persist_errors_total",
+        "counter",
+        "Restart-proof write failures, by step.",
+    );
+    for (step, v) in lodestar_dht::node::PersistStep::ALL
+        .iter()
+        .zip(d.restart_persist_errors)
+    {
+        o.value(
+            "dht_restart_persist_errors_total",
+            &format!("step=\"{}\"", step.as_str()),
+            v,
+        );
+    }
+}
+
+/// The storage sampler's last values (R-gauges); the scrape reads them
+/// and never the filesystem.
+pub fn render_storage(out: &mut String, g: &crate::storage::Gauges) {
+    let mut o = Out(std::mem::take(out));
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    o.one(
+        "store_db_bytes",
+        "gauge",
+        "Size of the main SQLite file, sampled.",
+        get(&g.db_bytes),
+    );
+    o.one(
+        "store_wal_bytes",
+        "gauge",
+        "Size of the SQLite write-ahead log, sampled; 0 when absent.",
+        get(&g.wal_bytes),
+    );
+    o.one(
+        "search_index_bytes",
+        "gauge",
+        "Size of the search index directory, any rebuild included, sampled.",
+        get(&g.index_bytes),
+    );
+    o.one(
+        "storage_sampled_seconds",
+        "gauge",
+        "Unix time of the last storage sample that read every size; 0 before one.",
+        get(&g.sampled_at),
+    );
+    o.one(
+        "storage_sample_errors_total",
+        "counter",
+        "Storage sizes that couldn't be read; each keeps its last value.",
+        get(&g.errors),
+    );
+    *out = o.0;
+}
+
+/// The search side's in-process caches (R-gauges): the serving index's
+/// `file:(…)` id sets and browse tops, and the result cache.
+pub fn render_caches(
+    out: &mut String,
+    index: &lodestar_search::CacheUsage,
+    results: &lodestar_search::CacheStats,
+) {
+    let mut o = Out(std::mem::take(out));
+    o.one(
+        "search_file_cache_entries",
+        "gauge",
+        "File-clause id sets cached by the serving index.",
+        index.file_set_entries,
+    );
+    o.one(
+        "search_file_cache_bytes",
+        "gauge",
+        "Bytes the file-clause id sets retain (8 MiB budget).",
+        index.file_set_bytes,
+    );
+    o.one(
+        "search_browse_cache_entries",
+        "gauge",
+        "Per-segment sorted tops cached by the serving index.",
+        index.browse_entries,
+    );
+    o.one(
+        "search_browse_cache_bytes",
+        "gauge",
+        "Estimated bytes of the per-segment sorted tops.",
+        index.browse_bytes,
+    );
+    let kinds = [("search", &results.search), ("facets", &results.facets)];
+    o.family(
+        "search_result_cache_entries",
+        "gauge",
+        "Result cache entries, by kind.",
+    );
+    for (kind, k) in kinds {
+        o.value(
+            "search_result_cache_entries",
+            &format!("kind=\"{kind}\""),
+            k.entries,
+        );
+    }
+    o.family(
+        "search_result_cache_bytes",
+        "gauge",
+        "Result cache estimated bytes, by kind.",
+    );
+    for (kind, k) in kinds {
+        o.value(
+            "search_result_cache_bytes",
+            &format!("kind=\"{kind}\""),
+            k.bytes,
+        );
+    }
+    *out = o.0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -893,5 +1048,90 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
+
+    #[test]
+    fn restart_families_render_one_reason_and_each_step() {
+        let mut d = StatsSnapshot {
+            sample_suppression_reason: lodestar_dht::restart::Reason::Resumed,
+            restart_obligations_restored: 7,
+            restart_obligations_pending: 5,
+            restart_obligations_refused: 3,
+            restart_obligations_honoured: 2,
+            ..StatsSnapshot::default()
+        };
+        d.restart_persist_errors[4] = 9;
+        let mut o = Out(String::new());
+        render_restart(&mut o, &d);
+        let out = o.0;
+        for line in [
+            "# TYPE lodestar_dht_sample_suppression_reason gauge",
+            "lodestar_dht_sample_suppression_reason{reason=\"resumed\"} 1",
+            "lodestar_dht_sample_suppression_reason{reason=\"first_start\"} 0",
+            "lodestar_dht_restart_obligations_restored 7",
+            "lodestar_dht_restart_obligations_pending 5",
+            "lodestar_dht_restart_obligations_refused_total 3",
+            "lodestar_dht_restart_obligations_honoured_total 2",
+            "lodestar_dht_restart_persist_errors_total{step=\"snapshot\"} 9",
+            "lodestar_dht_restart_persist_errors_total{step=\"lock\"} 0",
+        ] {
+            assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
+        }
+        let ones = out
+            .lines()
+            .filter(|l| {
+                l.starts_with("lodestar_dht_sample_suppression_reason{") && l.ends_with(" 1")
+            })
+            .count();
+        assert_eq!(ones, 1, "exactly one reason is set");
+    }
+
+    #[test]
+    fn storage_and_cache_families_render_once() {
+        let g = crate::storage::Gauges::default();
+        g.db_bytes.store(4096, Ordering::Relaxed);
+        g.wal_bytes.store(0, Ordering::Relaxed);
+        g.errors.store(2, Ordering::Relaxed);
+        let usage = lodestar_search::CacheUsage {
+            file_set_entries: 3,
+            file_set_bytes: 1024,
+            browse_entries: 5,
+            browse_bytes: 640,
+        };
+        let mut results = lodestar_search::CacheStats::default();
+        results.facets.bytes = 77;
+        let mut out = String::new();
+        render_storage(&mut out, &g);
+        render_caches(&mut out, &usage, &results);
+        for (family, kind) in [
+            ("store_db_bytes", "gauge"),
+            ("store_wal_bytes", "gauge"),
+            ("search_index_bytes", "gauge"),
+            ("storage_sampled_seconds", "gauge"),
+            ("storage_sample_errors_total", "counter"),
+            ("search_file_cache_entries", "gauge"),
+            ("search_file_cache_bytes", "gauge"),
+            ("search_browse_cache_entries", "gauge"),
+            ("search_browse_cache_bytes", "gauge"),
+            ("search_result_cache_entries", "gauge"),
+            ("search_result_cache_bytes", "gauge"),
+        ] {
+            let ty = format!("# TYPE lodestar_{family} {kind}\n");
+            assert_eq!(out.matches(&ty).count(), 1, "{family}: {out}");
+        }
+        for line in [
+            "lodestar_store_db_bytes 4096\n",
+            "lodestar_store_wal_bytes 0\n",
+            "lodestar_storage_sample_errors_total 2\n",
+            "lodestar_search_file_cache_bytes 1024\n",
+            "lodestar_search_browse_cache_entries 5\n",
+            "lodestar_search_browse_cache_bytes 640\n",
+            "lodestar_search_result_cache_bytes{kind=\"facets\"} 77\n",
+            "lodestar_search_result_cache_entries{kind=\"search\"} 0\n",
+        ] {
+            assert_eq!(out.matches(line).count(), 1, "{line}: {out}");
+        }
+        // Not duplicated: the have-filter and hot columns render elsewhere.
+        assert!(!out.contains("have_bytes") && !out.contains("hot_columns"));
     }
 }

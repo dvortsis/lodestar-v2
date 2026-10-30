@@ -120,7 +120,26 @@ struct State {
     unreadable: bool,
 }
 
+/// What readers see of [`State`]: published at the end of each change,
+/// so a reader on an async worker never waits on a write's fsync.
+#[derive(Debug, Default, Clone)]
+struct View {
+    updater: Updater,
+    check_unsaved: bool,
+    held: bool,
+    unreadable: bool,
+}
+
 impl State {
+    fn view(&self) -> View {
+        View {
+            updater: self.effective(),
+            check_unsaved: self.unsaved_check.is_some(),
+            held: self.held,
+            unreadable: self.unreadable,
+        }
+    }
+
     /// The state in effect: the durable one with any unsaved check.
     fn effective(&self) -> Updater {
         let mut u = self.durable.clone();
@@ -187,8 +206,11 @@ struct Inner {
     found: Mutex<Found>,
     /// The updater's state; held through every write of it, so writes
     /// land in the order they were made and never collide on the
-    /// temporary file.
+    /// temporary file. Only writers take it; readers use `view`.
     updater: Mutex<State>,
+    /// `updater`'s last published [`View`], replaced while `updater` is
+    /// held and never held across I/O.
+    view: Mutex<View>,
     fault: Fault,
     /// One check at a time.
     checking: tokio::sync::Mutex<()>,
@@ -255,6 +277,12 @@ impl Engine {
             }
             None => (Updater::default(), false),
         };
+        let state = State {
+            durable,
+            unsaved_check: None,
+            held: unreadable,
+            unreadable,
+        };
         Engine {
             inner: Arc::new(Inner {
                 ctx,
@@ -264,12 +292,8 @@ impl Engine {
                 fetch,
                 zone,
                 found: Mutex::new(Found::default()),
-                updater: Mutex::new(State {
-                    durable,
-                    unsaved_check: None,
-                    held: unreadable,
-                    unreadable,
-                }),
+                view: Mutex::new(state.view()),
+                updater: Mutex::new(state),
                 fault,
                 checking: tokio::sync::Mutex::new(()),
                 last_manual: Mutex::new(None),
@@ -334,7 +358,16 @@ impl Engine {
 
     /// The updater state in effect (any unsaved check included).
     fn updater(&self) -> Updater {
-        lock(&self.inner.updater).effective()
+        lock(&self.inner.view).updater.clone()
+    }
+
+    /// Changes the updater's state under its lock, then publishes the
+    /// readers' view before the lock is released.
+    fn change<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+        let mut state = lock(&self.inner.updater);
+        let r = f(&mut state);
+        *lock(&self.inner.view) = state.view();
+        r
     }
 
     /// The one way `updater.json` changes: `f` applied to the durable
@@ -359,15 +392,16 @@ impl Engine {
     /// Saves a check's times; when they can't be written they're kept in
     /// memory only, and the durable state (a pause) is untouched.
     fn save_check(&self, times: CheckTimes) {
-        let mut state = lock(&self.inner.updater);
-        if state.unreadable {
-            state.unsaved_check = Some(times);
-            return;
-        }
-        state.unsaved_check = match self.write_updater(&mut state, |u| times.apply(u)) {
-            Ok(()) => None,
-            Err(_) => Some(times),
-        };
+        self.change(|state| {
+            if state.unreadable {
+                state.unsaved_check = Some(times);
+                return;
+            }
+            state.unsaved_check = match self.write_updater(state, |u| times.apply(u)) {
+                Ok(()) => None,
+                Err(_) => Some(times),
+            };
+        });
     }
 
     fn publish(&self, state: UpdatesState, version: Option<String>, error: Option<String>) {
@@ -581,10 +615,8 @@ impl Engine {
 
     /// [`Engine::plan_with`] over the updater state now.
     fn plan(&self, settings: &Updates, now: i64) -> policy::Plan {
-        let state = lock(&self.inner.updater);
-        let held = (state.durable.paused_until, state.held);
-        drop(state);
-        self.plan_with(settings, now, held)
+        let view = lock(&self.inner.view).clone();
+        self.plan_with(settings, now, (view.updater.paused_until, view.held))
     }
 
     /// The policy's plan, given the durable pause and the hold (one
@@ -627,15 +659,12 @@ impl Engine {
         let settings = self.inner.settings.borrow().clone();
         let now = (self.inner.clock)();
         let ctx = &self.inner.ctx;
-        let (updater, check_unsaved, held_in_process, unreadable) = {
-            let state = lock(&self.inner.updater);
-            (
-                state.effective(),
-                state.unsaved_check.is_some(),
-                state.held,
-                state.unreadable,
-            )
-        };
+        let View {
+            updater,
+            check_unsaved,
+            held: held_in_process,
+            unreadable,
+        } = lock(&self.inner.view).clone();
         let plan = self.plan_with(&settings, now, (updater.paused_until, held_in_process));
         let found = lock(&self.inner.found);
         let reason = self.incapable(&settings, found.trust_damaged, self.skipped().is_some());
@@ -835,9 +864,8 @@ impl Engine {
     /// be saved leaves the pause and any hold as they were.
     pub fn pause(&self, days: u32) -> Result<UpdatesStatus, UpdatesError> {
         let now = (self.inner.clock)();
-        {
-            let mut state = lock(&self.inner.updater);
-            match self.write_updater(&mut state, |u| {
+        self.change(|state| {
+            match self.write_updater(state, |u| {
                 u.paused_until = (days > 0).then(|| now + i64::from(days) * 86_400);
             }) {
                 // A saved pause or resume is the outcome now: no hold,
@@ -845,18 +873,19 @@ impl Engine {
                 Ok(()) => {
                     state.held = false;
                     state.unreadable = false;
+                    Ok(())
                 }
                 // Nothing installs without `<data>/bin` anyway, and
                 // retrying won't make one: no hold.
-                Err(SaveError::NoBin) => return Err(UpdatesError::BinUnavailable),
+                Err(SaveError::NoBin) => Err(UpdatesError::BinUnavailable),
                 Err(SaveError::Io) => {
                     if days > 0 {
                         state.held = true;
                     }
-                    return Err(UpdatesError::NotSaved);
+                    Err(UpdatesError::NotSaved)
                 }
             }
-        }
+        })?;
         Ok(self.status())
     }
 
@@ -1563,6 +1592,19 @@ mod tests {
             ),
             "the state stays locked through the write"
         );
+        // Readers don't wait on the write: the scheduler and status read
+        // the published view from async workers.
+        let reader = e.engine.clone();
+        let (read, reading) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = reader.until_scheduled();
+            let _ = reader.summary();
+            let _ = reader.status();
+            read.send(()).unwrap();
+        });
+        reading
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a reader waited on the write's lock");
         let newer = e.engine.clone();
         let (pausing, attempting) = mpsc::channel();
         let pause = std::thread::spawn(move || {

@@ -73,10 +73,10 @@ impl TorrentFile {
                     .collect()
             })
             .unwrap_or_default();
-        if announce.is_empty() {
-            if let Some(url) = top.get(b"announce").and_then(text) {
-                announce.push(vec![url]);
-            }
+        if announce.is_empty()
+            && let Some(url) = top.get(b"announce").and_then(text)
+        {
+            announce.push(vec![url]);
         }
 
         let url_list = match top.get(b"url-list") {

@@ -78,6 +78,23 @@ impl SegmentCache {
     pub fn clear(&self) {
         self.map.lock().expect("cache lock").clear();
     }
+
+    /// Entries held and their estimated bytes: each key's string and
+    /// each top's list, at capacity, plus the map's slots.
+    pub fn usage(&self) -> (u64, u64) {
+        let map = self.map.lock().expect("cache lock");
+        let held: usize = map
+            .iter()
+            .map(|(k, top)| {
+                k.0.capacity()
+                    + top.0.capacity() * std::mem::size_of::<(bool, u64, DocId)>()
+                    + std::mem::size_of::<SegmentTop>()
+                    + 2 * std::mem::size_of::<usize>()
+            })
+            .sum();
+        let slots = map.capacity() * (std::mem::size_of::<(Key, Top)>() + 1);
+        (map.len() as u64, (held + slots) as u64)
+    }
 }
 
 /// Maps a fast value to a `u64` that sorts the same way.
@@ -353,4 +370,28 @@ fn segment_top(
         .map(|Reverse(r)| (r.present, r.value, r.addr.0.1))
         .collect();
     Ok((top, count))
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn usage_counts_entries_and_their_tops() {
+        let cache = SegmentCache::default();
+        assert_eq!(cache.usage().0, 0);
+        let order = Order {
+            by: By::Hot(Col::Seeders),
+            desc: true,
+        };
+        let top: Top = Arc::new((vec![(true, 1, 0); 1000], 1000));
+        let key = ("q".to_owned(), order, 1000, SegmentId::generate_random(), 0);
+        cache.map.lock().unwrap().insert(key, top);
+        let (entries, bytes) = cache.usage();
+        assert_eq!(entries, 1);
+        let list = 1000 * std::mem::size_of::<(bool, u64, DocId)>() as u64;
+        assert!(bytes >= list, "{bytes} < {list}");
+        cache.clear();
+        assert_eq!(cache.usage().0, 0);
+    }
 }

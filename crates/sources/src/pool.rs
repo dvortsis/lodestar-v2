@@ -285,6 +285,7 @@ pub fn spawn(
         interest: VecDeque::new(),
         timers: BinaryHeap::new(),
         timer_seq: 0,
+        generations: 0,
         admitted: VecDeque::new(),
         lookup_backlog: VecDeque::new(),
         lookups: 0,
@@ -342,8 +343,10 @@ struct Entry {
     fetch_started: bool,
     last_failure: Option<FailureKind>,
     state: State,
-    /// Bumped on every state change, to invalidate old timers.
-    generation: u32,
+    /// Set from the pool's counter on every state change, to invalidate
+    /// old timers and requests. Pool-wide, so a key evicted and found again
+    /// never meets a timer left by its earlier lifetime.
+    generation: u64,
 }
 
 impl Entry {
@@ -365,7 +368,7 @@ enum FinderReply {
 }
 
 struct Request {
-    generation: u32,
+    generation: u64,
     accepted: bool,
     /// An accepted finder answered. Accepted with none answering means the
     /// finders dropped the work (a pause, a shutdown): cancelled, and the
@@ -386,8 +389,10 @@ struct Pool {
     /// Sources with ready keys, in DRR order.
     rotation: VecDeque<SourceId>,
     interest: VecDeque<InfoHash>,
-    timers: BinaryHeap<Reverse<(Instant, u64, InfoHash, u32)>>,
+    timers: BinaryHeap<Reverse<(Instant, u64, InfoHash, u64)>>,
     timer_seq: u64,
+    /// The last entry generation handed out ([`next_generation`]).
+    generations: u64,
     /// Admission order, for eviction (lazily cleaned).
     admitted: VecDeque<InfoHash>,
     lookup_backlog: VecDeque<InfoHash>,
@@ -400,6 +405,13 @@ struct Pool {
     task_keys: HashMap<Id, (InfoHash, SocketAddr)>,
     recent: HashSet<InfoHash>,
     recent_order: VecDeque<InfoHash>,
+}
+
+/// The next entry generation. Never 0, which a new entry starts at, and
+/// never repeated in a pool's life.
+fn next_generation(last: &mut u64) -> u64 {
+    *last += 1;
+    *last
 }
 
 impl Pool {
@@ -635,7 +647,7 @@ impl Pool {
     fn make_ready(&mut self, key: InfoHash) {
         let e = self.entries.get_mut(&key).expect("present");
         e.state = State::Ready;
-        e.generation = e.generation.wrapping_add(1);
+        e.generation = next_generation(&mut self.generations);
         let (source, interest) = (e.source, e.interest);
         if interest {
             self.interest.push_back(key);
@@ -675,7 +687,7 @@ impl Pool {
             self.lose(key, loss);
             return;
         }
-        e.generation = e.generation.wrapping_add(1);
+        e.generation = next_generation(&mut self.generations);
         if self.cfg.paused || self.lookups >= self.cfg.max_lookups {
             e.state = State::LookupQueued;
             if e.interest {
@@ -830,7 +842,7 @@ impl Pool {
         }
     }
 
-    fn schedule(&mut self, at: Instant, key: InfoHash, generation: u32) {
+    fn schedule(&mut self, at: Instant, key: InfoHash, generation: u64) {
         self.timer_seq += 1;
         self.timers
             .push(Reverse((at, self.timer_seq, key, generation)));
@@ -875,7 +887,7 @@ impl Pool {
             return;
         }
         e.state = State::Backoff;
-        e.generation = e.generation.wrapping_add(1);
+        e.generation = next_generation(&mut self.generations);
         let generation = e.generation;
         let delay = base
             .max(Duration::from_millis(1))
@@ -908,7 +920,7 @@ impl Pool {
             e.tried += 1;
             e.state = State::Fetching;
             e.fetch_started = true;
-            e.generation = e.generation.wrapping_add(1);
+            e.generation = next_generation(&mut self.generations);
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
             let handle = self.tasks.spawn(self.fetcher.fetch(peer, key));
             self.task_keys.insert(handle.id(), (key, peer));
