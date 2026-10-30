@@ -122,15 +122,19 @@ impl<'a> Doc<'a> {
             Node::And { of } => of.iter().all(|n| self.eval(n, file, neutral)),
             Node::Or { of } => of.iter().any(|n| self.eval(n, file, neutral)),
             Node::Not { of } => !self.eval(of, file, neutral),
+            // The torrent's neutralized tokens are taken out, positions
+            // kept, so they supply no evidence.
             Node::Word { field, word } => {
-                !is_neutral(word, neutral) && texts(*field, &|t| has_word(t, word))
+                !is_neutral(word, neutral)
+                    && texts(*field, &|t| has_word(&masked(t, neutral), word))
             }
             Node::Phrase { field, text } => {
-                !is_neutral(text, neutral) && texts(*field, &|t| has_phrase(t, text))
+                !is_neutral(text, neutral)
+                    && texts(*field, &|t| has_phrase(&masked(t, neutral), text))
             }
             Node::Near { field, words, slop } => {
                 !words.iter().any(|w| is_neutral(w, neutral))
-                    && texts(*field, &|t| has_near(t, words, *slop))
+                    && texts(*field, &|t| has_near(&masked(t, neutral), words, *slop))
             }
             Node::Prefix { field, prefix } => {
                 let p = folded(prefix);
@@ -273,10 +277,24 @@ fn parts(text: &str) -> Vec<Tok> {
         .collect()
 }
 
-/// Whether a word, phrase or NEAR word needs a neutralized word: the
-/// semantics both matchers share ([`super::neutral_folds`]).
+/// Whether a word, phrase or NEAR word has a run of parts that is a
+/// neutralized word ([`super::neutral_folds`]).
 fn is_neutral(word: &str, neutral: &[String]) -> bool {
     super::neutralized(&super::neutral_folds(word), neutral)
+}
+
+/// A text without its tokens that are neutralized words.
+fn masked<'t>(field: &'t [Tok], neutral: &[String]) -> std::borrow::Cow<'t, [Tok]> {
+    if neutral.is_empty() {
+        return std::borrow::Cow::Borrowed(field);
+    }
+    std::borrow::Cow::Owned(
+        field
+            .iter()
+            .filter(|t| !super::neutral_token(&t.text, neutral))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// The field tokens at each position, for phrase checks.

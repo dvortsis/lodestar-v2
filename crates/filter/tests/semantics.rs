@@ -177,7 +177,8 @@ fn row(v1: [u8; 20], v2: Option<[u8; 32]>) -> TorrentRow {
     }
 }
 
-/// Every swarm hash of the row, as ingest has them.
+/// Every swarm hash of the row, as ingest has them: this mirrors
+/// `lodestar_store::Prepared::swarm_hashes`, which ingest judges with.
 fn swarm(r: &TorrentRow) -> Vec<[u8; 20]> {
     let mut out = vec![r.info_hash.0];
     if let Some(t) = r.info_hash_v2.map(|h| h.truncated()) {
@@ -364,9 +365,56 @@ fn other_evidence_still_counts() {
     // A prefix or fuzzy word another token satisfies still matches.
     assert!(hides("amb*", None, Some("amber"), "Amber Ambient"));
     assert!(hides("~ambar", None, Some("amber"), "Amber Ambar"));
-    // A part of a word isn't the word: neutralizing `x` leaves `x265`.
-    assert!(hides("\"x265 beacon\"", None, Some("x"), "x265 Beacon"));
+    // A whole or compound form is a token of its own: neutralizing `x`
+    // leaves the word `x265`, which a torrent has as one token too. A
+    // phrase reads parts only, so the `x` of `x265` can't complete it.
+    assert!(hides("x265 beacon", None, Some("x"), "x265 Beacon"));
     assert!(hides("x265 NEAR/1 beacon", None, Some("x"), "x265 Beacon"));
+    assert!(!hides("\"x265 beacon\"", None, Some("x"), "x265 Beacon"));
+    // A phrase is never one word: neutralizing `amberbeacon` leaves
+    // `"amber beacon"` on a torrent that hasn't that word.
+    assert!(hides(
+        "\"amber beacon\"",
+        None,
+        Some("amberbeacon"),
+        "Amber Beacon"
+    ));
+    assert!(hides(
+        "-\"amber beacon\"",
+        None,
+        Some("amberbeacon"),
+        "Cedar"
+    ));
+    assert!(!hides(
+        "-\"amber beacon\"",
+        None,
+        Some("amberbeacon"),
+        "Amber Beacon"
+    ));
+}
+
+/// A query word of several parts can't borrow a neutralized word the
+/// torrent has on its own.
+#[test]
+fn a_word_of_several_parts_needs_its_own_token() {
+    for q in [
+        "AmberBeacon",
+        "\"cedar AmberBeacon\"",
+        "AmberBeacon NEAR/1 cedar",
+        "amber2",
+    ] {
+        let name = "Cedar Amber Beacon amber 2";
+        assert!(hides(q, None, None, name), "{q}");
+        assert!(!hides(q, None, Some("amber"), name), "{q}");
+    }
+    // The torrent's own word of that spelling still matches.
+    assert!(hides(
+        "AmberBeacon",
+        None,
+        Some("amber"),
+        "Cedar AmberBeacon"
+    ));
+    assert!(hides("amber2", None, Some("amber"), "Cedar amber2"));
 }
 
 #[test]
@@ -414,6 +462,8 @@ fn query() -> impl Strategy<Value = String> {
         (word(), word(), word()).prop_map(|(a, b, c)| format!("\"{a} {b} {c}\"")),
         (word(), word(), 1u32..4).prop_map(|(a, b, n)| format!("{a} NEAR/{n} {b}")),
         (word(), word()).prop_map(|(a, b)| format!("{a}.{b}")),
+        (word(), word()).prop_map(|(a, b)| format!("{}{b}", capital(a))),
+        (word(), 1u8..10).prop_map(|(w, n)| format!("{w}{n}")),
         (word(), 2usize..5).prop_map(|(w, n)| format!("{}*", &w[..n])),
         word().prop_map(|w| format!("~{}a", &w[..w.len() - 1])),
         (word(), word()).prop_map(|(a, b)| format!("name:\"{a} {b}\"")),
@@ -427,21 +477,47 @@ fn query() -> impl Strategy<Value = String> {
     })
 }
 
-/// A name of vocabulary words between separators that keep each a word.
-fn name() -> impl Strategy<Value = Vec<(&'static str, &'static str)>> {
-    prop::collection::vec((word(), prop::sample::select(vec![" ", ".", "_"])), 1..8)
+fn capital(w: &str) -> String {
+    let mut c = w.chars();
+    c.next()
+        .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+        .unwrap_or_default()
 }
 
+/// A name of vocabulary words between separators, some joined
+/// ([`joined`]).
+fn name() -> impl Strategy<Value = Vec<(&'static str, &'static str)>> {
+    prop::collection::vec(
+        (word(), prop::sample::select(vec![" ", ".", "_", "", "2 "])),
+        1..8,
+    )
+}
+
+/// The name, with `swap` replacing every `from`. A neutralized word
+/// takes out every token of its text, a part of a joined word too, so
+/// `from` is never joined here: the swap then removes exactly what
+/// neutralizing does. Other words join with a capital (`CedarBeacon`)
+/// or a digit (`cedar2`).
 fn joined(words: &[(&str, &str)], swap: Option<(&str, &str)>) -> String {
     let mut out = String::new();
     for (i, (w, sep)) in words.iter().enumerate() {
+        let joins = |other: &str| *w == "amber" || other == "amber";
         if i > 0 {
-            out.push_str(sep);
+            let prev = words[i - 1].0;
+            out.push_str(match *sep {
+                "" | "2 " if joins(prev) => " ",
+                s => s,
+            });
         }
-        out.push_str(match swap {
+        let w = match swap {
             Some((from, to)) if *w == from => to,
             _ => w,
-        });
+        };
+        if i > 0 && sep.is_empty() && !joins(words[i - 1].0) {
+            out.push_str(&capital(w));
+        } else {
+            out.push_str(w);
+        }
     }
     out
 }
