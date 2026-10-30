@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T21:35Z",
+ "updated_at": "2026-10-30T21:37Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1469,13 +1469,14 @@
    "merge": "5f1deef5"
   },
   "X-crawler-sim-crate": {
-   "status": "review",
+   "status": "merged",
    "model": "opus (runner)",
    "deps": [
     "CR-0d-2a"
    ],
    "notes": "runner-built 20:55Z; goldens byte-identical; review by session_01MMjhn984M3k3UJXUCsEYPX",
-   "pr": 239
+   "pr": 239,
+   "merge": "a0cdf84a"
   },
   "X-clippy-msrv": {
    "status": "queued",
@@ -1524,11 +1525,11 @@
    "merge": "e9768a11"
   },
   "CR-SIM-restart": {
-   "status": "queued",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhn9zPWSCmVk1uqpWy9M",
    "pr": null,
-   "notes": "brief briefs/CR-SIM-restart.md (20:58Z); launch after #239 merges"
+   "notes": "launched 21:37Z"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2311,7 +2312,8 @@
   "2026-10-30T21:02Z owner: rc.2 published (image + draft prerelease with SHA256SUMS and minisig); per-file hashes recorded. Owner asked whether to switch the Unraid soak to rc.2 (restore the cold pre-v0.5.1 backup for the in-place upgrade test) and run the Windows MSI service and portable smokes: runner said yes, with the gate conditions. #239: fixed the targets_cover_every_crate failure (TARGETS entry for lodestar_crawler_sim).",
   "2026-10-30T21:04Z merged #238 hash-mismatch docs (644e5b28). Open: #239 (fix 2ff1781d in CI; runner's own delta check of the 3-line TARGETS fix is OK).",
   "2026-10-30T21:16Z safety check-in: every listed item done; re-armed for 22:20Z (#239, then launch CR-SIM-restart).",
-  "2026-10-30T21:35Z owner: rc.2 artifacts verified (minisig, digests, image); Unraid 24 h soak RUNNING from the restored cold backup (V3->V12 upgrade OK); Windows portable PASS; MSI service run RUNNING with the Defender exclusion. Next gate results ~2026-10-31T04:30Z (MSI) and ~2026-11-01T06Z (Unraid, after gluetun)."
+  "2026-10-30T21:35Z owner: rc.2 artifacts verified (minisig, digests, image); Unraid 24 h soak RUNNING from the restored cold backup (V3->V12 upgrade OK); Windows portable PASS; MSI service run RUNNING with the Defender exclusion. Next gate results ~2026-10-31T04:30Z (MSI) and ~2026-11-01T06Z (Unraid, after gluetun).",
+  "2026-10-30T21:37Z merged #239 X-crawler-sim-crate (a0cdf84a). Launched CR-SIM-restart (Opus, session_01MMjhn9zPWSCmVk1uqpWy9M). Shared reviewer session_01MMjhn984M3k3UJXUCsEYPX archived (nothing pending); new PRs get a fresh reviewer."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
