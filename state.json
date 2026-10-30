@@ -1325,6 +1325,13 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses."
+  },
+  "F-status": {
+   "status": "running",
+   "session": "session_01MMjhnCnk7norhoKvDiTbRW",
+   "model": "sonnet",
+   "attempt": 1,
+   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1813,7 +1820,8 @@
   "next_branch": "2026-10-30T05:37Z deleted origin/next (main == 058d9937 lineage)",
   "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051.",
   "soak_check": "2026-10-30T05:55Z owner's local agent pushes soak/cr0-final after 00:56 MDT; send_later trig_01KEnUWG4pD57ZpjVk9X2nBf at 07:15Z",
-  "cap_note": "2026-10-30T06:09Z working sessions briefly 5 (X-ci-health, CR-0f, X-sleeps, L3-fix, L4-fix); L-lane fixes are tier 1; X-sleeps lowest. Others idle waiting (F-updater, CR-COL, F-filters, F-metainfo)."
+  "cap_note": "2026-10-30T06:09Z working sessions briefly 5 (X-ci-health, CR-0f, X-sleeps, L3-fix, L4-fix); L-lane fixes are tier 1; X-sleeps lowest. Others idle waiting (F-updater, CR-COL, F-filters, F-metainfo).",
+  "slices_pr": "2026-10-30T06:29Z #182 adds X-ci-health, CR-0f, F-auth-lock, F-filters-packs, F-filters-neutral-perf, L4-followups; G-v051 deps + CR-0f"
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
