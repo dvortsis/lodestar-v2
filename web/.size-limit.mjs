@@ -327,10 +327,14 @@ export default [
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
-	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),
+	// Owner ruling, 2026-10-30 (S-settings-reconcile): with Settings a production route, Rolldown
+	// re-splits shared chunks (Toggle, format/bytes, Svelte's input bindings) these entries load;
+	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
+	// sections 33.9 → 34.5 KB.
+	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.1 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45 KB'),
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.8 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: settingsFirstView }),
@@ -382,7 +386,7 @@ export default [
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'33.9 KB'
+		'34.5 KB' // owner ruling, 2026-10-30: see the Alerts entries
 	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB

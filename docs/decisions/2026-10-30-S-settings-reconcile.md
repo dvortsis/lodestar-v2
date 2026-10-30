@@ -23,9 +23,9 @@ One Settings implementation, built on the owner's `848e10a0` (`work/soak-setting
 - **The five generated screens moved to `features/settings/screens/screen.ts`,** each with its icon. The shell no longer keeps a parallel icon array.
 - **Settings code says "Settings" with its own key** (`settings_shell_title`), not the shell's `shell_nav_settings`. Sharing that one message split the shell's navigation-message chunk for every route.
 
-## Budgets (§10.1): split code, no limit raised
+## Budgets (§10.1): split code; three limits outside Settings raised by owner ruling
 
-All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm run build` on this branch, gzipped:
+Every Settings budget is met by splitting code; no Settings limit was raised. The only limits that changed are the three below, outside Settings, by owner ruling. Measured with `npm run build` on this branch, gzipped:
 
 | Entry | Before (848e10a0 on main) | Now | Limit |
 |---|---|---|---|
@@ -56,14 +56,23 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
     - It is 31.09 KB with this PR (30.81 KB with `848e10a0` merged alone, 30.42 KB before Settings), against the 31.1 KB budget.
     - The growth is Svelte runtime the form engine and Keyboard use (runner's review: not reasonably avoidable). Keyboard stays in the navigation (runner, 2026-10-30).
     - A later route that passes the budget goes to the owner.
-- **Measured but not fixed here: three routes outside Settings go over their limits.**
-  - Alerts route is at 29.03 KB (limit 29), Alert route at 45.77 KB (limit 45), and Detail sections at 34.41 KB (limit 33.9). On `main` they measure 28.38, 44.95 and 33.82 KB.
+- **Three routes outside Settings went over their limits, and the owner raised those three (owner ruling, 2026-10-30, relayed by the runner).**
+  - Before the ruling: Alerts route 29.03 KB (limit 29), Alert route 45.77 KB (limit 45), Detail sections 34.41 KB (limit 33.9). On `main` they measured 28.38, 44.95 and 33.82 KB.
   - The cause, from sourcemaps: Settings is now a production route, and Rolldown splits shared chunks by importer set. `ui/fields/Toggle.svelte` leaves the alerts chunk, `format/bytes.ts` is split the same way (the form's memory estimate uses it), and the shared Svelte input-bindings chunk grows. The modules are the same; the extra cost is per-chunk overhead.
   - **Chunk grouping can't fix it (runner, 2026-10-30: try `vite.config.ts` groups first, with no growth on /search).** Every variant was built and measured, then reverted:
     - A group holding Toggle and bytes, or Toggle alone, with dependencies included (Rolldown's default): the group must take Svelte's `bindings/input.js`, which `Button`, `Input` and `Select` import, so /search's first load imports the group chunk. The stray check fails.
     - The same group without dependencies (`includeDependenciesRecursively: false`): Rolldown refuses the build alongside SvelteKit's `preserveEntrySignatures: "strict"`.
     - Moving Toggle back into the Alerts chunk would make Settings load Alerts code.
-  - **These three limits wait on the owner (the runner's fallback).** No limit changed in this PR.
+  - **The owner's ruling (option (a), 2026-10-30):**
+
+    | Entry | Old limit | New limit | Measured with `main` at `fa836c4e` merged |
+    |---|---|---|---|
+    | Alerts route (own JS + CSS) | 29 KB | 29.1 KB | 29.03 KB |
+    | Alert route (own JS + CSS) | 45 KB | 45.8 KB | 45.76 KB |
+    | Detail sections (on demand) | 33.9 KB | 34.5 KB | 34.41 KB |
+
+    - No other limit changed. `.size-limit.mjs` cites the ruling and the cause next to the three entries.
+    - Alert route has about 40 B of headroom. A later change that adds to it goes back to the owner.
 
 ## Tests
 
