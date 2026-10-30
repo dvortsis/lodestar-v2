@@ -1438,6 +1438,14 @@
    "pr": 206,
    "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both",
    "review_session": "session_01MMjhnCfFuShScq5SLixE9d"
+  },
+  "IMP-1": {
+   "status": "queued",
+   "model": "opus",
+   "deps": [
+    "v051-cut"
+   ],
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
