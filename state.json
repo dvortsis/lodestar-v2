@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T20:05Z",
+ "updated_at": "2026-10-30T20:15Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -2178,7 +2178,7 @@
   "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
   "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
   "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)",
-  "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision)",
+  "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
   "CR-SIM: move the sim into its own publish=false crate (crates/crawler-sim) so dht/sources unit tests run in production config; before CR-ADM relies on it (if not done in #209)",
   "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
   "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
