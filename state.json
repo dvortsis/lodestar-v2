@@ -1408,7 +1408,8 @@
     "CR-0f",
     "CR-COL"
    ],
-   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main"
+   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main",
+   "session": "session_01MMjhnBZWMru5fftMnr9Yf7"
   },
   "T-v051-gaps": {
    "status": "merged",
@@ -1435,7 +1436,8 @@
    "model": "opus",
    "attempt": 1,
    "pr": 206,
-   "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both"
+   "notes": " | 2026-10-30T12:22Z release/v0.5.1 created at c3f6341a; #206 cut/v0.5.1 (bump + cut decisions); #201 retargeted to release/v0.5.1; fresh review session commissioned for both",
+   "review_session": "session_01MMjhnCfFuShScq5SLixE9d"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
