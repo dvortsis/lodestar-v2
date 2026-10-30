@@ -106,7 +106,11 @@ struct AuthFile {
     proxy: ProxyConfig,
 }
 
-#[derive(Debug)]
+/// What `auth.json` holds, in memory. Every change builds the next value,
+/// saves it, and only then publishes it ([`Auth::commit`]), so a failed
+/// save leaves the credentials in effect as they were, now and after a
+/// restart.
+#[derive(Debug, Clone)]
 struct State {
     password: Option<String>,
     key: [u8; 32],
@@ -232,11 +236,12 @@ impl Auth {
         let proxy = Proxy::compile(config).map_err(SetProxyError::Invalid)?;
         let wide = proxy.config.enabled && proxy.has_wide_range();
         let mut state = self.state.write().expect("auth lock");
-        let previous = std::mem::replace(&mut state.proxy, proxy);
-        if let Err(e) = self.save(&state) {
-            state.proxy = previous;
-            return Err(SetProxyError::Storage(e));
-        }
+        let next = State {
+            proxy,
+            ..state.clone()
+        };
+        self.commit(&mut state, next)
+            .map_err(SetProxyError::Storage)?;
         let saved = state.proxy.config.clone();
         drop(state);
         // Once it applies, and outside the lock.
@@ -293,9 +298,14 @@ impl Auth {
             check_strength(password)?;
             let encoded = hash_password(password);
             let mut state = self.state.write().expect("auth lock");
-            state.key = random::<32>();
-            state.password = Some(encoded);
-            self.save(&state)?;
+            let next = State {
+                password: Some(encoded),
+                key: random::<32>(),
+                ..state.clone()
+            };
+            self.commit(&mut state, next)?;
+            // Spent only once the password is saved: after a failed save
+            // the instance is still unclaimed, and the token still works.
             *pending = None;
             Ok(self.cookie(&state.key))
         })();
@@ -352,9 +362,12 @@ impl Auth {
                 return Err(AuthError::BadPassword);
             }
             check_strength(new)?;
-            state.password = Some(hash_password(new));
-            state.key = random::<32>();
-            self.save(&state)?;
+            let next = State {
+                password: Some(hash_password(new)),
+                key: random::<32>(),
+                ..state.clone()
+            };
+            self.commit(&mut state, next)?;
             Ok(self.cookie(&state.key))
         })();
         log_events::checked(ip, log_events::Check::PasswordChange, &result);
@@ -369,12 +382,11 @@ impl Auth {
         if state.password.is_none() {
             return Err(AuthError::NotSetUp);
         }
-        let previous = state.key;
-        state.key = random::<32>();
-        if let Err(e) = self.save(&state) {
-            state.key = previous;
-            return Err(e);
-        }
+        let next = State {
+            key: random::<32>(),
+            ..state.clone()
+        };
+        self.commit(&mut state, next)?;
         Ok(self.cookie(&state.key))
     }
 
@@ -428,6 +440,15 @@ impl Auth {
 
     fn allow(&self, ip: IpAddr) -> Result<(), AuthError> {
         self.login.take(ip).map_err(|_| AuthError::RateLimited)
+    }
+
+    /// Saves `next`, then publishes it in place of `state` (held under
+    /// the write lock). On a storage error nothing changes: not the file,
+    /// not what's in effect.
+    fn commit(&self, state: &mut State, next: State) -> Result<(), AuthError> {
+        self.save(&next)?;
+        *state = next;
+        Ok(())
     }
 
     fn save(&self, state: &State) -> Result<(), AuthError> {
@@ -617,9 +638,20 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
     unhex(s)?.try_into().ok()
 }
 
-/// Writes `file` readable by the owner only, atomically.
+/// Writes `file` readable by the owner only, atomically: `path` is
+/// either left as it was or replaced whole. A failed write doesn't leave
+/// the half-written secrets behind in the temporary file.
 fn write_private(path: &Path, file: &AuthFile) -> io::Result<()> {
     let tmp = path.with_extension("json.tmp");
+    let result = write_and_rename(&tmp, path, file);
+    if result.is_err() {
+        // Best effort: the error that matters is the one returned.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_and_rename(tmp: &Path, path: &Path, file: &AuthFile) -> io::Result<()> {
     let text = serde_json::to_string_pretty(file).map_err(io::Error::other)?;
     {
         let mut opts = std::fs::OpenOptions::new();
@@ -630,11 +662,11 @@ fn write_private(path: &Path, file: &AuthFile) -> io::Result<()> {
             opts.mode(0o600);
         }
         use std::io::Write;
-        let mut f = opts.open(&tmp)?;
+        let mut f = opts.open(tmp)?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    std::fs::rename(tmp, path)
 }
 
 #[cfg(test)]
