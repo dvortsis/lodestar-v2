@@ -15,7 +15,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+// The actor's clock: the same as std's unless a test pauses it, so
+// restored deadlines run on the clock the sampler keeps. Re-exported so
+// callers (the fuzz target) don't need tokio themselves.
+pub use tokio::time::Instant;
 
 use lodestar_bencode::{self as bencode, DecodeOptions, Encoder, Value};
 use sha2::{Digest, Sha256};
