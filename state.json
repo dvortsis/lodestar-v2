@@ -1163,7 +1163,7 @@
    "status": "paused",
    "model": "sonnet",
    "deps": [],
-   "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge | 2026-10-23T21:14Z #147 review FIX: 1 blocking (settings save test-only hook via SettingsApi wrapper), 1 important (logs close poll vacuous), 3 polish. Web PR slice/X-sleeps-web ordered now (shortcuts.keyboard flake hit #149) | 2026-10-23T21:39Z #151 web (02dbc19) runner-reviewed OK, CI running | 2026-10-23T21:40Z #151 merged e9eb1cf (web waitForTimeout) | 2026-10-23T21:55Z #147 fixes 0a1e223 runner-checked OK (SignalSaves flag, chunk-stall wait); merge on green | 2026-10-23T22:29Z #147 merged 89610d7; next pool.rs + lodestar/tests | 2026-10-24T03:31Z paused (owner v0.5 priority, usage) | 2026-10-30T05:55Z old session told to port 7fcf111a,c272e0a2 onto new main as port/X-sleeps and open PR",
+   "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge | 2026-10-23T21:14Z #147 review FIX: 1 blocking (settings save test-only hook via SettingsApi wrapper), 1 important (logs close poll vacuous), 3 polish. Web PR slice/X-sleeps-web ordered now (shortcuts.keyboard flake hit #149) | 2026-10-23T21:39Z #151 web (02dbc19) runner-reviewed OK, CI running | 2026-10-23T21:40Z #151 merged e9eb1cf (web waitForTimeout) | 2026-10-23T21:55Z #147 fixes 0a1e223 runner-checked OK (SignalSaves flag, chunk-stall wait); merge on green | 2026-10-23T22:29Z #147 merged 89610d7; next pool.rs + lodestar/tests | 2026-10-24T03:31Z paused (owner v0.5 priority, usage) | 2026-10-30T05:55Z old session told to port 7fcf111a,c272e0a2 onto new main as port/X-sleeps and open PR | 2026-10-30T07:14Z #188 opened 38f73cde; told to hold until #187 merges, then merge main and resolve log_canary",
    "session": "session_01EFQKtWTWkBGHK299HzziBZ",
    "pr": null,
    "review_rounds": 1
@@ -1245,7 +1245,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears)."
+   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears). | 2026-10-30T07:14Z merged land/L5 dcff7b9 -> 397b013 green (891 tests; update:: 85); holding for #184"
   },
   "L7": {
    "status": "review",
@@ -1334,7 +1334,7 @@
    "session": "session_01MMjhnCnk7norhoKvDiTbRW",
    "model": "sonnet",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6"
+   "notes": " | 2026-10-30T06:29Z launched (Sonnet) from land/L6; no Rust/API changes; PR after L6 | 2026-10-30T07:14Z ready 4a88b3f (base land/L6); 2351 vitest; holding for L6. Owner flag: Starting state narrowed (only when nothing flowing)"
   },
   "IMP-0": {
    "status": "running",
@@ -1355,7 +1355,7 @@
    "session": "session_01MMjhnABUWdrF5PzgVK6oqa",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines)"
+   "notes": " | 2026-10-30T06:31Z launched (opus) from land/L5 | 2026-10-30T06:38Z granted services.rs CommitHook wiring (4 lines) | 2026-10-30T07:14Z ready 433744c on land/L5; self-review 3B/6I fixed; holding for #184. Owner flag: hide/demote/flag rules count as new+searchable"
   },
   "D-v051": {
    "status": "running",
@@ -1363,6 +1363,17 @@
    "model": "sonnet",
    "attempt": 1,
    "notes": " | 2026-10-30T06:31Z launched (sonnet) from land/L7 | 2026-10-30T06:38Z draft ready; told: delete docs/releases/v0.5.0.md, fix links, README release/nightly lines; no PR until L7"
+  },
+  "X-flake-shutdown-percolator": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01MMjhnCAnPjYNuyFZbX67yK",
+   "pr": null,
+   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range"
+  },
+  "CR-0": {
+   "status": "?",
+   "notes": " | 2026-10-30T07:14Z soak/cr0-final d54de926 arrived; hygiene clean; PR #189; Opus acceptance review running (RSS +6.12 MiB/h over baseline needs fit)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1784,7 +1795,9 @@
   "2026-10-24T01:30Z \u00a72.19 (S-search-1 #161): to keep /search's first load from growing per route, other routes' JS is no longer preloaded from the entry; it loads on hover/touch (small waterfall on first visit to another page; measured before merge)",
   "2026-10-24T03:14Z RESOLVED: Settings budget -> owner chose A",
   "G-v05 flags (\u00a72.19, S-search-3): density replaces history entry; swarm sorts withheld until W5 accepts them; search user-guide chapter follow-up. (S-search-2b): Size open top edge reads \"\u2014\"; Seeders/Trackers \"Not available yet\" until M4.",
-  "2026-10-30T07:10Z Detail drawer size-limit entry raised 28.5->29 KB (L3 visibility revalidation pulls event client 2.1 KB); docs/decisions/2026-10-30-L3-L5-landing.md"
+  "2026-10-30T07:10Z Detail drawer size-limit entry raised 28.5->29 KB (L3 visibility revalidation pulls event client 2.1 KB); docs/decisions/2026-10-30-L3-L5-landing.md",
+  "2026-10-30T07:14Z CR-gate-metrics: rows a rule only hides/demotes/flags count as new and searchable; \"filtered out\" = drop or quarantine (refines \u00a72.25 metric)",
+  "2026-10-30T07:14Z F-status: \"Starting\" state shown only when nothing is flowing yet (narrows brief rule)"
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
