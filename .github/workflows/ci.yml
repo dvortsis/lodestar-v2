@@ -95,6 +95,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Workspace builds unify the dev-only `testing` feature (CR-SIM's
+      # simulator seams) into dht and sources; lint their production build.
+      - run: cargo clippy -p lodestar-dht -p lodestar-sources --lib -- -D warnings
+      - name: testing seams stay out of the binary
+        run: |
+          if cargo tree -e features -p lodestar \
+            | grep -E 'lodestar-(dht|sources) feature "testing"|tokio feature "test-util"'; then
+            echo "::error::a test-only feature reaches the lodestar binary"; exit 1
+          fi
       # First-party lines only through log_event! (architecture §12.1).
       - name: logging check
         env:
@@ -138,6 +147,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # The DHT's tests in their production configuration (no `testing`),
+      # which the workspace run above never builds.
+      - name: dht tests without test seams
+        if: runner.os == 'Linux'
+        run: cargo test -p lodestar-dht
       # DUR-26: the updater's persistence tests are Unix-only; a cfg that
       # compiled them out must not pass as zero tests run.
       - name: updater tests selected

@@ -3,9 +3,12 @@
 //! expire after 30 minutes, as announces are re-sent periodically. The
 //! announce's `seed` flag is kept so BEP 33 scrapes can be answered.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
+
+use super::transport::Map;
 
 use lodestar_metainfo::InfoHash;
 
@@ -17,7 +20,7 @@ const MAX_PEERS: usize = 50;
 
 #[derive(Debug, Default)]
 pub(crate) struct PeerStore {
-    map: HashMap<InfoHash, Vec<Entry>>,
+    map: Map<InfoHash, Vec<Entry>>,
 }
 
 #[derive(Debug, Clone, Copy)]

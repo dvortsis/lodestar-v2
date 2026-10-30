@@ -3,7 +3,9 @@
 //! i.e. for 5 to 10 minutes after the `get_peers` that issued it.
 
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use rand::RngExt;
 use sha1::{Digest, Sha1};

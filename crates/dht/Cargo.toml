@@ -8,6 +8,12 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only seams for the deterministic crawler simulator
+# (crates/sources/tests/sim): an in-memory socket, a seeded RNG, ordered
+# maps and fixed seen-filter keys. No production build enables it.
+testing = []
+
 [dependencies]
 lodestar-network-policy.workspace = true
 lodestar-bencode.workspace = true
