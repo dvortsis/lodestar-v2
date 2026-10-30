@@ -624,6 +624,20 @@ fn a_case_disturbed_mid_run_has_a_wide_spread() {
     assert!(narrow < 0.01, "{narrow}");
 }
 
+/// A slower or faster engine scales every pass alike: the median scales
+/// with it and the spread doesn't move, so a slower runner can't read as
+/// a disturbed one.
+#[test]
+fn a_uniformly_slower_engine_keeps_its_spread() {
+    let passes = vec![42.9, 44.3, 51.1, 56.9, 49.6, 62.0, 52.6];
+    let (median, base) = spread(passes.clone());
+    for k in [0.25, 0.5, 2.0, 3.93, 10.0] {
+        let (m, s) = spread(passes.iter().map(|p| p * k).collect());
+        assert!((m - median * k).abs() < 1e-9 * k, "×{k}: median {m}");
+        assert!((s - base).abs() < 1e-12, "×{k}: spread {s} vs {base}");
+    }
+}
+
 /// How a job's times become reference-runner microseconds: each case's
 /// raw time ÷ `speed`.
 struct Scaling {
@@ -1066,8 +1080,9 @@ fn budget() {
         return;
     }
     panic!(
-        "the runner's speed changed under the test on all {ATTEMPTS} attempts, so the \
-         measurement can't be trusted: {drifted:?}"
+        "the runner's speed changed under the test on all {ATTEMPTS} attempts, or the \
+         engine's time varies between passes, so the measurement can't be trusted: \
+         {drifted:?}"
     );
 }
 
