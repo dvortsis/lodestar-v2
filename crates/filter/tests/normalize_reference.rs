@@ -395,8 +395,9 @@ proptest! {
         let paths: Vec<Vec<String>> = files
             .into_iter()
             .map(|(at, own)| {
+                // An empty folder and file name leave a path of none.
                 let mut p = folders[at.index(folders.len())].clone();
-                if !own.is_empty() || p.is_empty() {
+                if !own.is_empty() || !p.is_empty() {
                     p.push(own);
                 }
                 p
