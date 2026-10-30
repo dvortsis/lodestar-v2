@@ -1395,8 +1395,8 @@
       "notes": "2026-10-30T07:40Z launched from land/L5; pushes fix/L5-e2e; runner merges into land/L5 | 2026-10-30T08:06Z 43b18ae1 merged into land/L5. Settings top-bar: static boot header in smoke shots since 21bd01bc (deferred Chrome) - expected; gap: no key-screen baseline shows right-hand controls (functional coverage in shell.routes.test.ts)"
     },
     "IMP-3": {
-      "status": "launching",
-      "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values | 2026-10-30T23:30Z brief briefs/IMP-3.md; Opus session"
+      "status": "running",
+      "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values | 2026-10-30T23:30Z brief briefs/IMP-3.md; Opus session | session_01MMjhnAbQvQcWYHV3NmXLW6"
     },
     "F-filters-xcpu": {
       "status": "merged",
