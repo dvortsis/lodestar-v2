@@ -16,7 +16,7 @@ Three failures that hit unrelated PRs' CI, fixed once (`docs/owner-decisions.md`
 
 - **Cause:** `nothing_listening_is_unreachable` bound `127.0.0.1:0`, dropped the listener and connected to the freed port. Under load, another test's `ReplayServer` was given that port, answered the stray `POST /RPC2` with its own script (so the test saw `Rejected("Could not find info-hash.")`, `Auth`, a 599…), and lost the scripted reply its own test needed. That's the victim side: `paused_loads_without_starting_and_bulk_skips_duplicates` and others got the next reply ("already in the client"). Reproduced by narrowing the ephemeral port range: 21 wrong answers and several victims in 300 runs at 64 threads.
 - **Fix:** `support::refused_addr()` returns a socket that is bound but never listens, held for the test's lifetime. Connecting is refused, and without `SO_REUSEADDR` no other socket can bind the port meanwhile. No sleeps.
-- **The other adapters' tests** (`aria2`, `deluge`, `qbittorrent`, `transmission`) use the same bind-and-drop pattern. They aren't this slice's to edit; each can switch to `refused_addr()` in one line.
+- **The other adapters' tests** (`aria2`, `deluge`, `qbittorrent`, `transmission`) had the same bind-and-drop pattern and use `refused_addr()` too (runner, 2026-10-30, extending this slice to those lines).
 
 ## The log scrubber's linearity test measures larger inputs, best of five (test)
 
