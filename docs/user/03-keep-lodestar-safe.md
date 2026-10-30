@@ -98,7 +98,7 @@ The setup token is the one secret that appears in the log. It stops working once
 ## 3.5 Choose how updates work
 <!-- index: updates; fixes only; rollback -->
 
-Updates are off until you choose them, because checking contacts GitHub. In-app update settings are **(planned)**. Today you update by pulling a new image.
+Updates are off until you choose them, because checking contacts GitHub. Automatic updates are not available in this release. <!-- confirm at release cut --> Today you update by pulling a new image.
 
 | Option | What it means |
 |---|---|
@@ -111,6 +111,12 @@ To update by hand:
 2. Stop the container.
 3. Pull the new image and start the container.
    **Result:** The container starts, and the old data is intact.
+
+> [!NOTE]
+> After every start, sampling waits 6 hours before it resumes, so new discoveries slow down after an update or restart. Search still works. The index grows over days.
+
+> [!WARNING]
+> If you ran a pre-release or the `nightly` image, the database moves to schema V12 on the first start of v0.5.1. Take a backup first. After that, stay on the release image: `nightly` can apply migrations the release can't read.
 
 ## 3.6 Know what protects the content filters and API keys
 <!-- index: API keys; content filters; child-safety core -->

@@ -49,6 +49,13 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
   <img src="images/insights-light.png" alt="Lodestar Insights overview showing pipeline stage cards and status counters"></picture>
 *Figure 5.4: The Insights overview showing stage status cards, searchable torrent counts and attention items.*
 
+**Status pill.** The pill at the top of the screen shows how the pipeline is doing. It shows progress, and warns when the pipeline has stalled, which means nothing is being stored for a while. Open **Insights** to see which stage is stuck. <!-- confirm at release cut: F-status states and wording -->
+
+*Figure 5.5: The status pill in its normal and stalled states. (Screenshot pending; see [`images/SHOTLIST.md`](images/SHOTLIST.md).)*
+
+> [!NOTE]
+> After a start, sampling waits 6 hours, so the pill and the counts move slowly at first. The index grows over days.
+
 > [!TIP]
 > **Key takeaways**
 > - Combine text queries with facet checkboxes or `field:value` tokens on **Search**.

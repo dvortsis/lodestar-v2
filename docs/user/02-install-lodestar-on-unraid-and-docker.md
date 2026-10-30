@@ -3,7 +3,10 @@
 This chapter installs Lodestar from the Unraid template or with Docker Compose, then takes you through first run.
 
 > [!IMPORTANT]
-> The Lodestar image is published from the first release. No release exists yet, so `latest` isn't available and **Apply** or `docker compose up` fails with "manifest unknown". The only tag today is `nightly`, which is built daily from `main` and untested. Use it only to try Lodestar, and check this guide again after the first release.
+> The Lodestar image is published from the first release, v0.5.1. If **Apply** or `docker compose up` fails with "manifest unknown", the release isn't published yet; check again later. <!-- confirm at release cut -->
+
+> [!WARNING]
+> Don't run the `nightly` image on real data. It is built daily from `main` and untested, and it can apply database migrations that the release can't read. Once that happens, you can't go back to the release without a backup. Use `nightly` only for a throwaway try-out, and take a backup first ([section 3.7](03-keep-lodestar-safe.md#37-back-up-and-restore)) if you ever ran it on data you want to keep.
 
 > [!NOTE]
 > **What you will learn**
@@ -173,7 +176,7 @@ To install with the named volume:
     docker compose up -d
     ```
 
-   **Result:** Docker pulls the image and starts the container `lodestar`. Until the first release, this fails with "manifest unknown" unless you change the tag to `nightly`.
+   **Result:** Docker pulls the image and starts the container `lodestar`. If it fails with "manifest unknown", the release isn't published yet.
 4. Check that it is healthy:
 
     ```bash
@@ -237,6 +240,11 @@ To create the admin password:
 *Figure 2.3: The first-run setup screen at /setup, with the Setup token field outlined and log instructions expanded.*
 
 The crawler starts at once. The library fills slowly at first while the DHT routing table warms up.
+
+> [!NOTE]
+> **What to expect in the first hours**
+> - Search works at once, but the index is small. It grows over days, not minutes.
+> - After every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start.
 
 > [!NOTE]
 > **Worked example**
