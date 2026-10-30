@@ -343,8 +343,9 @@ impl Info {
         };
 
         // One encoding decision per torrent (see `TextEncoding::detect`).
-        // Each file prefers its own valid `path.utf-8`; detection runs over
-        // the name (unless `name.utf-8` labels it) and the legacy paths left.
+        // Each file prefers its own valid `path.utf-8`; the name (unless
+        // `name.utf-8` labels it), the legacy paths left and the symlink
+        // targets share one encoding.
         let mut unlabelled: Vec<&[u8]> = Vec::new();
         if name_utf8.is_none() {
             unlabelled.push(name_raw);
@@ -353,9 +354,13 @@ impl Info {
             if d.path_utf8.is_none() {
                 unlabelled.extend(d.path.iter().copied());
             }
-            unlabelled.extend(d.symlink_target.iter().flatten().copied());
+            // BEP 52 strings are UTF-8, so a pure v2 target can't sway the
+            // encoding of every file name.
+            if version != MetaVersion::V2 {
+                unlabelled.extend(d.symlink_target.iter().flatten().copied());
+            }
         }
-        let detected = TextEncoding::detect(unlabelled.iter().copied(), opts.encoding_hint);
+        let detected = legacy_encoding(&unlabelled, &drafts, opts.encoding_hint);
         let name = match name_utf8 {
             Some(n) => Text {
                 raw: n.to_vec(),
@@ -428,6 +433,64 @@ impl Info {
         }
         out
     }
+}
+
+type RawPath<'a> = Vec<&'a [u8]>;
+
+/// Files that carry both a legacy `path` and its `path.utf-8` show which
+/// encoding the creator wrote; at most this many are compared.
+const MAX_ENCODING_PAIRS: usize = 16;
+
+/// The encoding of the legacy text in `unlabelled`.
+///
+/// Valid UTF-8 wins. Otherwise detection also reads the legacy `path` bytes
+/// of files that have a `path.utf-8`: the same client wrote them, so they're
+/// more evidence. Those files also give ground truth: if another encoding
+/// decodes more of their legacy paths to exactly their `path.utf-8`, that
+/// encoding is taken over the statistical guess (or the hint).
+fn legacy_encoding(
+    unlabelled: &[&[u8]],
+    drafts: &[Draft<'_>],
+    hint: Option<TextEncoding>,
+) -> TextEncoding {
+    if unlabelled.iter().all(|s| std::str::from_utf8(s).is_ok()) {
+        return TextEncoding::UTF8;
+    }
+    let pairs: Vec<(&[&[u8]], &RawPath<'_>)> = drafts
+        .iter()
+        .filter_map(|d| Some((&d.path[..], d.path_utf8.as_ref()?)))
+        .filter(|(raw, _)| raw.iter().any(|s| std::str::from_utf8(s).is_err()))
+        .take(MAX_ENCODING_PAIRS)
+        .collect();
+    let evidence = unlabelled
+        .iter()
+        .copied()
+        .chain(pairs.iter().flat_map(|(raw, _)| raw.iter().copied()));
+    let detected = TextEncoding::detect(evidence, hint);
+    let fits = |e: TextEncoding| {
+        pairs
+            .iter()
+            .filter(|(raw, utf8)| {
+                raw.len() == utf8.len()
+                    && raw
+                        .iter()
+                        .zip(utf8.iter())
+                        .all(|(r, u)| e.decode(r).as_bytes() == *u)
+            })
+            .count()
+    };
+    let baseline = fits(detected);
+    if baseline == pairs.len() {
+        return detected;
+    }
+    // The first best candidate, so ties keep the table's order.
+    let (best, count) = TextEncoding::legacy_candidates()
+        .map(|e| (e, fits(e)))
+        .fold(
+            (detected, baseline),
+            |acc, c| if c.1 > acc.1 { c } else { acc },
+        );
+    if count > baseline { best } else { detected }
 }
 
 type OwnedPath = Vec<Vec<u8>>;
@@ -568,7 +631,6 @@ fn parse_v1_files<'a>(
                     // BEP 47 lets padding files omit their path.
                     if draft.attrs.contains(FileAttrs::PADDING) {
                         draft.path = PADDING_PATH.to_vec();
-                        draft.path_utf8 = Some(PADDING_PATH.to_vec());
                         out.push(draft);
                         continue;
                     }

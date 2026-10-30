@@ -127,6 +127,20 @@ impl TextEncoding {
         TextEncoding::from_encoding(detector.guess(None, Utf8Detection::Deny))
     }
 
+    /// Encodings a legacy BitTorrent client could have written names in:
+    /// everything but UTF-8, UTF-16 and the placeholder encodings.
+    pub(crate) fn legacy_candidates() -> impl Iterator<Item = TextEncoding> {
+        (1..ENCODINGS.len() as u8).map(TextEncoding).filter(|e| {
+            ![
+                encoding_rs::UTF_16BE,
+                encoding_rs::UTF_16LE,
+                encoding_rs::X_USER_DEFINED,
+                encoding_rs::REPLACEMENT,
+            ]
+            .contains(&e.encoding())
+        })
+    }
+
     /// Encodes `text` into this encoding only if that is lossless: every
     /// character is representable and decoding gives `text` back. Encodings
     /// `encoding_rs` can't write (UTF-16, replacement) never qualify.

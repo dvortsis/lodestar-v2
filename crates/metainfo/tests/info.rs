@@ -579,3 +579,46 @@ fn v2_symlink_targets_are_bounded() {
         Some(vec![b"dir".to_vec(), b"f".to_vec()])
     );
 }
+
+#[test]
+fn utf8_overrides_correct_a_wrong_encoding_guess() {
+    let gbk = |s: &str| encoding_rs::GBK.encode(s).0.into_owned();
+    let files = vec![
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第一集 高清"))])),
+            ("path.utf-8", path(&["第一集 高清"])),
+        ]),
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第二集 高清"))])),
+        ]),
+    ];
+    let v = multi("x", files, 16_384, 1);
+    // A wrong hint stands in for a wrong statistical guess: the pair of
+    // `path` and `path.utf-8` shows the creator wrote GBK.
+    let opts = ParseOptions {
+        encoding_hint: TextEncoding::for_label(b"euc-kr"),
+        ..ParseOptions::default()
+    };
+    let info = Info::parse_with(&to_vec(&v), &opts).unwrap();
+    assert_eq!(info.path_encoding.name(), "GBK");
+    assert_eq!(info.files[1].path[0], gbk("第二集 高清"));
+    assert_eq!(info.path_string(&info.files[0]), "第一集 高清");
+    assert_eq!(info.path_string(&info.files[1]), "第二集 高清");
+
+    // A pair that matches no encoding (a wrong override) changes nothing.
+    let files = vec![
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(b"\xff\xfe")])),
+            ("path.utf-8", path(&["第一集"])),
+        ]),
+        d(vec![
+            ("length", i(1)),
+            ("path", l(vec![b(gbk("第二集 高清"))])),
+        ]),
+    ];
+    let info = Info::parse_with(&to_vec(&multi("x", files, 16_384, 1)), &opts).unwrap();
+    assert_eq!(info.path_encoding.name(), "EUC-KR");
+}
