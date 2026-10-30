@@ -23,7 +23,140 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (10, V10),
     (11, V11),
     (12, V12),
+    (13, V13),
 ];
+
+/// Imports (IMP-1, `docs/decisions/2026-10-30-IMP-1.md`): durable jobs
+/// bound to a source identity, their cursors, which torrents each job
+/// touched, valid hashes too incomplete to be torrents, and the quality
+/// of imported rows. Additive only.
+///
+/// - A torrent with no `import_quality` row was fetched from the network:
+///   verified and complete. Existing imports get a row with verification
+///   unknown, and nothing is scheduled for them.
+/// - Candidates never hold an empty name or a zero size. One whose hash is
+///   tombstoned or quarantined is deleted, and its hash journalled so
+///   snapshots lose it too; one whose hash becomes a torrent is deleted.
+const V13: &str = "
+CREATE TABLE import_sources (
+    id         INTEGER PRIMARY KEY,
+    adapter    TEXT NOT NULL
+        CHECK (length(adapter) BETWEEN 1 AND 32 AND adapter NOT GLOB '*[^a-z0-9_]*'),
+    dataset    BLOB NOT NULL CHECK (length(dataset) BETWEEN 1 AND 64),
+    schema_sig BLOB NOT NULL CHECK (length(schema_sig) BETWEEN 1 AND 64),
+    UNIQUE (adapter, dataset, schema_sig)
+) STRICT;
+
+CREATE TABLE import_jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source        INTEGER NOT NULL REFERENCES import_sources (id),
+    adapter_ver   INTEGER NOT NULL,
+    contract_ver  INTEGER NOT NULL,
+    -- inspecting, ready, reading, committing, indexing, complete,
+    -- complete with issues.
+    phase         INTEGER NOT NULL CHECK (phase BETWEEN 0 AND 6),
+    -- none, paused, blocked, cancelled, failed.
+    control       INTEGER NOT NULL CHECK (control BETWEEN 0 AND 4),
+    reason        INTEGER,
+    options       BLOB NOT NULL CHECK (length(options) <= 4096),
+    -- A sealed secret's name, never the secret.
+    credential    TEXT CHECK (credential IS NULL OR (length(credential) BETWEEN 1 AND 64
+        AND credential NOT GLOB '*[^a-z0-9_-]*')),
+    read          INTEGER NOT NULL DEFAULT 0,
+    new           INTEGER NOT NULL DEFAULT 0,
+    merged        INTEGER NOT NULL DEFAULT 0,
+    candidates    INTEGER NOT NULL DEFAULT 0,
+    filtered      INTEGER NOT NULL DEFAULT 0,
+    quarantined   INTEGER NOT NULL DEFAULT 0,
+    invalid       INTEGER NOT NULL DEFAULT 0,
+    files_dropped INTEGER NOT NULL DEFAULT 0,
+    partial       INTEGER NOT NULL DEFAULT 0,
+    source_bytes  INTEGER NOT NULL DEFAULT 0,
+    max_new_id    INTEGER NOT NULL DEFAULT 0,
+    revision      INTEGER NOT NULL DEFAULT 1,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    finished_at   INTEGER
+) STRICT;
+-- At most one unfinished job per source identity.
+CREATE UNIQUE INDEX import_jobs_open ON import_jobs (source) WHERE control < 3 AND phase < 5;
+
+CREATE TABLE import_cursors (
+    job      INTEGER PRIMARY KEY REFERENCES import_jobs (id) ON DELETE CASCADE,
+    seq      INTEGER NOT NULL CHECK (seq >= 0),
+    position BLOB NOT NULL CHECK (length(position) <= 512),
+    at       INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE import_membership (
+    torrent_id INTEGER NOT NULL REFERENCES torrents (id) ON DELETE CASCADE,
+    job        INTEGER NOT NULL REFERENCES import_jobs (id) ON DELETE CASCADE,
+    created    INTEGER NOT NULL CHECK (created IN (0, 1)),
+    PRIMARY KEY (torrent_id, job)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX import_membership_job ON import_membership (job);
+
+CREATE TABLE import_candidates (
+    hash      BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    hash_v2   BLOB CHECK (hash_v2 IS NULL OR length(hash_v2) = 32),
+    job       INTEGER NOT NULL REFERENCES import_jobs (id) ON DELETE CASCADE,
+    name      BLOB CHECK (name IS NULL OR length(name) BETWEEN 1 AND 4096),
+    size      INTEGER CHECK (size IS NULL OR size > 0),
+    missing   INTEGER NOT NULL CHECK (missing > 0),
+    privacy   INTEGER NOT NULL CHECK (privacy BETWEEN 0 AND 2),
+    source_at INTEGER,
+    at        INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+CREATE INDEX import_candidates_job ON import_candidates (job);
+CREATE INDEX import_candidates_v2 ON import_candidates (substr(hash_v2, 1, 20))
+    WHERE hash_v2 IS NOT NULL;
+
+CREATE TABLE import_quality (
+    torrent_id   INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    -- unknown, partial, reported complete.
+    completeness INTEGER NOT NULL CHECK (completeness BETWEEN 0 AND 2),
+    -- unknown, unverified, verified, conflicting.
+    verification INTEGER NOT NULL CHECK (verification BETWEEN 0 AND 3),
+    -- unknown, public, private.
+    privacy      INTEGER NOT NULL CHECK (privacy BETWEEN 0 AND 2),
+    repair       INTEGER NOT NULL CHECK (repair >= 0),
+    source_at    INTEGER,
+    imported_at  INTEGER NOT NULL
+) STRICT;
+INSERT INTO import_quality
+    (torrent_id, completeness, verification, privacy, repair, source_at, imported_at)
+    SELECT id, CASE WHEN flags & 128 != 0 THEN 1 ELSE 0 END, 0,
+        CASE WHEN flags & 1 != 0 THEN 2 ELSE 0 END, 0, NULL, unixepoch()
+    FROM torrents WHERE flags & 32 != 0;
+
+CREATE TRIGGER import_candidate_tombstoned AFTER INSERT ON tombstones BEGIN
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT hash, unixepoch() FROM import_candidates WHERE hash = new.hash
+        UNION ALL
+        SELECT hash, unixepoch() FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    DELETE FROM import_candidates WHERE hash = new.hash;
+    DELETE FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash;
+END;
+CREATE TRIGGER import_candidate_quarantined AFTER INSERT ON quarantine BEGIN
+    INSERT INTO snapshot_deletions (hash, at)
+        SELECT hash, unixepoch() FROM import_candidates WHERE hash = new.hash
+        UNION ALL
+        SELECT hash, unixepoch() FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash
+        ON CONFLICT (hash) DO UPDATE SET at = max(at, excluded.at);
+    DELETE FROM import_candidates WHERE hash = new.hash;
+    DELETE FROM import_candidates
+        WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = new.hash;
+END;
+CREATE TRIGGER import_candidate_stored AFTER INSERT ON torrents BEGIN
+    DELETE FROM import_candidates WHERE hash = new.info_hash;
+    DELETE FROM import_candidates
+        WHERE new.info_hash_v2 IS NOT NULL AND hash = substr(new.info_hash_v2, 1, 20);
+END;
+";
 
 /// The snapshot purge's deletion journal (`snapshots`): the hash of every
 /// torrent the store deletes, with when, so snapshots lose it even after
@@ -1235,6 +1368,92 @@ mod tests {
     /// A crash mid-`VACUUM INTO` leaves only a `.tmp`, never a file under
     /// a snapshot's name; the next migration removes it and takes a whole
     /// snapshot. A snapshot that can't be written stops the migration.
+    /// V13 on a V12 store: each existing import gets a quality row with
+    /// verification unknown (completeness partial only where the file
+    /// list was flagged partial, privacy private only where the info dict
+    /// said so), the crawler's rows get none, and nothing is queued or
+    /// re-indexed.
+    #[test]
+    fn v13_marks_existing_imports_unknown_and_schedules_nothing() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_with(&mut conn, None, &MIGRATIONS[..12]).unwrap();
+        for (id, flags) in [(1, 0), (2, 32 | 128 | 1), (3, 32)] {
+            conn.execute(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+                 VALUES (?1, ?2, 'x', 1, 1, 1, 1, 1, ?3, 0, 0, 0)",
+                rusqlite::params![id, vec![id as u8; 20], flags],
+            )
+            .unwrap();
+        }
+        migrate_with(&mut conn, None, MIGRATIONS).unwrap();
+        let rows: Vec<(i64, i64, i64, i64, i64)> = conn
+            .prepare(
+                "SELECT torrent_id, completeness, verification, privacy, repair
+                 FROM import_quality ORDER BY torrent_id",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, [(2, 1, 0, 2, 0), (3, 0, 0, 0, 0)]);
+        for table in [
+            "fetch_queue",
+            "reindex_log",
+            "import_jobs",
+            "import_candidates",
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table}");
+        }
+    }
+
+    /// The v0.5.1 code path (migrations through V12) opening a V13 store
+    /// refuses it as newer and changes nothing: no migration, no
+    /// snapshot, the file as it was.
+    #[test]
+    fn a_v12_build_refuses_a_v13_store_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
+        let listing = || {
+            let mut names: Vec<_> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
+
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        let err = migrate_with(&mut conn, Some(&path), &MIGRATIONS[..12]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::SchemaTooNew {
+                    found: 13,
+                    supported: 12
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("newer than this build supports"));
+        assert_eq!(version(&conn), 13);
+        drop(conn);
+        assert_eq!(listing(), files, "no snapshot or side file left");
+        assert!(
+            std::fs::read(&path).unwrap() == bytes,
+            "the file is unchanged"
+        );
+    }
+
     #[test]
     fn the_snapshot_is_written_aside_then_renamed() {
         let dir = tempfile::tempdir().unwrap();

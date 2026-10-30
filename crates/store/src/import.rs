@@ -1,0 +1,1398 @@
+//! Imports (IMP-1, `docs/decisions/2026-10-30-IMP-1.md`; plan §6–§7):
+//! durable jobs bound to a source identity, and the commit of one
+//! destination batch.
+//!
+//! - **One transaction per batch,** on the store's single writer: the
+//!   records with their provenance and quality, filter hits, reindex
+//!   entries, the job's counters and its cursor. The caller acknowledges
+//!   the source only after [`Store::commit_import_batch`] returns `Ok`. A
+//!   batch at or below the cursor is [`BatchCommitted::Replayed`] and
+//!   writes nothing, so a crash between commit and acknowledgement
+//!   replays without counting twice.
+//! - **Every record is checked** against tombstones, quarantine and the
+//!   floor's hash list inside the transaction, whatever the caller's
+//!   filter decision says: a decision can only make a record stricter.
+//! - **An import never** downgrades a verified row, clears a private
+//!   restriction, resurrects a tombstone or counts as a DHT discovery: a
+//!   stored verified torrent only gains provenance.
+//! - **Pause, cancel and blocking are truthful:** a batch commits only
+//!   while its job is running, checked in the batch's own transaction.
+//!
+//! Credentials are never stored: a job holds a sealed secret's name.
+//! `options` and the cursor's `position` are the adapter's opaque bytes;
+//! they are never printed ([`ImportJob`]'s `Debug` gives their length).
+
+use std::fmt;
+
+use lodestar_metainfo::{InfoHash, InfoHashV2};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+
+use crate::{
+    Error, Filtered, Held, Prepared, Result, SourceId, Store, add_sources, begin_write, filter,
+    find_any, flags, insert_new, rules, write_enrichment,
+};
+
+/// The version of this contract a job was created under.
+pub const CONTRACT_VERSION: i64 = 1;
+/// Longest adapter options blob.
+pub const MAX_OPTIONS: usize = 4096;
+/// Longest cursor position.
+pub const MAX_POSITION: usize = 512;
+/// Longest dataset id and schema signature.
+pub const MAX_IDENTITY: usize = 64;
+/// Longest candidate name, as the metainfo limit.
+pub const MAX_NAME: usize = 4096;
+
+/// Persisted enums: `code` is what's stored, append only.
+macro_rules! codes {
+    ($(#[$m:meta])* $name:ident { $($(#[$vm:meta])* $v:ident = $c:literal => $label:literal,)+ }) => {
+        $(#[$m])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum $name { $($(#[$vm])* $v = $c,)+ }
+
+        impl $name {
+            pub const ALL: &'static [$name] = &[$($name::$v,)+];
+
+            pub fn code(self) -> i64 {
+                self as i64
+            }
+
+            pub fn from_code(code: i64) -> Option<$name> {
+                match code {
+                    $($c => Some($name::$v),)+
+                    _ => None,
+                }
+            }
+
+            /// A fixed label, for logs, metrics and the API.
+            pub fn label(self) -> &'static str {
+                match self {
+                    $($name::$v => $label,)+
+                }
+            }
+        }
+    };
+}
+
+codes! {
+    /// Where a job is. Phases only move forward.
+    Phase {
+        Inspecting = 0 => "inspecting",
+        Ready = 1 => "ready",
+        /// Source batches are read and committed.
+        Reading = 2 => "reading",
+        /// The source is exhausted; the last batches drain.
+        Committing = 3 => "committing",
+        /// Everything is committed; waiting for the index to reach
+        /// [`ImportJob::max_new_id`].
+        Indexing = 4 => "indexing",
+        Complete = 5 => "complete",
+        /// Complete, with invalid records, dropped file rows or
+        /// candidates to look at.
+        CompleteWithIssues = 6 => "complete_with_issues",
+    }
+}
+
+codes! {
+    /// What's stopping a job, orthogonal to its phase.
+    Control {
+        /// Runnable.
+        Running = 0 => "running",
+        /// By you.
+        Paused = 1 => "paused",
+        /// With a [`Reason`]; resuming revalidates.
+        Blocked = 2 => "blocked",
+        Cancelled = 3 => "cancelled",
+        Failed = 4 => "failed",
+    }
+}
+
+codes! {
+    /// Why a job is blocked or failed.
+    Reason {
+        NeedsCredentials = 0 => "needs_credentials",
+        SourceChanged = 1 => "source_changed",
+        SourceUnavailable = 2 => "source_unavailable",
+        NoSpace = 3 => "no_space",
+        /// It was running when the server stopped.
+        Interrupted = 4 => "interrupted",
+        StoreError = 5 => "store_error",
+    }
+}
+
+codes! {
+    /// How complete an imported row's file list is.
+    Completeness {
+        Unknown = 0 => "unknown",
+        Partial = 1 => "partial",
+        ReportedComplete = 2 => "reported_complete",
+    }
+}
+
+codes! {
+    /// Whether an imported row's metadata was checked against its hash.
+    Verification {
+        Unknown = 0 => "unknown",
+        Unverified = 1 => "unverified",
+        Verified = 2 => "verified",
+        Conflicting = 3 => "conflicting",
+    }
+}
+
+codes! {
+    /// A record's declared privacy.
+    Privacy {
+        Unknown = 0 => "unknown",
+        Public = 1 => "public",
+        Private = 2 => "private",
+    }
+}
+
+impl Privacy {
+    /// The more restrictive of the two: private, then unknown, then
+    /// public. So private is sticky.
+    pub fn merge(self, other: Privacy) -> Privacy {
+        let rank = |p: Privacy| match p {
+            Privacy::Public => 0,
+            Privacy::Unknown => 1,
+            Privacy::Private => 2,
+        };
+        if rank(other) > rank(self) {
+            other
+        } else {
+            self
+        }
+    }
+}
+
+/// Repair reason bits (`import_quality.repair`, `import_candidates.missing`).
+/// Recorded only: nothing schedules them yet (V14, CR-3).
+pub mod repair {
+    pub const MISSING_NAME: i64 = 1 << 0;
+    pub const MISSING_SIZE: i64 = 1 << 1;
+    pub const MISSING_FILES: i64 = 1 << 2;
+    pub const INCONSISTENT_FILES: i64 = 1 << 3;
+    pub const ALL: i64 = MISSING_NAME | MISSING_SIZE | MISSING_FILES | INCONSISTENT_FILES;
+}
+
+/// A job's persisted counters. Parent records obey
+/// [`ImportCounters::conserved`]; `files_dropped`, `partial` and
+/// `source_bytes` are outside the sum.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImportCounters {
+    /// Parent records in committed batches.
+    pub read: u64,
+    pub new: u64,
+    /// Already stored; provenance added.
+    pub merged: u64,
+    pub candidates: u64,
+    /// Dropped by a filter rule, the floor or a tombstone.
+    pub filtered: u64,
+    pub quarantined: u64,
+    pub invalid: u64,
+    /// Malformed child rows under a valid parent.
+    pub files_dropped: u64,
+    /// New rows stored with a partial file list.
+    pub partial: u64,
+    /// Source bytes consumed by committed batches.
+    pub source_bytes: u64,
+}
+
+impl ImportCounters {
+    /// `read = new + merged + candidates + filtered + quarantined + invalid`.
+    pub fn conserved(&self) -> bool {
+        self.read
+            == self.new
+                + self.merged
+                + self.candidates
+                + self.filtered
+                + self.quarantined
+                + self.invalid
+    }
+}
+
+/// One import job.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImportJob {
+    pub id: i64,
+    pub adapter: String,
+    pub adapter_ver: i64,
+    pub contract_ver: i64,
+    pub dataset: Vec<u8>,
+    pub schema_sig: Vec<u8>,
+    pub phase: Phase,
+    pub control: Control,
+    pub reason: Option<Reason>,
+    /// The adapter's options; never credentials.
+    pub options: Vec<u8>,
+    /// A sealed secret's name.
+    pub credential: Option<String>,
+    pub counters: ImportCounters,
+    /// The last committed batch.
+    pub seq: u64,
+    /// Where the adapter resumes.
+    pub position: Vec<u8>,
+    /// The highest torrent id this job inserted.
+    pub max_new_id: i64,
+    /// Bumped by every phase or control change, not by batches.
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub finished_at: Option<i64>,
+}
+
+impl ImportJob {
+    /// Cancelled, failed or complete: nothing changes it any more.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.control, Control::Cancelled | Control::Failed)
+            || matches!(self.phase, Phase::Complete | Phase::CompleteWithIssues)
+    }
+}
+
+impl fmt::Debug for ImportJob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ImportJob")
+            .field("id", &self.id)
+            .field("adapter", &self.adapter)
+            .field("adapter_ver", &self.adapter_ver)
+            .field("phase", &self.phase)
+            .field("control", &self.control)
+            .field("reason", &self.reason)
+            .field("options_len", &self.options.len())
+            .field("credential", &self.credential)
+            .field("counters", &self.counters)
+            .field("seq", &self.seq)
+            .field("position_len", &self.position.len())
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A job to create.
+#[derive(Debug, Clone, Copy)]
+pub struct NewImportJob<'a> {
+    /// The stable adapter name: `[a-z0-9_]`, at most 32 bytes.
+    pub adapter: &'a str,
+    pub adapter_ver: i64,
+    /// The dataset's identity (a snapshot or database id, not a name).
+    pub dataset: &'a [u8],
+    /// A digest of the source schema the adapter read.
+    pub schema_sig: &'a [u8],
+    pub options: &'a [u8],
+    /// A sealed secret's name: `[a-z0-9_-]`, at most 64 bytes.
+    pub credential: Option<&'a str>,
+    pub at: i64,
+}
+
+/// What the engine found when it checked a job before resuming it.
+#[derive(Debug, Clone, Copy)]
+pub struct Revalidation<'a> {
+    /// The source identity the adapter sees now.
+    pub dataset: &'a [u8],
+    pub schema_sig: &'a [u8],
+    /// The job's credential reference resolves (true when it has none).
+    pub credential_ok: bool,
+    pub space_ok: bool,
+}
+
+/// What a filter decided about one record: every hit (held, marked or
+/// shadow), as ingest records them, and the `flags` marks of one it keeps.
+/// The caller runs the filter engine on the record's name; the store adds
+/// its own hash checks on top.
+#[derive(Debug, Clone, Copy)]
+pub struct Decision<'a> {
+    pub hits: &'a [Filtered<'a>],
+    /// [`flags::HIDDEN`], [`flags::DEMOTED`], [`flags::FLAGGED`].
+    pub marks: i64,
+}
+
+impl Decision<'_> {
+    /// How the record is held back, if a hit holds it: a tombstone beats
+    /// quarantine.
+    fn held(&self) -> Option<Held> {
+        self.hits.iter().filter_map(|f| f.held).min()
+    }
+}
+
+/// An imported torrent whose fields fill a canonical row.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportTorrent<'a> {
+    pub torrent: &'a Prepared,
+    pub completeness: Completeness,
+    /// Never [`Verification::Verified`]: promoting verified metadata
+    /// from an import is IMP-06's.
+    pub verification: Verification,
+    pub privacy: Privacy,
+    /// [`repair`] bits.
+    pub repair: i64,
+    /// The source's own date; `None` when unknown or a sentinel.
+    pub source_at: Option<i64>,
+    pub files_dropped: u32,
+    pub decision: Decision<'a>,
+}
+
+/// A valid hash too incomplete for a canonical row. An empty name or a
+/// zero size is stored as missing, never as a value.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportCandidate<'a> {
+    pub hash: InfoHash,
+    pub hash_v2: Option<InfoHashV2>,
+    pub name: Option<&'a [u8]>,
+    pub size: Option<u64>,
+    pub privacy: Privacy,
+    pub source_at: Option<i64>,
+    pub decision: Decision<'a>,
+}
+
+/// One parent record of a batch.
+#[derive(Debug, Clone, Copy)]
+pub enum ImportRecord<'a> {
+    Torrent(ImportTorrent<'a>),
+    Candidate(ImportCandidate<'a>),
+    /// Rejected by the adapter with a fixed reason; counted only.
+    Invalid,
+}
+
+/// One destination batch.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportBatch<'a> {
+    pub job: i64,
+    /// The cursor's `seq` plus one.
+    pub seq: u64,
+    /// Where the adapter resumes after this batch.
+    pub position: &'a [u8],
+    /// The adapter's registered source.
+    pub source: SourceId,
+    pub source_bytes: u64,
+    pub at: i64,
+    /// The classification-rules generation the records were enriched
+    /// under, as [`crate::WriteBatch::class_gen`].
+    pub class_gen: Option<i64>,
+    pub records: &'a [ImportRecord<'a>],
+}
+
+/// What happened to one record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordOutcome {
+    New(i64),
+    /// Already stored: provenance added.
+    Merged(i64),
+    Candidate,
+    Filtered,
+    Quarantined,
+    Invalid,
+}
+
+/// What [`Store::commit_import_batch`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchCommitted {
+    Committed {
+        /// One per record, in order.
+        outcomes: Vec<RecordOutcome>,
+        /// The job's counters after the batch.
+        counters: ImportCounters,
+        /// The classification rules changed since enrichment: new rows
+        /// are marked for enriching again.
+        stale_class: bool,
+    },
+    /// Already committed (a replay): nothing was written.
+    Replayed { counters: ImportCounters },
+}
+
+/// The steps of a batch, for the crash tests' fail points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    Records,
+    Counters,
+    Cursor,
+    Commit,
+    /// After the commit, before the caller hears of it.
+    Acked,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FAIL_AT: std::cell::Cell<Option<Step>> = const { std::cell::Cell::new(None) };
+}
+
+fn fail_point(step: Step) -> Result<()> {
+    #[cfg(test)]
+    if FAIL_AT.with(|f| f.get()) == Some(step) {
+        return Err(Error::Invalid("fail point"));
+    }
+    let _ = step;
+    Ok(())
+}
+
+const MARKS: i64 = flags::HIDDEN | flags::DEMOTED | flags::FLAGGED;
+
+const JOB_SELECT: &str = "SELECT j.id, s.adapter, j.adapter_ver, j.contract_ver, s.dataset,
+         s.schema_sig, j.phase, j.control, j.reason, j.options, j.credential,
+         j.read, j.new, j.merged, j.candidates, j.filtered, j.quarantined, j.invalid,
+         j.files_dropped, j.partial, j.source_bytes, c.seq, c.position, j.max_new_id,
+         j.revision, j.created_at, j.updated_at, j.finished_at
+     FROM import_jobs j JOIN import_sources s ON s.id = j.source
+     JOIN import_cursors c ON c.job = j.id";
+
+fn job_row(r: &Row<'_>) -> rusqlite::Result<ImportJob> {
+    let bad = |i: usize| rusqlite::Error::IntegralValueOutOfRange(i, r.get(i).unwrap_or(-1));
+    let n = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(i)?.max(0) as u64) };
+    Ok(ImportJob {
+        id: r.get(0)?,
+        adapter: r.get(1)?,
+        adapter_ver: r.get(2)?,
+        contract_ver: r.get(3)?,
+        dataset: r.get(4)?,
+        schema_sig: r.get(5)?,
+        phase: Phase::from_code(r.get(6)?).ok_or_else(|| bad(6))?,
+        control: Control::from_code(r.get(7)?).ok_or_else(|| bad(7))?,
+        reason: r.get::<_, Option<i64>>(8)?.and_then(Reason::from_code),
+        options: r.get(9)?,
+        credential: r.get(10)?,
+        counters: ImportCounters {
+            read: n(11)?,
+            new: n(12)?,
+            merged: n(13)?,
+            candidates: n(14)?,
+            filtered: n(15)?,
+            quarantined: n(16)?,
+            invalid: n(17)?,
+            files_dropped: n(18)?,
+            partial: n(19)?,
+            source_bytes: n(20)?,
+        },
+        seq: n(21)?,
+        position: r.get(22)?,
+        max_new_id: r.get(23)?,
+        revision: r.get(24)?,
+        created_at: r.get(25)?,
+        updated_at: r.get(26)?,
+        finished_at: r.get(27)?,
+    })
+}
+
+fn load(conn: &Connection, id: i64) -> Result<ImportJob> {
+    conn.prepare_cached(&format!("{JOB_SELECT} WHERE j.id = ?1"))?
+        .query_row([id], job_row)
+        .optional()?
+        .ok_or(Error::NotFound("import job"))
+}
+
+fn charset_ok(s: &str, max: usize, extra: &[u8]) -> bool {
+    (1..=max).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || extra.contains(&b))
+}
+
+fn identity_ok(v: &[u8]) -> bool {
+    (1..=MAX_IDENTITY).contains(&v.len())
+}
+
+/// A phase or control change, applied by [`Store::change_job`].
+struct Change {
+    phase: Phase,
+    control: Control,
+    reason: Option<Reason>,
+}
+
+impl Store {
+    /// Creates a job at [`Phase::Inspecting`], with an empty cursor. At
+    /// most one unfinished job may use a source identity.
+    pub fn create_import_job(&mut self, job: &NewImportJob<'_>) -> Result<ImportJob> {
+        if !charset_ok(job.adapter, 32, b"_") {
+            return Err(Error::Invalid("import adapter name"));
+        }
+        if !identity_ok(job.dataset) || !identity_ok(job.schema_sig) {
+            return Err(Error::Invalid("import source identity"));
+        }
+        if job.options.len() > MAX_OPTIONS {
+            return Err(Error::Invalid("import options are too long"));
+        }
+        if job.credential.is_some_and(|c| !charset_ok(c, 64, b"_-")) {
+            return Err(Error::Invalid(
+                "a credential must be a sealed secret's name",
+            ));
+        }
+        let tx = begin_write(&mut self.conn)?;
+        tx.execute(
+            "INSERT INTO import_sources (adapter, dataset, schema_sig) VALUES (?1, ?2, ?3)
+             ON CONFLICT DO NOTHING",
+            params![job.adapter, job.dataset, job.schema_sig],
+        )?;
+        let source: i64 = tx.query_row(
+            "SELECT id FROM import_sources WHERE adapter = ?1 AND dataset = ?2 AND schema_sig = ?3",
+            params![job.adapter, job.dataset, job.schema_sig],
+            |r| r.get(0),
+        )?;
+        let open = tx
+            .query_row(
+                "SELECT 1 FROM import_jobs WHERE source = ?1 AND control < 3 AND phase < 5",
+                [source],
+                |_| Ok(()),
+            )
+            .optional()?;
+        if open.is_some() {
+            return Err(Error::Invalid(
+                "an unfinished import job already uses this source",
+            ));
+        }
+        tx.execute(
+            "INSERT INTO import_jobs (source, adapter_ver, contract_ver, phase, control, options,
+                 credential, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 0, 0, ?4, ?5, ?6, ?6)",
+            params![
+                source,
+                job.adapter_ver,
+                CONTRACT_VERSION,
+                job.options,
+                job.credential,
+                job.at
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO import_cursors (job, seq, position, at) VALUES (?1, 0, x'', ?2)",
+            params![id, job.at],
+        )?;
+        let created = load(&tx, id)?;
+        tx.commit()?;
+        Ok(created)
+    }
+
+    pub fn import_job(&self, id: i64) -> Result<Option<ImportJob>> {
+        match load(&self.conn, id) {
+            Ok(job) => Ok(Some(job)),
+            Err(Error::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Up to `limit` jobs, newest first, with ids below `before` (for
+    /// paging; `None` from the newest).
+    pub fn import_jobs(&self, before: Option<i64>, limit: usize) -> Result<Vec<ImportJob>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "{JOB_SELECT} WHERE j.id < ?1 ORDER BY j.id DESC LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![before.unwrap_or(i64::MAX), limit as i64], job_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// One phase or control change against `revision`, in one transaction.
+    fn change_job(
+        &mut self,
+        id: i64,
+        revision: i64,
+        at: i64,
+        f: impl FnOnce(&ImportJob) -> Result<Option<Change>>,
+    ) -> Result<ImportJob> {
+        let tx = begin_write(&mut self.conn)?;
+        let job = load(&tx, id)?;
+        if job.revision != revision {
+            return Err(Error::Invalid("the import job changed since it was read"));
+        }
+        if job.is_finished() {
+            return Err(Error::Invalid("the import job has finished"));
+        }
+        let Some(c) = f(&job)? else {
+            return Ok(job);
+        };
+        let finished = matches!(c.control, Control::Cancelled | Control::Failed)
+            || matches!(c.phase, Phase::Complete | Phase::CompleteWithIssues);
+        tx.execute(
+            "UPDATE import_jobs SET phase = ?2, control = ?3, reason = ?4,
+                 revision = revision + 1, updated_at = ?5,
+                 finished_at = CASE WHEN ?6 THEN ?5 ELSE finished_at END
+             WHERE id = ?1",
+            params![
+                id,
+                c.phase.code(),
+                c.control.code(),
+                c.reason.map(Reason::code),
+                at,
+                finished
+            ],
+        )?;
+        let changed = load(&tx, id)?;
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// Moves a running job forward. [`Phase::Complete`] is only reached
+    /// from [`Phase::Indexing`], and is stored as
+    /// [`Phase::CompleteWithIssues`] when the counters show issues.
+    pub fn set_import_phase(
+        &mut self,
+        id: i64,
+        revision: i64,
+        phase: Phase,
+        at: i64,
+    ) -> Result<ImportJob> {
+        self.change_job(id, revision, at, |job| {
+            if job.control != Control::Running {
+                return Err(Error::Invalid("the import job isn't running"));
+            }
+            let phase = match phase {
+                Phase::CompleteWithIssues => {
+                    return Err(Error::Invalid("the store decides whether there are issues"));
+                }
+                Phase::Complete if job.phase != Phase::Indexing => {
+                    return Err(Error::Invalid("an import completes only after indexing"));
+                }
+                Phase::Complete => {
+                    let c = &job.counters;
+                    if c.invalid > 0 || c.files_dropped > 0 || c.candidates > 0 {
+                        Phase::CompleteWithIssues
+                    } else {
+                        Phase::Complete
+                    }
+                }
+                p if p.code() <= job.phase.code() => {
+                    return Err(Error::Invalid("import phases only move forward"));
+                }
+                p => p,
+            };
+            Ok(Some(Change {
+                phase,
+                control: Control::Running,
+                reason: None,
+            }))
+        })
+    }
+
+    /// Pauses a running or blocked job. It stays paused across restarts.
+    pub fn pause_import_job(&mut self, id: i64, revision: i64, at: i64) -> Result<ImportJob> {
+        self.change_job(id, revision, at, |job| {
+            Ok((job.control != Control::Paused).then_some(Change {
+                phase: job.phase,
+                control: Control::Paused,
+                reason: None,
+            }))
+        })
+    }
+
+    /// Resumes a paused or blocked job after checking it again: a changed
+    /// source, a missing credential or too little space blocks it with
+    /// that reason instead. The cursor is kept either way.
+    pub fn resume_import_job(
+        &mut self,
+        id: i64,
+        revision: i64,
+        check: &Revalidation<'_>,
+        at: i64,
+    ) -> Result<ImportJob> {
+        self.change_job(id, revision, at, |job| {
+            if !matches!(job.control, Control::Paused | Control::Blocked) {
+                return Err(Error::Invalid("the import job isn't paused or blocked"));
+            }
+            let reason = if check.dataset != job.dataset || check.schema_sig != job.schema_sig {
+                Some(Reason::SourceChanged)
+            } else if !check.credential_ok {
+                Some(Reason::NeedsCredentials)
+            } else if !check.space_ok {
+                Some(Reason::NoSpace)
+            } else {
+                None
+            };
+            Ok(Some(Change {
+                phase: job.phase,
+                control: if reason.is_some() {
+                    Control::Blocked
+                } else {
+                    Control::Running
+                },
+                reason,
+            }))
+        })
+    }
+
+    /// Blocks a running job with a reason (the source went away, space ran
+    /// low).
+    pub fn block_import_job(
+        &mut self,
+        id: i64,
+        revision: i64,
+        reason: Reason,
+        at: i64,
+    ) -> Result<ImportJob> {
+        self.change_job(id, revision, at, |job| {
+            if job.control != Control::Running {
+                return Err(Error::Invalid("the import job isn't running"));
+            }
+            Ok(Some(Change {
+                phase: job.phase,
+                control: Control::Blocked,
+                reason: Some(reason),
+            }))
+        })
+    }
+
+    /// Cancels an unfinished job. What it committed stays.
+    pub fn cancel_import_job(&mut self, id: i64, revision: i64, at: i64) -> Result<ImportJob> {
+        self.change_job(id, revision, at, |job| {
+            Ok(Some(Change {
+                phase: job.phase,
+                control: Control::Cancelled,
+                reason: None,
+            }))
+        })
+    }
+
+    /// Fails an unfinished job. What it committed stays.
+    pub fn fail_import_job(
+        &mut self,
+        id: i64,
+        revision: i64,
+        reason: Reason,
+        at: i64,
+    ) -> Result<ImportJob> {
+        self.change_job(id, revision, at, |job| {
+            Ok(Some(Change {
+                phase: job.phase,
+                control: Control::Failed,
+                reason: Some(reason),
+            }))
+        })
+    }
+
+    /// At start: every job that was running and reads its source
+    /// (inspecting to committing) is blocked as [`Reason::Interrupted`],
+    /// so it resumes only through [`Store::resume_import_job`]'s checks.
+    /// Paused jobs stay paused; indexing jobs read nothing and go on.
+    /// Returns how many were blocked.
+    pub fn interrupt_import_jobs(&mut self, at: i64) -> Result<usize> {
+        let tx = begin_write(&mut self.conn)?;
+        let n = tx.execute(
+            "UPDATE import_jobs SET control = ?1, reason = ?2, revision = revision + 1,
+                 updated_at = ?3
+             WHERE control = ?4 AND phase <= ?5",
+            params![
+                Control::Blocked.code(),
+                Reason::Interrupted.code(),
+                at,
+                Control::Running.code(),
+                Phase::Committing.code()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Commits one destination batch; see the module docs. The caller
+    /// acknowledges the source only after this returns `Ok`.
+    pub fn commit_import_batch(&mut self, batch: &ImportBatch<'_>) -> Result<BatchCommitted> {
+        if batch.position.len() > MAX_POSITION {
+            return Err(Error::Invalid("import cursor position is too long"));
+        }
+        let Store { conn, codec, .. } = self;
+        let tx = begin_write(conn)?;
+        let job = load(&tx, batch.job)?;
+        if batch.seq <= job.seq {
+            return Ok(BatchCommitted::Replayed {
+                counters: job.counters,
+            });
+        }
+        if batch.seq != job.seq + 1 {
+            return Err(Error::Invalid("import batch out of sequence"));
+        }
+        if job.control != Control::Running
+            || !matches!(job.phase, Phase::Reading | Phase::Committing)
+        {
+            return Err(Error::Invalid("the import job isn't taking batches"));
+        }
+        let mut c = ImportCounters {
+            read: batch.records.len() as u64,
+            source_bytes: batch.source_bytes,
+            ..ImportCounters::default()
+        };
+        let mut outcomes = Vec::with_capacity(batch.records.len());
+        let mut new_ids = Vec::new();
+        for record in batch.records {
+            let outcome = match record {
+                ImportRecord::Torrent(t) => {
+                    if t.torrent
+                        .files
+                        .dict_id
+                        .is_some_and(|id| !codec.has_dict(id))
+                    {
+                        return Err(Error::Corrupt("prepared blob names an unknown dictionary"));
+                    }
+                    c.files_dropped += u64::from(t.files_dropped);
+                    let o = commit_torrent(&tx, batch, t)?;
+                    if let RecordOutcome::New(id) = o {
+                        new_ids.push(id);
+                        if t.completeness == Completeness::Partial {
+                            c.partial += 1;
+                        }
+                    }
+                    o
+                }
+                ImportRecord::Candidate(cand) => commit_candidate(&tx, batch, cand)?,
+                ImportRecord::Invalid => RecordOutcome::Invalid,
+            };
+            match outcome {
+                RecordOutcome::New(_) => c.new += 1,
+                RecordOutcome::Merged(_) => c.merged += 1,
+                RecordOutcome::Candidate => c.candidates += 1,
+                RecordOutcome::Filtered => c.filtered += 1,
+                RecordOutcome::Quarantined => c.quarantined += 1,
+                RecordOutcome::Invalid => c.invalid += 1,
+            }
+            outcomes.push(outcome);
+        }
+        let stale_class = match batch.class_gen {
+            Some(g) if rules::class_gen(&tx)? != g => {
+                let mut stmt = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
+                )?;
+                for id in &new_ids {
+                    stmt.execute([id])?;
+                }
+                true
+            }
+            _ => false,
+        };
+        fail_point(Step::Records)?;
+        let i = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+        tx.prepare_cached(
+            "UPDATE import_jobs SET read = read + ?2, new = new + ?3, merged = merged + ?4,
+                 candidates = candidates + ?5, filtered = filtered + ?6,
+                 quarantined = quarantined + ?7, invalid = invalid + ?8,
+                 files_dropped = files_dropped + ?9, partial = partial + ?10,
+                 source_bytes = source_bytes + ?11, max_new_id = max(max_new_id, ?12),
+                 updated_at = ?13
+             WHERE id = ?1",
+        )?
+        .execute(params![
+            batch.job,
+            i(c.read),
+            i(c.new),
+            i(c.merged),
+            i(c.candidates),
+            i(c.filtered),
+            i(c.quarantined),
+            i(c.invalid),
+            i(c.files_dropped),
+            i(c.partial),
+            i(c.source_bytes),
+            new_ids.iter().copied().max().unwrap_or(0),
+            batch.at,
+        ])?;
+        fail_point(Step::Counters)?;
+        tx.prepare_cached(
+            "UPDATE import_cursors SET seq = ?2, position = ?3, at = ?4 WHERE job = ?1",
+        )?
+        .execute(params![batch.job, i(batch.seq), batch.position, batch.at])?;
+        fail_point(Step::Cursor)?;
+        let counters = load(&tx, batch.job)?.counters;
+        fail_point(Step::Commit)?;
+        tx.commit()?;
+        fail_point(Step::Acked)?;
+        Ok(BatchCommitted::Committed {
+            outcomes,
+            counters,
+            stale_class,
+        })
+    }
+
+    /// An imported torrent's quality: `(completeness, verification,
+    /// privacy, repair bits)`, or `None` for a network-fetched one.
+    pub fn import_quality(
+        &self,
+        id: i64,
+    ) -> Result<Option<(Completeness, Verification, Privacy, i64)>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT completeness, verification, privacy, repair FROM import_quality
+                 WHERE torrent_id = ?1",
+            )?
+            .query_row([id], |r| {
+                Ok((
+                    Completeness::from_code(r.get(0)?).unwrap_or(Completeness::Unknown),
+                    Verification::from_code(r.get(1)?).unwrap_or(Verification::Unknown),
+                    Privacy::from_code(r.get(2)?).unwrap_or(Privacy::Unknown),
+                    r.get(3)?,
+                ))
+            })
+            .optional()?)
+    }
+}
+
+/// Whether a swarm hash is already held: a tombstone or the floor's hash
+/// list (filtered), or quarantine.
+fn store_hold(tx: &Transaction<'_>, hashes: &[InfoHash]) -> Result<Option<Held>> {
+    let mut dropped = tx.prepare_cached(
+        "SELECT 1 FROM tombstones WHERE hash = ?1 UNION ALL SELECT 1 FROM cs_hashes WHERE hash = ?1",
+    )?;
+    let mut quarantined = tx.prepare_cached("SELECT 1 FROM quarantine WHERE hash = ?1")?;
+    let mut held = None;
+    for h in hashes {
+        if dropped.exists([&h.0[..]])? {
+            return Ok(Some(Held::Tombstone));
+        }
+        if quarantined.exists([&h.0[..]])? {
+            held = Some(Held::Quarantine);
+        }
+    }
+    Ok(held)
+}
+
+fn held_outcome(held: Held) -> RecordOutcome {
+    match held {
+        Held::Tombstone => RecordOutcome::Filtered,
+        Held::Quarantine => RecordOutcome::Quarantined,
+    }
+}
+
+/// A stored torrent seen in an import: it gains the adapter's source bit
+/// and the job's membership. A verified row (no quality row, or
+/// `verified`) changes nothing else; an unverified one may become private,
+/// never public.
+fn merge(tx: &Transaction<'_>, id: i64, batch: &ImportBatch<'_>, privacy: Privacy) -> Result<()> {
+    add_sources(tx, id, batch.source.bit() as u64)?;
+    tx.prepare_cached(
+        "INSERT INTO import_membership (torrent_id, job, created) VALUES (?1, ?2, 0)
+         ON CONFLICT DO NOTHING",
+    )?
+    .execute(params![id, batch.job])?;
+    let stored: Option<(i64, i64)> = tx
+        .prepare_cached("SELECT verification, privacy FROM import_quality WHERE torrent_id = ?1")?
+        .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((verification, was)) = stored else {
+        return Ok(());
+    };
+    if verification == Verification::Verified.code() {
+        return Ok(());
+    }
+    let was = Privacy::from_code(was).unwrap_or(Privacy::Unknown);
+    let now = was.merge(privacy);
+    if now == was {
+        return Ok(());
+    }
+    tx.prepare_cached("UPDATE import_quality SET privacy = ?2 WHERE torrent_id = ?1")?
+        .execute(params![id, now.code()])?;
+    if now == Privacy::Private {
+        let marked = tx
+            .prepare_cached(
+                "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1 AND flags & ?2 = 0",
+            )?
+            .execute(params![id, flags::PRIVATE])?;
+        if marked > 0 {
+            tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                .execute([id])?;
+        }
+    }
+    Ok(())
+}
+
+/// The privacy a candidate under one of these hashes declared, if any.
+fn candidate_privacy(tx: &Transaction<'_>, hashes: &[InfoHash]) -> Result<Option<Privacy>> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT privacy FROM import_candidates WHERE hash = ?1
+         UNION ALL
+         SELECT privacy FROM import_candidates
+         WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1",
+    )?;
+    let mut out: Option<Privacy> = None;
+    for h in hashes {
+        let mut rows = stmt.query([&h.0[..]])?;
+        while let Some(r) = rows.next()? {
+            let p = Privacy::from_code(r.get(0)?).unwrap_or(Privacy::Unknown);
+            out = Some(out.map_or(p, |o| o.merge(p)));
+        }
+    }
+    Ok(out)
+}
+
+fn commit_torrent(
+    tx: &Transaction<'_>,
+    batch: &ImportBatch<'_>,
+    t: &ImportTorrent<'_>,
+) -> Result<RecordOutcome> {
+    if t.verification == Verification::Verified {
+        return Err(Error::Invalid("an import can't claim verified metadata"));
+    }
+    let p = t.torrent;
+    let hashes: Vec<InfoHash> = p.swarm_hashes().collect();
+    if let Some(held) = store_hold(tx, &hashes)? {
+        return Ok(held_outcome(held));
+    }
+    if let Some(id) = find_any(tx, hashes.iter().copied())? {
+        // The stored row's own filter state stands (§20.9 refiles stored
+        // torrents); a held decision only keeps this record out.
+        if let Some(held) = t.decision.held() {
+            return Ok(held_outcome(held));
+        }
+        merge(tx, id, batch, t.privacy)?;
+        return Ok(RecordOutcome::Merged(id));
+    }
+    filter::write(tx, t.decision.hits)?;
+    if let Some(held) = t.decision.held() {
+        return Ok(held_outcome(held));
+    }
+    let mut privacy = t.privacy;
+    if p.flags & flags::PRIVATE != 0 {
+        privacy = privacy.merge(Privacy::Private);
+    }
+    if let Some(c) = candidate_privacy(tx, &hashes)? {
+        privacy = privacy.merge(c);
+    }
+    let flags = p.flags
+        | flags::IMPORTED
+        | (t.decision.marks & MARKS)
+        | if t.completeness == Completeness::Partial {
+            flags::FILES_PARTIAL
+        } else {
+            0
+        }
+        | if privacy == Privacy::Private {
+            flags::PRIVATE
+        } else {
+            0
+        };
+    let discovered_at = t.source_at.unwrap_or(batch.at);
+    let id = insert_new(tx, p, flags, discovered_at, batch.at, batch.source)?;
+    if let Some(e) = &p.enrichment {
+        write_enrichment(tx, id, e)?;
+    }
+    tx.prepare_cached(
+        "INSERT INTO import_quality (torrent_id, completeness, verification, privacy, repair,
+             source_at, imported_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?
+    .execute(params![
+        id,
+        t.completeness.code(),
+        t.verification.code(),
+        privacy.code(),
+        t.repair & repair::ALL,
+        t.source_at,
+        batch.at
+    ])?;
+    tx.prepare_cached(
+        "INSERT INTO import_membership (torrent_id, job, created) VALUES (?1, ?2, 1)",
+    )?
+    .execute(params![id, batch.job])?;
+    Ok(RecordOutcome::New(id))
+}
+
+fn commit_candidate(
+    tx: &Transaction<'_>,
+    batch: &ImportBatch<'_>,
+    cand: &ImportCandidate<'_>,
+) -> Result<RecordOutcome> {
+    let mut hashes = vec![cand.hash];
+    if let Some(v2) = cand
+        .hash_v2
+        .map(|h| h.truncated())
+        .filter(|t| *t != cand.hash)
+    {
+        hashes.push(v2);
+    }
+    if let Some(held) = store_hold(tx, &hashes)? {
+        return Ok(held_outcome(held));
+    }
+    if let Some(id) = find_any(tx, hashes.iter().copied())? {
+        if let Some(held) = cand.decision.held() {
+            return Ok(held_outcome(held));
+        }
+        merge(tx, id, batch, cand.privacy)?;
+        return Ok(RecordOutcome::Merged(id));
+    }
+    filter::write(tx, cand.decision.hits)?;
+    if let Some(held) = cand.decision.held() {
+        return Ok(held_outcome(held));
+    }
+    // Never an empty name or a zero size: those are missing.
+    let name = cand.name.filter(|n| (1..=MAX_NAME).contains(&n.len()));
+    let size = cand
+        .size
+        .filter(|s| *s > 0)
+        .and_then(|s| i64::try_from(s).ok());
+    tx.prepare_cached(
+        "INSERT INTO import_candidates
+             (hash, hash_v2, job, name, size, missing, privacy, source_at, at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, ?7, ?8)
+         ON CONFLICT (hash) DO UPDATE SET
+             hash_v2 = coalesce(hash_v2, excluded.hash_v2),
+             name = coalesce(name, excluded.name),
+             size = coalesce(size, excluded.size),
+             privacy = CASE
+                 WHEN privacy = 2 OR excluded.privacy = 2 THEN 2
+                 WHEN privacy = 0 OR excluded.privacy = 0 THEN 0
+                 ELSE 1 END,
+             source_at = coalesce(source_at, excluded.source_at)",
+    )?
+    .execute(params![
+        &cand.hash.0[..],
+        cand.hash_v2.as_ref().map(|h| &h.0[..]),
+        batch.job,
+        name,
+        size,
+        cand.privacy.code(),
+        cand.source_at,
+        batch.at,
+        repair::MISSING_FILES
+            | if name.is_none() {
+                repair::MISSING_NAME
+            } else {
+                0
+            }
+            | if size.is_none() {
+                repair::MISSING_SIZE
+            } else {
+                0
+            },
+    ])?;
+    // What's missing follows what's stored; a candidate never holds files.
+    tx.prepare_cached(
+        "UPDATE import_candidates SET missing = ?2
+             | CASE WHEN name IS NULL THEN ?3 ELSE 0 END
+             | CASE WHEN size IS NULL THEN ?4 ELSE 0 END
+         WHERE hash = ?1",
+    )?
+    .execute(params![
+        &cand.hash.0[..],
+        repair::MISSING_FILES,
+        repair::MISSING_NAME,
+        repair::MISSING_SIZE
+    ])?;
+    Ok(RecordOutcome::Candidate)
+}
+
+/// Whether an imported row's privacy is private (sticky across a verified
+/// upgrade).
+pub(crate) fn sticky_private(conn: &Connection, id: i64) -> Result<bool> {
+    Ok(conn
+        .prepare_cached("SELECT privacy FROM import_quality WHERE torrent_id = ?1")?
+        .query_row([id], |r| r.get::<_, i64>(0))
+        .optional()?
+        == Some(Privacy::Private.code()))
+}
+
+/// A partial import whose info dict was fetched and verified: its quality
+/// becomes verified and complete, and the repair reasons the fetch
+/// resolved are cleared.
+pub(crate) fn verified_upgrade(conn: &Connection, id: i64) -> Result<()> {
+    conn.prepare_cached(
+        "UPDATE import_quality SET verification = ?2, completeness = ?3, repair = repair & ~?4
+         WHERE torrent_id = ?1",
+    )?
+    .execute(params![
+        id,
+        Verification::Verified.code(),
+        Completeness::ReportedComplete.code(),
+        repair::ALL
+    ])?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lodestar_metainfo::InfoHash;
+
+    use super::*;
+    use crate::StoreConfig;
+
+    const T: i64 = 1_700_000_000;
+    const PASS: Decision<'static> = Decision {
+        hits: &[],
+        marks: 0,
+    };
+
+    fn prepared(store: &Store, name: &str) -> Prepared {
+        let raw = format!(
+            "d6:lengthi5e4:name{}:{name}12:piece lengthi16384e6:pieces20:",
+            name.len()
+        );
+        let mut raw = raw.into_bytes();
+        raw.extend([0; 20]);
+        raw.push(b'e');
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        store.preparer().prepare(&info, None).unwrap()
+    }
+
+    fn reading(store: &mut Store) -> ImportJob {
+        let job = store
+            .create_import_job(&NewImportJob {
+                adapter: "magnetico",
+                adapter_ver: 1,
+                dataset: b"ds",
+                schema_sig: b"sig",
+                options: b"",
+                credential: None,
+                at: T,
+            })
+            .unwrap();
+        let job = store
+            .set_import_phase(job.id, job.revision, Phase::Reading, T)
+            .unwrap();
+        assert_eq!(job.contract_ver, CONTRACT_VERSION);
+        job
+    }
+
+    fn state(store: &Store, id: i64) -> (ImportJob, i64, i64, i64) {
+        let n = |sql: &str| store.conn.query_row(sql, [], |r| r.get(0)).unwrap();
+        (
+            store.import_job(id).unwrap().unwrap(),
+            n("SELECT count(*) FROM torrents"),
+            n("SELECT count(*) FROM import_candidates"),
+            n("SELECT count(*) FROM import_membership"),
+        )
+    }
+
+    /// A crash at each step of the transaction leaves nothing behind, and
+    /// the replay commits once; a crash after the commit, before the
+    /// caller hears of it, replays as `Replayed` with the same counters.
+    #[test]
+    fn a_crash_at_every_step_replays_exactly_once() {
+        for step in [
+            Step::Records,
+            Step::Counters,
+            Step::Cursor,
+            Step::Commit,
+            Step::Acked,
+        ] {
+            let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+            let src = store.register_source("magnetico", "1", T).unwrap();
+            let job = reading(&mut store);
+            let a = prepared(&store, "Alpha");
+            let records = [
+                ImportRecord::Torrent(ImportTorrent {
+                    torrent: &a,
+                    completeness: Completeness::Partial,
+                    verification: Verification::Unknown,
+                    privacy: Privacy::Unknown,
+                    repair: repair::MISSING_FILES,
+                    source_at: None,
+                    files_dropped: 2,
+                    decision: PASS,
+                }),
+                ImportRecord::Candidate(ImportCandidate {
+                    hash: InfoHash([3; 20]),
+                    hash_v2: None,
+                    name: None,
+                    size: Some(9),
+                    privacy: Privacy::Public,
+                    source_at: None,
+                    decision: PASS,
+                }),
+                ImportRecord::Invalid,
+            ];
+            let batch = ImportBatch {
+                job: job.id,
+                seq: 1,
+                position: b"after-1",
+                source: src,
+                source_bytes: 64,
+                at: T,
+                class_gen: None,
+                records: &records,
+            };
+            let untouched = state(&store, job.id);
+
+            FAIL_AT.with(|f| f.set(Some(step)));
+            let crashed = store.commit_import_batch(&batch);
+            FAIL_AT.with(|f| f.set(None));
+            assert!(crashed.is_err(), "{step:?}");
+
+            let first = store.commit_import_batch(&batch).unwrap();
+            let after = state(&store, job.id);
+            if step == Step::Acked {
+                assert!(matches!(first, BatchCommitted::Replayed { .. }), "{step:?}");
+            } else {
+                assert!(
+                    matches!(first, BatchCommitted::Committed { .. }),
+                    "{step:?}"
+                );
+                assert_eq!((untouched.1, untouched.2, untouched.3), (0, 0, 0));
+            }
+            let c = after.0.counters;
+            assert_eq!(
+                c,
+                ImportCounters {
+                    read: 3,
+                    new: 1,
+                    merged: 0,
+                    candidates: 1,
+                    filtered: 0,
+                    quarantined: 0,
+                    invalid: 1,
+                    files_dropped: 2,
+                    partial: 1,
+                    source_bytes: 64,
+                },
+                "{step:?}"
+            );
+            assert!(c.conserved());
+            assert_eq!((after.0.seq, &after.0.position[..]), (1, &b"after-1"[..]));
+            assert_eq!((after.1, after.2, after.3), (1, 1, 1), "{step:?}");
+            assert_eq!(
+                store.commit_import_batch(&batch).unwrap(),
+                BatchCommitted::Replayed { counters: c }
+            );
+            assert_eq!(state(&store, job.id), after, "{step:?}");
+        }
+    }
+
+    #[test]
+    fn an_import_cannot_claim_verified_metadata() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("magnetico", "1", T).unwrap();
+        let job = reading(&mut store);
+        let a = prepared(&store, "Alpha");
+        let records = [ImportRecord::Torrent(ImportTorrent {
+            torrent: &a,
+            completeness: Completeness::ReportedComplete,
+            verification: Verification::Verified,
+            privacy: Privacy::Public,
+            repair: 0,
+            source_at: None,
+            files_dropped: 0,
+            decision: PASS,
+        })];
+        let batch = ImportBatch {
+            job: job.id,
+            seq: 1,
+            position: b"",
+            source: src,
+            source_bytes: 0,
+            at: T,
+            class_gen: None,
+            records: &records,
+        };
+        assert!(store.commit_import_batch(&batch).is_err());
+        assert_eq!(state(&store, job.id).1, 0);
+    }
+
+    #[test]
+    fn privacy_merges_to_the_more_restrictive() {
+        use Privacy::*;
+        for (a, b, want) in [
+            (Public, Public, Public),
+            (Public, Unknown, Unknown),
+            (Unknown, Private, Private),
+            (Private, Public, Private),
+            (Private, Unknown, Private),
+        ] {
+            assert_eq!(a.merge(b), want);
+            assert_eq!(b.merge(a), want);
+        }
+    }
+
+    #[test]
+    fn codes_round_trip() {
+        for p in Phase::ALL {
+            assert_eq!(Phase::from_code(p.code()), Some(*p));
+        }
+        for c in Control::ALL {
+            assert_eq!(Control::from_code(c.code()), Some(*c));
+        }
+        for r in Reason::ALL {
+            assert_eq!(Reason::from_code(r.code()), Some(*r));
+        }
+        assert_eq!(Phase::from_code(7), None);
+        assert_eq!(Reason::NeedsCredentials.label(), "needs_credentials");
+    }
+}
