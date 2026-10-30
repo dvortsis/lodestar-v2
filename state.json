@@ -1245,7 +1245,7 @@
    "pr": 198,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears). | 2026-10-30T07:14Z merged land/L5 dcff7b9 -> 397b013 green (891 tests; update:: 85); holding for #184 | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #198 d9c96f9; full-ci + CI dispatched; fresh security review session_01MMjhn8LXfftTgrUx6g7rdp"
+   "notes": " | 2026-10-30T03:41Z launched from land/L4 (stacked; PR after swap + L4 merge). Contract (error code, process-only hold status) needs runner OK before code. | 2026-10-30T03:44Z contract (ef86f7c, decisions 2026-10-30-F-updater.md) OK'd with changes: no-bin pause/resume -> 409 bin_unavailable (no hold); hold enforced in the eligibility fn 5/5 will call (+test); document folder-fsync residual for resume, test both directions. | 2026-10-30T04:28Z impl done; runner: (a) slice adds one Linux step in ci.yml test job counting update:: tests (>0), owns extended to that step only; OK fail-closed on unreadable updater.json (\u00a72.19 flag to owner; notice must say explicit pause/resume rewrites; test hold clears). | 2026-10-30T07:14Z merged land/L5 dcff7b9 -> 397b013 green (891 tests; update:: 85); holding for #184 | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:26Z #198 d9c96f9; full-ci + CI dispatched; fresh security review session_01MMjhn8LXfftTgrUx6g7rdp | 2026-10-30T10:41Z fresh security review MERGE (0 blocking). Runner takes IMPORTANT before merge: folder-fsync EINVAL/ENOTSUP -> best effort (warn once), EIO fatal (Unraid FUSE primary). + polish NoBin notice, held golden."
   },
   "L7": {
    "status": "merged",
@@ -1847,7 +1847,8 @@
   "2026-10-30T08:21Z F-auth-lock: when two password changes race, the loser gets bad_password and spends a login attempt (documented in 2026-10-30-F-auth-lock.md)",
   "2026-10-30T09:29Z F-filters-xcpu: filter-budget gate normalizes by per-CPU-model factors (engine time on that model / EPYC 7763 at identical code) instead of a generic calibration loop; 50us and the 7763 reference unchanged; unlisted models fall back to calibration",
   "2026-10-30T10:21Z CR-COL: the Unraid gluetun leg (>=2h measured, plan \u00a70.4) is a separate collector run with --leg gluetun and a 2h baseline after the usual 6h suppression + 30min warm-up (runner decision on evidence shape)",
-  "2026-10-30T10:26Z F-updater: an unreadable updater.json fails closed (automatic updates inhibited); docs/decisions/2026-10-30-F-updater.md (re-flag; carried in #198)"
+  "2026-10-30T10:26Z F-updater: an unreadable updater.json fails closed (automatic updates inhibited); docs/decisions/2026-10-30-F-updater.md (re-flag; carried in #198)",
+  "2026-10-30T10:41Z F-updater: updater state writes treat an unsupported directory fsync (EINVAL/ENOTSUP, e.g. some FUSE mounts like Unraid shfs) as best effort with a one-time warning, like auth and secrets; real I/O errors still fail the pause"
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
@@ -2027,7 +2028,8 @@
  "followups": [
   "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
   "2026-10-30T08:41Z UI polish: welcome page h1 (tabindex -1, focused on load) shows a focus ring wider than the text with a notch; consider :focus-visible handling for programmatic focus",
-  "2026-10-30T10:17Z Re-derive the Xeon 8573C filter-budget factor (n=1, provisional) once 2 more 8573C jobs exist; record in a decisions entry (job 123999363098 = 39.6us raw mixed at #196 code)"
+  "2026-10-30T10:17Z Re-derive the Xeon 8573C filter-budget factor (n=1, provisional) once 2 more 8573C jobs exist; record in a decisions entry (job 123999363098 = 39.6us raw mixed at #196 code)",
+  "2026-10-30T10:41Z F-updater: scheduler reads the updater std::Mutex from async (until_scheduled) and can block a tokio worker for an fsync; move the read into blocking or publish a snapshot (pre-existing)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
