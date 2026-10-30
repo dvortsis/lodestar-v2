@@ -242,7 +242,7 @@ pub(crate) fn neutralized(folds: &[Box<str>], neutral: &[String]) -> bool {
 pub(crate) fn neutral_token(text: &str, neutral: &[String]) -> bool {
     !neutral.is_empty() && {
         let f = folded(text);
-        neutral.iter().any(|n| *n == f)
+        neutral.contains(&f)
     }
 }
 

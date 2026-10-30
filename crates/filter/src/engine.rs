@@ -271,11 +271,14 @@ impl Engine {
                 return Some(hit.into());
             }
         }
-        if self
-            .allow
-            .iter()
-            .any(|a| doc.matches(&a.query, neutral_words))
-        {
+        // Neutralizing only takes evidence away: an allow query must
+        // match without the neutralized words too, so one that needs a
+        // neutralized word absent (`-"amber beacon"`) releases nothing
+        // more than it did.
+        if self.allow.iter().any(|a| {
+            doc.matches(&a.query, neutral_words)
+                && (neutral_words.is_empty() || doc.matches(&a.query, &[]))
+        }) {
             return None;
         }
         for i in doc.candidates(&self.rules, neutral_words) {

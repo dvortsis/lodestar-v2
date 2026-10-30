@@ -551,3 +551,28 @@ proptest! {
         prop_assert_eq!(rule(&e, &n), rule(&plain, &swapped), "{} on {}", q, n);
     }
 }
+
+/// The security review's note: neutralizing a word an allow query needs
+/// absent never makes it release more.
+#[test]
+fn neutralizing_never_widens_always_allow() {
+    for allow in [
+        "foo -\"bar baz\"",
+        "foo -(bar NEAR/1 baz)",
+        "foo -bar.baz",
+        "foo -bar",
+    ] {
+        let mut e = engine();
+        list(&mut e, 1, Action::Hide, &[H]);
+        e.allow.push(lodestar_filter::Allow {
+            id: 1,
+            query: parse(allow).unwrap(),
+        });
+        let listed = Some((RuleRef::List(1), Action::Hide));
+        assert_eq!(decided(&e, &[H], "foo bar baz"), listed, "{allow}");
+        assert_eq!(decided(&e, &[H], "foo qux"), None, "{allow}");
+        e.overrides.push(neutralize("bar"));
+        assert_eq!(decided(&e, &[H], "foo bar baz"), listed, "{allow}");
+        assert_eq!(decided(&e, &[H], "foo qux"), None, "{allow}");
+    }
+}
