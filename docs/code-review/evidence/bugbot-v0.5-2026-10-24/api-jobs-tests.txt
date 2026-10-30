@@ -1,0 +1,40 @@
+    Blocking waiting for file lock on build directory
+   Compiling tokio v1.54.0
+   Compiling tantivy-sstable v0.27.0
+   Compiling tantivy-columnar v0.27.0
+   Compiling tantivy v0.27.0
+   Compiling hyper v1.12.0
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.6
+   Compiling lodestar-utp v0.5.0 (C:\src\Github\lodestar-v2\crates\utp)
+   Compiling tokio-tungstenite v0.30.0
+   Compiling lodestar-dht v0.5.0 (C:\src\Github\lodestar-v2\crates\dht)
+   Compiling lettre v0.11.23
+   Compiling lodestar-peer-wire v0.5.0 (C:\src\Github\lodestar-v2\crates\peer-wire)
+   Compiling tower-http v0.6.11
+   Compiling lodestar-sources v0.5.0 (C:\src\Github\lodestar-v2\crates\sources)
+   Compiling hyper-util v0.1.21
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling axum v0.8.9
+   Compiling lodestar-integrations v0.5.0 (C:\src\Github\lodestar-v2\crates\integrations)
+   Compiling lodestar-tracker-scrape v0.5.0 (C:\src\Github\lodestar-v2\crates\tracker-scrape)
+   Compiling lodestar-cluster v0.5.0 (C:\src\Github\lodestar-v2\crates\cluster)
+   Compiling lodestar-search v0.5.0 (C:\src\Github\lodestar-v2\crates\search)
+   Compiling lodestar-filter v0.5.0 (C:\src\Github\lodestar-v2\crates\filter)
+   Compiling lodestar-pipeline v0.5.0 (C:\src\Github\lodestar-v2\crates\pipeline)
+   Compiling lodestar-api v0.5.0 (C:\src\Github\lodestar-v2\crates\api)
+    Finished `release` profile [optimized + debuginfo] target(s) in 5m 43s
+     Running unittests src\lib.rs (target\release\deps\lodestar_api-8891c7b75f81e6cb.exe)
+
+running 8 tests
+test jobs::tests::at_most_four_run_at_once_and_finishing_frees_a_slot ... ok
+test jobs::tests::the_first_outcome_stands_and_finished_jobs_refuse_controls ... ok
+test jobs::tests::a_panicking_worker_fails_its_job_with_a_500_and_frees_its_slot ... ok
+test jobs::tests::rate_and_eta_leave_paused_time_out ... ok
+test jobs::tests::finished_jobs_expire_and_are_capped ... ok
+test jobs::tests::closing_cancels_every_job_and_refuses_new_ones ... ok
+test jobs::tests::checkpoints_wait_while_paused_and_stop_when_cancelled ... ok
+test jobs::tests::the_pacer_shares_one_rate_and_never_bursts ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 145 filtered out; finished in 2.05s
