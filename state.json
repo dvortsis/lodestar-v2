@@ -1257,9 +1257,9 @@
    "notes": " | 2026-10-30T03:41Z land/L7 dc92de60 = 23a986fd cherry-picked on L6; conflicts kept newer chain text (cr0-soak.ps1, PW status); personal profile paths -> %USERPROFILE%; hygiene scan clean (hex = upstream permalinks). | 2026-10-30T06:24Z pre-review FIX -> runner 02c0af7e (scope banners on import plans; review records marked fixed by L4; \u00a72.25 adoption note; PIDs/container id redacted). PR desc: addendum + cr0-soak.ps1 already carried by L5/L6. | 2026-10-30T06:35Z PR #186 opened (base land/L6); retarget to main after the range below merges | 2026-10-30T10:25Z #186 retargeted to main; land/L7 merged main -> ca08002d (docs only); CI running | 2026-10-30T10:30Z #186 merged 1199430f. L1-L7 all on main."
   },
   "F-filters-packs": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhn9HZcFZGjzvAkoTomC",
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
@@ -1334,7 +1334,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses."
+   "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses. | 2026-10-30T21:50Z I3 split out as F-rollback-journal; I4/P2/P3 (perf) remain"
   },
   "F-status": {
    "status": "merged",
@@ -1530,6 +1530,13 @@
    "session": "session_01MMjhn9zPWSCmVk1uqpWy9M",
    "pr": null,
    "notes": "launched 21:37Z"
+  },
+  "F-rollback-journal": {
+   "status": "queued",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "notes": "brief briefs/F-rollback-journal.md (L4 review I3); 21:50Z"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
