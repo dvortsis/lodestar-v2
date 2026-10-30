@@ -1276,6 +1276,13 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so."
+  },
+  "CR-COL": {
+   "status": "running",
+   "session": "session_01MMjhnAXqNdYeYYFdttw8Zo",
+   "model": "sonnet",
+   "attempt": 1,
+   "notes": " | 2026-10-30T05:37Z launched (Sonnet) from land/L5; PR after L5 merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1760,7 +1767,9 @@
    "2026-10-30T04:56Z F-metainfo: per-file path.utf-8; pathless padding -> .pad/padding; decode-to-UTF-8 fallback loses legacy raw bytes when no lossless re-encode (arch \u00a76/\u00a716)"
   ],
   "review_round_1": "2026-10-30T05:07Z: fresh review #174 MERGE (+polish: cat-file guard pushed); #175 L1 FIX -> runner commit on land/L1 (labels, Torznab, v0.5.0, PID; CSV exception stated); #176 FIX -> 768327be (owner confirmation of tree diffs recorded in \u00a72.25; 4-slot cap recorded as approved-plan; 2.3KB binds pilots; CR-COL in tier 1 + G-v051; L owns = range files; dep/own fixes). #177 F-metainfo FIX: fuzz bound vs case-3 decode growth -> enforce limit on output; polish sent.",
-  "plan_merged": "2026-10-30T05:23Z #176 merged 9f96d1f3: build-plan \u00a70, owner-decisions \u00a72.25, master-plan decisions, slices.yaml now on main"
+  "plan_merged": "2026-10-30T05:23Z #176 merged 9f96d1f3: build-plan \u00a70, owner-decisions \u00a72.25, master-plan decisions, slices.yaml now on main",
+  "next_branch": "2026-10-30T05:37Z deleted origin/next (main == 058d9937 lineage)",
+  "queue": "After F-metainfo merges: port X-sleeps (old session session_01EFQKtWTWkBGHK299HzziBZ: cherry-pick 7fcf111a,c272e0a2 onto new main as port/X-sleeps). After F-filters: F-status on land/L6 (Sonnet). Then D-v051."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
