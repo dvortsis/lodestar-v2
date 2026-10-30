@@ -99,6 +99,14 @@ it('shows a generated screen with its purpose, notice, form and extra', async ()
 	]);
 });
 
+it('fetches the settings index once, even as the form’s code arrives', async () => {
+	const index = vi.fn(() => Promise.resolve({}));
+	registry.index = index;
+	render(SettingsSection, { section: 'disk' });
+	await until(() => expect(screen.getByText('Export panel')).toBeTruthy());
+	expect(index).toHaveBeenCalledOnce();
+});
+
 it('keeps the form when its extra cannot load, and says so', async () => {
 	registry.extra = () => Promise.reject(new Error('chunk'));
 	render(SettingsSection, { section: 'disk' });

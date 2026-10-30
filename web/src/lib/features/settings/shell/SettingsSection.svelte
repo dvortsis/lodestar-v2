@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -27,7 +28,8 @@
 		let live = true;
 		failed = false;
 		// Both start at once, so the form's code never waits on the index (or the other way round).
-		if (!SectionForm)
+		// Read without tracking: the form arriving must not re-run this and fetch the index again.
+		if (!untrack(() => SectionForm))
 			void import('./SectionForm.svelte').then(
 				(mod) => {
 					SectionForm = mod.default;
