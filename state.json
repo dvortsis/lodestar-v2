@@ -1444,13 +1444,21 @@
    "review_session_done": true
   },
   "IMP-1": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "deps": [
     "v051-cut"
    ],
-   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK",
-   "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx"
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy",
+   "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx",
+   "pr": 210
+  },
+  "X-flake-logdelete": {
+   "status": "running",
+   "session": "session_01MMjhn8X3Sivfo3uzLtqfiE",
+   "model": "opus",
+   "attempt": 1,
+   "notes": " | 2026-10-30T13:45Z launched: logging source_tests delete_while_writers_run_and_a_compression_is_in_flight deleted 0 under load (reported by IMP-1)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
