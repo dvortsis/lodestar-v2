@@ -1884,7 +1884,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-10-23T13:39:57Z",
+  "last_heartbeat": "2026-10-30T16:22Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": {
@@ -2214,6 +2214,7 @@
     "2026-10-30T15:40Z merged #220 (d241e3a1) and #219 R-gauges (9dbff7a8), each with MERGE in hand and CI green. Opened #222: cherry-pick R-gauges onto release/v0.5.1 for rc.2, with the delta map updated. Sessions archived: the R-gauges author, and the #219, #220, #214 and #215 reviewers.",
     "2026-10-30T15:44Z #213 post-merge review: OK (root cause right, ordering total, tests catch the old code, no Windows issue); no revert. #217 fixes 4dcba77f sent to the same reviewer; Alerts route now passes, so only Alert route and Detail sections wait on the owner.",
     "2026-10-30T15:54Z #216 re-check MERGE at d3a57912, but it conflicts with main (#218, #219, #220); author told to merge main plus 2 optional items, then a delta check and merge. #217 re-check MERGE pending the owner; the reviewer measured Alerts at 29.03/29 again (26 B over), so all three limits go to the owner.",
-    "2026-10-30T16:06Z merged #222 into release/v0.5.1 (6be95525: R-gauges carried for rc.2). Dispatched CI, E2E (all-themes) and Release on release/v0.5.1; Web is unchanged since the cut. #223 fix/pool-generation opened; review session_01MMjhn9hV1psq7df6CTgYVb. #216: the merge-main delta was checked by the runner (both sides kept in metrics.rs; test-only hold; decisions line); merge on green."
+    "2026-10-30T16:06Z merged #222 into release/v0.5.1 (6be95525: R-gauges carried for rc.2). Dispatched CI, E2E (all-themes) and Release on release/v0.5.1; Web is unchanged since the cut. #223 fix/pool-generation opened; review session_01MMjhn9hV1psq7df6CTgYVb. #216: the merge-main delta was checked by the runner (both sides kept in metrics.rs; test-only hold; decisions line); merge on green.",
+    "2026-10-30T16:22Z heartbeat and check-in: merged #223 (a9091bc3, pool-wide generations; MERGE, CI green). #216 waits on ci-ok. Release branch 6be95525: E2E (all-themes) green; CI and Release running. Heartbeat and check-in prompts refreshed (ReadNotifications first)."
   ]
 }
