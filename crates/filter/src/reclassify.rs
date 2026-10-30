@@ -150,8 +150,10 @@ fn rule_says(
         return None;
     }
     let facts = facts(row, class, now);
+    // Every swarm hash, as ingest judges it, so `hash:` reads the same.
+    let hashes = row_hashes(row);
     let item = Item {
-        hashes: &[],
+        hashes: &hashes,
         name: &row.name,
         files,
         content_type: class.content_type,

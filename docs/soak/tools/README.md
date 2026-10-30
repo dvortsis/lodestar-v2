@@ -1,7 +1,7 @@
 # Offline CR-0 soak analysis
 
 `analyze_cr0.py` reads the aggregate evidence written by `cr0-soak.ps1`.
-It uses Python 3.10+ and the standard library; no packages or services are required.
+It uses Python 3.12+ and the standard library; no packages or services are required.
 It does not connect to the crawler, inspect its database, read process logs, or
 change the collector or evidence. It works during startup and after termination.
 

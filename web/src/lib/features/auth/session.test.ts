@@ -74,6 +74,18 @@ describe('installAuthHandlers', () => {
 		expect(currentSession()).toBe('setup_required');
 	});
 
+	it('does not invalidate the detail caches on the first answer, only on a later change', () => {
+		setSession('unknown');
+		const seen = vi.fn();
+		const off = onDetailInvalidated(seen);
+		setSession('signed_in');
+		expect(seen).not.toHaveBeenCalled();
+		setSession('signed_out');
+		setSession('signed_in');
+		expect(seen).toHaveBeenLastCalledWith(true);
+		off();
+	});
+
 	it('marks the session signed in after any request that worked', async () => {
 		setSession('unknown');
 		vi.stubGlobal(

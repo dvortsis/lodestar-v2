@@ -3,16 +3,7 @@
 import { pushState, replaceState } from '$app/navigation';
 import { resolve } from '$app/paths';
 import { page } from '$app/state';
-import { api, isAbort } from '$lib/api/client';
-import {
-	cacheDetail,
-	cacheHit,
-	cachedDetail,
-	detailGeneration,
-	forgetDetail,
-	onDetailInvalidated,
-	type SearchHit
-} from './cache';
+import { cacheHit, type SearchHit } from './cache';
 import { watchDetailVisibility } from './visibility';
 
 export interface OpenOptions {
@@ -64,37 +55,4 @@ export function markClosed() {
 
 export const returnFocusTarget = () => returnTarget?.();
 
-const IDLE_MS = 150;
-let timer: ReturnType<typeof setTimeout> | undefined;
-let inflight: AbortController | undefined;
-
-export function cancelDetailPrefetch() {
-	clearTimeout(timer);
-	timer = undefined;
-	inflight?.abort();
-	inflight = undefined;
-}
-onDetailInvalidated(cancelDetailPrefetch);
-
-/**
- * Warm the cache for `hash` after 150 ms of idle. A newer call cancels a pending timer and an
- * in-flight request, so only the torrent the pointer or focus rests on is fetched.
- */
-export function prefetchDetail(hash: string) {
-	watchDetailVisibility();
-	cancelDetailPrefetch();
-	if (cachedDetail(hash)) return;
-	const generation = detailGeneration();
-	timer = setTimeout(async () => {
-		const ctl = (inflight = new AbortController());
-		try {
-			const detail = await api.get('/torrents/{hash}', { path: { hash }, signal: ctl.signal });
-			if (!ctl.signal.aborted && generation === detailGeneration()) cacheDetail(hash, detail);
-		} catch (e) {
-			if (!isAbort(e) && !ctl.signal.aborted && generation === detailGeneration())
-				forgetDetail(hash);
-		} finally {
-			if (inflight === ctl) inflight = undefined;
-		}
-	}, IDLE_MS);
-}
+export { cancelDetailPrefetch, prefetchDetail } from './prefetch';

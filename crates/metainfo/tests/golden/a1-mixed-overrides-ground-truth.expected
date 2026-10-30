@@ -1,0 +1,8 @@
+version: V1
+name: "t" (GBK)
+path encoding: GBK
+total size: 2
+piece count: 1
+warnings: []
+file: "剧集" size=1 attrs=""
+file: "高清" size=1 attrs=""

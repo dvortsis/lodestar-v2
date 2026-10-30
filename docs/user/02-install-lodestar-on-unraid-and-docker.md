@@ -115,7 +115,8 @@ How hard the crawler works: `low`, `balanced` or `aggressive`. Balanced opens ab
 ### Log level (advanced)
 
 The templates have no Log level field. The optional custom container variable
-`LODESTAR_LOG` controls console logging: `error`, `warn`, `info` or `debug`.
+`LODESTAR_LOG` sets how much Lodestar logs on every output: `error`, `warn`, `info` or `debug`.
+While it is set, you can't change Logging verbosity in Settings.
 If you add this variable to the container configuration, use `LODESTAR_LOG` as its key.
 
 **Recommended:** leave it unset; the default is `info`. Logs hold no torrent details by default.

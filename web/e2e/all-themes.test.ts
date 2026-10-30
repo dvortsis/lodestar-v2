@@ -16,6 +16,10 @@ for (const theme of ALL_THEMES) {
 				route.mock?.(mock);
 				await go(route.path);
 				await expect(page.locator('html')).toHaveAttribute('data-theme', theme.id);
+				// As in smoke.test.ts: a route that settles asynchronously (welcome's auth check)
+				// is scanned and photographed only once its heading shows.
+				if (route.heading)
+					await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
 				await expectNoA11yViolations(page);
 				const name = snapshotName(route, { shots, density, themeId: theme.id });
 				if (name) await expectPageSnapshot(page, name);

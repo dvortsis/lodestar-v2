@@ -3,7 +3,7 @@
 Owner authorization: October 27, 2026. Integration branch `work/soak-followups`,
 starting at `5e1a53c0`, including the support and prepared product/follow-up stack.
 This ledger supersedes historical statements that the October 26 soak is running.
-The owner separately authorized the next native soak on October 28 ("Ok. Go.").
+The owner separately authorized the next native soak on October 28.
 The network-capable run started at 18:23 MDT; see the
 [launch record](../soak/2026-10-28-native-cr0-launch.md), including the preserved
 two-minute offline-sandbox startup attempt.

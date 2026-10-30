@@ -15,6 +15,11 @@
 	let live = false;
 	const signedIn = $derived(ready && currentSession() === 'signed_in');
 
+	function isIdle() {
+		const active = document.activeElement;
+		return !active || active === document.body || active.id === 'main';
+	}
+
 	async function check() {
 		failed = false;
 		ready = false;
@@ -22,6 +27,8 @@
 		if (!live) return;
 		if (!status) {
 			failed = true;
+			await tick();
+			if (live && isIdle()) container?.querySelector<HTMLElement>('button')?.focus();
 			return;
 		}
 		if (status.setup_required) return toSetup();
@@ -30,8 +37,7 @@
 		await tick();
 		if (!live) return;
 		// Async auth must not steal focus from a control the visitor already chose.
-		const active = document.activeElement;
-		if (!active || active === document.body || active.id === 'main') {
+		if (isIdle()) {
 			const heading = container?.querySelector('h1');
 			heading?.setAttribute('tabindex', '-1');
 			heading?.focus();
@@ -57,11 +63,10 @@
 		</AuthPage>
 	{:else}
 		<div class="mx-auto flex max-w-sm flex-col gap-4 px-4 py-8">
+			<h1 class="text-display font-semibold text-base-content">{m.auth_checking()}</h1>
 			{#if failed}
 				<Banner kind="error">{m.auth_error_network()}</Banner>
 				<Button onclick={() => void check()}>{m.auth_welcome_retry()}</Button>
-			{:else}
-				<p role="status" class="text-body text-muted-text">{m.auth_checking()}</p>
 			{/if}
 		</div>
 	{/if}

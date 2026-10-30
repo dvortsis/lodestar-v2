@@ -3,7 +3,7 @@
 Status: **running; measured baseline in progress; acceptance pending**.
 The [October 29 checkpoint](2026-10-29-native-cr0-checkpoint.md) preserves the
 16-hour results, diagnostics and owner-confirmed external disk consumption.
-The owner explicitly authorized launch ("Ok. Go.") after reviewing readiness and
+The owner authorized the launch after reviewing readiness and
 the six-hour sampling suppression. The previous interrupted run remains preserved.
 
 ## Frozen candidate and launch
@@ -14,8 +14,8 @@ the six-hour sampling suppression. The previous interrupted run remains preserve
 - Evidence: repository-root `target/soak/cr0-native-2026-10-28-744b84d6-r2`.
 - Launch review and supervisor identity: integration checkout
   `target/launch-supervision-r21-r2/` (private).
-- Collector PID: `98244`; start ticks: `639288302350369040`.
-- Crawler PID: `49888`; identity: `49888:639288302370712270`.
+- Collector PID and start ticks: recorded in the local run (`run.json`), redacted here.
+- Crawler PID and identity: recorded in the local run, redacted here.
 - Collector run start: `2026-10-28T18:23:56.142782-06:00` (America/Denver).
 
 Package verification passed immediately before launch. The unchanged launch review
