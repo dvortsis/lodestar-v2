@@ -1238,50 +1238,70 @@ fn commit_candidate(
         .size
         .filter(|s| *s > 0)
         .and_then(|s| i64::try_from(s).ok());
-    // One candidate per torrent identity, as in `torrents`: a record
-    // under any of a stored candidate's swarm hashes fills that one.
-    let existing = {
+    // One candidate per torrent identity, as in `torrents`. A record
+    // under the swarm hashes of several stored candidates (a hybrid's v1
+    // and v2 views stored apart) folds them into the oldest first, so
+    // setting its v2 hash can never collide with another row's.
+    let mut ids = std::collections::BTreeSet::new();
+    {
         let mut stmt = tx.prepare_cached(
             "SELECT id FROM import_candidates WHERE hash = ?1
              UNION ALL
              SELECT id FROM import_candidates
-             WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1
-             LIMIT 1",
+             WHERE hash_v2 IS NOT NULL AND substr(hash_v2, 1, 20) = ?1",
         )?;
-        let mut found = None;
         for h in &hashes {
-            found = stmt
-                .query_row([&h.0[..]], |r| r.get::<_, i64>(0))
-                .optional()?;
-            if found.is_some() {
-                break;
+            for id in stmt.query_map([&h.0[..]], |r| r.get::<_, i64>(0))? {
+                ids.insert(id?);
             }
         }
-        found
-    };
-    let row = match existing {
-        Some(row) => {
+    }
+    let row = match ids.first().copied() {
+        Some(keep) => {
+            let mut merged = Folded {
+                hash_v2: cand.hash_v2.map(|h| h.0.to_vec()),
+                name: name.map(<[u8]>::to_vec),
+                size,
+                privacy: cand.privacy,
+                source_at: cand.source_at,
+            };
+            let mut read = tx.prepare_cached(
+                "SELECT hash_v2, name, size, privacy, source_at FROM import_candidates
+                 WHERE id = ?1",
+            )?;
+            // The oldest row's values win, then the others' in id order,
+            // then the record's.
+            for id in ids.iter().rev() {
+                let row: Folded = read.query_row([id], |r| {
+                    Ok(Folded {
+                        hash_v2: r.get(0)?,
+                        name: r.get(1)?,
+                        size: r.get(2)?,
+                        privacy: Privacy::from_code(r.get(3)?).unwrap_or(Privacy::Unknown),
+                        source_at: r.get(4)?,
+                    })
+                })?;
+                merged = row.over(merged);
+            }
+            drop(read);
+            for id in ids.iter().skip(1) {
+                tx.prepare_cached("DELETE FROM import_candidates WHERE id = ?1")?
+                    .execute([id])?;
+            }
             tx.prepare_cached(
-                "UPDATE import_candidates SET
-                     hash_v2 = coalesce(hash_v2, ?2),
-                     name = coalesce(name, ?3),
-                     size = coalesce(size, ?4),
-                     privacy = CASE
-                         WHEN privacy = 2 OR ?5 = 2 THEN 2
-                         WHEN privacy = 0 OR ?5 = 0 THEN 0
-                         ELSE 1 END,
-                     source_at = coalesce(source_at, ?6)
+                "UPDATE import_candidates SET hash_v2 = ?2, name = ?3, size = ?4, privacy = ?5,
+                     source_at = ?6
                  WHERE id = ?1",
             )?
             .execute(params![
-                row,
-                cand.hash_v2.as_ref().map(|h| &h.0[..]),
-                name,
-                size,
-                cand.privacy.code(),
-                cand.source_at,
+                keep,
+                merged.hash_v2,
+                merged.name,
+                merged.size,
+                merged.privacy.code(),
+                merged.source_at,
             ])?;
-            row
+            keep
         }
         None => {
             insert_candidate(tx, batch, cand, name, size)?;
@@ -1302,6 +1322,29 @@ fn commit_candidate(
         repair::MISSING_SIZE
     ])?;
     Ok(RecordOutcome::Candidate)
+}
+
+/// A candidate's fields while several are folded into one.
+struct Folded {
+    hash_v2: Option<Vec<u8>>,
+    name: Option<Vec<u8>>,
+    size: Option<i64>,
+    privacy: Privacy,
+    source_at: Option<i64>,
+}
+
+impl Folded {
+    /// `self`'s values where it has them, else `under`'s; privacy the
+    /// more restrictive.
+    fn over(self, under: Folded) -> Folded {
+        Folded {
+            hash_v2: self.hash_v2.or(under.hash_v2),
+            name: self.name.or(under.name),
+            size: self.size.or(under.size),
+            privacy: self.privacy.merge(under.privacy),
+            source_at: self.source_at.or(under.source_at),
+        }
+    }
 }
 
 fn insert_candidate(

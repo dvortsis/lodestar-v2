@@ -1188,6 +1188,87 @@ fn promoted_candidates_are_no_issue_and_v2_candidates_are_one() {
     assert_eq!(j.phase, Phase::Complete, "no candidate is left waiting");
 }
 
+fn v2_of(n: u8) -> lodestar_metainfo::InfoHashV2 {
+    lodestar_metainfo::InfoHashV2([n + 1; 32])
+}
+
+fn v2_candidate(
+    hash: [u8; 20],
+    hash_v2: Option<lodestar_metainfo::InfoHashV2>,
+) -> ImportRecord<'static> {
+    ImportRecord::Candidate(ImportCandidate {
+        hash: InfoHash(hash),
+        hash_v2,
+        name: None,
+        size: Some(3),
+        privacy: Privacy::Unknown,
+        source_at: None,
+        decision: PASS,
+    })
+}
+
+/// A hybrid's v1 and v2 views stored as separate candidates, then a
+/// record carrying both: they fold into the oldest, and the batch
+/// commits (it used to fail on the v2 index every time, wedging the job).
+#[test]
+fn a_record_spanning_two_candidates_folds_them() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let j = reading(&mut store, b"ds-1");
+    let v = lodestar_metainfo::InfoHashV2([7; 32]);
+    let v1_only = ImportRecord::Candidate(ImportCandidate {
+        privacy: Privacy::Private,
+        ..match candidate([1; 20], Some(b"Hybrid"), None) {
+            ImportRecord::Candidate(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    let v2_only = ImportRecord::Candidate(ImportCandidate {
+        hash_v2: Some(v),
+        ..match candidate(v.truncated().0, Some(b"Other name"), Some(9)) {
+            ImportRecord::Candidate(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    let both = ImportRecord::Candidate(ImportCandidate {
+        hash_v2: Some(v),
+        ..match candidate([1; 20], None, None) {
+            ImportRecord::Candidate(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    for (seq, rec) in [(1, v1_only), (2, v2_only), (3, both)] {
+        store
+            .commit_import_batch(&batch(j.id, seq, src, &[rec]))
+            .unwrap();
+    }
+    type Row = (Vec<u8>, Vec<u8>, Vec<u8>, i64, i64);
+    let rows: Vec<Row> = store
+        .connection()
+        .prepare("SELECT hash, hash_v2, name, size, privacy FROM import_candidates")
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [(
+            vec![1; 20],
+            vec![7; 32],
+            b"Hybrid".to_vec(),
+            9,
+            Privacy::Private.code()
+        )],
+        "one row, the oldest's values first, private sticky"
+    );
+    let j = job(&store, j.id);
+    assert_eq!((j.counters.candidates, j.open_candidates), (3, 1));
+    assert!(j.counters.conserved());
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
@@ -1199,7 +1280,7 @@ proptest! {
     #[test]
     fn counters_are_conserved_under_replay(
         batches in proptest::collection::vec(
-            (proptest::collection::vec((0u8..12, 0u8..5), 0..8), 1usize..3, any::<bool>()),
+            (proptest::collection::vec((0u8..12, 0u8..8), 0..8), 1usize..3, any::<bool>()),
             1..10,
         ),
     ) {
@@ -1222,12 +1303,20 @@ proptest! {
                     // A candidate under a torrent's hash: one that's
                     // stored merges, one that isn't waits until it is.
                     3 => candidate(names[n as usize].info_hash.0, None, Some(5)),
+                    // A hybrid's views over shared hashes: v1 alone, v2
+                    // alone, and both, in any order.
+                    4 => v2_candidate([200 + n; 20], None),
+                    5 => v2_candidate(v2_of(n).truncated().0, Some(v2_of(n))),
+                    6 => v2_candidate([200 + n; 20], Some(v2_of(n))),
                     _ => ImportRecord::Invalid,
                 })
                 .collect();
             if *pause_first {
                 let p = store.pause_import_job(j.id, revision, T).unwrap();
-                prop_assert!(store.commit_import_batch(&batch(j.id, seq + 1, src, &recs)).is_err());
+                prop_assert!(matches!(
+                    store.commit_import_batch(&batch(j.id, seq + 1, src, &recs)),
+                    Err(Error::ImportNotRunning)
+                ));
                 let r = store.resume_import_job(j.id, p.revision, &ok_check(&p), T).unwrap();
                 revision = r.revision;
             }
