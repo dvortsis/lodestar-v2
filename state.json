@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T21:39Z",
+ "updated_at": "2026-10-30T21:48Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1532,9 +1532,9 @@
    "notes": "launched 21:37Z"
   },
   "F-rollback-journal": {
-   "status": "queued",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnASnWheCLRMWNr6pN1",
    "pr": null,
    "notes": "brief briefs/F-rollback-journal.md (L4 review I3); 21:50Z"
   }
@@ -2321,7 +2321,8 @@
   "2026-10-30T21:16Z safety check-in: every listed item done; re-armed for 22:20Z (#239, then launch CR-SIM-restart).",
   "2026-10-30T21:35Z owner: rc.2 artifacts verified (minisig, digests, image); Unraid 24 h soak RUNNING from the restored cold backup (V3->V12 upgrade OK); Windows portable PASS; MSI service run RUNNING with the Defender exclusion. Next gate results ~2026-10-31T04:30Z (MSI) and ~2026-11-01T06Z (Unraid, after gluetun).",
   "2026-10-30T21:37Z merged #239 X-crawler-sim-crate (a0cdf84a). Launched CR-SIM-restart (Opus, session_01MMjhn9zPWSCmVk1uqpWy9M). Shared reviewer session_01MMjhn984M3k3UJXUCsEYPX archived (nothing pending); new PRs get a fresh reviewer.",
-  "2026-10-30T21:39Z heartbeat: no open PRs; CR-SIM-restart running; the owner's rc.2 gates running. Heartbeat prompt refreshed to the current state."
+  "2026-10-30T21:39Z heartbeat: no open PRs; CR-SIM-restart running; the owner's rc.2 gates running. Heartbeat prompt refreshed to the current state.",
+  "2026-10-30T21:48Z launched F-filters-packs (session_01MMjhn9HZcFZGjzvAkoTomC) and F-rollback-journal (session_01MMjhnASnWheCLRMWNr6pN1), Opus, frugal. Running: CR-SIM-restart, F-filters-packs, F-rollback-journal. Reconciled the stale slice statuses."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions",
  "release": {
