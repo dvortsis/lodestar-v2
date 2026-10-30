@@ -29,11 +29,11 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
 
 | Entry | Before (848e10a0 on main) | Now | Limit |
 |---|---|---|---|
-| Settings overview (own JS + CSS) | 9.9 KB | 11.2 KB | 45 KB |
-| Settings section (own JS + CSS) | 50.67 KB | 40.59 KB | 45 KB |
-| Settings controls (on demand) | 56.5 KB | 35.92 KB | 38 KB |
+| Settings overview (own JS + CSS) | 9.9 KB | 11.18 KB | 45 KB |
+| Settings section (own JS + CSS) | 50.67 KB | 40.55 KB | 45 KB |
+| Settings controls (on demand) | 56.5 KB | 35.9 KB | 38 KB |
 | Settings edit chunk (on demand), **new** | — | 10.26 KB | 11.3 KB |
-| Settings screen bodies (on demand), **new** | — | 42.56 KB | 47 KB |
+| Settings screen bodies (on demand), **new** | — | 35.29 KB | 38.9 KB |
 
 - **The save pipeline loads on demand, as one edit chunk (owner, 2026-10-24: option A, relayed by the runner).**
   - The runner checked this against the owner's own session and recorded it in runner-state's `state.json` (`owner_decision_settings_split`): "draft/conflict code loads on first edit; 45 KB limit kept".
@@ -47,8 +47,9 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
 - **The edit chunk has its own entry.** It's new code, so its limit follows the "measured + 10%" rule (10.26 KB → 11.3 KB). "Settings controls (on demand)" leaves the edit chunk out, so it keeps measuring only the controls under its existing 38 KB.
 - **A screen's body and extras are measured on their own (§2.19).**
   - The registry imports every `screen.ts` eagerly, so a section's first view would otherwise count every hand-built screen's dynamic `load` (Keyboard's 5.9 KB) and General's export panel, which only load on their own screen.
-  - `settingsFirstView` stops at them. "Settings screen bodies (on demand)" gates them at measured + 10% (42.56 KB → 47 KB).
-  - A later hand-built screen whose body would push this entry over adds its own entry.
+  - `settingsFirstView` stops at exactly those files, and nothing else. A hand-built screen's body is named `*Screen.svelte` (the registry's doc comment says so); the export panel is named by path. A broader pattern could hide code a section loads statically.
+  - "Settings screen bodies (on demand)" measures each of them with `ownChunk`, beyond the section's first view, so shared chunks aren't counted twice. It's 35.29 KB: Keyboard's body with its shortcut sheet and Bits UI's dialog code, plus the export panel. Its limit is measured + 10%, rounded up (38.9 KB).
+  - A later hand-built screen adds its body to this entry, measured the same way, and raises its limit by measured + 10% in its own PR, or adds an entry of its own.
 - **Measured but not fixed here: three routes outside Settings go over their limits.**
   - Alerts route is at 29.03 KB (limit 29), Alert route at 45.77 KB (limit 45), and Detail sections at 34.41 KB (limit 33.9). On `main` they measure 28.38, 44.95 and 33.82 KB.
   - The cause, from sourcemaps: Settings is now a production route, and Rolldown splits shared chunks by importer set. `ui/fields/Toggle.svelte` leaves the alerts chunk, `format/bytes.ts` is split the same way (the form's memory estimate uses it), and the shared Svelte input-bindings chunk grows. The modules are the same; the extra cost is per-chunk overhead.
@@ -67,5 +68,11 @@ All of `web/.size-limit.mjs`'s existing limits are unchanged. Measured with `npm
   - invalid and repeated screens are dropped.
 - **M-settings-form-3's tests come with the edit chunk:** `lazy.test.ts` (cold loads, the first edit, events and drafts, failure paths), `SettingsForm.offline.test.ts` and the `lazy-imports.test.ts` list.
 - **`SectionForm.test.ts`** waits for the save bar, which now arrives with the edit chunk.
-- **Playwright:** `settings.routes.test.ts` runs at 390 and 1366 px. The `settings-form` specs (routes, fixture, keyboard; axe in Riverstone light and dark at 390 and 1366) and the shortcuts and boot-shell specs pass. No `waitForTimeout`.
+- **`shell/SettingsSection.test.ts`** uses a fake registry to cover:
+  - a hand-built screen's loading state, which shows its title as the `<h1>`, and its body taking over with exactly one `<h1>`;
+  - its load failure, which keeps the title and shows the Reload banner;
+  - a generated screen with its purpose, notice, form and extra, and an extra that fails;
+  - switching from a hand-built screen to a generated one;
+  - an unknown id, which loads nothing.
+- **Playwright:** `settings.routes.test.ts` runs at 390 and 1366 px. That includes opening Keyboard from the Settings navigation, with one `<h1>`, no horizontal scroll and axe. The `settings-form` specs (routes, fixture, keyboard; axe in Riverstone light and dark at 390 and 1366) and the shortcuts and boot-shell specs pass. No `waitForTimeout`.
 - **No visual change beyond the merged screens and Keyboard's new navigation item,** so all-themes isn't rerun here.

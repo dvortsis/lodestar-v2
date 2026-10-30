@@ -43,6 +43,7 @@
 <svelte:head><title>{screen?.title() ?? m.settings_shell_title()} · Lodestar</title></svelte:head>
 {#if screen?.load}
 	{#await screen.load()}
+		<h1 class="text-title font-semibold">{screen.title()}</h1>
 		<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 	{:then body}
 		<body.default />

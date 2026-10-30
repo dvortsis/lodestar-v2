@@ -154,19 +154,24 @@ const settingsEditLazy = requireMeasuredJs(
 	onDemandOf('/settings/[section]', settingsEdit)
 );
 // Settings screens (S-settings-reconcile): the registry (shell/screens.ts) imports every screen.ts
-// eagerly, but a hand-built screen's body (`load`, e.g. Keyboard) and a screen's extras (`extra`,
-// General's export) are dynamic imports that run only on that screen. A section's first view is the
-// generated form; "Settings screen bodies (on demand)" gates the rest.
+// eagerly, but a hand-built screen's body (`load`, named `*Screen.svelte`, e.g. Keyboard's) and a
+// screen's extras (`extra`, General's export) are dynamic imports that run only on that screen. A
+// section's first view is the generated form and stops at exactly these files; each body is then
+// measured beyond that first view, so shared chunks are never counted twice.
 const settingsScreensOnDemand = [
-	/features\/settings\/shell\/SettingsExport\.svelte$/,
-	/features\/(?!settings\/)[^/]+\/(?!screen\.ts$)/
+	/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/,
+	/features\/settings\/shell\/SettingsExport\.svelte$/
 ];
 const settingsFirstView = [...settingsOnDemand, ...settingsEdit, ...settingsScreensOnDemand];
+const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsScreens = requireMeasuredJs('Settings screen bodies (on demand)', [
-	...new Set([
-		...onDemandOf('/settings', settingsScreensOnDemand),
-		...onDemandOf('/settings/[section]', settingsScreensOnDemand)
-	])
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsScreensOnDemand.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsSectionView)
+			)
+	)
 ]);
 
 // What another route can still add to /search's first load (runner, 2026-10-24):
@@ -281,22 +286,20 @@ export default [
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45 KB'),
-	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: settingsFirstView }),
 		'45 KB'
 	),
-	entry(
-		'Settings section (own JS + CSS)',
-		own('/settings/[section]', { onDemand: settingsFirstView }),
-		'45 KB'
-	),
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
-	entry('Settings screen bodies (on demand)', settingsScreens, '47 KB'),
+	// Keyboard's body (with its shortcut sheet and Bits UI's dialog code) and General's export panel,
+	// beyond the section's first view: 35.29 KB (limit = measured + 10%).
+	entry('Settings screen bodies (on demand)', settingsScreens, '38.9 KB'),
+	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',
 		[

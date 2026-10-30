@@ -38,7 +38,8 @@ export interface Screen {
 	icon?: Component;
 	/**
 	 * A hand-built screen, loaded when it opens. It renders everything below the shell, its own
-	 * `<h1>` included.
+	 * `<h1>` included. Name its file `*Screen.svelte`: `.size-limit.mjs` keeps it off a section's
+	 * first view by that name.
 	 */
 	load?: () => Promise<{ default: Component }>;
 	/** A generated screen: the schema sections whose fields the form engine shows. */
@@ -57,7 +58,8 @@ const isScreen = (v: unknown): v is Screen =>
 	typeof (v as Screen).id === 'string' &&
 	groups.some((g) => g.id === (v as Screen).group) &&
 	typeof (v as Screen).title === 'function' &&
-	(typeof (v as Screen).load === 'function' || !!(v as Screen).sections?.length);
+	(typeof (v as Screen).load === 'function' ||
+		(Array.isArray((v as Screen).sections) && (v as Screen).sections!.length > 0));
 
 /**
  * The screens these modules export, in navigation order. A screen exported under two names counts

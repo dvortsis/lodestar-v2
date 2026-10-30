@@ -166,6 +166,43 @@ test('mobile list-detail navigation preserves density and fits the viewport', as
 	await expect(page.getByRole('heading', { name: 'General', exact: true })).toBeVisible();
 });
 
+for (const width of [390, 1366]) {
+	test(`a hand-built screen (Keyboard) opens from the navigation at ${width} px`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		const field = (value: unknown) => ({
+			value,
+			env: null,
+			read_only: false,
+			restart_required: false,
+			source: 'default' as const
+		});
+		mock.on('getSettings', {
+			section: 'preferences',
+			revision: 1,
+			restart_required: [],
+			fields: { shortcuts: field(true), shortcut_keys: field({}) }
+		});
+		await page.setViewportSize({ width, height: 900 });
+		await go('/settings');
+		const nav = page.getByRole('navigation', { name: 'Settings sections' });
+		await expect(nav.getByRole('heading', { name: 'Preferences' })).toBeVisible();
+		await nav.getByRole('link', { name: 'Keyboard', exact: true }).click();
+		await expect(page).toHaveURL(/\/settings\/keyboard/);
+		await expect(page.getByRole('heading', { level: 1, name: 'Keyboard' })).toBeVisible();
+		await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+		await expect(
+			page.getByText('Choose how Lodestar responds to the keyboard, and which key does what.')
+		).toBeVisible();
+		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+			true
+		);
+		await expectNoA11yViolations(page);
+	});
+}
+
 test('direct Advanced field link opens its disclosure and focuses the control', async ({
 	page
 }) => {
