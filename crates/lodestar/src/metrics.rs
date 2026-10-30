@@ -457,7 +457,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
                 value,
             );
         }
-        render_permit_returns(&mut o, &d);
+        render_permit_returns(&mut o, d);
         o.one(
             "dht_peer_cancelled_total",
             "counter",
