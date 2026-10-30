@@ -1485,10 +1485,10 @@
       "notes": " | 2026-10-30T14:35Z launched: 8573C provisional factor (1 job) makes neutralized case 53.3us on #210; per-case scaling differs on 8573C; method change goes to runner first; 50us owner budget untouched"
     },
     "R-gauges": {
-      "status": "running",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBEKCAaLuqVT1phsxp",
-      "pr": null,
+      "pr": 219,
       "notes": "owner #189 step 5; cherry-pick to release/v0.5.1 -> v0.5.1-rc.2"
     },
     "IMP-2": {
@@ -2207,6 +2207,7 @@
     "2026-10-30T15:23Z merged #210 IMP-1 (b9c93080, round-4 MERGE), #218 clippy part 1 (c58b72eb, MERGE). #220 refused: ci-ok pending.",
     "2026-10-30T15:23Z RUNNER ERROR: merged #213 (d8fe0376) WITHOUT a review verdict. Its reviewer had never started (wrong branch name: slice/X-flake-logdelete instead of fix/flake-logdelete). Post-merge review launched: session_01MMjhn8QeDxFG54Ku2jUGja. Lesson: confirm each verdict before merging, one PR at a time.",
     "2026-10-30T15:25Z ReadNotifications backlog (23+5) processed. #214 MERGE (nits fixed by runner, 4b...). #215 CHANGES -> gap fix 944a1efe, re-check asked. #216 CHANGES (B1, B2) relayed. #217 CHANGES (Keyboard first view >45 KB) relayed; keep Keyboard; vendor comment. IMP-2 A/B/C answered (C: accept the WAL siblings, never delete, quiescence first). CR-ADM design OK; generation defect as its own unconditional PR fix/pool-generation; Phase 2 after #216. X-filter-budget spread rule accepted (no veto). #219 R-gauges review launched session_01MMjhnAQikEtXErXdw8L7yw.",
-    "2026-10-30T15:32Z merged #214 (9fcdbad5, CR-0 acceptance) and #215 (40935f89, memory-gate fit), each with a MERGE verdict in hand and CI green. #221 X-welcome-focus: review CHANGES (welcome baselines need regenerating); relayed. #220 waits on the Windows test."
+    "2026-10-30T15:32Z merged #214 (9fcdbad5, CR-0 acceptance) and #215 (40935f89, memory-gate fit), each with a MERGE verdict in hand and CI green. #221 X-welcome-focus: review CHANGES (welcome baselines need regenerating); relayed. #220 waits on the Windows test.",
+    "2026-10-30T15:40Z merged #220 (d241e3a1) and #219 R-gauges (9dbff7a8), each with MERGE in hand and CI green. Opened #222: cherry-pick R-gauges onto release/v0.5.1 for rc.2, with the delta map updated. Sessions archived: the R-gauges author, and the #219, #220, #214 and #215 reviewers."
   ]
 }
