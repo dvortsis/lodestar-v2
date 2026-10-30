@@ -47,6 +47,7 @@ jobs:
       importer: ${{ steps.c.outputs.importer }}
       log_bench: ${{ steps.c.outputs.log_bench }}
       fuzz: ${{ steps.c.outputs.fuzz }}
+      soak_tools: ${{ steps.c.outputs.soak_tools }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -261,9 +262,25 @@ jobs:
   # log-bench is the exception the runner approved (B-log1b): its gates take
   # the best of several runs and compare like with like (the same threads on
   # isolated events), so a shared runner's noise doesn't fail it.
+  # The soak analyzer and collectors decide soak acceptance (build-plan §0.4),
+  # so their tests gate like any other code. Standard library only.
+  soak-tools:
+    name: soak tools (Python)
+    needs: changes
+    if: needs.changes.outputs.soak_tools == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s docs/soak/tools -p 'test_*.py' -v
+      - name: Linux collector
+        run: |
+          if [ -d docs/soak/tools/linux ]; then
+            python3 -m unittest discover -s docs/soak/tools/linux -p 'test_*.py' -v
+          fi
+
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench]
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench, soak-tools]
     if: always()
     runs-on: ubuntu-latest
     steps:
