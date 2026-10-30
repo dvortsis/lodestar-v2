@@ -2154,6 +2154,7 @@
     "2026-10-30T14:06Z IMP-1 #210 round-2 fix 562450ae (N1 fold of multi-match candidates); re-check sent to session_01MMjhnCGd8sA1XL9cargxwy; the old run 41065412960 is superseded",
     "2026-10-30T14:06Z CR-0d-2a: runner chose option 1. The I1 reason stays in the metrics gauge, the suppression seconds and the Warn event in 2a; the /stats sampling_blocked field, the pill wording and zh go in 2b",
     "2026-10-30T14:10Z merged #211 (904209d4, owner freshness key; review MERGE, CI green). Opened #212 X-freshness-hardening (869a5bb1, reviewed MERGE); merge on green",
-    "2026-10-30T14:11Z S-settings-reconcile q2: Alerts/Alert/Detail entries 0.03-0.77 KB over from importer-set chunk splitting (Toggle, format/bytes, bindings). Runner: option 1, scope extended to the web/vite.config.ts chunk groups; no limit changes, /search first load must not grow; fallback = report numbers, runner takes them to the owner"
+    "2026-10-30T14:11Z S-settings-reconcile q2: Alerts/Alert/Detail entries 0.03-0.77 KB over from importer-set chunk splitting (Toggle, format/bytes, bindings). Runner: option 1, scope extended to the web/vite.config.ts chunk groups; no limit changes, /search first load must not grow; fallback = report numbers, runner takes them to the owner",
+    "2026-10-30T14:12Z IMP-1 #210 round-3 review of 562450ae: CHANGES. Blocking: the fold keeps a trunc(v2) hash and drops the hybrid's v1, so a floor or abuse hit misses (content safety). Runner: also refuse the record (invalid) when v2s conflict; hoist the DELETE. Sent to the author"
   ]
 }
