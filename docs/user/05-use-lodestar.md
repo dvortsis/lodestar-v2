@@ -49,7 +49,16 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
   <img src="images/insights-light.png" alt="Lodestar Insights overview showing pipeline stage cards and status counters"></picture>
 *Figure 5.4: The Insights overview showing stage status cards, searchable torrent counts and attention items.*
 
-**Status pill.** The pill at the top of the screen shows how the pipeline is doing. It shows progress, and warns when the pipeline has stalled, which means nothing is being stored for a while. Open **Insights** to see which stage is stuck. <!-- confirm at release cut: F-status states and wording -->
+**Status pill.** The pill at the top of the screen shows how the crawler is doing. Select it to open **Insights**.
+
+| State | What it means |
+|---|---|
+| **Crawling** | New torrents are arriving. |
+| **Starting** | Lodestar started less than 6 hours ago and nothing is flowing yet. Sampling waits up to 6 hours after every start. |
+| **Idle** | The crawler has nothing to do right now. |
+| **Stalled** | The crawler is running, but nothing new has been stored for an hour. Or the search index is behind: new torrents are stored but can't be searched yet. |
+
+When the pill says **Stalled**, open **Insights**. A banner there says the crawler looks stalled, and the stage strip below it shows which stage is stuck.
 
 *Figure 5.5: The status pill in its normal and stalled states. (Screenshot pending; see [`images/SHOTLIST.md`](images/SHOTLIST.md).)*
 

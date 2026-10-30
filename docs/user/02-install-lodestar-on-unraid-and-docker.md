@@ -184,7 +184,7 @@ To install with the named volume:
     docker inspect --format '{{.State.Health.Status}}' lodestar
     ```
 
-   **Result:** The command prints `healthy` after about 30 seconds.
+   **Result:** The command prints `healthy` after about 30 seconds. `healthy` means only that the Lodestar process is alive. It doesn't mean Lodestar is finding torrents. The status pill on the **Search** screen and **Insights** show that ([section 5.3](05-use-lodestar.md#53-browse-discover-and-insights)).
 
 > [!WARNING]
 > Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there.
