@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-30T18:47Z",
+ "updated_at": "2026-10-30T19:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1510,6 +1510,13 @@
    "session": null,
    "pr": null,
    "notes": "supervisor switch-refusal stall in CI (run 41091029121)"
+  },
+  "CR-gate-hash-mismatch": {
+   "status": "queued",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "notes": "brief briefs/CR-gate-hash-mismatch.md written 2026-10-30T19:00Z; launch when the usage warning clears or a slot frees; touches sources/pool.rs, so after #231/#232"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2153,7 +2160,6 @@
  "followups": [
   "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
   "2026-10-30T08:41Z UI polish: welcome page h1 (tabindex -1, focused on load) shows a focus ring wider than the text with a notch; consider :focus-visible handling for programmatic focus",
-  "2026-10-30T10:41Z CR-gate-metrics: carry HashMismatch separately through the pool terminal loss so failed_verification means hash mismatch only (peer-wire/sources change)",
   "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
   "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
   "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)",
@@ -2249,7 +2255,8 @@
   "2026-10-30T18:25Z #227 new head 9c99b688: runner delta check OK (config.rs both sides kept; ci.yml requires >=1 passing privdrop test); merge on green ci-ok. #229 X-flake-supervisor-switch runner review CHANGES (drain spins once stderr disconnects). #221 head ad3895ad sent to reviewer.",
   "2026-10-30T18:35Z #231 fix/cr-adm-polish runner review CHANGES: partial-refusal holds miss refusals seen in an earlier poll (refused/unacknowledged are per-poll locals); author session_01MMjhnA3oPv1oEebqrwfFcm.",
   "2026-10-30T18:55Z opened #232 fix/dht-queued-cancel-count (runner-owned: dht_peer_queued_dropped_total{reason}, CR-SIM conservation, admission-pressure golden +2 lines); review queued with session_01MMjhn984M3k3UJXUCsEYPX after #230/#221.",
-  "2026-10-30T18:47Z heartbeat. Merged #221 X-welcome-focus (9b3951d6; ci-ok, playwright core, lighthouse, web green; reviewer MERGE); author archived. #230 MERGE, waits on ci-ok. #229 delta OK at 3d1321c3 and #231 delta OK at 2e18f07f; both wait on ci-ok. #227 waits on ci-ok at 9c99b688. #232 CHANGES fixed at 0ec7379a (third drop site in start_peer_request; folded in the filter-budget nits), same reviewer re-checking. Disk full at 18:40: cleared target/debug and scratchpad/l5-target."
+  "2026-10-30T18:47Z heartbeat. Merged #221 X-welcome-focus (9b3951d6; ci-ok, playwright core, lighthouse, web green; reviewer MERGE); author archived. #230 MERGE, waits on ci-ok. #229 delta OK at 3d1321c3 and #231 delta OK at 2e18f07f; both wait on ci-ok. #227 waits on ci-ok at 9c99b688. #232 CHANGES fixed at 0ec7379a (third drop site in start_peer_request; folded in the filter-budget nits), same reviewer re-checking. Disk full at 18:40: cleared target/debug and scratchpad/l5-target.",
+  "2026-10-30T19:00Z CR-gate-hash-mismatch scoped: multi-crate (FailureKind ripples into stats, metrics, log codes and goldens; Loss is persisted), so it's queued as a slice with a brief instead of a runner patch. The cli.rs port fix is ready locally as cf087f09 on top of #229, to push after #229 merges."
  ],
  "policy_note_usage": "2026-10-30T18:04Z seven-day usage warning seen; minimise new sessions"
 }
