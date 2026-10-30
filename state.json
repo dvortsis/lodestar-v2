@@ -1263,7 +1263,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src)"
+   "notes": "2026-10-30T04:56Z from F-filters: packs MW-3, LU-2, LU-4, FK-2, SC-1 ignore Neutralize terms (\u00a720.5.5). deps F-filters. | 2026-10-30T06:32Z waits for F-filters-neutral-perf (both own crates/filter/src) | 2026-10-30T21:45Z brief briefs/F-filters-packs.md; unblocked (#192 merged); launching"
   },
   "X-ci-health": {
    "status": "merged",
@@ -1310,13 +1310,13 @@
    "notes": "2026-10-30T05:48Z from L2 review (v0.5.1 BLOCKER for item 1): (1) exempt resolved bootstrap seeds from special-range check (fake-ip 198.18/15, NAT64) keeping blocklist+port; warn if all rejected; (2) SetPaused(true) must not burn an attempt: drop reply sender -> cancel; polish: IANA ranges 192.31.196/24,192.52.193/24,192.175.48/24,2620:4f:8000::/48 + range-edge/scope-id tests; analyzer outstanding_rpcs cap per preset (256/1024/4096) + json recursion errors; tx-id start lower half; lookups_completed excludes cancelled. Each runtime change -> release delta + targeted test. | 2026-10-30T05:55Z launched (Opus) from land/L5 | 2026-10-30T07:18Z ready 52290f3 on land/L5 dcff7b9; security-review clean. Runner OK: narrow seed exemption (198.18/15, 64:ff9b::/96, 64:ff9b:1::/48); amend metrics.md:641 in PR; NAT64 needs [::] bind (follow-up) | 2026-10-30T10:13Z told: merge main (post-#184) and open PR | 2026-10-30T10:29Z #200 48d1db9; full-ci + CI dispatched; fresh protocol/security review session_01MMjhnCFkYrw91eV2dqK7Ei | 2026-10-30T10:43Z review FIX FIRST: BLOCKING NAT64 /96 accepted any embedded IPv4 (loopback/LAN/metadata) -> require public embedded v4 (/96) + RFC6052 /48 decode-and-check; resume order DHT-then-pool taken now (was CR-ADM input); decision wording; polish. | 2026-10-30T10:56Z round-1 fixes c3c2f30 (NAT64 /96+/48 RFC 6052 public check; DHT resumes before pool); delta re-check asked of session_01MMjhnCFkYrw91eV2dqK7Ei; CI waiter | 2026-10-30T11:08Z re-check FIX FIRST: local-use NAT64 /48 decode aliases other prefix lengths (bypass); runner: local-use only as 64:ff9b:1::/96; sent | 2026-10-30T11:16Z soak-tools CI red on c3c2f30: semantic clash with #197 (analyzer flags missing settings.intensity; Linux collector omits it); author to add collect.py --intensity + tests + README with the NAT64 push (ownership extended to docs/soak/tools/linux) | 2026-10-30T11:28Z NAT64 delta 9b16597 re-check MERGE; awaiting main merge + collector --intensity push | 2026-10-30T11:33Z 6c08bf9: main merged + collect.py --intensity (runner-reviewed delta OK); merge on green CI (full-ci) | head is 5c88c65 (author correction) | 2026-10-30T12:03Z 5c88c65 all green but merge refused: logs_catalog.txt golden conflict with #198; author to merge main + regenerate | 2026-10-30T12:22Z merged #200 as c3f6341a (= v0.5.1 cutoff); author archived"
   },
   "CR-ADM": {
-   "notes": " | 2026-10-30T05:48Z L2 review: actor refusals get exponential back-off (pool.rs:764 vs flat pool.rs:675); pool max_lookups 256 > actor cap 32 -> include (requeue refused keys without exp factor; derive max_lookups from actor cap). | 2026-10-30T07:18Z input from CR-0f: pipeline/src/control.rs pauses pool before DHT and resumes same order on separate channels; race can make one key wait refusal back-off (no attempt lost) | 2026-10-30T08:01Z brief written (briefs/CR-ADM.md): phase 1 design OK gate; launch after CR-0f + CR-SIM on main | 2026-10-30T10:43Z pause/resume ordering race now fixed in CR-0f #200 (resume: DHT first); remove from CR-ADM scope",
+   "notes": " | 2026-10-30T05:48Z L2 review: actor refusals get exponential back-off (pool.rs:764 vs flat pool.rs:675); pool max_lookups 256 > actor cap 32 -> include (requeue refused keys without exp factor; derive max_lookups from actor cap). | 2026-10-30T07:18Z input from CR-0f: pipeline/src/control.rs pauses pool before DHT and resumes same order on separate channels; race can make one key wait refusal back-off (no attempt lost) | 2026-10-30T08:01Z brief written (briefs/CR-ADM.md): phase 1 design OK gate; launch after CR-0f + CR-SIM on main | 2026-10-30T10:43Z pause/resume ordering race now fixed in CR-0f #200 (resume: DHT first); remove from CR-ADM scope | 2026-10-30T21:45Z reconciled: merged #223/#228/#231",
    "deps": [
     "CR-0f",
     "CR-SIM"
    ],
    "session": "session_01MMjhnA3oPv1oEebqrwfFcm",
-   "status": "running"
+   "status": "merged"
   },
   "F-filters-neutral-perf": {
    "status": "merged",
@@ -1446,21 +1446,21 @@
    "review_session_done": true
   },
   "IMP-1": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "deps": [
     "v051-cut"
    ],
-   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy | 2026-10-30T13:55Z review FIX FIRST: B1 legacy import path writes no quality row -> runner: option (b) (IMPORTED+no row = unknown; drop V13 backfill); I3 verified-upgrade writes verified row + signal or documented limitation; I4 candidate refile follow-up; polish 5-9 incl. candidates rowid table | 2026-10-30T14:35Z fixes 6c7bcef3 (option b, info_size>0 verified signal, polish); size 3,446 accepted (tests); re-check asked of session_01MMjhnCGd8sA1XL9cargxwy; filter budget red = 8573C gate issue (not PR) -> re-run once when run 41065412960 completes | 2026-10-30T14:40Z round-2 re-check FIX FIRST: N1 candidate fold wedge (UNIQUE v2 index) reproduced; round-1 all resolved; fix: fold multi-match candidates in-tx",
+   "notes": " | 2026-10-30T12:40Z brief written; launch when a helper slot frees (after D-v051) | 2026-10-30T12:45Z launched (opus) from main; contract first | 2026-10-30T13:05Z contract 43f758f9 OK with conditions: V13 downgrade refusal test, store-side floor/CS check stricter-only, Replayed changes no counters; gate.rs Origin::Import + metrics.md line OK; 2.2-2.8k one PR OK | 2026-10-30T13:45Z PR #210 (00da08a4, ~3.0k lines, size accepted); downgrade refusal test + stricter-only floor + Replayed no-count done; Origin::Import deferred (ack); fresh Opus + security review session_01MMjhnCGd8sA1XL9cargxwy | 2026-10-30T13:55Z review FIX FIRST: B1 legacy import path writes no quality row -> runner: option (b) (IMPORTED+no row = unknown; drop V13 backfill); I3 verified-upgrade writes verified row + signal or documented limitation; I4 candidate refile follow-up; polish 5-9 incl. candidates rowid table | 2026-10-30T14:35Z fixes 6c7bcef3 (option b, info_size>0 verified signal, polish); size 3,446 accepted (tests); re-check asked of session_01MMjhnCGd8sA1XL9cargxwy; filter budget red = 8573C gate issue (not PR) -> re-run once when run 41065412960 completes | 2026-10-30T14:40Z round-2 re-check FIX FIRST: N1 candidate fold wedge (UNIQUE v2 index) reproduced; round-1 all resolved; fix: fold multi-match candidates in-tx | 2026-10-30T21:45Z reconciled: merged #210",
    "session": "session_01MMjhnAfK5WT1Ptw6kRCAkx",
    "pr": 210
   },
   "X-flake-logdelete": {
-   "status": "running",
+   "status": "merged",
    "session": "session_01MMjhn8X3Sivfo3uzLtqfiE",
    "model": "opus",
    "attempt": 1,
-   "notes": " | 2026-10-30T13:45Z launched: logging source_tests delete_while_writers_run_and_a_compression_is_in_flight deleted 0 under load (reported by IMP-1)"
+   "notes": " | 2026-10-30T13:45Z launched: logging source_tests delete_while_writers_run_and_a_compression_is_in_flight deleted 0 under load (reported by IMP-1) | 2026-10-30T21:45Z reconciled: merged #213"
   },
   "S-settings-reconcile": {
    "notes": " | 2026-10-30T14:25Z launched (opus) from main; base 848e10a0 + ports; budgets by splitting",
@@ -1479,9 +1479,9 @@
    "merge": "a0cdf84a"
   },
   "X-clippy-msrv": {
-   "status": "queued",
+   "status": "merged",
    "model": "sonnet",
-   "notes": "brief written; launch when no large Rust PR is open across touched crates"
+   "notes": "brief written; launch when no large Rust PR is open across touched crates | 2026-10-30T21:45Z reconciled: merged #218/#224/#237; part 3 (chunks_exact_to_as_chunks) is a follow-up"
   },
   "X-filter-budget-8573C": {
    "status": "merged",
@@ -1503,18 +1503,18 @@
    "merge": "c15a5112"
   },
   "X-welcome-focus": {
-   "status": "running",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhnCqnvGWrwaoWdoFLnG",
    "pr": null,
-   "notes": "WelcomePage h1 programmatic-focus ring; tokens; screenshots before/after"
+   "notes": "WelcomePage h1 programmatic-focus ring; tokens; screenshots before/after | 2026-10-30T21:45Z reconciled: merged #221"
   },
   "X-flake-supervisor-switch": {
-   "status": "running",
+   "status": "merged",
    "model": "opus",
    "session": null,
    "pr": null,
-   "notes": "supervisor switch-refusal stall in CI (run 41091029121)"
+   "notes": "supervisor switch-refusal stall in CI (run 41091029121) | 2026-10-30T21:45Z reconciled: merged #229 (+#234, #235)"
   },
   "CR-gate-hash-mismatch": {
    "status": "merged",
