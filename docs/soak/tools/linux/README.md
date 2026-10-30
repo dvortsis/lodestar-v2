@@ -2,7 +2,8 @@
 
 `collect.py` collects aggregate soak evidence from a running Lodestar instance on
 Linux, in Docker (Unraid) or native. It writes the same evidence that
-`../cr0-soak.ps1` writes on Windows, so `../analyze_cr0.py` reads it unchanged.
+`../cr0-soak.ps1` writes on Windows, so `../analyze_cr0.py` reads it unchanged. Its report opens with a "Run" section and a `gate_evidence`
+verdict, so a rehearsal or a 2 h leg isn't mistaken for 24 h evidence.
 Python 3.10+ and the standard library only. Developer and operator doc.
 
 It **observes**; it does not launch Lodestar. Start Lodestar first, then start the

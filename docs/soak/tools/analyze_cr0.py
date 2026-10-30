@@ -367,6 +367,51 @@ def disk_summary(root, issues):
     return summary
 
 
+# Baseline coverage each leg must measure before its run can be gate evidence.
+GATE_HOURS = {"main": 24, "gluetun": 2}
+
+
+def run_identity(run):
+    """Which kind of run this is, from run.json alone. A field the collector
+    didn't record is None, never guessed."""
+    settings = run.get("settings", {})
+    leg = settings.get("leg")
+    rehearsal = settings.get("rehearsal")
+    hours = settings.get("baseline_hours")
+    intensity = settings.get("intensity")
+    if "python" in run or settings.get("mode") in ("docker", "native"):
+        collector = "linux"
+    elif "common_sha256" in run or str(run.get("os", "")).startswith("Microsoft Windows"):
+        collector = "windows"
+    else:
+        collector = None
+    return {
+        "leg": leg if leg in GATE_HOURS else None,
+        "rehearsal": rehearsal if isinstance(rehearsal, bool) else None,
+        "baseline_required_hours": hours if number(hours) else None,
+        "intensity": intensity.lower() if isinstance(intensity, str) and intensity.lower() in OUTSTANDING_RPCS else None,
+        "collector": collector,
+    }
+
+
+def gate_verdict(identity_, covered_seconds):
+    """Informational only: whether this run could count as release-gate
+    evidence. It changes no pass/fail computation."""
+    reasons = []
+    if identity_["rehearsal"] is None:
+        reasons.append("rehearsal_not_recorded")
+    elif identity_["rehearsal"]:
+        reasons.append("rehearsal")
+    leg = identity_["leg"]
+    if leg is None:
+        reasons.append("leg_not_recorded")
+    elif covered_seconds < GATE_HOURS[leg] * 3600:
+        reasons.append("coverage_below_required")
+    if identity_["intensity"] is None:
+        reasons.append("intensity_not_recorded")
+    return not reasons, reasons
+
+
 def analyze(root, max_gap=90, now=None, intensity=None):
     run = read_json(root / "run.json")
     if not isinstance(run.get("settings", {}), dict):
@@ -421,7 +466,12 @@ def analyze(root, max_gap=90, now=None, intensity=None):
         reason = "process_exited" if str(reason).startswith("process_exited_") else "unknown"
     core_coverage = {name: baseline["measurement_coverage"][name]["fraction"]
                      for name in CORE_COUNTERS + GAUGES}
+    run_info = run_identity(run)
+    evidence, reasons = gate_verdict(run_info, baseline["valid_interval_seconds"])
+    run_info.update(baseline_measured_hours=baseline["valid_interval_seconds"] / 3600,
+                    gate_evidence=evidence, gate_evidence_reasons=reasons)
     return {
+        "run": run_info,
         "schema_version": 2, "provenance": provenance, "intensity": intensity,
         "run_state": result_state(result),
         "observation_state": freshness(rows, now or datetime.now(timezone.utc)),
@@ -456,7 +506,22 @@ def markdown(report):
     def fmt(value):
         return "unknown" if value is None else f"{value:,.2f}"
     shutdown = {None: "not recorded", True: "yes", False: "no"}[report["clean_shutdown"]]
-    out = ["# CR-0 soak evidence", "",
+    run = report["run"]
+
+    def recorded(value):
+        return "not recorded" if value is None else str(value).lower() if isinstance(value, bool) else str(value)
+    gate = ("yes" if run["gate_evidence"] else "no: " + ", ".join(run["gate_evidence_reasons"]))
+    leg = recorded(run["leg"])
+    if run["leg"] == "gluetun":
+        leg += " (2 h leg)"
+    out = ["# CR-0 soak evidence", "", "## Run", "",
+           f"- Collector: {recorded(run['collector'])}",
+           f"- Leg: {leg}",
+           f"- Rehearsal: {recorded(run['rehearsal'])}",
+           f"- Baseline hours configured: {recorded(run['baseline_required_hours'])}",
+           f"- Baseline hours measured (valid coverage): {fmt(run['baseline_measured_hours'])}",
+           f"- Intensity: {recorded(run['intensity'])}",
+           f"- Gate evidence: {gate}", "",
            f"Commit: `{report['provenance'].get('commit', 'unknown')}`.",
            f"Binary SHA-256: `{report['provenance'].get('sha256', 'unknown')}`.", "",
            f"Run: {report['run_state']}. Baseline: {report['baseline_status']}.", "",
