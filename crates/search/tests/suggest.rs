@@ -471,6 +471,69 @@ fn a_cancelled_request_stops() {
     assert!(suggest::suggest(&f.index, &req, &cancel).is_err());
 }
 
+/// A phrase excluded with `-` that matches nothing, or whose first match
+/// is after the query's first candidate, is asked about documents behind
+/// it; tantivy's phrase scorer asserted on that in debug builds
+/// (docs/decisions/2026-10-30-X-ci-health.md). Found by the property
+/// test below.
+#[test]
+fn a_negated_phrase_suggests_without_panicking() {
+    let f = fixture();
+    for q in [
+        "-\"e,h\"~*é0",
+        "-\"e h\"",
+        "-\"dark matter\"",
+        "dark -\"dark matter\"",
+    ] {
+        for pos in 0..=q.chars().count() {
+            let r = restrict(PLAIN);
+            let req = Request {
+                q,
+                pos: Some(pos),
+                limit: 20,
+                shown: PLAIN,
+                restrict: &r,
+                now: NOW,
+            };
+            suggest::suggest(&f.index, &req, &CancelToken::new()).unwrap();
+        }
+    }
+}
+
+/// A negated phrase still removes exactly the documents the phrase
+/// matches: one that matches nothing, one whose first match comes after
+/// other candidates, and one that matches the first candidates.
+#[test]
+fn a_negated_phrase_excludes_its_matches() {
+    let f = fixture();
+    let found = |q: &str| {
+        let ast = parse(q).unwrap_or_else(|e| panic!("{q}: {e}"));
+        let r = f.index.search(&f.index.query(&ast, NOW), 50).unwrap();
+        assert_eq!(r.total, r.hits.len(), "{q}");
+        let mut names = f.index.names(&r.hits).unwrap();
+        names.sort();
+        names
+    };
+    let dark = found("dark");
+    assert_eq!(dark.len(), 4, "{dark:?}");
+    for phrase in ["\"e h\"", "\"dark matter\"", "\"dark knight\""] {
+        let excluded = found(phrase);
+        let left = found(&format!("dark -{phrase}"));
+        let expected: Vec<String> = dark
+            .iter()
+            .filter(|n| !excluded.contains(n))
+            .cloned()
+            .collect();
+        assert_eq!(left, expected, "dark -{phrase}");
+        assert_eq!(
+            found(&format!("-{phrase}")).len(),
+            TORRENTS.len() - excluded.len()
+        );
+    }
+    assert_eq!(found("\"dark matter\"").len(), 1);
+    assert_eq!(found("\"dark knight\"").len(), 2);
+}
+
 /// Quarantines stored torrent `id` with a sealed name, as filtering does
 /// when it holds one (§20.3).
 fn quarantine(store: &mut Store, id: i64) {

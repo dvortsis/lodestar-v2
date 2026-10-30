@@ -115,6 +115,21 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// A loopback address where connecting is refused, for as long as the
+/// returned socket lives. The socket is bound but never listens, so
+/// nothing answers, and no other test's server can be given the port
+/// meanwhile. (Binding a listener and dropping it frees the port, and a
+/// server another test starts in parallel can take it and answer.)
+pub fn refused_addr() -> (tokio::net::TcpSocket, std::net::SocketAddr) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    // Without SO_REUSEADDR no other socket can bind the port, even one
+    // that sets it (as tokio's listeners do on Unix).
+    assert!(!socket.reuseaddr().unwrap());
+    socket.bind(([127, 0, 0, 1], 0).into()).unwrap();
+    let addr = socket.local_addr().unwrap();
+    (socket, addr)
+}
+
 #[derive(Default)]
 struct State {
     script: Vec<Fixture>,
