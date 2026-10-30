@@ -325,6 +325,93 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["intensity"], "aggressive")
 
+    def kind_run(self, hours, **run_fields):
+        """A run of `hours` of baseline whose run.json carries run_fields."""
+        step = 600
+        self.rows([sample(t, t // 60, process_id=123) for t in range(0, int(hours * 3600) + step, step)])
+        run = {"commit": "a" * 40, **run_fields}
+        (self.root / "run.json").write_text(json.dumps(run), encoding="utf-8")
+        report = analyze(self.root, max_gap=step)
+        return report, markdown(report)
+
+    LINUX = {"python": "3.12.0"}
+
+    def test_main_24h_run_is_gate_evidence(self):
+        report, md = self.kind_run(24, **self.LINUX, settings={
+            "leg": "main", "rehearsal": False, "baseline_hours": 24, "intensity": "balanced"})
+        self.assertEqual(report["run"]["leg"], "main")
+        self.assertIs(report["run"]["rehearsal"], False)
+        self.assertEqual(report["run"]["baseline_required_hours"], 24)
+        self.assertEqual(report["run"]["intensity"], "balanced")
+        self.assertEqual(report["run"]["collector"], "linux")
+        self.assertIs(report["run"]["gate_evidence"], True)
+        self.assertEqual(report["run"]["gate_evidence_reasons"], [])
+        self.assertIn("- Leg: main\n", md)
+        self.assertIn("- Rehearsal: false\n", md)
+        self.assertIn("- Gate evidence: yes\n", md)
+        self.assertLess(md.index("## Run"), md.index("Commit:"))
+
+    def test_gluetun_2h_leg_is_gate_evidence_labelled_as_the_leg(self):
+        report, md = self.kind_run(2, **self.LINUX, settings={
+            "leg": "gluetun", "rehearsal": False, "baseline_hours": 2, "intensity": "low"})
+        self.assertEqual(report["run"]["leg"], "gluetun")
+        self.assertIs(report["run"]["gate_evidence"], True)
+        self.assertIn("- Leg: gluetun (2 h leg)\n", md)
+        self.assertIn("- Baseline hours configured: 2\n", md)
+
+    def test_rehearsal_is_never_gate_evidence(self):
+        report, md = self.kind_run(24, **self.LINUX, settings={
+            "leg": "main", "rehearsal": True, "baseline_hours": 24, "intensity": "balanced"})
+        self.assertIs(report["run"]["gate_evidence"], False)
+        self.assertEqual(report["run"]["gate_evidence_reasons"], ["rehearsal"])
+        self.assertIn("- Gate evidence: no: rehearsal\n", md)
+
+    def test_windows_run_without_settings_fields_shows_absent_not_guessed(self):
+        report, md = self.kind_run(1, os="Microsoft Windows NT 10.0", common_sha256="b" * 64, settings={})
+        run = report["run"]
+        self.assertEqual(run["collector"], "windows")
+        for field in ("leg", "rehearsal", "baseline_required_hours", "intensity"):
+            self.assertIsNone(run[field])
+        self.assertIs(run["gate_evidence"], False)
+        self.assertEqual(run["gate_evidence_reasons"], [
+            "rehearsal_not_recorded", "leg_not_recorded", "intensity_not_recorded"])
+        for line in ("Leg", "Rehearsal", "Baseline hours configured", "Intensity"):
+            self.assertIn(f"- {line}: not recorded\n", md)
+        self.assertIn("- Collector: windows\n", md)
+        # No settings at all must still work.
+        report, _ = self.kind_run(1, os="Microsoft Windows NT 10.0")
+        self.assertIsNone(report["run"]["intensity"])
+        # The --intensity override picks the cap but is not a recorded intensity.
+        report = analyze(self.root, intensity="aggressive")
+        self.assertIsNone(report["run"]["intensity"])
+        self.assertIn("intensity_not_recorded", report["run"]["gate_evidence_reasons"])
+
+    def test_windows_run_with_the_real_settings_shape(self):
+        # cr0-soak.ps1 writes intensity and baseline_hours but no leg or rehearsal.
+        report, md = self.kind_run(24, os="Microsoft Windows NT 10.0", common_sha256="b" * 64,
+                                   settings={"intensity": "balanced", "baseline_hours": 24, "warmup_minutes": 30})
+        run = report["run"]
+        self.assertEqual((run["collector"], run["intensity"], run["baseline_required_hours"]),
+                         ("windows", "balanced", 24))
+        self.assertIsNone(run["leg"])
+        self.assertIs(run["gate_evidence"], False)
+        self.assertEqual(run["gate_evidence_reasons"], ["rehearsal_not_recorded", "leg_not_recorded"])
+        self.assertEqual(list(report)[0], "run")
+
+    def test_gluetun_rehearsal_is_not_gate_evidence(self):
+        report, _ = self.kind_run(2, **self.LINUX, settings={
+            "leg": "gluetun", "rehearsal": True, "baseline_hours": 2, "intensity": "low"})
+        self.assertEqual(report["run"]["gate_evidence_reasons"], ["rehearsal"])
+
+    def test_run_too_short_for_its_leg_is_not_gate_evidence(self):
+        for leg, hours in (("main", 23), ("gluetun", 1)):
+            with self.subTest(leg=leg):
+                report, md = self.kind_run(hours, **self.LINUX, settings={
+                    "leg": leg, "rehearsal": False, "baseline_hours": hours, "intensity": "balanced"})
+                self.assertIs(report["run"]["gate_evidence"], False)
+                self.assertEqual(report["run"]["gate_evidence_reasons"], ["coverage_below_required"])
+                self.assertIn("- Gate evidence: no: coverage_below_required\n", md)
+
     def test_deeply_nested_json_is_malformed_evidence(self):
         deep = "[" * 200000 + "]" * 200000
         self.rows([sample(0)])
