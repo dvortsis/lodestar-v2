@@ -652,3 +652,55 @@ fn neutralizing_never_widens_always_allow() {
         assert_eq!(decided(&e, &[H], "foo qux"), None, "{allow}");
     }
 }
+
+/// The locked floor (CS-1a, CS-1b, CS-8a) comes before everything these
+/// fixes touch: neutralizing, Always allow, list exceptions and
+/// classification rules never reach it.
+#[test]
+fn the_floor_is_untouched() {
+    use lodestar_filter::{CoreRule, Origin, payload_sig};
+    let (confirmed, imported) = ([0x11; 20], [0x22; 20]);
+    let payload = vec![
+        FileInfo::new(vec!["x".into(), "Amber Beacon.mkv".into()], 734_003_201),
+        FileInfo::new(vec!["x".into(), "Amber Beacon.srt".into()], 81_233),
+    ];
+    let mut e = engine();
+    e.core.cs.add_hash(confirmed, Origin::Confirmed);
+    e.core.cs.add_hash(imported, Origin::Imported);
+    e.core.cs.add_sig(payload_sig(&payload).unwrap().sig);
+    // Every release this change touches, all matching the torrent.
+    e.overrides.push(neutralize("amber"));
+    e.overrides.push(Override {
+        id: 2,
+        what: Match::Keyword("beacon".into()),
+        strength: Strength::Override,
+        ..neutralize("amber")
+    });
+    e.allow.push(lodestar_filter::Allow {
+        id: 1,
+        query: parse("beacon -\"amber beacon\"").unwrap(),
+    });
+    for h in [confirmed, imported, H] {
+        list(&mut e, 1, Action::Hide, &[h]);
+    }
+    e.exceptions.push(except_list(1, &[confirmed, imported, H]));
+    e.class_rules = class_engine(&[("amber", false)]).class_rules;
+    for (hashes, files, rule) in [
+        (&[confirmed][..], &[][..], CoreRule::Cs1a),
+        (&[imported][..], &[][..], CoreRule::Cs1b),
+        (&[H][..], &payload[..], CoreRule::Cs8a),
+    ] {
+        let it = Item {
+            files,
+            ..item(hashes, "Amber Beacon")
+        };
+        let d = e.judge(&it, None, 0).decision.unwrap();
+        assert_eq!(d.rule, RuleRef::Core(rule), "{rule:?}");
+        let (v, _) = e.judge_classified(&it, None, 0);
+        assert_eq!(v.decision.unwrap().rule, RuleRef::Core(rule), "{rule:?}");
+        if rule != CoreRule::Cs8a {
+            let d = e.blocked_hash(hashes).unwrap();
+            assert_eq!(d.rule, RuleRef::Core(rule), "{rule:?}");
+        }
+    }
+}
