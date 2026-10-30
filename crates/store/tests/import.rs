@@ -1269,6 +1269,118 @@ fn a_record_spanning_two_candidates_folds_them() {
     assert!(j.counters.conserved());
 }
 
+/// A fold keeps the hybrid's v1 hash as the key, in either order, so a
+/// floor or abuse hit on the v1 hash, or a tombstone on the truncated v2
+/// hash, removes the candidate and journals it.
+#[test]
+fn a_folded_hybrid_is_keyed_by_its_v1_hash() {
+    let v = lodestar_metainfo::InfoHashV2([7; 32]);
+    let h1 = [1u8; 20];
+    let orders: [&[ImportRecord<'static>]; 3] = [
+        &[
+            v2_candidate(v.truncated().0, Some(v)),
+            v2_candidate(h1, Some(v)),
+        ],
+        &[v2_candidate(h1, None), v2_candidate(h1, Some(v))],
+        &[
+            v2_candidate(v.truncated().0, Some(v)),
+            v2_candidate(h1, None),
+            v2_candidate(h1, Some(v)),
+        ],
+    ];
+    for (i, order) in orders.iter().enumerate() {
+        for floor_v1 in [true, false] {
+            let mut store = mem();
+            let src = source(&mut store);
+            let j = reading(&mut store, b"ds-1");
+            for (seq, rec) in order.iter().enumerate() {
+                store
+                    .commit_import_batch(&batch(
+                        j.id,
+                        seq as u64 + 1,
+                        src,
+                        std::slice::from_ref(rec),
+                    ))
+                    .unwrap();
+            }
+            let key: (Vec<u8>, Vec<u8>) = store
+                .connection()
+                .query_row("SELECT hash, hash_v2 FROM import_candidates", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            assert_eq!(key, (h1.to_vec(), v.0.to_vec()), "order {i}");
+            if floor_v1 {
+                store.add_cs_hashes(&[h1], 1, T).unwrap();
+            } else {
+                hold(&mut store, v.truncated().0, Held::Tombstone);
+            }
+            assert_eq!(
+                count(&store, "SELECT count(*) FROM import_candidates"),
+                0,
+                "order {i}, floor_v1 {floor_v1}"
+            );
+            assert_eq!(
+                count(
+                    &store,
+                    "SELECT count(*) FROM snapshot_deletions WHERE hash = x'0101010101010101010101010101010101010101'"
+                ),
+                1,
+                "journalled under the v1 key: order {i}, floor_v1 {floor_v1}"
+            );
+        }
+    }
+}
+
+/// Records that disagree on a torrent's identity (two v2 hashes, or two
+/// v1 hashes for one v2) are refused as invalid, and nothing is folded or
+/// dropped.
+#[test]
+fn a_conflicting_identity_is_refused() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let j = reading(&mut store, b"ds-1");
+    let v = lodestar_metainfo::InfoHashV2([7; 32]);
+    let other = lodestar_metainfo::InfoHashV2([8; 32]);
+    store
+        .commit_import_batch(&batch(j.id, 1, src, &[v2_candidate([1; 20], Some(v))]))
+        .unwrap();
+    let before: Vec<(Vec<u8>, Vec<u8>)> = store
+        .connection()
+        .prepare("SELECT hash, hash_v2 FROM import_candidates")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let out = outcomes(
+        store
+            .commit_import_batch(&batch(
+                j.id,
+                2,
+                src,
+                &[
+                    v2_candidate([1; 20], Some(other)),
+                    v2_candidate([2; 20], Some(v)),
+                ],
+            ))
+            .unwrap(),
+    );
+    assert_eq!(out, [RecordOutcome::Invalid, RecordOutcome::Invalid]);
+    let after: Vec<(Vec<u8>, Vec<u8>)> = store
+        .connection()
+        .prepare("SELECT hash, hash_v2 FROM import_candidates")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(after, before);
+    let c = job(&store, j.id).counters;
+    assert_eq!((c.invalid, c.candidates), (2, 1));
+    assert!(c.conserved());
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 

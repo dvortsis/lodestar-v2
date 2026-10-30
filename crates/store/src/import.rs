@@ -1228,8 +1228,8 @@ fn commit_candidate(
         merge(tx, id, batch, cand.privacy)?;
         return Ok(RecordOutcome::Merged(id));
     }
-    filter::write(tx, cand.decision.hits)?;
     if let Some(held) = cand.decision.held() {
+        filter::write(tx, cand.decision.hits)?;
         return Ok(held_outcome(held));
     }
     // Never an empty name or a zero size: those are missing.
@@ -1240,8 +1240,8 @@ fn commit_candidate(
         .and_then(|s| i64::try_from(s).ok());
     // One candidate per torrent identity, as in `torrents`. A record
     // under the swarm hashes of several stored candidates (a hybrid's v1
-    // and v2 views stored apart) folds them into the oldest first, so
-    // setting its v2 hash can never collide with another row's.
+    // and v2 views stored apart) folds them into the oldest, so setting
+    // its v2 hash can never collide with another row's.
     let mut ids = std::collections::BTreeSet::new();
     {
         let mut stmt = tx.prepare_cached(
@@ -1256,41 +1256,77 @@ fn commit_candidate(
             }
         }
     }
+    let mut rows = Vec::with_capacity(ids.len());
+    {
+        let mut read = tx.prepare_cached(
+            "SELECT hash, hash_v2, name, size, privacy, source_at FROM import_candidates
+             WHERE id = ?1",
+        )?;
+        for id in &ids {
+            rows.push(read.query_row([id], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    Folded {
+                        hash_v2: r.get(1)?,
+                        name: r.get(2)?,
+                        size: r.get(3)?,
+                        privacy: Privacy::from_code(r.get(4)?).unwrap_or(Privacy::Unknown),
+                        source_at: r.get(5)?,
+                    },
+                ))
+            })?);
+        }
+    }
+    // The identity the record and the rows describe together: at most
+    // one v2 hash, and at most one v1 (a hash that isn't the truncated
+    // v2). Anything else is inconsistent source data: the record is
+    // refused, and nothing is folded or dropped (runner, IMP-1 round 3).
+    let record_v2 = cand.hash_v2.map(|h| h.0.to_vec());
+    let mut v2s: Vec<&Vec<u8>> = record_v2
+        .iter()
+        .chain(rows.iter().filter_map(|(_, f)| f.hash_v2.as_ref()))
+        .collect();
+    v2s.sort();
+    v2s.dedup();
+    if v2s.len() > 1 {
+        return Ok(RecordOutcome::Invalid);
+    }
+    let truncated = v2s.first().map(|v| &v[..20]);
+    let mut v1s: Vec<&[u8]> = std::iter::once(&cand.hash.0[..])
+        .chain(rows.iter().map(|(h, _)| &h[..]))
+        .filter(|h| Some(*h) != truncated)
+        .collect();
+    v1s.sort();
+    v1s.dedup();
+    if v1s.len() > 1 {
+        return Ok(RecordOutcome::Invalid);
+    }
+    // Keyed as `torrents` key a hybrid: by its v1 hash when one is known,
+    // so a hold on either hash finds it. Every row holding that hash is
+    // among those folded, so it can't collide.
+    let key = v1s.first().map(|h| h.to_vec());
+    filter::write(tx, cand.decision.hits)?;
     let row = match ids.first().copied() {
         Some(keep) => {
+            // The oldest row's values win, then the others' in id order,
+            // then the record's.
             let mut merged = Folded {
-                hash_v2: cand.hash_v2.map(|h| h.0.to_vec()),
+                hash_v2: record_v2,
                 name: name.map(<[u8]>::to_vec),
                 size,
                 privacy: cand.privacy,
                 source_at: cand.source_at,
             };
-            let mut read = tx.prepare_cached(
-                "SELECT hash_v2, name, size, privacy, source_at FROM import_candidates
-                 WHERE id = ?1",
-            )?;
-            // The oldest row's values win, then the others' in id order,
-            // then the record's.
-            for id in ids.iter().rev() {
-                let row: Folded = read.query_row([id], |r| {
-                    Ok(Folded {
-                        hash_v2: r.get(0)?,
-                        name: r.get(1)?,
-                        size: r.get(2)?,
-                        privacy: Privacy::from_code(r.get(3)?).unwrap_or(Privacy::Unknown),
-                        source_at: r.get(4)?,
-                    })
-                })?;
+            for (_, row) in rows.into_iter().rev() {
                 merged = row.over(merged);
             }
-            drop(read);
+            let mut delete = tx.prepare_cached("DELETE FROM import_candidates WHERE id = ?1")?;
             for id in ids.iter().skip(1) {
-                tx.prepare_cached("DELETE FROM import_candidates WHERE id = ?1")?
-                    .execute([id])?;
+                delete.execute([id])?;
             }
             tx.prepare_cached(
-                "UPDATE import_candidates SET hash_v2 = ?2, name = ?3, size = ?4, privacy = ?5,
-                     source_at = ?6
+                "UPDATE import_candidates SET hash = coalesce(?7, hash), hash_v2 = ?2, name = ?3,
+                     size = ?4, privacy = ?5, source_at = ?6
                  WHERE id = ?1",
             )?
             .execute(params![
@@ -1300,6 +1336,7 @@ fn commit_candidate(
                 merged.size,
                 merged.privacy.code(),
                 merged.source_at,
+                key,
             ])?;
             keep
         }
