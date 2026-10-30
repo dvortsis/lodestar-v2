@@ -1273,13 +1273,13 @@
    "pr": 181
   },
   "F-auth-lock": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnA9YgN5pKpBLqeFsYr",
    "pr": 190,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk) | 2026-10-30T08:00Z local reviewer stopped (disk); fresh review moved to cloud session session_01MMjhnBvsF5kreeXyjjL3kB | 2026-10-30T08:21Z fresh review MERGE (0B/0I/2P). Merge blocked by conflict with main fafe2f89 (likely logs_catalog golden); author told to merge main + regenerate | 2026-10-30T08:41Z 95207bf4 conflict resolved (logs_catalog re-blessed); CI running"
+   "notes": "2026-10-30T05:24Z from F-auth review I1 (pre-existing): commit holds state write lock across file+dir fsync, so verify()/client_ip on every request stall on slow disks (Unraid spun-down array). Fix: save_lock Mutex serialising writers; build+save under it with read-lock clone; write lock only for swap; hash before lock. Also I2: warn once on dir-fsync failure. Not a v0.5.1 blocker unless the owner says so. | 2026-10-30T06:30Z launched (Opus) from main | 2026-10-30T07:41Z #190 ready 203daf53 (self-review 0B/0I; security-review clean). Needs fresh Opus review (after bisect frees disk) | 2026-10-30T08:00Z local reviewer stopped (disk); fresh review moved to cloud session session_01MMjhnBvsF5kreeXyjjL3kB | 2026-10-30T08:21Z fresh review MERGE (0B/0I/2P). Merge blocked by conflict with main fafe2f89 (likely logs_catalog golden); author told to merge main + regenerate | 2026-10-30T08:41Z 95207bf4 conflict resolved (logs_catalog re-blessed); CI running | 2026-10-30T08:54Z #190 merged 476689c9 (A2-1 release blocker closed)"
   },
   "CR-COL": {
    "status": "ready-waiting-L5",
@@ -1373,7 +1373,7 @@
    "model": "opus",
    "session": "session_01MMjhnCAnPjYNuyFZbX67yK",
    "pr": null,
-   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191. | 2026-10-30T08:41Z #193 merged 18c1f324; Windows NRT measurement pending | 2026-10-30T08:43Z Windows NRT measured (run 41024502148): store-to-searchable p50 2.14s max 2.19s (Linux 2.02s); commit-to-alert ~30ms both. 5.74s was test contention. No owner issue. Docs-only r2 decisions PR approved."
+   "notes": "2026-10-30T07:14Z launched: shutdown.rs stalled-download exited 0.3s (ubuntu, L5 591c2a3f) + percolator commit-to-alert 5.74s (windows); neither path touched by L range | 2026-10-30T07:40Z scope narrowed to percolator Windows timing (shutdown is L5 regression) | 2026-10-30T08:07Z shutdown race mechanism measured: hyper partial flush leaves buffer < max_buf_size, parked on writable; close wake finds room, body ends -> fast shutdown (8/25 fail on main under stress). Patch (fdinfo + 1-byte wake) declined in favour of #191. | 2026-10-30T08:41Z #193 merged 18c1f324; Windows NRT measurement pending | 2026-10-30T08:43Z Windows NRT measured (run 41024502148): store-to-searchable p50 2.14s max 2.19s (Linux 2.02s); commit-to-alert ~30ms both. 5.74s was test contention. No owner issue. Docs-only r2 decisions PR approved. | 2026-10-30T08:54Z #194 docs r2 merged 6efc2136"
   },
   "CR-0": {
    "status": "awaiting-owner",
