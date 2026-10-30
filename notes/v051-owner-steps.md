@@ -44,5 +44,8 @@ Install the rc MSI and let the service run for at least 6 h. Check:
 
 Write down whether a Defender exclusion was active. Then smoke-test the portable zip: start it, search, stop.
 
-## 6. Hand back
+## 6. Read the verdict
+`analyze_cr0.py` now opens its report with a **Run** section and a `gate_evidence` line (#207, on main; use main's copy of the tool). The 24 h run must say `Gate evidence: yes`, and the gluetun leg must say `yes` with "(2 h leg)". A rehearsal, a short run or a missing `--intensity` says `no`, with the reason.
+
+## 7. Hand back
 Push the evidence the same way as `soak/cr0-final`: aggregates and hourly data only, no raw logs, databases or personal paths. Use one branch per run. The runner analyzes it, records the outcome and, if everything passes, asks you to tag `v0.5.1` on the same commit as the passing rc.

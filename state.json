@@ -1402,13 +1402,13 @@
    "pr": 196
   },
   "CR-COL-2": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "deps": [
     "CR-0f",
     "CR-COL"
    ],
-   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main | 2026-10-30T12:50Z #207 (155 lines); runner review MERGE; Windows gate_evidence false accepted; valid-interval coverage confirmed",
+   "notes": "2026-10-30T10:21Z queued (from #197 review I2): analyze_cr0.py surfaces settings.rehearsal, settings.leg and baseline_required_hours in md+json so rehearsal/leg runs never read as gate evidence; CI soak-tools job adds -s docs/soak/tools/linux if not done. | 2026-10-30T12:25Z launched (sonnet) from main | 2026-10-30T12:50Z #207 (155 lines); runner review MERGE; Windows gate_evidence false accepted; valid-interval coverage confirmed | 2026-10-30T12:55Z merged #207 (ci-ok + soak tools green); session archived",
    "session": "session_01MMjhnBZWMru5fftMnr9Yf7",
    "pr": 207
   },
