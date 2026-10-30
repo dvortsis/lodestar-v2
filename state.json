@@ -2089,7 +2089,11 @@
       "unblocks": "v0.5.1 gate (\u00a70.4)",
       "ref": "#197; needs rc artifact after cut"
     },
-    "Branch cleanup: delete stale wip/CR-0d (runner's deletion was refused by the permission check); also the old-lineage branches per G6"
+    "Branch cleanup: delete stale wip/CR-0d (runner's deletion was refused by the permission check); also the old-lineage branches per G6",
+    {
+      "item": "Freshness environment: confirm the main-only deployment-branch rule and that FRESHNESS_SIGNING_KEY is set (the key is passwordless, so FRESHNESS_SIGNING_KEY_PASSWORD can stay empty)",
+      "unblocks": "weekly freshness re-sign (#211); once envelopes exist, a missing key fails the job"
+    }
   ],
   "external_gates": {
     "history-swap": {
@@ -2128,7 +2132,14 @@
     "PR211-freshness-key": {
       "reviewer": "session_01MMjhnC6uV1DEV9qmnqQ5M7",
       "head": "fa185018",
-      "note": "owner-authored PR; fresh Opus review + /security-review; runner merges on MERGE + green"
+      "note": "owner-authored PR; fresh Opus review + /security-review; runner merges on MERGE + green",
+      "verdict": "2026-10-30T13:58Z MERGE (8 optional findings); merge on green"
+    },
+    "X-freshness-hardening": {
+      "branch": "slice/X-freshness-hardening",
+      "head": "3c6d8ad6",
+      "reviewer": "session_01MMjhnC6uV1DEV9qmnqQ5M7",
+      "note": "runner-owned follow-up: #211 review findings 1-7; open PR after #211 merges"
     }
   },
   "log": [
