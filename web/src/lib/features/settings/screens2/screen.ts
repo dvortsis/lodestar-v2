@@ -9,8 +9,8 @@ export const screens: Screen[] = [
 	{
 		id: 'language',
 		group: 'preferences',
-		title: () => m.settings_language_title(),
-		purpose: () => m.settings_language_purpose(),
+		title: () => m.settings_screen_language_title(),
+		purpose: () => m.settings_screen_language_purpose(),
 		icon: IconLanguage,
 		load: () => import('./LanguageScreen.svelte')
 	}

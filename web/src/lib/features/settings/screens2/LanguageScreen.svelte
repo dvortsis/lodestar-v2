@@ -44,8 +44,8 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold">{m.settings_language_title()}</h1>
-<p class="text-muted-text">{m.settings_language_purpose()}</p>
+<h1 class="text-title font-semibold">{m.settings_screen_language_title()}</h1>
+<p class="text-muted-text">{m.settings_screen_language_purpose()}</p>
 {#if failed}
 	<Banner kind="error"
 		>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}

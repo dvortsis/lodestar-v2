@@ -61,8 +61,6 @@
 	"settings_group_database": "数据库",
 	"settings_group_search": "搜索",
 	"settings_group_index": "索引",
-	"settings_language_title": "语言和地区",
-	"settings_language_purpose": "语言、时区和每周的第一天。",
 	"settings_preferences_language_label": "语言",
 	"settings_preferences_language_help": "自动则跟随浏览器，也可以选择一种语言。",
 	"settings_preferences_time_zone_label": "时区",
@@ -73,5 +71,8 @@
 	"settings_preferences_first_day_of_week_option_monday": "星期一",
 	"settings_preferences_first_day_of_week_option_saturday": "星期六",
 	"settings_preferences_first_day_of_week_option_sunday": "星期日",
-	"settings_group_region": "地区"
+	"settings_group_region": "地区",
+	"settings_screen_language_title": "语言和地区",
+	"settings_screen_language_purpose": "语言、时区和每周的第一天。",
+	"settings_screen_time_zone_unknown": "不认识这个时区。请从列表中选择，如 Europe/Berlin。"
 }

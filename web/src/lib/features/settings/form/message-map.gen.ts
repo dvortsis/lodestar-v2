@@ -14,7 +14,8 @@ export const EN_FILE = join(HERE, '../messages/en.json');
 
 /**
  * Keys the server can name: `settings_*` messages without placeholders (label, help and group
- * keys never take any). The engine's own `settings_form_*` strings are never server keys.
+ * keys never take any). The engine's own `settings_form_*` strings and a screen's own `settings_screen_*` strings are
+ * never server keys.
  */
 export function messageKeys(text: string): string[] {
 	return Object.entries(JSON.parse(text) as Record<string, unknown>)
@@ -22,6 +23,7 @@ export function messageKeys(text: string): string[] {
 			([k, v]) =>
 				k.startsWith('settings_') &&
 				!k.startsWith('settings_form_') &&
+				!k.startsWith('settings_screen_') &&
 				typeof v === 'string' &&
 				!v.includes('{')
 		)

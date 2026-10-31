@@ -26,8 +26,6 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_group_search: m.settings_group_search,
 	settings_group_transport: m.settings_group_transport,
 	settings_group_web_ui: m.settings_group_web_ui,
-	settings_language_purpose: m.settings_language_purpose,
-	settings_language_title: m.settings_language_title,
 	settings_network_dht_enabled_help: m.settings_network_dht_enabled_help,
 	settings_network_dht_enabled_label: m.settings_network_dht_enabled_label,
 	settings_network_dht_port_help: m.settings_network_dht_port_help,

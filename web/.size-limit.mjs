@@ -253,6 +253,8 @@ const settingsFormFiles = [settingsFormChunk[0], languageForm[0]].flatMap((re) =
 	const key = Object.keys(manifest).find((k) => re.test(k));
 	return key ? ownChunk(key, [...settingsOnDemand, ...settingsEdit], false) : [];
 });
+// The closure stops at the shell's section form and Language & region's form (`settingsFormFiles`):
+// both are already counted in their screens' first views, so extras are only what loads after them.
 const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
 	...new Set([
 		...extraKeys.flatMap((key) =>

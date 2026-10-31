@@ -81,6 +81,31 @@ describe('Language & region', () => {
 		expect(sent.at(-1)?.body).toMatchObject({ preferences: { language: 'zh' } });
 	});
 
+	it('refuses an unknown time zone and saves a known one', async () => {
+		await open();
+		await screen.findByText('Time zone', undefined, { timeout: 10_000 });
+		const input = await waitFor(
+			() => {
+				const el = document.querySelector<HTMLInputElement>('input[list]');
+				if (!el) throw new Error('no time zone input');
+				return el;
+			},
+			{ timeout: 10_000 }
+		);
+		const patches = () => server.calls.filter((c) => c.method === 'PATCH');
+		await fireEvent.input(input, { target: { value: 'Foo/Bar' } });
+		await until(() => expect(screen.getByRole('alert').textContent).toMatch(/isn't known/));
+		await fireEvent.input(input, { target: { value: 'Europe/Ber' } });
+		expect(patches()).toHaveLength(0);
+		await fireEvent.input(input, { target: { value: 'Europe/Berlin' } });
+		await until(() =>
+			expect(patches().at(-1)?.body).toMatchObject({ preferences: { time_zone: 'Europe/Berlin' } })
+		);
+		expect(screen.queryByRole('alert')).toBeNull();
+		// Nothing invalid was ever sent.
+		expect(JSON.stringify(patches())).not.toMatch(/Foo|Europe\/Ber"/);
+	});
+
 	it('offers a retry when the schema fails to load', async () => {
 		index.load = () => Promise.reject(new Error('down'));
 		await open();
