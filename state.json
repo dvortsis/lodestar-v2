@@ -1695,7 +1695,7 @@
    "pr": 283,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus | 15:54Z PR #283 head ce842e28 (cold broad p95 1M 195->102 ms, gated FILE_P95 150 ms; parallel segment scan); fresh Opus reviewer session_01MMjhn8VhL9DEqTBq434TbW"
+   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus | 15:54Z PR #283 head ce842e28 (cold broad p95 1M 195->102 ms, gated FILE_P95 150 ms; parallel segment scan); fresh Opus reviewer session_01MMjhn8VhL9DEqTBq434TbW | 16:03Z MERGE at ce842e28 (4 optional); waiting on test ubuntu/windows"
   },
   "X-import-refile-2": {
    "status": "review",
@@ -2515,7 +2515,8 @@
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "store/src/filter.rs: per-hash hold query (or HeldSet removal generation) so the writer re-holds only hashes the store still holds, covering the sweep arm and backfill's arm (writer.rs:573); until then both insert unconditionally (over-strict, safe) (#282)",
-  "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)"
+  "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
+  "search files.rs (#283 review): stop sibling segment scans on a non-cancel error (local AtomicBool in stopped()); decisions line that cold file scans share the file pool's 4 threads (include concurrent cold queries in the 10M measurement); comment that tantivy's range size_hint is num_docs/10 (TODO upstream); scan test should pair parts to segments by first id, not position"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
