@@ -877,7 +877,7 @@
     },
     "S-settings-2": {
       "status": "running",
-      "notes": "2026-10-31T03:47Z brief briefs/S-settings-2.md; Sonnet session_01MMjhnBtMgHN6ooQJhwduav; /security-review (secrets)"
+      "notes": "2026-10-31T03:47Z brief briefs/S-settings-2.md; Sonnet session_01MMjhnBtMgHN6ooQJhwduav; /security-review (secrets) | 03:48Z blocked: server lacks integrations/notifications/trackers/insights settings sections, /settings/test kinds beyond download_client, clear-usage-data. Runner: ship Language & region now; S-settings-2b after backend"
     },
     "M-security-settings": {
       "status": "pending",
@@ -2234,6 +2234,7 @@
     }
   },
   "followups": [
+    "B-settings-sections (backend, Opus, security-review): settings sections + CRUD for integrations (download clients, Torznab/*arr), notification channels + event routing, trackers (list, scrape on/off, cadence, health), insights (digest schedule/channels, query logging, retention); POST /settings/test kinds for torznab and each notification channel (through the SSRF guard); clear-usage-data endpoint. Unblocks S-settings-2b. Also consider the send-to-client endpoint (S-search-5 deferral) in the same lane",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
