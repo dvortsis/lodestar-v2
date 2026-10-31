@@ -2614,10 +2614,24 @@ impl FiltersApi {
         };
         stop()?;
         let generation = self.store().class_gen().map_err(internal)?;
-        // The same path as the torrents an index hasn't reached yet, from
-        // the first id.
-        let n = self.store().mark_unenriched_after(0).map_err(internal)?;
+        // Every id up to the highest stored now, a chunk per lock, with
+        // the shutdown checked between chunks. A torrent stored later is
+        // enriched under the rules in force by then.
+        let last = self.store().max_id().map_err(internal)?;
+        let chunk = lodestar_store::MARK_CHUNK as i64;
+        let (mut lo, mut n) = (0_i64, 0);
+        while lo < last {
+            stop()?;
+            let hi = lo.saturating_add(chunk).min(last);
+            let ids: Vec<i64> = (lo + 1..=hi).collect();
+            n += self.store().mark_unenriched(&ids).map_err(internal)?;
+            lo = hi;
+        }
         self.reenrich.store(true, Ordering::Release);
+        #[cfg(test)]
+        if let Some(hook) = tests::ALL_MARKED.with(std::cell::Cell::get) {
+            hook(self);
+        }
         stop()?;
         let mut store = self.store();
         if store.class_gen().map_err(internal)? == generation
@@ -2635,7 +2649,8 @@ impl FiltersApi {
     /// the rest still run: its error is logged where it happens, by type
     /// only (`api.internal_error`), never with the query. Only the
     /// shutdown stops the loop, and what's left stays for the next start.
-    /// A full re-mark is one re-queue. Returns how many an index finished.
+    /// A full re-mark is one re-queue; failed, it stays and its error is
+    /// returned. Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
         // Read under its own statement: the store guard mustn't live on
         // into the re-queue, which takes the lock itself.
@@ -3086,6 +3101,9 @@ mod tests {
     thread_local! {
         pub(super) static CORRECT_MARKED: std::cell::Cell<Option<CorrectHook>> =
             const { std::cell::Cell::new(None) };
+        /// Runs in the full re-mark once its marks are in, before it clears.
+        pub(super) static ALL_MARKED: std::cell::Cell<Option<fn(&FiltersApi)>> =
+            const { std::cell::Cell::new(None) };
         /// A pending re-queue text that fails every time it's redone.
         pub(super) static FAIL_REQUEUE: std::cell::RefCell<Option<String>> =
             const { std::cell::RefCell::new(None) };
@@ -3126,20 +3144,9 @@ mod tests {
         assert_eq!(pending_requeues(&store).unwrap(), Pending::All);
     }
 
-    /// One pending re-queue failing every time doesn't hold up the rest:
-    /// it stays, and the others are done and cleared.
-    #[test]
-    fn a_failing_requeue_does_not_block_the_others() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
-        for q in ["fails", "lexb", "lexb", "other"] {
-            push_pending_requeue(&mut store, q).unwrap();
-        }
-        assert_eq!(
-            pending_requeues(&store).unwrap(),
-            texts(&["fails", "lexb", "other"])
-        );
-        let api = FiltersApi {
+    /// An API on `store` with an empty in-memory search index.
+    fn test_api(store: Store) -> FiltersApi {
+        FiltersApi {
             store: Arc::new(Mutex::new(store)),
             engine: Arc::new(Handle::new(Engine::new(Core::new(
                 Lists::shipped().unwrap(),
@@ -3154,7 +3161,52 @@ mod tests {
             jobs: Default::default(),
             quarantine_secs: 0,
             shutdown: Default::default(),
-        };
+        }
+    }
+
+    /// A full re-mark is cleared only if no shutdown and no rule change
+    /// came while it marked; otherwise it stays for the next start.
+    #[test]
+    fn a_full_remark_stopped_or_overtaken_stays_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+        set_pending_requeues(&mut store, &Pending::All).unwrap();
+        let api = test_api(store);
+        // A shutdown during the marking.
+        ALL_MARKED.with(|h| h.set(Some(|api| api.shutdown.cancel())));
+        assert!(api.resume_requeues(0).is_err());
+        assert_eq!(pending_requeues(&api.store()).unwrap(), Pending::All);
+        // The next start: the same file, a new shutdown token.
+        drop(api);
+        let api = test_api(Store::open(dir.path().join("t.db"), Default::default()).unwrap());
+        // A rule change during the marking: a new generation.
+        ALL_MARKED.with(|h| {
+            h.set(Some(|api| {
+                api.store().bump_class_gen().unwrap();
+            }))
+        });
+        assert_eq!(api.resume_requeues(0).unwrap(), 1);
+        assert_eq!(pending_requeues(&api.store()).unwrap(), Pending::All);
+        // Undisturbed: done, so cleared.
+        ALL_MARKED.with(|h| h.set(None));
+        assert_eq!(api.resume_requeues(0).unwrap(), 1);
+        assert_eq!(pending_requeues(&api.store()).unwrap(), texts(&[]));
+    }
+
+    /// One pending re-queue failing every time doesn't hold up the rest:
+    /// it stays, and the others are done and cleared.
+    #[test]
+    fn a_failing_requeue_does_not_block_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+        for q in ["fails", "lexb", "lexb", "other"] {
+            push_pending_requeue(&mut store, q).unwrap();
+        }
+        assert_eq!(
+            pending_requeues(&store).unwrap(),
+            texts(&["fails", "lexb", "other"])
+        );
+        let api = test_api(store);
         FAIL_REQUEUE.with(|f| *f.borrow_mut() = Some("fails".into()));
         assert_eq!(api.resume_requeues(0).unwrap(), 2);
         assert_eq!(pending_requeues(&api.store()).unwrap(), texts(&["fails"]));
