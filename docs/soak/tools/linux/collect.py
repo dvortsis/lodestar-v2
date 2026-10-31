@@ -41,6 +41,10 @@ SAMPLE_SECONDS = 60.0
 WATCH_SECONDS = 10.0
 UNVERIFIED_LIMIT_SECONDS = 180.0  # three missed samples
 GIB = 2**30
+# The 1 GiB x 5 stop rule's basis (docs/decisions/2026-10-31-X-soak-docker-memrule.md).
+# A Docker cgroup's working set includes page cache from file reads (active_file),
+# so Docker mode judges the cgroup's anonymous memory; native mode keeps VmRSS.
+MEMORY_STOP_BASIS = {"docker": "anon", "native": "rss"}
 # Metrics every sample must carry (cr0-soak.ps1); a missing one fails the sample.
 REQUIRED = (
     "start_time_seconds", "torrents", "dht_sample_suppression_seconds",
@@ -746,6 +750,7 @@ class Collector:
                                    "stop_free_bytes": a.stop_free_bytes, "check_seconds": WATCH_SECONDS,
                                    "volumes": self.volumes_now},
             "stop_instance_at_end": bool(a.stop),
+            "memory_stop_basis": MEMORY_STOP_BASIS[inst.kind],
         }
         # The preset sets the analyzer's outstanding-RPC limit. Recorded only
         # as the operator states it; absent, the analyzer flags its fallback.
@@ -783,6 +788,8 @@ class Collector:
         suppression_seen = False
         self.suppression_end_at = self.baseline_start = baseline_at = end_at = None
         bad_health = bad_metrics = bad_bounds = bad_memory = disk_failures = 0
+        self.working_set_over_gib = 0
+        anon_basis, memory_reason, fallback_noted = MEMORY_STOP_BASIS[self.instance.kind] == "anon", None, False
         unverified_since = None
         last_completed, last_progress = 0.0, 0.0
         self.verdict = self.start_time = None
@@ -898,7 +905,20 @@ class Collector:
                     if values["dht_lookups_completed_total"] != last_completed or values["dht_peer_active"] == 0:
                         last_completed, last_progress = values["dht_lookups_completed_total"], elapsed
                 resources = self.instance.resources()
-                bad_memory = bad_memory + 1 if resources.get("working_set_bytes", 0) > GIB else 0
+                working_set = resources.get("working_set_bytes", 0)
+                if anon_basis and working_set > GIB:  # evidence only; never a stop in Docker mode
+                    if not self.working_set_over_gib:
+                        self.note("cgroup working set passed 1 GiB (page cache included); recorded, not a stop")
+                    self.working_set_over_gib += 1
+                if anon_basis and isinstance(resources.get("private_bytes"), int):
+                    memory, sample_reason = resources["private_bytes"], "process_memory_over_1GiB_for_five_samples"
+                else:  # native VmRSS, or Docker without anon: fail safe on the working set
+                    memory, sample_reason = working_set, "rss_over_1GiB_for_five_samples"
+                    if anon_basis and not fallback_noted:
+                        fallback_noted = True
+                        self.note("cgroup anon unavailable; memory stop rule fell back to working set")
+                bad_memory = bad_memory + 1 if memory > GIB else 0
+                memory_reason = sample_reason if bad_memory else None
                 phase = ("baseline" if self.baseline_start else "warmup" if baseline_at is not None else "startup")
                 row = {"schema_version": SCHEMA, "sequence": self.sample, "process_identity": self.instance.identity,
                        "time": iso(stamp), "elapsed_seconds": round(elapsed, 1), "phase": phase,
@@ -909,6 +929,7 @@ class Collector:
                     row["ip_family_counters"] = family
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
                 self.save({"state": "running", "phase": phase, "sample": self.sample, "latest": row,
+                           **self.memory_evidence(),
                            "suppression_ended": self.suppression_end_at, "baseline_started": self.baseline_start,
                            "expected_end": iso(stamp + timedelta(seconds=end_at - elapsed)) if end_at else None},
                           status_path)
@@ -923,7 +944,7 @@ class Collector:
                     self.reason = "three_consecutive_capacity_violations"
                     break
                 if bad_memory >= 5:
-                    self.reason = "rss_over_1GiB_for_five_samples"
+                    self.reason = memory_reason
                     break
                 if metrics_ok and values["dht_peer_active"] > 0 and elapsed - last_progress >= 300:
                     self.reason = "active_peer_requests_without_completion_for_five_minutes"
@@ -970,6 +991,7 @@ class Collector:
             "baseline_started": self.baseline_start, "elapsed_seconds": self.clock() - started,
             "assessment": "Evidence collected; review required before any acceptance or performance claim.",
         }
+        result.update(self.memory_evidence())
         if self.stop_signal and self.reason == "operator_stop":
             result["stop_signal"] = self.stop_signal
         if self.verdict is not None:
@@ -986,6 +1008,11 @@ class Collector:
         close = getattr(self.instance, "close", None)
         if close:
             close()
+
+    def memory_evidence(self):
+        if MEMORY_STOP_BASIS[self.instance.kind] != "anon":
+            return {}
+        return {"working_set_over_1GiB_samples": getattr(self, "working_set_over_gib", 0)}
 
     def exit_code(self):
         if self.reason != "baseline_window_complete" or self.finalization_errors:

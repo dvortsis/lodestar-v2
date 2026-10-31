@@ -40,7 +40,8 @@ STOP_REASONS = {
     "embedded_ui_mismatch",
     "overall_deadline_without_complete_baseline", "three_consecutive_health_failures",
     "three_consecutive_metrics_failures", "three_consecutive_capacity_violations",
-    "rss_over_1GiB_for_five_samples", "active_peer_requests_without_completion_for_five_minutes",
+    "rss_over_1GiB_for_five_samples", "process_memory_over_1GiB_for_five_samples",
+    "active_peer_requests_without_completion_for_five_minutes",
 }
 # The binding memory gate (owner, 2026-10-30, #189; docs/decisions/2026-10-30-CR-0-acceptance.md):
 # the OLS slope of anonymous private memory over baseline hours 12-24, judged by
