@@ -98,6 +98,9 @@ pub(crate) struct Hints {
     /// Captures in arrival order, which is time order, for pruning.
     order: VecDeque<(Instant, InfoHash, usize)>,
     guard: Map<IpAddr, Restriction>,
+    /// Compactions so far, for the amortised-bound test.
+    #[cfg(test)]
+    compactions: usize,
 }
 
 impl Hints {
@@ -207,20 +210,28 @@ impl Hints {
         expired
     }
 
-    /// Drops the order entries of hints already used or replaced. Live
-    /// entries are at most 2 × [`HINT_CAPACITY`] (two families), so after
-    /// a compaction at least 2 × the cap captures pass before the next:
-    /// amortised O(1) per capture. `retain` keeps the time order that
-    /// [`Hints::prune_hints`] relies on. A slot taken and recaptured at the
-    /// same `Instant` keeps its stale entry too; with a real clock that's
-    /// rare, and the stale one goes once the hint is used or expires.
+    /// Drops the order entries of hints already used or replaced, and all
+    /// but one entry of each live hint: a slot taken and recaptured at the
+    /// same `Instant` leaves entries that all match it. So at most one
+    /// entry is left per live hint, 2 × [`HINT_CAPACITY`] (two families),
+    /// and at least 2 × the cap captures pass before the next compaction:
+    /// amortised O(1) per capture, however the clock reads. `retain` keeps
+    /// the time order that [`Hints::prune_hints`] relies on; duplicates
+    /// share one time, so which is kept doesn't matter.
     fn compact_order(&mut self) {
+        #[cfg(test)]
+        {
+            self.compactions += 1;
+        }
         let by_key = &self.by_key;
-        self.order.retain(|(at, key, s)| {
+        let mut kept: Map<(InfoHash, usize), ()> = Map::default();
+        self.order.retain(|&(at, key, s)| {
             by_key
-                .get(key)
-                .is_some_and(|slots| slots[*s].is_some_and(|h| h.at == *at))
+                .get(&key)
+                .is_some_and(|slots| slots[s].is_some_and(|h| h.at == at))
+                && kept.insert((key, s), ()).is_none()
         });
+        debug_assert!(self.order.len() <= 2 * HINT_CAPACITY);
     }
 
     fn prune_guard(&mut self, now: Instant) {
@@ -381,6 +392,35 @@ mod tests {
         assert_eq!(h.held(), 2);
         assert!(h.order.iter().is_sorted_by_key(|(at, ..)| *at));
         assert_eq!(h.prune(late + HINT_TTL), 2);
+        assert_eq!(h.held(), 0);
+    }
+
+    /// Recaptures at one `Instant` leave entries that all match a live
+    /// hint, which `retain` alone can't drop: the order still stays
+    /// bounded, and compactions stay rare.
+    #[test]
+    fn recaptures_at_one_instant_stay_bounded() {
+        let mut h = Hints::default();
+        let t0 = Instant::now();
+        let addr: SocketAddr = "31.0.0.1:6881".parse().unwrap();
+        let captures = 6 * ORDER_CAPACITY;
+        for i in 0..captures {
+            // Two keys alternate, so no entry repeats the one before it.
+            let k = key(i as u32 % 2);
+            h.take(&k);
+            assert_eq!(h.capture(k, addr, t0), Ok(true));
+            assert!(h.order.len() <= ORDER_CAPACITY, "at capture {i}");
+        }
+        assert_eq!(h.held(), 2);
+        // One compaction per 2 × the cap captures at most, not one each.
+        assert!(
+            h.compactions <= captures / (2 * HINT_CAPACITY),
+            "{} compactions for {captures} captures",
+            h.compactions
+        );
+        assert!(h.compactions > 0);
+        // The kept entries still expire the hints.
+        assert_eq!(h.prune(t0 + HINT_TTL), 2);
         assert_eq!(h.held(), 0);
     }
 

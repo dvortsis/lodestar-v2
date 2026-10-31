@@ -215,6 +215,7 @@ fn fixture() -> Fixture {
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
+        shutdown: Default::default(),
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -1197,6 +1198,7 @@ async fn filters_without_an_index_or_filters() {
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
+        shutdown: Default::default(),
     });
     let app = |filters: Option<Arc<FiltersApi>>| {
         Router::new().nest(
