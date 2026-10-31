@@ -1644,13 +1644,13 @@
    "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file | 12:20Z CHANGES at 07d6c069 (B1 registration key vs shown key + follow(null); B2 re-register on return from hidden/bfcache/stream outage; B3 words-only test misses Recover path; opt 4-6 folded); relayed to author | 12:35Z fix push 9b680509; re-check sent to same reviewer | 12:42Z re-check MERGE at 9b680509 (3 optional); ci-ok/web/lighthouse green, playwright+smoke running | 12:47Z merged 67c03cdf (all checks green); sessions archived"
   },
   "B-import-server-1": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhn9GgGnH78YRExARWGL",
-   "pr": null,
+   "pr": 276,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:25Z brief briefs/B-import-server-1.md (IMP-4b open items: indexing->complete on server, shared filter loader); Lane I | 12:19Z launched Opus"
+   "notes": "12:25Z brief briefs/B-import-server-1.md (IMP-4b open items: indexing->complete on server, shared filter loader); Lane I | 12:19Z launched Opus | 13:09Z PR #276 head 5f012f2b; §2.19 refinements: loader = two calls (sync_sources in binary + pipeline::load_filter), floor term tested as CS-8 signature, floor-marked subscribed list not in parity test; fresh Opus reviewer session_01MMjhn95r9YhbzXnt4ZRgyt + security review"
   },
   "B-import-server-2": {
    "status": "pending",
