@@ -13,6 +13,7 @@
 	import { lazyPart } from './lazy.svelte';
 	import { loadEdit, loadedEdit, preloadSettingsForm, type SettingsForm } from './form.svelte';
 	import { hardNavigate, leaveDecision } from './leave';
+	import { loadMessages, messagesLoaded } from './messages';
 	import type { FieldKey } from './types';
 	import { widgetFor } from './widgets';
 
@@ -37,6 +38,12 @@
 		onReveal,
 		children
 	}: Props = $props();
+
+	// The labels and help of these fields' sections: nothing renders before they're in, so a raw
+	// key never flashes. Already loaded (a return visit) renders at once.
+	const sections = untrack(() => form.specs.map((spec) => spec.section));
+	let labelsReady = $state(messagesLoaded(sections));
+	if (!labelsReady) void loadMessages(sections).then(() => (labelsReady = true));
 
 	let summaryShown = $state(false);
 	let summaryFocus = $state(0);
@@ -280,7 +287,7 @@
 		<NoticePart.part {form} />
 	{/if}
 
-	{#if form.status === 'loading'}
+	{#if form.status === 'loading' || !labelsReady}
 		<p class="text-muted-text" aria-busy="true">{m.settings_form_loading()}</p>
 	{:else if form.status === 'load-error'}
 		<Banner kind="error">

@@ -1,9 +1,16 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EN_FILE, MAP_FILE, messageKeys, renderMap } from './message-map.gen';
-import { MESSAGES } from './message-map';
-import { fieldHelp, fieldLabel, messageId, settingText } from './messages';
+import { EN_FILE, messageKeys, render, renderMap } from './message-map.gen';
+import { LOADERS } from './message-map';
+import {
+	fieldHelp,
+	fieldLabel,
+	loadMessages,
+	messageId,
+	messagesLoaded,
+	settingText
+} from './messages';
 import { unitText } from './units';
 import { spec } from './testing/values';
 
@@ -17,19 +24,21 @@ describe('settingText', () => {
 		);
 	});
 
-	it('resolves a settings message through the map, and returns undefined for a missing one', () => {
-		// A stand-in must restore the real catalogue entry for subsequent tests.
-		const original = MESSAGES.settings_crawler_intensity_label;
-		MESSAGES.settings_crawler_intensity_label = () => 'Intensity';
-		try {
-			expect(settingText('settings.crawler.intensity.label')).toBe('Intensity');
-		} finally {
-			if (original) MESSAGES.settings_crawler_intensity_label = original;
-			else delete MESSAGES.settings_crawler_intensity_label;
-		}
+	it('resolves a settings message once its map is loaded, and returns undefined for a missing one', async () => {
+		await loadMessages(['crawler']);
+		expect(settingText('settings.crawler.intensity.label')).toBeTypeOf('string');
+		expect(settingText('settings.group.intensity')).toBeTypeOf('string');
 		expect(settingText('settings.crawler.no_such_field.label')).toBeUndefined();
 		// The engine's own strings aren't server keys.
 		expect(settingText('settings.form.unit.seconds')).toBeUndefined();
+	});
+
+	it('shows no text for a section whose map is not loaded yet, then its text', async () => {
+		expect(messagesLoaded(['transport'])).toBe(false);
+		expect(settingText('settings.transport.utp.label')).toBeUndefined();
+		await loadMessages(['transport']);
+		expect(messagesLoaded(['transport'])).toBe(true);
+		expect(settingText('settings.transport.utp.label')).toBeTypeOf('string');
 	});
 
 	it('never resolves a message outside settings_*', () => {
@@ -67,7 +76,7 @@ describe('the bundle', () => {
 		// `m[key]` would pull every message of the app into the Settings chunk.
 		const dir = import.meta.dirname;
 		const sources = readdirSync(dir).filter(
-			(f) => /\.(ts|svelte)$/.test(f) && !f.endsWith('.test.ts') && f !== 'message-map.ts'
+			(f) => /\.(ts|svelte)$/.test(f) && !f.endsWith('.test.ts')
 		);
 		expect(sources.length).toBeGreaterThan(5);
 		for (const f of sources) {
@@ -78,11 +87,16 @@ describe('the bundle', () => {
 
 describe('the message map', () => {
 	it('is up to date with messages/en.json', () => {
-		const want = renderMap(messageKeys(readFileSync(EN_FILE, 'utf8')));
-		expect(
-			readFileSync(MAP_FILE, 'utf8'),
-			'run: node --experimental-strip-types src/lib/features/settings/form/message-map.gen.ts'
-		).toBe(want);
+		const files = render(readFileSync(EN_FILE, 'utf8'));
+		for (const [file, want] of Object.entries(files)) {
+			expect(
+				readFileSync(file, 'utf8'),
+				`${file}: run: node --experimental-strip-types src/lib/features/settings/form/message-map.gen.ts`
+			).toBe(want);
+		}
+		// No stale map is left behind.
+		const maps = readdirSync(join(import.meta.dirname, 'message-maps')).map((f) => f.slice(0, -3));
+		expect(maps.sort()).toEqual(Object.keys(LOADERS).sort());
 	});
 
 	it('leaves out messages with placeholders', () => {

@@ -62,12 +62,18 @@
 					// A locked chip list has no input to label.
 					(choice.builtin === 'chips' && !f.locked)))
 	);
-	// Discard, Undo or Use theirs bringing the sentinel back turns Automatic on again.
+	// Discard, Undo, Use theirs or a server update bringing the sentinel back turns Automatic on
+	// again. Only a change of value does: turning Automatic off keeps the value (an empty text, a
+	// typed 0) and must stay off, and so must the save that follows it.
+	let seen = untrack(() => f.value);
+	let arrived = false; // the value just changed to the automatic one; wait for it to settle
 	$effect(() => {
 		const v = f.value;
 		const clean = !f.dirty;
 		untrack(() => {
-			if (manual && clean && v === spec.auto) manual = false;
+			if (v !== seen) arrived = v === spec.auto;
+			seen = v;
+			if (arrived && manual && clean) manual = arrived = false;
 		});
 	});
 

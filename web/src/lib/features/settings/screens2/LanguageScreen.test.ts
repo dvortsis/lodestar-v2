@@ -58,6 +58,23 @@ async function open() {
 	render(Screen);
 }
 
+/** Turns a field's Automatic switch off (it starts on, its value being empty) and checks it stays off. */
+async function turnAutomaticOff(key: string) {
+	const toggle = await waitFor(
+		() => {
+			const el = document.querySelector<HTMLInputElement>(
+				`[data-field="${key}"] input[role="switch"]`
+			);
+			if (!el) throw new Error('no Automatic switch');
+			return el;
+		},
+		{ timeout: 10_000 }
+	);
+	expect(toggle.checked).toBe(true);
+	await fireEvent.click(toggle);
+	await until(() => expect(toggle.checked).toBe(false));
+}
+
 describe('Language & region', () => {
 	it('registers as a preferences screen', () => {
 		expect(screens[0]).toMatchObject({ id: 'language', group: 'preferences' });
@@ -67,6 +84,7 @@ describe('Language & region', () => {
 		await open();
 		await screen.findByText('Time zone', undefined, { timeout: 10_000 });
 		expect(screen.queryByLabelText('Theme')).toBeNull();
+		await turnAutomaticOff('preferences.language');
 		const select = await waitFor(
 			() => {
 				const el = document.querySelector('select');
@@ -84,6 +102,7 @@ describe('Language & region', () => {
 	it('refuses an unknown time zone and saves a known one', async () => {
 		await open();
 		await screen.findByText('Time zone', undefined, { timeout: 10_000 });
+		await turnAutomaticOff('preferences.time_zone');
 		const input = await waitFor(
 			() => {
 				const el = document.querySelector<HTMLInputElement>('input[list]');

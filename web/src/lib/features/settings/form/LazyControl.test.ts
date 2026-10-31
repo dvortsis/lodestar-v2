@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import SettingField from './SettingField.svelte';
 import { loadControls } from './controls.svelte';
+import { loadMessages } from './messages';
 import { createSettingsForm, type SettingsForm } from './form.svelte';
 import { fakeServer } from './testing/fake-server';
 import { spec, sv, values } from './testing/values';
@@ -24,6 +25,7 @@ let form: SettingsForm;
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 
 beforeEach(async () => {
+	await loadMessages(['crawler', 'network']);
 	vi.spyOn(console, 'warn').mockImplementation(() => {}); // the JSON fallback's dev warning
 	const server = fakeServer([
 		values('crawler', 1, {
