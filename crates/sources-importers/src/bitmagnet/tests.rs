@@ -3,7 +3,11 @@
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use proptest::prelude::*;
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
 
 use super::conn::{Target, session_sql, target};
 use super::*;
@@ -278,17 +282,26 @@ fn positions_round_trip_and_refuse_others() {
 }
 
 #[test]
-fn legacy_cursors_are_read() {
+fn cursors_are_bound_to_their_dataset() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cursor");
-    assert_eq!(read_cursor(&path).unwrap(), Vec::<u8>::new());
-    std::fs::write(&path, "07".repeat(20)).unwrap();
-    assert_eq!(read_cursor(&path).unwrap(), position(&[7; 20]));
-    write_cursor(&path, &position(&[9; 32])).unwrap();
-    assert_eq!(read_cursor(&path).unwrap(), position(&[9; 32]));
-    for bad in ["0", "zz", "0201"] {
-        std::fs::write(&path, bad).unwrap();
-        assert!(read_cursor(&path).is_err(), "{bad}");
+    let (a, b) = ([1u8; 32], [2u8; 32]);
+    assert_eq!(read_cursor(&path, &a).unwrap(), Vec::<u8>::new());
+    write_cursor(&path, &a, &position(&[9; 20])).unwrap();
+    assert_eq!(read_cursor(&path, &a).unwrap(), position(&[9; 20]));
+    // Another database's cursor never resumes this one.
+    assert!(matches!(
+        read_cursor(&path, &b),
+        Err(ImportError::Source(Refusal::SourceChanged))
+    ));
+    // A pre-IMP-3 cursor (a bare hash) and junk aren't trusted.
+    for bad in [
+        "07".repeat(20),
+        "zz".into(),
+        format!("{CURSOR_TAG} {} 02", hex(&a)),
+    ] {
+        std::fs::write(&path, &bad).unwrap();
+        assert!(read_cursor(&path, &a).is_err(), "{bad}");
     }
 }
 
@@ -455,6 +468,95 @@ fn refusals_map_to_job_reasons() {
     ] {
         assert_eq!(r.job_reason(), None, "{r:?}");
     }
+}
+
+/// A fake PostgreSQL server on 127.0.0.1 that answers the SSLRequest,
+/// completes a TLS handshake with `testdata/server.pem` (for `localhost`,
+/// issued by `testdata/ca.pem`), and then refuses the password. Reaching
+/// that refusal proves the handshake verified.
+async fn fake_tls_server() -> u16 {
+    use rustls::pki_types::PrivateKeyDer;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let chain: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(include_bytes!("testdata/server.pem"))
+            .collect::<Result<_, _>>()
+            .unwrap();
+    let key = PrivateKeyDer::from_pem_slice(include_bytes!("testdata/server.key")).unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(chain, key)
+    .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut tcp, _)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let mut ssl_request = [0u8; 8];
+                tcp.read_exact(&mut ssl_request).await?;
+                tcp.write_all(b"S").await?;
+                let mut tls = acceptor.accept(tcp).await?;
+                let len = tls.read_u32().await? as usize;
+                let mut startup = vec![0; len.saturating_sub(4).min(4096)];
+                tls.read_exact(&mut startup).await?;
+                let fields = b"SFATAL\0VFATAL\0C28P01\0Mno\0\0";
+                let mut msg = vec![b'E'];
+                msg.extend_from_slice(&(fields.len() as u32 + 4).to_be_bytes());
+                msg.extend_from_slice(fields);
+                tls.write_all(&msg).await?;
+                tls.shutdown().await
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certificates_and_names_are_verified() {
+    let port = fake_tls_server().await;
+    let testdata = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bitmagnet/testdata");
+    let connect = |host: &str, ca: Option<&str>| {
+        let mut s = Settings::new(host, "bitmagnet", "reader");
+        s.port = port;
+        s.tls = Tls::Verify {
+            ca_file: ca.map(|c| testdata.join(c)),
+        };
+        async move { super::conn::connect(&s).await.map(|_| ()) }
+    };
+    // Not in the platform's trust store.
+    assert_eq!(
+        connect("localhost", None).await,
+        Err(Refusal::Unavailable("tls_failed"))
+    );
+    // Issued by a CA we weren't told to trust.
+    assert_eq!(
+        connect("localhost", Some("other-ca.pem")).await,
+        Err(Refusal::Unavailable("tls_failed"))
+    );
+    // The right CA, but the certificate is for `localhost`, not this name.
+    assert_eq!(
+        connect("127.0.0.1", Some("ca.pem")).await,
+        Err(Refusal::Unavailable("tls_failed"))
+    );
+    // The right CA and name: the handshake passes and the server's own
+    // password refusal comes back.
+    assert_eq!(
+        connect("localhost", Some("ca.pem")).await,
+        Err(Refusal::Unavailable("auth_failed"))
+    );
+    // A CA file that isn't one.
+    assert_eq!(
+        connect("localhost", Some("server.key")).await,
+        Err(Refusal::Unavailable("ca_file_invalid"))
+    );
 }
 
 fn arb_bytes() -> impl Strategy<Value = Bytes> {

@@ -304,11 +304,12 @@ pub enum Status {
 }
 
 impl Status {
-    fn parse(v: Option<&[u8]>) -> Status {
+    /// From the reader's `CASE`: 1 single, 2 multi, 3 over_threshold.
+    fn parse(v: Option<i32>) -> Status {
         match v {
-            Some(b"single") => Status::Single,
-            Some(b"multi") => Status::Multi,
-            Some(b"over_threshold") => Status::OverThreshold,
+            Some(1) => Status::Single,
+            Some(2) => Status::Multi,
+            Some(3) => Status::OverThreshold,
             _ => Status::NoInfo,
         }
     }
@@ -369,8 +370,7 @@ impl fmt::Debug for FileEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileEntry")
             .field("segments", &self.path.len())
-            .field("size", &self.size)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -837,7 +837,8 @@ const OPTIONAL: [(&str, &str, &str); 7] = [
 const COLUMNS_SQL: &str = "\
 SELECT convert_to(c.relname::text, 'SQL_ASCII'), convert_to(a.attname::text, 'SQL_ASCII'), \
        convert_to(t.typname::text, 'SQL_ASCII'), a.attnum, a.attnotnull, c.relkind::text = 'r', \
-       c.oid, pg_catalog.pg_relation_filenode(c.oid) \
+       c.oid, pg_catalog.pg_relation_filenode(c.oid), \
+       t.typnamespace = 'pg_catalog'::pg_catalog.regnamespace, t.typtype::text = 'e' \
 FROM pg_catalog.pg_class c \
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
 JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
@@ -860,13 +861,16 @@ const DATABASE_SQL: &str = "\
 SELECT d.oid, convert_to(d.datname::text, 'SQL_ASCII') \
 FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()";
 
-/// Quiescence: other sessions' write locks on the read tables, the tables'
-/// cumulative write counters, whether this is a standby, and whether the
-/// counters are kept at all.
+/// Quiescence: other sessions' write locks on the read tables (a prepared
+/// transaction's `pid` is NULL, hence `IS DISTINCT FROM`), the tables'
+/// cumulative write counters, whether this is a standby, whether the
+/// counters are kept at all, and the cluster's next transaction id. Our
+/// reads assign none, so any committed write moves it at once, where the
+/// counters can lag by seconds.
 const QUIET_SQL: &str = "\
 SELECT (SELECT count(*) FROM pg_catalog.pg_locks l \
         WHERE l.database = $1 AND l.relation = ANY($2) \
-          AND l.pid <> pg_catalog.pg_backend_pid() \
+          AND l.pid IS DISTINCT FROM pg_catalog.pg_backend_pid() \
           AND l.mode IN ('RowExclusiveLock', 'ShareRowExclusiveLock', 'ExclusiveLock', \
                          'AccessExclusiveLock')), \
        (SELECT coalesce(sum(pg_catalog.pg_stat_get_tuples_inserted(o) \
@@ -874,7 +878,8 @@ SELECT (SELECT count(*) FROM pg_catalog.pg_locks l \
                           + pg_catalog.pg_stat_get_tuples_deleted(o)), 0)::int8 \
         FROM pg_catalog.unnest($2::oid[]) o), \
        pg_catalog.pg_is_in_recovery(), \
-       pg_catalog.current_setting('track_counts') = 'on'";
+       pg_catalog.current_setting('track_counts') = 'on', \
+       pg_catalog.pg_snapshot_xmax(pg_catalog.pg_current_snapshot())::text::int8";
 
 /// The keyset's ends, hashed so a long key is never transferred.
 const ENDS_SQL: &str = "\
@@ -883,9 +888,13 @@ SELECT pg_catalog.sha256((SELECT info_hash FROM public.torrents ORDER BY info_ha
 
 fn torrents_sql(c: &Caps, first: bool) -> String {
     let status = if c.files_status {
-        "convert_to(t.files_status::text, 'SQL_ASCII')"
+        // No cast: a user-defined cast from the enum would run source code.
+        // Comparing with a label uses the enum's input function and
+        // pg_catalog's operators only.
+        "CASE t.files_status WHEN 'single' THEN 1 WHEN 'multi' THEN 2 \
+         WHEN 'over_threshold' THEN 3 END"
     } else {
-        "CASE t.single_file WHEN true THEN 'single'::bytea WHEN false THEN 'multi'::bytea END"
+        "CASE t.single_file WHEN true THEN 1 WHEN false THEN 2 END"
     };
     let count = if c.files_count {
         "t.files_count"
@@ -947,6 +956,9 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
         table: Vec<u8>,
         name: Vec<u8>,
         typ: Vec<u8>,
+        /// A built-in `pg_catalog` type, or an enum: a `public` domain or
+        /// type named `bytea` or `FilesStatus` doesn't pass.
+        trusted: bool,
         num: i16,
         notnull: bool,
         plain: bool,
@@ -959,6 +971,16 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
             table: r.try_get(0).map_err(map_err)?,
             name: r.try_get(1).map_err(map_err)?,
             typ: r.try_get(2).map_err(map_err)?,
+            trusted: {
+                let builtin: bool = r.try_get(8).map_err(map_err)?;
+                let is_enum: bool = r.try_get(9).map_err(map_err)?;
+                let typ: &[u8] = r.try_get(2).map_err(map_err)?;
+                if typ == b"FilesStatus" {
+                    is_enum
+                } else {
+                    builtin
+                }
+            },
             num: r.try_get(3).map_err(map_err)?,
             notnull: r.try_get(4).map_err(map_err)?,
             plain: r.try_get(5).map_err(map_err)?,
@@ -969,8 +991,9 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
         });
     }
     let find = |t: &str, c: &str, ty: &str| {
-        cols.iter()
-            .find(|x| x.table == t.as_bytes() && x.name == c.as_bytes() && x.typ == ty.as_bytes())
+        cols.iter().find(|x| {
+            x.table == t.as_bytes() && x.name == c.as_bytes() && x.typ == ty.as_bytes() && x.trusted
+        })
     };
     let mut missing: Vec<&'static str> = Vec::new();
     for t in &TABLES[..2] {
@@ -1019,9 +1042,9 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
         return Err(Refusal::UnsupportedSchema(vec!["table: torrents"]));
     };
     let pieces_rel = rel("torrent_pieces").filter(|_| {
-        cols.iter()
-            .any(|x| x.table == b"torrent_pieces" && x.name == b"pieces" && x.typ == b"bytea")
-            && has(5)
+        cols.iter().any(|x| {
+            x.table == b"torrent_pieces" && x.name == b"pieces" && x.typ == b"bytea" && x.trusted
+        }) && has(5)
             && has(6)
     });
     let oids: Vec<u32> = [Some(torrents), Some(files), pieces_rel]
@@ -1073,9 +1096,9 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
     let pieces = if pieces_rel.is_some() {
         Pieces::Table
     } else if has(3)
-        && cols
-            .iter()
-            .any(|x| x.table == b"torrents" && x.name == b"pieces" && x.typ == b"bytea")
+        && cols.iter().any(|x| {
+            x.table == b"torrents" && x.name == b"pieces" && x.typ == b"bytea" && x.trusted
+        })
     {
         Pieces::Columns
     } else {
@@ -1145,6 +1168,8 @@ pub struct Source {
     rels: Vec<Rel>,
     /// The read tables' write counters at open, rechecked in every batch.
     writes: i64,
+    /// The next transaction id at open, rechecked in every batch.
+    xmax: i64,
     torrents_first: Statement,
     torrents_next: Statement,
     files_first: Statement,
@@ -1198,7 +1223,7 @@ impl Source {
         let db_name: Vec<u8> = db.try_get(1).map_err(map_err)?;
         let fingerprint = fingerprint(db_oid, &db_name, &schema.rels);
         let oids: Vec<u32> = schema.rels.iter().map(|r| r.oid).collect();
-        let writes = quiet(&tx, db_oid, &oids, None).await?;
+        let (writes, xmax) = quiet(&tx, db_oid, &oids, None).await?;
         let ends = tx.query_one(ENDS_SQL, &[]).await.map_err(map_err)?;
         let (lo, hi): (Option<Vec<u8>>, Option<Vec<u8>>) = (
             ends.try_get(0).map_err(map_err)?,
@@ -1233,6 +1258,7 @@ impl Source {
             fingerprint,
             rels: schema.rels,
             writes,
+            xmax,
             statement_timeout,
             cancel: Arc::new(AtomicBool::new(false)),
             max_parents: MAX_PARENTS,
@@ -1298,7 +1324,7 @@ impl Source {
             return Err(Refusal::SourceChanged);
         }
         let oids: Vec<u32> = self.rels.iter().map(|r| r.oid).collect();
-        quiet(&tx, self.db_oid, &oids, Some(self.writes)).await?;
+        quiet(&tx, self.db_oid, &oids, Some((self.writes, self.xmax))).await?;
 
         let (stmt, key) = match &start {
             None => (&self.torrents_first, Vec::new()),
@@ -1320,7 +1346,7 @@ impl Source {
                 name: Bytes::guarded(col(r, 1)?, col(r, 2)?),
                 size: col(r, 3)?,
                 private: col(r, 4)?,
-                status: Status::parse(r.try_get::<_, Option<&[u8]>>(5).map_err(map_err)?),
+                status: Status::parse(col(r, 5)?),
                 files_count: col(r, 6)?,
                 piece_length: col(r, 7)?,
                 pieces_len: col(r, 8)?,
@@ -1500,14 +1526,15 @@ async fn current_rels(
         .collect()
 }
 
-/// Refuses a source that may be changing; returns the write counters.
-/// With `expect`, the counters must not have moved since the open.
+/// Refuses a source that may be changing; returns the write counters and
+/// the next transaction id. With `expect`, neither may have moved since the
+/// open.
 async fn quiet(
     client: &impl tokio_postgres::GenericClient,
     db: u32,
     oids: &[u32],
-    expect: Option<i64>,
-) -> Result<i64, Refusal> {
+    expect: Option<(i64, i64)>,
+) -> Result<(i64, i64), Refusal> {
     let r = client
         .query_one(QUIET_SQL, &[&db, &oids])
         .await
@@ -1516,10 +1543,11 @@ async fn quiet(
     let writes: i64 = r.try_get(1).map_err(map_err)?;
     let standby: bool = r.try_get(2).map_err(map_err)?;
     let counted: bool = r.try_get(3).map_err(map_err)?;
-    if locks > 0 || standby || !counted || expect.is_some_and(|w| w != writes) {
+    let xmax: i64 = r.try_get(4).map_err(map_err)?;
+    if locks > 0 || standby || !counted || expect.is_some_and(|e| e != (writes, xmax)) {
         return Err(Refusal::NotQuiescent);
     }
-    Ok(writes)
+    Ok((writes, xmax))
 }
 
 // ---- The legacy `import-bitmagnet` path, until IMP-4 ----
@@ -1589,35 +1617,53 @@ pub struct Report {
     pub skipped: u64,
 }
 
-/// The saved position. A 20-byte cursor is the pre-IMP-3 format, a bare
-/// `info_hash`.
-fn read_cursor(path: &Path) -> Result<Vec<u8>, ImportError> {
-    let bad = || ImportError::Io(std::io::Error::other("bad cursor"));
+const CURSOR_TAG: &str = "bitmagnet-cursor-v2";
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(t: &str) -> Option<Vec<u8>> {
+    if t.len() % 2 != 0 {
+        return None;
+    }
+    (0..t.len())
+        .step_by(2)
+        .map(|i| t.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .collect()
+}
+
+/// The saved position, bound to the dataset it was read from: a cursor
+/// from another database (or one changed since) is `source_changed`, never
+/// a silent skip. A cursor without the dataset, from before IMP-3, isn't
+/// trusted (IMP-1): it's refused with the safe step.
+fn read_cursor(path: &Path, dataset: &[u8; 32]) -> Result<Vec<u8>, ImportError> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(ImportError::Io(e)),
     };
-    let t = text.trim();
-    if t.len() % 2 != 0 || t.len() > 2 * (MAX_KEY + 1) {
-        return Err(bad());
+    let mut parts = text.split_whitespace();
+    let (Some(CURSOR_TAG), Some(saved), Some(pos), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(ImportError::Io(std::io::Error::other(
+            "the cursor file isn't this version's: delete it to start over (torrents already \
+             imported are kept and recognised)",
+        )));
+    };
+    if unhex(saved).as_deref() != Some(&dataset[..]) {
+        return Err(ImportError::Source(Refusal::SourceChanged));
     }
-    let bytes = (0..t.len())
-        .step_by(2)
-        .map(|i| t.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
-        .collect::<Option<Vec<u8>>>()
-        .ok_or_else(bad)?;
-    if bytes.len() == 20 {
-        return Ok(position(&bytes));
-    }
-    parse_position(&bytes).map_err(|_| bad())?;
-    Ok(bytes)
+    let pos = unhex(pos).ok_or_else(|| ImportError::Io(std::io::Error::other("bad cursor")))?;
+    parse_position(&pos)?;
+    Ok(pos)
 }
 
-fn write_cursor(path: &Path, position: &[u8]) -> Result<(), ImportError> {
+fn write_cursor(path: &Path, dataset: &[u8; 32], position: &[u8]) -> Result<(), ImportError> {
     let tmp = path.with_extension("tmp");
-    let hex: String = position.iter().map(|b| format!("{b:02x}")).collect();
-    std::fs::write(&tmp, hex).map_err(ImportError::Io)?;
+    let text = format!("{CURSOR_TAG} {} {}\n", hex(dataset), hex(position));
+    std::fs::write(&tmp, text).map_err(ImportError::Io)?;
     std::fs::rename(&tmp, path).map_err(ImportError::Io)
 }
 
@@ -1633,7 +1679,7 @@ pub async fn import(
 ) -> Result<Report, ImportError> {
     let mut src = Source::open(settings).await?;
     let mut cursor = match &opts.cursor {
-        Some(p) => read_cursor(p)?,
+        Some(p) => read_cursor(p, &src.identity().dataset)?,
         None => Vec::new(),
     };
     let mut report = Report::default();
@@ -1689,7 +1735,7 @@ pub async fn import(
         }
         cursor = b.position;
         if let Some(p) = &opts.cursor {
-            write_cursor(p, &cursor)?;
+            write_cursor(p, &src.identity().dataset, &cursor)?;
         }
         progress(&report);
     }

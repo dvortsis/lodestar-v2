@@ -83,9 +83,13 @@ fn ddl(layout: Layout) -> String {
     )
 }
 
-/// The admin connection string, or `None` to skip. Panics where CI
-/// requires PostgreSQL.
-fn base() -> Option<String> {
+/// One test at a time: the quiescence check watches the cluster's next
+/// transaction id, which another test's fixture writes would move.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The admin connection string and this test's turn, or `None` to skip.
+/// Panics where CI requires PostgreSQL.
+async fn base() -> Option<(String, tokio::sync::MutexGuard<'static, ()>)> {
     let base = std::env::var("LODESTAR_TEST_POSTGRES").ok();
     if base.is_none() {
         assert!(
@@ -94,7 +98,7 @@ fn base() -> Option<String> {
         );
         eprintln!("skipped: set LODESTAR_TEST_POSTGRES to run");
     }
-    base
+    Some((base?, SERIAL.lock().await))
 }
 
 async fn admin(base: &str, dbname: Option<&str>) -> Client {
@@ -154,7 +158,20 @@ impl Fixture {
         s
     }
 
+    /// Flushes the fixture writer's table statistics, which PostgreSQL
+    /// otherwise sends up to 10 s later: a late flush would read as a
+    /// write mid-import. The flush runs as the session goes idle after the
+    /// request, so the second statement returns after it.
+    async fn settle(&self) {
+        self.db
+            .batch_execute("SELECT pg_stat_force_next_flush()")
+            .await
+            .unwrap();
+        self.db.batch_execute("SELECT 1").await.unwrap();
+    }
+
     async fn open(&self) -> Source {
+        self.settle().await;
         Source::open(&self.settings()).await.unwrap()
     }
 
@@ -297,7 +314,9 @@ fn torrents(batches: &[Batch]) -> Vec<&TorrentRecord> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_layout_is_read() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     for (tag, layout, caps) in [
         ("v010", Layout::V0_10, (true, true, Pieces::Table)),
         (
@@ -350,10 +369,7 @@ async fn every_layout_is_read() {
         // A second open of the same database is the same source.
         drop(src);
         let again = fx.open().await;
-        assert_eq!(
-            again.identity(),
-            Source::open(&fx.settings()).await.unwrap().identity()
-        );
+        assert_eq!(again.identity(), fx.open().await.identity());
         drop(again);
         fx.drop_db().await;
     }
@@ -361,7 +377,9 @@ async fn every_layout_is_read() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unsupported_schemas_are_refused_by_name() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "empty", None).await;
     let Err(Refusal::UnsupportedSchema(missing)) = Source::open(&fx.settings()).await else {
         panic!("an empty database opened")
@@ -393,15 +411,33 @@ async fn unsupported_schemas_are_refused_by_name() {
         Refusal::UnsupportedSchema(vec!["index: torrent_files(info_hash, index)"])
     );
     fx.drop_db().await;
+
+    // A type of the source's own that's named like a built-in doesn't pass.
+    let fx = Fixture::new(&base, "domain", Some(Layout::NoPieces)).await;
+    fx.db
+        .batch_execute(
+            "CREATE DOMAIN public.text AS pg_catalog.text; \
+             ALTER TABLE torrents ALTER COLUMN name TYPE public.text",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        Source::open(&fx.settings()).await.unwrap_err(),
+        Refusal::UnsupportedSchema(vec!["torrents.name"])
+    );
+    fx.drop_db().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_session_is_read_only_and_bounded() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "session", Some(Layout::V0_10)).await;
     insert(&fx.db, Layout::V0_10, &[row(1, "single", &[])]).await;
     let mut s = fx.settings();
     s.statement_timeout = Duration::from_secs(2);
+    fx.settle().await;
     let src = Source::open(&s).await.unwrap();
     let c = src.client();
     for (name, want) in [
@@ -436,7 +472,9 @@ async fn the_session_is_read_only_and_bounded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tls_is_required_and_verified() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "tls", Some(Layout::V0_10)).await;
     // CI's server has no TLS: asking for it fails, never falls back.
     let mut s = fx.settings();
@@ -456,7 +494,9 @@ async fn tls_is_required_and_verified() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn raw_bytes_and_nameless_rows_survive() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "bytes", Some(Layout::V0_10)).await;
     let mut odd = row(1, "multi", &[]);
     odd.name = vec![b'G', 0xb5, 0xc4, 0xff];
@@ -514,7 +554,9 @@ async fn raw_bytes_and_nameless_rows_survive() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn batches_are_bounded_by_count_and_memory() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "bounds", Some(Layout::V0_10)).await;
     many(&fx.db, 1_100).await;
     let mut src = fx.open().await;
@@ -586,7 +628,9 @@ async fn batches_are_bounded_by_count_and_memory() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_live_source_is_refused() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "live", Some(Layout::V0_10)).await;
     many(&fx.db, 10).await;
     // A writer mid-transaction: refused at open.
@@ -644,7 +688,9 @@ async fn write_count(db: &Client) -> i64 {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resumed_job_refuses_another_database_with_the_same_name() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "resume", Some(Layout::V0_10)).await;
     many(&fx.db, 600).await;
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
@@ -652,6 +698,7 @@ async fn a_resumed_job_refuses_another_database_with_the_same_name() {
     let job = reading_job(&mut store, &src.identity());
     let b1 = src.read_batch(&[], NOW).await.unwrap().unwrap();
     commit(&mut store, job.id, 1, &b1);
+    let old_fingerprint = src.fingerprint;
     // A replay writes nothing.
     assert_eq!(commit(&mut store, job.id, 1, &b1), "replayed");
     drop(src);
@@ -663,7 +710,11 @@ async fn a_resumed_job_refuses_another_database_with_the_same_name() {
     let fx = Fixture::new(&base, "resume", Some(Layout::V0_10)).await;
     many(&fx.db, 600).await;
     assert_eq!(fx.settings().dbname, settings.dbname);
-    let id = fx.open().await.identity();
+    let fresh = fx.open().await;
+    // The binding is the database's and tables' OIDs, not the content.
+    assert_ne!(fresh.fingerprint, old_fingerprint);
+    let id = fresh.identity();
+    drop(fresh);
     let job = store.import_job(job.id).unwrap().unwrap();
     let job = store
         .resume_import_job(
@@ -685,7 +736,9 @@ async fn a_resumed_job_refuses_another_database_with_the_same_name() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_legacy_import_runs_on_the_adapter() {
-    let Some(base) = base() else { return };
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
     let fx = Fixture::new(&base, "legacyimport", Some(Layout::V0_10)).await;
     let mut private = row(3, "over_threshold", &[]);
     private.private = true;
@@ -711,6 +764,7 @@ async fn the_legacy_import_runs_on_the_adapter() {
         limit: None,
     };
     let mut batches = 0;
+    fx.settle().await;
     let report = import(&fx.settings(), &mut store, source, &opts, |_| batches += 1)
         .await
         .unwrap();
@@ -733,6 +787,19 @@ async fn the_legacy_import_runs_on_the_adapter() {
         .await
         .unwrap();
     assert_eq!(again.read, 0);
+    // The cursor is bound to this database: a new one under the same name
+    // is refused, not resumed past the old cursor.
+    fx.drop_db().await;
+    let fx = Fixture::new(&base, "legacyimport", Some(Layout::V0_10)).await;
+    insert(&fx.db, Layout::V0_10, &[row(1, "single", &[])]).await;
+    fx.settle().await;
+    let err = import(&fx.settings(), &mut store, source, &opts, |_| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ImportError::Source(Refusal::SourceChanged)),
+        "{err}"
+    );
     fx.drop_db().await;
 }
 
