@@ -1372,28 +1372,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/send": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sends torrents to a saved download client (the default one unless
-         *     `client` names another), with its saved category, save path and
-         *     paused setting. Each hash gets a result; hidden ones are refused, never
-         *     sent.
-         */
-        post: operations["sendToClient"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/sessions/revoke-others": {
         parameters: {
             query?: never;
@@ -2711,37 +2689,6 @@ export interface components {
             corrections: number;
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
-        };
-        /** @description `POST /send`: torrents to add to a saved download client. */
-        ClientSend: {
-            /** @description The saved client's id; without it, the default client. */
-            client?: string;
-            /** @description 1 to 100 info hashes (40 hex characters). */
-            hashes: string[];
-        };
-        /** @description One torrent's result. */
-        ClientSendItem: {
-            /**
-             * @description `not_found`, `hidden`, `adult_hidden`, `private` or `same_torrent` when refused; the
-             *     connection test's codes when failed; null otherwise.
-             */
-            code: string | null;
-            hash: string;
-            /** @description A sentence for people; never the client's address or a credential. */
-            message: string | null;
-            /**
-             * @description What happened to one torrent of a send.
-             * @enum {string}
-             */
-            outcome: "sent" | "duplicate" | "refused" | "failed";
-        };
-        /** @description `POST /send`: the result per torrent, in the order asked. */
-        ClientSendResult: {
-            /** @description The client's id. */
-            client: string;
-            results: components["schemas"]["ClientSendItem"][];
-            /** @description How many went in (sent or already there). */
-            sent: number;
         };
         /** @description `POST /collections`. */
         CollectionCreate: {
@@ -10662,67 +10609,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    sendToClient: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ClientSend"];
-            };
-        };
-        responses: {
-            /** @description The send ran; each hash has its result. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClientSendResult"];
-                };
-            };
-            /** @description `cross_origin`. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `no_client`: no download client is saved, or none with that id. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `invalid_hashes`: none, more than 100, or one isn't an info hash. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `sends_busy` or `send_rate_limited`: try again shortly. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
