@@ -526,7 +526,7 @@ fn store_openers_refuse_during_an_update_rollback() {
     };
     for args in [
         serve,
-        &["import-bitmagnet", "postgres://localhost/bitmagnet"],
+        &["import-bitmagnet", "--host", "localhost"],
         &["stats"],
         &["reindex"],
         &["vacuum"],
