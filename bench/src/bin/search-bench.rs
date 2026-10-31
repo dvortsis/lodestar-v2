@@ -55,6 +55,8 @@ use rand_chacha::ChaCha8Rng;
 
 /// §3: keyword search top 50, p95.
 const KEYWORD_P95: Duration = Duration::from_millis(30);
+/// §3: file-level query joined to torrents, p95.
+const FILE_P95: Duration = Duration::from_millis(150);
 /// §3: filter-only browse over the whole corpus, p95.
 const BROWSE_P95: Duration = Duration::from_millis(50);
 /// §3: facets for the same query (a separate request), p95.
@@ -868,7 +870,8 @@ fn recovery_path(
 /// id sets need against the file-set cache's budget, then the search
 /// with a cold cache (emptied before each query) and a warm one (all the
 /// clauses in turn, so they compete for the budget), with the warm
-/// loop's cache hit rate. Warm is gated at [`KEYWORD_P95`].
+/// loop's cache hit rate. Cold is gated at [`FILE_P95`] (X-search-files-2),
+/// warm at [`KEYWORD_P95`].
 fn file_sets_path(
     a: &Args,
     index: &SearchIndex,
@@ -962,7 +965,7 @@ fn file_sets_path(
     );
     let mut ok = true;
     for (name, times, target) in [
-        ("broad file (cold)", &mut cold, None),
+        ("broad file (cold)", &mut cold, Some(FILE_P95)),
         ("broad file (warm)", &mut warm, Some(KEYWORD_P95)),
     ] {
         times.sort();

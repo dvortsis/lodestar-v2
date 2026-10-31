@@ -559,3 +559,35 @@ fn a_file_scan_cancelled_partway_fails_the_compile_and_caches_nothing() {
     let total = crate::count::total(&index.searcher(), &compiled, &fresh).unwrap();
     assert_eq!(total.value, 10);
 }
+
+/// Segments scan in parallel, and their sets are cached only once every
+/// one is whole: small segments that finish before a large one is
+/// cancelled leave nothing cached either.
+#[test]
+fn a_cancelled_scan_over_several_segments_caches_no_segment() {
+    let (index, _) = index_with(12, 1);
+    append_files(&index, 1..3, 10);
+    append_files(&index, 3..5, 10);
+    let per = u64::from(crate::cancel::CHECK_EVERY);
+    append_files(&index, 5..13, per);
+    assert_eq!(index.files_searcher().segment_readers().len(), 3);
+    let node = crate::parse("file:(size:>0)").unwrap();
+    let cancel = CancelToken::new();
+    // The small segments hold 40 files, so the cancel lands in the large one.
+    let (trip, _) = tripwire(100, &cancel);
+    crate::testing::FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+    assert!(matches!(
+        index.compile_cancelled(&node, NOW, 0, false, &cancel),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(index.cache_usage().file_set_entries, 0);
+
+    crate::testing::FILE_QUERY.with(|q| *q.borrow_mut() = Some(Box::new(tantivy::query::AllQuery)));
+    let fresh = CancelToken::new();
+    let compiled = index
+        .compile_cancelled(&node, NOW, 0, false, &fresh)
+        .unwrap();
+    let total = crate::count::total(&index.searcher(), &compiled, &fresh).unwrap();
+    assert_eq!(total.value, 12);
+    assert_eq!(index.cache_usage().file_set_entries, 3);
+}
