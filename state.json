@@ -1599,22 +1599,22 @@
    "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size | 08:03Z Lighthouse total-byte-weight /search 102,891 > 102,400 on ed23185 (PR-caused); author told to move boot work off the initial path (target <= ~150 B growth); reviewer informed"
   },
   "S-search-recover-ui": {
-   "status": "launching",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01MMjhnCz41jUgEexEZLJBjA",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "08:12Z brief briefs/S-search-recover-ui.md (bind #266 recovery + /search/state)"
+   "notes": "08:12Z brief briefs/S-search-recover-ui.md (bind #266 recovery + /search/state) | 08:11Z launched Sonnet"
   },
   "B-search-live": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnACQp59D4wxDKkXiW9",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "08:12Z brief briefs/B-search-live.md (part 4 design from #266 decisions); security-review"
+   "notes": "08:12Z brief briefs/B-search-live.md (part 4 design from #266 decisions); security-review | 08:11Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
