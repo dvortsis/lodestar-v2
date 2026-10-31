@@ -166,11 +166,11 @@ test.describe('keyboard: connection settings screens', () => {
 		await expect(page.getByRole('heading', { level: 1, name: 'Notifications' })).toBeVisible();
 		await expectNoA11yViolations(page);
 		const discord = page.getByRole('region', { name: 'Discord' });
-		await kbd.tabTo(discord.getByRole('button', { name: 'Add' }));
+		await kbd.tabTo(discord.getByRole('button', { name: 'Add', exact: true }), 150);
 		await kbd.press('Enter');
-		await kbd.tabTo(discord.getByLabel('New value for Discord webhook address'));
+		await kbd.tabTo(discord.getByLabel('New value for Discord webhook address'), 20);
 		await page.keyboard.type('https://discord.com/api/webhooks/1/x');
-		await kbd.tabTo(discord.getByRole('button', { name: 'Send test to Discord' }));
+		await kbd.tabTo(discord.getByRole('button', { name: 'Send test to Discord' }), 20);
 		await kbd.press('Enter');
 		await expect(discord.getByTestId('test-result')).toHaveText('Test message sent.');
 		expect(tests).toEqual([{ kind: 'discord', url: 'https://discord.com/api/webhooks/1/x' }]);
@@ -196,7 +196,7 @@ test.describe('keyboard: connection settings screens', () => {
 		await expect(page.getByTestId('save-bar')).toContainText('Saved');
 		expect(backend.patches).toEqual([{ insights: { if_revision: 1, query_logging: true } }]);
 
-		await kbd.tabTo(page.getByRole('button', { name: 'Clear usage data…' }));
+		await kbd.tabTo(page.getByRole('button', { name: 'Clear usage data…' }), 150);
 		await kbd.press('Enter');
 		const clear = page.getByRole('dialog', { name: 'Clear usage data?' });
 		await expect(clear).toContainText('This deletes 1,204 logged searches.');
@@ -204,8 +204,12 @@ test.describe('keyboard: connection settings screens', () => {
 		await kbd.press('Escape');
 		await expect(clear).toBeHidden();
 		expect(cleared).toHaveLength(0);
-		await kbd.press('Enter'); // focus returned to the button
+		await kbd.tabTo(page.getByRole('button', { name: 'Clear usage data…' }), 150);
+		await kbd.press('Enter');
+		const again = page.getByRole('dialog', { name: 'Clear usage data?' });
+		await expect(again.getByRole('button', { name: 'Cancel' })).toBeFocused();
 		await kbd.press('Tab');
+		await expect(again.getByRole('button', { name: 'Delete 1,204 searches' })).toBeFocused();
 		await kbd.press('Enter');
 		await expect(page.getByText('Deleted 1,204 searches.')).toBeVisible();
 		expect(cleared).toEqual([{ confirm: true }]);
