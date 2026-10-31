@@ -26,13 +26,15 @@ pub enum Topic {
     Insights,
     /// A settings section was saved ([`SettingsEvent`]).
     Settings,
-    /// The update engine's state changed ([`UpdatesEvent`]). Last, so
-    /// the other topics keep their bits.
+    /// The update engine's state changed ([`UpdatesEvent`]).
     Updates,
+    /// New matches for your own live queries ([`SearchLiveEvent`]). Last,
+    /// so the other topics keep their bits.
+    SearchLive,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 7] = [
+    pub const ALL: [Topic; 8] = [
         Topic::Torrents,
         Topic::Crawler,
         Topic::Rebuild,
@@ -40,6 +42,7 @@ impl Topic {
         Topic::Insights,
         Topic::Settings,
         Topic::Updates,
+        Topic::SearchLive,
     ];
 
     /// The name in `?topics=` and in the frame's `event:` line.
@@ -52,6 +55,7 @@ impl Topic {
             Topic::Insights => "insights",
             Topic::Settings => "settings",
             Topic::Updates => "updates",
+            Topic::SearchLive => "search_live",
         }
     }
 
@@ -259,6 +263,58 @@ pub struct UpdatesEvent {
     pub error: Option<String>,
 }
 
+/// `POST /search/live`: the query whose new matches to count, as `/search`
+/// takes it.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct SearchLiveRequest {
+    /// The query text. Send `q` or `ast`, not both.
+    pub q: Option<String>,
+    /// A query AST, as `/parse` returns it; it must be one the parser
+    /// could produce.
+    #[schema(value_type = Option<crate::dto::search::AstNode>)]
+    pub ast: Option<lodestar_search::Node>,
+    /// Include torrents a filter rule hid (§20.3), as `/search` does.
+    pub hidden: Option<bool>,
+    /// The user's zone for `time:`, in minutes east of UTC (−840 to 840);
+    /// 0 by default.
+    pub tz: Option<i32>,
+}
+
+/// A live query's registration: listen for `search_live` events with
+/// its `id` on `/events?topics=search_live` (or every topic).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "id": "4f1c9a0b7d2e8a61", "since": 48211 }))]
+pub struct SearchLiveRegistration {
+    /// Names it in `search_live` events and in `DELETE /search/live/{id}`.
+    pub id: String,
+    /// The highest torrent id searchable when it was made: matches are
+    /// counted after it. **Null while Adult is hidden**, as `torrents`'
+    /// `max_id` is: a real id would show, in its gap from a later one,
+    /// how many hidden torrents arrived.
+    #[schema(required = true)]
+    pub since: Option<i64>,
+}
+
+/// `event: search_live`: one of your live queries (`POST /search/live`)
+/// has new matches. `matched` counts every match since it was made, so
+/// a missed event loses nothing. Each connection gets at most one per
+/// live query every 5 s; counts in between are combined. Sent only to
+/// the session that made it, never replayed (it has no `id:`), and only
+/// torrents search would show count: none a filter rule hid (unless the
+/// query asked for them) and no Adult while "Show adult content" is off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "id": "4f1c9a0b7d2e8a61", "matched": 3, "through": 48250 }))]
+pub struct SearchLiveEvent {
+    /// The registration's id.
+    pub id: String,
+    /// Matches since the registration was made; at least 1.
+    pub matched: u64,
+    /// The highest torrent id checked so far. **Null while Adult is
+    /// hidden** (see `SearchLiveRegistration.since`).
+    #[schema(required = true)]
+    pub through: Option<i64>,
+}
+
 /// Why a `resync` was sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -297,6 +353,7 @@ pub enum Event {
     Insights(InsightsEvent),
     Settings(SettingsEvent),
     Updates(UpdatesEvent),
+    SearchLive(SearchLiveEvent),
     Resync(ResyncEvent),
 }
 
@@ -312,6 +369,7 @@ impl Event {
             Event::Insights(_) => Topic::Insights,
             Event::Settings(_) => Topic::Settings,
             Event::Updates(_) => Topic::Updates,
+            Event::SearchLive(_) => Topic::SearchLive,
             Event::Resync(_) => return None,
         })
     }
@@ -331,6 +389,7 @@ impl Event {
             Event::Insights(e) => serde_json::to_string(e),
             Event::Settings(e) => serde_json::to_string(e),
             Event::Updates(e) => serde_json::to_string(e),
+            Event::SearchLive(e) => serde_json::to_string(e),
             Event::Resync(e) => serde_json::to_string(e),
         };
         v.expect("event payloads serialize")
@@ -381,5 +440,15 @@ mod tests {
         });
         assert_eq!((s.name(), s.topic()), ("settings", Some(Topic::Settings)));
         assert_eq!(s.data(), r#"{"revision":4,"section":"crawler"}"#);
+        let l = Event::SearchLive(SearchLiveEvent {
+            id: "ab".into(),
+            matched: 2,
+            through: None,
+        });
+        assert_eq!(
+            (l.name(), l.topic()),
+            ("search_live", Some(Topic::SearchLive))
+        );
+        assert_eq!(l.data(), r#"{"id":"ab","matched":2,"through":null}"#);
     }
 }
