@@ -1803,13 +1803,13 @@
       "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus."
     },
     "S-logs-2b": {
-      "status": "building",
+      "status": "pr-fixing",
       "model": "opus",
       "session": "session_01MMjhn9PaFGExdtPTuRLd14",
-      "pr": null,
+      "pr": 294,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow."
+      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head."
     },
     "X-form-remount": {
       "status": "building",
@@ -2331,7 +2331,9 @@
     "2026-10-31T15:51Z": "Lesson: a reviewer's 'optional' suggestion to narrow a safety mechanism (#280 opt 2) went into a brief and was a content-safety loosening caught in #282. Briefs that relax a hold/refusal path must say 'check this doesn't loosen safety' and get a security review.",
     "2026-10-31T17:34Z": "Usage: a reviewer session reports rate_limit status allowed_warning (seven-day). Prioritise safety-critical slices; defer polish-only launches.",
     "short_sha": "create_session source_revision must be a full SHA or branch: a 7-8 char SHA fails init (ref_not_found) and the session sits PENDING silently. Heartbeat now checks PENDING > 5 min.",
-    "alert_route_main": "#289 reviewer: Alert route on main 673692a4 measured 46.01 KB locally vs 46 KB limit (CI on #289 head passed). Watch main's web size job."
+    "alert_route_main": "#289 reviewer: Alert route on main 673692a4 measured 46.01 KB locally vs 46 KB limit (CI on #289 head passed). Watch main's web size job.",
+    "tailwind_bang": "Tailwind content scan reads JS like `if (!list)` as daisyUI's `!list` important-class and adds ~155 B to first-load CSS (found in S-logs-2b). Watch for `!word` patterns matching class names in Svelte/TS.",
+    "build_noise": "Each web build embeds a timestamp and random app id; every size entry moves a few bytes per build. Results toolbar (4.6 KB) and Alert/Search sit within that noise on main. Fix queued: X-build-stable-name."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
