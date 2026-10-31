@@ -1,0 +1,6 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_cards_option": "Cards",
+	"search_cards_label": "Results as cards",
+	"search_cards_more": "Open details"
+}

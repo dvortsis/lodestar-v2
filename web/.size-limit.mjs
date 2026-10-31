@@ -283,7 +283,12 @@ const RESULTS = [
 		(manifest[k].css ?? []).some((c) => /\/row\.[^/]*\.css$/.test(c))
 	)
 ];
-const resultsOnDemand = [/features\/detail\//, /^chunk:magnet$/, /^chunk:Menu$/];
+const resultsOnDemand = [
+	/features\/detail\//,
+	/features\/search\/(live|cards)\//,
+	/^chunk:magnet$/,
+	/^chunk:Menu$/
+];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
 // link it loads only with the first interaction, so the panel really does fetch what they share.
@@ -340,6 +345,28 @@ const builderLazy = ownChunk('src/lib/features/search/assist/Builder.svelte', []
 	...engagedSearch,
 	...assistLazy
 ]);
+
+// The live banner (S-search-6) loads once the results are ready; Cards loads when the density is
+// Cards. Each is measured beyond the views it loads into.
+const liveLazy = [
+	...new Set(
+		[
+			'src/lib/features/search/live/live.svelte.ts',
+			'src/lib/features/search/live/LiveHost.svelte'
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+	)
+];
+const cardsLazy = [
+	...new Set(
+		[
+			'src/lib/features/search/live/extras.ts',
+			'src/lib/features/search/cards/CardList.svelte',
+			'src/lib/features/search/cards/Card.svelte',
+			'src/lib/features/search/cards/cards.ts',
+			'src/lib/features/search/cards/cards.css'
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+	)
+];
 
 // Never pass by measuring nothing: a renamed or moved file must fail here, not drop the entry.
 if (Object.keys(manifest).length && !resultsLazy.some((f) => f.endsWith('.js')))
@@ -444,6 +471,8 @@ export default [
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
+	entry('Search live banner (lazy)', liveLazy, '1.45 KB'),
+	entry('Search cards (lazy)', cardsLazy, '6.1 KB'),
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
 	entry('Natural phrasing (on demand)', naturalLazy, '1.64 KB'),
 	entry('Builder (on demand)', builderLazy, '5.69 KB'),

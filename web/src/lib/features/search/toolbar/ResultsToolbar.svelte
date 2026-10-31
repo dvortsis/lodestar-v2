@@ -21,9 +21,10 @@
 
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
-	const density = $derived(
-		page.url.searchParams.get('density') === 'compact' ? 'compact' : 'comfortable'
-	);
+	const density = $derived.by(() => {
+		const d = page.url.searchParams.get('density');
+		return d === 'compact' || d === 'cards' ? d : 'comfortable';
+	});
 
 	// The count of the rows shown: none while the first answer is out, or after it failed.
 	const count = $derived.by(() => {
@@ -87,7 +88,8 @@
 				value={density}
 				options={[
 					{ value: 'comfortable', label: m.search_toolbar_comfortable() },
-					{ value: 'compact', label: m.search_toolbar_compact() }
+					{ value: 'compact', label: m.search_toolbar_compact() },
+					{ value: 'cards', label: m.search_cards_option() }
 				]}
 				onchange={setDensity}
 			/>

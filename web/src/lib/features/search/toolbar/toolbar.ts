@@ -23,7 +23,7 @@ export function sortValue(sort: string): string {
 /** This page with `density` set; Comfortable is the default, so it drops the parameter. */
 export function densityHref(url: URL, density: string): string {
 	const u = new URL(url);
-	if (density === 'compact') u.searchParams.set('density', 'compact');
+	if (density === 'compact' || density === 'cards') u.searchParams.set('density', density);
 	else u.searchParams.delete('density');
 	return u.pathname + u.search + u.hash;
 }

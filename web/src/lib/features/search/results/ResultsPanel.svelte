@@ -52,6 +52,7 @@
 	const density = $derived<Density>(
 		page.url.searchParams.get('density') === 'compact' ? 'compact' : 'comfortable'
 	);
+	const cards = $derived(page.url.searchParams.get('density') === 'cards');
 
 	// The query the rows follow. No query in the URL: the empty state. A query that hasn't parsed
 	// (in flight, or a syntax error): no new load, so the last good rows stay.
@@ -111,6 +112,15 @@
 	$effect(() => {
 		if (results.hits.length && !Actions)
 			void import('./RowActions.svelte').then((mod) => (Actions = mod.default));
+	});
+
+	// S-search-6: Cards (cards/) and the live banner (live/) load on demand.
+	let ext = $state.raw<Partial<Awaited<ReturnType<typeof import('../live/extras').load>>>>({});
+	$effect(() => {
+		const want = { cards, live: results.status === 'ready' };
+		void import('../live/extras')
+			.then((mod) => mod.load(want))
+			.then((got) => (ext = { Live: got.Live ?? ext.Live, Cards: got.Cards ?? ext.Cards }));
 	});
 
 	let active = $state(0);
@@ -338,6 +348,8 @@
 		</Banner>
 	{/if}
 
+	{#if ext.Live}<ext.Live bind:said />{/if}
+
 	{#if waiting}
 		<!-- the parse is out: see `waiting` -->
 	{:else if results.status === 'empty'}
@@ -445,31 +457,35 @@
 				onpointerover={pointerOver}
 				onkeydown={keyDown}
 			>
-				<VirtualList
-					bind:this={list}
-					items={results.hits}
-					role="grid"
-					getKey={(h) => h.hash}
-					label={m.search_results_label()}
-					estimateSize={rowHeight}
-					resetKey={results.shown ?? ''}
-					bind:activeIndex={active}
-					onActivate={(_i, hit) => void open(hit)}
-					hasMore={results.hasMore}
-					loadingMore={results.loadingMore}
-					onLoadMore={() => void results.loadMore()}
-					loadMoreLabel={m.search_results_loading_more()}
-				>
-					{#snippet row(hit)}
-						<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
-							<ResultRow {hit} {density} {matched} testid="result-{hit.hash}">
-								{#snippet actions(h)}
-									{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
-								{/snippet}
-							</ResultRow>
-						</div>
-					{/snippet}
-				</VirtualList>
+				{#if cards}
+					{#if ext.Cards}<ext.Cards bind:this={list} bind:active open={(h) => void open(h)} />{/if}
+				{:else}
+					<VirtualList
+						bind:this={list}
+						items={results.hits}
+						role="grid"
+						getKey={(h) => h.hash}
+						label={m.search_results_label()}
+						estimateSize={rowHeight}
+						resetKey={results.shown ?? ''}
+						bind:activeIndex={active}
+						onActivate={(_i, hit) => void open(hit)}
+						hasMore={results.hasMore}
+						loadingMore={results.loadingMore}
+						onLoadMore={() => void results.loadMore()}
+						loadMoreLabel={m.search_results_loading_more()}
+					>
+						{#snippet row(hit)}
+							<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
+								<ResultRow {hit} {density} {matched} testid="result-{hit.hash}">
+									{#snippet actions(h)}
+										{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
+									{/snippet}
+								</ResultRow>
+							</div>
+						{/snippet}
+					</VirtualList>
+				{/if}
 			</div>
 			<div bind:this={foot}>
 				<div class="rp-foot">

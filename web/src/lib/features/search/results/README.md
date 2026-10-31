@@ -39,4 +39,4 @@ Rules: the latest query wins (an older answer is dropped); the same query is nev
 
 ## Not yet (follow-ups)
 
-The live "N new" banner, per-clause zero-result counts, hidden counts, highlights, Send (`s`), recent searches, "In library" and matched file paths. The empty state's "+N in the last hour" waits for an API figure (runner decision 2).
+Per-clause zero-result counts (S-search-6 shipped the live banner and Cards; see `docs/decisions/2026-10-31-S-search-6.md`), hidden counts, highlights, Send (`s`), recent searches, "In library" and matched file paths. The empty state's "+N in the last hour" waits for an API figure (runner decision 2).
