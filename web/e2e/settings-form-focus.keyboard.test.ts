@@ -118,6 +118,8 @@ test.describe('keyboard: focus stays through a resync', () => {
 		const search = page.getByRole('searchbox', { name: 'Search events' });
 		await kbd.tabTo(search, 60);
 		await page.keyboard.type('pipeline');
+		const group = page.getByTestId('log-group-pipeline').locator('xpath=..');
+		await expect(group).toHaveJSProperty('open', true);
 		const toggle = page.getByRole('switch', { name: 'pipeline.stored' });
 		await kbd.tabTo(toggle, 20);
 		await kbd.press('Space');
@@ -134,6 +136,7 @@ test.describe('keyboard: focus stays through a resync', () => {
 		expect(backend.patches).toHaveLength(1);
 		await expect(toggle).toBeFocused();
 		await expect(search).toHaveValue('pipeline');
+		await expect(group).toHaveJSProperty('open', true);
 		await expectNoA11yViolations(page);
 	});
 });

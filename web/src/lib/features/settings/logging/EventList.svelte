@@ -1,10 +1,3 @@
-<script lang="ts" module>
-	// Groups the user opened or closed keep that state when a search is cleared, and when the form
-	// re-renders the list (a resync shows the form's loading state for a moment, which remounts it).
-	// A group nobody has touched is open while searching.
-	const opened = $state<Record<string, boolean>>({});
-</script>
-
 <script lang="ts">
 	// The event list (§10.10.12): every catalogued event grouped by component, each group
 	// collapsible with a count ("Fetch · 4 of 11 on"). A row has a toggle, the plain name, the level
@@ -52,6 +45,9 @@
 			: {}) as Record<string, string>
 	);
 
+	// Groups the user opened or closed keep that state when a search is cleared. A group nobody has
+	// touched is open while searching. A resync doesn't remount the list, so this survives it.
+	const opened = $state<Record<string, boolean>>({});
 	let query = $state('');
 	let changedOnly = $state(false);
 	const matches = (e: LogEvent, q: string) =>

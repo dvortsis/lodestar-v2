@@ -57,8 +57,6 @@ export interface SettingsForm {
 	readonly mode: 'staged' | 'instant';
 	readonly specs: FieldSpec[];
 	readonly status: FormStatus;
-	/** The first load finished: the body stays mounted through a later load, or a failed one. */
-	readonly loaded: boolean;
 	readonly loadError?: ApiError;
 	/** The failed save behind an `offline` or `save-error` status (`retryAfter` for 429/503). */
 	readonly saveError?: ApiError;
@@ -187,7 +185,6 @@ export class Engine implements SettingsForm {
 	byKey = new Map<string, FieldSpec>();
 	sections = $state.raw<Sections>({});
 	status = $state<FormStatus>('loading');
-	loaded = $state(false);
 	loadError = $state.raw<ApiError | undefined>();
 	saveError = $state.raw<ApiError | undefined>();
 	fieldErrors = $state.raw<Record<string, string>>({});
@@ -322,7 +319,6 @@ export class Engine implements SettingsForm {
 			for (const v of values) next[v.section] = fromValues(v);
 			this.sections = next;
 			this.status = 'ready';
-			this.loaded = true;
 			if (offered) editMod!.offerDraft(this);
 			else if (offered === false) this.draftUnavailable = true;
 			this.schedulePreview();
