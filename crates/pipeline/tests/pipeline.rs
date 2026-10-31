@@ -514,9 +514,10 @@ async fn refetches_stay_out_of_the_funnel() {
     let pipeline = Pipeline::start(config(), store, vec![feed, finder])
         .await
         .unwrap();
-    // The crawl sights the refetching key too, while its refetch lease is
-    // out (restored at start): it's the import's row, a rediscovery, never
-    // a harvest of its own.
+    // The crawl sights the refetching key too, likely while its refetch
+    // lease (restored at start) is still out. Before or after the refetch
+    // commits, the import's row is in the have-filter: a rediscovery,
+    // never a harvest of its own.
     feed_tx.send(Found::key(refetch, 0)).await.unwrap();
     feed_tx
         .send(Found::key(crawl, 0).with_peers(vec![peer.addr()]))

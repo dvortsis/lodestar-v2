@@ -457,7 +457,10 @@ async fn run_search(
         // the page the cache serves.
         let recovery = if served == 0 && total.value == 0 {
             let key = self::fingerprint(&ast, visibility, sort);
-            let counted = recoveries().get_or(&key, cached.as_ref(), || {
+            // The result cache doesn't keep a `file:(…)` page, so neither
+            // do its counts.
+            let kept = cached.as_ref().filter(|_| !shown.has_file_clause());
+            let counted = recoveries().get_or(&key, kept, || {
                 recover(&lease, &ast, visibility, &cancel)
             });
             match counted {
@@ -608,8 +611,9 @@ const RECOVERY_ENTRIES: usize = 1024;
 /// allocation, so a new one can't take its address.
 ///
 /// A recovery a deadline cut short (a clause without `total`) isn't
-/// kept: a repeat tries again, as without the cache. One computed for a
-/// search the cache didn't keep (`file:(…)`) isn't kept either.
+/// kept: a repeat tries again, as without the cache. Neither is one for
+/// a search the result cache doesn't keep (`file:(…)`) or bypasses
+/// (`explain`): no page is passed for those.
 ///
 /// [`CachedSearch`]: lodestar_search::CachedSearch
 struct RecoveryCache<T> {
