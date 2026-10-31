@@ -33,6 +33,7 @@ The cold broad `file:(…)` clause against §3's "File-level query joined to tor
 
   Warm p95 4.95 → 5.18 ms (noise). The full `search-bench --torrents 200000 --gate` passes.
 - **At 10M** the scan grows with the file documents, so the cold p95 will pass 150 ms again on four cores; the fixes buy a constant factor (about 2×), not a different curve. The floor is the size range, which reads every file document's `size`. Indexing `size` in the file index would let it read postings instead, but that is an index format change, out of this slice's scope: **proposed for the runner (§2.26)** as a follow-up to measure at the 10M bench, alongside the warm path, which already holds every broad clause's sets.
+- **The 10M measurement must include concurrent cold queries** (X-polish-1031c): cold file scans share the file index's pool (at most 4 threads) across requests, so one query's cold time alone understates what several at once see.
 
 ## #278 optional findings
 - **`IdPart` proptest** (`id_part_props`): random sorted, deduplicated sets built from dense runs and lone sparse ids at any base, so they cross 64-bit word boundaries at every offset and come out in both forms. `contains` (on every id, its neighbours and far probes), `for_each`, `last`, `is_empty` and the `IdSet` union and membership equal the plain sorted list; the bitset and list gathers, in any order and with repeats, give the same part.

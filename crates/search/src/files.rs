@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lodestar_classify::Category;
@@ -708,14 +708,36 @@ pub(crate) fn torrent_ids(
     if !missed.is_empty() {
         cancel.check()?;
         let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+        // One segment's failure stops its siblings: they see `failed` at
+        // their next check and give up, and the first real error is the
+        // one reported (the executor would report the first by position,
+        // which may be a sibling's stop).
+        let failed = AtomicBool::new(false);
+        let first_err = Mutex::new(None);
         let scanned = searcher
             .index()
             .search_executor()
             .map(
-                |i: usize| scan_segment(weight.as_ref(), &segs[i], cancel),
+                |i: usize| {
+                    scan_segment(weight.as_ref(), &segs[i], cancel, &failed).map_err(|e| {
+                        // A stop by the token or by a sibling is not this
+                        // segment's own error.
+                        if !cancel.is_stopped() && !failed.load(Ordering::Acquire) {
+                            let mut slot = first_err.lock().unwrap_or_else(|p| p.into_inner());
+                            slot.get_or_insert(e);
+                            failed.store(true, Ordering::Release);
+                            crate::cancel::interrupted()
+                        } else {
+                            e
+                        }
+                    })
+                },
                 missed.iter().copied(),
             )
-            .map_err(|e| crate::cancel::stopped_or(cancel, e))?;
+            .map_err(|e| {
+                let first = first_err.lock().unwrap_or_else(|p| p.into_inner()).take();
+                crate::cancel::stopped_or(cancel, first.unwrap_or(e))
+            })?;
         cancel.check()?;
         // Cached only once every segment is whole: a scan cut short
         // caches nothing.
@@ -785,9 +807,10 @@ fn scan_segment(
     weight: &dyn Weight,
     seg: &SegmentReader,
     cancel: &crate::CancelToken,
+    failed: &AtomicBool,
 ) -> tantivy::Result<IdPart> {
     let stopped = || {
-        if cancel.is_stopped() {
+        if cancel.is_stopped() || failed.load(Ordering::Acquire) {
             Err(crate::cancel::interrupted())
         } else {
             Ok(())
@@ -798,6 +821,9 @@ fn scan_segment(
     let alive = seg.alive_bitset();
     let mut scorer = weight.scorer(seg, 1.0)?;
     let span = column.max_value().saturating_sub(column.min_value()) / 64 + 1;
+    // An estimate: tantivy 0.27's range doc set (`size:` ranges) gives
+    // `num_docs / 10` as its size hint (an upstream TODO), so the form
+    // chosen for those can be the costlier one; either is correct.
     let mut gather = if seg.max_doc() > 0 && u64::from(scorer.size_hint()) >= span {
         Gather::Bits {
             lo: column.min_value(),
@@ -1364,10 +1390,21 @@ mod scan_tests {
         let cache = FileSetCache::default();
         let token = crate::CancelToken::new();
         let set = torrent_ids(&searcher, &AllQuery, "all", &cache, &token).unwrap();
-        let mut forms = Vec::new();
-        // Tantivy orders segments by size, largest first, which here is
-        // the order they were written.
-        for (part, ids) in set.parts.iter().zip(&segments) {
+        let mut forms = vec![None; segments.len()];
+        assert_eq!(set.parts.len(), segments.len());
+        // Parts follow tantivy's segment order, which is not promised:
+        // pair each with the segment that holds its first id.
+        for part in &set.parts {
+            let mut first = None;
+            part.for_each(|id| {
+                first.get_or_insert(id);
+            });
+            let first = first.expect("no segment is wholly deleted");
+            let at = segments
+                .iter()
+                .position(|ids| ids.contains(&first))
+                .expect("a part's ids come from a written segment");
+            let ids = &segments[at];
             let want: Vec<u64> = ids
                 .iter()
                 .copied()
@@ -1376,9 +1413,10 @@ mod scan_tests {
             let mut got = Vec::new();
             part.for_each(|id| got.push(id));
             assert_eq!(got, want);
-            forms.push(matches!(**part, IdPart::Bits { .. }));
+            assert!(forms[at].is_none(), "two parts for segment {at}");
+            forms[at] = Some(matches!(**part, IdPart::Bits { .. }));
         }
-        assert_eq!(forms, [true, true, false, false]);
+        assert_eq!(forms, [Some(true), Some(true), Some(false), Some(false)]);
         assert!(set.contains(4_999) && !set.contains(17) && !set.contains(70_000));
         let (hits, misses) = cache.hits();
         assert_eq!((hits, misses), (0, 4));
