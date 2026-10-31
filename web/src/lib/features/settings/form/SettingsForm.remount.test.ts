@@ -60,12 +60,26 @@ describe('SettingsForm keeps its body through a reload', () => {
 		expect(document.activeElement).toBe(radio);
 	});
 
+	it('keeps the body and its focus through a resync', async () => {
+		const form = await shown();
+		const radio = screen.getByRole('radio', { name: 'balanced' });
+		radio.focus();
+		server.change('crawler', { intensity: sv('low', 'db') });
+		await form.resync();
+		await waitFor(() => expect(screen.getByRole('radio', { name: 'low' })).toBeTruthy());
+		expect(screen.queryByText('Loading settings…')).toBeNull();
+		expect(screen.getByRole('radio', { name: 'balanced' })).toBe(radio);
+		expect(document.activeElement).toBe(radio);
+	});
+
 	it('keeps the body and shows the error with Retry when a reload fails', async () => {
 		const form = await shown();
 		const radio = screen.getByRole('radio', { name: 'balanced' });
 		server.next('GET /settings/crawler', server.err(500, 'internal'));
 		void reload(form);
 		await waitFor(() => expect(form.status).toBe('load-error'));
+		expect(region().getAttribute('aria-busy')).toBeNull();
+		expect(screen.queryByText('Loading settings…')).toBeNull();
 		expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
 		expect(screen.getByRole('radio', { name: 'balanced' })).toBe(radio);
 		await form.retry();

@@ -1,6 +1,7 @@
 // Keyboard focus and local UI state survive a save and the resync after it (X-form-remount,
 // WCAG 2.4.3): the control the user used stays focused, and the Logging list keeps its search.
 import { expectNoA11yViolations } from './a11y';
+import { liveEvents } from './support/events-server';
 import { expect as baseExpect, test } from './support/test';
 import {
 	SettingsBackend,
@@ -18,6 +19,7 @@ test.describe('keyboard: focus stays through a resync', () => {
 		mock
 	}) => {
 		const backend = new SettingsBackend().attach(mock);
+		const events = await liveEvents(page);
 		await go('/dev/settings-form');
 		const group = page.locator('[data-field="crawler.intensity"]').getByRole('radiogroup');
 		await expect(group).toBeVisible();
@@ -27,9 +29,11 @@ test.describe('keyboard: focus stays through a resync', () => {
 		await expect(chosen).toBeChecked();
 		await kbd.press('Control+s');
 		await expect(page.getByTestId('save-bar')).toContainText('Saved');
-		// The server announces the change; the form refetches the section.
-		backend.change('crawler', { intensity: { value: 'aggressive', source: 'db' } });
-		await expect.poll(() => backend.patches.length).toBe(1);
+		// Another client changes another field and the events stream resyncs: the form refetches.
+		backend.change('crawler', { paused: { value: true, source: 'db' } });
+		await events.send('resync', {});
+		await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeChecked();
+		expect(backend.patches).toHaveLength(1);
 		await expect(chosen).toBeFocused();
 		await expect(page.getByTestId('save-bar')).toBeVisible();
 		await expectNoA11yViolations(page);
@@ -109,20 +113,27 @@ test.describe('keyboard: focus stays through a resync', () => {
 			status: 200,
 			body: { files: [], folder: '/data/logs', index_readable: true, reason: null, state: 'on' }
 		}));
+		const events = await liveEvents(page);
 		await go('/settings/logging');
 		const search = page.getByRole('searchbox', { name: 'Search events' });
 		await kbd.tabTo(search, 60);
-		await page.keyboard.type('stored');
+		await page.keyboard.type('pipeline');
 		const toggle = page.getByRole('switch', { name: 'pipeline.stored' });
 		await kbd.tabTo(toggle, 20);
 		await kbd.press('Space');
+		// Events default to on (`current: true` above).
 		await expect(toggle).not.toBeChecked();
 		await kbd.press('Control+s');
 		await expect(page.getByTestId('save-bar')).toContainText('Saved');
-		backend.change('logging', { events: { value: { 'pipeline.stored': false }, source: 'db' } });
-		await expect.poll(() => backend.patches.length).toBe(1);
+		// Another client turns the other event off and the stream resyncs: the form refetches.
+		backend.change('logging', {
+			events: { value: { 'pipeline.stored': false, 'pipeline.dropped': false }, source: 'db' }
+		});
+		await events.send('resync', {});
+		await expect(page.getByRole('switch', { name: 'pipeline.dropped' })).not.toBeChecked();
+		expect(backend.patches).toHaveLength(1);
 		await expect(toggle).toBeFocused();
-		await expect(search).toHaveValue('stored');
+		await expect(search).toHaveValue('pipeline');
 		await expectNoA11yViolations(page);
 	});
 });
