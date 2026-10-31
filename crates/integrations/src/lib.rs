@@ -22,6 +22,7 @@ pub mod metrics;
 pub mod net;
 pub mod notify;
 pub mod secret;
+pub mod torznab;
 
 use std::future::Future;
 use std::pin::Pin;

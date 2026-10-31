@@ -247,19 +247,15 @@ mod tests {
         assert!(check_url(&format!("http://x/{}", "a".repeat(MAX_URL))).is_err());
         // An API key goes in its own, sealed field.
         for url in [
-            "https://p.lan/api?apikey=k",
-            "https://p.lan/api?t=caps&API_KEY=k",
+            "https://p.lan/api?apikey=hunter2",
+            "https://p.lan/api?t=caps&API_KEY=hunter2",
         ] {
             let s = Integrations {
                 torznab_url: url.into(),
                 ..Default::default()
             };
             let e = s.check("torznab_url").unwrap_err();
-            assert!(
-                e.contains("its own field")
-                    && !e.contains('k'.to_string().as_str().repeat(2).as_str()),
-                "{e}"
-            );
+            assert!(e.contains("its own field") && !e.contains("hunter2"), "{e}");
         }
     }
 

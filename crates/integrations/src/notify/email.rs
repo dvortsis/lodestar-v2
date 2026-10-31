@@ -227,6 +227,18 @@ impl Email {
         )
     }
 
+    /// The same, under another address policy. Only for pointing a test at
+    /// a stand-in server (Settings' own tests): delivery and Send test use
+    /// [`Email::new`], whose notification policy never reaches loopback.
+    #[doc(hidden)]
+    pub fn with_policy(
+        config: &EmailConfig,
+        policy: NetPolicy,
+        resolver: Arc<dyn Resolve>,
+    ) -> Result<Email, DeliveryError> {
+        Email::build(config, policy, resolver)
+    }
+
     fn build(
         config: &EmailConfig,
         policy: NetPolicy,

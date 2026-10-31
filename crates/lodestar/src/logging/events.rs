@@ -199,6 +199,16 @@ lodestar_log::catalogue! {
         message: "Removed a saved setting: it can only be set in config.toml or the environment now",
         fields: { section: Label, field: Label },
     }
+    /// A secret couldn't be sealed, so the save that carried it was
+    /// refused: the key file in the data directory can't be read or
+    /// written. Never the error's detail, which can name the path.
+    SETTINGS_SEAL_FAILED {
+        id: "settings.seal_failed",
+        component: System,
+        level: Error,
+        message: "Couldn't seal a secret, so the change wasn't saved; check secrets.key in the data directory",
+        fields: { section: Label, field: Label },
+    }
     /// A section's saved revision wasn't a number.
     SETTINGS_REVISION_RESET {
         id: "settings.revision_reset",
