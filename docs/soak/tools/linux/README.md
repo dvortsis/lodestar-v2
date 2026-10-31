@@ -172,21 +172,23 @@ region in your own notes, not in the evidence.
 
 The defaults match the Windows collector: samples every 60 s, a warm-up of at
 least 30 minutes after suppression ends, then a 24 h baseline. The same stop
-rules apply (three failed health checks or metrics reads, three capacity
-violations, process memory over 1 GiB for five samples, active peer requests
-without completion for five minutes, an overall deadline of 8 h plus the
-baseline).
+rules apply, except for the memory basis described below (three failed health
+checks or metrics reads, three capacity violations, process memory over 1 GiB
+for five samples, active peer requests without completion for five minutes, an
+overall deadline of 8 h plus the baseline).
 
-The memory rule judges process memory, not page cache. Native mode uses
-`VmRSS` (reason `rss_over_1GiB_for_five_samples`). Docker mode uses the
-cgroup's `anon` (reason `process_memory_over_1GiB_for_five_samples`), because a
-container's working set also counts the cache from its own file reads. If
-`anon` is missing from a sample, that sample falls back to the working set and
-the old reason. `run.json` records the basis as `settings.memory_stop_basis`
-(`anon` or `rss`). In Docker mode the working set is still recorded every
-sample: `events.log` notes once when it first passes 1 GiB, and
-`status.json` and `result.json` count such samples in
+The memory rule judges process memory, not page cache. Native mode uses `VmRSS`
+(reason `rss_over_1GiB_for_five_samples`). Docker mode uses the cgroup's `anon`
+(reason `process_memory_over_1GiB_for_five_samples`), because a container's
+working set also counts the cache from its own file reads. If `anon` is missing
+from a sample, that sample falls back to the working set and the old reason.
+The Docker API stats on a cgroup v1 host carry no `anon`, so there every sample
+uses the working set. `run.json` records the basis as
+`settings.memory_stop_basis` (`anon` or `rss`). In Docker mode the working set
+is still recorded every sample: `events.log` notes once when it first passes 1
+GiB, and `status.json` and `result.json` count such samples in
 `working_set_over_1GiB_samples`. It never stops the run.
+
 `--rehearsal` allows shorter windows for testing and is recorded in
 `run.json`. Rehearsal evidence is test data, not soak coverage.
 

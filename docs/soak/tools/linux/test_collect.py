@@ -474,6 +474,39 @@ class FaultInjectionTests(Base):
         self.assertEqual(self.result()["reason"], "rss_over_1GiB_for_five_samples")
         self.assertEqual((self.root / "events.log").read_text().count("fell back to working set"), 1)
 
+    def api_stats_instance(self, inner):
+        api = FakeDocker()
+        stats = {"memory_stats": {"usage": 2 * GIB + 100, "stats": inner}, "pids_stats": {"current": 9}}
+        api.get = lambda path, orig=api.get: (200, stats) if "/stats" in path else orig(path)
+        return collect.DockerInstance(api, "lodestar", self.tmp / "nowhere", clock=self.clock.clock,
+                                      sleep=self.clock.sleep)
+
+    def test_docker_api_path_judges_anon_and_falls_back_without_it(self):
+        c = self.collector(self.api_stats_instance({"inactive_file": 100, "anon": 250}))
+        self.assertEqual(c.run(), 0)
+        self.assertEqual(self.result()["working_set_over_1GiB_samples"], c.sample)
+        self.root = self.tmp / "run-v1"  # cgroup v1 stats carry no anon
+        c = self.collector(self.api_stats_instance({"total_inactive_file": 100}))
+        self.assertEqual(c.run(), 1)
+        self.assertEqual(c.sample, 5)
+        self.assertEqual(self.result()["reason"], "rss_over_1GiB_for_five_samples")
+
+    def test_mixed_streak_takes_the_reason_of_the_tripping_sample(self):
+        instance = self.docker()
+        base = write_cgroup(self.cgroup, memory=2 * GIB + 100, inactive=100, anon=GIB + 1)
+        resources, calls = instance.resources, []
+
+        def drop_anon_after_three():
+            calls.append(1)
+            if len(calls) == 4:
+                (base / "memory.stat").write_text("file 123\ninactive_file 100\n")
+            return resources()
+        instance.resources = drop_anon_after_three
+        c = self.collector(instance)
+        self.assertEqual(c.run(), 1)
+        self.assertEqual(c.sample, 5)
+        self.assertEqual(self.result()["reason"], "rss_over_1GiB_for_five_samples")
+
     def test_native_rss_over_one_gib_ends_the_run(self):
         proc = self.tmp / "proc"
         write_proc(proc, rss_kb=GIB // 1024 + 1)
