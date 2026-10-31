@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 35
+  "count": 36
  },
  "tags": {},
  "slices": {
@@ -1662,13 +1662,13 @@
    "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b) | carry #276 optional: IMP-4b decisions l.141 drop stale status sentence; parity test add floor-marked subscribed list (record_refresh, hash_of(6)) and drop \"Left untested\" bullet | 13:42Z runner: deferred. Online import needs a server-side trigger (an API taking a source path or PostgreSQL credentials = new file/SSRF surface), which goes to the owner with uploads/wizard (plan A6). The offline CLI covers the pilots (13.9k/s synthetic). Ask the owner in the next summary whether online import is wanted before v0.6."
   },
   "X-search-files-perf": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnAfGbQDVWK7mHPhRoz",
    "pr": 278,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA | 14:05Z MERGE at 29201097 (3 optional); waiting on ci-ok (windows). Runner §2.26: merge as is; follow-up X-search-files-2 gates cold file-clause class at §3 FILE_P95 150 ms at CI size + investigates cold broad clause at 1M (211 ms > §3 150 ms row) + IdPart proptest + recency-index charge"
+   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA | 14:05Z MERGE at 29201097 (3 optional); waiting on ci-ok (windows). Runner §2.26: merge as is; follow-up X-search-files-2 gates cold file-clause class at §3 FILE_P95 150 ms at CI size + investigates cold broad clause at 1M (211 ms > §3 150 ms row) + IdPart proptest + recency-index charge | 14:08Z merged 4d47440a; sessions archived"
   },
   "X-polish-1031b": {
    "status": "running",
@@ -1687,6 +1687,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus"
+  },
+  "X-search-files-2": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2470,7 +2479,6 @@
   "Filters API: shutdown token for the classification-rule re-queue (X-search-files-perf kept it uncancellable for content safety)",
   "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
   "Logging slice: the §10.10.7 banner while query_logging is on (#277 review; left to §10.10.12)",
-  "X-search-files-2 (Opus): gate the cold broad file-clause bench class at §3 'file-level query joined to torrents < 150 ms' (FILE_P95) at CI size; investigate the cold broad-clause path at 1M (211 ms p95, #278) against that row; IdPart proptest (contains/for_each/last/union vs sorted list); recency-index charge x3 or comment (#278 review 1-3)",
   "lib/ui Lazy.svelte: load-failure message lacks role=alert/status (#277 review)"
  ],
  "main_health": [
