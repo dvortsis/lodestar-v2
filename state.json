@@ -1595,8 +1595,8 @@
    "session": "session_01MMjhnBf1FigREZgKsycUGD",
    "pr": 270,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size | 08:03Z Lighthouse total-byte-weight /search 102,891 > 102,400 on ed23185 (PR-caused); author told to move boot work off the initial path (target <= ~150 B growth); reviewer informed | 08:17Z also Playwright core fail on ed23185: detail.routes:121 file-tree worker count 0; relayed to author"
+   "review_rounds": 1,
+   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size | 08:03Z Lighthouse total-byte-weight /search 102,891 > 102,400 on ed23185 (PR-caused); author told to move boot work off the initial path (target <= ~150 B growth); reviewer informed | 08:17Z also Playwright core fail on ed23185: detail.routes:121 file-tree worker count 0; relayed to author | 08:14Z reviewer CHANGES at ed23185: B1 401 re-arm fetch storm on /login (fix via session onSessionOk refetch, drop WAKE); runner requires size cut >=450 B (Lighthouse), hint-path e2e, docs, browserZone cache; plus detail.routes fix"
   },
   "S-search-recover-ui": {
    "status": "running",
