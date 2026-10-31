@@ -1558,7 +1558,7 @@
    "model": "sonnet",
    "session": "session_01MMjhnCv77szJz5C9itzYPf",
    "branch": "slice/M-settings-engine-2",
-   "notes": "2026-10-31T05:21Z launched (brief briefs/M-settings-engine-2.md); before S-settings-2b | 05:59Z PR #264 head 06174069; section 43.1->40.99 KB, messages gate 3.64/4 KB; fresh Opus reviewer session_01MMjhnCeVXFD1FufdMSDLuR | 06:13Z reviewer CHANGES at 06174069: B1 map-load failure has no retry/banner; runner asked also honest first-view sizes (+maps), staged-mode re-arm mid-edit (\u00a72.26 UX), zh test; optional helper/unit test",
+   "notes": "2026-10-31T05:21Z launched (brief briefs/M-settings-engine-2.md); before S-settings-2b | 05:59Z PR #264 head 06174069; section 43.1->40.99 KB, messages gate 3.64/4 KB; fresh Opus reviewer session_01MMjhnCeVXFD1FufdMSDLuR | 06:13Z reviewer CHANGES at 06174069: B1 map-load failure has no retry/banner; runner asked also honest first-view sizes (+maps), staged-mode re-arm mid-edit (\u00a72.26 UX), zh test; optional helper/unit test | 06:30Z re-review MERGE at 6c05884f (section 42.31 KB, Lang 42.77 KB); merge when Playwright core green",
    "pr": 264,
    "review_rounds": 1
   },
@@ -2320,7 +2320,8 @@
    "when": "after IMP-5 merges, when a slot frees"
   },
   "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
-  "IMP-5 UI follow-up (Sonnet): bind Overview/Index screens to kpi.searchable_crawled, kpi.imported, new_searchable_imported, trend[].searchable_imported and import annotations per docs/decisions/2026-10-31-IMP-5.md 'What the screens should show'"
+  "IMP-5 UI follow-up (Sonnet): bind Overview/Index screens to kpi.searchable_crawled, kpi.imported, new_searchable_imported, trend[].searchable_imported and import annotations per docs/decisions/2026-10-31-IMP-5.md 'What the screens should show'",
+  "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
