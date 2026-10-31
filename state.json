@@ -1809,6 +1809,15 @@
       "attempt": 1,
       "review_rounds": 0,
       "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow."
+    },
+    "X-form-remount": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2645,7 +2654,6 @@
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
     "Logging catalog periodic reload (optional O2, #289): reload /logs/catalog on tick or visibilitychange so a kind turned on in another tab shows here.",
-    "Form engine remount (from #289 review): SettingsForm unmounting children while form.status=loading resets list search text / Show changed only and drops focus to <body> after each toggle (a11y). Fix in form/** (keep children mounted during resync or preserve state + focus).",
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice."
   ],
   "main_health": [
