@@ -995,6 +995,7 @@ async fn the_driver_imports_through_the_filter() {
         stop: &stop,
         limit: None,
         now: || NOW,
+        progress: None,
     };
     let mut a = Adapter::Bitmagnet(fx.open().await);
     let id = reading_job(

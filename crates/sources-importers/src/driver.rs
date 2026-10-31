@@ -203,7 +203,7 @@ impl std::fmt::Debug for Filter<'_> {
 }
 
 /// What a run may do besides reading.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Options<'a> {
     /// The adapter's registered source ([`Store::register_source`] under
     /// the adapter's name).
@@ -217,6 +217,18 @@ pub struct Options<'a> {
     pub limit: Option<u64>,
     /// The clock, in Unix seconds.
     pub now: fn() -> i64,
+    /// Called after each committed batch with the job's counters.
+    pub progress: Option<&'a dyn Fn(&ImportCounters)>,
+}
+
+impl std::fmt::Debug for Options<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("source", &self.source)
+            .field("filter", &self.filter)
+            .field("limit", &self.limit)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How a run ended.
@@ -401,9 +413,13 @@ pub async fn run(
                 // Exhausted: everything is committed, so the job waits for
                 // the index.
                 for phase in [Phase::Committing, Phase::Indexing] {
-                    let j = load(store, job.id)?;
-                    if j.phase.code() < phase.code() {
-                        job = store.set_import_phase(j.id, j.revision, phase, now)?;
+                    if load(store, job.id)?.phase.code() < phase.code() {
+                        match change(store, job.id, |s, j| {
+                            s.set_import_phase(j.id, j.revision, phase, now)
+                        })? {
+                            Ok(j) => job = j,
+                            Err(c) => return not_running(store, job.id, report, c),
+                        }
                     }
                 }
                 report.counters = job.counters;
@@ -411,20 +427,28 @@ pub async fn run(
             }
             Err(r) if r.label == "cancelled" => return pause(store, job.id, report, opts),
             Err(r) => {
-                let j = load(store, job.id)?;
-                let j = match r.job_reason {
+                let changed = match r.job_reason {
                     Some(reason) => {
                         report.ended = Ended::Blocked(reason);
-                        store.block_import_job(j.id, j.revision, reason, now)?
+                        change(store, job.id, |s, j| {
+                            s.block_import_job(j.id, j.revision, reason, now)
+                        })?
                     }
                     None => {
                         report.ended = Ended::Failed;
-                        store.fail_import_job(j.id, j.revision, Reason::SourceUnavailable, now)?
+                        change(store, job.id, |s, j| {
+                            s.fail_import_job(j.id, j.revision, Reason::SourceUnavailable, now)
+                        })?
                     }
                 };
-                report.counters = j.counters;
                 report.refusal = Some(r);
-                return Ok(report);
+                return match changed {
+                    Ok(j) => {
+                        report.counters = j.counters;
+                        Ok(report)
+                    }
+                    Err(c) => not_running(store, job.id, report, c),
+                };
             }
         };
         let n = report.batches + 1;
@@ -510,6 +534,9 @@ pub async fn run(
                 report.batches += 1;
                 report.records += records.len() as u64;
                 report.counters = counters;
+                if let Some(p) = opts.progress {
+                    p(&counters);
+                }
                 for (label, count) in &batch.findings {
                     *report.findings.entry(label).or_default() += count;
                 }
@@ -555,10 +582,48 @@ fn pause(
     mut report: Report,
     opts: &Options<'_>,
 ) -> Result<Report, DriverError> {
+    let now = (opts.now)();
+    match change(store, id, |s, j| s.pause_import_job(j.id, j.revision, now))? {
+        Ok(j) => {
+            report.ended = Ended::Paused;
+            report.counters = j.counters;
+            Ok(report)
+        }
+        Err(c) => not_running(store, id, report, c),
+    }
+}
+
+/// One job change the driver makes. When the store refuses it because the
+/// job was paused, cancelled or finished elsewhere meanwhile, that's
+/// `Ok(Err(control))`: a truthful [`Ended::NotRunning`], not a fault.
+fn change(
+    store: &mut Store,
+    id: i64,
+    f: impl FnOnce(&mut Store, &ImportJob) -> lodestar_store::Result<ImportJob>,
+) -> Result<Result<ImportJob, Control>, DriverError> {
     let j = load(store, id)?;
-    let j = store.pause_import_job(j.id, j.revision, (opts.now)())?;
-    report.ended = Ended::Paused;
-    report.counters = j.counters;
+    match f(store, &j) {
+        Ok(j) => Ok(Ok(j)),
+        Err(e @ Error::Invalid(_)) => {
+            let now = load(store, id)?;
+            if now.control != Control::Running || now.is_finished() {
+                Ok(Err(now.control))
+            } else {
+                Err(e.into())
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn not_running(
+    store: &Store,
+    id: i64,
+    mut report: Report,
+    control: Control,
+) -> Result<Report, DriverError> {
+    report.ended = Ended::NotRunning(control);
+    report.counters = load(store, id)?.counters;
     Ok(report)
 }
 

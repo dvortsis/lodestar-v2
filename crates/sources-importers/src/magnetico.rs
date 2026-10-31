@@ -684,6 +684,8 @@ pub struct Source {
     path: PathBuf,
     file_id: FileId,
     identity: Identity,
+    /// `torrents` rows at open (IMP-4's `inspect`).
+    rows: u64,
     /// [`fingerprint`] at open, rechecked before every batch.
     fingerprint: [u8; 32],
     files_sql: String,
@@ -865,12 +867,13 @@ pub fn open(path: &Path, policy: &OpenPolicy) -> Result<Source, Refusal> {
         SchemaError::Unsupported(missing) => Refusal::UnsupportedSchema(missing),
     })?;
     deadline.arm();
-    let (identity, fingerprint) = identity(&conn, &files_sql, &deadline).map_err(map_err)?;
+    let (identity, fingerprint, rows) = identity(&conn, &files_sql, &deadline).map_err(map_err)?;
     Ok(Source {
         conn,
         path: canonical,
         file_id,
         identity,
+        rows,
         fingerprint,
         files_sql,
         deadline,
@@ -1222,7 +1225,7 @@ fn identity(
     conn: &Connection,
     files_sql: &str,
     deadline: &Deadline,
-) -> rusqlite::Result<(Identity, [u8; 32])> {
+) -> rusqlite::Result<(Identity, [u8; 32], u64)> {
     let (schema_sig, fingerprint) = fingerprint(conn, files_sql)?;
     deadline.arm_for(COUNT_STEPS);
     let rows: i64 = conn.query_row("SELECT count(*) FROM torrents", [], |r| r.get(0))?;
@@ -1237,6 +1240,7 @@ fn identity(
             schema_sig,
         },
         fingerprint,
+        rows.max(0) as u64,
     ))
 }
 
@@ -1375,6 +1379,11 @@ impl Source {
     /// A handle that cancels the running statement and every later one.
     pub fn canceller(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
+    }
+
+    /// The `torrents` rows counted at open: what `inspect` estimates from.
+    pub fn rows(&self) -> u64 {
+        self.rows
     }
 
     /// Reads the next batch after `position` (empty to start). `None` when

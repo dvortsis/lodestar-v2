@@ -99,6 +99,7 @@ fn opts<'a>(source: SourceId, engine: &'a Engine, stop: &'a AtomicBool) -> Optio
         stop,
         limit: None,
         now,
+        progress: None,
     }
 }
 
@@ -217,14 +218,35 @@ fn a_magnetico_source_imports_through_the_filter() {
 }
 
 /// A clean run's end state, to compare crashed runs with.
-fn clean(path: &Path) -> (ImportCounters, u64) {
+fn clean(path: &Path) -> (ImportCounters, u64, Vec<String>) {
     let (mut store, source) = mem();
     let engine = engine();
     let stop = AtomicBool::new(false);
     let mut a = adapter(path);
     let id = create(&mut store, &a);
     let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
-    (r.counters, store.count().unwrap())
+    (r.counters, store.count().unwrap(), provenance_rows(&store))
+}
+
+/// Every provenance and quality row, in order: a replay must leave the
+/// same ones as a clean run.
+fn provenance_rows(store: &Store) -> Vec<String> {
+    let mut out = Vec::new();
+    for sql in [
+        "SELECT torrent_id || ',' || job || ',' || created FROM import_membership
+         ORDER BY torrent_id, job",
+        "SELECT torrent_id || ',' || completeness || ',' || verification || ',' || privacy
+             || ',' || repair || ',' || coalesce(source_at, '') FROM import_quality
+         ORDER BY torrent_id",
+    ] {
+        let mut stmt = store.connection().prepare(sql).unwrap();
+        out.extend(
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap),
+        );
+    }
+    out
 }
 
 #[test]
@@ -260,7 +282,11 @@ fn a_crash_anywhere_replays_without_counting_twice() {
         resume(&mut store, id, &a);
         let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
         assert_eq!(r.ended, Ended::Exhausted, "{fault:?}");
-        assert_eq!((r.counters, store.count().unwrap()), want, "{fault:?}");
+        assert_eq!(
+            (r.counters, store.count().unwrap(), provenance_rows(&store)),
+            want,
+            "{fault:?}"
+        );
     }
 }
 
@@ -581,4 +607,107 @@ fn changes_between_batches_stop_the_run_truthfully() {
         (Control::Blocked, 2, 1_000)
     );
     assert!(j.counters.conserved());
+}
+
+/// The pilots' pass line (IMP-4b decisions file): 100,000 synthetic
+/// Magnetico torrents, three files each, into a file-backed store through
+/// the full filter. Run it in release, on its own:
+/// `cargo test --release -p lodestar-sources-importers -- --ignored throughput --nocapture`.
+#[test]
+#[ignore = "a measurement: run in release, see the decisions file"]
+fn throughput_on_a_synthetic_100k_source() {
+    const N: u32 = 100_000;
+    let dir = tempfile::tempdir().unwrap();
+    let rows: Vec<TorrentRow> = (1..=N)
+        .map(|i| TorrentRow {
+            name: Value::Text(format!(
+                "Some.Show.S01E{:02}.1080p.WEB.h264-GROUP {i}",
+                i % 24
+            )),
+            ..TorrentRow::good(
+                i,
+                &[
+                    ("Show/ep.mkv", 1_000_000),
+                    ("Show/ep.nfo", 900),
+                    ("Show/Sample/s.mkv", 50_000),
+                ],
+            )
+        })
+        .collect();
+    let path = fixture(dir.path(), "a.sqlite3", &rows);
+    let source_bytes = std::fs::metadata(&path).unwrap().len();
+    let db = dir.path().join("lodestar.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let source = store.register_source(magnetico::ADAPTER, "1", NOW).unwrap();
+    let engine = engine();
+    let stop = AtomicBool::new(false);
+    let mut a = adapter(&path);
+    let id = create(&mut store, &a);
+    let started = std::time::Instant::now();
+    let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
+    let secs = started.elapsed().as_secs_f64();
+    store.checkpoint().unwrap();
+    assert_eq!((r.ended, r.counters.new), (Ended::Exhausted, u64::from(N)));
+    let store_bytes = std::fs::metadata(&db).unwrap().len();
+    println!(
+        "throughput: {N} torrents in {secs:.1} s = {:.0}/s; source {} MiB, store {} MiB = {} B a torrent",
+        f64::from(N) / secs,
+        source_bytes >> 20,
+        store_bytes >> 20,
+        store_bytes / u64::from(N)
+    );
+}
+
+/// The job paused or cancelled elsewhere just as the source ends or is
+/// refused: the run reports it as not running, not as a store fault
+/// (runner, #253 review).
+#[test]
+fn a_job_stopped_elsewhere_at_the_end_is_reported_not_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    let stop = AtomicBool::new(false);
+    for refused in [false, true] {
+        let path = fixture(dir.path(), &format!("s{refused}.sqlite3"), &rows_n(600));
+        let db = dir.path().join(format!("l{refused}.db"));
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let source = store.register_source(magnetico::ADAPTER, "1", NOW).unwrap();
+        let mut a = adapter(&path);
+        let id = create(&mut store, &a);
+        let (other, src) = (db.clone(), path.clone());
+        // After the last batch (no more rows), or after the first one with
+        // the source then written to (refused at the next read).
+        let at = if refused { 1 } else { 2 };
+        HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |f, n| {
+                if (f, n) == (Fault::AfterCommit, at) {
+                    let mut s = Store::open(&other, StoreConfig::default()).unwrap();
+                    let j = s.import_job(id).unwrap().unwrap();
+                    if refused {
+                        s.pause_import_job(id, j.revision, NOW).unwrap();
+                        let mut conn = rusqlite::Connection::open(&src).unwrap();
+                        crate::magnetico::fixtures::insert(&mut conn, &rows_n(601)[600..]);
+                        conn.close().unwrap();
+                    } else {
+                        s.cancel_import_job(id, j.revision, NOW).unwrap();
+                    }
+                }
+            }))
+        });
+        let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop)));
+        HOOK.with(|h| *h.borrow_mut() = None);
+        let r = r.unwrap();
+        let want = if refused {
+            Control::Paused
+        } else {
+            Control::Cancelled
+        };
+        assert_eq!(r.ended, Ended::NotRunning(want), "refused={refused}");
+        assert_eq!(r.refusal.is_some(), refused, "the path taken");
+        assert_eq!(r.batches, at);
+        assert_eq!(r.counters, job(&store, id).counters);
+    }
+}
+
+fn rows_n(n: u32) -> Vec<TorrentRow> {
+    rows(1..=n)
 }
