@@ -21,6 +21,7 @@ pub mod natural;
 mod percolate;
 pub mod query;
 mod rebuild;
+pub mod recovery;
 mod retry_dir;
 pub mod schema;
 mod seek_guard;
