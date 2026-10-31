@@ -9,6 +9,7 @@
 	import IconRestart from '~icons/ph/arrows-clockwise';
 	import { loadControls } from '../form/controls.svelte';
 	import { focusSettingField } from '../form/focus';
+	import { loadMessages, messagesLoaded } from '../form/messages';
 	import { widgetFor } from '../form/widgets';
 	import {
 		createSettingsForm,
@@ -66,7 +67,12 @@
 		await tick();
 	}
 	let focusGeneration = 0;
-	const ready = $derived(form.status !== 'loading' && form.status !== 'load-error');
+	// The fields render once their labels are in (`SettingsForm`), so a link to one waits for that.
+	const sections = untrack(() => fields.map((spec) => spec.section));
+	const inPlace = messagesLoaded(sections);
+	let labelsReady = $state(inPlace);
+	if (!inPlace) void loadMessages(sections).then(() => (labelsReady = true));
+	const ready = $derived(labelsReady && form.status !== 'loading' && form.status !== 'load-error');
 	$effect(() => {
 		const hash = page.url.hash;
 		const generation = ++focusGeneration;
