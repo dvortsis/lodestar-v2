@@ -25,7 +25,7 @@
 {#if skipped.length}
 	<section class="flex flex-col gap-2" data-testid="wizard-skipped">
 		<h3 class="text-body-lg font-semibold">{m.wizard_done_skipped()}</h3>
-		<ul class="flex flex-col gap-1 ps-5 text-body">
+		<ul class="flex flex-col gap-1 ps-4 text-body">
 			{#each skipped as step (step.id)}
 				<li class="list-disc">
 					<a class="link ls-focus" href={resolve('/settings/[section]', { section: step.settings })}

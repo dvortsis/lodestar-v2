@@ -120,7 +120,7 @@
 	);
 </script>
 
-<div class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8" data-testid="wizard">
+<div class="mx-auto flex max-w-xl flex-col gap-6 px-4 py-8" data-testid="wizard">
 	<header class="flex flex-col gap-1">
 		<h1 class="w-fit max-w-full text-display font-semibold text-base-content">
 			{m.wizard_title()}
@@ -129,7 +129,7 @@
 	</header>
 
 	<nav aria-label={m.wizard_progress()}>
-		<ol class="flex flex-wrap gap-x-4 gap-y-2 text-label" data-testid="wizard-progress">
+		<ol class="flex flex-wrap gap-4 text-label" data-testid="wizard-progress">
 			{#each [m.auth_setup_step_token(), m.auth_setup_step_password()] as past (past)}
 				<li class="flex items-center gap-1 text-muted-text">
 					<IconCheck aria-hidden="true" class="text-success" />

@@ -31,17 +31,25 @@
 			width="100"
 			height="56"
 			rx="8"
-			class="fill-none stroke-current"
+			fill="none"
+			stroke="currentColor"
 			stroke-width="2"
 		/>
-		<text x={x + 50} y="26" text-anchor="middle" class="fill-current text-caption">{i + 1}</text>
-		<text x={x + 50} y="46" text-anchor="middle" class="fill-current text-label font-semibold"
-			>{labels[i]!()}</text
+		<text x={x + 50} y="26" text-anchor="middle" fill="currentColor" class="text-caption"
+			>{i + 1}</text
+		>
+		<text
+			x={x + 50}
+			y="46"
+			text-anchor="middle"
+			fill="currentColor"
+			class="text-label font-semibold">{labels[i]!()}</text
 		>
 		{#if i < 3}
 			<path
 				d="M{x + 104} 36 h12 m-5 -5 l5 5 l-5 5"
-				class="fill-none stroke-current"
+				fill="none"
+				stroke="currentColor"
 				stroke-width="2"
 				stroke-linecap="round"
 				stroke-linejoin="round"
@@ -50,7 +58,7 @@
 	{/each}
 </svg>
 
-<ol class="flex list-decimal flex-col gap-2 ps-5 text-body" data-testid="wizard-how">
+<ol class="flex list-decimal flex-col gap-2 ps-4 text-body" data-testid="wizard-how">
 	{#each stages as stage (stage.title())}
 		<li><strong class="font-semibold">{stage.title()}.</strong> {stage.text()}</li>
 	{/each}

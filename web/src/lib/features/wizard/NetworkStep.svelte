@@ -89,7 +89,7 @@
 {#if check && check.reachable !== true && !off}
 	<section class="flex flex-col gap-2">
 		<h3 class="text-body-lg font-semibold">{m.wizard_net_help_title()}</h3>
-		<ul class="list-disc ps-5 text-body">
+		<ul class="list-disc ps-4 text-body">
 			<li>{m.wizard_net_help_forward()}</li>
 			<li>{m.wizard_net_help_vpn()}</li>
 			<li>{m.wizard_net_help_still()}</li>

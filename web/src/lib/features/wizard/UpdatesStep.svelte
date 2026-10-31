@@ -55,7 +55,7 @@
 					aria-describedby="wizard-updates-{option.value}"
 					onchange={() => form.set(KEY, option.value)}
 				/>
-				<span id="wizard-updates-{option.value}" class="ps-7 text-body text-muted-text"
+				<span id="wizard-updates-{option.value}" class="ps-4 text-body text-muted-text"
 					>{option.help}</span
 				>
 			</div>
