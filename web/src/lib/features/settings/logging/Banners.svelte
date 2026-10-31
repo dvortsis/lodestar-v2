@@ -7,7 +7,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import type { SettingsForm } from '../form';
 	import type { LoggingCatalog } from './catalog.svelte';
-	import { identifyingOn, optInOn, soonest, timeLeft } from './state';
+	import { identifyingOn, optInOn, endOf, timeLeft } from './state';
 
 	let { catalog, form }: { catalog: LoggingCatalog; form?: SettingsForm } = $props();
 
@@ -18,7 +18,7 @@
 					{
 						id: 'identifying',
 						title: m.settings_logging_banner_identifying(),
-						left: timeLeft(soonest(identifyingOn(c, catalog.now)), catalog.now)
+						left: timeLeft(endOf(identifyingOn(c, catalog.now)), catalog.now)
 					},
 					{
 						id: 'peer_activity',
@@ -48,6 +48,9 @@
 			error = m.settings_logging_failed_off({ message: (e as Error).message });
 		} finally {
 			busy = false;
+			// The banner and its button may be gone: keep focus on the page, not the body.
+			if (!document.activeElement || document.activeElement === document.body)
+				document.getElementById('logging-title')?.focus();
 		}
 	}
 </script>

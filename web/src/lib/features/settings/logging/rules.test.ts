@@ -8,7 +8,7 @@ import {
 	offPatch,
 	presetOn,
 	presetPatch,
-	soonest,
+	endOf,
 	toggleEvent,
 	identifyingOn,
 	type Catalog,
@@ -102,6 +102,11 @@ describe('privacy patches', () => {
 		expect(Object.keys(p)).not.toContain('peer_activity_until');
 		expect(Object.keys(p)).not.toContain('change_details_until');
 		expect(presetPatch('private', NOW + 3600).data_until).toBe(0);
+		// Client addresses turned off survive a preset; identifying switches don't.
+		const c = { kinds: [kind('name'), kind('client'), kind('peer_activity')] } as Catalog;
+		expect(presetPatch('hashes', NOW + 60, { kinds: { client: 0, name: -1 } }, c).kinds).toEqual({
+			client: 0
+		});
 	});
 	it('Turn off now keeps only switches of kinds that identify no one', () => {
 		const c = { kinds: [kind('name'), kind('client'), kind('peer_activity')] } as Catalog;
@@ -114,7 +119,7 @@ describe('privacy patches', () => {
 });
 
 describe('banners', () => {
-	it('shows the soonest deadline of what the server has on', () => {
+	it('shows when logging of what the server has on stops', () => {
 		const c = {
 			kinds: [
 				kind('hash', { until: NOW + 7200 }),
@@ -125,9 +130,9 @@ describe('banners', () => {
 		} as Catalog;
 		const on = identifyingOn(c, NOW);
 		expect(on.map((k) => k.kind)).toEqual(['hash', 'name']);
-		expect(soonest(on)).toBe(NOW + 600);
-		expect(soonest([{ until: -1 }])).toBe(-1);
-		expect(soonest([])).toBe(0);
+		expect(endOf(on)).toBe(NOW + 7200);
+		expect(endOf([{ until: NOW + 5 }, { until: -1 }])).toBe(-1);
+		expect(endOf([])).toBe(0);
 	});
 	it('says nothing once a deadline has passed (the server turns it off)', () => {
 		expect(timeLeft(NOW - 1, NOW)).toBeNull();

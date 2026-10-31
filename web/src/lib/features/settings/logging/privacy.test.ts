@@ -8,6 +8,7 @@ import { initLocale } from '$lib/i18n/locale.svelte';
 import { dismissAll } from '../form/dialogs';
 import Banners from './Banners.svelte';
 import DataKinds from './DataKinds.svelte';
+import { turnOffAll } from './privacy';
 import { LoggingCatalog } from './catalog.svelte';
 import type { Catalog, LogKind } from './rules';
 
@@ -39,6 +40,7 @@ const KINDS = [
 let server: { catalog: Catalog; files: unknown[] };
 let calls: { method: string; path: string; body: unknown }[];
 let patchReply: { status: number; body: unknown } | undefined;
+let catalogFails = false;
 
 function catalogWith(on: Partial<Record<string, number>> = {}, data = 'private'): Catalog {
 	return {
@@ -64,9 +66,12 @@ function catalogWith(on: Partial<Record<string, number>> = {}, data = 'private')
 	};
 }
 
+let revision = 3;
 const SECTION = {
 	section: 'logging',
-	revision: 3,
+	get revision() {
+		return revision;
+	},
 	restart_required: [],
 	fields: Object.fromEntries(
 		Object.entries({
@@ -87,6 +92,8 @@ beforeEach(() => {
 	server = { catalog: catalogWith(), files: [] };
 	calls = [];
 	patchReply = undefined;
+	revision = 3;
+	catalogFails = false;
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -99,8 +106,11 @@ beforeEach(() => {
 					status,
 					headers: { 'Content-Type': 'application/json' }
 				});
-			if (path === '/logs/catalog') return reply(200, server.catalog);
-			if (path === '/settings/logging') return reply(200, SECTION);
+			if (path === '/logs/catalog')
+				return catalogFails
+					? reply(500, { error: { code: 'internal', message: 'down' } })
+					: reply(200, server.catalog);
+			if (path === '/settings/logging') return reply(200, { ...SECTION, revision });
 			if (path === '/logs/files' && method === 'GET')
 				return reply(200, {
 					files: server.files,
@@ -113,7 +123,7 @@ beforeEach(() => {
 				return reply(200, { deleted: server.files.length, bytes: 0, skipped: [] });
 			if (path === '/settings' && method === 'PATCH') {
 				if (patchReply) return reply(patchReply.status, patchReply.body);
-				return reply(200, { sections: { logging: { ...SECTION, revision: 4 } } });
+				return reply(200, { sections: { logging: { if_revision: 3, ...SECTION, revision: 4 } } });
 			}
 			return reply(404, { error: { code: 'not_found', message: path } });
 		})
@@ -138,7 +148,7 @@ describe('data kinds', () => {
 	it('says which enabled events would carry a kind', async () => {
 		await mount();
 		expect(screen.getByTestId('log-kind-name').textContent).toContain(
-			'Would appear in 1 of the events'
+			"Would appear in events you've turned on (1)"
 		);
 		expect(screen.getByTestId('log-kind-peer').textContent).toContain('None of the events');
 	});
@@ -165,13 +175,15 @@ describe('data kinds', () => {
 		const hour = await screen.findByRole('button', { name: 'For 1 hour' }, { timeout: 10_000 });
 		server.catalog = catalogWith({ name: NOW + 3600 });
 		await fireEvent.click(hour);
-		await until(() => expect(patches()).toEqual([{ logging: { kinds: { name: NOW + 3600 } } }]));
+		await until(() =>
+			expect(patches()).toEqual([{ logging: { if_revision: 3, kinds: { name: NOW + 3600 } } }])
+		);
 		await until(() => expect(names().checked).toBe(true));
 		expect(screen.getByTestId('log-kind-left-name').textContent).toContain('1 h');
 		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 		await fireEvent.click(names()); // turning off asks nothing
 		await until(() => expect(patches()).toHaveLength(2));
-		expect(patches()[1]).toEqual({ logging: { kinds: {} } });
+		expect(patches()[1]).toEqual({ logging: { if_revision: 3, kinds: {} } });
 	});
 
 	it('a failed request leaves the kind off and says so', async () => {
@@ -182,7 +194,7 @@ describe('data kinds', () => {
 			await screen.findByRole('button', { name: 'For 24 hours' }, { timeout: 10_000 })
 		);
 		await until(() => expect(screen.getByRole('alert').textContent).toContain('stays off'));
-		expect(patches()).toEqual([{ logging: { kinds: { name: NOW + 86_400 } } }]);
+		expect(patches()).toEqual([{ logging: { if_revision: 3, kinds: { name: NOW + 86_400 } } }]);
 		expect(names().checked).toBe(false);
 	});
 
@@ -205,7 +217,64 @@ describe('data kinds', () => {
 			await screen.findByRole('button', { name: 'Until I turn it off' }, { timeout: 10_000 })
 		);
 		await until(() =>
-			expect(patches()).toEqual([{ logging: { data: 'full', data_until: -1, kinds: {} } }])
+			expect(patches()).toEqual([
+				{ logging: { if_revision: 3, data: 'full', data_until: -1, kinds: {} } }
+			])
+		);
+	});
+
+	it('builds the change after the dialog, at the revision it read then', async () => {
+		await mount();
+		await fireEvent.click(names());
+		const hour = await screen.findByRole('button', { name: 'For 1 hour' }, { timeout: 10_000 });
+		revision = 7; // another tab saved while the dialog was open
+		await fireEvent.click(hour);
+		await until(() =>
+			expect(patches()).toEqual([{ logging: { if_revision: 7, kinds: { name: NOW + 3600 } } }])
+		);
+	});
+
+	it('a refused stale change leaves the kind off', async () => {
+		await mount();
+		patchReply = {
+			status: 409,
+			body: { error: { code: 'stale_revision', message: 'changed meanwhile' } }
+		};
+		await fireEvent.click(names());
+		await fireEvent.click(
+			await screen.findByRole('button', { name: 'For 1 hour' }, { timeout: 10_000 })
+		);
+		await until(() => expect(screen.getByRole('alert').textContent).toContain('stays off'));
+		expect(names().checked).toBe(false);
+	});
+
+	it("says so when the state can't be read after a change, and reloads on the next tick", async () => {
+		const catalog = await mount();
+		catalogFails = true;
+		await fireEvent.click(screen.getByRole('switch', { name: 'Sign-in and API client addresses' }));
+		await until(() => expect(screen.getByRole('alert').textContent).toContain("couldn't be read"));
+		catalogFails = false;
+		server.catalog = catalogWith();
+		const loads = calls.filter((c) => c.path === '/logs/catalog').length;
+		catalog.tick();
+		await until(() =>
+			expect(calls.filter((c) => c.path === '/logs/catalog').length).toBe(loads + 1)
+		);
+		await until(() => expect(catalog.error).toBeUndefined());
+	});
+
+	it('offers to delete files when a preset turns identifying kinds off', async () => {
+		server.catalog = catalogWith({ hash: NOW + 600, name: NOW + 600 }, 'full');
+		server.files = [{ name: 'a.jsonl', size: 10, details: true, opt_in: false, current: true }];
+		await mount();
+		await fireEvent.click(screen.getByRole('radio', { name: 'Hashes' }));
+		const hour = await screen.findByRole('button', { name: 'For 1 hour' }, { timeout: 10_000 });
+		server.catalog = catalogWith({ hash: NOW + 3600 }, 'hashes');
+		await fireEvent.click(hour);
+		await screen.findByRole(
+			'dialog',
+			{ name: 'Also delete log files that contain torrent details?' },
+			{ timeout: 10_000 }
 		);
 	});
 
@@ -221,7 +290,9 @@ describe('data kinds', () => {
 		expect(screen.queryByRole('button', { name: 'Until I turn it off' })).toBeNull();
 		await fireEvent.click(screen.getByRole('button', { name: 'For 24 hours' }));
 		await until(() =>
-			expect(patches()).toEqual([{ logging: { peer_activity_until: NOW + 86_400 } }])
+			expect(patches()).toEqual([
+				{ logging: { if_revision: 3, peer_activity_until: NOW + 86_400 } }
+			])
 		);
 	});
 });
@@ -247,13 +318,15 @@ describe('banners', () => {
 			},
 			{ timeout: 10_000 }
 		);
-		expect(offer.textContent).toContain('1 log files');
+		expect(offer.textContent).toContain('Log files written while torrent details were on: 1');
 		expect(document.activeElement?.textContent?.trim()).toBe('Keep the files');
-		await fireEvent.click(screen.getByRole('button', { name: 'Delete 1 log files' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete log files (1)' }));
 		await until(() =>
 			expect(calls.find((c) => c.method === 'DELETE')?.body).toEqual({ which: 'details' })
 		);
-		expect(patches()).toEqual([{ logging: { data: 'private', data_until: 0, kinds: {} } }]);
+		expect(patches()).toEqual([
+			{ logging: { if_revision: 3, data: 'private', data_until: 0, kinds: {} } }
+		]);
 		await until(() => expect(screen.queryByTestId('logging-banner-identifying')).toBeNull());
 		expect(screen.getByTestId('logging-banner-filter_changes')).toBeTruthy();
 	});
@@ -262,12 +335,34 @@ describe('banners', () => {
 		server.catalog = catalogWith({ peer_activity: NOW + 600 });
 		server.files = [{ name: 'a.jsonl', size: 10, details: false, opt_in: true, current: true }];
 		await mount(Banners);
+		server.catalog = catalogWith();
 		await fireEvent.click(screen.getByRole('button', { name: 'Turn off now' }));
 		await fireEvent.click(
 			await screen.findByRole('button', { name: 'Keep the files' }, { timeout: 10_000 })
 		);
 		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
-		expect(patches()).toEqual([{ logging: { peer_activity_until: 0 } }]);
+		expect(patches()).toEqual([{ logging: { if_revision: 3, peer_activity_until: 0 } }]);
 		expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+	});
+
+	it('/logs Turn off now turns off the identifying kinds and both opt-ins', async () => {
+		server.catalog = catalogWith({ name: NOW + 600, peer_activity: NOW + 600 }, 'custom');
+		const catalog = new LoggingCatalog();
+		await catalog.load();
+		server.catalog = catalogWith();
+		await turnOffAll({ catalog });
+		expect(patches()).toEqual([
+			{
+				logging: {
+					if_revision: 3,
+					data: 'private',
+					data_until: 0,
+					kinds: {},
+					peer_activity_until: 0,
+					change_details_until: 0
+				}
+			}
+		]);
+		expect(catalog.catalog?.kinds.find((k) => k.kind === 'name')?.until).toBe(0);
 	});
 });

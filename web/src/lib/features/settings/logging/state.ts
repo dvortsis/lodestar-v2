@@ -18,11 +18,13 @@ export const identifyingOn = (c: Catalog, now: number) =>
 export const optInOn = (c: Catalog, kind: string, now: number) =>
 	c.kinds.find((k) => k.kind === kind && ahead(k.until, now));
 
-/** When a set of kinds turns off: the soonest deadline, -1 if none ends, 0 if none is on. */
-export function soonest(kinds: Pick<Kind, 'until'>[]): number {
+/**
+ * When logging of a set of kinds stops: -1 if any is on until turned off, else the latest deadline
+ * (what `/logs` shows too); 0 if none is on.
+ */
+export function endOf(kinds: Pick<Kind, 'until'>[]): number {
 	if (!kinds.length) return 0;
-	const timed = kinds.map((k) => k.until).filter((u) => u !== -1);
-	return timed.length ? Math.min(...timed) : -1;
+	return kinds.some((k) => k.until === -1) ? -1 : Math.max(...kinds.map((k) => k.until));
 }
 
 /** The banners' time left ("This is on for about 42 min more."), or null once it's passed. */

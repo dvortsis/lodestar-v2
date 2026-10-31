@@ -66,7 +66,7 @@
 	"settings_logging_preset_hashes": "Hashes",
 	"settings_logging_preset_full": "Full",
 	"settings_logging_preset_custom": "Custom",
-	"settings_logging_kind_carried": "Would appear in {count} of the events you've turned on: {events}",
+	"settings_logging_kind_carried": "Would appear in events you've turned on ({count}): {events}",
 	"settings_logging_kind_carried_none": "None of the events you've turned on would carry it.",
 	"settings_logging_dialog_title": "Write torrent details to the log?",
 	"settings_logging_dialog_what": "{kinds} will be written to the log file and the live log for as long as you choose.",
@@ -97,10 +97,12 @@
 	"settings_logging_banner_filters": "Filter change details are being logged",
 	"settings_logging_turn_off": "Turn off now",
 	"settings_logging_delete_title": "Also delete log files that contain torrent details?",
-	"settings_logging_delete_body": "{count} log files ({size}) were written while torrent details were on.",
+	"settings_logging_delete_body": "Log files written while torrent details were on: {count} ({size}).",
 	"settings_logging_delete_keep": "Keep the files",
-	"settings_logging_delete_confirm": "Delete {count} log files",
+	"settings_logging_delete_confirm": "Delete log files ({count})",
 	"settings_logging_failed_on": "Couldn't turn it on, so it stays off: {message}",
 	"settings_logging_failed_off": "Couldn't turn it off: {message}",
-	"settings_logging_unavailable": "Logging's current state couldn't be read."
+	"settings_logging_unavailable": "Logging's current state couldn't be read.",
+	"settings_logging_unread": "The change was sent, but Lodestar's current logging state couldn't be read. Reload the page to see it.",
+	"settings_logging_events_temporary": "A temporary level from the live log is on, so more events are recorded right now than this list shows."
 }

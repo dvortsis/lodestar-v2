@@ -39,11 +39,14 @@ export class LoggingCatalog {
 		return Date.now() / 1000 + this.#offset;
 	}
 
-	/** Redraws the time left, and reloads once a deadline the catalog listed has passed. */
+	/**
+	 * Redraws the time left, and reloads once a deadline the catalog listed has passed, or while the
+	 * last reload failed (what shows may no longer be the server's state).
+	 */
 	tick() {
 		this.now = this.serverNow();
 		const c = this.catalog;
-		if (c?.kinds.some((k) => k.until > 0 && k.until <= this.now)) void this.load();
+		if (this.error || c?.kinds.some((k) => k.until > 0 && k.until <= this.now)) void this.load();
 	}
 
 	start(): () => void {

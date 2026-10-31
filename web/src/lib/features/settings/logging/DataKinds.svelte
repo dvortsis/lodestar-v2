@@ -4,6 +4,7 @@
 	// what the server has on (`GET /logs/catalog`) and changes only through `privacy.ts`, which asks
 	// first for anything identifying and sends the change at once. A click never flips a switch by
 	// itself: it shows on only once the server has saved it.
+	import { formatCount } from '$lib/format';
 	import { m } from '$lib/paraglide/messages.js';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
@@ -57,7 +58,7 @@
 		if (!events.length) return m.settings_logging_kind_carried_none();
 		const names = events.slice(0, 3).map(eventLabel).join(', ');
 		return m.settings_logging_kind_carried({
-			count: events.length,
+			count: formatCount(events.length),
 			events: events.length > 3 ? `${names}, …` : names
 		});
 	}
@@ -82,7 +83,7 @@
 			options={PRESETS.map((p) => ({
 				value: p,
 				label: PRESET_LABELS[p]!(),
-				disabled: busy || p === 'custom'
+				disabled: p === 'custom'
 			}))}
 			bind:value={shown}
 			onchange={choosePreset}
@@ -95,7 +96,7 @@
 					<Toggle
 						label={kindLabel(k.kind)}
 						checked={on}
-						disabled={busy}
+						aria-busy={busy}
 						onclick={(e) => {
 							e.preventDefault();
 							void setKind(k, !on);
@@ -125,14 +126,17 @@
 					<Toggle
 						{label}
 						checked={on}
-						disabled={busy || !k}
+						disabled={!k}
+						aria-busy={busy}
 						onclick={(e) => {
 							e.preventDefault();
 							void setOptIn(kind, !on);
 						}}
 					/>
 					<p class="text-small text-muted-text">{help}</p>
-					{#if on}<p class="text-small">{timeLeft(k!.until, catalog.now)}</p>{/if}
+					{#if on}<p class="text-small" data-testid="log-optin-left-{kind}">
+							{timeLeft(k!.until, catalog.now)}
+						</p>{/if}
 				</div>
 			{/each}
 		</section>

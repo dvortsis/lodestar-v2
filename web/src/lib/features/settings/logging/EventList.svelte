@@ -60,6 +60,14 @@
 		return Object.entries(out).filter(([, g]) => g.shown.length);
 	});
 	const filtering = $derived(query.trim() !== '' || changedOnly);
+	// Groups the user opened stay open when a search is cleared.
+	let opened = $state<Record<string, boolean>>({});
+	// "Detailed for 30 minutes" from the live log raises every component's level for now, so more
+	// events record than the saved settings this list shows.
+	const temporary = $derived.by(() => {
+		const t = catalog?.catalog?.presets.temporary;
+		return t && t.until > (catalog?.now ?? 0) ? t : null;
+	});
 
 	function set(e: LogEvent, on: boolean) {
 		form.set(key, toggleEvent(e, on, verbosity, components, overrides));
@@ -87,6 +95,11 @@
 			onclick={() => form.set(key, {})}>{m.settings_logging_events_reset()}</Button
 		>
 	</div>
+	{#if temporary}
+		<p class="text-small text-muted-text" data-testid="log-events-temporary">
+			{m.settings_logging_events_temporary()}
+		</p>
+	{/if}
 	{#if catalog?.error && !catalog.catalog}
 		<p role="alert" class="text-small text-error">{m.settings_logging_unavailable()}</p>
 	{:else if !catalog?.catalog}
@@ -95,7 +108,13 @@
 		<p class="text-muted-text">{m.settings_logging_events_none()}</p>
 	{/if}
 	{#each groups as [component, g] (component)}
-		<details open={filtering} class="border-t border-base-300">
+		<details
+			open={filtering || opened[component] === true}
+			ontoggle={(ev) => {
+				if (!filtering) opened[component] = ev.currentTarget.open;
+			}}
+			class="border-t border-base-300"
+		>
 			<summary class="ls-focus cursor-pointer py-3 text-label" data-testid="log-group-{component}"
 				>{m.settings_logging_events_group({
 					component: componentLabel(component),

@@ -5,7 +5,7 @@
 import type { components } from '$lib/api/schema';
 import { ahead } from './state';
 
-export { ahead, identifyingOn, optInOn, soonest } from './state';
+export { ahead, identifyingOn, optInOn, endOf } from './state';
 
 export type LogEvent = components['schemas']['LogEvent'];
 export type LogKind = components['schemas']['LogKind'];
@@ -127,22 +127,33 @@ export function kindPatch(
 	return { kinds };
 }
 
-/** The patch for a data preset: its deadline, and no per-kind switches. */
-export function presetPatch(preset: string, until: number): DataValues {
-	return { data: preset, data_until: preset === 'private' ? 0 : until, kinds: {} };
+/** The switches of kinds that identify no one (client addresses, sizes): presets keep them. */
+function safeSwitches(kinds: Record<string, number>, c: Catalog | undefined) {
+	const safe = new Set(
+		(c?.kinds ?? []).filter((k) => !k.identifying && !k.opt_in).map((k) => k.kind as string)
+	);
+	return Object.fromEntries(Object.entries(kinds).filter(([k]) => safe.has(k)));
 }
 
 /**
- * The patch that turns every identifying kind off ("Turn off now"): back to Private, keeping only
- * the switches of kinds that don't identify anyone (client addresses, sizes).
+ * The patch for a data preset: its deadline, and no per-kind switches but those of kinds that
+ * identify no one, so turning client addresses off survives a preset.
  */
-export function offPatch(v: DataValues, c: Catalog): DataValues {
-	const keep = new Set(c.kinds.filter((k) => !k.identifying && !k.opt_in).map((k) => k.kind));
-	const kinds = Object.fromEntries(
-		Object.entries(v.kinds).filter(([k]) => keep.has(k as DataKind))
-	);
-	return { data: 'private', data_until: 0, kinds };
+export function presetPatch(
+	preset: string,
+	until: number,
+	v: Pick<DataValues, 'kinds'> = { kinds: {} },
+	c?: Catalog
+): DataValues {
+	return {
+		data: preset,
+		data_until: preset === 'private' ? 0 : until,
+		kinds: safeSwitches(v.kinds, c)
+	};
 }
+
+/** The patch that turns every identifying kind off ("Turn off now"): back to Private. */
+export const offPatch = (v: DataValues, c: Catalog): DataValues => presetPatch('private', 0, v, c);
 
 /** Whether a preset choice needs the privacy dialog: any but Private turns on identifying kinds. */
 export const presetIdentifies = (preset: string) => preset !== 'private';

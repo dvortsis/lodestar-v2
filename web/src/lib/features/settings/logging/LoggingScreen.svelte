@@ -65,7 +65,9 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold">{m.settings_logging_title()}</h1>
+<h1 id="logging-title" tabindex="-1" class="text-title font-semibold">
+	{m.settings_logging_title()}
+</h1>
 <p class="text-muted-text">{m.settings_logging_purpose()}</p>
 <a class="self-start underline" href={resolve('/logs')}>{m.settings_logging_open_live()}</a>
 {#if parts && catalog}

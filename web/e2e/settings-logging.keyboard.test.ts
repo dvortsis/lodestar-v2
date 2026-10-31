@@ -2,6 +2,7 @@
 // renders, the Verbosity preset and an event change save together, turning on torrent names asks
 // first (Cancel sends nothing), and the banner's Turn off now sends the change.
 import { expectNoA11yViolations } from './a11y';
+import { liveLogs } from './logs.stream';
 import { expect as baseExpect, test } from './support/test';
 import {
 	SettingsBackend,
@@ -190,6 +191,7 @@ test.describe('keyboard: Settings → Logging', () => {
 		await expectNoA11yViolations(page);
 		await kbd.press('Enter');
 		await expect(dialog).toBeHidden();
+		await expect(names).toBeFocused();
 		await expect(names).not.toBeChecked();
 		expect(backend.patches).toEqual([]);
 	});
@@ -207,6 +209,72 @@ test.describe('keyboard: Settings → Logging', () => {
 		current = catalog();
 		await kbd.press('Enter');
 		await expect(page.getByTestId('logging-banner-identifying')).toBeHidden();
-		expect(backend.patches).toEqual([{ logging: { data: 'private', data_until: 0, kinds: {} } }]);
+		expect(backend.patches).toEqual([
+			{ logging: { if_revision: 1, data: 'private', data_until: 0, kinds: {} } }
+		]);
+	});
+
+	test('Reset to preset puts changed events back; Show changed only lists them', async ({
+		page,
+		go,
+		kbd
+	}) => {
+		await go('/settings/logging');
+		await kbd.tabTo(page.getByTestId('log-group-pipeline'), 60);
+		await kbd.press('Enter');
+		const stored = page.getByRole('switch', { name: 'pipeline.stored' });
+		await kbd.tabTo(stored, 20);
+		await kbd.press('Space');
+		await expect(stored).not.toBeChecked();
+		// The list's toolbar sits above the rows: back to it with Shift+Tab.
+		const changedOnly = page.getByRole('checkbox', { name: 'Show changed only' });
+		for (
+			let i = 0;
+			i < 20 && !(await changedOnly.evaluate((el) => el === document.activeElement));
+			i++
+		)
+			await kbd.press('Shift+Tab');
+		await expect(changedOnly).toBeFocused();
+		await kbd.press('Space');
+		await expect(page.getByTestId('log-event-app.start')).toBeHidden();
+		await expect(page.getByTestId('log-event-pipeline.stored')).toBeVisible();
+		await kbd.tabTo(page.getByRole('button', { name: 'Reset to preset' }), 10);
+		await kbd.press('Enter');
+		await expect(page.getByText('No events match.')).toBeVisible();
+		await kbd.press('Shift+Tab');
+		await expect(changedOnly).toBeFocused();
+		await kbd.press('Space');
+		await expect(page.getByRole('switch', { name: 'pipeline.stored' })).toBeChecked();
+	});
+
+	test('/logs: Turn off now sends Private and both opt-ins off', async ({
+		page,
+		go,
+		kbd,
+		mock
+	}) => {
+		await liveLogs(page);
+		mock.on('getLogHistory', { lines: [], more: false, next_cursor: null, unreadable: 0 });
+		current = catalog(NOW + 1800);
+		await go('/logs');
+		const banner = page.getByText('Log lines may identify torrents or people');
+		await expect(banner).toBeVisible();
+		await expectNoA11yViolations(page);
+		await kbd.tabTo(page.getByRole('button', { name: 'Turn off now' }), 40);
+		current = catalog();
+		await kbd.press('Enter');
+		await expect(banner).toBeHidden();
+		expect(backend.patches).toEqual([
+			{
+				logging: {
+					if_revision: 1,
+					data: 'private',
+					data_until: 0,
+					kinds: {},
+					peer_activity_until: 0,
+					change_details_until: 0
+				}
+			}
+		]);
 	});
 });

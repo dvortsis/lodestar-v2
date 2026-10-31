@@ -66,7 +66,7 @@
 	"settings_logging_preset_hashes": "哈希",
 	"settings_logging_preset_full": "完整",
 	"settings_logging_preset_custom": "自定义",
-	"settings_logging_kind_carried": "会出现在你已开启的 {count} 个事件中：{events}",
+	"settings_logging_kind_carried": "会出现在你已开启的事件中（{count} 个）：{events}",
 	"settings_logging_kind_carried_none": "你已开启的事件都不会包含它。",
 	"settings_logging_dialog_title": "将种子详情写入日志？",
 	"settings_logging_dialog_what": "在你选择的时间内，{kinds}将被写入日志文件和实时日志。",
@@ -97,10 +97,12 @@
 	"settings_logging_banner_filters": "正在记录过滤更改详情",
 	"settings_logging_turn_off": "立即关闭",
 	"settings_logging_delete_title": "同时删除包含种子详情的日志文件？",
-	"settings_logging_delete_body": "在开启种子详情期间写入了 {count} 个日志文件（{size}）。",
+	"settings_logging_delete_body": "在开启种子详情期间写入的日志文件：{count} 个（{size}）。",
 	"settings_logging_delete_keep": "保留文件",
-	"settings_logging_delete_confirm": "删除 {count} 个日志文件",
+	"settings_logging_delete_confirm": "删除日志文件（{count} 个）",
 	"settings_logging_failed_on": "无法开启，因此保持关闭：{message}",
 	"settings_logging_failed_off": "无法关闭：{message}",
-	"settings_logging_unavailable": "无法读取日志的当前状态。"
+	"settings_logging_unavailable": "无法读取日志的当前状态。",
+	"settings_logging_unread": "更改已发送，但无法读取 Lodestar 当前的日志状态。请重新加载页面查看。",
+	"settings_logging_events_temporary": "实时日志的临时级别正在生效，因此当前记录的事件比此列表显示的更多。"
 }
