@@ -59,6 +59,10 @@ pub struct NetConfig {
     /// Hashes each BEP 51 node holds; with [`SwarmConfig::catalogue`] this
     /// sets the overlap between nodes.
     pub held_per_node: usize,
+    /// A BEP 51 node also answers `get_peers` for the hashes it samples,
+    /// as a responder storing them would (CR-1a-H's screen). Off in the
+    /// baselines, whose goldens predate it.
+    pub samplers_hold: bool,
 }
 
 /// Reply delay: `base + U(0, jitter)`, or `slow` instead with
@@ -113,24 +117,34 @@ pub struct FetchConfig {
 pub struct Switches {
     /// CR-ADM: `dht.coordinated_admission`.
     pub coordinated_admission: bool,
+    /// CR-1a-H: `dht.responder_hints`.
+    pub responder_hints: bool,
 }
 
 impl Switches {
     /// Writes the switches into the real configs the run starts with.
-    pub fn apply(&self, _dht: &mut Config, pool: &mut PoolConfig) {
+    pub fn apply(&self, dht: &mut Config, pool: &mut PoolConfig) {
         if self.coordinated_admission {
             // As the pipeline wires it (`crates/pipeline/src/lib.rs`).
             pool.coordinated_admission = true;
             pool.finder_capacity = lodestar_dht::node::PEER_REQUEST_CAPACITY;
         }
+        dht.responder_hints = self.responder_hints;
     }
 
     /// For the report header: `name=value` of every switch that's on.
     pub fn describe(&self) -> String {
-        if self.coordinated_admission {
-            "coordinated_admission=true".to_string()
-        } else {
+        let on: Vec<&str> = [
+            (self.coordinated_admission, "coordinated_admission=true"),
+            (self.responder_hints, "responder_hints=true"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        if on.is_empty() {
             "none".to_string()
+        } else {
+            on.join(",")
         }
     }
 }
@@ -157,6 +171,7 @@ pub fn base(name: &'static str) -> Scenario {
             sample_interval_s: 300,
             sample_size: 20,
             held_per_node: 60,
+            samplers_hold: false,
         },
         swarm: SwarmConfig {
             catalogue: 20_000,

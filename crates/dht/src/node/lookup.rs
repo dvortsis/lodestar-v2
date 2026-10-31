@@ -172,6 +172,13 @@ impl Lookup {
         peers: &[SocketAddr],
     ) -> bool {
         let ours = self.settle(id, State::Responded);
+        self.absorb(nodes, peers);
+        ours
+    }
+
+    /// Takes a reply's nodes (by their own XOR distance) and peers without
+    /// settling any candidate: for a query outside the candidate list.
+    pub fn absorb(&mut self, nodes: impl Iterator<Item = NodeInfo>, peers: &[SocketAddr]) {
         for n in nodes {
             self.add(n);
         }
@@ -181,7 +188,6 @@ impl Lookup {
             }
             self.peers.insert(*peer);
         }
-        ours
     }
 
     pub fn on_failure(&mut self, id: &NodeId) {

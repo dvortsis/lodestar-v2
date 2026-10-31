@@ -28,6 +28,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         deny: None,
         paused: false,
         restart: None,
+        responder_hints: false,
     }
 }
 
