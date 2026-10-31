@@ -1602,3 +1602,110 @@ fn removing_a_job_takes_back_only_what_it_alone_added() {
         }
     );
 }
+
+/// IMP-4 review: overlapping pilots remove cleanly in either order, a
+/// paused job is refused (resuming it would skip what was removed), and a
+/// row the crawler or you have touched since stays.
+#[test]
+fn overlapping_pilots_remove_in_any_order_and_touched_rows_stay() {
+    for a_first in [true, false] {
+        let mut store = mem();
+        // The crawler's source first, so the adapter's bit is another.
+        assert_eq!(store.register_source("dht", "1", T).unwrap(), DHT);
+        let src = source(&mut store);
+        let p: Vec<Prepared> = ["Both", "Seen", "Yours", "Private"]
+            .iter()
+            .map(|n| prepared(&store, n))
+            .collect();
+        let a = reading(&mut store, b"ds-a");
+        let out = outcomes(
+            store
+                .commit_import_batch(&batch(
+                    a.id,
+                    1,
+                    src,
+                    &[
+                        torrent(&p[0], Privacy::Unknown),
+                        torrent(&p[1], Privacy::Unknown),
+                        torrent(&p[2], Privacy::Unknown),
+                        ImportRecord::Candidate(ImportCandidate {
+                            privacy: Privacy::Private,
+                            ..match candidate([7; 20], None, Some(5)) {
+                                ImportRecord::Candidate(c) => c,
+                                _ => unreachable!(),
+                            }
+                        }),
+                    ],
+                ))
+                .unwrap(),
+        );
+        let RecordOutcome::New(both) = out[0] else {
+            panic!("{out:?}")
+        };
+        let (seen, yours) = match (out[1], out[2]) {
+            (RecordOutcome::New(s), RecordOutcome::New(y)) => (s, y),
+            o => panic!("{o:?}"),
+        };
+        // The 100k pilot over the same source merges what the 10k one
+        // inserted.
+        let b = reading(&mut store, b"ds-b");
+        store
+            .commit_import_batch(&batch(b.id, 1, src, &[torrent(&p[0], Privacy::Unknown)]))
+            .unwrap();
+        // The crawler reports one; you label another.
+        store
+            .write(&WriteBatch {
+                touches: &[lodestar_store::Touch {
+                    hash: p[1].info_hash,
+                    sources: 1 << DHT.get(),
+                    at: T,
+                    public: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        store
+            .set_user_item(
+                yours,
+                &lodestar_store::UserItemUpdate {
+                    favourite: Some(true),
+                    hidden: None,
+                    labels: None,
+                    note: None,
+                },
+                T,
+            )
+            .unwrap();
+
+        let paused = store
+            .pause_import_job(a.id, job(&store, a.id).revision, T)
+            .unwrap();
+        assert!(matches!(
+            store.remove_import_job_records(paused.id, 10),
+            Err(Error::Invalid(_))
+        ));
+        for j in [a.id, b.id] {
+            store
+                .cancel_import_job(j, job(&store, j).revision, T)
+                .unwrap();
+        }
+        let order = if a_first { [a.id, b.id] } else { [b.id, a.id] };
+        let mut first = store.remove_import_job_records(order[0], 0).unwrap();
+        while !first.done {
+            first.add(store.remove_import_job_records(order[0], 0).unwrap());
+        }
+        let second = store.remove_import_job_records(order[1], 10).unwrap();
+        assert!(second.done);
+        assert!(
+            store.torrent(both).unwrap().is_none(),
+            "a_first={a_first}: the shared row goes with its last job"
+        );
+        assert!(store.torrent(seen).unwrap().is_some(), "the crawler saw it");
+        assert!(store.torrent(yours).unwrap().is_some(), "it's yours");
+        let removed_a = if a_first { first } else { second };
+        assert_eq!((removed_a.kept_seen, removed_a.kept_yours), (1, 1));
+        assert_eq!(removed_a.kept_private_candidates, 1);
+        assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 1);
+        assert_eq!(count(&store, "SELECT count(*) FROM import_membership"), 0);
+    }
+}

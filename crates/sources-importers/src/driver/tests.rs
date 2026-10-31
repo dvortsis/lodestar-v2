@@ -47,8 +47,12 @@ fn rows(seeds: impl Iterator<Item = u32>) -> Vec<TorrentRow> {
 }
 
 fn fixture(dir: &Path, name: &str, rows: &[TorrentRow]) -> PathBuf {
+    fixture_in(dir, name, Layout::V3, rows)
+}
+
+fn fixture_in(dir: &Path, name: &str, layout: Layout, rows: &[TorrentRow]) -> PathBuf {
     let path = dir.join(name);
-    build(&path, Layout::V3, rows);
+    build(&path, layout, rows);
     path
 }
 
@@ -59,6 +63,11 @@ fn adapter(path: &Path) -> Adapter {
 fn mem() -> (Store, SourceId) {
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let source = store.register_source(magnetico::ADAPTER, "1", NOW).unwrap();
+    assert_eq!(
+        store.class_gen().unwrap(),
+        0,
+        "the generation opts() passes"
+    );
     (store, source)
 }
 
@@ -85,6 +94,7 @@ fn opts<'a>(source: SourceId, engine: &'a Engine, stop: &'a AtomicBool) -> Optio
             engine,
             sealer: None,
             quarantine_secs: 3_600,
+            class_gen: 0,
         },
         stop,
         limit: None,
@@ -417,4 +427,158 @@ fn a_pilot_can_be_removed() {
     }
     assert_eq!(removed.torrents, 500);
     assert_eq!(store.count().unwrap(), 0);
+}
+
+fn named(seed: u32, name: &str) -> TorrentRow {
+    TorrentRow {
+        name: Value::Text(name.into()),
+        ..TorrentRow::good(seed, &[("d/a", 3)])
+    }
+}
+
+/// Your rules judge each record's name, as at ingest: a drop leaves a
+/// tombstone, a quarantine a sealed name, a flag a mark, a shadow rule a
+/// logged hit only; a candidate is judged by its name too.
+#[test]
+fn rules_judge_names_and_candidates_as_at_ingest() {
+    use lodestar_filter::{Action, Sealer};
+    let dir = tempfile::tempdir().unwrap();
+    let mut nameless_size = named(6, "dropme candidate");
+    nameless_size.total_size = Value::Integer(0);
+    let path = fixture_in(
+        dir.path(),
+        "a.sqlite3",
+        Layout::Lax,
+        &[
+            named(1, "alpha dropme"),
+            named(2, "beta quarantineme"),
+            named(3, "gamma flagme"),
+            named(4, "delta shadowme"),
+            named(5, "epsilon"),
+            nameless_size,
+        ],
+    );
+    let (mut store, source) = mem();
+    for (word, action, shadow) in [
+        ("dropme", Action::Drop, None),
+        ("quarantineme", Action::Quarantine, None),
+        ("flagme", Action::Flag, None),
+        ("shadowme", Action::Drop, Some(NOW + 3_600)),
+    ] {
+        store.add_rule(word, action.code(), shadow, None).unwrap();
+    }
+    let mut engine = engine();
+    assert_eq!(
+        engine.load_rules(&store.rule_set().unwrap()),
+        Vec::<String>::new()
+    );
+    let sealer = Sealer::new(&[7; 32]);
+    let stop = AtomicBool::new(false);
+    let mut a = adapter(&path);
+    let id = create(&mut store, &a);
+    let mut o = opts(source, &engine, &stop);
+    o.filter.sealer = Some(&sealer);
+    let r = block_on(run(&mut store, id, &mut a, &o)).unwrap();
+    let c = r.counters;
+    assert_eq!(
+        (c.read, c.new, c.filtered, c.quarantined, c.candidates),
+        (6, 3, 2, 1, 0),
+        "{c:?}"
+    );
+    let stored = |seed| {
+        store
+            .find(&lodestar_metainfo::InfoHash(hash(seed)))
+            .unwrap()
+    };
+    assert!(stored(1).is_none() && stored(2).is_none() && stored(6).is_none());
+    let tombstoned: Vec<[u8; 20]> = store
+        .tombstones(10)
+        .unwrap()
+        .iter()
+        .map(|t| t.hash)
+        .collect();
+    assert!(tombstoned.contains(&hash(1)) && tombstoned.contains(&hash(6)));
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].hash, hash(2));
+    assert_eq!(
+        sealer.open(q[0].sealed.as_deref().unwrap()).unwrap(),
+        "beta quarantineme"
+    );
+    let flagged = store.torrent(stored(3).unwrap()).unwrap().unwrap();
+    assert_ne!(flagged.flags & flags::FLAGGED, 0);
+    let shadowed = store.torrent(stored(4).unwrap()).unwrap().unwrap();
+    assert_eq!(
+        shadowed.flags & (flags::FLAGGED | flags::HIDDEN),
+        0,
+        "shadow only logs"
+    );
+    let hits = store.filter_hits(0).unwrap();
+    let shadow_hit = hits.iter().find(|h| h.hash == hash(4)).unwrap();
+    assert_ne!(shadow_hit.action & lodestar_store::SHADOW, 0);
+    assert!(
+        hits.iter()
+            .any(|h| h.hash == hash(3) && h.action == Action::Flag.code())
+    );
+    assert!(store.import_quality(stored(5).unwrap()).unwrap().is_some());
+}
+
+/// Changes made elsewhere between batches: a job paused by another
+/// connection commits nothing more, and a source written mid-import
+/// blocks the job, each with exactly the committed batches kept.
+#[test]
+fn changes_between_batches_stop_the_run_truthfully() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fixture(dir.path(), "a.sqlite3", &rows(1..=ROWS));
+    let db = dir.path().join("lodestar.db");
+    let engine = engine();
+    let stop = AtomicBool::new(false);
+
+    // Paused by another connection while batch 2 is judged.
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let source = store.register_source(magnetico::ADAPTER, "1", NOW).unwrap();
+    let mut a = adapter(&path);
+    let id = create(&mut store, &a);
+    let other = db.clone();
+    HOOK.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move |at, n| {
+            if (at, n) == (Fault::BeforeCommit, 2) {
+                let mut s = Store::open(&other, StoreConfig::default()).unwrap();
+                let j = s.import_job(id).unwrap().unwrap();
+                s.pause_import_job(id, j.revision, NOW).unwrap();
+            }
+        }))
+    });
+    let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop)));
+    HOOK.with(|h| *h.borrow_mut() = None);
+    let r = r.unwrap();
+    assert_eq!(r.ended, Ended::NotRunning(Control::Paused));
+    assert_eq!((r.batches, r.counters.read), (1, 500));
+    assert_eq!(job(&store, id).seq, 1);
+    assert_eq!(store.count().unwrap(), 500);
+
+    // The source is written after batch 1 commits: blocked, not fed a
+    // moving source.
+    resume(&mut store, id, &a);
+    let src = path.clone();
+    HOOK.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move |at, n| {
+            if (at, n) == (Fault::AfterCommit, 1) {
+                let mut conn = rusqlite::Connection::open(&src).unwrap();
+                crate::magnetico::fixtures::insert(&mut conn, &rows(ROWS + 1..=ROWS + 1));
+                conn.close().unwrap();
+            }
+        }))
+    });
+    let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop)));
+    HOOK.with(|h| *h.borrow_mut() = None);
+    let r = r.unwrap();
+    assert!(matches!(r.ended, Ended::Blocked(_)), "{:?}", r.ended);
+    assert!(r.refusal.is_some());
+    let j = job(&store, id);
+    assert_eq!(
+        (j.control, j.seq, j.counters.read),
+        (Control::Blocked, 2, 1_000)
+    );
+    assert!(j.counters.conserved());
 }

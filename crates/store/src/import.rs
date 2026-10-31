@@ -990,26 +990,44 @@ impl Store {
     /// [`Removed::done`].
     ///
     /// - A torrent the job inserted is deleted, and logged so the indexer
-    ///   drops it, unless another job touched it too or a network fetch
-    ///   has verified it since: then only this job's provenance goes.
+    ///   drops it. It's kept, losing only this job's provenance, when:
+    ///   - another job touched it too: the oldest such job inherits the
+    ///     insert, so removing that one later deletes it;
+    ///   - a network fetch has verified it since;
+    ///   - another source (the crawler, a peer finder) has reported it
+    ///     since;
+    ///   - you've kept something of your own on it: a note, label,
+    ///     favourite, collection or classification correction.
     /// - A torrent the job merged into loses this job's provenance only.
     ///   Its source bit and a privacy the import made stricter stay:
     ///   other jobs of the adapter may share the bit, and a restriction is
     ///   never loosened.
-    /// - The job's waiting candidates are deleted.
+    /// - The job's waiting candidates are deleted, except a private one: a
+    ///   later job may have folded its private claim into it, and that
+    ///   restriction mustn't be lost.
     /// - Filter hits, tombstones and quarantine the job wrote stay: they
     ///   are safety records, not imported data.
     ///
-    /// The job's counters stay as its history. A job still reading its
-    /// source is refused: cancel or pause it first.
+    /// The job's counters stay as its history. Only a job that reads its
+    /// source no more (cancelled, failed, finished, or indexing) can be
+    /// removed: a paused job resumed afterwards would skip what was
+    /// removed, so it's refused: cancel it first.
     pub fn remove_import_job_records(&mut self, job: i64, limit: usize) -> Result<Removed> {
+        let limit = limit.max(1);
         let tx = begin_write(&mut self.conn)?;
         let j = load(&tx, job)?;
-        if j.control == Control::Running && j.phase.code() <= Phase::Committing.code() {
+        let reading = !matches!(j.control, Control::Cancelled | Control::Failed)
+            && j.phase.code() <= Phase::Committing.code();
+        if reading {
             return Err(Error::Invalid(
-                "the import job is running: pause or cancel it first",
+                "the import job can still read its source: cancel it first",
             ));
         }
+        // The adapter's own source bit: any other means another source
+        // has reported the torrent since.
+        let adapter_bits: i64 = tx
+            .prepare_cached("SELECT coalesce(sum(1 << id), 0) FROM sources WHERE plugin = ?1")?
+            .query_row([&j.adapter], |r| r.get(0))?;
         let members: Vec<(i64, bool)> = {
             let mut stmt = tx.prepare_cached(
                 "SELECT torrent_id, created FROM import_membership
@@ -1022,8 +1040,17 @@ impl Store {
         };
         let mut out = Removed::default();
         {
-            let mut shared = tx.prepare_cached(
-                "SELECT 1 FROM import_membership WHERE torrent_id = ?1 AND job != ?2",
+            let mut inherit = tx.prepare_cached(
+                "UPDATE import_membership SET created = 1
+                 WHERE torrent_id = ?1 AND job = (SELECT min(job) FROM import_membership
+                                                  WHERE torrent_id = ?1 AND job != ?2)",
+            )?;
+            let mut seen =
+                tx.prepare_cached("SELECT 1 FROM torrents WHERE id = ?1 AND sources & ~?2 != 0")?;
+            let mut yours = tx.prepare_cached(
+                "SELECT 1 FROM user_items WHERE torrent_id = ?1
+                 UNION ALL SELECT 1 FROM collection_items WHERE torrent_id = ?1
+                 UNION ALL SELECT 1 FROM class_corrections WHERE torrent_id = ?1",
             )?;
             let mut forget = tx.prepare_cached(
                 "DELETE FROM import_membership WHERE torrent_id = ?1 AND job = ?2",
@@ -1032,33 +1059,47 @@ impl Store {
             let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
             let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
             for &(id, created) in &members {
-                if !created {
-                    forget.execute(params![id, job])?;
-                    out.provenance += 1;
-                } else if shared.exists(params![id, job])? {
-                    forget.execute(params![id, job])?;
-                    out.kept_shared += 1;
+                let kept = if !created {
+                    &mut out.provenance
+                } else if inherit.execute(params![id, job])? > 0 {
+                    &mut out.kept_shared
                 } else if quality(&tx, id)?
                     .is_some_and(|q| q.verification == Verification::Verified)
                 {
-                    forget.execute(params![id, job])?;
-                    out.kept_verified += 1;
+                    &mut out.kept_verified
+                } else if seen.exists(params![id, adapter_bits])? {
+                    &mut out.kept_seen
+                } else if yours.exists([id])? {
+                    &mut out.kept_yours
                 } else {
                     // Membership and quality cascade with the row.
                     delete.execute([id])?;
                     log.execute([id])?;
                     out.torrents += 1;
-                }
+                    continue;
+                };
+                forget.execute(params![id, job])?;
+                *kept += 1;
             }
         }
         let room = limit.saturating_sub(members.len());
-        out.candidates = tx
-            .prepare_cached(
+        out.candidates =
+            tx.prepare_cached(
                 "DELETE FROM import_candidates WHERE id IN
-                     (SELECT id FROM import_candidates WHERE job = ?1 LIMIT ?2)",
+                     (SELECT id FROM import_candidates WHERE job = ?1 AND privacy != ?2
+                      LIMIT ?3)",
             )?
-            .execute(params![job, room as i64])? as u64;
+            .execute(params![job, Privacy::Private.code(), room as i64])? as u64;
         out.done = members.len() < limit && (out.candidates as usize) < room;
+        if out.done {
+            out.kept_private_candidates = tx
+                .prepare_cached(
+                    "SELECT count(*) FROM import_candidates WHERE job = ?1 AND privacy = ?2",
+                )?
+                .query_row(params![job, Privacy::Private.code()], |r| {
+                    r.get::<_, i64>(0)
+                })? as u64;
+        }
         tx.commit()?;
         Ok(out)
     }
@@ -1069,15 +1110,23 @@ impl Store {
 pub struct Removed {
     /// Torrents the job inserted, deleted.
     pub torrents: u64,
-    /// Torrents the job inserted that another job touched too: kept.
+    /// Torrents the job inserted that another job touched too: kept, and
+    /// now that job's to remove.
     pub kept_shared: u64,
     /// Torrents the job inserted that a network fetch verified since:
     /// kept.
     pub kept_verified: u64,
+    /// Torrents the job inserted that another source reported since:
+    /// kept.
+    pub kept_seen: u64,
+    /// Torrents the job inserted that hold something of yours: kept.
+    pub kept_yours: u64,
     /// Stored torrents the job only merged into: provenance removed.
     pub provenance: u64,
     /// Waiting candidates deleted.
     pub candidates: u64,
+    /// Private candidates of the job's that stay (set when `done`).
+    pub kept_private_candidates: u64,
     /// Nothing of the job's is left to remove.
     pub done: bool,
 }
@@ -1088,8 +1137,11 @@ impl Removed {
         self.torrents += other.torrents;
         self.kept_shared += other.kept_shared;
         self.kept_verified += other.kept_verified;
+        self.kept_seen += other.kept_seen;
+        self.kept_yours += other.kept_yours;
         self.provenance += other.provenance;
         self.candidates += other.candidates;
+        self.kept_private_candidates = other.kept_private_candidates;
         self.done = other.done;
     }
 }

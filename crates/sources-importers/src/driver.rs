@@ -186,6 +186,11 @@ pub struct Filter<'a> {
     pub sealer: Option<&'a Sealer>,
     /// How long a quarantine lasts.
     pub quarantine_secs: i64,
+    /// The classification-rules generation ([`Store::class_gen`]) read
+    /// *before* the engine's rules were loaded, as the writer reads it: if
+    /// the rules change during the run, the store marks the new rows for
+    /// enriching again.
+    pub class_gen: i64,
 }
 
 impl std::fmt::Debug for Filter<'_> {
@@ -299,9 +304,19 @@ thread_local! {
     /// `(fault, batch)`: crash there in the run's nth batch (from 1).
     pub(crate) static CRASH: std::cell::Cell<Option<(Fault, u64)>> =
         const { std::cell::Cell::new(None) };
+    /// Runs at every fault point: a change made elsewhere mid-run.
+    #[allow(clippy::type_complexity)]
+    pub(crate) static HOOK: std::cell::RefCell<Option<Box<dyn FnMut(Fault, u64)>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn crash(at: Fault, batch: u64) -> Result<(), DriverError> {
+    #[cfg(test)]
+    HOOK.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f(at, batch);
+        }
+    });
     #[cfg(test)]
     if CRASH.with(|c| c.get()) == Some((at, batch)) {
         return Err(DriverError::Crash(at));
@@ -414,7 +429,6 @@ pub async fn run(
         };
         let n = report.batches + 1;
         crash(Fault::AfterRead, n)?;
-        let class_gen = store.class_gen()?;
         let mut prepared: Vec<Option<Prepared>> = Vec::with_capacity(batch.records.len());
         let mut judged: Vec<Judged> = Vec::with_capacity(batch.records.len());
         let mut prepare_rejected = 0;
@@ -485,7 +499,7 @@ pub async fn run(
             source: opts.source,
             source_bytes: batch.source_bytes,
             at: now,
-            class_gen: Some(class_gen),
+            class_gen: Some(opts.filter.class_gen),
             records: &records,
         });
         match committed {

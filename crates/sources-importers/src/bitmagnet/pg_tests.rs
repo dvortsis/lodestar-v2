@@ -990,6 +990,7 @@ async fn the_driver_imports_through_the_filter() {
             engine: &engine,
             sealer: None,
             quarantine_secs: 3_600,
+            class_gen: store.class_gen().unwrap(),
         },
         stop: &stop,
         limit: None,
