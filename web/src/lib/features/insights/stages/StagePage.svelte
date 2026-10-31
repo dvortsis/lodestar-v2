@@ -141,7 +141,7 @@
 	const groupName = (k: string) => groups[k]?.() ?? k;
 	const typeName = (k: string) => types[k]?.() ?? k;
 
-	const model = $derived<StageModel | undefined>(data ? mapStage(stage, data) : undefined);
+	const model = $derived<StageModel | undefined>(data ? mapStage(stage, data, locale) : undefined);
 	const extraBars = $derived.by<BarsSpec[]>(() => {
 		if (!data) return [];
 		if (stage === 'discover') return discoverBars(data as never, locale);
@@ -212,6 +212,12 @@
 		formatCount({ value: typeof v === 'object' && v !== null ? v.value : v, approx: true }, l);
 	const fmtPoint = (approx: boolean | undefined, v: number | null | undefined) =>
 		approx ? approxCount(v ?? null, locale) : formatCount(v, locale);
+	const previousLabel = (label: string) => `${label} · ${m.insights_overview_previous_period()}`;
+	// A snapshot chart is readings at the end of each bucket, so it has no "per hour" unit.
+	const summaryOf = (c: { title: string; snapshot?: boolean }) =>
+		c.snapshot
+			? m.insights_stage_chart_summary_snapshot({ title: c.title, range: rangeText })
+			: m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText });
 	const noData = (series: { values: (number | null)[] }[]) =>
 		series.every((s) => s.values.every((v) => v === null));
 
@@ -330,12 +336,17 @@
 
 		<section class="ins-section" aria-labelledby="ins-s-kpi">
 			<h2 id="ins-s-kpi" class="ins-heading">{m.insights_stage_kpis()}</h2>
-			<p class="ins-sub">{m.insights_stage_time_event({ tz })}</p>
+			<p class="ins-sub">{m.insights_stage_time_kpis({ tz })}</p>
 			<div class="ins-kpis" data-testid="insights-stage-kpis">
 				{#each model.kpis as x (x.key)}
 					<div class="ins-card" data-testid="insights-stage-kpi-{x.key}">
 						<span class="ins-muted">{x.label}</span>
 						<span class="ins-status">{@render metricValue(x)}</span>
+						{#if x.snapshot}
+							<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-snapshot"
+								>{m.insights_stage_snapshot()}</span
+							>
+						{/if}
 						{#if hasPrev(x)}
 							<span class="ins-kpi-note"
 								>{m.insights_overview_previous_period()}:
@@ -358,7 +369,11 @@
 			{@const times = data.trend.map((p) => p.at)}
 			<section class="ins-section" aria-labelledby="ins-{c.id}-h">
 				<h2 id="ins-{c.id}-h" class="ins-heading">{c.title}</h2>
-				<p class="ins-sub">{m.insights_stage_time_event({ tz })}</p>
+				<p class="ins-sub">
+					{c.snapshot
+						? m.insights_stage_time_snapshot({ tz })
+						: m.insights_stage_time_event({ tz })}
+				</p>
 				{#if noData(c.series)}
 					<p class="ins-sentence" data-testid="insights-chart-{c.id}-empty">
 						{m.insights_stage_nothing_measured()}
@@ -367,15 +382,27 @@
 					<ChartPanel
 						id="ins-{c.id}"
 						title={c.title}
-						summary={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
+						summary={summaryOf(c)}
 						caption={c.title}
 						columns={[
 							{ key: 'at', label: m.insights_overview_col_time() },
-							...c.series.map((s) => ({ key: s.key, label: s.label, numeric: true }))
+							...c.series.flatMap((s) => [
+								{ key: s.key, label: s.label, numeric: true },
+								...(query.compare && s.previous
+									? [{ key: `${s.key}-prev`, label: previousLabel(s.label), numeric: true }]
+									: [])
+							])
 						]}
 						rows={data.trend.map((p, i) => ({
 							at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
-							...Object.fromEntries(c.series.map((s) => [s.key, fmtPoint(c.approx, s.values[i])]))
+							...Object.fromEntries(
+								c.series.flatMap((s) => [
+									[s.key, fmtPoint(c.approx, s.values[i])],
+									...(query.compare && s.previous
+										? [[`${s.key}-prev`, fmtPoint(c.approx, s.previous[i])]]
+										: [])
+								])
+							)
 						}))}
 						csv={reason ? undefined : c.csv}
 						{query}
@@ -389,15 +416,15 @@
 								...(query.compare && s.previous
 									? [
 											{
-												label: `${s.label} · ${m.insights_overview_previous_period()}`,
+												label: previousLabel(s.label),
 												values: s.previous,
 												token: '--color-muted-text'
 											}
 										]
 									: [])
 							])}
-							label={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
-							{unit}
+							label={summaryOf(c)}
+							unit={c.snapshot ? m.insights_stage_unit_torrents() : unit}
 							format={c.approx ? approxCount : formatCount}
 							axisFormat={formatCompact}
 							{bucket}

@@ -157,5 +157,10 @@
 	"insights_stage_discover_strategy_get_peers": "节点查询",
 	"insights_stage_discover_strategy_announce": "通告",
 	"insights_stage_discover_strategy_lookup": "主动查找",
-	"insights_stage_discover_strategy_refetch": "重新获取"
+	"insights_stage_discover_strategy_refetch": "重新获取",
+	"insights_stage_time_kpis": "事件时间，{tz}。标记为“快照”的项目为最近一次更新时的状态。",
+	"insights_stage_time_snapshot": "每个周期末的快照，{tz}",
+	"insights_stage_snapshot": "快照",
+	"insights_stage_unit_torrents": "个种子",
+	"insights_stage_chart_summary_snapshot": "{title}：{range}内每个周期末的快照。"
 }

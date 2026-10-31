@@ -104,7 +104,32 @@ describe('mapIndex', () => {
 	});
 });
 
+describe('snapshot series', () => {
+	it('flags the total on the Index page as a snapshot chart, and the new/removed chart as not', () => {
+		const charts = mapIndex(indexFixture()).charts;
+		expect(charts.find((c) => c.id === 'index-total')?.snapshot).toBe(true);
+		expect(charts.find((c) => c.id === 'index-trend')?.snapshot).toBeUndefined();
+	});
+	it('flags readings as snapshot metrics and event counts as not', () => {
+		const fetch = mapFetch(fetchFixture());
+		expect(find(fetch.kpis, 'queue_depth').snapshot).toBe(true);
+		expect(find(fetch.kpis, 'fetched').snapshot).toBe(false);
+		const index = mapIndex(indexFixture());
+		for (const k of ['searchable', 'lag', 'projection']) {
+			expect(find(index.kpis, k).snapshot).toBe(true);
+		}
+		expect(find(index.kpis, 'new').snapshot).toBe(false);
+	});
+});
+
 describe('mapServe', () => {
+	it('formats the query counts in the given locale', () => {
+		const t = mapServe(
+			serveFixture({ top_queries: [{ count: 1234, query: 'a', zero: 5 }] }),
+			'de'
+		).tables;
+		expect(t[0]?.rows[0]?.count).toBe('1.234');
+	});
 	it('says query logging is off when the lists are null', () => {
 		const t = mapServe(serveFixture()).tables;
 		expect(t.every((x) => x.empty && x.rows.length === 0)).toBe(true);

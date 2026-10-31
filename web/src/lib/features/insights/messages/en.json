@@ -310,5 +310,10 @@
 	"insights_stage_discover_strategy_get_peers": "Peer lookups",
 	"insights_stage_discover_strategy_announce": "Announces",
 	"insights_stage_discover_strategy_lookup": "Active lookups",
-	"insights_stage_discover_strategy_refetch": "Refetches"
+	"insights_stage_discover_strategy_refetch": "Refetches",
+	"insights_stage_time_kpis": "Event time, in {tz}. Items marked Snapshot are as of the last update.",
+	"insights_stage_time_snapshot": "Snapshot at the end of each period, in {tz}",
+	"insights_stage_snapshot": "Snapshot",
+	"insights_stage_unit_torrents": "torrents",
+	"insights_stage_chart_summary_snapshot": "{title} at the end of each period over {range}, a snapshot."
 }

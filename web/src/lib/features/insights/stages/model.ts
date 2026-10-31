@@ -8,7 +8,6 @@ import {
 	formatLatency,
 	formatPercent,
 	formatScore,
-	formatShare,
 	formatSpan,
 	type MetricValue
 } from '$lib/format';
@@ -36,6 +35,8 @@ export interface Metric {
 	previous?: number | null;
 	fmt: Fmt;
 	approx?: boolean;
+	/** A reading as of the last update (a queue, a size, a total), not a count over the range. */
+	snapshot?: boolean;
 }
 
 export interface Series {
@@ -54,6 +55,8 @@ export interface ChartSpec {
 	csv?: string;
 	/** Every value is an estimate (shown with "≈"). */
 	approx?: boolean;
+	/** A series of readings at the end of each bucket, not counts per bucket: no rate unit. */
+	snapshot?: boolean;
 }
 
 export interface Table {
@@ -94,6 +97,30 @@ export interface StageModel {
 	notes: { key: string; label: string; text: string }[];
 }
 
+// Snapshot metrics (docs/metrics.md): a state now, not events in the range.
+const SNAPSHOT = new Set([
+	'queue_depth',
+	'in_flight',
+	'queue_age',
+	'dht_nodes',
+	'reply_ratio',
+	'keyspace',
+	'seen_filter',
+	'searchable',
+	'lag',
+	'projection',
+	'data',
+	'disk_free',
+	'db',
+	'index',
+	'files',
+	'segments',
+	'merges',
+	'file_cov',
+	'scrape_cov',
+	'scrape_fresh'
+]);
+
 const metric = (
 	key: string,
 	label: string,
@@ -101,7 +128,7 @@ const metric = (
 	fmt: Fmt,
 	previous?: number | null,
 	approx = false
-): Metric => ({ key, label, value, fmt, previous, approx });
+): Metric => ({ key, label, value, fmt, previous, approx, snapshot: SNAPSHOT.has(key) });
 
 /** One value through its formatter. Latency percentiles and `approx` metrics always carry "≈". */
 export function formatMetric(x: Metric, v: number | null | undefined, locale?: string): string {
@@ -480,6 +507,7 @@ export function mapIndex(r: IndexResponse): StageModel {
 		},
 		{
 			id: 'index-total',
+			snapshot: true,
 			title: m.insights_stage_index_chart_total(),
 			series: [
 				series(r.trend, p, 'searchable', m.insights_stage_index_searchable(), (x) => x.searchable)
@@ -489,7 +517,7 @@ export function mapIndex(r: IndexResponse): StageModel {
 	return out;
 }
 
-export function mapServe(r: ServeResponse): StageModel {
+export function mapServe(r: ServeResponse, locale?: string): StageModel {
 	const k = r.kpi;
 	const p = r.previous;
 	const out = empty();
@@ -555,14 +583,14 @@ export function mapServe(r: ServeResponse): StageModel {
 			id: 'top-queries',
 			title: m.insights_stage_serve_top(),
 			columns: cols,
-			rows: rows(r.top_queries),
+			rows: rows(r.top_queries, locale),
 			empty: r.top_queries === null ? m.insights_stage_serve_logging_off() : undefined
 		},
 		{
 			id: 'top-zero',
 			title: m.insights_stage_serve_top_zero(),
 			columns: cols,
-			rows: rows(r.top_zero_result_queries),
+			rows: rows(r.top_zero_result_queries, locale),
 			empty: r.top_zero_result_queries === null ? m.insights_stage_serve_logging_off() : undefined
 		}
 	];
@@ -585,11 +613,14 @@ export function binEdges(bins: Bin[]): number[] | undefined {
 
 /** Edge labels for the histogram, in the bins' unit. */
 export function edgeLabels(edges: number[], fmt: 'score' | 'percent', locale?: string): string[] {
-	return edges.map((e) => (fmt === 'score' ? formatScore(e, locale) : formatShare(e, locale)));
+	return edges.map((e) =>
+		fmt === 'score' ? formatScore(e, locale) : formatPercent(e / 100, locale, 0)
+	);
 }
 
 export function binLabel(b: Bin, fmt: 'score' | 'percent', locale?: string): string {
-	const f = (n: number) => (fmt === 'score' ? formatScore(n, locale) : formatShare(n, locale));
+	const f = (n: number) =>
+		fmt === 'score' ? formatScore(n, locale) : formatPercent(n / 100, locale, 0);
 	return `${f(b.lo)}–${f(b.hi)}`;
 }
 
@@ -681,7 +712,7 @@ export function trackerTable(r: IndexResponse, locale?: string): Table {
 	};
 }
 
-export function mapStage(stage: StageId, r: StageResponse): StageModel {
+export function mapStage(stage: StageId, r: StageResponse, locale?: string): StageModel {
 	switch (stage) {
 		case 'discover':
 			return mapDiscover(r as DiscoverResponse);
@@ -692,6 +723,6 @@ export function mapStage(stage: StageId, r: StageResponse): StageModel {
 		case 'index':
 			return mapIndex(r as IndexResponse);
 		case 'serve':
-			return mapServe(r as ServeResponse);
+			return mapServe(r as ServeResponse, locale);
 	}
 }
