@@ -69,6 +69,8 @@ beforeEach(() => {
 	);
 });
 afterEach(() => {
+	delete (document as { execCommand?: unknown }).execCommand;
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
 	document.body.innerHTML = '';
@@ -311,9 +313,12 @@ describe('the leave guard', () => {
 		expect(go('link', `${location.origin}/settings/general`)).toHaveBeenCalled();
 		let dialog = await screen.findByRole(
 			'dialog',
-			{ name: 'Leave without changing the password?' },
+			{ name: 'Leave without saving?' },
 			{ timeout: 10_000 }
 		);
+		expect(
+			within(dialog).getByText('What you typed in Change password will be cleared.')
+		).toBeTruthy();
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
 		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(nav.goto).not.toHaveBeenCalled();
@@ -349,7 +354,8 @@ describe('Secure cookies', () => {
 		render(SecurityScreen);
 		await until(() => expect(screen.getByTestId('security-cookies').textContent).toContain('On'));
 		expect(screen.getByText(/Set by LODESTAR_SECURE_COOKIES/)).toBeTruthy();
-		expect(screen.queryByRole('switch')).toBeNull();
+		const cookies = screen.getByTestId('security-cookies').closest('section')!;
+		expect(within(cookies as HTMLElement).queryByRole('switch')).toBeNull();
 	});
 
 	it('says so when it can’t be read', async () => {
@@ -373,5 +379,470 @@ describe('the password confirmation and the screen', () => {
 		await until(() => expect(document.body.innerHTML).not.toContain('typed-then-left'));
 		expect(screen.queryByRole('dialog')).toBeNull();
 		expect(writes()).toEqual([]);
+	});
+});
+
+const SECRET = 'lsk_AbCdEfGh_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG';
+const KEY = (id: number, name: string, extra: Record<string, unknown> = {}) => ({
+	id,
+	name,
+	kind: 'api_key',
+	prefix: `lsk_${String(id).padStart(8, 'k')}`,
+	scopes: ['torznab'],
+	status: 'active',
+	created_at: 1_790_000_000,
+	expires_at: null,
+	last_used_at: null,
+	revoked_at: null,
+	saved_search_id: null,
+	...extra
+});
+const PROXY = (extra: Record<string, unknown> = {}) => ({
+	enabled: false,
+	forced_off: false,
+	header: 'Remote-User',
+	trusted: [],
+	allowed_users: [],
+	...extra
+});
+/** Every place a secret could be kept on the client. */
+const leaked = (secret: string) =>
+	[
+		document.body.innerHTML,
+		JSON.stringify({ ...localStorage }),
+		JSON.stringify({ ...sessionStorage }),
+		location.href
+	].filter((s) => s.includes(secret));
+
+async function passwordDialog(title: string) {
+	const dialog = await screen.findByRole('dialog', { name: title }, { timeout: 10_000 });
+	const input = within(dialog).getByLabelText(/Your password/) as HTMLInputElement;
+	await until(() => expect(document.activeElement).toBe(input));
+	return { dialog, input };
+}
+
+describe('API keys and feed tokens', () => {
+	beforeEach(() => {
+		replies['GET /keys'] = () => ({
+			status: 200,
+			body: {
+				keys: [KEY(1, 'Sonarr'), KEY(2, 'Old', { status: 'revoked', revoked_at: 1_790_000_100 })]
+			}
+		});
+		replies['GET /auth/proxy'] = () => ({ status: 200, body: PROXY() });
+	});
+
+	async function keysSection() {
+		render(SecurityScreen);
+		const section = await screen.findByTestId('security-keys', {}, { timeout: 10_000 });
+		await within(section).findByText('Sonarr');
+		return section;
+	}
+
+	it('lists the keys; a revoked one has no actions', async () => {
+		const section = await keysSection();
+		const rows = within(section).getAllByTestId('security-key');
+		expect(rows).toHaveLength(2);
+		expect(rows[0]!.textContent).toContain('lsk_kkkkkkk1…');
+		expect(rows[0]!.textContent).toContain('Never used');
+		expect(within(rows[0]!).getByRole('button', { name: 'Regenerate Sonarr…' })).toBeTruthy();
+		expect(rows[1]!.textContent).toContain('Revoked');
+		expect(within(rows[1]!).queryByRole('button')).toBeNull();
+	});
+
+	it('says so when the list can’t be read, and tries again', async () => {
+		replies['GET /keys'] = () => err(500, 'internal', 'boom');
+		render(SecurityScreen);
+		expect(
+			await screen.findByText("Couldn't load the keys.", {}, { timeout: 10_000 })
+		).toBeTruthy();
+		replies['GET /keys'] = () => ({ status: 200, body: { keys: [] } });
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[0]!);
+		expect(await screen.findByTestId('security-keys-empty')).toBeTruthy();
+	});
+
+	it('refuses a nameless key or one with no scope without sending', async () => {
+		const section = await keysSection();
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		expect(within(section).getByText('Enter a name.')).toBeTruthy();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByLabelText('Search API'));
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		expect(within(section).getByText('Choose at least one.')).toBeTruthy();
+		expect(writes()).toEqual([]);
+		expect(screen.queryByRole('dialog')).toBeNull();
+	});
+
+	it('create needs the password; Cancel sends nothing', async () => {
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Radarr?');
+		await fireEvent.input(input, { target: { value: 'hunter2hunter2' } });
+		await fireEvent.click(within(dialog).getByTestId('password-dialog-cancel'));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes()).toEqual([]);
+	});
+
+	it('shows a new secret once, with Copy, and keeps it nowhere afterwards', async () => {
+		const logs = (['log', 'info', 'warn', 'error', 'debug'] as const).map((k) =>
+			vi.spyOn(console, k)
+		);
+		const writeText = vi.fn(async () => {});
+		vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+		vi.stubGlobal('isSecureContext', true);
+		replies['POST /keys'] = () => ({
+			status: 201,
+			body: { key: KEY(3, 'Feeds', { kind: 'feed_token', scopes: ['feeds'] }), secret: SECRET }
+		});
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Feeds' } });
+		await fireEvent.click(within(section).getByLabelText(/^Feed token/));
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Feeds?');
+		await fireEvent.input(input, { target: { value: 'right-password' } });
+		await fireEvent.click(within(dialog).getByTestId('password-dialog-confirm'));
+		const reveal = await screen.findByRole(
+			'dialog',
+			{ name: 'Copy the secret for Feeds' },
+			{ timeout: 10_000 }
+		);
+		expect(writes()).toEqual([
+			{
+				method: 'POST',
+				path: '/keys',
+				body: { name: 'Feeds', kind: 'feed_token', password: 'right-password' }
+			}
+		]);
+		const shown = within(reveal).getByTestId('key-secret') as HTMLInputElement;
+		expect(shown.value).toBe(SECRET);
+		await until(() => expect(document.activeElement).toBe(shown));
+		await fireEvent.click(within(reveal).getByTestId('key-secret-copy'));
+		expect(writeText).toHaveBeenCalledWith(SECRET);
+		expect(await within(reveal).findByText('Copied.')).toBeTruthy();
+
+		await fireEvent.click(within(reveal).getByTestId('key-secret-done'));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		await until(() => expect(leaked(SECRET)).toEqual([]));
+		expect(logs.flatMap((l) => l.mock.calls.flat()).join(' ')).not.toContain(SECRET);
+		expect(within(section).getByText('Feeds')).toBeTruthy();
+		expect(within(section).getByLabelText(/^Name/)).toHaveProperty('value', '');
+	});
+
+	it('over plain HTTP, Copy falls back, or says so and selects the secret', async () => {
+		vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
+		vi.stubGlobal('isSecureContext', false);
+		const exec = vi.fn(() => false);
+		Object.defineProperty(document, 'execCommand', { value: exec, configurable: true });
+		replies['POST /keys'] = () => ({
+			status: 201,
+			body: { key: KEY(3, 'Radarr'), secret: SECRET }
+		});
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Radarr?');
+		await confirm(dialog, input, 'right-password');
+		const reveal = await screen.findByRole('dialog', { name: 'Copy the secret for Radarr' });
+		const shown = within(reveal).getByTestId('key-secret') as HTMLInputElement;
+		await fireEvent.click(within(reveal).getByTestId('key-secret-copy'));
+		expect(
+			await within(reveal).findByText("Couldn't copy. Select the text and copy it yourself.")
+		).toBeTruthy();
+		expect(exec).toHaveBeenCalledWith('copy');
+		expect(document.activeElement).toBe(shown);
+		expect(shown.selectionEnd! - shown.selectionStart!).toBe(SECRET.length);
+
+		exec.mockReturnValue(true);
+		await fireEvent.click(within(reveal).getByTestId('key-secret-copy'));
+		expect(await within(reveal).findByText('Copied.')).toBeTruthy();
+	});
+
+	it('regenerate needs the password and replaces the row; Cancel sends nothing', async () => {
+		replies['POST /keys/1/regenerate'] = () => ({
+			status: 200,
+			body: { key: KEY(7, 'Sonarr'), secret: SECRET }
+		});
+		const section = await keysSection();
+		const button = within(section).getByRole('button', { name: 'Regenerate Sonarr…' });
+		await fireEvent.click(button);
+		let { dialog, input } = await passwordDialog('Regenerate Sonarr?');
+		await fireEvent.click(within(dialog).getByTestId('password-dialog-cancel'));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes()).toEqual([]);
+
+		await fireEvent.click(button);
+		({ dialog, input } = await passwordDialog('Regenerate Sonarr?'));
+		await confirm(dialog, input, 'right-password');
+		const reveal = await screen.findByRole('dialog', { name: 'Copy the secret for Sonarr' });
+		expect(writes()).toEqual([
+			{ method: 'POST', path: '/keys/1/regenerate', body: { password: 'right-password' } }
+		]);
+		await fireEvent.keyDown(reveal, { key: 'Escape' });
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		await until(() => expect(leaked(SECRET)).toEqual([]));
+		expect(within(section).getByText('lsk_kkkkkkk7…', { exact: false })).toBeTruthy();
+		expect(screen.getByTestId('security-keys-result').textContent).toContain(
+			'The old secret no longer works.'
+		);
+	});
+
+	it('a session that ended mid-flow reveals nothing', async () => {
+		replies['POST /keys'] = () => err(401, 'login_required', 'Sign in again.');
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByLabelText('Search API'));
+		await fireEvent.click(within(section).getByLabelText('Torznab'));
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Radarr?');
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes().map((w) => w.body)).toEqual([
+			{ name: 'Radarr', kind: 'api_key', scopes: ['torznab'], password: 'right-password' }
+		]);
+	});
+
+	it('a refusal that isn’t the password’s closes the dialog and shows on the screen', async () => {
+		replies['POST /keys'] = () => err(409, 'too_many_keys', 'There are 500 keys already.');
+		replies['POST /keys/1/regenerate'] = () =>
+			err(409, 'key_inactive', 'This key is no longer active.');
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		let { dialog, input } = await passwordDialog('Create Radarr?');
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.getByTestId('security-keys-result').textContent).toContain(
+			'Nothing was changed. There are 500 keys already.'
+		);
+
+		await fireEvent.click(within(section).getByRole('button', { name: 'Regenerate Sonarr…' }));
+		({ dialog, input } = await passwordDialog('Regenerate Sonarr?'));
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.getByTestId('security-keys-result').textContent).toContain(
+			'This key is no longer active.'
+		);
+		expect(writes()).toHaveLength(2);
+	});
+
+	it('a refused name shows at the name field', async () => {
+		replies['POST /keys'] = () => err(400, 'invalid', 'That name is taken.', 'name');
+		const section = await keysSection();
+		const field = within(section).getByLabelText(/^Name/);
+		await fireEvent.input(field, { target: { value: 'Sonarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Sonarr?');
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(within(section).getByText('That name is taken.')).toBeTruthy();
+		expect(field.getAttribute('aria-invalid')).toBe('true');
+	});
+
+	it('revoke asks first, without the password (B12); Keep it sends nothing', async () => {
+		replies['POST /keys/1/revoke'] = () => ({
+			status: 200,
+			body: KEY(1, 'Sonarr', { status: 'revoked', revoked_at: 1_790_000_200 })
+		});
+		const section = await keysSection();
+		const button = within(section).getByRole('button', { name: 'Revoke Sonarr…' });
+		await fireEvent.click(button);
+		let dialog = await screen.findByRole('dialog', { name: 'Revoke Sonarr?' }, { timeout: 10_000 });
+		expect(within(dialog).queryByLabelText(/Your password/)).toBeNull();
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes()).toEqual([]);
+
+		await fireEvent.click(button);
+		dialog = await screen.findByRole('dialog', { name: 'Revoke Sonarr?' }, { timeout: 10_000 });
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke' }));
+		await until(() =>
+			expect(screen.getByTestId('security-keys-result').textContent).toContain('Revoked Sonarr.')
+		);
+		expect(writes()).toEqual([{ method: 'POST', path: '/keys/1/revoke', body: {} }]);
+		expect(within(section).queryByRole('button', { name: 'Revoke Sonarr…' })).toBeNull();
+	});
+});
+
+describe('Trusted proxy sign-in', () => {
+	beforeEach(() => {
+		replies['GET /keys'] = () => ({ status: 200, body: { keys: [] } });
+		replies['GET /auth/proxy'] = () => ({ status: 200, body: PROXY() });
+		replies['PUT /auth/proxy'] = (body) => {
+			const rest = { ...(body as Record<string, unknown>) };
+			delete rest.password;
+			return { status: 200, body: PROXY(rest) };
+		};
+	});
+
+	async function proxySection() {
+		render(SecurityScreen);
+		const form = await screen.findByTestId('security-proxy', {}, { timeout: 10_000 });
+		const toggle = (await within(form).findByRole('switch')) as HTMLInputElement;
+		return { form, toggle };
+	}
+
+	it('explains the choice and recommends leaving it off', async () => {
+		const { form } = await proxySection();
+		expect(form.textContent).toContain('Recommended: leave this off');
+		expect(form.textContent).toContain("Don't publish Lodestar's port");
+		expect(form.textContent).toContain('Never trust the Docker bridge gateway');
+	});
+
+	it('LODESTAR_PROXY_AUTH=off shows as locked, with its source', async () => {
+		replies['GET /auth/proxy'] = () => ({
+			status: 200,
+			body: PROXY({ enabled: true, forced_off: true, trusted: ['172.20.0.2/32'] })
+		});
+		const { form, toggle } = await proxySection();
+		expect(within(form).getByText(/set by LODESTAR_PROXY_AUTH=off/)).toBeTruthy();
+		expect(toggle.disabled).toBe(true);
+		expect(toggle.checked).toBe(true);
+		expect(toggle.closest('label')!.textContent).toContain('Saved setting');
+	});
+
+	it('says so when the settings can’t be read', async () => {
+		replies['GET /auth/proxy'] = () => err(500, 'internal', 'boom');
+		render(SecurityScreen);
+		expect(
+			await screen.findByText("Couldn't read the trusted proxy settings.", {}, { timeout: 10_000 })
+		).toBeTruthy();
+	});
+
+	it('turning it on warns, needs a trusted address and the password; Cancel sends nothing', async () => {
+		const { form, toggle } = await proxySection();
+		expect(within(form).queryByTestId('security-proxy-warning')).toBeNull();
+		await fireEvent.click(toggle);
+		expect(within(form).getByTestId('security-proxy-warning').textContent).toContain(
+			'without a password'
+		);
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		expect(within(form).getByText("Add the proxy's address first.")).toBeTruthy();
+		expect(screen.queryByRole('dialog')).toBeNull();
+
+		await fireEvent.input(within(form).getByLabelText(/Trusted proxies/), {
+			target: { value: ' 172.20.0.2 \n\n' }
+		});
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		let { dialog, input } = await passwordDialog('Turn on trusted proxy sign-in?');
+		expect(dialog.textContent).toContain(
+			'Anything at 172.20.0.2 will be able to sign in as any allowed user, without a password.'
+		);
+		await fireEvent.click(within(dialog).getByTestId('password-dialog-cancel'));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(writes()).toEqual([]);
+
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		({ dialog, input } = await passwordDialog('Turn on trusted proxy sign-in?'));
+		await confirm(dialog, input, 'right-password');
+		await until(() =>
+			expect(screen.getByTestId('security-proxy-result').textContent).toContain('Saved.')
+		);
+		expect(writes()).toEqual([
+			{
+				method: 'PUT',
+				path: '/auth/proxy',
+				body: {
+					enabled: true,
+					trusted: ['172.20.0.2'],
+					header: 'Remote-User',
+					allowed_users: [],
+					password: 'right-password'
+				}
+			}
+		]);
+		expect(within(form).queryByTestId('security-proxy-warning')).toBeNull();
+	});
+
+	it('a new trusted address while on warns as well', async () => {
+		replies['GET /auth/proxy'] = () => ({
+			status: 200,
+			body: PROXY({ enabled: true, trusted: ['172.20.0.2/32'] })
+		});
+		const { form } = await proxySection();
+		const area = within(form).getByLabelText(/Trusted proxies/);
+		await fireEvent.input(area, { target: { value: '172.20.0.2/32' } });
+		expect(within(form).queryByTestId('security-proxy-warning')).toBeNull();
+		await fireEvent.input(area, { target: { value: '172.20.0.2/32\n10.0.0.0/8' } });
+		expect(within(form).getByTestId('security-proxy-warning')).toBeTruthy();
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		await passwordDialog('Let more people sign in through the proxy?');
+	});
+
+	it('turning it off is a plain save, with no warning', async () => {
+		replies['GET /auth/proxy'] = () => ({
+			status: 200,
+			body: PROXY({ enabled: true, trusted: ['172.20.0.2/32'] })
+		});
+		const { form, toggle } = await proxySection();
+		await fireEvent.click(toggle);
+		expect(within(form).queryByTestId('security-proxy-warning')).toBeNull();
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		const { dialog, input } = await passwordDialog('Save trusted proxy sign-in?');
+		expect(dialog.textContent).not.toContain('without a password');
+		await confirm(dialog, input, 'right-password');
+		await until(() =>
+			expect(screen.getByTestId('security-proxy-result').textContent).toContain('Saved.')
+		);
+		expect((writes()[0]!.body as { enabled: boolean }).enabled).toBe(false);
+	});
+
+	it('a new user header while on warns', async () => {
+		replies['GET /auth/proxy'] = () => ({
+			status: 200,
+			body: PROXY({ enabled: true, trusted: ['172.20.0.2/32'] })
+		});
+		const { form } = await proxySection();
+		await fireEvent.input(within(form).getByLabelText(/User header/), {
+			target: { value: 'X-Forwarded-User' }
+		});
+		expect(within(form).getByTestId('security-proxy-warning')).toBeTruthy();
+	});
+
+	it('a refused value closes the dialog and shows at its field', async () => {
+		replies['PUT /auth/proxy'] = () =>
+			err(400, 'invalid', 'A /0 range would trust everyone.', 'trusted');
+		const { form, toggle } = await proxySection();
+		await fireEvent.click(toggle);
+		await fireEvent.input(within(form).getByLabelText(/Trusted proxies/), {
+			target: { value: '0.0.0.0/0' }
+		});
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		const { dialog, input } = await passwordDialog('Turn on trusted proxy sign-in?');
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(within(form).getByText('A /0 range would trust everyone.')).toBeTruthy();
+		expect(document.activeElement).toBe(within(form).getByLabelText(/Trusted proxies/));
+	});
+
+	it('leaving with a change asks once, naming every part with something typed', async () => {
+		const { form } = await proxySection();
+		await fireEvent.input(within(form).getByLabelText(/Allowed users/), {
+			target: { value: 'alice' }
+		});
+		await fireEvent.input(screen.getByLabelText(/Current password/), {
+			target: { value: 'half-typed' }
+		});
+		const cancel = vi.fn();
+		for (const g of nav.guards)
+			g({
+				type: 'link',
+				from: { url: new URL(`${location.origin}/settings/security`) },
+				to: { url: new URL(`${location.origin}/settings/general`) },
+				cancel
+			});
+		const dialog = await screen.findByRole(
+			'dialog',
+			{ name: 'Leave without saving?' },
+			{ timeout: 10_000 }
+		);
+		expect(screen.getAllByRole('dialog')).toHaveLength(1);
+		expect(dialog.textContent).toContain('What you typed in Change password will be cleared.');
+		expect(dialog.textContent).toContain(
+			'What you typed in Trusted proxy sign-in will be cleared.'
+		);
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+		await until(() => expect(nav.goto).toHaveBeenCalled());
+		expect(within(form).getByLabelText(/Allowed users/)).toHaveProperty('value', '');
 	});
 });
