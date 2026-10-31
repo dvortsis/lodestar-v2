@@ -9,10 +9,10 @@
 //! index of hidden items).
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
-//! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1; §20.5.5), as it
-//! does in the core and your rules. The words of a name or file the
-//! rules count are read with the neutralized ones blanked, positions
-//! kept ([`Ctx::evidence`]). The guards that keep a rule from matching
+//! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1) and in LU-1's
+//! lure notes (§20.5.5), as it does in the core and your rules. The
+//! words of a name or file the rules count are read with the neutralized
+//! ones blanked, positions kept ([`Ctx::evidence`], [`Ctx::live_lure`]). The guards that keep a rule from matching
 //! (FK-2's `trailer`/`sample`, SC-1's `trainer`/`mod`/`offline`) read the
 //! torrent as it is, as `unless` does, so neutralizing never widens a
 //! rule.
@@ -314,6 +314,57 @@ impl<'a> Ctx<'a> {
         self.evidence(words(f.name()))
     }
 
+    /// Whether a lure note still counts for LU-1. With nothing
+    /// neutralized, the classifier's `lure-file` reason is the evidence as
+    /// it is. Otherwise some lure text a file holds
+    /// ([`lodestar_classify::lure_hits`]) must have no neutralized word
+    /// over it: a phrase (`click here`) is broken where a neutralized word
+    /// stands, as in [`Ctx::evidence`]. Words are whole, so a lure inside
+    /// a joined word (`MyPassword`) is broken only by neutralizing that
+    /// whole word, never by `password`. Every file is read, not only the
+    /// first [`crate::MAX_FILES`], because the classifier reads them all.
+    fn live_lure(&self) -> bool {
+        if self.neutral.is_empty() {
+            return true;
+        }
+        self.item.files.iter().any(|f| {
+            let mut hits = lodestar_classify::lure_hits(f).peekable();
+            if hits.peek().is_none() {
+                return false;
+            }
+            let name = f.name();
+            let low = name.to_ascii_lowercase();
+            let blanked = self.neutral_spans(name);
+            // No lure overlaps itself, so non-overlapping finds see them all.
+            hits.any(|l| {
+                low.match_indices(l).any(|(at, _)| {
+                    let end = at + l.len();
+                    !blanked.iter().any(|&(s, e)| s < end && at < e)
+                })
+            })
+        })
+    }
+
+    /// The byte spans of a text's neutralized words, each a whole run of
+    /// letters and digits as [`words`] reads them. Unlike
+    /// [`Ctx::evidence`], any word is checked, since a lure can sit inside
+    /// a word like `password1`; it's blanked only when that whole word is
+    /// neutralized.
+    fn neutral_spans(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut start = None;
+        for (i, c) in text.char_indices().chain([(text.len(), ' ')]) {
+            if c.is_alphanumeric() {
+                start.get_or_insert(i);
+            } else if let Some(s) = start.take()
+                && neutral_token(&text[s..i].to_lowercase(), self.neutral)
+            {
+                spans.push((s, i));
+            }
+        }
+        spans
+    }
+
     fn with_ext<'s>(&'s self, set: &'s [&str]) -> impl Iterator<Item = &'s FileInfo> + 's {
         self.files
             .iter()
@@ -346,7 +397,9 @@ impl<'a> Ctx<'a> {
             }
             Mw4 => junk(JunkReason::TinyVideo) && self.with_ext(EXECUTABLE).next().is_some(),
             Mw5 => !software && self.with_ext(&["scr", "pif"]).next().is_some(),
-            Lu1 => junk(JunkReason::LureFile) && junk(JunkReason::ArchiveForMedia),
+            Lu1 => {
+                junk(JunkReason::LureFile) && junk(JunkReason::ArchiveForMedia) && self.live_lure()
+            }
             Lu2 => {
                 let real_media = pct(Category::Video) > 0 || pct(Category::Audio) > 0;
                 !real_media
@@ -792,6 +845,49 @@ mod tests {
         assert!(!hit("Movie 2019 1080p", &gap).contains(&"LU-2"));
     }
 
+    /// LU-1 reads the classifier's lure notes, with a neutralized word
+    /// broken where it stands, as the keyword rules do.
+    #[test]
+    fn lure_notes_honour_neutralize() {
+        let archive = ("Movie.2019.1080p.rar", 4u64 << 30);
+        let lu1 = |notes: &[(&str, u64)], neutral: &[&str]| {
+            let mut paths = vec![archive];
+            paths.extend_from_slice(notes);
+            hit_with("Movie 2019 1080p", &paths, neutral).contains(&"LU-1")
+        };
+        let password = ("PASSWORD.txt", 90);
+        let click = ("Click here.url", 90);
+        assert!(lu1(&[password], &[]));
+        // The sole lure word, neutralized, is no evidence.
+        assert!(!lu1(&[password], &["password"]));
+        // Another lure note still counts.
+        assert!(lu1(&[password, click], &["password"]));
+        // A phrase is broken by either of its words, and only by its words.
+        assert!(!lu1(&[click], &["click"]));
+        assert!(!lu1(&[click], &["HERE"]));
+        assert!(lu1(&[click], &["clicks"]));
+        assert!(lu1(&[("Click here, or click here now.url", 90)], &["now"]));
+        // Words are whole: `pass` isn't `password`, and a lure inside a
+        // joined word stays evidence until that whole word is neutralized.
+        assert!(lu1(&[password], &["pass"]));
+        let joined = ("MyPassword.txt", 90);
+        assert!(lu1(&[joined], &[]));
+        assert!(lu1(&[joined], &["password"]));
+        assert!(!lu1(&[joined], &["MyPassword"]));
+        // The note's size is the classifier's: a large file is no note.
+        assert!(!lu1(&[("password.txt", 64 * 1024)], &[]));
+        // An archive standing in for media is still needed.
+        let movie = [("Movie.2019.1080p.mkv", 4u64 << 30), password];
+        assert!(!hit_with("Movie 2019 1080p", &movie, &[]).contains(&"LU-1"));
+        assert!(!hit_with("Movie 2019 1080p", &movie, &["password"]).contains(&"LU-1"));
+        // A lure past the files the other rules read still counts.
+        let mut many: Vec<(&str, u64)> = vec![("filler.rar", 1); crate::MAX_FILES];
+        many.push(password);
+        many.push(click);
+        assert!(lu1(&many, &["password"]));
+        assert!(!lu1(&many, &["password", "click"]));
+    }
+
     /// Guards read the torrent as it is: neutralizing a guard word never
     /// makes a rule match.
     #[test]
@@ -848,6 +944,11 @@ mod tests {
             "offline",
             "sample",
             "trailer",
+            "click",
+            "here",
+            "www",
+            "passwd",
+            "MyPassword",
             "exe",
             "txt",
             "CodecSetup",
@@ -873,6 +974,33 @@ mod tests {
             &["free", "robux"],
             &["Free", "Robux", "offline"],
         ];
+
+        /// Words of lure notes, and words beside them.
+        const LURE_VOCAB: &[&str] = &[
+            "password",
+            "PASSWD",
+            "click",
+            "here",
+            "visit",
+            "www",
+            "how",
+            "to",
+            "open",
+            "MyPassword",
+            "movie",
+        ];
+
+        /// Whether to add an archive for the media and lure notes, the
+        /// notes, and lure words to neutralize.
+        #[allow(clippy::type_complexity)]
+        fn lure_case() -> impl Strategy<Value = (bool, Vec<Vec<&'static str>>, Vec<&'static str>)> {
+            let words = || prop::collection::vec(prop::sample::select(LURE_VOCAB), 1..4);
+            (
+                any::<bool>(),
+                prop::collection::vec(words(), 1..3),
+                prop::sample::subsequence(LURE_VOCAB.to_vec(), 2..6),
+            )
+        }
 
         fn text(n: std::ops::Range<usize>) -> impl Strategy<Value = Vec<&'static str>> {
             prop::collection::vec(prop::sample::select(VOCAB), n)
@@ -902,7 +1030,8 @@ mod tests {
             /// torrent with those words replaced by a word no rule reads
             /// (positions kept, the classification left as it was), and
             /// as it is, for guards: a rule matches with neutralizing
-            /// exactly when it matches both ways.
+            /// exactly when it matches both ways. SP-1 and SP-2 read no
+            /// keywords, so they match as they do on the torrent as it is.
             #[test]
             fn neutralizing_removes_only_sole_evidence(
                 lead in prop::sample::select(LEADS),
@@ -912,8 +1041,21 @@ mod tests {
                     1..5,
                 ),
                 neutral in prop::sample::subsequence(VOCAB.to_vec(), 0..5),
+                lure in lure_case(),
             ) {
-                let name: Vec<&str> = lead.iter().copied().chain(rest).collect();
+                // LU-1 needs an HD name, an archive standing in for the
+                // media and a small lure note, which random files rarely
+                // give together: half the cases carry them.
+                let (afm, notes, lure_neutral) = lure;
+                let mut name: Vec<&str> = lead.iter().copied().chain(rest).collect();
+                let mut files = files;
+                let mut neutral = neutral;
+                if afm {
+                    name.splice(0..0, ["movie", "1080p"]);
+                    files.insert(0, (vec!["movie", "1080p"], "rar", 4 << 30));
+                    files.extend(notes.into_iter().map(|w| (w, "txt", 90)));
+                    neutral.extend(lure_neutral);
+                }
                 let keys = super::keys(&neutral);
                 let path = |(w, e, s): &(Vec<&str>, &str, u64), m: &[String]| {
                     (format!("{}.{e}", joined(w, " ", m)), *s)
@@ -927,8 +1069,17 @@ mod tests {
                 let class_of = (name_as_is.as_str(), &f[..]);
                 let neutralized = hit_as(class_of, &name_as_is, &f, &neutral);
                 let as_is = hit_as(class_of, &name_as_is, &f, &[]);
-                let masked = hit_as(class_of, &name_masked, &m, &[]);
-                let both: Vec<_> = as_is.iter().copied().filter(|r| masked.contains(r)).collect();
+                // A neutral word no torrent holds: LU-1 then reads the
+                // masked notes instead of the classifier's reason, which
+                // is of the torrent as it is.
+                let masked = hit_as(class_of, &name_masked, &m, &["zzzz"]);
+                // SP-1 and SP-2 read the name as it is by design (no
+                // keywords), so they're expected as they are.
+                let both: Vec<_> = as_is
+                    .iter()
+                    .copied()
+                    .filter(|r| masked.contains(r) || ["SP-1", "SP-2"].contains(r))
+                    .collect();
                 prop_assert_eq!(&neutralized, &both);
             }
         }
