@@ -668,28 +668,31 @@ fn state_of(
     }
 }
 
-/// Torrents made searchable per hour over the last [`GROWTH_HOURS`]
-/// whole UTC hours: every `NEWLY_SEARCHABLE` row in them, as Insights'
-/// trend counts them, over the time the index was measured (`COVERAGE`
-/// seconds on its index dim, at most an hour per hour), and that time in
-/// hours. Nothing measured is `None`, not 0.
+/// Torrents the crawl made searchable per hour over the last
+/// [`GROWTH_HOURS`] whole UTC hours, as Insights' Index trend counts them:
+/// `NEWLY_SEARCHABLE` rows with key 0 (imports, key 1, are left out, so
+/// a bitmagnet import isn't growth) in hours the index was measured
+/// (`COVERAGE` seconds on its index dim), over that measured time; and
+/// the time in hours. Nothing measured is `None`, not 0.
 fn growth(store: &Store, now: i64) -> lodestar_store::Result<(Option<f64>, f64)> {
     let to = now.div_euclid(3600);
     let from = to - GROWTH_HOURS;
     store.read_snapshot(|st| {
-        let measured: i64 = st
-            .rollup_sums(metric::COVERAGE, from, to, RollupBy::HourDim)?
-            .iter()
-            .filter(|c| c.dim == metric::COVERAGE_INDEX)
-            .map(|c| c.value.clamp(0, 3600))
-            .sum();
+        let mut measured = std::collections::BTreeMap::new();
+        for c in st.rollup_sums(metric::COVERAGE, from, to, RollupBy::HourDim)? {
+            if c.dim == metric::COVERAGE_INDEX && c.value > 0 {
+                *measured.entry(c.hour).or_insert(0) += c.value;
+            }
+        }
         let newly: i64 = st
-            .rollup_sums(metric::NEWLY_SEARCHABLE, from, to, RollupBy::Total)?
+            .rollup_sums(metric::NEWLY_SEARCHABLE, from, to, RollupBy::HourKey)?
             .iter()
+            .filter(|c| c.key == 0 && measured.contains_key(&c.hour))
             .map(|c| c.value)
             .sum();
-        let hours = measured as f64 / 3600.0;
-        Ok(((measured > 0).then(|| newly as f64 / hours), hours))
+        let seconds: i64 = measured.values().map(|v: &i64| (*v).min(3600)).sum();
+        let hours = seconds as f64 / 3600.0;
+        Ok(((seconds > 0).then(|| newly as f64 / hours), hours))
     })
 }
 

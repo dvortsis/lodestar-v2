@@ -312,6 +312,11 @@ async fn index_state_reads_size_growth_and_cold_start() {
         key: 0,
         value,
     };
+    // An import (key 1) in a measured hour isn't growth.
+    let import = Counter {
+        key: 1,
+        ..counter(10, hour - 1, 4, 100_000)
+    };
     f.store
         .add_counters(&[
             counter(12, hour - 2, 0, 3600),
@@ -320,6 +325,9 @@ async fn index_state_reads_size_growth_and_cold_start() {
             counter(12, hour - 3, 1, 3600),
             counter(10, hour - 1, 4, 30),
             counter(10, hour - 2, 2, 15),
+            import,
+            // Made searchable while the index wasn't measured.
+            counter(10, hour - 5, 2, 700),
             // Older than 24 hours.
             counter(12, hour - 30, 0, 3600),
             counter(10, hour - 30, 2, 500),

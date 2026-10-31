@@ -170,9 +170,19 @@ mod tests {
 
     #[test]
     fn a_clause_index_removes_that_clause() {
-        let ast = parse("rare common size:>1500 -half").unwrap();
+        let ast =
+            parse(r#"rare common size:>1500 -half "big movie" alpha NEAR beta (x OR y)"#).unwrap();
+        let kinds: Vec<_> = top_level(&ast).iter().map(std::mem::discriminant).collect();
+        assert_eq!(kinds.len(), 7);
+        let phrase = parse(r#""big movie""#).unwrap();
+        let near = parse("alpha NEAR beta").unwrap();
+        let or = parse("x OR y").unwrap();
+        assert!(matches!(phrase, Node::Phrase { .. }));
+        assert!(matches!(near, Node::Near { .. }));
+        assert!(matches!(or, Node::Or { .. }));
+        assert_eq!(&top_level(&ast)[4..], [phrase, near, or]);
         let got = removals(&ast);
-        assert_eq!(got.len(), 4);
+        assert_eq!(got.len(), 7);
         for (i, without) in &got {
             let mut want = top_level(&ast).to_vec();
             want.remove(*i);
