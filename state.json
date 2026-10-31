@@ -1662,13 +1662,13 @@
    "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b)"
   },
   "X-search-files-perf": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnAfGbQDVWK7mHPhRoz",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1)"
+   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
