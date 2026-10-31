@@ -34,11 +34,30 @@ test('print media: the chrome is gone and the footer shows the URL and time', as
 	await expect(page.locator('#insights-exceptions')).toBeVisible();
 	await expect(page.locator('#insights-funnel')).toBeVisible();
 	await expect(page.locator('#insights-movement')).toBeVisible();
+	for (const id of ['status', 'exceptions', 'movement']) {
+		await expect(page.locator(`#insights-${id} .ins-sub`)).toBeVisible();
+	}
 	await expect(page.getByRole('button').filter({ visible: true })).toHaveCount(0);
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'riverstone-light');
 	await page.emulateMedia({ media: 'screen' });
 	await expect(page.getByTestId('insights-print-footer')).toBeHidden();
 });
+
+for (const width of [800, 1024, 1920]) {
+	test(`print: one page on A4 and Letter at ${width} px`, async ({ page, mock, go }) => {
+		await page.setViewportSize({ width, height: 900 });
+		mock.on('getInsightsOverview', overviewFixture());
+		mock.on('getCrawler', crawlerFixture());
+		await go('/insights');
+		await expect(page.getByTestId('insights-print-footer')).toBeAttached();
+		await expect(page.getByTestId('insights-line-new')).toBeVisible();
+		for (const format of ['A4', 'Letter'] as const) {
+			const pdf = await page.pdf({ format });
+			const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+			expect(pages, format).toBe(1);
+		}
+	});
+}
 
 type Index = components['schemas']['SettingsIndex'];
 type Values = components['schemas']['SectionValues'];

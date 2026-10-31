@@ -38,7 +38,7 @@
 		padding: 0;
 		gap: calc(var(--spacing) * 3);
 		/* Fits the report on one A4 or Letter page at default margins. */
-		zoom: 0.8;
+		zoom: 0.65;
 		padding-bottom: calc(var(--spacing) * 8);
 	}
 
@@ -70,7 +70,18 @@
 	.ins-card {
 		box-shadow: none;
 	}
-	.ins-sub {
-		display: none;
+	/* The charts shrink to the sheet's width, keeping their shape: uPlot keeps its screen pixel
+	   width in print, and a stretched canvas would blur its text. */
+	.ins-page .uplot,
+	.ins-page .u-wrap {
+		max-width: 100% !important;
+	}
+	.ins-page .uplot canvas {
+		max-width: 100% !important;
+		height: auto !important;
+	}
+	/* Its legend prints as "Time: — Newly searchable: —". */
+	.ins-page .u-legend {
+		display: none !important;
 	}
 }
