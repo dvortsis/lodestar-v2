@@ -1968,7 +1968,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-10-31T03:40Z",
+ "last_heartbeat": "2026-10-31T06:40Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
@@ -2288,6 +2288,18 @@
    "action": "Alerts route size limit 45.8 -> 45.9 KB? #256 S-search-6 leaves it 3 B over (45,803 B) after a chunk-split fix",
    "unblocks": "#256 merge",
    "status": "decided 2026-10-31 by runner under \u00a72.26 (#260): 45.9 KB; #256 sets it"
+  },
+  {
+   "item": "FYI (\u00a72.19/\u00a72.26) #262 IMP-5 (merged): Insights 'New searchable' and its trend are now crawled only (imports shown separately as '+ N imported'); this reverses docs/metrics.md's 'imports included' for kpi.new_searchable, as the brief asked. Rollup overhead p95 +3.0% (budget 5%).",
+   "status": "to-send"
+  },
+  {
+   "item": "FYI (\u00a72.26) #264 M-settings-engine-2 (merged): a user's own edit back to the automatic value can still turn Automatic on (old behaviour); Automatic no longer re-arms mid-edit, it waits for the field to lose focus. Settings section first view 42.3 KB of the 45 KB owner budget, no limit raised.",
+   "status": "to-send"
+  },
+  {
+   "item": "FYI (\u00a72.26) #256 (merged): Alert route size limit 45.8 -> 45.9 KB (CI measured 45.83 KB), docs/decisions/2026-10-31-owner-delegation.md.",
+   "status": "to-send"
   }
  ],
  "external_gates": {
