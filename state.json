@@ -1813,13 +1813,14 @@
       "reviewer": "session_01MMjhnA5HC3rJjGGgq1dCrL"
     },
     "X-form-remount": {
-      "status": "building",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhnA1v32xTxqD5BgaaKR",
-      "pr": null,
+      "pr": 295,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot)."
+      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot). | 21:03Z PR #295 head 2603d447. Author: engine never sets loading on resync (premise wrong); body kept mounted anyway. Reviewer told to find real remount cause and prove spec fails on main. Subscribed.",
+      "reviewer": "session_01MMjhn9dGmekFXHRR8v4YnR"
     },
     "X-build-stable-name": {
       "status": "building",
