@@ -233,7 +233,7 @@ async fn a_duplicate_is_rejected_and_bulk_adds_one_at_a_time() {
             .add_magnet(&magnet(), &AddOptions::default())
             .await
             .unwrap_err(),
-        ClientError::Rejected("the torrent is already in the client".into())
+        ClientError::AlreadyThere
     );
     server.finish();
 
@@ -268,7 +268,7 @@ async fn a_duplicate_is_rejected_and_bulk_adds_one_at_a_time() {
         client(&server)
             .add_magnets(&[magnet(), other], &AddOptions::default())
             .await,
-        Err(ClientError::Rejected(_))
+        Err(ClientError::AlreadyThere)
     ));
     server.finish();
 }

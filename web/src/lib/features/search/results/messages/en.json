@@ -26,8 +26,6 @@
 	"search_results_adult_hidden": "Adult content is hidden",
 	"search_results_adult_hidden_body": "Turn on \"Show adult content\" in Appearance to see adult torrents.",
 	"search_results_adult_settings": "Appearance settings",
-	"search_results_rebuilding": "The index is being rebuilt: {done} of {total} torrents. Search uses the current index until it's done.",
-	"search_results_cold_start": "The index is still growing: {count} torrents so far. Older content appears over time.",
 	"search_results_empty_title": "Search {count} torrents",
 	"search_results_empty_title_unknown": "Search torrents",
 	"search_results_empty_lead": "Type words, or try one of these:",

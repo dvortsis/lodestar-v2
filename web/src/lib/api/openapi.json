@@ -4729,6 +4729,217 @@
         ]
       }
     },
+    "/search/live": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Registers a live query: the count of new matches for `q` (or `ast`)\narrives as `search_live` events on `/events`, to this session only.",
+        "description": "The query is validated and bounded as `/search` bounds it, and runs\nwith the same visibility: torrents a filter rule hid unless `hidden`,\nand no Adult while \"Show adult content\" is off. Changing that setting\nreleases every live query: register again. A session holds at most 4\n(a fifth replaces the oldest); one is released 30 s after the\nsession's last `/events` connection closes (a reconnect keeps it),\nafter 60 s if no connection opens, on a `content` settings save,\nor with `DELETE /search/live/{id}`. Register again after a `settings`\nevent for `content`, or when a `search_live` id you hold is no longer\nknown (a 404 on `DELETE`). Swarm clauses (`seeders:`…) match nothing\nat index time, so a query with one counts only what it can see then.\nWhere the percolator doesn't run (fixture mode), nothing is counted.\nAny `/events` connection of the session keeps its registrations, whatever\nits `topics`.",
+        "operationId": "registerSearchLive",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchLiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchLiveRegistration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `bad_tz`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`not_json`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many live queries are registered (`too_many_live_queries`).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Search is off (`search_disabled`), or live updates aren't served (`events_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/search/live/{id}": {
+      "delete": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Releases one of this session's live queries.",
+        "operationId": "releaseSearchLive",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The registration's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`live_query_not_found`: none by that id for this session (it may have been released already).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`not_json`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Live updates aren't served (`events_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/search/state": {
       "get": {
         "tags": [
@@ -4743,6 +4954,85 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchIndexState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/send": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Sends torrents to a saved download client (the default one unless\n`client` names another), with its saved category, save path and\npaused setting. Each hash gets a result; hidden ones are refused, never\nsent.",
+        "operationId": "sendToClient",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientSend"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The send ran; each hash has its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientSendResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`no_client`: no download client is saved, or none with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_hashes`: none, more than 100, or one isn't an info hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sends_busy` or `send_rate_limited`: try again shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -8569,6 +8859,92 @@
           }
         }
       },
+      "ClientSend": {
+        "type": "object",
+        "description": "`POST /send`: torrents to add to a saved download client.",
+        "required": [
+          "hashes"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The saved client's id; without it, the default client."
+          },
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1 to 100 info hashes (40 hex characters)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClientSendItem": {
+        "type": "object",
+        "description": "One torrent's result.",
+        "required": [
+          "code",
+          "hash",
+          "message",
+          "outcome"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When refused: `not_found` (unknown, or withheld from you, which\nlook the same: hidden by a filter, or Adult while it's hidden),\n`private`, `same_torrent` or `invalid`. When failed: the connection\ntest's codes, or `timeout_unknown` (some may have gone in). Null\notherwise."
+          },
+          "hash": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A sentence for people; never the client's address or a credential."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "What happened to one torrent of a send.",
+            "enum": [
+              "sent",
+              "duplicate",
+              "refused",
+              "failed"
+            ]
+          }
+        }
+      },
+      "ClientSendResult": {
+        "type": "object",
+        "description": "`POST /send`: the result per torrent, in the order asked.",
+        "required": [
+          "client",
+          "results",
+          "sent"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The client's id."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientSendItem"
+            }
+          },
+          "sent": {
+            "type": "integer",
+            "description": "How many went in (sent or already there).",
+            "minimum": 0
+          }
+        }
+      },
       "CollectionCreate": {
         "type": "object",
         "description": "`POST /collections`.",
@@ -10290,6 +10666,24 @@
                 "type": "string",
                 "enum": [
                   "updates"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/SearchLiveEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "search_live"
                 ]
               }
             }
@@ -15947,6 +16341,105 @@
           "updated_at": 1792681200
         }
       },
+      "SearchLiveEvent": {
+        "type": "object",
+        "description": "`event: search_live`: one of your live queries (`POST /search/live`)\nhas new matches. `matched` counts every match since it was made, so\na missed event loses nothing. Each connection gets at most one per\nlive query every 5 s; counts in between are combined. Sent only to\nthe session that made it, never replayed (it has no `id:`), and only\ntorrents search would show count: none a filter rule hid (unless the\nquery asked for them) and no Adult while \"Show adult content\" is off.",
+        "required": [
+          "id",
+          "matched",
+          "through"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The registration's id."
+          },
+          "matched": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matches since the registration was made; at least 1.",
+            "minimum": 0
+          },
+          "through": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The highest torrent id checked so far. **Null while Adult is\nhidden** (see `SearchLiveRegistration.since`)."
+          }
+        },
+        "example": {
+          "id": "4f1c9a0b7d2e8a61",
+          "matched": 3,
+          "through": 48250
+        }
+      },
+      "SearchLiveRegistration": {
+        "type": "object",
+        "description": "A live query's registration: listen for `search_live` events with\nits `id` on `/events?topics=search_live` (or every topic).",
+        "required": [
+          "id",
+          "since"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Names it in `search_live` events and in `DELETE /search/live/{id}`."
+          },
+          "since": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The highest torrent id searchable when it was made: matches are\ncounted after it. **Null while Adult is hidden**, as `torrents`'\n`max_id` is: a real id would show, in its gap from a later one,\nhow many hidden torrents arrived."
+          }
+        },
+        "example": {
+          "id": "4f1c9a0b7d2e8a61",
+          "since": 48211
+        }
+      },
+      "SearchLiveRequest": {
+        "type": "object",
+        "description": "`POST /search/live`: the query whose new matches to count, as `/search`\ntakes it.",
+        "properties": {
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode",
+                "description": "A query AST, as `/parse` returns it; it must be one the parser\ncould produce."
+              }
+            ]
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Include torrents a filter rule hid (§20.3), as `/search` does."
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The query text. Send `q` or `ast`, not both."
+          },
+          "tz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840);\n0 by default."
+          }
+        }
+      },
       "SearchNotice": {
         "type": "string",
         "description": "A note on what a search left out.",
@@ -18522,7 +19015,8 @@
           "alerts",
           "insights",
           "settings",
-          "updates"
+          "updates",
+          "search_live"
         ]
       },
       "TorrentDetail": {

@@ -45,6 +45,7 @@ pub mod ops;
 mod request_log;
 mod saved;
 mod search;
+pub mod search_live;
 pub mod settings;
 mod suggest;
 mod swarm;

@@ -17,6 +17,7 @@ Closes the gap `2026-10-31-IMP-5.md` recorded: the start-time refetch of incompl
 - **A refetch is never `origin="network"`.** One already stored, the normal case, was and stays `already_stored`. One that stores a new row, because the imported row was deleted while the fetch was in flight (a filter relabel or retention; `lodestar import` removes only with the server stopped), now counts under `origin="recovery"`, the label `docs/metrics.md` reserved, which this slice renders (`gate::Origin::Recovery`; `crates/lodestar/src/metrics.rs` renders every origin in `ORIGINS`, so it needed no change).
 - **`discovery_to_searchable_seconds` is the network's only,** so a recovered row's wait never reads as crawl latency.
 - **Such a row is stored with `IMPORTED`:** the writer sets the flag on every refetch's row (an existing one already has it), so a recovered row stays out of cohort Searchable, yield, `NEWLY_SEARCHABLE` key 0 and `rollup --repair`'s cohort Stored, as the import it was.
+- **A recovered row has no import-job provenance:** the Imports screen's counts by job won't include it; only `insights_state.imported` does (X-polish-1031).
 - **This narrows `recovery`,** which `2026-10-30-CR-gate-metrics.md` and IMP-5 reserved, unrendered, for wider background metadata recovery. It's rendered now, and supersedes their "`origin` has one value". A later recovery source can count under the same label. The runner flags this refinement to the owner (`docs/owner-decisions.md` §2.19).
 
 ## No refetch counter of its own

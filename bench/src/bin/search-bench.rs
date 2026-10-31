@@ -21,6 +21,13 @@
 //! query `/search` runs (hidden and Adult torrents left out), gated at
 //! [`SUGGEST_P95`], after building the title FST and reporting its size.
 //!
+//! A fifth runs each class with a word nothing matches appended, so it
+//! returns nothing, and times the zero-result recovery pass `/search`
+//! then runs (decision B-search-recovery): a count of the query without
+//! each of its top-level clauses, under the default visibility, sharing
+//! one deadline. Gated at that deadline, [`RECOVERY_P95`]; a pass the
+//! deadline cut short took at least that long, so it counts against it.
+//!
 //! Last, it times new torrent → searchable (§3) through the live indexer
 //! at its production settings, gated at [`NRT_MAX`]. The unit tests only
 //! check that the indexer follows the store: a wall-clock budget there
@@ -35,6 +42,7 @@ use std::time::{Duration, Instant};
 use lodestar_bench::synth::{self, Generator};
 use lodestar_metainfo::Info;
 use lodestar_search::query::TagKey;
+use lodestar_search::recovery;
 use lodestar_search::suggest::{self, Shown};
 use lodestar_search::{
     CancelToken, FacetParams, Lease, LiveConfig, LiveIndexer, Node, SearchIndex, Sort, Start,
@@ -53,6 +61,15 @@ const BROWSE_P95: Duration = Duration::from_millis(50);
 const FACETS_P95: Duration = Duration::from_millis(100);
 /// §3: typeahead / suggest, p95.
 const SUGGEST_P95: Duration = Duration::from_millis(15);
+/// The zero-result recovery pass's shared deadline, p95 (decision
+/// B-search-recovery: a search with no results takes at most this much
+/// more).
+const RECOVERY_P95: Duration = recovery::RECOVERY_BUDGET;
+/// Recovery passes timed per class, at most.
+const RECOVERY_QUERIES: usize = 100;
+/// Matches nothing in the synthetic corpus (its words are drawn from the
+/// generator's vocabulary).
+const NO_MATCH: &str = "zzqxjnomatch";
 /// The deep-cursor class reads this many pages of 50 before timing one.
 const DEEP_PAGES: usize = 20;
 /// The estimate samples a sixteenth of the documents, so its relative
@@ -599,6 +616,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         }
     }
     ok &= api_path(a, &index, &reader, now)?;
+    ok &= recovery_path(a, &index, now)?;
     ok &= facets_path(a, &index, now)?;
     ok &= suggest_path(a, &index, &reader, now)?;
     ok &= nrt(a, &index, &db)?;
@@ -763,6 +781,85 @@ fn api_path(
         if pass { "PASS" } else { "FAIL" }
     );
     Ok(ok && pass)
+}
+
+/// Zero-result recovery as `/search` runs it: each class's queries with
+/// [`NO_MATCH`] appended, a lease that finds nothing (timed, reported),
+/// then the recovery pass on that lease (gated at [`RECOVERY_P95`]).
+/// Every query is restricted as the API's default visibility restricts
+/// it: filter-hidden torrents left out and Adult hidden.
+fn recovery_path(
+    a: &Args,
+    index: &SearchIndex,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let adult_hidden = [Node::Not {
+        of: Box::new(Node::Tag {
+            key: TagKey::Type,
+            any: vec!["adult".into()],
+        }),
+    }];
+    let shown = |n: Node| with_filters(n.without_hidden(), &adult_hidden);
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!("\n  zero results: each class with a word nothing matches, then the recovery pass");
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>8} {:>8}  target",
+        "class", "search95", "p50", "p95", "max", "cut"
+    );
+    let mut ok = true;
+    for class in classes(a.seed, a.queries.min(RECOVERY_QUERIES), a.hot)
+        .into_iter()
+        .filter(|c| a.only.as_deref().is_none_or(|o| c.name.contains(o)))
+    {
+        let mut searches = Vec::with_capacity(class.queries.len());
+        let mut times = Vec::with_capacity(class.queries.len());
+        let mut cut = 0usize;
+        for q in &class.queries {
+            if class.cold {
+                index.clear_cache();
+            }
+            let ast = parse(&format!("{q} {NO_MATCH}"))?;
+            let started = Instant::now();
+            let lease = Lease::new(index.clone(), &shown(ast.clone()), now, class.sort, &cancel)?;
+            searches.push(started.elapsed());
+            if lease.total().value != 0 {
+                return Err(format!("{q} {NO_MATCH}: matched {}", lease.total().value).into());
+            }
+            let removals = recovery::removals(&ast);
+            if removals.is_empty() {
+                continue;
+            }
+            let started = Instant::now();
+            let queries: Vec<Node> = removals.into_iter().map(|(_, w)| shown(w)).collect();
+            let totals = recovery::totals_on(&lease, &queries, &cancel, recovery::RECOVERY_BUDGET)?;
+            times.push(started.elapsed());
+            cut += usize::from(totals.iter().any(Option::is_none));
+        }
+        // A browse of everything has one clause with the word: nothing
+        // to remove, so nothing to time.
+        if times.is_empty() {
+            continue;
+        }
+        searches.sort();
+        times.sort();
+        let p95 = pct(&times, 0.95);
+        let pass = p95 <= RECOVERY_P95;
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>8} {:>8}  p95 < {} ms {}",
+            class.name,
+            ms(pct(&searches, 0.95)),
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("timed")),
+            cut,
+            RECOVERY_P95.as_millis(),
+            if pass { "PASS" } else { "FAIL" }
+        );
+    }
+    Ok(ok)
 }
 
 /// `/facets` as the API runs it: a lease for the query, then every term

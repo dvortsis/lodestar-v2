@@ -30,6 +30,7 @@
 	import { EXAMPLES } from '../query/examples';
 	import { ensureSearchPath } from '../query/path';
 	import { appearanceHref, searchHref } from './links';
+	import { bannerFor, type IndexState } from './recover';
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
 	import { selection } from '../bulk/selection.svelte';
@@ -40,13 +41,9 @@
 	}
 	let { focusBar }: Props = $props();
 
-	type Stats = components['schemas']['StatsResponse'];
-
 	/** §10.4 "First load": skeletons only after this long, so a quick answer never flashes them. */
 	const SKELETON_AFTER_MS = 300;
-	/** §10.4 "Cold start": below this many searchable torrents the index says it is still growing. */
-	const COLD_START_BELOW = 1_000_000;
-	/** How long the first rows wait for /stats (the cold-start line above them). */
+	/** How long the first rows wait for /search/state (the banner above them). */
 	const FIGURES_WAIT_MS = 1000;
 
 	const locale = $derived(currentLocale());
@@ -91,13 +88,9 @@
 	// A query in the URL that hasn't parsed yet (a pasted link): nothing at all, not the empty state,
 	// so the strip's line can arrive above without moving anything (§10.1). A parse error keeps this
 	// too; the bar explains it.
-	// The cold-start banner sits above the rows: they also wait for /stats (at most
+	// The index-state banner sits above the rows: they also wait for /search/state (at most
 	// FIGURES_WAIT_MS), so it never arrives after them and pushes them down.
 	let figuresKnown = $state(false);
-	const waiting = $derived(
-		(!!search.q && results.status === 'empty' && search.ast?.op !== 'all') ||
-			(results.status !== 'empty' && !figuresKnown)
-	);
 
 	// "Matched in N files": the server sends `matched_files` only for a query with a file clause, so
 	// the whole list takes the taller row (one fixed height per list, §10.1).
@@ -115,17 +108,56 @@
 		return () => clearTimeout(t);
 	});
 
-	let figures = $state.raw<Stats | null>(null);
+	// `/search/state`: fetched once per visit and again on a rebuild event (no polling).
+	let figures = $state.raw<IndexState | null>(null);
 	let saved = $state.raw<components['schemas']['SavedSearchView'][]>([]);
 	// The shell's stream already subscribes to `rebuild` (a second subscriber could reconnect the
 	// stream with another topic set): read its snapshot.
-	const rebuild = $derived(shellStatus.rebuild);
-	const rebuilding = $derived(
-		rebuild !== null && rebuild.phase !== 'done' && rebuild.phase !== 'failed'
+	const banner = $derived(bannerFor(figures, shellStatus.rebuild));
+	const fullCold = $derived(figures?.cold_start && results.status === 'empty');
+	const suggested = $derived(results.recovery?.clauses.some((c) => c.total));
+	// A failed chunk leaves No results as it was: the filters and Clear all, without the counts.
+	let recoverFailed = $state(false);
+	let Recover = $state<typeof import('./Recover.svelte').default>();
+	let Index = $state<typeof import('./IndexState.svelte').default>();
+	$effect(() => {
+		if (suggested && !Recover && !recoverFailed)
+			void import('./Recover.svelte').then(
+				(mod) => (Recover = mod.default),
+				() => (recoverFailed = true)
+			);
+		if ((banner || fullCold) && !Index) void ensureIndex();
+	});
+	/** The banner chunk; a failed load leaves the page without the banner, never without rows. */
+	const ensureIndex = () =>
+		import('./IndexState.svelte').then(
+			(mod) => (Index = mod.default),
+			() => {}
+		);
+	const waiting = $derived(
+		(!!search.q && results.status === 'empty' && search.ast?.op !== 'all') || !figuresKnown
 	);
-	const coldStart = $derived(
-		figures?.searchable_torrents != null && figures.searchable_torrents < COLD_START_BELOW
-	);
+
+	async function loadState() {
+		try {
+			figures = await api.get('/search/state');
+			// The rows wait for this (at most FIGURES_WAIT_MS), so the banner never pushes them down.
+			if (bannerFor(figures, shellStatus.rebuild) || figures.cold_start) await ensureIndex();
+		} catch {
+			// the page works without it
+		} finally {
+			figuresKnown = true;
+		}
+	}
+	// The shell's stream carries `rebuild`: a new phase changes the index, so read its state again.
+	// The phase at mount is not a change: onMount already fetches once per visit.
+	let seenPhase = shellStatus.rebuild?.phase;
+	$effect(() => {
+		const phase = shellStatus.rebuild?.phase;
+		if (phase === seenPhase) return;
+		seenPhase = phase;
+		void untrack(loadState);
+	});
 
 	/** Search's row actions: one lazy chunk, fetched with the first results. */
 	let Actions = $state<typeof import('./RowActions.svelte').default>();
@@ -154,16 +186,7 @@
 		// Headline figures and the cold-start line; saved searches for the empty state. Failures leave
 		// them out: the page works without them.
 		const giveUp = setTimeout(() => (figuresKnown = true), FIGURES_WAIT_MS);
-		void api
-			.get('/stats')
-			.then(
-				(s) => (figures = s),
-				() => {}
-			)
-			.finally(() => {
-				clearTimeout(giveUp);
-				figuresKnown = true;
-			});
+		void loadState().finally(() => clearTimeout(giveUp));
 		void api.get('/saved-searches').then(
 			(s) => (saved = s.slice(0, 5)),
 			() => {}
@@ -369,34 +392,23 @@
 
 	<p class="sr-only" aria-live="polite" data-testid="results-announce">{said}</p>
 
-	{#if rebuilding && rebuild}
-		<Banner kind="info" class="rp-banner">
-			<span data-testid="results-rebuilding"
-				>{m.search_results_rebuilding({
-					done: formatCount(rebuild.done, locale),
-					total: formatCount(rebuild.total, locale)
-				})}</span
-			>
-		</Banner>
-	{/if}
-	{#if coldStart && figures?.searchable_torrents != null && results.status !== 'empty'}
-		<Banner kind="info" class="rp-banner">
-			<span data-testid="results-cold-start"
-				>{m.search_results_cold_start({
-					count: formatCount(figures.searchable_torrents, locale)
-				})}</span
-			>
-		</Banner>
-	{/if}
+	{#if Index && (banner || fullCold)}<Index
+			{banner}
+			state={figures}
+			full={fullCold}
+			{focusBar}
+		/>{/if}
 
 	{#if ext.Live}<ext.Live bind:said list={nav} />{/if}
 
 	{#if waiting}
 		<!-- the parse is out: see `waiting` -->
+	{:else if fullCold && Index}
+		<!-- the cold-start page above stands in for the empty state -->
 	{:else if results.status === 'empty'}
 		<div class="rp-empty" data-testid="results-empty">
 			<p class="rp-empty-title" data-testid="results-empty-title">
-				{figures?.searchable_torrents != null
+				{figures
 					? m.search_results_empty_title({
 							count: formatCount(figures.searchable_torrents, locale)
 						})
@@ -468,10 +480,16 @@
 			</Banner>
 		{/if}
 		{#if results.hits.length === 0}
-			<div class="rp-none" data-testid="results-none">
+			<!-- the counts' chunk is on its way: the block waits for it, so the buttons never move -->
+			<div
+				class="rp-none"
+				data-testid="results-none"
+				hidden={suggested && !Recover && !recoverFailed}
+			>
 				<p class="rp-empty-title">{m.search_results_none()}</p>
+				{#if clauses.length}<p>{m.search_results_none_lead()}</p>{/if}
+				{#if Recover && (clauses.length || suggested)}<Recover recovery={results.recovery} />{/if}
 				{#if clauses.length}
-					<p>{m.search_results_none_lead()}</p>
 					<ul class="rp-examples" data-testid="results-none-clauses">
 						{#each clauses as clause, i (i)}
 							<li>

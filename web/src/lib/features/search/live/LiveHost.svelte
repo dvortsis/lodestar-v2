@@ -29,15 +29,16 @@
 	const locale = $derived(currentLocale());
 	const grid = () => document.querySelector<HTMLElement>('#results [role="grid"]');
 
+	const queryShown = (): ResultsQuery => ({
+		ast: search.q ? search.ast : search.browse ? { op: 'all' } : null,
+		sort: search.sort,
+		hidden: search.hidden,
+		exact: search.exact,
+		browse: search.browse
+	});
 	const live = createLive({
 		shown: () => {
-			const q: ResultsQuery = {
-				ast: search.q ? search.ast : search.browse ? { op: 'all' } : null,
-				sort: search.sort,
-				hidden: search.hidden,
-				exact: search.exact,
-				browse: search.browse
-			};
+			const q = queryShown();
 			return q.ast && results.status === 'ready' && results.showing(q)
 				? { query: q, total: results.total, approx: results.totalApprox }
 				: null;
@@ -56,14 +57,19 @@
 	});
 	$effect(() => live.start());
 	// A new query (or sort) replaces the rows: whatever was counted new is moot.
+	// The query now shown is the one registered for live counts (the old registration is released).
 	$effect(() => {
 		void results.shown;
 		live.reset();
+		const s = results.status === 'ready' ? queryShown() : null;
+		if (s?.ast && results.showing(s)) void live.follow(s);
+		else if (results.shown === null) void live.follow(null); // nothing shown: release the id
 	});
 	/** Show: the list again from the top; the list moves its own active row and focus there. */
 	async function show() {
 		await results.reload();
 		live.reset();
+		void live.follow(queryShown(), true); // the count starts again from 0
 		const g = grid();
 		if (g) g.scrollTop = 0;
 		await tick();

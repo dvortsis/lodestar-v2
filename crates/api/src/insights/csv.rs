@@ -603,6 +603,28 @@ mod tests {
             } else {
                 assert_eq!(p.columns, sorted, "{}", p.name);
             }
+            // Each panel's export, rendered from the endpoint's fixture
+            // (`tests/insights.rs`, blessed into the goldens), has exactly
+            // the declared header: a field the panel doesn't declare would
+            // land in it and move the columns.
+            let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/golden")
+                .join(format!("insights_export_{}.txt", p.name.replace('.', "_")));
+            let text = std::fs::read_to_string(&golden)
+                .unwrap_or_else(|e| panic!("{}: {e}", golden.display()));
+            let mut header = vec!["period".to_string()];
+            for c in p.columns {
+                header.push(c.to_string());
+                if TIMES.contains(c) {
+                    header.push(format!("{c}_utc"));
+                }
+            }
+            assert_eq!(
+                text.lines().next(),
+                Some(header.join(",").as_str()),
+                "{}",
+                p.name
+            );
         }
         let v = json!({"annotations": [
             {"at": 3600, "kind": "import_removed", "text": "job=1 source=s removed=2",
