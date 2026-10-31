@@ -447,7 +447,7 @@
     },
     "S-search-4": {
       "status": "review",
-      "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9 | 2026-10-31T01:26Z PR #250 head 39566a36 (~1,800, 45% tests); /search first load unchanged; mount in query/Live.svelte accepted (runner); reviewer session_01MMjhn8yBp4uRAjAcidcd4c"
+      "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9 | 2026-10-31T01:26Z PR #250 head 39566a36 (~1,800, 45% tests); /search first load unchanged; mount in query/Live.svelte accepted (runner); reviewer session_01MMjhn8yBp4uRAjAcidcd4c | 01:27Z CI: e2e:typecheck fails (suggest fixture kind:string); author fixes locally, pushes with review round"
     },
     "S-search-5": {
       "status": "pending",
