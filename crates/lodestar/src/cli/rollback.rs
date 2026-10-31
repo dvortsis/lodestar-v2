@@ -13,7 +13,8 @@
 //!    after the restore would show other torrents' data;
 //! 6. copy the snapshot beside the store, apply the store's deletion
 //!    journal and holds to the copy (BB-1: a rollback never brings back a
-//!    deleted torrent), and rename it into place.
+//!    deleted torrent), carry those holds into it (so it goes on refusing
+//!    what they hold), and rename it into place.
 //!
 //! The snapshot itself is kept, so the same restore can be done again. A
 //! crash before the rename leaves the store as it was; the staged copy it
@@ -373,7 +374,7 @@ pub fn restore(
         .map_err(index_note)?;
     let copied = std::fs::copy(&snapshot.path, &staged)
         .map_err(failed(format!("copying {}", snapshot.path.display())))
-        .and_then(|_| purge_staged(lock.conn(), &staged, snapshot.modified, now));
+        .and_then(|_| purge_staged(lock.conn(), &staged, now));
     if let Err(e) = copied {
         remove_stage(&staged);
         lock.release()?;
@@ -390,15 +391,10 @@ pub fn restore(
     }))
 }
 
-/// Applies the store's deletions to the staged copy (see
+/// Applies the store's deletions and holds to the staged copy (see
 /// [`snapshots::purge_for_restore`]) and syncs it.
-fn purge_staged(
-    live: &lodestar_store::rusqlite::Connection,
-    staged: &Path,
-    taken: Option<i64>,
-    now: i64,
-) -> Outcome {
-    let purged = snapshots::purge_for_restore(live, staged, taken, now).map_err(|e| {
+fn purge_staged(live: &lodestar_store::rusqlite::Connection, staged: &Path, now: i64) -> Outcome {
+    let purged = snapshots::purge_for_restore(live, staged, now).map_err(|e| {
         Failure::Failed(format!(
             "removing deleted torrents from the copy {}: {e}",
             staged.display()
@@ -552,6 +548,58 @@ mod tests {
         assert_eq!(hashes(&db, "snapshot_deletions"), [vec![1; 20]]);
         // The undo copy is the store as it was.
         assert_eq!(hashes(&r.kept, "torrents"), [vec![2; 20]]);
+    }
+
+    /// Holds recorded after the snapshot survive the rollback: the
+    /// restored store's filter state, which intake refuses from at start
+    /// (the CS-1 list in the engine, tombstones and quarantine in its held
+    /// set), still holds them, and the held torrent is gone.
+    #[test]
+    fn a_rollback_keeps_the_holds_recorded_since() {
+        use lodestar_filter::Origin;
+        use lodestar_store::{Held, Store, StoreConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let (config, snap) = deleted_after_snapshot(dir.path());
+        let db = config.db_path();
+        {
+            let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+            store.add_cs_hashes(&[[7; 20]], 1, unix_now()).unwrap();
+            let c = store.connection();
+            c.execute(
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-3', ?2)",
+                lodestar_store::rusqlite::params![&[2u8; 20][..], unix_now()],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                 VALUES (?1, 'CS-2a', x'00', ?2, ?3)",
+                lodestar_store::rusqlite::params![&[9u8; 20][..], unix_now(), unix_now() + 86_400],
+            )
+            .unwrap();
+        }
+        restore(&config, &snap, unix_now(), |_| Ok(true))
+            .unwrap()
+            .unwrap();
+        assert!(hashes(&db, "torrents").is_empty(), "the held torrent goes");
+
+        let state = Store::open(&db, StoreConfig::default())
+            .unwrap()
+            .filter_state()
+            .unwrap();
+        let mut held = state.held.clone();
+        held.sort();
+        assert_eq!(
+            held,
+            [([2; 20], Held::Tombstone), ([9; 20], Held::Quarantine)]
+        );
+        let engine = lodestar_pipeline::default_filter();
+        assert!(engine.current().blocked_hash(&[[7; 20]]).is_none());
+        engine.update(|core| {
+            for (h, origin) in &state.cs_hashes {
+                core.cs.add_hash(*h, Origin::from_code(*origin).unwrap());
+            }
+        });
+        assert!(engine.current().blocked_hash(&[[7; 20]]).is_some());
     }
 
     /// A crash after the copy, before the rename (or the purge), leaves
