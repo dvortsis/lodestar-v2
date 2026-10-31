@@ -278,7 +278,8 @@ const TYPE_VALUE: Record<string, () => string> = {
 	adult: m.search_filters_type_adult
 };
 
-const ADULT_VALUE: Record<string, () => string> = {
+/** `adult:` subtypes by name (the facet rail names them the same way). */
+export const ADULT_VALUE: Record<string, () => string> = {
 	scene: m.search_filters_adult_scene,
 	movie: m.search_filters_adult_movie,
 	photos: m.search_filters_adult_photos,
