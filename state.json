@@ -1773,13 +1773,13 @@
       "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB"
     },
     "B-held-precommit": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnAEudSyvPq9dbHQEmb",
       "pr": 291,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit). | 18:23Z launched Opus. | 18:56Z PR #291 head b3312f5b (~585 lines; enrich.rs _marking hooks; pending marks separate from held set - differs from brief shape, reviewer to prove). Filter budget bench reportedly red on main locally (51.8/50us) - check CI. Reviewer + security review; subscribed. | 19:05Z told: merges after #290 -> bring main with review fixes. | 19:10Z MERGE at b3312f5b (design sound). Author merging main (#290) + optional P-before-C test in correct; runner checks delta, merges on green. | 19:20Z head 5000d3c5 (clean main merge + cfg(test) P-before-C test; runner checked). Merge on green.",
+      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit). | 18:23Z launched Opus. | 18:56Z PR #291 head b3312f5b (~585 lines; enrich.rs _marking hooks; pending marks separate from held set - differs from brief shape, reviewer to prove). Filter budget bench reportedly red on main locally (51.8/50us) - check CI. Reviewer + security review; subscribed. | 19:05Z told: merges after #290 -> bring main with review fixes. | 19:10Z MERGE at b3312f5b (design sound). Author merging main (#290) + optional P-before-C test in correct; runner checks delta, merges on green. | 19:20Z head 5000d3c5 (clean main merge + cfg(test) P-before-C test; runner checked). Merge on green. | 19:51Z MERGED 084f1e4a; sessions archived.",
       "reviewer": "session_01MMjhn94YmgkwkPeUXA5HEY"
     },
     "X-soak-docker-memrule": {
@@ -1791,6 +1791,15 @@
       "review_rounds": 0,
       "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time). | 19:05Z launched Opus. | 19:13Z PR #292 head 358b1260 (anon basis, new reason, fallback; \u00a72.19 flag). Reviewer + security review; subscribed. | 19:16Z MERGED 673692a4; sessions archived; owner told (gluetun leg collector choice asked).",
       "reviewer": "session_01MMjhn912vzFDE65VeyMNE1"
+    },
+    "X-polish-1031d": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2567,6 +2576,11 @@
       "status": "sent",
       "at": "2026-10-31T19:13Z",
       "sent_at": "2026-10-31T19:16Z"
+    },
+    {
+      "item": "FYI (\u00a72.19) #291 B-held-precommit merged: intake refuses a new hold from before its store commit (pending marks kept apart from the held set); ingest commit and API correct are now exact too. Content safety tightened only.",
+      "status": "to-send",
+      "at": "2026-10-31T19:51Z"
     }
   ],
   "external_gates": {
@@ -2621,10 +2635,8 @@
     "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
-    "X-requeue cap (optional O1, #290): classify.requeue_pending is bounded per distinct text, not overall, while search is off; admin add/remove of many queries grows it. Fix = cap that collapses to a full re-mark (mark all unenriched). Low; admin-only.",
     "Logging catalog periodic reload (optional O2, #289): reload /logs/catalog on tick or visibilitychange so a kind turned on in another tab shows here.",
-    "Form engine remount (from #289 review): SettingsForm unmounting children while form.status=loading resets list search text / Show changed only and drops focus to <body> after each toggle (a11y). Fix in form/** (keep children mounted during resync or preserve state + focus).",
-    "analyze_cr0 report: 'Peak RSS (MiB)' column shows working_set_bytes (cgroup incl. page cache in Docker mode); rename to 'Peak working set (MiB)' and/or add 'Peak private (MiB)'. Optional from #292 review; tiny."
+    "Form engine remount (from #289 review): SettingsForm unmounting children while form.status=loading resets list search text / Show changed only and drops focus to <body> after each toggle (a11y). Fix in form/** (keep children mounted during resync or preserve state + focus)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
