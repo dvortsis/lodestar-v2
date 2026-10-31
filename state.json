@@ -1754,13 +1754,14 @@
       "reviewer": "session_01MMjhn8kJAEoHa23dyFCMM5"
     },
     "X-requeue-2": {
-      "status": "running",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhn9dUBLyjZWb4VdC1aR",
-      "pr": null,
+      "pr": 290,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "17:36Z brief briefs/X-requeue-2.md (#286 review opt 1-3; content safety); security review | 17:34Z launched Opus"
+      "notes": "17:36Z brief briefs/X-requeue-2.md (#286 review opt 1-3; content safety); security review | 17:34Z launched Opus | 18:16Z PR #290 head 6496e7d1 (search.enabled restart-only; start hook is the hook; reuses api.internal_error). Reviewer w/ security-review; subscribed.",
+      "reviewer": "session_01MMjhnCzxKvgLJq1RkG55sJ"
     },
     "X-settings-registry-slim": {
       "status": "pending",
