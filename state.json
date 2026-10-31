@@ -1793,13 +1793,13 @@
       "reviewer": "session_01MMjhn912vzFDE65VeyMNE1"
     },
     "X-polish-1031d": {
-      "status": "pending",
+      "status": "building",
       "model": "opus",
-      "session": null,
+      "session": "session_01MMjhnD1JfZZo9GAX8FrrEh",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt)."
+      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
