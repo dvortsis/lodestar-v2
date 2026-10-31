@@ -1832,13 +1832,13 @@
       "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head. | 21:21Z head 70494f28 (toolbar 4.65 KB + security.test dismissAll teardown fix; flake not reproduced locally, CI is the test). Reviewer launched; subscribed. | 21:33Z review CHANGES: Dockerfile web stage builds without GITHUB_SHA -> every image UI version 0.0.0 (breaks stale-deploy recovery, ui_build_id). Fix: ARG REVISION + GITHUB_SHA=$REVISION. CI green otherwise (security flake gone on this run). | 21:41Z head 8021b3b6: Dockerfile ARG REVISION= + GITHUB_SHA=\"$REVISION\" (runner checked diff; no docker daemon to build). Reviewer archived. Merge on green. | 21:59Z MERGED; sessions archived. (PR body stale on workflows/toolbar; decisions file is correct.)"
     },
     "S-logs-3": {
-      "status": "pr-fixing",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhnCPswD7uRSscABnsRK",
       "pr": 298,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh). | 22:12Z launched Sonnet. | 22:33Z PR #298 head 685ecc86 (~1.78k lines, mostly messages; event names lazy 10.73 KB; Logging first view 42.79). Opus reviewer launched; subscribed. | 22:39Z web job red = security confirm.ts teardown flake (not theirs); \u00a72.18 comment + one re-run. | 22:40Z review CHANGES: B1 no checked-in generator for event-names.ts. Fold O1 abort, O2 tick jitter, O3 kind_switched wording. Runner checks delta. | 22:51Z round 2 fc261568: generator + test, O1-O3 in. Runner: timeout must set error (banner truthfulness, #289 invariant), not silent abort; one more push.",
+      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh). | 22:12Z launched Sonnet. | 22:33Z PR #298 head 685ecc86 (~1.78k lines, mostly messages; event names lazy 10.73 KB; Logging first view 42.79). Opus reviewer launched; subscribed. | 22:39Z web job red = security confirm.ts teardown flake (not theirs); \u00a72.18 comment + one re-run. | 22:40Z review CHANGES: B1 no checked-in generator for event-names.ts. Fold O1 abort, O2 tick jitter, O3 kind_switched wording. Runner checks delta. | 22:51Z round 2 fc261568: generator + test, O1-O3 in. Runner: timeout must set error (banner truthfulness, #289 invariant), not silent abort; one more push. | 23:00Z round 3 head 9f668477: timeout sets error, keeps catalog; full vitest 2788/2788. Runner accepts; reviewer archived; merge on green. Logging parts 17.06/17.1 KB (tight).",
       "reviewer": "session_01MMjhnAJNz4LPBqsm4Npykf"
     },
     "X-security-confirm-teardown": {
