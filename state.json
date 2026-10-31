@@ -1823,13 +1823,13 @@
       "reviewer": "session_01MMjhn9dGmekFXHRR8v4YnR"
     },
     "X-build-stable-name": {
-      "status": "pr-fixing",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhnB5apyKG6jubZNaGRA",
       "pr": 296,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head. | 21:21Z head 70494f28 (toolbar 4.65 KB + security.test dismissAll teardown fix; flake not reproduced locally, CI is the test). Reviewer launched; subscribed. | 21:33Z review CHANGES: Dockerfile web stage builds without GITHUB_SHA -> every image UI version 0.0.0 (breaks stale-deploy recovery, ui_build_id). Fix: ARG REVISION + GITHUB_SHA=$REVISION. CI green otherwise (security flake gone on this run)."
+      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head. | 21:21Z head 70494f28 (toolbar 4.65 KB + security.test dismissAll teardown fix; flake not reproduced locally, CI is the test). Reviewer launched; subscribed. | 21:33Z review CHANGES: Dockerfile web stage builds without GITHUB_SHA -> every image UI version 0.0.0 (breaks stale-deploy recovery, ui_build_id). Fix: ARG REVISION + GITHUB_SHA=$REVISION. CI green otherwise (security flake gone on this run). | 21:41Z head 8021b3b6: Dockerfile ARG REVISION= + GITHUB_SHA=\"$REVISION\" (runner checked diff; no docker daemon to build). Reviewer archived. Merge on green."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
