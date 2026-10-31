@@ -23,7 +23,7 @@ test.describe('first-run wizard', () => {
 	test('keyboard only: every step, Skip, save, Done', async ({ page, go, kbd }) => {
 		await go('/welcome');
 		await expect(h2(page, 'Network check')).toBeVisible();
-		await expect(page.getByText('Reachable', { exact: true })).toBeVisible();
+		await expect(page.getByText('Reachable', { exact: true }).first()).toBeVisible();
 		await expectNoA11yViolations(page);
 
 		// The page heading has focus after the auth check; Tab reaches Retest, then Continue.
