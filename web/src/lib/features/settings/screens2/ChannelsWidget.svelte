@@ -21,7 +21,7 @@
 	role="group"
 	aria-labelledby={controlProps['aria-labelledby']}
 	aria-describedby={controlProps['aria-describedby']}
-	class="flex flex-wrap gap-x-6 gap-y-1"
+	class="flex flex-wrap gap-4"
 >
 	{#each options as option (option)}
 		<Checkbox

@@ -137,14 +137,14 @@ test.describe('keyboard: connection settings screens', () => {
 	test('Integrations tests a client and saves an edit', async ({ page, go, kbd }) => {
 		await go('/settings/integrations');
 		await expect(page.getByRole('heading', { level: 1, name: 'Integrations' })).toBeVisible();
-		const card = page.getByRole('group', { name: 'Home' });
-		await expect(card).toBeVisible();
+		const entry = page.getByRole('group', { name: 'Home' });
+		await expect(entry).toBeVisible();
 		await expectNoA11yViolations(page);
-		await kbd.tabTo(card.getByLabel('Category'));
+		await kbd.tabTo(entry.getByLabel('Category'));
 		await page.keyboard.type('lodestar');
-		await kbd.tabTo(card.getByRole('button', { name: 'Test connection to Home' }));
+		await kbd.tabTo(entry.getByRole('button', { name: 'Test connection to Home' }));
 		await kbd.press('Enter');
-		await expect(card.getByTestId('test-result')).toHaveText('Connected. Version v4.6.3.');
+		await expect(entry.getByTestId('test-result')).toHaveText('Connected. Version v4.6.3.');
 		expect(tests).toEqual([
 			{
 				kind: 'download_client',

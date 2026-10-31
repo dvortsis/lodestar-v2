@@ -107,12 +107,12 @@ describe('Integrations', () => {
 	it('tests a client with the values on screen, and never sends its saved password', async () => {
 		server.next('POST /settings/test', OK);
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await type(within(card).getByLabelText('Address'), 'http://10.0.0.2:8080/');
-		await fireEvent.click(within(card).getByRole('button', { name: 'Test connection to Home' }));
-		await until(() => expect(within(card).getByRole('status', { name: '' })).toBeTruthy());
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await type(within(entry).getByLabelText('Address'), 'http://10.0.0.2:8080/');
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Test connection to Home' }));
+		await until(() => expect(within(entry).getByRole('status', { name: '' })).toBeTruthy());
 		await until(() =>
-			expect(card.querySelector('[data-testid="test-result"]')?.textContent?.trim()).toBe(
+			expect(entry.querySelector('[data-testid="test-result"]')?.textContent?.trim()).toBe(
 				'Connected. Version v4.6.3.'
 			)
 		);
@@ -138,10 +138,10 @@ describe('Integrations', () => {
 			}
 		});
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await type(within(card).getByLabelText('New password'), 'hunter2');
-		await fireEvent.click(within(card).getByRole('button', { name: 'Test connection to Home' }));
-		const result = () => card.querySelector('[data-testid="test-result"]')!;
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await type(within(entry).getByLabelText('New password'), 'hunter2');
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Test connection to Home' }));
+		const result = () => entry.querySelector('[data-testid="test-result"]')!;
 		await until(() => expect(result().textContent).toContain('wrong password'));
 		// Text, not markup.
 		expect(result().textContent).toBe('<b>Refused</b>: wrong password');
@@ -152,10 +152,12 @@ describe('Integrations', () => {
 	it('shows a server error as text', async () => {
 		server.next('POST /settings/test', server.err(502, 'bad_gateway'));
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await fireEvent.click(within(card).getByRole('button', { name: 'Test connection to Home' }));
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Test connection to Home' }));
 		await until(() =>
-			expect(card.querySelector('[data-testid="test-result"]')?.textContent).toBe('msg bad_gateway')
+			expect(entry.querySelector('[data-testid="test-result"]')?.textContent).toBe(
+				'msg bad_gateway'
+			)
 		);
 	});
 
@@ -183,8 +185,8 @@ describe('Integrations', () => {
 
 	it('saves the list without the password of a client left alone', async () => {
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await type(within(card).getByLabelText('Category'), 'lodestar');
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await type(within(entry).getByLabelText('Category'), 'lodestar');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
 		await until(() => expect(patched()).toHaveLength(1));
 		const sent = patched()[0] as { integrations: { clients: Record<string, unknown>[] } };
@@ -196,12 +198,12 @@ describe('Integrations', () => {
 
 	it('removes a password with its own confirmed request, apart from Save', async () => {
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await type(within(card).getByLabelText('Category'), 'staged');
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await type(within(entry).getByLabelText('Category'), 'staged');
 		await until(() =>
-			expect(within(card).getByTestId('client-password-status').textContent).toContain('Set')
+			expect(within(entry).getByTestId('client-password-status').textContent).toContain('Set')
 		);
-		await fireEvent.click(within(card).getByRole('button', { name: 'Remove' }));
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Remove' }));
 		const confirm = await dialog();
 		expect(patched()).toHaveLength(0);
 		await fireEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
@@ -214,8 +216,8 @@ describe('Integrations', () => {
 
 	it('keeps the password when removing it is cancelled', async () => {
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await fireEvent.click(await within(card).findByRole('button', { name: 'Remove' }));
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await fireEvent.click(await within(entry).findByRole('button', { name: 'Remove' }));
 		const confirm = await dialog();
 		await fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
 		await new Promise((r) => setTimeout(r, 0));
@@ -224,27 +226,27 @@ describe('Integrations', () => {
 
 	it('saves a new password on its own, for a saved client only', async () => {
 		await open('integrations');
-		const card = await screen.findByRole('group', { name: 'Home' });
-		await type(within(card).getByLabelText('New password'), 's3cret');
-		await fireEvent.click(within(card).getByRole('button', { name: 'Save password' }));
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await type(within(entry).getByLabelText('New password'), 's3cret');
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Save password' }));
 		await until(() => expect(patched()).toHaveLength(1));
 		expect(patched()[0]).toEqual({
 			integrations: { if_revision: 3, clients: [{ ...HOME, password: 's3cret' }] }
 		});
 		await until(() =>
-			expect((within(card).getByLabelText('New password') as HTMLInputElement).value).toBe('')
+			expect((within(entry).getByLabelText('New password') as HTMLInputElement).value).toBe('')
 		);
 	});
 
 	it('adds a client whose password waits for it to be saved', async () => {
 		await open('integrations');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Add a download client' }));
-		const card = await screen.findByRole('group', { name: 'Client 2' });
-		expect(within(card).getByRole('button', { name: 'Save password' })).toHaveProperty(
+		const entry = await screen.findByRole('group', { name: 'Client 2' });
+		expect(within(entry).getByRole('button', { name: 'Save password' })).toHaveProperty(
 			'disabled',
 			true
 		);
-		expect(within(card).getByText(/Save the client first/)).toBeTruthy();
+		expect(within(entry).getByText(/Save the client first/)).toBeTruthy();
 	});
 });
 

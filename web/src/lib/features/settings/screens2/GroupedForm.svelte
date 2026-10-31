@@ -6,8 +6,6 @@
 	import { onDestroy, untrack, type Snippet } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatCount } from '$lib/format';
-	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import IconRestart from '~icons/ph/arrows-clockwise';
 	import { createSettingsForm, groupFields, settingText, type FieldSpec } from '../form';
 	import type { SettingsForm as Form } from '../form';
 	import SettingField from '../form/SettingField.svelte';
@@ -50,15 +48,6 @@
 </script>
 
 <SettingsForm {form}>
-	{#if form.restartPending.length}
-		<Banner
-			><span class="flex items-center gap-2"
-				><IconRestart aria-hidden="true" /><span data-testid="settings-restart-count"
-					>{m.settings_shell_restart({ count: formatCount(form.restartPending.length) })}</span
-				></span
-			></Banner
-		>
-	{/if}
 	{#each groups as group (group.group)}
 		<section class="flex flex-col gap-6" aria-label={settingText(group.labelKey) ?? group.group}>
 			<h2 class="text-body-lg font-semibold">{settingText(group.labelKey) ?? group.group}</h2>

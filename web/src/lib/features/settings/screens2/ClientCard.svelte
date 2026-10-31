@@ -74,8 +74,8 @@
 <div
 	role="group"
 	aria-label={name}
-	class="flex flex-col gap-4 rounded-lg border border-base-300 p-4"
-	data-testid="client-card"
+	class="flex flex-col gap-4 rounded-field border border-base-300 p-4"
+	data-testid="client-entry"
 >
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<h3 class="text-label font-semibold">{name}</h3>
@@ -107,7 +107,7 @@
 			</div>
 		{/if}
 	</div>
-	<div class="grid gap-4 sm:grid-cols-2">
+	<div class="flex flex-col gap-4">
 		<Field label={m.settings_screen_client_name()}>
 			{#snippet children(cp)}
 				<Input

@@ -19,7 +19,7 @@
 		success: (version: string | null) => string;
 		/** Says what's missing when `build` returns null. */
 		missing: string;
-		/** Only the test button is named by its card, so two cards' buttons differ. */
+		/** Only the test button is named by its entry, so two clients' buttons differ. */
 		'aria-label'?: string;
 		disabled?: boolean;
 	}
