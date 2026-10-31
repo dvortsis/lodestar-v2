@@ -1581,13 +1581,22 @@
    "notes": "06:06Z brief briefs/B-refetch-funnel.md; launch after #262 merges | 06:14Z launched Opus | 07:18Z PR #267 head 84cb1bdf; accepted pipeline tests + origin=recovery refinement; fresh Opus reviewer session_01MMjhnBnfNfNNoXEroi7mBU"
   },
   "S-insights-imports": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhnCSu1chTDhjfYfPMkm",
    "pr": 265,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu | 07:08Z reviewer MERGE at 46c8736a; runner asked a small push (card label colon, zh wording, events-500 e2e, truncated note); runner checks delta | 07:16Z polish push d95b905c; runner checked delta (labels, zh, events-500 e2e, truncated note): clean; merge on green"
+   "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu | 07:08Z reviewer MERGE at 46c8736a; runner asked a small push (card label colon, zh wording, events-500 e2e, truncated note); runner checks delta | 07:16Z polish push d95b905c; runner checked delta (labels, zh, events-500 e2e, truncated note): clean; merge on green | 07:25Z #265 merged b5fd5d70; author+reviewer archived"
+  },
+  "S-locale-boot": {
+   "status": "launching",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2335,7 +2344,6 @@
   "Pipeline: one shared filter loader so the import CLI and the server cannot drift (#257); server-side import slice: online import through the writer, jobs indexing->complete",
   "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
   "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
-  "Locale boot: routes/+layout.ts calls initLocale(null), so a saved language does not apply at start-up; time_zone and first_day_of_week are not read anywhere yet (#259)",
   "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)",
   {
    "id": "B-refetch-funnel",
