@@ -2248,7 +2248,7 @@
         "tags": [
           "insights"
         ],
-        "summary": "Trend annotations (`restart`, `stopped`, `paused`, `resumed`,\n`intensity`; other events are skipped) and the paused spans\noverlapping `from..to`, so the client draws gaps.",
+        "summary": "Trend annotations (`restart`, `stopped`, `paused`, `resumed`,\n`intensity`, and an import's `import_started`, `import_finished` and\n`import_removed` with its counts; other events are skipped) and the\npaused spans\noverlapping `from..to`, so the client draws gaps.",
         "operationId": "getInsightsEvents",
         "parameters": [
           {
@@ -6671,7 +6671,8 @@
         "required": [
           "at",
           "kind",
-          "text"
+          "text",
+          "import"
         ],
         "properties": {
           "at": {
@@ -6679,13 +6680,24 @@
             "format": "int64",
             "description": "Unix seconds."
           },
+          "import": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportNote",
+                "description": "An import annotation's job and counts; null for other kinds."
+              }
+            ]
+          },
           "kind": {
             "type": "string",
-            "description": "`restart`, `stopped`, `paused`, `resumed` or `intensity`."
+            "description": "`restart`, `stopped`, `paused`, `resumed`, `intensity`,\n`import_started`, `import_finished` or `import_removed`."
           },
           "text": {
             "type": "string",
-            "description": "The event's detail: the version for `restart`, the new level for\n`intensity`; empty when there's none."
+            "description": "The event's detail: the version for `restart`, the new level for\n`intensity`, `key=value` words for an import (as `import`); empty\nwhen there's none."
           }
         }
       },
@@ -11559,6 +11571,55 @@
           "to": {}
         }
       },
+      "ImportNote": {
+        "type": "object",
+        "description": "What an import annotation says, so a step in the trend is explained.",
+        "required": [
+          "job",
+          "source",
+          "new",
+          "merged",
+          "removed"
+        ],
+        "properties": {
+          "job": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The import job's id."
+          },
+          "merged": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`import_finished`: records the store already had, merged as\nprovenance only (already known). Null otherwise.",
+            "minimum": 0
+          },
+          "new": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`import_finished`: records the job stored new (novel). Null\notherwise.",
+            "minimum": 0
+          },
+          "removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`import_removed`: torrents the removal deleted. Null otherwise.",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string",
+            "description": "Its adapter: `magnetico` or `bitmagnet`."
+          }
+        }
+      },
       "ImportReport": {
         "type": "object",
         "description": "`POST /settings/import`: the diff, and whether it was applied.",
@@ -11665,6 +11726,7 @@
           "index_lag_s",
           "merges",
           "new_searchable",
+          "new_searchable_imported",
           "projection_days",
           "rebuild",
           "removed",
@@ -11722,7 +11784,13 @@
           "new_searchable": {
             "type": "integer",
             "format": "int64",
-            "description": "Torrents that became searchable in the range. Event time.",
+            "description": "Crawled torrents that became searchable in the range, imports\nexcluded. Event time.",
+            "minimum": 0
+          },
+          "new_searchable_imported": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Imported torrents that became searchable in the range. Event time.",
             "minimum": 0
           },
           "projection_days": {
@@ -11800,6 +11868,7 @@
         "required": [
           "at",
           "new_searchable",
+          "new_searchable_imported",
           "removed",
           "searchable"
         ],
@@ -11814,6 +11883,16 @@
               "null"
             ],
             "format": "int64",
+            "description": "Crawled torrents newly searchable (imports excluded).",
+            "minimum": 0
+          },
+          "new_searchable_imported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Imported torrents newly searchable.",
             "minimum": 0
           },
           "removed": {
@@ -12407,7 +12486,9 @@
           "imported",
           "new_searchable",
           "new_searchable_delta",
+          "new_searchable_imported",
           "searchable",
+          "searchable_crawled",
           "searchable_delta",
           "time_to_searchable_p50_s",
           "time_to_searchable_p50_delta_s",
@@ -12432,7 +12513,7 @@
           "new_searchable": {
             "type": "integer",
             "format": "int64",
-            "description": "Torrents that first became searchable in the range, imports\nincluded. Event time; 0 is real.",
+            "description": "Crawled torrents that first became searchable in the range:\nimports excluded (`new_searchable_imported`). Event time; 0 is\nreal.",
             "minimum": 0
           },
           "new_searchable_delta": {
@@ -12443,6 +12524,12 @@
             "format": "int64",
             "description": "`new_searchable` less `previous.kpi.new_searchable`; null without\n`compare=1` (and for `all`)."
           },
+          "new_searchable_imported": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Imported torrents that first became searchable in the range (an\nimport's records, indexed). Event time; 0 is real.",
+            "minimum": 0
+          },
           "searchable": {
             "type": [
               "integer",
@@ -12450,6 +12537,15 @@
             ],
             "format": "int64",
             "description": "Documents in the search index now; null when search is off.",
+            "minimum": 0
+          },
+          "searchable_crawled": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of `searchable`, the crawled ones: `searchable` less `imported`;\nnull when either is null.",
             "minimum": 0
           },
           "searchable_delta": {
@@ -14274,6 +14370,7 @@
         "description": "The KPIs over the previous period.",
         "required": [
           "new_searchable",
+          "new_searchable_imported",
           "searchable",
           "time_to_searchable_p50_s",
           "time_to_searchable_p95_s",
@@ -14281,6 +14378,11 @@
         ],
         "properties": {
           "new_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "new_searchable_imported": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -18153,7 +18255,8 @@
         "required": [
           "at",
           "harvested",
-          "searchable"
+          "searchable",
+          "searchable_imported"
         ],
         "properties": {
           "at": {
@@ -18176,7 +18279,16 @@
               "null"
             ],
             "format": "int64",
-            "description": "Torrents newly searchable in the bucket.",
+            "description": "Crawled torrents newly searchable in the bucket (imports\nexcluded).",
+            "minimum": 0
+          },
+          "searchable_imported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Imported torrents newly searchable in the bucket; null and 0 as\nfor `searchable`.",
             "minimum": 0
           }
         }
@@ -18227,7 +18339,7 @@
           "newly_searchable": {
             "type": "integer",
             "format": "int64",
-            "description": "Torrents that became searchable in the range. Event time.",
+            "description": "Crawled torrents that became searchable in the range, imports\nexcluded. Event time.",
             "minimum": 0
           },
           "parser_confidence": {
