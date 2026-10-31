@@ -74,13 +74,7 @@ pub enum Command {
     Healthcheck,
     /// Import a bitmagnet database (read-only, resumable); run it while
     /// the server is stopped
-    ImportBitmagnet {
-        /// postgres://user:password@host/database
-        url: String,
-        /// Stop after this many torrents
-        #[arg(long, value_name = "N")]
-        limit: Option<u64>,
-    },
+    ImportBitmagnet(ImportBitmagnetArgs),
     /// Show the blocklist catalog ([subscriptions] catalog keys)
     Lists,
     /// Back up the store, config.toml, seal.key and auth.json; safe while
@@ -114,6 +108,36 @@ pub enum Command {
     /// was tracked. Hourly detail older than 30 days is folded into days,
     /// so those days are repaired at daily grain.
     Rollup(RollupArgs),
+}
+
+/// Where the bitmagnet database is. The password comes from
+/// --password-file or LODESTAR_IMPORT_PG_PASSWORD, never the command line.
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct ImportBitmagnetArgs {
+    /// PostgreSQL's host name or IP address, or its Unix socket folder
+    #[arg(long, default_value = "localhost")]
+    pub host: String,
+    #[arg(long, default_value_t = 5432)]
+    pub port: u16,
+    #[arg(long, default_value = "bitmagnet")]
+    pub dbname: String,
+    #[arg(long, default_value = "bitmagnet_reader")]
+    pub user: String,
+    /// Read the password from this file (chmod 600); otherwise from
+    /// LODESTAR_IMPORT_PG_PASSWORD
+    #[arg(long, value_name = "PATH")]
+    pub password_file: Option<PathBuf>,
+    /// Trust only the CA certificates in this PEM file for TLS (default:
+    /// the system's)
+    #[arg(long, value_name = "PATH")]
+    pub ca_file: Option<PathBuf>,
+    /// Connect without TLS: allowed only to a Unix socket or a loopback
+    /// address
+    #[arg(long, conflicts_with = "ca_file")]
+    pub allow_plaintext_loopback: bool,
+    /// Stop after this many torrents
+    #[arg(long, value_name = "N")]
+    pub limit: Option<u64>,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -203,7 +227,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Rollup(a) => ("rollup", rollup::run(&config, a.since)),
         Command::Serve { .. }
         | Command::Healthcheck
-        | Command::ImportBitmagnet { .. }
+        | Command::ImportBitmagnet(_)
         | Command::Lists => unreachable!("main.rs runs these"),
     };
     match outcome {
@@ -285,19 +309,34 @@ mod tests {
     fn parses_the_existing_commands() {
         assert_eq!(cmd("lists").1, Some(Command::Lists));
         assert_eq!(
-            cmd("import-bitmagnet postgres://x/bm --limit 10").1,
-            Some(Command::ImportBitmagnet {
-                url: "postgres://x/bm".into(),
+            cmd("import-bitmagnet --host db.lan --password-file pw --limit 10").1,
+            Some(Command::ImportBitmagnet(ImportBitmagnetArgs {
+                host: "db.lan".into(),
+                port: 5432,
+                dbname: "bitmagnet".into(),
+                user: "bitmagnet_reader".into(),
+                password_file: Some("pw".into()),
+                ca_file: None,
+                allow_plaintext_loopback: false,
                 limit: Some(10)
-            })
+            }))
         );
         use clap::error::ErrorKind;
+        // No URL and no --password: argv is visible to other processes.
         assert_eq!(
-            args("import-bitmagnet").err(),
-            Some(ErrorKind::MissingRequiredArgument)
+            args("import-bitmagnet postgres://u:p@x/bm").err(),
+            Some(ErrorKind::UnknownArgument)
         );
         assert_eq!(
-            args("import-bitmagnet x --limit ten").err(),
+            args("import-bitmagnet --password p").err(),
+            Some(ErrorKind::UnknownArgument)
+        );
+        assert_eq!(
+            args("import-bitmagnet --ca-file a --allow-plaintext-loopback").err(),
+            Some(ErrorKind::ArgumentConflict)
+        );
+        assert_eq!(
+            args("import-bitmagnet --limit ten").err(),
             Some(ErrorKind::ValueValidation)
         );
         assert_eq!(args("--version").err(), Some(ErrorKind::DisplayVersion));

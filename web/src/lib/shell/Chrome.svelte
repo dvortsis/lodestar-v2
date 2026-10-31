@@ -61,6 +61,7 @@
 
 	let offCommands: (() => void) | undefined;
 	let offShortcuts: (() => void) | undefined;
+	let offAppearance: (() => void) | undefined;
 	let detachKeys: (() => void) | undefined;
 	let disposed = false;
 
@@ -73,14 +74,16 @@
 				import('$lib/keys'),
 				import('./commands'),
 				import('$lib/features/shortcuts/boot'),
+				import('$lib/features/appearance/boot'),
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
 				import('./ConnectionView.svelte')
-			]).then(([keysModule, commands, shortcutsBoot, status, pill, connection]) => {
+			]).then(([keysModule, commands, shortcutsBoot, appearanceBoot, status, pill, connection]) => {
 				if (disposed) return;
 				detachKeys = keysModule.keys.attach(window);
 				offCommands = commands.registerShellCommands();
 				offShortcuts = shortcutsBoot.startShortcuts();
+				offAppearance = appearanceBoot.startAppearance();
 				statusRef.Pill = pill.default;
 				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
@@ -100,6 +103,7 @@
 			detachKeys?.();
 			offCommands?.();
 			offShortcuts?.();
+			offAppearance?.();
 		};
 	});
 
