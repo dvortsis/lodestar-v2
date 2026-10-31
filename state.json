@@ -917,13 +917,13 @@
       "notes": "from #86 | 15:46Z split: S-logs-1 (/logs live page) now; S-logs-2 (Settings \u2192 Logging) after S-logs-1 + M-security-settings merge"
     },
     "S-about": {
-      "status": "building",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhn8YvJJ6F1Aj1ndusDe",
-      "pr": null,
+      "pr": 299,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet."
+      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet. | 22:41Z PR #299 head 3802a214: About 31.9 KB; other Settings +160-205 B (vs #293 note); Alerts route 29,168->29,200 (=limit) - reviewer to root-cause, no raise. Approved shell test edits; marker next push. Reviewer launched; subscribed."
     },
     "B-update": {
       "status": "paused",
@@ -2665,6 +2665,7 @@
     }
   },
   "followups": [
+    "App-wide stale-tab check (from S-about): compare UI build id vs server on every page load (app shell), offer reload; About-only check can't fire after upgrade because its chunk is gone. Shell slice (Sonnet ok, Opus review). Coordinate with #296's version name.",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
