@@ -211,7 +211,9 @@ impl Hints {
     /// entries are at most 2 × [`HINT_CAPACITY`] (two families), so after
     /// a compaction at least 2 × the cap captures pass before the next:
     /// amortised O(1) per capture. `retain` keeps the time order that
-    /// [`Hints::prune_hints`] relies on.
+    /// [`Hints::prune_hints`] relies on. A slot taken and recaptured at the
+    /// same `Instant` keeps its stale entry too; with a real clock that's
+    /// rare, and the stale one goes once the hint is used or expires.
     fn compact_order(&mut self) {
         let by_key = &self.by_key;
         self.order.retain(|(at, key, s)| {

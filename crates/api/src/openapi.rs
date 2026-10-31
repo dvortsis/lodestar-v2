@@ -67,8 +67,8 @@ pub fn document() -> Doc {
     doc
 }
 
-/// Each module's part of the document, in merge order. A later part's
-/// schema silently replaces an earlier one of the same name, so the tests
+/// Each module's part of the document, in merge order. A merge keeps the
+/// first schema of a name and silently drops a later one, so the tests
 /// check that no two parts disagree on one.
 fn parts() -> Vec<(&'static str, Doc)> {
     // Add a module, add one line.
@@ -232,11 +232,13 @@ mod tests {
     }
 
     /// #255: `DiscoverResponse` and `HistogramBin` were each defined twice,
-    /// and `openapi.json` kept only the last. A type shared by several
+    /// and `openapi.json` kept only the first. A type shared by several
     /// modules is fine; two shapes under one name aren't.
     #[test]
     fn no_two_modules_register_one_component_name_differently() {
-        assert_eq!(collisions(&parts()), Vec::<String>::new());
+        let mut all = vec![("base", Base::openapi())];
+        all.extend(parts());
+        assert_eq!(collisions(&all), Vec::<String>::new());
     }
 
     #[test]
