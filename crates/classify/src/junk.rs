@@ -146,7 +146,7 @@ pub(crate) fn score(
         if ext::category_of(e) == Category::Video {
             largest_video = largest_video.max(f.size);
         }
-        if f.size < 64 * 1024 && is_lure_name(name) {
+        if lure_hits(f).next().is_some() {
             lure = true;
         }
     }
@@ -213,22 +213,34 @@ fn hides_media_extension(name: &str, dangerous: &str) -> bool {
     })
 }
 
-fn is_lure_name(name: &str) -> bool {
-    let low = name.to_ascii_lowercase();
-    const LURES: &[&str] = &[
-        "password",
-        "passwd",
-        "click here",
-        "how to open",
-        "how to download",
-        "how to unlock",
-        "read me to unlock",
-        "get the key",
-        "visit www",
-        "visit http",
-        "download here",
-    ];
-    LURES.iter().any(|l| low.contains(l))
+/// Lure notes are small; a larger file isn't one.
+const LURE_MAX_SIZE: u64 = 64 * 1024;
+
+const LURES: &[&str] = &[
+    "password",
+    "passwd",
+    "click here",
+    "how to open",
+    "how to download",
+    "how to unlock",
+    "read me to unlock",
+    "get the key",
+    "visit www",
+    "visit http",
+    "download here",
+];
+
+/// The lure texts a file's name holds, as the `lure-file` reason reads
+/// them: ASCII-lowercase substrings, so `MyPassword.txt` holds
+/// `password`. None for padding or a file of 64 KiB or more. The filter's
+/// LU-1 reads these, so the size and the list live only here (§20.6).
+pub fn lure_hits(f: &FileInfo) -> impl Iterator<Item = &'static str> {
+    let low = if f.padding || f.size >= LURE_MAX_SIZE {
+        String::new()
+    } else {
+        f.name().to_ascii_lowercase()
+    };
+    LURES.iter().copied().filter(move |l| low.contains(l))
 }
 
 #[cfg(test)]
@@ -252,9 +264,51 @@ mod tests {
 
     #[test]
     fn lures() {
-        assert!(is_lure_name("PASSWORD.txt"));
-        assert!(is_lure_name("Visit www.example.com for more.txt"));
-        assert!(!is_lure_name("Movie.nfo"));
+        let hits = |name: &str, size: u64| {
+            lure_hits(&FileInfo::new(vec!["dir".into(), name.into()], size)).collect::<Vec<_>>()
+        };
+        assert_eq!(hits("PASSWORD.txt", 90), ["password"]);
+        assert_eq!(hits("MyPassword.txt", 90), ["password"]);
+        assert_eq!(
+            hits("Click here, visit www.example.com.txt", 90),
+            ["click here", "visit www"]
+        );
+        assert!(hits("Movie.nfo", 90).is_empty());
+        // Only small files, and never padding.
+        assert_eq!(hits("password.txt", LURE_MAX_SIZE - 1), ["password"]);
+        assert!(hits("password.txt", LURE_MAX_SIZE).is_empty());
+        let mut pad = FileInfo::new(vec!["password.txt".into()], 90);
+        pad.padding = true;
+        assert!(lure_hits(&pad).next().is_none());
+    }
+
+    /// The lure reason and its weight, pinned: the filter's LU-1 reads
+    /// [`lure_hits`], and the score must stay what it was.
+    #[test]
+    fn lure_file_scores_as_before() {
+        let junk = |notes: &[(&str, u64, bool)]| {
+            let mut files = vec![FileInfo::new(vec!["Movie.2019.1080p.rar".into()], 4 << 30)];
+            for (n, size, padding) in notes {
+                let mut f = FileInfo::new(vec![(*n).into()], *size);
+                f.padding = *padding;
+                files.push(f);
+            }
+            crate::classify("Movie 2019 1080p", &files).junk
+        };
+        let lure = Junk {
+            score: 70,
+            reasons: vec![JunkReason::LureFile, JunkReason::ArchiveForMedia],
+        };
+        let plain = Junk {
+            score: 30,
+            reasons: vec![JunkReason::ArchiveForMedia],
+        };
+        assert_eq!(junk(&[("password.txt", 90, false)]), lure);
+        assert_eq!(junk(&[("MyPassword.txt", 90, false)]), lure);
+        assert_eq!(junk(&[("Click here.txt", LURE_MAX_SIZE - 1, false)]), lure);
+        assert_eq!(junk(&[("password.txt", LURE_MAX_SIZE, false)]), plain);
+        assert_eq!(junk(&[("password.txt", 90, true)]), plain);
+        assert_eq!(junk(&[("readme.txt", 90, false)]), plain);
     }
 
     #[test]

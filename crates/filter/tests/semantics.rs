@@ -796,6 +796,39 @@ fn a_neutralized_word_is_no_pack_evidence() {
     );
 }
 
+// LU-1-neutralize: LU-1's lure notes honour Neutralize terms too.
+#[test]
+fn a_neutralized_lure_word_is_no_lu1_evidence() {
+    use lodestar_filter::PackRule;
+    let lu1 = Some(RuleRef::Pack(PackRule::Lu1));
+    let name = "Movie 2019 1080p";
+    let archive = FileInfo::new(vec!["Movie.2019.1080p.rar".into()], 4 << 30);
+    let note = |n: &str| FileInfo::new(vec![n.into()], 90);
+    let files = [archive.clone(), note("password.txt")];
+    assert_eq!(pack_decision(name, &files, &[]), lu1);
+    // FK-5 still demotes the archive standing in for the media.
+    assert_eq!(
+        pack_decision(name, &files, &[neutralize("password")]),
+        Some(RuleRef::Pack(PackRule::Fk5))
+    );
+    // Another lure note still counts.
+    let two = [
+        archive.clone(),
+        note("password.txt"),
+        note("Click here.url"),
+    ];
+    assert_eq!(pack_decision(name, &two, &[neutralize("password")]), lu1);
+    // An entry in shadow mode neutralizes nothing.
+    let shadow = Override {
+        shadow_until: Some(10),
+        ..neutralize("password")
+    };
+    assert_eq!(pack_decision(name, &files, &[shadow]), lu1);
+    // A lure inside a joined word isn't the bare word.
+    let joined = [archive, note("MyPassword.txt")];
+    assert_eq!(pack_decision(name, &joined, &[neutralize("password")]), lu1);
+}
+
 /// The floor holds against a Neutralize entry for every word of the
 /// torrent while packs are on.
 #[test]
