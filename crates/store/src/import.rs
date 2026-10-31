@@ -560,20 +560,26 @@ pub mod event {
     pub const REMOVED: u32 = 8;
 }
 
-/// The annotation a phase or control change writes, if any.
-fn change_event(before: &ImportJob, after: &ImportJob) -> Option<u32> {
-    let began = before.phase.code() >= Phase::Reading.code();
-    if after.phase == Phase::Reading && !began {
-        Some(event::STARTED)
-    } else if (after.phase == Phase::Indexing && before.phase != Phase::Indexing)
-        || (began
-            && before.phase.code() < Phase::Indexing.code()
-            && matches!(after.control, Control::Cancelled | Control::Failed))
-    {
-        Some(event::FINISHED)
-    } else {
-        None
+/// The annotations a phase or control change writes, oldest first. A job
+/// may skip phases forward, so one change can both begin and finish it.
+fn change_events(before: &ImportJob, after: &ImportJob) -> Vec<u32> {
+    let reading = Phase::Reading.code();
+    let indexing = Phase::Indexing.code();
+    let (began, begins) = (
+        before.phase.code() >= reading,
+        after.phase.code() >= reading,
+    );
+    let mut out = Vec::new();
+    if begins && !began {
+        out.push(event::STARTED);
     }
+    let ended = matches!(after.control, Control::Cancelled | Control::Failed);
+    if before.phase.code() < indexing
+        && (after.phase.code() >= indexing || (ended && (began || begins)))
+    {
+        out.push(event::FINISHED);
+    }
+    out
 }
 
 impl Store {
@@ -694,7 +700,7 @@ impl Store {
             ],
         )?;
         let changed = load(&tx, id)?;
-        if let Some(kind) = change_event(&job, &changed) {
+        for kind in change_events(&job, &changed) {
             let mut detail = format!("job={id} source={}", changed.adapter);
             if kind == event::FINISHED {
                 let c = &changed.counters;
@@ -1150,14 +1156,17 @@ impl Store {
 
 /// Adds `deleted` to the job's removal annotation, written at the first
 /// step that deleted anything, so a removal in many steps is one event.
+/// A removal resumed more than an hour after that annotation starts a new
+/// one, so each spike in `REMOVED` has its marker nearby.
 fn annotate_removal(tx: &Connection, job: &ImportJob, deleted: u64) -> Result<()> {
     let prefix = format!("job={} source={} removed=", job.id, job.adapter);
     let last: Option<(i64, String)> = tx
         .prepare_cached(
-            "SELECT id, detail FROM events WHERE kind = ?1 AND substr(detail, 1, ?2) = ?3
+            "SELECT id, detail FROM events
+             WHERE kind = ?1 AND instr(detail, ?2) = 1 AND at >= unixepoch() - 3600
              ORDER BY id DESC LIMIT 1",
         )?
-        .query_row(params![event::REMOVED, prefix.len() as i64, prefix], |r| {
+        .query_row(params![event::REMOVED, prefix], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .optional()?;

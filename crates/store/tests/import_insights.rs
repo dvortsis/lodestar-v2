@@ -355,3 +355,29 @@ fn a_fetch_of_an_imported_torrent_is_not_new_to_the_gate() {
         w.prepared
     );
 }
+
+/// Phases may skip forward: a job that jumps past `reading` still
+/// annotates its start, and one change can begin and finish it.
+#[test]
+fn a_job_that_skips_phases_still_annotates_its_start() {
+    let mut store = mem();
+    let job = store
+        .create_import_job(&NewImportJob {
+            adapter: "magnetico",
+            adapter_ver: 1,
+            dataset: b"ds",
+            schema_sig: b"sig",
+            options: b"{}",
+            credential: None,
+            at: T,
+        })
+        .unwrap();
+    store
+        .set_import_phase(job.id, job.revision, Phase::Indexing, T + 5)
+        .unwrap();
+    let kinds: Vec<(i64, u32)> = import_events(&store)
+        .iter()
+        .map(|e| (e.at, e.kind))
+        .collect();
+    assert_eq!(kinds, [(T + 5, event::STARTED), (T + 5, event::FINISHED)]);
+}

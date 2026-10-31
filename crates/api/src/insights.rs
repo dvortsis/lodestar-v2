@@ -2204,6 +2204,8 @@ mod tests {
             };
             counters.extend([
                 c(codes::metric::NEWLY_SEARCHABLE, (k % 3) as u32, 0, k + 1),
+                // Imports apart (key 1), in the same hours (IMP-5).
+                c(codes::metric::NEWLY_SEARCHABLE, (k % 2) as u32, 1, k % 4),
                 c(codes::metric::STORED, 0, 0, k),
                 c(
                     codes::metric::COVERAGE,
@@ -2245,8 +2247,22 @@ mod tests {
             );
             assert_eq!(a.trend, b.trend);
             assert_eq!(
-                (a.stages, a.new_searchable, a.yield_, a.p50, a.p95),
-                (b.stages, b.new_searchable, b.yield_, b.p50, b.p95)
+                (
+                    a.stages,
+                    a.new_searchable,
+                    a.new_searchable_imported,
+                    a.yield_,
+                    a.p50,
+                    a.p95
+                ),
+                (
+                    b.stages,
+                    b.new_searchable,
+                    b.new_searchable_imported,
+                    b.yield_,
+                    b.p50,
+                    b.p95
+                )
             );
             assert_eq!(funnel(&a.cohorts), funnel(&b.cohorts));
             let names = BTreeMap::new();
@@ -2339,6 +2355,8 @@ mod tests {
             };
             counters.extend([
                 c(codes::metric::NEWLY_SEARCHABLE, (k % 3) as u32, 0, k + 1),
+                // Imports apart (key 1), in the same hours (IMP-5).
+                c(codes::metric::NEWLY_SEARCHABLE, (k % 2) as u32, 1, k % 4),
                 c(codes::metric::STORED, 0, 0, k),
                 c(
                     codes::metric::COVERAGE,
@@ -2410,6 +2428,7 @@ mod tests {
                         p.stages,
                         p.fetch,
                         p.new_searchable,
+                        p.new_searchable_imported,
                         p.yield_,
                         p.p50,
                         p.p95,
@@ -2448,7 +2467,7 @@ mod tests {
             },
         );
         assert_eq!(after, before);
-        assert_eq!(before[1].9, Some(77), "the compacted day's gauge");
+        assert_eq!(before[1].10, Some(77), "the compacted day's gauge");
         assert!(before[0].2.is_some_and(|n| n > 0));
         // Fetches weren't counted before `funnel_events_since_hour`.
         let late = InsightsState {
