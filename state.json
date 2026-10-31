@@ -1677,7 +1677,7 @@
    "pr": 279,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p"
+   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p | 14:25Z MERGE at 48c0f1b6 (3 optional); waiting on test ubuntu/windows"
   },
   "B-import-refile": {
    "status": "running",
@@ -2485,7 +2485,9 @@
   "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
   "Logging slice: the §10.10.7 banner while query_logging is on (#277 review; left to §10.10.12)",
   "lib/ui Lazy.svelte: load-failure message lacks role=alert/status (#277 review)",
-  "Settings engine: lift the reveal + hash-focus logic shared by SectionForm and screens2/GroupedForm into form/reveal.svelte.ts (#277 review)"
+  "Settings engine: lift the reveal + hash-focus logic shared by SectionForm and screens2/GroupedForm into form/reveal.svelte.ts (#277 review)",
+  "hints.rs compact_order: make the amortised bound unconditional (next_compact = max(ORDER_CAPACITY, 2*len)) or skip duplicate push_back (#279 review 1)",
+  "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
