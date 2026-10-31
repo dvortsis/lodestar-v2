@@ -60,32 +60,43 @@ struct Base;
 /// [`crate::router`] merges their routes.
 pub fn document() -> Doc {
     let mut doc = Base::openapi();
-    // Add a module, add one line.
-    doc.merge(crate::auth::ApiDoc::openapi());
-    doc.merge(crate::search::ApiDoc::openapi());
-    doc.merge(crate::facets::ApiDoc::openapi());
-    doc.merge(crate::suggest::ApiDoc::openapi());
-    doc.merge(crate::torrents::ApiDoc::openapi());
-    doc.merge(crate::filters::ApiDoc::openapi());
-    doc.merge(crate::settings::ApiDoc::openapi());
-    doc.merge(crate::ops::ApiDoc::openapi());
-    doc.merge(crate::compare::ApiDoc::openapi());
-    doc.merge(crate::discover::ApiDoc::openapi());
-    doc.merge(crate::insights::ApiDoc::openapi());
-    doc.merge(crate::digest::ApiDoc::openapi());
-    doc.merge(crate::events::ApiDoc::openapi());
-    doc.merge(crate::keys::ApiDoc::openapi());
-    doc.merge(crate::user_items::ApiDoc::openapi());
-    doc.merge(crate::collections::ApiDoc::openapi());
-    doc.merge(crate::saved::ApiDoc::openapi());
-    doc.merge(crate::export::ApiDoc::openapi());
-    doc.merge(crate::jobs::ApiDoc::openapi());
-    doc.merge(crate::system::ApiDoc::openapi());
-    doc.merge(crate::updates::ApiDoc::openapi());
-    doc.merge(crate::alerts::ApiDoc::openapi());
-    doc.merge(crate::logs::ApiDoc::openapi());
+    for (_, part) in parts() {
+        doc.merge(part);
+    }
     finish(&mut doc);
     doc
+}
+
+/// Each module's part of the document, in merge order. A merge keeps the
+/// first schema of a name and silently drops a later one, so the tests
+/// check that no two parts disagree on one.
+fn parts() -> Vec<(&'static str, Doc)> {
+    // Add a module, add one line.
+    vec![
+        ("auth", crate::auth::ApiDoc::openapi()),
+        ("search", crate::search::ApiDoc::openapi()),
+        ("facets", crate::facets::ApiDoc::openapi()),
+        ("suggest", crate::suggest::ApiDoc::openapi()),
+        ("torrents", crate::torrents::ApiDoc::openapi()),
+        ("filters", crate::filters::ApiDoc::openapi()),
+        ("settings", crate::settings::ApiDoc::openapi()),
+        ("ops", crate::ops::ApiDoc::openapi()),
+        ("compare", crate::compare::ApiDoc::openapi()),
+        ("discover", crate::discover::ApiDoc::openapi()),
+        ("insights", crate::insights::ApiDoc::openapi()),
+        ("digest", crate::digest::ApiDoc::openapi()),
+        ("events", crate::events::ApiDoc::openapi()),
+        ("keys", crate::keys::ApiDoc::openapi()),
+        ("user_items", crate::user_items::ApiDoc::openapi()),
+        ("collections", crate::collections::ApiDoc::openapi()),
+        ("saved", crate::saved::ApiDoc::openapi()),
+        ("export", crate::export::ApiDoc::openapi()),
+        ("jobs", crate::jobs::ApiDoc::openapi()),
+        ("system", crate::system::ApiDoc::openapi()),
+        ("updates", crate::updates::ApiDoc::openapi()),
+        ("alerts", crate::alerts::ApiDoc::openapi()),
+        ("logs", crate::logs::ApiDoc::openapi()),
+    ]
 }
 
 /// The document as served and committed: pretty-printed, keys in a
@@ -186,4 +197,78 @@ pub(crate) async fn openapi_json() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "application/json")],
         JSON.get_or_init(json).as_str(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use utoipa::ToSchema;
+
+    use super::*;
+
+    /// Component names that two parts define differently, with the parts.
+    fn collisions(parts: &[(&'static str, Doc)]) -> Vec<String> {
+        let mut seen: BTreeMap<&str, (&str, serde_json::Value)> = BTreeMap::new();
+        let mut found = Vec::new();
+        for (module, part) in parts {
+            let Some(components) = &part.components else {
+                continue;
+            };
+            for (name, schema) in &components.schemas {
+                let schema = serde_json::to_value(schema).expect("a schema serializes");
+                match seen.get(name.as_str()) {
+                    Some((first, earlier)) if *earlier != schema => {
+                        found.push(format!("{name}: {first} and {module}"));
+                    }
+                    Some(_) => {}
+                    None => {
+                        seen.insert(name, (module, schema));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// #255: `DiscoverResponse` and `HistogramBin` were each defined twice,
+    /// and `openapi.json` kept only the first. A type shared by several
+    /// modules is fine; two shapes under one name aren't.
+    #[test]
+    fn no_two_modules_register_one_component_name_differently() {
+        let mut all = vec![("base", Base::openapi())];
+        all.extend(parts());
+        assert_eq!(collisions(&all), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_guard_catches_a_collision() {
+        #[derive(ToSchema)]
+        #[allow(dead_code)]
+        struct Bin {
+            lo: u32,
+        }
+        mod other {
+            #[derive(utoipa::ToSchema)]
+            #[allow(dead_code)]
+            pub struct Bin {
+                pub lo: f64,
+            }
+        }
+        #[derive(OpenApi)]
+        #[openapi(components(schemas(Bin)))]
+        struct A;
+        #[derive(OpenApi)]
+        #[openapi(components(schemas(other::Bin)))]
+        struct B;
+        assert_eq!(
+            collisions(&[
+                ("a", A::openapi()),
+                ("b", B::openapi()),
+                ("c", A::openapi())
+            ]),
+            ["Bin: a and b"]
+        );
+        assert!(collisions(&[("a", A::openapi()), ("c", A::openapi())]).is_empty());
+    }
 }

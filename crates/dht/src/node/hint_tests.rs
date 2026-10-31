@@ -381,3 +381,40 @@ async fn a_hinted_reply_streams_its_peers_to_a_session() {
     assert_eq!(s.terminal.try_recv(), Ok(LookupEnd::Complete));
     assert!(a.peer_requests.is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_hinted_send_falls_back_and_counts_send_failed() {
+    let (mut a, mut sockets, _rx) = actor(true);
+    // An IPv6 family whose socket is an IPv4 stand-in: a send to an IPv6
+    // hint passes every check, then fails at the socket on every host.
+    let stand_in = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    stand_in.set_nonblocking(true).unwrap();
+    sockets.push(SendSocket::Udp(stand_in));
+    a.families.push(Family {
+        table: RoutingTable::new(a.ids[0], true),
+        ipv6: true,
+    });
+    let v6: SocketAddr = "[2a00::1]:6881".parse().unwrap();
+    let now = Instant::now();
+    assert_eq!(
+        a.hints.as_mut().unwrap().capture(hash(1), v6, now),
+        Ok(true)
+    );
+    let mut reply = request(&mut a, &sockets, hash(1));
+    assert_eq!(fallbacks(&a, HintFallback::SendFailed), 1);
+    assert_eq!(get(&a.stats.send_errors), 1);
+    // No hinted query went out: none counted, none pending, and the IP
+    // isn't restricted, since only a sent query sets the guard.
+    assert_eq!(get(&a.stats.hint_queries), 0);
+    assert!(hinted(&a).is_empty());
+    assert!(!a.hints.as_ref().unwrap().restricts(v6.ip(), now));
+    // Ordinary routing drove both legs at once; with nobody to ask, the
+    // request answers now rather than at its deadline.
+    assert_eq!(reply.try_recv(), Ok(vec![]));
+    let others: u64 = HintFallback::ALL
+        .iter()
+        .filter(|w| **w != HintFallback::SendFailed)
+        .map(|w| fallbacks(&a, *w))
+        .sum();
+    assert_eq!(others, 0);
+}
