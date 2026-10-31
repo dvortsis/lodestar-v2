@@ -24,29 +24,33 @@ vi.mock('../results/results.svelte', () => ({
 }));
 
 const { default: LiveHost } = await import('./LiveHost.svelte');
+const moveTo = vi.fn();
+const list = () => ({ moveTo });
 
 it('shows nothing until results are new, and Show reloads from the top', async () => {
-	const { unmount } = render(LiveHost, {});
+	const { unmount } = render(LiveHost, { list });
 	expect(screen.queryByTestId('results-live')).toBeNull();
 	unmount();
 
 	state.fresh = 1;
-	render(LiveHost, {});
+	render(LiveHost, { list });
 	expect(screen.getByTestId('results-live').textContent).toBe('1 new result');
 	await fireEvent.click(screen.getByTestId('results-live-show'));
 	expect(state.reset).toHaveBeenCalled();
 	await vi.waitFor(() => expect(state.reload).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+	// The list owns its active row and focus after Show.
+	await vi.waitFor(() => expect(moveTo).toHaveBeenCalledWith(0), { timeout: 10_000 });
 });
 
 it('counts with the locale formatter', () => {
 	state.fresh = 1240;
-	render(LiveHost, {});
+	render(LiveHost, { list });
 	expect(screen.getByTestId('results-live').textContent).toBe('1,240 new results');
 });
 
 it('pauses polling while a selection is held or the list is scrolled deep', () => {
 	state.fresh = 0;
-	render(LiveHost, {});
+	render(LiveHost, { list });
 	const paused = () => state.deps!.paused();
 	expect(paused()).toBe(false);
 	state.selection.mode = true;
