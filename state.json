@@ -2354,7 +2354,7 @@
     },
     {
       "id": "OC10",
-      "action": "Later: PostgreSQL 16 restore of the Bitmagnet dump per IMP-0 runbook; Unraid 24 h rc soak; Windows service-mode rc run",
+      "action": "Later: PostgreSQL 16 restore of the Bitmagnet dump per IMP-0 runbook; Unraid 24 h rc soak; Windows service-mode rc run [Windows service-mode rc run DONE 2026-10-31 on rc.2]",
       "unblocks": "IMP-3 pilots, G-v051"
     },
     {
@@ -2587,7 +2587,8 @@
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
     "HeldSet: close the ms gap between a new hold's store commit and its HeldSet insert (insert batch hashes before commit, reconcile after) (#287 review opt 4)",
-    "B-held-exact nits (optional, #287 re-check): held.rs:6-9 move CHECK_CHUNK above HeldSet doc; decisions 'Errors fail closed' bullet -> 'that chunk and every later one'. Ride next filter/held PR."
+    "B-held-exact nits (optional, #287 re-check): held.rs:6-9 move CHECK_CHUNK above HeldSet doc; decisions 'Errors fail closed' bullet -> 'that chunk and every later one'. Ride next filter/held PR.",
+    "X-soak-docker-memrule: in collect.py Docker mode, apply the 1 GiB x5 guardrail to private_bytes (cgroup anon), keep working_set as a gauge; document why (Linux cgroup charges page cache). Small PR; Opus (soak evidence). Only for runs started after it merges."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
@@ -2755,7 +2756,19 @@
           "working_set_mib": 627.5,
           "restart_count": 0
         },
-        "next": "gluetun leg >=2 h measured after baseline end"
+        "next": "gluetun leg >=2 h measured after baseline end",
+        "prelim_14h": {
+          "at": "~2026-10-31T17:50Z",
+          "not_gate_evidence": true,
+          "restarts": 0,
+          "errors": 0,
+          "torrents": 18922,
+          "per_hour": 665,
+          "private_mib": 800,
+          "private_slope_h12_14": "-0.40 MiB/h CI[-6.08,+5.28]",
+          "working_set_mib": "960-1010, 25 samples >1024, peak 1070.97, max 3 consecutive"
+        },
+        "risk": "Docker working set = memory.current - inactive_file includes active page cache charged to the cgroup; 1 GiB x5 stop rule may trip on cache, not a leak. A trip ends collection (reason rss_over_1GiB_for_five_samples) -> analyzer status interrupted -> no gate evidence -> re-run (never stitched). Proposed follow-up: in Docker mode apply the guardrail to anon (private_bytes), keep working set as a recorded gauge."
       },
       "windows_portable": {
         "result": "PASS",
@@ -2777,7 +2790,13 @@
         "handles": 353
       },
       "memory_gate_fit": "owner ruling on #189 (h12-24 private fit) still open; the Linux soak analysis reports it",
-      "checksums": "2026-10-31 owner recorded SHA256SUMS for rc.2 (6be95525) in notes/v051-owner-steps.md; minisign verifies against packaging/keys/lodestar-release.pub; all 4 artifacts match (MSI named lodestar-0.5.1-x86_64.msi, no rc suffix, as MSI versions require)"
+      "checksums": "2026-10-31 owner recorded SHA256SUMS for rc.2 (6be95525) in notes/v051-owner-steps.md; minisign verifies against packaging/keys/lodestar-release.pub; all 4 artifacts match (MSI named lodestar-0.5.1-x86_64.msi, no rc suffix, as MSI versions require)",
+      "windows_msi_options": {
+        "result": "PASS",
+        "reported": "2026-10-31T18:09Z via owner dashboard session",
+        "detail": "MSI options pass (DEFENDER_EXCLUSION=1 WEB_FIREWALL=1, REMOVE_DATA=1) and reduced MSI-defaults pass both clean; firewall back to 739 rules"
+      },
+      "windows": "CLOSED 2026-10-31T18:10Z: portable PASS, MSI service-mode PASS (7h09m), MSI options + defaults passes PASS"
     }
   },
   "owner_standing": {
