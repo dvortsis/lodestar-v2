@@ -239,6 +239,10 @@ export function createResults() {
 			loadingMore = false;
 			status = 'empty';
 		},
+		/** The current query again from the top, whatever failed before (the live banner's Show). */
+		reload() {
+			return current ? untrack(() => run(current!, true)) : Promise.resolve();
+		},
 		/** Retry: the current query again (after an error), or the next page. */
 		retry() {
 			if (moreError) {

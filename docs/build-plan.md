@@ -98,7 +98,7 @@ At most four helper slices at a time in this phase (§2.25), filled in this orde
   - **What counts:** unique infohashes fetched and verified from the network in this run, committed and searchable.
   - **Where it's measured:** one node, one public IP, a fresh data directory with no imports, the Balanced preset.
   - **Target:** ≥ 100 per minute sustained, comparable to a pinned bitmagnet run. The stretch target is 1,000/min, which remote workers also serve.
-  - **Thresholds proposed for the owner to confirm:** 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
+  - **Thresholds (decided 2026-10-31 under `docs/owner-decisions.md` §2.26):** 24 h mean ≥ 100/min, no hour below 70/min, p95 discovery-to-searchable ≤ 10 min. That figure runs from the first sighting of the infohash and includes the metadata fetch; it doesn't replace §1.6's "new torrent → searchable < 5 s", which starts once the metadata is stored.
   - Politeness and network guardrails are never relaxed to reach it.
 - **Import scale:**
   - pilots at 10k → 100k → 1M → 10M, each measured against §1.6's budgets, including about 2.3 KB per torrent all-in; any excess goes to the owner (the owner's ladder in §2.25 is 1M → 10M → 50M; 10k and 100k are runner smoke stages);

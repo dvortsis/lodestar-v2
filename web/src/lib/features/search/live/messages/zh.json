@@ -1,0 +1,9 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_live_new_one": "1 个新结果",
+	"search_live_new_other": "{count} 个新结果",
+	"search_live_show": "显示",
+	"search_live_show_label": "显示 {count} 个新结果",
+	"search_live_announce_one": "1 个新结果。使用“显示”加载。",
+	"search_live_announce_other": "{count} 个新结果。使用“显示”加载。"
+}
