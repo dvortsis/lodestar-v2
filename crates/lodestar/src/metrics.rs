@@ -187,6 +187,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         );
     }
     render_admission(&mut o, p);
+    render_stream_pool(&mut o, p);
     // Attempts and successes per transport; the success family replaces
     // the pool's unlabelled count (see `write_prometheus` for how the two
     // can differ). The uTP socket's own
@@ -460,6 +461,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         }
         render_permit_returns(&mut o, d);
         render_hints(&mut o, d);
+        render_stream_dht(&mut o, d);
         o.one(
             "dht_peer_cancelled_total",
             "counter",
@@ -935,6 +937,93 @@ fn render_admission(o: &mut Out, p: &lodestar_sources::PoolStats) {
     );
 }
 
+/// CR-1a-S's streaming families on the pool's side (docs/metrics.md).
+fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    o.one(
+        "fetch_stream_batches_total",
+        "counter",
+        "Peer batches read from streaming lookups.",
+        get(&p.stream_batches),
+    );
+    o.one(
+        "fetch_stream_peers_capped_total",
+        "counter",
+        "Streamed peers turned away because the key already held its peer cap.",
+        get(&p.stream_peers_capped),
+    );
+    o.family(
+        "fetch_stream_terminals_total",
+        "counter",
+        "Streaming lookup ends the pool saw, by kind.",
+    );
+    for (i, t) in lodestar_sources::Terminal::ALL.iter().enumerate() {
+        o.value(
+            "fetch_stream_terminals_total",
+            &format!("kind=\"{}\"", t.label()),
+            get(&p.stream_terminals[i]),
+        );
+    }
+    o.one(
+        "fetch_stream_first_fetch_seconds_total",
+        "counter",
+        "Time from a key's first streamed batch to its first fetch start.",
+        format_args!("{:.3}", get(&p.stream_first_fetch_millis) as f64 / 1000.0),
+    );
+    o.one(
+        "fetch_stream_first_fetches_total",
+        "counter",
+        "Keys whose first fetch followed a streamed batch.",
+        get(&p.stream_first_fetches),
+    );
+}
+
+/// CR-1a-S's streaming families on the DHT's side (docs/metrics.md).
+fn render_stream_dht(o: &mut Out, d: &StatsSnapshot) {
+    o.one(
+        "dht_peer_stream_batches_total",
+        "counter",
+        "Peer batches sent to streaming lookups.",
+        d.peer_stream_batches,
+    );
+    o.one(
+        "dht_peer_stream_backpressure_total",
+        "counter",
+        "Streamed peers dropped because the caller's batches were full.",
+        d.peer_stream_backpressure,
+    );
+    o.one(
+        "dht_peer_stream_seen_full_total",
+        "counter",
+        "Peers ignored once a streaming lookup had seen 32.",
+        d.peer_stream_seen_full,
+    );
+    o.family(
+        "dht_peer_stream_terminals_total",
+        "counter",
+        "Streaming lookup ends, by kind.",
+    );
+    for (i, end) in lodestar_dht::node::LookupEnd::ALL.iter().enumerate() {
+        o.value(
+            "dht_peer_stream_terminals_total",
+            &format!("kind=\"{}\"", end.label()),
+            d.peer_stream_terminals[i],
+        );
+    }
+    o.one(
+        "dht_peer_stream_first_batch_seconds_total",
+        "counter",
+        "Time from a streaming request's start to its first batch.",
+        format_args!("{:.3}", d.peer_stream_first_batch_millis as f64 / 1000.0),
+    );
+    o.one(
+        "dht_peer_stream_first_batches_total",
+        "counter",
+        "Streaming requests that sent a batch.",
+        d.peer_stream_first_batches,
+    );
+}
+
 /// Admission permits the DHT actor returned, by boundary (CR-ADM).
 fn render_permit_returns(o: &mut Out, d: &StatsSnapshot) {
     o.family(
@@ -1267,6 +1356,57 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
+
+    #[test]
+    fn streaming_families_render_each_label_with_its_own_value() {
+        let p = lodestar_sources::PoolStats::default();
+        let set = |a: &std::sync::atomic::AtomicU64, v| a.store(v, Ordering::Relaxed);
+        set(&p.stream_batches, 1);
+        set(&p.stream_peers_capped, 2);
+        set(&p.stream_terminals[3], 3);
+        set(&p.stream_first_fetch_millis, 4_500);
+        set(&p.stream_first_fetches, 5);
+        let mut d = StatsSnapshot {
+            peer_stream_batches: 6,
+            peer_stream_backpressure: 7,
+            peer_stream_seen_full: 8,
+            peer_stream_first_batch_millis: 1_250,
+            peer_stream_first_batches: 9,
+            ..StatsSnapshot::default()
+        };
+        d.peer_stream_terminals[1] = 10;
+        let mut o = Out(String::new());
+        render_stream_pool(&mut o, &p);
+        render_stream_dht(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_fetch_stream_batches_total counter",
+            "lodestar_fetch_stream_batches_total 1",
+            "lodestar_fetch_stream_peers_capped_total 2",
+            "lodestar_fetch_stream_terminals_total{kind=\"source_failed\"} 3",
+            "lodestar_fetch_stream_terminals_total{kind=\"complete\"} 0",
+            "lodestar_fetch_stream_first_fetch_seconds_total 4.500",
+            "lodestar_fetch_stream_first_fetches_total 5",
+            "lodestar_dht_peer_stream_batches_total 6",
+            "lodestar_dht_peer_stream_backpressure_total 7",
+            "lodestar_dht_peer_stream_seen_full_total 8",
+            "lodestar_dht_peer_stream_terminals_total{kind=\"deadline\"} 10",
+            "lodestar_dht_peer_stream_terminals_total{kind=\"cancelled\"} 0",
+            "lodestar_dht_peer_stream_first_batch_seconds_total 1.250",
+            "lodestar_dht_peer_stream_first_batches_total 9",
+        ] {
+            assert!(
+                o.0.lines().any(|l| l == line),
+                "missing {line:?} in\n{}",
+                o.0
+            );
+        }
+        assert_eq!(
+            o.0.lines()
+                .filter(|l| l.contains("terminals_total{"))
+                .count(),
+            7
+        );
     }
 
     #[test]

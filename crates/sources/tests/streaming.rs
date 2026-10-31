@@ -588,3 +588,27 @@ async fn a_silent_streaming_request_is_unacknowledged_at_the_deadline() {
     let q = h.stop().await;
     assert_eq!(q[0].attempts, 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_silent_stream_after_a_failed_fetch_is_released_at_its_deadline() {
+    let mut h = Harness::start(
+        PoolConfig {
+            lookup_wait: Duration::from_secs(5),
+            ..config()
+        },
+        1,
+    );
+    let sent = Instant::now();
+    h.discover(1).await;
+    let s = accept(h.next(0).await);
+    // The only peer fails: the key waits on the lookup under a new
+    // generation, and the finder then says nothing more.
+    s.batch(&[peer(1)]);
+    until("the peer failed", || h.started() == [peer(1)]).await;
+    assert_eq!(h.lookups(), 1);
+    until("deadline", || h.lookups() == 0).await;
+    assert!(Instant::now().duration_since(sent) >= Duration::from_secs(5));
+    assert!(s.batches.is_closed(), "the session is cancelled");
+    let q = h.stop().await;
+    assert_eq!(q[0].attempts, 1, "backed off, attempt used");
+}

@@ -1465,6 +1465,8 @@ impl Pool {
         e.state = State::Backoff;
         e.generation = next_generation(&mut self.generations);
         let generation = e.generation;
+        // A retry starts its own first-batch clock.
+        self.first_batch.remove(&key);
         let delay = base
             .max(Duration::from_millis(1))
             .saturating_mul(4u32.saturating_pow(u32::from(e.attempts.saturating_sub(1))));

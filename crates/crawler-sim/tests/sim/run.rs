@@ -10,15 +10,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_dht::node::testing::{self, SimPort};
-use lodestar_dht::node::{Config, Harvest, Node, NodeHandle, Source, StatsSnapshot};
+use lodestar_dht::node::{
+    Config, Harvest, LookupEnd, Node, NodeHandle, SessionAdmit, SessionEnd, Source, StatsSnapshot,
+};
 use lodestar_peer_wire::FailureKind;
 use lodestar_sources::pool::spawn;
 use lodestar_sources::{
-    Discovery, FetchedKey, Found, FunnelCounts, Loss, PeerRequest, PoolConfig, PoolHandle, PoolIo,
-    PoolStats, Shutdown, Stage,
+    Discovery, FetchedKey, Found, FunnelCounts, LookupSession, Loss, PeerRequest, PoolConfig,
+    PoolHandle, PoolIo, PoolStats, SessionAdmission, Shutdown, Stage, Terminal,
 };
 use lodestar_store::{QueuedKey, SourceId};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
 
@@ -58,6 +60,12 @@ pub struct PoolEnd {
     pub evicted_service: [u64; 4],
     /// Coordinated admission (CR-ADM): waits, grants, refusals, holds.
     pub admission: [u64; 4],
+    /// Streaming peers (CR-1a-S): batches read, terminals by kind, and
+    /// the first-batch-to-fetch time's sum (ms) and count.
+    pub stream_batches: u64,
+    pub stream_terminals: [u64; 4],
+    pub stream_first_fetch_millis: u64,
+    pub stream_first_fetches: u64,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -113,6 +121,45 @@ fn strategy(source: Source) -> u8 {
     }
 }
 
+/// `crates/pipeline/src/dht.rs`'s session adapter (CR-1a-S), repeated
+/// here because the simulator doesn't depend on the pipeline: without it a
+/// streaming request would fall back to the final answer and the screen's
+/// "on" arm would silently run the old path.
+struct SimSession(SessionAdmission);
+
+impl SessionAdmit for SimSession {
+    fn is_closed(&self) -> bool {
+        self.0.is_closed()
+    }
+
+    fn admit(
+        self: Box<Self>,
+        batches: mpsc::Receiver<Vec<SocketAddr>>,
+    ) -> Option<Box<dyn SessionEnd>> {
+        let (tx, terminal) = oneshot::channel();
+        self.0
+            .send(Some(LookupSession { batches, terminal }))
+            .ok()
+            .map(|()| Box::new(SimEnd(tx)) as Box<dyn SessionEnd>)
+    }
+
+    fn refuse(self: Box<Self>) {
+        let _ = self.0.send(None);
+    }
+}
+
+struct SimEnd(oneshot::Sender<Terminal>);
+
+impl SessionEnd for SimEnd {
+    fn end(self: Box<Self>, end: LookupEnd) {
+        let _ = self.0.send(match end {
+            LookupEnd::Complete => Terminal::Complete,
+            LookupEnd::Deadline => Terminal::Deadline,
+            LookupEnd::Cancelled => Terminal::Cancelled,
+        });
+    }
+}
+
 /// The DHT plugin's loop (`DhtSource::run`), minus its stats mirror: owned
 /// peer requests go to the node; lookup harvests answer as replies and the
 /// rest are discoveries. Discovery times are virtual.
@@ -133,9 +180,15 @@ async fn glue(
             biased;
             _ = stop.changed() => break,
             req = requests.recv(), if requests_open => match req {
-                Some(r) => {
-                    node.request_peers_with(r.key, r.admit, r.permit);
-                }
+                Some(r) => match r.session {
+                    Some(session) => {
+                        drop(r.admit);
+                        node.request_session(r.key, Box::new(SimSession(session)), r.permit);
+                    }
+                    None => {
+                        node.request_peers_with(r.key, r.admit, r.permit);
+                    }
+                },
                 None => requests_open = false,
             },
             Some(h) = harvests.recv() => {
@@ -334,6 +387,10 @@ impl Leg {
                 sum(&p.admission_refusals),
                 l(&p.admission_holds),
             ],
+            stream_batches: l(&p.stream_batches),
+            stream_terminals: std::array::from_fn(|i| l(&p.stream_terminals[i])),
+            stream_first_fetch_millis: l(&p.stream_first_fetch_millis),
+            stream_first_fetches: l(&p.stream_first_fetches),
         }
     }
 
@@ -732,6 +789,25 @@ pub fn write_totals(t: &mut String, d: &StatsSnapshot, p: &PoolStats, funnel: &F
         (
             "dht_permit_returns",
             d.peer_permit_returns.iter().sum::<u64>(),
+        ),
+        // Streaming peers (CR-1a-S), likewise.
+        ("stream_batches", l(&p.stream_batches)),
+        ("stream_peers_capped", l(&p.stream_peers_capped)),
+        ("stream_terminals", sum(&p.stream_terminals)),
+        ("stream_source_failed", l(&p.stream_terminals[3])),
+        ("stream_first_fetches", l(&p.stream_first_fetches)),
+        ("stream_first_fetch_millis", l(&p.stream_first_fetch_millis)),
+        ("dht_stream_batches", d.peer_stream_batches),
+        ("dht_stream_backpressure", d.peer_stream_backpressure),
+        ("dht_stream_seen_full", d.peer_stream_seen_full),
+        (
+            "dht_stream_terminals",
+            d.peer_stream_terminals.iter().sum::<u64>(),
+        ),
+        ("dht_stream_first_batches", d.peer_stream_first_batches),
+        (
+            "dht_stream_first_batch_millis",
+            d.peer_stream_first_batch_millis,
         ),
     ] {
         let _ = writeln!(t, "{name}={v}");

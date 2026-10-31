@@ -121,6 +121,9 @@ pub(crate) struct Stream {
     end: Box<dyn SessionEnd>,
     pending: Vec<SocketAddr>,
     seen: Set<SocketAddr>,
+    /// A batch has gone out; [`Stream::first_sent`] reports it once.
+    sent: bool,
+    first_reported: bool,
 }
 
 impl Stream {
@@ -133,7 +136,16 @@ impl Stream {
             end,
             pending: Vec::with_capacity(STREAM_BATCH),
             seen: Set::default(),
+            sent: false,
+            first_reported: false,
         })
+    }
+
+    /// True once, after the first batch has gone out.
+    pub(crate) fn first_sent(&mut self) -> bool {
+        let first = self.sent && !self.first_reported;
+        self.first_reported |= first;
+        first
     }
 
     /// The caller dropped its receivers. Seen even with the channel full.
@@ -174,12 +186,17 @@ impl Stream {
         if self.pending.is_empty() {
             return;
         }
-        let batch = std::mem::replace(&mut self.pending, Vec::with_capacity(STREAM_BATCH));
-        match self.tx.try_send(batch) {
-            Ok(()) => Stats::inc(&stats.peer_stream_batches),
-            Err(mpsc::error::TrySendError::Full(batch)) => self.pending = batch,
+        // Reserve first, so a full channel costs no allocation.
+        match self.tx.try_reserve() {
+            Ok(permit) => {
+                let batch = std::mem::replace(&mut self.pending, Vec::with_capacity(STREAM_BATCH));
+                permit.send(batch);
+                self.sent = true;
+                Stats::inc(&stats.peer_stream_batches);
+            }
+            Err(mpsc::error::TrySendError::Full(())) => {}
             // The caller went; cancellation reclaims the request.
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Closed(())) => {}
         }
     }
 
