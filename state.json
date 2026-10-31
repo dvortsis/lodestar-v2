@@ -1843,7 +1843,7 @@
     "X-security-confirm-teardown": {
       "status": "building",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhnCmLXMy8i8SiLSD6uh",
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
