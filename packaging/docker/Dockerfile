@@ -20,7 +20,9 @@ COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund
 COPY web/ ./
-RUN npm run build
+# The UI's version name is the package version plus this short SHA (web/scripts/build-version.mjs).
+ARG REVISION=
+RUN GITHUB_SHA="$REVISION" npm run build
 
 # ---- 2. Rust binary --------------------------------------------------------
 FROM --platform=$BUILDPLATFORM rust:1.97-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS build
