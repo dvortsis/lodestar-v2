@@ -1671,13 +1671,13 @@
    "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus"
   },
   "X-polish-1031b": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnApMYvpxgsjfykU8zf",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line)"
+   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
