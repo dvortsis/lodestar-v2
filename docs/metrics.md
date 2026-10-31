@@ -748,10 +748,12 @@ These series count only with `dht.streaming_peers` on ([the decision](decisions/
 | `fetch_stream_batches_total` | Batches the pool read. |
 | `fetch_stream_peers_capped_total` | Streamed peers a key turned away because it already held its 32 peers. Apart from `dht_peer_stream_backpressure_total`. |
 | `fetch_stream_terminals_total{kind}` | Lookup ends the pool saw: `complete`, `deadline`, `cancelled`, or `source_failed` (the finder went without an end, never counted as success). |
-| `fetch_stream_first_fetch_seconds_total` | Time from a key's first kept batch to its first fetch start. |
+| `fetch_stream_first_fetch_seconds_total` | Time from a key's first streamed batch to its first fetch start. The clock starts only on a batch that added a peer to the key. |
 | `fetch_stream_first_fetches_total` | Keys whose first fetch followed a streamed batch. The ratio of the two rates is the mean wait. |
 
 `fetch_stream_batches_total` ≤ `dht_peer_stream_batches_total`: the pool doesn't read a batch queued for a lookup it has already let go of.
+
+**"First fetch ms" isn't one measurement in both arms.** With `dht.streaming_peers` off, these series stay 0, so the CR-1a-S screen uses the mean lookup run time instead (`dht_peer_lookup_seconds_total` over `dht_peer_lookups_answered_total`), because peers arrive only when the lookup ends. That covers every answered lookup, including ones with no peers, and stops at the answer, not at a fetch. With it on, the screen adds the mean time to the first batch to the pool's mean wait from that batch to a fetch start, so it counts only requests that sent a batch and keys that then started a fetch. Compare the two arms only with that caveat: an off-to-on change is a rough guide, not a like-for-like speed-up.
 
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 

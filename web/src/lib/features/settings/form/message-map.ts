@@ -4,9 +4,13 @@ export const LOADERS: Record<string, () => Promise<{ MESSAGES: Record<string, ()
 	crawler: () => import('./message-maps/crawler'),
 	general: () => import('./message-maps/general'),
 	group: () => import('./message-maps/group'),
+	insights: () => import('./message-maps/insights'),
+	integrations: () => import('./message-maps/integrations'),
 	network: () => import('./message-maps/network'),
+	notifications: () => import('./message-maps/notifications'),
 	preferences: () => import('./message-maps/preferences'),
 	search: () => import('./message-maps/search'),
 	storage: () => import('./message-maps/storage'),
+	trackers: () => import('./message-maps/trackers'),
 	transport: () => import('./message-maps/transport')
 };

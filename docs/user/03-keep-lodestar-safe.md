@@ -180,6 +180,8 @@ To restore on Unraid:
 
 You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
 
+After you restore a backup, the content filters are as they were when the backup was taken. Anything you did to them since is gone. A torrent you blocked, reported or deleted since then can come back, so block, report or delete it again. Filter changes you made since are undone, so make them again. The child-safety core is built in, so it is always on.
+
 ## 3.8 Restart without the six-hour wait
 <!-- index: safe restart; restart record; witness; six hours; Starting -->
 

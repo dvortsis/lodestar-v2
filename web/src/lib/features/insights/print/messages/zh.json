@@ -1,0 +1,7 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"insights_print_title": "洞察",
+	"insights_print_range": "范围:{range}",
+	"insights_print_compare": "与上一周期比较",
+	"insights_print_footer": "{url} · 生成于 {time}"
+}

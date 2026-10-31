@@ -1,0 +1,96 @@
+/* Print layout for /insights (§10.9.6). Loaded with PrintReport after the overview mounts, so it is
+   not in the route's first load. Everything is inside @media print; tokens only. */
+
+.ins-print-head,
+.ins-print-foot {
+	display: none;
+}
+
+@media print {
+	/* The app's chrome: the top bar, the skip link, banners' actions. */
+	body header,
+	a[href='#main'],
+	.ins-bar,
+	[data-testid='insights-strip'],
+	#insights-segments,
+	#insights-serve,
+	#insights-detail,
+	[data-testid='insights-annotations'],
+	[data-testid='insights-losses-panel'],
+	[data-testid='insights-cohorts-panel'],
+	[data-testid='insights-chart-harvested'],
+	.ins-actions,
+	[data-testid$='-csv'],
+	[data-testid='insights-exceptions'] .ins-link,
+	.ins-page button,
+	.ins-page [role='tablist'] {
+		display: none !important;
+	}
+
+	html,
+	body,
+	main {
+		background: var(--color-base-100) !important;
+		color: var(--color-base-content);
+	}
+
+	.ins-page {
+		max-width: none;
+		padding: 0;
+		gap: calc(var(--spacing) * 3);
+		/* Fits the report on one A4 or Letter page at default margins. */
+		zoom: 0.65;
+		padding-bottom: calc(var(--spacing) * 8);
+	}
+
+	.ins-print-head,
+	.ins-print-foot {
+		display: block;
+		font-size: var(--text-small);
+		line-height: var(--text-small--line-height);
+		color: var(--color-muted-text);
+	}
+	.ins-print-title {
+		font-size: var(--text-title);
+		line-height: var(--text-title--line-height);
+		font-weight: var(--font-weight-semibold);
+		color: var(--color-base-content);
+	}
+	.ins-print-foot {
+		position: fixed;
+		inset-inline: 0;
+		bottom: 0;
+		border-top: var(--border) solid var(--color-base-300);
+		padding-top: calc(var(--spacing) * 1);
+	}
+
+	.ins-section,
+	.ins-card {
+		break-inside: avoid;
+	}
+	.ins-card {
+		box-shadow: none;
+		/* The bars are background fills, which Chrome drops unless "Background graphics" is on. */
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+	/* The funnel's stage names are links on screen; on paper they are plain text. */
+	[data-testid='insights-funnel'] .ins-link {
+		color: var(--color-base-content);
+		text-decoration: none;
+	}
+	/* The charts shrink to the sheet's width, keeping their shape: uPlot keeps its screen pixel
+	   width in print, and a stretched canvas would blur its text. */
+	.ins-page .uplot,
+	.ins-page .u-wrap {
+		max-width: 100% !important;
+	}
+	.ins-page .uplot canvas {
+		max-width: 100% !important;
+		height: auto !important;
+	}
+	/* Its legend prints as "Time: — Newly searchable: —". */
+	.ins-page .u-legend {
+		display: none !important;
+	}
+}
