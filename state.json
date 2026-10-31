@@ -2102,17 +2102,20 @@
     {
       "id": "OC4",
       "action": "Decide whether to delete ~150 old-lineage branches after the backup",
-      "unblocks": "scrub completeness"
+      "unblocks": "scrub completeness",
+      "status": "decided 2026-10-31: delete (owner). Script notes/branch-cleanup.md; owner runs it (proxy refuses deletes)"
     },
     {
       "id": "OC5",
       "action": "Confirm or change the crawler gate thresholds: 24 h mean >=100/min, no hour <70/min, p95 discovery-to-searchable <=10 min",
-      "unblocks": "first acceptance analysis"
+      "unblocks": "first acceptance analysis",
+      "status": "decided 2026-10-31 by runner under \u00a72.26 (#260): 24h mean>=100/min, no hour <70/min, p95 <=10 min"
     },
     {
       "id": "OC6",
       "action": "First-run 6 h sampling suppression: accept as product behaviour?",
-      "unblocks": "D-v051 wording, wizard copy"
+      "unblocks": "D-v051 wording, wizard copy",
+      "status": "decided 2026-10-31 by runner under \u00a72.26 (#260): kept; wizard + guide must say first hours are slow"
     },
     {
       "id": "OC7",
@@ -2127,7 +2130,8 @@
     {
       "id": "OC9",
       "action": "Optional: make Web / web and E2E / run required checks (\u00a72.22 left them outside ci-ok)",
-      "unblocks": "auto-merge safety"
+      "unblocks": "auto-merge safety",
+      "status": "runner recommends yes (\u00a72.26); only the owner can edit the ruleset - asked 2026-10-31"
     },
     {
       "id": "OC10",
@@ -2151,7 +2155,8 @@
       "at": "2026-10-30T08:43Z",
       "item": "Delete branch measure/windows-nrt (one commit adding a push-only measurement workflow; proxy refuses deletes)",
       "unblocks": "hygiene",
-      "ref": "run 41024502148"
+      "ref": "run 41024502148",
+      "status": "in notes/branch-cleanup.md (owner runs)"
     },
     {
       "at": "2026-10-30T10:34Z",
@@ -2243,7 +2248,7 @@
       "id": "OC-alerts-limit",
       "action": "Alerts route size limit 45.8 -> 45.9 KB? #256 S-search-6 leaves it 3 B over (45,803 B) after a chunk-split fix",
       "unblocks": "#256 merge",
-      "status": "asked 2026-10-31T05:08Z"
+      "status": "decided 2026-10-31 by runner under \u00a72.26 (#260): 45.9 KB; #256 sets it"
     }
   ],
   "external_gates": {
@@ -2475,5 +2480,8 @@
       },
       "memory_gate_fit": "owner ruling on #189 (h12-24 private fit) still open; the Linux soak analysis reports it"
     }
+  },
+  "owner_standing": {
+    "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (\u00a72.19). Security/content-safety loosening still to owner."
   }
 }
