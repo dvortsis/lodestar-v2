@@ -774,6 +774,8 @@ impl Pipeline {
             candidates: Default::default(),
             #[cfg(test)]
             between: None,
+            #[cfg(test)]
+            marked: None,
         };
         drop(pool_tx);
         let writer = tokio::spawn(writer.run(writer::WriterIo {
