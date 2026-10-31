@@ -8684,7 +8684,7 @@
               "string",
               "null"
             ],
-            "description": "`not_found`, `hidden`, `adult_hidden`, `private` or `same_torrent` when refused; the\nconnection test's codes when failed; null otherwise."
+            "description": "When refused: `not_found` (unknown, or withheld from you, which\nlook the same: hidden by a filter, or Adult while it's hidden),\n`private`, `same_torrent` or `invalid`. When failed: the connection\ntest's codes, or `timeout_unknown` (some may have gone in). Null\notherwise."
           },
           "hash": {
             "type": "string"
