@@ -17,6 +17,7 @@ mod peers;
 mod proof;
 mod sampler;
 mod seen;
+mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod tokens;
@@ -37,6 +38,11 @@ use lodestar_metainfo::InfoHash;
 
 use crate::compact::NodeId;
 use crate::state::StateError;
+
+pub use stream::{
+    LookupEnd, LookupSession, STREAM_BATCH, STREAM_QUEUE, STREAM_SEEN, SessionAdmission,
+    SessionAdmit, SessionEnd,
+};
 
 /// Crawl intensity presets (architecture §5: Low / Balanced / Aggressive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -330,6 +336,17 @@ pub struct Stats {
     /// Gauges: hashes holding hints, and IPs the guard restricts.
     pub hints_held: AtomicU64,
     pub hint_guard_entries: AtomicU64,
+    /// CR-1a-S: peer batches sent to streaming sessions, peers dropped to
+    /// backpressure (including the final flush's discards), peers ignored
+    /// once a session's seen set was full, and terminals by [`LookupEnd`].
+    pub peer_stream_batches: AtomicU64,
+    pub peer_stream_backpressure: AtomicU64,
+    pub peer_stream_seen_full: AtomicU64,
+    pub peer_stream_terminals: [AtomicU64; LookupEnd::ALL.len()],
+    /// Time from the request's start to its session's first batch, in ms, and
+    /// its count: sessions that sent one.
+    pub peer_stream_first_batch_millis: AtomicU64,
+    pub peer_stream_first_batches: AtomicU64,
 }
 
 impl Stats {
@@ -409,6 +426,12 @@ impl Stats {
             hint_guard_skips: g(&self.hint_guard_skips),
             hints_held: g(&self.hints_held),
             hint_guard_entries: g(&self.hint_guard_entries),
+            peer_stream_batches: g(&self.peer_stream_batches),
+            peer_stream_backpressure: g(&self.peer_stream_backpressure),
+            peer_stream_seen_full: g(&self.peer_stream_seen_full),
+            peer_stream_terminals: std::array::from_fn(|i| g(&self.peer_stream_terminals[i])),
+            peer_stream_first_batch_millis: g(&self.peer_stream_first_batch_millis),
+            peer_stream_first_batches: g(&self.peer_stream_first_batches),
         }
     }
 }
@@ -694,6 +717,13 @@ pub struct StatsSnapshot {
     pub hint_guard_skips: u64,
     pub hints_held: u64,
     pub hint_guard_entries: u64,
+    pub peer_stream_batches: u64,
+    pub peer_stream_backpressure: u64,
+    pub peer_stream_seen_full: u64,
+    /// By [`LookupEnd::ALL`].
+    pub peer_stream_terminals: [u64; LookupEnd::ALL.len()],
+    pub peer_stream_first_batch_millis: u64,
+    pub peer_stream_first_batches: u64,
 }
 
 impl StatsSnapshot {
@@ -757,6 +787,8 @@ pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
     GetPeers(InfoHash),
     RequestPeers(InfoHash, PeerAdmission, Option<PeerPermit>),
+    /// A streaming request (CR-1a-S).
+    RequestSession(InfoHash, Box<dyn SessionAdmit>, Option<PeerPermit>),
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
     SetIntensity(Intensity),
     SetPaused(bool),
@@ -824,6 +856,32 @@ impl NodeHandle {
         if let Command::RequestPeers(_, admit, permit) = cmd {
             // The caller sees the closed admission before the permit is
             // back, as with a refusal.
+            drop(admit);
+            PermitReturn::HandoffFailed.release(&self.stats, permit);
+        }
+        false
+    }
+
+    /// A streaming peer request (CR-1a-S): an admitted request hands the
+    /// caller a session of bounded peer batches and a separate terminal,
+    /// allocated only once the actor admits it. Otherwise as
+    /// [`request_peers_with`](Self::request_peers_with).
+    pub fn request_session(
+        &self,
+        hash: InfoHash,
+        admit: Box<dyn SessionAdmit>,
+        permit: Option<PeerPermit>,
+    ) -> bool {
+        let (counter, cmd) = match self
+            .commands
+            .try_send(Command::RequestSession(hash, admit, permit))
+        {
+            Ok(()) => return true,
+            Err(mpsc::error::TrySendError::Full(cmd)) => (&self.stats.peer_command_full, cmd),
+            Err(mpsc::error::TrySendError::Closed(cmd)) => (&self.stats.peer_command_closed, cmd),
+        };
+        Stats::inc(counter);
+        if let Command::RequestSession(_, admit, permit) = cmd {
             drop(admit);
             PermitReturn::HandoffFailed.release(&self.stats, permit);
         }

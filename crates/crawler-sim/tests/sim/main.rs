@@ -551,3 +551,133 @@ fn responder_hints_screen() {
         );
     }
 }
+
+/// CR-1a-S's switch on a short healthy run: sessions really stream (the
+/// glue forwards them; without it the "on" arm would quietly run the old
+/// path), the off arm counts nothing, and the same seed is byte-identical.
+#[test]
+fn streaming_peers_stream_batches_deterministically() {
+    let mut off = scenario::healthy();
+    off.minutes = 4;
+    let on = Scenario {
+        switches: Switches {
+            streaming_peers: true,
+            ..Switches::default()
+        },
+        ..off.clone()
+    };
+    let (a, b) = (simulate(&off), simulate(&on));
+    assert_eq!(a.dht.peer_stream_batches, 0, "{}", a.text);
+    assert_eq!(a.pool.stream_batches, 0, "{}", a.text);
+    assert!(b.text.contains("streaming_peers=true"));
+    assert!(b.dht.peer_stream_batches > 0, "{}", b.text);
+    assert!(b.pool.stream_batches > 0, "{}", b.text);
+    assert!(
+        b.pool.stream_terminals.iter().sum::<u64>() > 0,
+        "{}",
+        b.text
+    );
+    assert!(b.pool.stream_first_fetches > 0, "{}", b.text);
+    assert!(b.stored > 0, "{}", b.text);
+    assert!(b.dht.peer_active + b.dht.peer_queued <= 32, "{}", b.text);
+    assert_eq!(simulate(&on).text, b.text);
+}
+
+/// The CR-1a-S screen: streaming off against on over `SCREEN_SEEDS`, on
+/// each baseline scenario. Conversion is stored per admitted lookup. Time
+/// to first fetch is, off, the lookup's run time (peers arrive only at its
+/// end) and, on, the time to the first batch plus the pool's wait from
+/// that batch to the fetch.
+/// `cargo test -p lodestar-crawler-sim --test sim streaming_peers_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn streaming_peers_screen() {
+    for off in [
+        scenario::healthy(),
+        scenario::high_latency(),
+        scenario::admission_pressure(),
+    ] {
+        let on = Scenario {
+            switches: Switches {
+                streaming_peers: true,
+                ..Switches::default()
+            },
+            ..off.clone()
+        };
+        println!("\n## {}", off.name);
+        println!(
+            "seed | arm | admitted | completed | stored | conversion | first fetch ms | batches | backpressure | capped | source failed | steady/min"
+        );
+        let mut diffs = Vec::new();
+        let [mut steady, mut conv, mut first] = <[[Vec<f64>; 2]; 3]>::default();
+        for seed in SCREEN_SEEDS {
+            let mut row = [0.0; 2];
+            for (arm, s) in [(0, &off), (1, &on)] {
+                let mut s = s.clone();
+                s.seed = seed;
+                let r = simulate(&s);
+                let d = &r.dht;
+                let per = |sum: u64, n: u64| sum as f64 / n.max(1) as f64;
+                let first_ms = if arm == 0 {
+                    per(d.peer_lookup_millis, d.peer_lookups_answered)
+                } else {
+                    per(
+                        d.peer_stream_first_batch_millis,
+                        d.peer_stream_first_batches,
+                    ) + per(
+                        r.pool.stream_first_fetch_millis,
+                        r.pool.stream_first_fetches,
+                    )
+                };
+                let conversion = r.stored as f64 / d.peer_admitted.max(1) as f64;
+                println!(
+                    "{seed} | {} | {} | {} | {} | {:.3} | {:.0} | {} | {} | {} | {} | {:.1}",
+                    ["off", "on"][arm],
+                    d.peer_admitted,
+                    d.lookups_completed,
+                    r.stored,
+                    conversion,
+                    first_ms,
+                    d.peer_stream_batches,
+                    d.peer_stream_backpressure,
+                    r.text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("stream_peers_capped="))
+                        .unwrap_or("0"),
+                    r.pool.stream_terminals[3],
+                    r.steady_stored
+                );
+                row[arm] = r.steady_stored;
+                steady[arm].push(r.steady_stored);
+                conv[arm].push(conversion);
+                first[arm].push(first_ms);
+            }
+            diffs.push(row[1] - row[0]);
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let spread = |v: &[f64]| {
+            let (lo, hi) = v
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                    (a.min(*x), b.max(*x))
+                });
+            100.0 * (hi - lo) / mean(v).max(1.0)
+        };
+        println!(
+            "steady stored/min: off mean {:.1} (spread {:.1}%), on mean {:.1}, change {:+.1}%; conversion: off {:.3}, on {:.3}; first fetch ms: off {:.0}, on {:.0}; sign test {:?}; diffs {:?}",
+            mean(&steady[0]),
+            spread(&steady[0]),
+            mean(&steady[1]),
+            100.0 * (mean(&steady[1]) - mean(&steady[0])) / mean(&steady[0]).max(1.0),
+            mean(&conv[0]),
+            mean(&conv[1]),
+            mean(&first[0]),
+            mean(&first[1]),
+            sign_test(&diffs),
+            diffs
+                .iter()
+                .map(|d| (d * 10.0).round() / 10.0)
+                .collect::<Vec<_>>()
+        );
+    }
+}

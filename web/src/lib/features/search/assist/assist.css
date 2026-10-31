@@ -1,0 +1,79 @@
+/* The assist panel's stylesheet, loaded with its chunk (never the route's eager CSS). */
+@reference "../../../../app.css";
+
+/* The listbox anchors to the search landmark; bar.css leaves it static from `large`. */
+@variant large {
+	search[data-search-bar] {
+		position: relative;
+	}
+}
+
+.assist-pop {
+	@apply absolute z-20 overflow-y-auto rounded-box border border-base-300 bg-base-100 shadow-md;
+	inset-inline: calc(var(--spacing) * 4);
+	top: calc(var(--query-bar-height) + var(--spacing) * 2 + var(--border));
+	max-height: var(--listbox-max-height);
+}
+.assist-pop {
+	@apply list-none p-1;
+	margin: 0;
+}
+.assist-option {
+	@apply flex cursor-pointer items-baseline gap-3 rounded-field px-3;
+	min-height: var(--control-height);
+	align-items: center;
+}
+.assist-option[aria-selected='true'] {
+	background: var(--color-selected);
+	@apply font-medium;
+}
+@media (pointer: coarse) {
+	.assist-option {
+		min-height: var(--target-min);
+	}
+}
+.assist-kind {
+	@apply text-small text-muted-text;
+	min-inline-size: calc(var(--spacing) * 24);
+}
+.assist-text {
+	@apply min-w-0 flex-1 truncate;
+}
+.assist-count {
+	@apply text-small tabular-nums text-muted-text;
+}
+
+/* The natural-phrasing preview and the Builder: in the flow under the bar, not over the results. */
+.assist-panel {
+	@apply flex flex-col gap-3 rounded-box border border-base-300 bg-base-100 p-4;
+}
+.assist-row {
+	@apply flex flex-wrap items-end gap-2;
+}
+.assist-row > * {
+	min-inline-size: 0;
+}
+
+.assist-chips {
+	@apply m-0 flex list-none flex-wrap gap-2 p-0;
+}
+.assist-note {
+	font-size: var(--text-small);
+	margin: 0;
+}
+.assist-error {
+	color: var(--color-error);
+}
+.assist-field {
+	@apply flex flex-col gap-1;
+	font-size: var(--text-small);
+}
+.assist-grow {
+	@apply min-w-0 flex-1;
+}
+.assist-mono {
+	font-family: var(--font-mono);
+}
+.assist-actions {
+	@apply flex flex-wrap items-center gap-2;
+}
