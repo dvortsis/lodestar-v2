@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatDateTime } from '$lib/format';
-import { currentLocale, applyLocale } from './locale.svelte';
+import { currentLocale, applyLocale, displayTimeZone } from './locale.svelte';
 import {
 	REGION_CACHE,
 	applyRegion,
 	followSaved,
-	displayTimeZone,
 	narrowRegion,
 	readRegionHint
 } from './region.svelte';
-import { firstDayOfWeek } from './week';
+import { firstDayOfWeek } from './week.svelte';
 
 const get = vi.fn();
 vi.stubGlobal('fetch', (...a: unknown[]) => get(...a));
@@ -41,7 +40,7 @@ describe('time zone', () => {
 		applyRegion({ ...auto, timeZone: 'Asia/Tokyo' });
 		expect(formatDateTime(AT, 'en', { timeZone: 'UTC' })).toContain('Oct 22, 2026, 23:30');
 		applyRegion({ ...auto, timeZone: 'Foo/Bar' });
-		expect(displayTimeZone()).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+		expect(formatDateTime(AT, 'en')).toMatch(/Oct 2[23], 2026/);
 	});
 });
 
@@ -79,7 +78,9 @@ describe('boot', () => {
 				}
 			})
 		);
-		const { bootRegion } = await import('./boot');
+		const { bootRegion, resetBoot } = await import('./boot');
+		resetBoot();
+		applyRegion(readRegionHint());
 		const done = bootRegion();
 		expect(currentLocale()).toBe('zh');
 		await done;
@@ -90,20 +91,24 @@ describe('boot', () => {
 	it('a failed fetch keeps the hint and does not throw', async () => {
 		localStorage.setItem(REGION_CACHE, JSON.stringify({ ...auto, language: 'zh' }));
 		get.mockRejectedValue(new Error('offline'));
-		const { bootRegion } = await import('./boot');
+		applyRegion(readRegionHint());
+		const { bootRegion, resetBoot } = await import('./boot');
+		resetBoot();
 		await expect(bootRegion()).resolves.toBeUndefined();
 		expect(currentLocale()).toBe('zh');
 	});
 	it('no hint and no answer falls back to the browser, then en', async () => {
 		get.mockResolvedValue(ok({}));
-		const { bootRegion } = await import('./boot');
+		const { bootRegion, resetBoot } = await import('./boot');
+		resetBoot();
 		await bootRegion();
 		expect(currentLocale()).toBe('en');
 	});
 	it('drops an answer older than a value applied meanwhile', async () => {
 		let resolve: (v: unknown) => void = () => {};
 		get.mockReturnValue(new Promise((r) => (resolve = r)));
-		const { bootRegion } = await import('./boot');
+		const { bootRegion, resetBoot } = await import('./boot');
+		resetBoot();
 		const done = bootRegion();
 		followSaved({ ...auto, language: 'zh', timeZone: 'Asia/Tokyo' });
 		resolve(ok({ fields: { language: { value: 'en' }, time_zone: { value: '' } } }));
@@ -113,7 +118,9 @@ describe('boot', () => {
 	});
 	it('a 401, a 500 or a malformed body keeps the hint', async () => {
 		localStorage.setItem(REGION_CACHE, JSON.stringify({ ...auto, language: 'zh' }));
-		const { bootRegion } = await import('./boot');
+		applyRegion(readRegionHint());
+		const { bootRegion, resetBoot } = await import('./boot');
+		resetBoot();
 		for (const answer of [
 			{ ok: false, status: 401, json: async () => ({}) },
 			{ ok: false, status: 500, json: async () => ({}) },
@@ -125,6 +132,7 @@ describe('boot', () => {
 				}
 			}
 		]) {
+			resetBoot();
 			get.mockResolvedValue(answer);
 			await expect(bootRegion()).resolves.toBeUndefined();
 			expect(currentLocale()).toBe('zh');

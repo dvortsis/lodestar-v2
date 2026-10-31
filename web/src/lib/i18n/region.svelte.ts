@@ -1,7 +1,8 @@
 // The region preferences (§10.12): the display time zone and the first day of the week, next to
 // the language. One place holds the saved values; the shared date formatters and calendars read
 // the accessors below, so changing a setting applies at once without a reload.
-import { initLocale } from './locale.svelte';
+import { initLocale, setZone } from './locale.svelte';
+import { setFirstDay } from './week.svelte';
 
 export type FirstDay = 'auto' | 'monday' | 'saturday' | 'sunday';
 
@@ -15,8 +16,6 @@ export interface Region {
 export const REGION_CACHE = 'lodestar.region';
 const FIRST_DAYS: readonly string[] = ['auto', 'monday', 'saturday', 'sunday'];
 
-let zone = $state('');
-let first = $state<FirstDay>('auto');
 /** Bumped by every applied value, so an older answer can't overwrite a newer one. */
 let seq = 0;
 export const regionSeq = () => seq;
@@ -35,8 +34,8 @@ export function narrowRegion(raw: Record<string, unknown> | null | undefined): R
 
 /** The saved time zone and first day (language goes through `initLocale`). */
 export function setRegion(r: Pick<Region, 'timeZone' | 'firstDay'>): void {
-	zone = knownZone(r.timeZone) ? r.timeZone : '';
-	first = r.firstDay;
+	setZone(r.timeZone);
+	setFirstDay(r.firstDay);
 }
 
 /** Applies all three settings. Call at start-up and whenever the Language & region screen saves. */
@@ -45,26 +44,6 @@ export function applyRegion(r: Region): void {
 	setRegion(r);
 	initLocale(r.language || null);
 }
-
-const knownZone = (name: string) => {
-	if (!name) return false;
-	try {
-		new Intl.DateTimeFormat(undefined, { timeZone: name });
-		return true;
-	} catch {
-		return false;
-	}
-};
-
-const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-/** The IANA zone dates are shown in: the saved one, else the browser's. Reactive in runes. */
-export function displayTimeZone(): string {
-	return zone || browserZone;
-}
-
-/** The first-day setting as saved (`auto` follows the language; see `week.ts`). */
-export const firstDaySetting = (): FirstDay => first;
 
 export function readRegionHint(): Region {
 	try {

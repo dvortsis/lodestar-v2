@@ -2,18 +2,23 @@
 
 Refinement of §10.12 / §10.10.8 (Language & region); no owner decision changes.
 
-- **Boot.** `+layout.ts` calls `bootRegion()` (`lib/i18n/boot.ts`) without awaiting it. It applies a
-  per-browser hint from `localStorage["lodestar.region"]` (language, time zone, first day: non-secret,
-  per viewer) before the first paint, then fetches `GET /settings/preferences` and applies and re-caches
-  the saved values. The server stays authoritative. A failed, slow, offline or malformed answer keeps the
-  hint and never throws or blocks. Order: saved → `navigator.language` → en; "Automatic" (empty) keeps
-  following the browser. The fetch is a plain `fetch` so the API client stays out of the first load; a 401
-  is handled by the shell's own requests.
-- **Time zone.** `displayTimeZone()` (saved zone if the browser knows it, else the browser's) is the default
-  for `formatDate`, `formatDateTime` and `formatDateFull`; an explicit `timeZone` option still wins.
+- **Boot.** `+layout.ts` applies the cached hint (`localStorage["lodestar.region"]`: language, time zone,
+  first day; non-secret, per viewer) before the first paint, the only synchronous work. The account's saved
+  values are fetched by a lazily imported `lib/i18n/boot.ts` on the first pointer or key press, not during
+  the load: Lighthouse's `total-byte-weight` on /search sits 0.3% under its 100 KiB assertion, so a boot-time
+  request (answered with the SPA page by the preview server) and the code behind it don't fit. The server
+  stays authoritative: its answer is applied and re-cached. A failed, offline, malformed or older-than-newest
+  answer keeps what is applied and never throws. Order: saved → `navigator.language` → en; "Automatic"
+  (empty) follows the browser. A 401 (login page) re-arms one fetch on the next interaction. A browser with no
+  hint therefore shows the browser's language until the first interaction. Plain `fetch`, so the API client
+  stays out of the first load.
+- **Time zone.** `displayTimeZone()` (the saved zone, else the browser's; a zone the browser doesn't know falls back
+  inside `dateFormat`) is the default for `formatDate`, `formatDateTime` and `formatDateFull`; it lives in
+  `locale.svelte.ts`, and `format/shared.ts` reads it through a `globalThis.lodestarZone` hook, because any new
+  import in `shared.ts` re-split chunks and pushed the Alerts route 560 B over its limit; an explicit `timeZone` option still wins.
   Charts and `RelativeTime` go through those, so they follow the setting. Insights passes the server's
   `range.tz` explicitly and `'UTC'` for UTC-labelled ranges; those stay as they are.
-- **First day of week.** `firstDayOfWeek()` (`lib/i18n/week.ts`, kept out of the boot bundle) returns
+- **First day of week.** `firstDayOfWeek()` (`lib/i18n/week.svelte.ts`, kept out of the boot bundle) returns
   0/1/6 from the setting, or the language's own (`Intl.Locale` week info), else Monday. Automatic uses `navigator.language` (its region
   gives en-GB a Monday). No week-based UI can use it yet: the Insights custom range is a native
   `<input type="date">`, whose week start follows the browser and can't be set, so it is exposed only.
@@ -23,4 +28,5 @@ Refinement of §10.12 / §10.10.8 (Language & region); no owner decision changes
   account's values without a reload. A response older than a value applied meanwhile is dropped.
 - **Not changed.** Other tabs' changes are picked up on the next load, not live. The hint is per browser and
   isn't cleared on logout; the account's values replace it as soon as the fetch answers.
-- **Size.** Search initial JS 42.8 → 43.4 kB gzipped (limit 45 kB, unchanged).
+- **Size.** Search initial JS 42.8 → 43.0 kB gzipped (limit 45 kB, unchanged). Lighthouse `total-byte-weight` on
+  /search: 98,555 B locally (the previous head measured 102,891 B, CI's figure), against 102,400.

@@ -1,4 +1,3 @@
-import { displayTimeZone } from '$lib/i18n/region.svelte';
 import { dateFormat, DEFAULT_LOCALE, formatSeconds } from './shared';
 import type { DateOptions } from './datetime';
 
@@ -33,7 +32,7 @@ export function formatDateFull(
 		dateFormat(
 			locale,
 			coarse ? 'datefull-day' : 'datefull-hour',
-			opts.timeZone ?? displayTimeZone(),
+			opts.timeZone,
 			coarse ? DAY : HOUR
 		)
 	);

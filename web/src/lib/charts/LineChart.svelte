@@ -9,8 +9,7 @@
 		formatDateTime,
 		type MetricValue
 	} from '$lib/format';
-	import { displayTimeZone } from '$lib/i18n/region.svelte';
-	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { currentLocale, displayTimeZone } from '$lib/i18n/locale.svelte';
 	import {
 		buildData,
 		buildOptions,

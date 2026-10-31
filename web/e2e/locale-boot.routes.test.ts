@@ -1,9 +1,18 @@
 // A saved language and time zone apply on a fresh load, with no visit to Language & region.
+import type { Page } from '@playwright/test';
 import { body, hashOf, hits, server } from './search-results.fixtures';
 import { liveEvents } from './support/events-server';
 import { expect as baseExpect, test } from './support/test';
 
 const expect = baseExpect.configure({ timeout: 10_000 });
+
+/** Presses a key until `ready` holds: the first press can land before the app's listeners exist. */
+async function nudge(page: Page, ready: () => Promise<boolean>) {
+	await expect(async () => {
+		await page.keyboard.press('Shift');
+		expect(await ready()).toBe(true);
+	}).toPass({ timeout: 15_000 });
+}
 const field = (value: unknown) => ({
 	value,
 	env: null,
@@ -25,7 +34,13 @@ test('a saved zh language shows zh after a reload', async ({ page, go, mock }) =
 		}
 	});
 	await go('/search');
-	await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
+	// The saved values are fetched on the first interaction.
+	await nudge(page, () =>
+		page
+			.locator('html')
+			.getAttribute('lang')
+			.then((l) => l === 'zh')
+	);
 	await expect
 		.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lodestar.region') ?? '{}')))
 		.toMatchObject({ language: 'zh', timeZone: 'Asia/Tokyo', firstDay: 'sunday' });
@@ -54,6 +69,11 @@ for (const [zone, day] of [
 			)
 		);
 		await go('/search?q=lantern');
+		// The saved values are fetched on the first interaction and cached; the next load shows them.
+		await nudge(page, () =>
+			page.evaluate((z) => localStorage.getItem('lodestar.region')?.includes(z) ?? false, zone)
+		);
+		await page.reload();
 		const when = page.getByTestId(`result-${hashOf(1)}-discovered`).locator('time');
 		await expect(when).toHaveAttribute('title', day);
 	});

@@ -1,4 +1,3 @@
-import { displayTimeZone } from '$lib/i18n/region.svelte';
 import { dateFormat, DEFAULT_LOCALE, formatSeconds } from './shared';
 
 export interface DateOptions {
@@ -14,7 +13,7 @@ export function formatDateTime(
 ): string {
 	return formatSeconds(
 		seconds,
-		dateFormat(locale, 'datetime', opts.timeZone ?? displayTimeZone(), {
+		dateFormat(locale, 'datetime', opts.timeZone, {
 			dateStyle: 'medium',
 			timeStyle: 'short',
 			hourCycle: 'h23'

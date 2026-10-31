@@ -53,3 +53,21 @@ export function initLocale(setting?: string | null): AppLocale {
 export function currentLocale(): AppLocale {
 	return current;
 }
+
+// The display time zone (§10.12) lives here, next to the locale, in the chunk every route already
+// loads. The shared formatters read it through the hook below, with no import of their own.
+let zone = $state('');
+let browser = '';
+
+/** The saved time zone. A zone the browser doesn't know falls back inside the formatters. */
+export function setZone(timeZone: string): void {
+	zone = timeZone;
+}
+
+/** The IANA zone dates are shown in: the saved one, else the browser's. Reactive in runes. */
+export function displayTimeZone(): string {
+	return zone || (browser ||= Intl.DateTimeFormat().resolvedOptions().timeZone);
+}
+
+// The shared formatters read the setting through this hook, so they need no import of this module.
+(globalThis as { lodestarZone?: () => string }).lodestarZone = displayTimeZone;

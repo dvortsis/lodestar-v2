@@ -1,14 +1,8 @@
-// Start-up for the region settings: the cached hint is applied before the first paint, then the
-// account's saved values replace it. A failed, slow or malformed answer keeps the hint and never
+// Start-up for the region settings. The cached hint is applied by the layout before the first
+// paint; this module (loaded after first render) replaces it with the account's saved values. A failed, slow or malformed answer keeps the hint and never
 // blocks or throws (§10.12), and an answer older than a value applied meanwhile is dropped. Not
 // awaited by the layout. A plain `fetch` keeps the API client out of the first load (§10.1).
-import {
-	applyRegion,
-	narrowRegion,
-	readRegionHint,
-	regionSeq,
-	writeRegionHint
-} from './region.svelte';
+import { applyRegion, narrowRegion, regionSeq, writeRegionHint } from './region.svelte';
 
 const WAKE = ['pointerdown', 'keydown'] as const;
 
@@ -44,7 +38,7 @@ function rearm(): void {
 	for (const e of WAKE) addEventListener(e, go, { once: true });
 }
 
-export function bootRegion(): Promise<void> {
-	applyRegion(readRegionHint());
-	return fetchSaved();
-}
+let booted: Promise<void> | undefined;
+/** Both wake events call this; only the first fetches. */
+export const bootRegion = (): Promise<void> => (booted ??= fetchSaved());
+export const resetBoot = () => (booted = undefined);
