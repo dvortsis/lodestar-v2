@@ -1800,7 +1800,7 @@
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus."
+      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus. | 21:17Z hang = own deadlock: match on pending_requeues(&self.store())? kept the store MutexGuard alive through the match arm that re-locked (would have hung start-time resume). Fixed with let. Reviewer: grep for the same temporary-guard-in-match pattern."
     },
     "S-logs-2b": {
       "status": "pr-review",
@@ -2344,7 +2344,8 @@
     "short_sha": "create_session source_revision must be a full SHA or branch: a 7-8 char SHA fails init (ref_not_found) and the session sits PENDING silently. Heartbeat now checks PENDING > 5 min.",
     "alert_route_main": "#289 reviewer: Alert route on main 673692a4 measured 46.01 KB locally vs 46 KB limit (CI on #289 head passed). Watch main's web size job.",
     "tailwind_bang": "Tailwind content scan reads JS like `if (!list)` as daisyUI's `!list` important-class and adds ~155 B to first-load CSS (found in S-logs-2b). Watch for `!word` patterns matching class names in Svelte/TS.",
-    "build_noise": "Each web build embeds a timestamp and random app id; every size entry moves a few bytes per build. Results toolbar (4.6 KB) and Alert/Search sit within that noise on main. Fix queued: X-build-stable-name."
+    "build_noise": "Each web build embeds a timestamp and random app id; every size entry moves a few bytes per build. Results toolbar (4.6 KB) and Alert/Search sit within that noise on main. Fix queued: X-build-stable-name.",
+    "match_guard_deadlock": "Rust: a MutexGuard created in a match/if-let scrutinee lives until the end of the whole match, so re-locking inside an arm deadlocks (X-polish-1031d). Bind to a let first. Reviewers of store/api code should grep for `match .*store()` / `if let .*lock()` patterns."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
