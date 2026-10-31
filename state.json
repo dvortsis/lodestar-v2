@@ -1764,13 +1764,13 @@
       "reviewer": "session_01MMjhnCzxKvgLJq1RkG55sJ"
     },
     "X-settings-registry-slim": {
-      "status": "pending",
+      "status": "building",
       "model": "opus",
-      "session": null,
+      "session": "session_01MMjhnB9ykpQogGPLGEmRAX",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB | 19:58Z brief briefs/X-settings-registry-slim.md."
+      "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB | 19:58Z brief briefs/X-settings-registry-slim.md. | 19:57Z launched Opus."
     },
     "B-held-precommit": {
       "status": "merged",
