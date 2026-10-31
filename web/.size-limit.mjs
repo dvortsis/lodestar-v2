@@ -518,8 +518,8 @@ export default [
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
-	entry('Search live banner (lazy)', liveLazy, '1.52 KB'),
-	entry('Search cards (lazy)', cardsLazy, '6.16 KB'),
+	entry('Search live banner (lazy)', liveLazy, '1.72 KB'),
+	entry('Search cards (lazy)', cardsLazy, '7.34 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),

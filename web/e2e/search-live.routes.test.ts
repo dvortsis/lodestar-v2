@@ -11,7 +11,7 @@ function live(mock: Parameters<typeof server>[0], state: { total: number; approx
 	mock.on('searchPost', (async (request: Request) => {
 		const sent = request.postDataJSON() as { limit: number };
 		if (sent.limit === 1) return body([], { total: state.total, total_approx: state.approx });
-		return body(hits(10), { total: state.total === 10 ? 10 : state.total });
+		return body(hits(10), { total: state.total });
 	}) as never);
 }
 

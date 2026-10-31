@@ -4,6 +4,8 @@
 	import type { Snippet } from 'svelte';
 	import ArrowDown from '~icons/ph/arrow-down-bold';
 	import ArrowUp from '~icons/ph/arrow-up-bold';
+	import History from '~icons/ph/clock-counter-clockwise-bold';
+	import Warning from '~icons/ph/warning-bold';
 	import { formatBytes, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -16,9 +18,12 @@
 		hit: SearchHit;
 		testid: string;
 		onopen: (hit: SearchHit) => void;
+		/** The roving tile: the one in the tab order. */
+		current?: boolean;
+		onfocusin?: () => void;
 		actions?: Snippet<[SearchHit]>;
 	}
-	let { hit, testid: id, onopen, actions }: Props = $props();
+	let { hit, testid: id, onopen, current = true, onfocusin, actions }: Props = $props();
 
 	const locale = $derived(currentLocale());
 	const title = $derived(showBidi(hit.title ?? hit.name));
@@ -29,6 +34,15 @@
 				? TYPE[hit.content_type]?.()
 				: undefined
 	);
+
+	const FLAG: [string, () => string][] = [
+		['private', m.search_results_flag_private],
+		['v2', m.search_results_flag_v2],
+		['hybrid', m.search_results_flag_hybrid],
+		['imported', m.search_results_flag_imported]
+	];
+	const flags = $derived(FLAG.filter(([f]) => hit.flags.includes(f)));
+	const scraped = $derived(hit.trackers_reporting !== null && hit.trackers_checked !== null);
 
 	function key(event: KeyboardEvent) {
 		if (event.target !== event.currentTarget || event.key !== 'Enter') return;
@@ -49,15 +63,21 @@
 	class="cd-tile"
 	role="group"
 	aria-label={title}
-	tabindex="0"
+	tabindex={current ? 0 : -1}
+	{onfocusin}
 	data-testid={id}
 	data-hash={hit.hash}
 	onclick={click}
 	onkeydown={key}
 >
 	<div class="cd-title" data-testid="{id}-title">{title}</div>
-	{#if type}
-		<div class="cd-badges"><span class="cd-badge" data-testid="{id}-badge-type">{type}</span></div>
+	{#if type || flags.length}
+		<div class="cd-badges" data-testid="{id}-badges">
+			{#if type}<span class="cd-badge" data-testid="{id}-badge-type">{type}</span>{/if}
+			{#each flags as [f, label] (f)}<span class="cd-badge" data-testid="{id}-badge-{f}"
+					>{label()}</span
+				>{/each}
+		</div>
 	{/if}
 	<div class="cd-facts">
 		<span class="cd-fact" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
@@ -84,9 +104,28 @@
 				>
 			{/if}
 		</span>
+		{#if hit.swarm_suspect}
+			<span class="cd-fact" data-testid="{id}-suspect">
+				<Warning aria-hidden="true" />{m.swarm_suspect()}
+			</span>
+		{/if}
+		<span class="cd-fact" data-testid="{id}-trackers">
+			<span class="sr-only">{m.trackers_reporting()}: </span>
+			{#if scraped}
+				{m.search_results_trackers_of({
+					reporting: formatCount(hit.trackers_reporting, locale),
+					checked: formatCount(hit.trackers_checked, locale)
+				})}
+			{:else}
+				<span role="img" aria-label={m.never_scraped()}>—</span>
+			{/if}
+		</span>
 		<span class="cd-fact">
 			<span class="sr-only">{m.discovered()}: </span>
 			<span data-testid="{id}-discovered"><RelativeTime seconds={hit.discovered_at} /></span>
+			{#if hit.flags.includes('backfill')}
+				<span data-testid="{id}-backfill"><History aria-hidden="true" />{m.backfill()}</span>
+			{/if}
 		</span>
 	</div>
 	{#if actions}<div class="cd-actions rr-actions">{@render actions(hit)}</div>{/if}

@@ -21,7 +21,9 @@ export interface LiveDeps {
 export function createLive(deps: LiveDeps) {
 	let fresh = $state(0);
 	const slot = latest();
-	let pending = false;
+	/** The run in flight (a token, so a reset's late `finally` can't clear a newer run's flag). */
+	let pending = 0;
+	let runs = 0;
 	let lastAnnounced = -Infinity;
 	let sinceTotal: number | null = null;
 
@@ -30,7 +32,7 @@ export function createLive(deps: LiveDeps) {
 		if (!shown || shown.approx || pending || deps.paused()) return;
 		if (typeof document !== 'undefined' && document.hidden) return;
 		const { query: q, total } = shown;
-		pending = true;
+		const mine = (pending = ++runs);
 		try {
 			const r = await slot.run((signal) =>
 				api.post('/search', {
@@ -53,18 +55,19 @@ export function createLive(deps: LiveDeps) {
 			if (!now || now.total !== total || now.approx) return;
 			const n = r.total_approx ? 0 : r.total - total;
 			fresh = n > 0 ? n : 0;
+			// A change the throttle held back is said by a later check, not lost.
 			if (fresh > 0 && fresh !== sinceTotal) {
-				sinceTotal = fresh;
 				const t = Date.now();
 				if (t - lastAnnounced >= (deps.intervalMs ?? INTERVAL_MS)) {
 					lastAnnounced = t;
+					sinceTotal = fresh;
 					deps.announce?.(fresh);
 				}
 			}
 		} catch (e) {
 			if (!isAbort(e)) fresh = 0; // a failure says nothing; the list's own errors are its own
 		} finally {
-			pending = false;
+			if (pending === mine) pending = 0;
 		}
 	}
 
@@ -76,7 +79,7 @@ export function createLive(deps: LiveDeps) {
 		/** The rows were replaced (a new query, or Show): nothing is new any more. */
 		reset() {
 			slot.cancel();
-			pending = false;
+			pending = 0;
 			fresh = 0;
 			sinceTotal = null;
 		},

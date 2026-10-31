@@ -3,6 +3,7 @@
 	"search_live_new_one": "1 new result",
 	"search_live_new_other": "{count} new results",
 	"search_live_show": "Show",
+	"search_live_show_label": "Show {count} new results",
 	"search_live_announce_one": "1 new result. Use Show to load it.",
 	"search_live_announce_other": "{count} new results. Use Show to load them."
 }

@@ -43,3 +43,22 @@ test('a tile opens the drawer with Enter and the density control switches views'
 	await expect.poll(() => new URL(page.url()).searchParams.get('density')).toBe('compact');
 	await expect(page.locator('.cd-row')).toHaveCount(0);
 });
+
+test('arrows and j/k move one tile at a time, and the drawer opens the focused tile', async ({
+	page,
+	mock
+}) => {
+	await page.setViewportSize({ width: 1600, height: 900 });
+	server(mock, () => body(hits(7)));
+	await page.goto('/search?q=lantern&density=cards');
+	await expect(row(page, 1)).toBeVisible();
+	await row(page, 1).focus();
+	await page.keyboard.press('ArrowRight');
+	await expect(row(page, 2)).toBeFocused();
+	await page.keyboard.press('ArrowDown');
+	await expect(row(page, 5)).toBeFocused();
+	await page.keyboard.press('ArrowLeft');
+	await expect(row(page, 4)).toBeFocused();
+	await page.keyboard.press('Enter');
+	await expect(page).toHaveURL(new RegExp(`/t/${'a'.repeat(39)}4`));
+});

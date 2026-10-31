@@ -1,8 +1,9 @@
 <script lang="ts">
 	// Cards density (§10.4): the results as rows of cards in the same virtual list. The panel loads
-	// this when `density=cards` and keeps `active` as an index into the hits, as for the rows; here a
-	// list row is `cols` cards, so the two indexes are mapped. Styles: cards.css.
-	import { untrack } from 'svelte';
+	// this when `density=cards` and keeps `active` as an index into the hits (j/k, `x`, the drawer
+	// follow); here a list row is `cols` tiles, so the active tile is the roving one: arrows, j/k and
+	// a click or focus on a tile all move `active`. Styles: cards.css.
+	import { tick, untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import VirtualList from '$lib/ui/lists/VirtualList.svelte';
 	import { tokenPx } from '$lib/ui/overlays/motion';
@@ -26,15 +27,17 @@
 	let host = $state<HTMLElement>();
 	let cols = $state(1);
 	let at = $state(0);
-	let vl = $state<{ move: (d: number) => void; moveTo: (i: number) => void }>();
+	let vl = $state<{ moveTo: (i: number) => void }>();
 	const rows = $derived(chunk(results.hits, cols));
-	// Cards are three comfortable rows tall (three lines of facts, the title and the actions).
-	const height = tokenPx('--row-height-comfortable', 64) * 3;
+	// Four comfortable rows tall: the title (two lines), the badges, the facts (they wrap on a narrow
+	// tile) and the actions, which are 44 px under a coarse pointer.
+	const height = tokenPx('--row-height-comfortable', 64) * 4;
 
 	$effect(() => {
 		const el = host?.closest<HTMLElement>('.rp-list');
 		return el ? observeColumns(el, (n) => (cols = n)) : undefined;
 	});
+	// The list row follows the active hit (and the other way, for a row focused by the list itself).
 	$effect(() => {
 		const r = Math.floor(active / cols);
 		untrack(() => (at = r));
@@ -46,8 +49,35 @@
 		});
 	});
 
-	export const move = (delta: number) => vl?.move(delta);
-	export const moveTo = (i: number) => vl?.moveTo(Math.floor(i / cols));
+	async function go(index: number, focus: boolean) {
+		const i = Math.min(Math.max(index, 0), results.hits.length - 1);
+		if (i < 0) return;
+		active = i;
+		vl?.moveTo(Math.floor(i / cols)); // scrolls the row in (and focuses it)
+		await tick();
+		if (!focus) return;
+		const hash = results.hits[i]?.hash;
+		host
+			?.querySelector<HTMLElement>(`[data-hash="${CSS.escape(hash ?? '')}"]`)
+			?.focus({ preventScroll: true });
+	}
+	export const move = (delta: number) => go(active + delta, true);
+	export const moveTo = (i: number) => go(i, true);
+
+	/** Arrows move between tiles (up and down by a row); the list's own keys act on rows. */
+	function onKey(event: KeyboardEvent, ctx: { onRow: boolean }) {
+		if (ctx.onRow) return;
+		const step: Record<string, number> = {
+			ArrowLeft: -1,
+			ArrowRight: 1,
+			ArrowUp: -cols,
+			ArrowDown: cols
+		};
+		const by = step[event.key];
+		if (by === undefined || (event.target as HTMLElement).closest('input,select,textarea')) return;
+		event.preventDefault();
+		void go(active + by, true);
+	}
 </script>
 
 <div class="cd-host" bind:this={host}>
@@ -60,7 +90,9 @@
 		estimateSize={height}
 		resetKey={results.shown ?? ''}
 		bind:activeIndex={at}
-		onActivate={(_i, r) => open(r.items[0]!)}
+		{onKey}
+		onActivate={(_i, r) =>
+			open(r.items[Math.min(Math.max(active - r.start, 0), r.items.length - 1)]!)}
 		hasMore={results.hasMore}
 		loadingMore={results.loadingMore}
 		onLoadMore={() => void results.loadMore()}
@@ -68,9 +100,15 @@
 	>
 		{#snippet row(r)}
 			<div class="cd-row" style:--cd-cols={cols} role="presentation">
-				{#each r.items as hit (hit.hash)}
+				{#each r.items as hit, i (hit.hash)}
 					<div role="gridcell" class="cd-cell">
-						<Card {hit} testid="result-{hit.hash}" onopen={open}>
+						<Card
+							{hit}
+							testid="result-{hit.hash}"
+							onopen={open}
+							current={r.start + i === active}
+							onfocusin={() => (active = r.start + i)}
+						>
 							{#snippet actions(h)}
 								{#if Actions}<Actions hit={h} density="comfortable" testid="result-{h.hash}" />{/if}
 							{/snippet}

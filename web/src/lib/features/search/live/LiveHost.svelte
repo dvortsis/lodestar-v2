@@ -1,6 +1,7 @@
 <script lang="ts">
 	// "12 new results · Show" (§10.4 "Live"): the poller and its banner, loaded by the results panel
 	// once there are rows. The announcement goes through the panel's own polite region.
+	import { tick } from 'svelte';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -51,26 +52,33 @@
 		void results.shown;
 		live.reset();
 	});
-	/** Show: the list again from the top, with focus on its first row (the button is gone). */
+	/** Show: the list again from the top, with focus on its first row (the button has gone). */
 	async function show() {
+		await results.reload();
 		live.reset();
-		await results.retry();
 		const g = grid();
 		if (g) g.scrollTop = 0;
-		g?.querySelector<HTMLElement>('[data-index="0"]')?.focus({ preventScroll: true });
+		await tick();
+		requestAnimationFrame(() =>
+			g?.querySelector<HTMLElement>('[data-index="0"]')?.focus({ preventScroll: true })
+		);
 	}
 </script>
 
 {#if live.fresh > 0}
 	<Banner kind="info" class="rp-banner">
-		<span data-testid="results-live"
+		<!-- Hidden from the region: the throttled announcement (the panel's) says it; Show names the count. -->
+		<span aria-hidden="true" data-testid="results-live"
 			>{live.fresh === 1
 				? m.search_live_new_one()
 				: m.search_live_new_other({ count: formatCount(live.fresh, locale) })}</span
 		>
 		{#snippet action()}
-			<Button dense data-testid="results-live-show" onclick={() => void show()}
-				>{m.search_live_show()}</Button
+			<Button
+				dense
+				data-testid="results-live-show"
+				aria-label={m.search_live_show_label({ count: formatCount(live.fresh, locale) })}
+				onclick={() => void show()}>{m.search_live_show()}</Button
 			>
 		{/snippet}
 	</Banner>

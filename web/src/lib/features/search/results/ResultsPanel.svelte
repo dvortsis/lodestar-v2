@@ -245,9 +245,12 @@
 	}
 	/** The hash of the row (a list row or a table row) holding `target`. */
 	function hashOf(target: EventTarget | null) {
-		return (target as HTMLElement)
-			.closest('[role="row"], tr')
-			?.querySelector<HTMLElement>('[data-hash]')?.dataset.hash;
+		// A Cards tile carries its own hash (a list row holds several).
+		const el = target as HTMLElement;
+		return (
+			el.closest<HTMLElement>('[data-hash]') ??
+			el.closest('[role="row"], tr')?.querySelector<HTMLElement>('[data-hash]')
+		)?.dataset.hash;
 	}
 	function focusOut(event: FocusEvent) {
 		if (listEl?.contains(event.relatedTarget as Node | null)) return;
@@ -258,9 +261,8 @@
 		const mod = await detailMod();
 		if (gone) return;
 		detail = mod;
-		const rowEl = listEl
-			?.querySelector<HTMLElement>(`[data-hash="${CSS.escape(hit.hash)}"]`)
-			?.closest<HTMLElement>('[role="row"], tr');
+		const el = listEl?.querySelector<HTMLElement>(`[data-hash="${CSS.escape(hit.hash)}"]`);
+		const rowEl = cards ? el : el?.closest<HTMLElement>('[role="row"], tr');
 		mod.openDetail(hit.hash, {
 			hit,
 			returnFocus: () => rowEl ?? null,
