@@ -17,6 +17,7 @@ describe('the screen registry', () => {
 		expect(screens.map((screen) => screen.id)).toEqual([
 			'appearance',
 			'keyboard',
+			'language',
 			'crawler',
 			'network',
 			'storage',

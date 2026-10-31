@@ -162,6 +162,9 @@ const settingsEditLazy = requireMeasuredJs(
 //   the 45 KB route cap (§10.1), one entry per body, so a later screen is gated the moment it lands.
 // - "Settings screen extras (on demand)" gates the extras beyond the section's first view.
 const SECTION_FORM = 'src/lib/features/settings/shell/SectionForm.svelte';
+// The shell's section form, which a body such as Language & region shows for its fields: gated
+// as "Settings section", so a body that loads it on demand stops at it.
+const settingsFormChunk = [new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)];
 const settingsBodies = [/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/];
 const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
 // What a hand-built body loads only on an interaction: Keyboard's shortcut sheet (opened with ?) and
@@ -175,7 +178,7 @@ const settingsFirstView = [
 ];
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsShellView = own('/settings/[section]', {
-	onDemand: [...settingsFirstView, new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)]
+	onDemand: [...settingsFirstView, ...settingsFormChunk]
 });
 // Never leave out code a page loads statically: every body or extra the patterns match must be a
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
@@ -209,7 +212,13 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 			...settingsShellView,
 			...ownChunk(
 				key,
-				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions, ...appearanceLater],
+				[
+					...settingsOnDemand,
+					...settingsEdit,
+					...settingsBodyInteractions,
+					...appearanceLater,
+					...settingsFormChunk
+				],
 				false,
 				settingsShellView
 			)
@@ -243,13 +252,22 @@ const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
 	editorKey ? ownChunk(editorKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
 );
+const settingsFormKey = Object.keys(manifest).find((key) => settingsFormChunk[0].test(key));
+const settingsFormFiles = settingsFormKey
+	? ownChunk(settingsFormKey, [...settingsOnDemand, ...settingsEdit], false)
+	: [];
 const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
 	...new Set([
 		...extraKeys.flatMap((key) =>
 			ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsSectionView)
 		),
 		...bodyKeys.flatMap((key) =>
-			ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions], true)
+			ownChunk(
+				key,
+				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				true,
+				settingsFormFiles
+			)
 		)
 	])
 ]);
