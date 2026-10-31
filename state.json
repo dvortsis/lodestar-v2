@@ -1764,13 +1764,14 @@
       "reviewer": "session_01MMjhnCzxKvgLJq1RkG55sJ"
     },
     "X-settings-registry-slim": {
-      "status": "building",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhnB9ykpQogGPLGEmRAX",
-      "pr": null,
+      "pr": 293,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB | 19:58Z brief briefs/X-settings-registry-slim.md. | 19:57Z launched Opus."
+      "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB | 19:58Z brief briefs/X-settings-registry-slim.md. | 19:57Z launched Opus. | 20:39Z PR #293 head c72fffca: every Settings first view -1.2..-1.6 KB (>=1.39 KB headroom), Notifications back to 45 KB. Runner: titles stay in registry (25 B each, accepted). Reviewer started; subscribed.",
+      "reviewer": "session_01MMjhnD78QDorf6z7Tn3TSP"
     },
     "B-held-precommit": {
       "status": "merged",
@@ -2599,6 +2600,11 @@
       "item": "FYI (\u00a72.19) #291 B-held-precommit merged: intake refuses a new hold from before its store commit (pending marks kept apart from the held set); ingest commit and API correct are now exact too. Content safety tightened only.",
       "status": "to-send",
       "at": "2026-10-31T19:51Z"
+    },
+    {
+      "item": "FYI (\u00a72.19) #293 X-settings-registry-slim (when merged): reverses the runner's Notifications 45.1 KB raise; every Settings first view drops ~1.2-1.6 KB. Titles stay in the shared registry (25 B each; moving them saves nothing).",
+      "status": "to-send",
+      "at": "2026-10-31T20:39Z"
     }
   ],
   "external_gates": {
@@ -2609,6 +2615,7 @@
     }
   },
   "followups": [
+    "X-build-stable-name (HIGH): kit.version.name defaults to build time, so hashed chunk names change every build and move size gates ~\u00b140 B (Alert 46 KB and Search results 43.3 KB sit within that noise). Set a stable version.name (commit SHA or package version via env), check the update-available/version poll still works, then re-measure. Small web slice (Sonnet ok, Opus review).",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
