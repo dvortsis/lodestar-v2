@@ -116,10 +116,20 @@ describe('the screen', () => {
 		expect(await screen.findByText(/older version of Lodestar/)).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
 	});
-	it('shows the UI build when the server is unreachable, and the rest of the page when updates fail', async () => {
+	it('shows a retry and keeps the page when the server is unreachable', async () => {
 		vi.mocked(fetch).mockResolvedValue(json({ error: { code: 'x', message: 'down' } }, 500));
 		render(AboutScreen);
 		await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
 		expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+	});
+	it('keeps the version block when only the update state fails', async () => {
+		vi.mocked(fetch).mockImplementation(async (input) =>
+			String(input).includes('/system')
+				? json(info({ build: { ...info().build, ui_build_id: null } }))
+				: json({ error: { code: 'x', message: 'down' } }, 500)
+		);
+		render(AboutScreen);
+		expect(await screen.findByRole('heading', { name: 'Lodestar 0.5.2' })).toBeTruthy();
+		expect(await screen.findByText("Couldn't read the update state.")).toBeTruthy();
 	});
 });

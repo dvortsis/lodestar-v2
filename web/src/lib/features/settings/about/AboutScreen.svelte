@@ -4,7 +4,6 @@
 	// reads GET /updates (the full screen is Settings → Updates). The diagnostics and the licence
 	// list are their own parts, loaded when opened.
 	import { onMount, type Component } from 'svelte';
-	import { version as uiBuild } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { api, isAbort } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
@@ -17,7 +16,16 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
-	import { httpsUrl, isStale, links, shortCommit, versionText, type System } from './logic';
+	import { screens } from '../shell/screens';
+	import {
+		httpsUrl,
+		isStale,
+		links,
+		shortCommit,
+		UI_BUILD as uiBuild,
+		versionText,
+		type System
+	} from './logic';
 
 	type Updates = components['schemas']['UpdatesStatus'];
 
@@ -56,6 +64,8 @@
 		logos.find((l) => l.id === 'horizontal' && l.mode === (dark ? 'dark' : 'light'))!
 	);
 
+	// A link to a Settings screen only while that screen exists (Updates is a later slice).
+	const known = new Set(screens.map((s) => s.id));
 	const stale = $derived(isStale(uiBuild, info?.build.ui_build_id));
 	const link = $derived(info ? links(info) : null);
 	const fmtBytes = (n: number | null) => formatBytes(n, locale);
@@ -341,9 +351,10 @@
 					>{checking ? m.settings_about_checking() : m.settings_about_check_now()}</Button
 				>
 			{/if}
-			<a class="underline" href={resolve('/settings/[section]', { section: 'updates' })}
-				>{m.settings_about_updates_settings()}</a
-			>
+			{#if known.has('updates')}
+				<a class="underline" href={resolve('/settings/[section]', { section: 'updates' })}
+					>{m.settings_about_updates_settings()}</a
+				>{/if}
 		</div>
 	</section>
 
@@ -370,9 +381,11 @@
 		<ul class="flex flex-col gap-1">
 			{#each info.connections as c (c.kind)}
 				<li>
-					<a class="underline" href={resolve('/settings/[section]', { section: c.settings })}
-						>{connLabels[c.kind]()}</a
-					>: {stateLabel(c.state)}{#if c.count !== null}
+					{#if known.has(c.settings)}<a
+							class="underline"
+							href={resolve('/settings/[section]', { section: c.settings })}
+							>{connLabels[c.kind]()}</a
+						>{:else}{connLabels[c.kind]()}{/if}: {stateLabel(c.state)}{#if c.count !== null}
 						· {m.settings_about_conn_count({
 							count: formatCount(c.count, locale)
 						})}{/if}{#if c.last_checked_at !== null}

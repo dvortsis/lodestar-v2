@@ -5,6 +5,12 @@ import type { components } from '$lib/api/schema';
 
 export type System = components['schemas']['SystemInfo'];
 
+// Not `version` from `$app/environment`: About would be the only code importing it, which adds an
+// export to the shared runtime chunk and re-splits the routes that share it (Alerts, Alert, Logs,
+// Detail, Insights). SvelteKit defines this constant with the same value at build time.
+declare const __SVELTEKIT_APP_VERSION__: string;
+export const UI_BUILD: string = __SVELTEKIT_APP_VERSION__;
+
 /**
  * The tab's UI came from a different build than the server runs. Only when both ids are known: a
  * stub page or a server that doesn't say (null) is never "older".

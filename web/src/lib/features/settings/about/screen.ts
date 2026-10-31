@@ -9,7 +9,7 @@ export const screen: Screen = {
 	title: () => m.settings_about_title(),
 	about: () => import('./about'),
 	iconLoad: () => import('./icon'),
-	load: () => import('./AboutScreen.svelte')
+	load: () => import('./body').then((b) => b.load())
 };
 
 export default screen;
