@@ -1794,13 +1794,13 @@
       "reviewer": "session_01MMjhn912vzFDE65VeyMNE1"
     },
     "X-polish-1031d": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnD1JfZZo9GAX8FrrEh",
       "pr": 297,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus. | 21:17Z hang = own deadlock: match on pending_requeues(&self.store())? kept the store MutexGuard alive through the match arm that re-locked (would have hung start-time resume). Fixed with let. Reviewer: grep for the same temporary-guard-in-match pattern. | 21:26Z PR #297 head d7d90e65 (cap 64, \"all\" full re-mark chunked; downgrade drops pending all - reviewer to assess). Reviewer + security review; subscribed. | 21:37Z MERGE at d7d90e65 (reviewer session_01MMjhnAmoFTFMu13dTd8VV5). Runner: fold O1 separate classify.requeue_all key (downgrade-safe), O2 range UPDATE per chunk (perf at 10M-50M), O3 comment; one push; reviewer re-checks delta. | 21:50Z re-check MERGE at 184dcf5a (separate key downgrade-safe; range UPDATE correct). Merge on green ci-ok."
+      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus. | 21:17Z hang = own deadlock: match on pending_requeues(&self.store())? kept the store MutexGuard alive through the match arm that re-locked (would have hung start-time resume). Fixed with let. Reviewer: grep for the same temporary-guard-in-match pattern. | 21:26Z PR #297 head d7d90e65 (cap 64, \"all\" full re-mark chunked; downgrade drops pending all - reviewer to assess). Reviewer + security review; subscribed. | 21:37Z MERGE at d7d90e65 (reviewer session_01MMjhnAmoFTFMu13dTd8VV5). Runner: fold O1 separate classify.requeue_all key (downgrade-safe), O2 range UPDATE per chunk (perf at 10M-50M), O3 comment; one push; reviewer re-checks delta. | 21:50Z re-check MERGE at 184dcf5a (separate key downgrade-safe; range UPDATE correct). Merge on green ci-ok. | 22:14Z MERGED; sessions archived."
     },
     "S-logs-2b": {
       "status": "merged",
@@ -2640,6 +2640,11 @@
       "item": "FYI: Settings \u2192 Logging is complete (#289 2a + #294 2b): events, data kinds with duration dialogs and banners, opt-ins, never-logged list, outputs, log files (downloads redact torrent details by default), delete with confirmation. Runner UX calls (\u00a72.26): one size-preview panel instead of per-field; console format shows text/json until event labels land.",
       "status": "to-send",
       "at": "2026-10-31T21:31Z"
+    },
+    {
+      "item": "FYI (\u00a72.19) #297 X-polish-1031d merged: classification re-queue list capped at 64 texts, then one full re-mark stored under classify.requeue_all (survives downgrade; runs on next start with search on, in range-UPDATE chunks). Content safety: marks more, never fewer.",
+      "status": "to-send",
+      "at": "2026-10-31T22:14Z"
     }
   ],
   "external_gates": {
