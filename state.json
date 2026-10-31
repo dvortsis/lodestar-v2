@@ -1734,13 +1734,13 @@
    "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus"
   },
   "B-held-exact": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhn8kGRXFvTNcJrZKLAi",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review"
+   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
