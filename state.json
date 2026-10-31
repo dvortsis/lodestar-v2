@@ -2250,7 +2250,8 @@
     "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
     "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)",
     "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)",
-    "CR-1a-H polish: cap `order` growth in hints::capture between ticks; a send_failed test (#246 review optional)"
+    "CR-1a-H polish: cap `order` growth in hints::capture between ticks; a send_failed test (#246 review optional)",
+    "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
