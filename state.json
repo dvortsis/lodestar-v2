@@ -1604,8 +1604,8 @@
    "session": "session_01MMjhnCz41jUgEexEZLJBjA",
    "pr": 271,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "08:12Z brief briefs/S-search-recover-ui.md (bind #266 recovery + /search/state) | 08:11Z launched Sonnet | 09:37Z found draft PR #271 (b2192a36): Search results (lazy) 45.09 > 43.2 KB because new lazy chunks counted; runner approved .size-limit.mjs edit (resultsOnDemand + on-demand entries at measured+10%); ready + message when done | 10:29Z #271 ready at 20f37ec7 (initial unchanged; results lazy 43.16/43.2; new on-demand entries); fresh Opus reviewer; cold-start art dropped (text-only) -> \u00a72.19 flag + follow-up"
+   "review_rounds": 1,
+   "notes": "08:12Z brief briefs/S-search-recover-ui.md (bind #266 recovery + /search/state) | 08:11Z launched Sonnet | 09:37Z found draft PR #271 (b2192a36): Search results (lazy) 45.09 > 43.2 KB because new lazy chunks counted; runner approved .size-limit.mjs edit (resultsOnDemand + on-demand entries at measured+10%); ready + message when done | 10:29Z #271 ready at 20f37ec7 (initial unchanged; results lazy 43.16/43.2; new on-demand entries); fresh Opus reviewer; cold-start art dropped (text-only) -> \u00a72.19 flag + follow-up | 10:49Z #271 CHANGES at 20f37ec7: B1 failed Recover chunk hides no-results; B2 words-only queries get no counts; B3 hard-coded \u2248 (metrics \u00a71); runner asked also live rebuild fallback, empty-state flicker, restore searching_crawling art (+1.33 KB, banners limit ~2.95 KB) + copy, docs, ListFormat"
   },
   "B-search-live": {
    "status": "merged",
@@ -2348,7 +2348,7 @@
   },
   {
    "item": "FYI (\u00a72.19) #271 S-search-recover-ui: the full-page cold-start state (< 1,000 torrents) is text-only for now; the searching_crawling illustration (\u00a710.19 brand assets) was left out to hold the Search size budget and will return as its own on-demand chunk in a follow-up.",
-   "status": "to-send"
+   "status": "withdrawn (art restored in #271)"
   }
  ],
  "external_gates": {
@@ -2392,7 +2392,6 @@
   "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
   "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
   "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
-  "Search cold start: bring back the searching_crawling illustration (\u00a710.19) as its own on-demand chunk with a size entry at measured+10% (#271 dropped it to hold size)",
   "S-search-6 live banner: switch from 30 s polling to POST /search/live + event: search_live per docs/decisions/2026-10-31-B-search-live.md (small Sonnet UI slice)"
  ],
  "main_health": [
