@@ -80,7 +80,9 @@ impl Default for LiveConfig {
             per_session: 4,
             // Four for each of the hub's 64 streams.
             total: 256,
-            idle: Duration::from_secs(600),
+            // Short, so connectionless registrations can't hold the
+            // global cap for long (runner, #272).
+            idle: Duration::from_secs(60),
             grace: Duration::from_secs(30),
             every: Duration::from_secs(5),
         }
@@ -301,6 +303,10 @@ impl LiveQueries {
     /// longer expire.
     pub(crate) fn opened(&self, session: u64) {
         let mut st = self.lock();
+        // What has already expired stays released: a reconnect after the
+        // grace doesn't revive it.
+        let now = Instant::now();
+        st.regs.retain(|r| r.expires.is_none_or(|t| now < t));
         st.sessions
             .entry(session)
             .or_insert_with(|| Session {
@@ -505,12 +511,14 @@ fn not_found() -> ApiError {
 /// releases every live query: register again. A session holds at most 4
 /// (a fifth replaces the oldest); one is released 30 s after the
 /// session's last `/events` connection closes (a reconnect keeps it),
-/// after 10 minutes if no connection opens, on a `content` settings save,
+/// after 60 s if no connection opens, on a `content` settings save,
 /// or with `DELETE /search/live/{id}`. Register again after a `settings`
 /// event for `content`, or when a `search_live` id you hold is no longer
 /// known (a 404 on `DELETE`). Swarm clauses (`seeders:`…) match nothing
 /// at index time, so a query with one counts only what it can see then.
 /// Where the percolator doesn't run (fixture mode), nothing is counted.
+/// Any `/events` connection of the session keeps its registrations, whatever
+/// its `topics`.
 #[utoipa::path(
     operation_id = "registerSearchLive",
     post,
@@ -822,6 +830,52 @@ mod tests {
         assert_eq!(ids(&l, 1), [a]);
         // A close it never saw changes nothing.
         l.closed(9);
+    }
+
+    /// A reconnect after the grace doesn't revive what it released.
+    #[test]
+    fn a_reconnect_after_the_grace_finds_nothing() {
+        let (_, l) = live(LiveConfig {
+            grace: Duration::from_millis(50),
+            ..LiveConfig::default()
+        });
+        l.opened(1);
+        l.register(1, &q("a"), false, 0, 0).unwrap();
+        l.closed(1);
+        let start = std::time::Instant::now();
+        while l.lock().regs[0].expires.is_some_and(|t| Instant::now() < t) {
+            assert!(start.elapsed() < Duration::from_secs(10), "never expired");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Expired but not yet swept: opening must not bring it back.
+        assert_eq!(l.lock().regs.len(), 1);
+        l.opened(1);
+        assert!(l.lock().regs.is_empty());
+    }
+
+    #[test]
+    fn a_connectionless_registration_is_short_lived() {
+        let (_, l) = live(LiveConfig::default());
+        l.register(1, &q("a"), false, 0, 0).unwrap();
+        let expires = l.lock().regs[0].expires.unwrap();
+        let left = expires.duration_since(Instant::now());
+        assert!(
+            left <= Duration::from_secs(60) && left > Duration::from_secs(50),
+            "{left:?}"
+        );
+    }
+
+    /// Prepared while Adult was shown, inserted after it was hidden: no
+    /// id in the answer, and it never runs.
+    #[test]
+    fn a_registration_raced_by_a_visibility_change_never_counts() {
+        let (shown, l) = live(LiveConfig::default());
+        shown.store(true, Ordering::SeqCst);
+        let p = l.prepare(&q("scene"), false);
+        shown.store(false, Ordering::SeqCst);
+        let reg = l.insert(1, p, 0, false, 42).unwrap();
+        assert_eq!(reg.since, None);
+        assert!(l.due().is_empty());
     }
 
     #[test]

@@ -1390,12 +1390,14 @@ export interface paths {
          *     releases every live query: register again. A session holds at most 4
          *     (a fifth replaces the oldest); one is released 30 s after the
          *     session's last `/events` connection closes (a reconnect keeps it),
-         *     after 10 minutes if no connection opens, on a `content` settings save,
+         *     after 60 s if no connection opens, on a `content` settings save,
          *     or with `DELETE /search/live/{id}`. Register again after a `settings`
          *     event for `content`, or when a `search_live` id you hold is no longer
          *     known (a 404 on `DELETE`). Swarm clauses (`seeders:`…) match nothing
          *     at index time, so a query with one counts only what it can see then.
          *     Where the percolator doesn't run (fixture mode), nothing is counted.
+         *     Any `/events` connection of the session keeps its registrations, whatever
+         *     its `topics`.
          */
         post: operations["registerSearchLive"];
         delete?: never;
