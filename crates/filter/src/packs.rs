@@ -1030,7 +1030,8 @@ mod tests {
             /// torrent with those words replaced by a word no rule reads
             /// (positions kept, the classification left as it was), and
             /// as it is, for guards: a rule matches with neutralizing
-            /// exactly when it matches both ways.
+            /// exactly when it matches both ways. SP-1 and SP-2 read no
+            /// keywords, so they match as they do on the torrent as it is.
             #[test]
             fn neutralizing_removes_only_sole_evidence(
                 lead in prop::sample::select(LEADS),
@@ -1072,7 +1073,13 @@ mod tests {
                 // masked notes instead of the classifier's reason, which
                 // is of the torrent as it is.
                 let masked = hit_as(class_of, &name_masked, &m, &["zzzz"]);
-                let both: Vec<_> = as_is.iter().copied().filter(|r| masked.contains(r)).collect();
+                // SP-1 and SP-2 read the name as it is by design (no
+                // keywords), so they're expected as they are.
+                let both: Vec<_> = as_is
+                    .iter()
+                    .copied()
+                    .filter(|r| masked.contains(r) || ["SP-1", "SP-2"].contains(r))
+                    .collect();
                 prop_assert_eq!(&neutralized, &both);
             }
         }
