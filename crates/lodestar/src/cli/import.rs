@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Args, Subcommand, ValueEnum};
-use lodestar_filter::{CoreRule, Engine, Origin, Sealer};
+use lodestar_filter::{Engine, Sealer};
+use lodestar_pipeline::StoreFilter;
 use lodestar_sources_importers::driver::{self, Adapter, Ended, Report};
 use lodestar_sources_importers::{bitmagnet, magnetico};
 use lodestar_store::Store;
@@ -750,42 +751,27 @@ async fn resume(
     run_job(config, &mut store, id, &mut opened.adapter, limit, json).await
 }
 
-/// The filter the server would judge with: the store's floor, CS-1
-/// entries and switches, subscribed lists, packs and your rules. The
-/// classification rules' generation is read first, as the writer does.
-fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
+/// The filter the server would judge with, built the way it builds it
+/// (`filter_load`): the store's floor, subscribed lists, CS-1 entries and
+/// switches, packs and your rules. The classification rules' generation
+/// is read first, as the writer does.
+pub(crate) fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
     let class_gen = store.class_gen().map_err(failed("reading the rules"))?;
     let files = config
         .blocklist_files()
         .map_err(failed("reading the blocklist files"))?;
-    crate::floor::sync_files(store, &files, unix_now()).map_err(Failure::Failed)?;
-    crate::subscriptions::sync_config(store, &config.subscriptions).map_err(Failure::Failed)?;
     let handle = lodestar_pipeline::default_filter();
-    crate::subscriptions::apply(store, &handle, &Default::default()).map_err(Failure::Failed)?;
-    let state = store.filter_state().map_err(failed("reading the filter"))?;
-    handle.update(|core| {
-        for (hash, origin) in &state.cs_hashes {
-            core.cs.add_hash(
-                *hash,
-                Origin::from_code(*origin).unwrap_or(Origin::Imported),
-            );
-        }
-        for sig in &state.cs_sigs {
-            core.cs.add_sig(*sig);
-        }
-        for (rule, on) in &state.switches {
-            if let Some(r) = CoreRule::from_id(rule) {
-                let _ = core.switches.set(r, *on);
-            }
-        }
-    });
-    let rules = store.rule_set().map_err(failed("reading the rules"))?;
-    let class_rules = store.class_rules().map_err(failed("reading the rules"))?;
-    let skipped = handle.update_engine(|e| {
-        let mut notes = e.load_rules(&rules);
-        notes.extend(e.load_class_rules(&class_rules));
-        notes
-    });
+    crate::filter_load::sync_sources(
+        store,
+        &config.subscriptions,
+        &files,
+        &handle,
+        &Default::default(),
+        unix_now(),
+    )
+    .map_err(Failure::Failed)?;
+    let from = StoreFilter::read(store).map_err(failed("reading the filter"))?;
+    let skipped = lodestar_pipeline::load_filter(&handle, &from);
     if !skipped.is_empty() {
         eprintln!(
             "lodestar import: {} filter rule(s) couldn't be read and are skipped, as the server \
@@ -797,27 +783,12 @@ fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
 }
 
 /// The seal key the server uses for quarantined names, if it has made
-/// one; without it a quarantine keeps no name.
+/// one; without it a quarantine keeps no name. Never created here.
 fn sealer(config: &Config) -> Option<Sealer> {
-    let path = config.data_dir.join("seal.key");
-    let bytes = match std::fs::read(&path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+    match crate::filter_load::read_seal_key(&config.data_dir.join("seal.key")) {
+        Ok(key) => key.map(|k| Sealer::new(&k)),
         Err(e) => {
-            eprintln!(
-                "lodestar import: can't read {} ({e}): quarantined names won't be kept",
-                path.display()
-            );
-            return None;
-        }
-    };
-    match <[u8; 32]>::try_from(bytes) {
-        Ok(key) => Some(Sealer::new(&key)),
-        Err(_) => {
-            eprintln!(
-                "lodestar import: {} isn't a 32-byte key: quarantined names won't be kept",
-                path.display()
-            );
+            eprintln!("lodestar import: {e}: quarantined names won't be kept");
             None
         }
     }
@@ -1062,7 +1033,10 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
             format_count(c.invalid)
         );
         if j.phase == Phase::Indexing && j.control == Control::Running {
-            println!("  Lodestar indexes these torrents after it starts.");
+            println!(
+                "  Waiting for the search index: the job completes once the running server has \
+                 indexed these torrents."
+            );
         }
     }
     Ok(())

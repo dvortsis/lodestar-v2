@@ -444,6 +444,82 @@ fn phases_move_forward_and_complete_after_indexing() {
     );
 }
 
+/// A job completes once the index watermark reaches its highest new id,
+/// not before; one with a waiting candidate completes with issues; one
+/// with no new rows completes at once; a paused one waits.
+#[test]
+fn indexed_jobs_complete_when_the_watermark_passes_them() {
+    let mut store = mem();
+    let src = source(&mut store);
+    let to_indexing = |store: &mut Store, j: ImportJob| {
+        store
+            .set_import_phase(j.id, j.revision, Phase::Indexing, T)
+            .unwrap()
+    };
+    let a = reading(&mut store, b"ds-a");
+    let (p1, p2) = (prepared(&store, "one"), prepared(&store, "two"));
+    let records = [
+        torrent(&p1, Privacy::Public),
+        torrent(&p2, Privacy::Public),
+        candidate([9; 20], None, Some(5)),
+    ];
+    store
+        .commit_import_batch(&batch(a.id, 1, src, &records))
+        .unwrap();
+    let a = job(&store, a.id);
+    let a = to_indexing(&mut store, a);
+    assert!(a.max_new_id > 0);
+    let empty = reading(&mut store, b"ds-empty");
+    let empty = to_indexing(&mut store, empty);
+    let c = reading(&mut store, b"ds-c");
+    let p3 = prepared(&store, "three");
+    store
+        .commit_import_batch(&batch(c.id, 1, src, &[torrent(&p3, Privacy::Public)]))
+        .unwrap();
+    let c = job(&store, c.id);
+    let c = to_indexing(&mut store, c);
+    store.pause_import_job(c.id, c.revision, T).unwrap();
+
+    let done = store.complete_indexed_import_jobs(T + 1).unwrap();
+    assert_eq!(done.iter().map(|j| j.id).collect::<Vec<_>>(), [empty.id]);
+    assert_eq!(job(&store, empty.id).phase, Phase::Complete);
+    assert_eq!(job(&store, a.id).phase, Phase::Indexing);
+
+    store.record_index_watermark(1, a.max_new_id - 1).unwrap();
+    assert!(
+        store
+            .complete_indexed_import_jobs(T + 2)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(job(&store, a.id).phase, Phase::Indexing, "not before");
+
+    store.record_index_watermark(2, a.max_new_id).unwrap();
+    let done = store.complete_indexed_import_jobs(T + 3).unwrap();
+    assert_eq!(done.iter().map(|j| j.id).collect::<Vec<_>>(), [a.id]);
+    let a = job(&store, a.id);
+    assert_eq!(a.phase, Phase::CompleteWithIssues, "a candidate waits");
+    assert_eq!(a.finished_at, Some(T + 3));
+
+    // Passed by the watermark but paused: it waits until it runs again.
+    store.record_index_watermark(3, i64::MAX / 2).unwrap();
+    assert!(
+        store
+            .complete_indexed_import_jobs(T + 4)
+            .unwrap()
+            .is_empty()
+    );
+    let c = job(&store, c.id);
+    assert_eq!((c.phase, c.control), (Phase::Indexing, Control::Paused));
+    // Nothing is due twice.
+    assert!(
+        store
+            .complete_indexed_import_jobs(T + 5)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 fn a_restart_blocks_running_jobs_until_they_revalidate() {
     let dir = tempfile::tempdir().unwrap();
