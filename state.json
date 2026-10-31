@@ -1980,9 +1980,7 @@
  "last_heartbeat": "2026-10-31T06:40Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
- "runner_prs_open": [
-  "#268 runner/glossary-imported 4f03f2df: Crawled/Imported glossary rows; in-process fresh review running"
- ],
+ "runner_prs_open": [],
  "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier.",
  "notes": [
   "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547.",
