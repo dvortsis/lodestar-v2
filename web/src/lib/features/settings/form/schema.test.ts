@@ -20,13 +20,27 @@ const golden = (): SettingsIndex => {
 	return JSON.parse(text.slice(text.indexOf('\n') + 1));
 };
 
-/** Maps whose widgets other slices register (S-logs, S-keys); until then, the JSON input. */
+/**
+ * Maps and lists whose widgets other slices register (S-logs, S-keys; S-settings-2b for the
+ * client list and the channel lists); until then, the JSON input.
+ */
 const REGISTERED_ELSEWHERE = [
 	'logging.events',
 	'logging.kinds',
 	'logging.components',
-	'preferences.shortcut_keys'
+	'preferences.shortcut_keys',
+	'integrations.clients',
+	'notifications.route_alerts',
+	'notifications.route_updates',
+	'notifications.route_health',
+	'insights.digest_channels'
 ];
+
+/** A list of free strings; a list of objects or of enum values reads as unknown. */
+const isStringList = (items: unknown) => {
+	const i = items as { type?: string; enum?: unknown } | undefined;
+	return i?.type === 'string' && i.enum === undefined;
+};
 
 const name = (w: WidgetChoice) => ('builtin' in w ? w.builtin : w.name);
 
@@ -79,7 +93,9 @@ describe('the schema reader on the golden index', () => {
 						: p.type === 'object'
 							? 'map'
 							: p.type === 'array'
-								? 'string-list'
+								? isStringList(p.items)
+									? 'string-list'
+									: 'unknown'
 								: p.type;
 				expect(spec.kind, at).toBe(kind);
 			}

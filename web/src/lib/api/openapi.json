@@ -16229,6 +16229,13 @@
             "type": "boolean",
             "description": "A change takes effect at the next restart."
           },
+          "secrets_set": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a list whose items hold credentials (a download client's\npassword): which are set, as `<item id>.<key>`. The values are\nnever sent. Left out when empty."
+          },
           "source": {
             "$ref": "#/components/schemas/SettingSource"
           },

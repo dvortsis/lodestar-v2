@@ -54,7 +54,11 @@ fn fixture_with(wrap: impl FnOnce(Arc<Registry>) -> Arc<dyn SettingsApi>) -> Fix
     let store = Arc::new(Mutex::new(
         Store::open(&db, StoreConfig::default()).unwrap(),
     ));
-    let registry = Arc::new(Registry::load(&config, store).unwrap());
+    let mut registry = Registry::load(&config, store).unwrap();
+    // Secrets seal with a key in the test's directory; `general.data_dir`
+    // still shows the config's.
+    registry.sealer.dir = Some(dir.path().to_path_buf());
+    let registry = Arc::new(registry);
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let hub = EventHub::start(EventsConfig::default(), EventSources::default());
@@ -174,7 +178,7 @@ async fn settings_endpoints() {
     let c = Some(cookie.as_str());
 
     let index = golden(&f, "settings_index", get("/api/v1/settings", c)).await;
-    assert_eq!(index["sections"].as_array().unwrap().len(), 10);
+    assert_eq!(index["sections"].as_array().unwrap().len(), 14);
     let crawler = golden(&f, "settings_crawler", get("/api/v1/settings/crawler", c)).await;
     assert_eq!(crawler["fields"]["timeout_secs"]["source"], json!("file"));
     let network = golden(&f, "settings_network", get("/api/v1/settings/network", c)).await;
@@ -184,6 +188,36 @@ async fn settings_endpoints() {
     );
     golden(&f, "settings_general", get("/api/v1/settings/general", c)).await;
     golden(&f, "settings_updates", get("/api/v1/settings/updates", c)).await;
+    for s in ["trackers", "integrations", "notifications", "insights"] {
+        golden(
+            &f,
+            &format!("settings_{s}"),
+            get(&format!("/api/v1/settings/{s}"), c),
+        )
+        .await;
+    }
+    // A client saved without a password; a bad address is refused without
+    // being quoted.
+    golden(
+        &f,
+        "settings_patch_integrations",
+        patch(
+            "/api/v1/settings/integrations",
+            c,
+            r#"{"clients":[{"id":"home","name":"Home","kind":"transmission","url":"http://192.168.1.5:9091/"}],"default_client":"home"}"#,
+        ),
+    )
+    .await;
+    golden(
+        &f,
+        "settings_patch_integrations_bad_url",
+        patch(
+            "/api/v1/settings/integrations",
+            c,
+            r#"{"torznab_url":"http://user:pass@prowlarr.lan/"}"#,
+        ),
+    )
+    .await;
     // The window is checked: one that starts as it ends is refused.
     golden(
         &f,

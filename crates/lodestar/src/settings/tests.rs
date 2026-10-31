@@ -143,7 +143,11 @@ fn every_section_reports_every_field() {
             "transport",
             "storage",
             "search",
+            "trackers",
             "content",
+            "integrations",
+            "notifications",
+            "insights",
             "updates",
             "preferences",
             "logging"
@@ -712,7 +716,6 @@ fn filtering_state_is_out_of_reach() {
         "blocklist",
         "safety",
         "secrets",
-        "integrations",
     ] {
         assert!(r.section(section).is_none(), "{section}");
         assert_eq!(
@@ -734,6 +737,11 @@ fn filtering_state_is_out_of_reach() {
     ];
     for s in r.index().sections {
         for f in &s.fields {
+            // Credentials are sealed fields (`writeOnly`); no other field
+            // is named like one.
+            if s.schema["properties"][&f.name]["writeOnly"] == json!(true) {
+                continue;
+            }
             for w in words {
                 assert!(!f.name.contains(w), "{}.{}", s.section, f.name);
             }

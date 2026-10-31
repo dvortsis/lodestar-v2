@@ -91,6 +91,11 @@ pub struct SettingValue {
     pub read_only: bool,
     /// A change takes effect at the next restart.
     pub restart_required: bool,
+    /// For a list whose items hold credentials (a download client's
+    /// password): which are set, as `<item id>.<key>`. The values are
+    /// never sent. Left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets_set: Vec<String>,
     pub source: SettingSource,
     /// Any JSON value, of the type the section's schema gives the field.
     pub value: Value,

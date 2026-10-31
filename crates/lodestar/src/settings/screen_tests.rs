@@ -109,9 +109,16 @@ fn every_field_has_its_form_hints() {
                 m.insert(f.name.to_string(), auto.clone());
                 assert!(entry.plan(&m).is_ok(), "{at}: x-auto {auto} isn't accepted");
             }
-            // No real section holds a secret: credentials live in the
-            // integrations `SecretStore` (§18.10).
-            assert!(!f.secret && p.get("writeOnly").is_none(), "{at}");
+            // `writeOnly` exactly on secrets, and on list items' secret
+            // keys.
+            assert_eq!(p.get("writeOnly") == Some(&json!(true)), f.secret, "{at}");
+            for k in f.secret_keys {
+                assert_eq!(
+                    p["items"]["properties"][*k]["writeOnly"],
+                    json!(true),
+                    "{at}.{k}"
+                );
+            }
         }
     }
     let index = r.index();
@@ -561,7 +568,8 @@ proptest! {
         b in any_batch(),
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let c = config(dir.path(), Some("[fetch]\ntimeout_secs = 30\n"), &[("LODESTAR_DHT_PORT", "7000")]);
+        let mut c = config(dir.path(), Some("[fetch]\ntimeout_secs = 30\n"), &[("LODESTAR_DHT_PORT", "7000")]);
+        c.data_dir = dir.path().to_path_buf();
         let r = registry(dir.path(), &c);
         // Some saved state first, so revisions and saved values vary.
         let _ = r.save(earlier);
@@ -676,11 +684,18 @@ impl Section for Vault {
     }
 }
 
+/// A config whose data directory, where the secrets key goes, is `dir`.
+fn sealed_config(dir: &Path) -> Config {
+    let mut c = config(dir, None, &[]);
+    c.data_dir = dir.to_path_buf();
+    c
+}
+
 fn vault(dir: &Path) -> Registry {
-    let c = config(dir, None, &[]);
+    let c = sealed_config(dir);
     let mut r = Registry::empty(open(dir));
     r.register::<super::crawler::Crawler>(&c).unwrap();
-    r.register_with_secrets::<Vault>(&c).unwrap();
+    r.register::<Vault>(&c).unwrap();
     r
 }
 
@@ -1054,15 +1069,451 @@ fn the_registry_reserves_route_names_and_patch_keys() {
 }
 
 #[test]
-fn a_section_with_a_secret_is_refused_until_secrets_are_sealed() {
+fn secrets_are_sealed_at_rest_and_bound_to_their_field() {
     let dir = tempfile::tempdir().unwrap();
-    let c = config(dir.path(), None, &[]);
-    let store = open(dir.path());
-    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Registry::empty(store.clone()).register::<Vault>(&c)
-    }));
-    let message = *refused.unwrap_err().downcast::<String>().unwrap();
-    assert!(message.contains("sealed storage"), "{message}");
+    let r = vault(dir.path());
+    r.patch(
+        "vault",
+        patch(json!({ "token": "hunter2", "label": "hunter2" })),
+    )
+    .unwrap();
+    let rows = saved(&r);
+    let token = &rows
+        .iter()
+        .find(|(k, _)| k == "settings.vault.token")
+        .unwrap()
+        .1;
+    assert!(
+        token.starts_with("\"sealed:") && !token.contains("hunter2"),
+        "{token}"
+    );
+    // A new registry over the same store and key opens it.
+    drop(r);
+    let r = vault(dir.path());
+    assert_eq!(r.get::<Vault>().token, "hunter2");
+    assert_eq!(
+        r.section("vault").unwrap().fields["token"].source,
+        SettingSource::Db
+    );
+    // A sealed value moved onto another field doesn't open there.
+    let moved = token.clone();
+    r.store
+        .lock()
+        .unwrap()
+        .set_settings_text(&[("settings.vault.label", moved.as_str())])
+        .unwrap();
+    drop(r);
+    let r = vault(dir.path());
+    assert_ne!(r.get::<Vault>().label, "hunter2");
+    // Without the key file, nothing opens: skipped, never fatal.
+    drop(r);
+    std::fs::remove_file(dir.path().join(SecretStore::KEY_FILE)).unwrap();
+    let text = logs(|| {
+        let r = vault(dir.path());
+        assert_eq!(r.get::<Vault>().token, "");
+    });
+    assert!(
+        text.contains("field=token") && text.contains("not_sealed"),
+        "{text}"
+    );
+}
+
+/// A download client item, with `extra` keys over it.
+fn client_item(id: &str, extra: Value) -> Value {
+    let mut m = json!({
+        "id": id, "name": id, "kind": "qbittorrent", "url": "http://192.168.1.5:8080/"
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        m[k] = v.clone();
+    }
+    m
+}
+
+#[test]
+fn list_item_secrets_follow_their_item_by_id_and_never_another_server() {
+    use super::integrations::Integrations;
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    let clients = |v: Value| patch(json!({ "clients": v }));
+    let passwords = |r: &Registry| -> Vec<(String, Option<String>)> {
+        r.get::<Integrations>()
+            .clients
+            .iter()
+            .map(|c| (c.id.clone(), c.password.as_ref().map(|p| p.0.clone())))
+            .collect()
+    };
+    r.patch(
+        "integrations",
+        clients(json!([
+            client_item("a", json!({ "password": "pa" })),
+            client_item("b", json!({ "password": "pb" }))
+        ])),
+    )
+    .unwrap();
+    // Reordered, one sent with `null`: each keeps its own.
+    r.patch(
+        "integrations",
+        clients(json!([
+            client_item("b", json!({})),
+            client_item("a", json!({ "password": null }))
+        ])),
+    )
+    .unwrap();
+    assert_eq!(
+        passwords(&r),
+        [
+            ("b".into(), Some("pb".into())),
+            ("a".into(), Some("pa".into()))
+        ]
+    );
+    // One removed: the other keeps its password.
+    r.patch(
+        "integrations",
+        clients(json!([client_item("a", json!({}))])),
+    )
+    .unwrap();
+    assert_eq!(passwords(&r), [("a".into(), Some("pa".into()))]);
+    // A renamed id, another server, another kind: dropped, never carried.
+    for moved in [
+        client_item("c", json!({})),
+        client_item("a", json!({ "url": "http://attacker.example:8080/" })),
+        client_item("a", json!({ "kind": "deluge" })),
+    ] {
+        r.patch(
+            "integrations",
+            clients(json!([client_item("a", json!({ "password": "pa" }))])),
+        )
+        .unwrap();
+        let out = r
+            .patch("integrations", clients(json!([moved.clone()])))
+            .unwrap();
+        assert!(out.fields["clients"].secrets_set.is_empty(), "{moved}");
+        assert_eq!(passwords(&r)[0].1, None, "{moved}");
+    }
+    // The same server written differently keeps it.
+    r.patch(
+        "integrations",
+        clients(json!([client_item("a", json!({ "password": "pa" }))])),
+    )
+    .unwrap();
+    r.patch(
+        "integrations",
+        clients(json!([client_item(
+            "a",
+            json!({ "url": "http://192.168.1.5:8080/other" })
+        )])),
+    )
+    .unwrap();
+    assert_eq!(passwords(&r)[0].1.as_deref(), Some("pa"));
+    // Only the secret is sealed: without the key file, the list survives
+    // and only the password is lost.
+    drop(r);
+    std::fs::remove_file(dir.path().join(SecretStore::KEY_FILE)).unwrap();
+    let text = logs(|| {
+        let r = registry(dir.path(), &sealed_config(dir.path()));
+        assert_eq!(passwords(&r), [("a".into(), None)]);
+        assert_eq!(
+            r.get::<Integrations>().clients[0].url,
+            "http://192.168.1.5:8080/other"
+        );
+    });
+    assert!(
+        text.contains("field=clients") && text.contains("not_sealed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_empty_secret_resets_and_a_moved_endpoint_drops_its_secret() {
+    use super::integrations::Integrations;
+    use super::notifications::Notifications;
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    let out = r
+        .patch("integrations", patch(json!({ "torznab_api_key": "" })))
+        .unwrap();
+    assert_eq!(out.fields["torznab_api_key"].source, SettingSource::Default);
+    assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
+    r.patch(
+        "integrations",
+        patch(json!({ "torznab_url": "https://prowlarr.lan/1/api", "torznab_api_key": "k1" })),
+    )
+    .unwrap();
+    // Another path on the same server keeps it.
+    r.patch(
+        "integrations",
+        patch(json!({ "torznab_url": "https://prowlarr.lan/2/api" })),
+    )
+    .unwrap();
+    assert_eq!(r.get::<Integrations>().torznab_api_key.0, "k1");
+    // Another server drops it, unless it's sent again.
+    let out = r
+        .patch(
+            "integrations",
+            patch(json!({ "torznab_url": "https://evil.example/api" })),
+        )
+        .unwrap();
+    assert_eq!(out.fields["torznab_api_key"].source, SettingSource::Default);
+    r.patch(
+        "integrations",
+        patch(json!({ "torznab_url": "https://prowlarr.lan/1/api", "torznab_api_key": "k2" })),
+    )
+    .unwrap();
+    assert_eq!(r.get::<Integrations>().torznab_api_key.0, "k2");
+    r.patch(
+        "notifications",
+        patch(
+            json!({ "email_host": "smtp.example.com", "email_username": "me",
+                      "email_password": "pw", "email_from": "me@example.com",
+                      "email_to": ["me@example.com"] }),
+        ),
+    )
+    .unwrap();
+    // The login then needs its password again before it's saved.
+    let err = r
+        .patch(
+            "notifications",
+            patch(json!({ "email_host": "smtp.evil.example" })),
+        )
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("password again"), "{err:?}");
+    assert_eq!(r.get::<Notifications>().email_password.0, "pw");
+    r.patch(
+        "notifications",
+        patch(json!({ "email_host": "smtp.evil.example", "email_password": "pw2" })),
+    )
+    .unwrap();
+    assert_eq!(r.get::<Notifications>().email_password.0, "pw2");
+    // Another IPv6 host, another port, or no encryption: asked again too.
+    for (from, to) in [
+        (
+            json!({ "email_host": "fd00::25" }),
+            json!({ "email_host": "fd00::66" }),
+        ),
+        (json!({ "email_port": 587 }), json!({ "email_port": 2525 })),
+        (
+            json!({ "email_security": "tls" }),
+            json!({ "email_security": "none" }),
+        ),
+    ] {
+        let mut set = json!({ "email_password": "pw3", "email_allow_private": true });
+        set.as_object_mut()
+            .unwrap()
+            .extend(from.as_object().unwrap().clone());
+        r.patch("notifications", patch(set)).unwrap();
+        let err = r.patch("notifications", patch(to.clone())).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("password again"),
+            "{to}: {err:?}"
+        );
+    }
+    r.patch(
+        "notifications",
+        patch(json!({ "email_host": "smtp.evil.example", "email_port": 0,
+                      "email_security": "starttls", "email_password": "pw2" })),
+    )
+    .unwrap();
+    // Without a login, nothing is asked.
+    r.patch(
+        "notifications",
+        patch(json!({ "email_username": "", "email_password": "" })),
+    )
+    .unwrap();
+    r.patch(
+        "notifications",
+        patch(json!({ "email_host": "smtp.example.com" })),
+    )
+    .unwrap();
+}
+
+#[test]
+fn notification_values_the_sender_refuses_fail_at_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    for p in [
+        json!({ "discord_url": "https://example.com/hooks/1/abc" }),
+        json!({ "ntfy_url": "https://ntfy.sh/" }),
+        json!({ "ntfy_url": "http://ntfy.example.com/topic", "ntfy_token": "tk_secretvalue" }),
+        json!({ "webhook_url": "http://127.0.0.1/hook" }),
+        json!({ "email_host": "smtp.example.com", "email_security": "none",
+                "email_username": "me", "email_password": "secretvalue",
+                "email_from": "me@example.com", "email_to": ["me@example.com"] }),
+    ] {
+        let err = r.patch("notifications", patch(p.clone())).unwrap_err();
+        let shown = format!("{err:?}");
+        assert!(matches!(err, SettingsError::Invalid { .. }), "{p} {shown}");
+        assert!(
+            !shown.contains("secretvalue") && !shown.contains("example.com/hooks"),
+            "{shown}"
+        );
+    }
+    r.patch(
+        "notifications",
+        patch(
+            json!({ "discord_url": "https://discord.com/api/webhooks/123456789012345678/abc",
+                      "ntfy_url": "https://ntfy.sh/my-topic" }),
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_new_sections_round_trip_and_check_their_values() {
+    use super::insights::Insights;
+    use super::notifications::Notifications;
+    use super::trackers::Trackers;
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    r.save(batch(json!({
+        "trackers": { "scrape": false, "interval_secs": 10,
+                      "trackers": ["udp://tracker.example:6969/announce"] },
+        "notifications": { "email_host": "smtp.example.com", "email_to": ["me@example.com"],
+                           "route_alerts": ["email", "ntfy"], "ntfy_url": "https://ntfy.sh/x" },
+        "insights": { "query_logging": true, "query_retention_days": 7, "digest": "weekly" }
+    })))
+    .unwrap();
+    drop(r);
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    let t = r.get::<Trackers>();
+    assert_eq!(
+        (t.scrape, t.interval_secs, t.trackers.len()),
+        (false, 10, 1)
+    );
+    let n = r.get::<Notifications>();
+    assert_eq!(n.email_to, ["me@example.com"]);
+    assert_eq!(n.ntfy_url.0, "https://ntfy.sh/x");
+    let i = r.get::<Insights>();
+    assert!(i.query_logging && i.query_retention_days == 7);
+    // Saved tracker values reach the scraper's config at the next start.
+    let eff = r.effective_config(&sealed_config(dir.path()));
+    assert!(!eff.scrape.enabled && eff.scrape.interval_secs == Some(10));
+    for (section, p) in [
+        ("trackers", json!({ "trackers": ["wss://x.example/"] })),
+        ("trackers", json!({ "interval_secs": 86401 })),
+        ("notifications", json!({ "email_to": ["nobody"] })),
+        ("notifications", json!({ "ntfy_priority": 6 })),
+        ("notifications", json!({ "route_health": ["ntfy", "ntfy"] })),
+        ("notifications", json!({ "route_health": ["pager"] })),
+        ("insights", json!({ "query_retention_days": 31 })),
+        ("insights", json!({ "query_retention_days": 0 })),
+        ("integrations", json!({ "default_client": "nas" })),
+        ("integrations", json!({ "torznab_url": "ftp://x/" })),
+    ] {
+        assert!(r.patch(section, patch(p.clone())).is_err(), "{section} {p}");
+    }
+}
+
+#[test]
+fn the_scraper_switch_follows_its_environment_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path(), None, &[("LODESTAR_SCRAPE_ENABLED", "false")]);
+    let r = registry(dir.path(), &c);
+    let f = &r.section("trackers").unwrap().fields["scrape"];
+    assert_eq!(
+        (f.read_only, f.env.as_deref(), &f.value),
+        (true, Some("LODESTAR_SCRAPE_ENABLED"), &json!(false))
+    );
+    assert_eq!(
+        r.patch("trackers", patch(json!({ "scrape": true }))),
+        Err(SettingsError::SetByEnv {
+            field: "scrape".into(),
+            var: "LODESTAR_SCRAPE_ENABLED".into()
+        })
+    );
+}
+
+#[test]
+fn a_registry_with_no_secret_saved_never_creates_the_key_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = vault(dir.path());
+    r.patch("vault", patch(json!({ "label": "home" }))).unwrap();
+    assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
+}
+
+#[test]
+fn list_item_secrets_are_kept_redacted_and_removable() {
+    use super::integrations::Integrations;
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    let item = |pw: Value| {
+        let mut m = json!({
+            "id": "home", "name": "Home", "kind": "qbittorrent",
+            "url": "http://192.168.1.5:8080/"
+        });
+        if !pw.is_null() {
+            m["password"] = pw;
+        }
+        m
+    };
+    let out = r
+        .patch(
+            "integrations",
+            patch(json!({ "clients": [item(json!("hunter2"))] })),
+        )
+        .unwrap();
+    let f = &out.fields["clients"];
+    assert_eq!(f.secrets_set, vec!["home.password".to_string()]);
+    assert!(f.value[0].get("password").is_none(), "{:?}", f.value);
+    assert!(!format!("{out:?}{:?}", r.section("integrations")).contains("hunter2"));
+    // Sent back without it (as GET returned it): kept.
+    r.patch(
+        "integrations",
+        patch(
+            json!({ "clients": [{ "id": "home", "name": "Renamed", "kind": "qbittorrent",
+                                    "url": "http://192.168.1.5:8080/" }] }),
+        ),
+    )
+    .unwrap();
+    let c = r.get::<Integrations>();
+    assert_eq!(c.clients[0].name, "Renamed");
+    assert_eq!(c.clients[0].password.as_ref().unwrap().0, "hunter2");
+    // At rest, sealed; not in the preview, an export or a log line.
+    assert!(saved(&r).iter().all(|(_, v)| !v.contains("hunter2")));
+    let shown = format!(
+        "{:?}{}",
+        r.preview(batch(
+            json!({ "integrations": { "clients": [item(json!("hunter3"))] } })
+        ))
+        .unwrap(),
+        r.export(true)
+    );
+    assert!(!shown.contains("hunter"), "{shown}");
+    // An error never quotes it, even when the item is refused.
+    let err = r
+        .patch(
+            "integrations",
+            patch(
+                json!({ "clients": [{ "id": "home", "name": "x", "kind": "qbittorrent",
+                                        "url": "hunter4://x", "password": "hunter4" }] }),
+            ),
+        )
+        .unwrap_err();
+    assert!(!format!("{err:?}").contains("hunter4"), "{err:?}");
+    // `""` removes it.
+    let out = r
+        .patch(
+            "integrations",
+            patch(json!({ "clients": [item(json!(""))] })),
+        )
+        .unwrap();
+    assert!(out.fields["clients"].secrets_set.is_empty());
+    assert!(r.get::<Integrations>().clients[0].password.is_none());
+    // Import never sets one.
+    let report = r
+        .import(
+            SettingsImport {
+                toml: "[integrations]\nclients = []\ntorznab_api_key = \"x\"\n".into(),
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap()
+        .report;
+    assert!(
+        report.skipped.iter().all(|s| s.reason == "secret"),
+        "{report:?}"
+    );
+    assert_eq!(report.skipped.len(), 2);
 }
 
 /// A section whose check compares two fields.

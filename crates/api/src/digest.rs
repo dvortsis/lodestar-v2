@@ -446,6 +446,8 @@ struct Row {
     label: &'static str,
     value: String,
     changes: Vec<Change>,
+    /// A secondary line under the value, never added into it.
+    note: Option<String>,
 }
 
 struct Stage {
@@ -609,6 +611,7 @@ fn model(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Model {
             changes: change("", k.searchable_delta.map(format_delta_count))
                 .into_iter()
                 .collect(),
+            note: None,
         },
         Row {
             label: "New searchable",
@@ -616,6 +619,9 @@ fn model(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Model {
             changes: change("", k.new_searchable_delta.map(format_delta_count))
                 .into_iter()
                 .collect(),
+            // Crawled only since IMP-5; an import's records beside it.
+            note: (k.new_searchable_imported > 0)
+                .then(|| format!("+ {} imported", format_count(k.new_searchable_imported))),
         },
         Row {
             label: "Yield",
@@ -626,6 +632,7 @@ fn model(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Model {
             changes: change("", k.yield_delta.map(format_delta_percent))
                 .into_iter()
                 .collect(),
+            note: None,
         },
         Row {
             label: "Time to searchable",
@@ -643,11 +650,13 @@ fn model(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Model {
             .into_iter()
             .flatten()
             .collect(),
+            note: None,
         },
         Row {
             label: "Health",
             value: health,
             changes: Vec::new(),
+            note: None,
         },
     ];
     let versus = rows
@@ -761,6 +770,9 @@ fn render_text(m: &Model, alerts: usize) -> String {
             let _ = write!(t, "; change {}", changes.join(", "));
         }
         t.push('\n');
+        if let Some(note) = &r.note {
+            let _ = writeln!(t, "  {note}");
+        }
     }
 
     let _ = writeln!(t, "\nFunnel ({})", m.cohorts);
@@ -834,8 +846,11 @@ fn render_html(m: &Model, alerts: usize) -> String {
         h.raw("<tr><th scope=\"row\">")
             .text(r.label)
             .raw("</th><td style=\"text-align:right\">")
-            .text(&r.value)
-            .raw("</td><td>");
+            .text(&r.value);
+        if let Some(note) = &r.note {
+            h.raw("<br>").text(note);
+        }
+        h.raw("</td><td>");
         for (i, c) in r.changes.iter().enumerate() {
             if i > 0 {
                 h.raw(", ");
@@ -1397,6 +1412,29 @@ mod tests {
                 "{name}: the digest changed"
             );
         }
+    }
+
+    /// "New searchable" is the crawl's; an import's records are a line
+    /// under it, never added in, and only when there are some.
+    #[test]
+    fn imported_records_are_a_line_under_new_searchable() {
+        let plain = render(&week(), DigestPeriod::Weekly, T);
+        assert!(!plain.text.contains("imported"));
+        assert!(!plain.html.contains("imported"));
+        let mut o = week();
+        o.kpi.new_searchable_imported = 12_500;
+        let d = render(&o, DigestPeriod::Weekly, T);
+        assert!(
+            d.text
+                .contains("- New searchable: 1,240; change ▼ −3\n  + 12,500 imported\n"),
+            "{}",
+            d.text
+        );
+        assert!(
+            d.html.contains(">1,240<br>+ 12,500 imported</td>"),
+            "{}",
+            d.html
+        );
     }
 
     #[test]
