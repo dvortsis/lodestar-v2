@@ -446,8 +446,8 @@
       "merged_sha": "a1b2938"
     },
     "S-search-4": {
-      "status": "running",
-      "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9"
+      "status": "review",
+      "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9 | 2026-10-31T01:26Z PR #250 head 39566a36 (~1,800, 45% tests); /search first load unchanged; mount in query/Live.svelte accepted (runner); reviewer session_01MMjhn8yBp4uRAjAcidcd4c"
     },
     "S-search-5": {
       "status": "pending",
@@ -2251,7 +2251,8 @@
     "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)",
     "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)",
     "CR-1a-H polish: cap `order` growth in hints::capture between ticks; a send_failed test (#246 review optional)",
-    "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)"
+    "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
+    "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
