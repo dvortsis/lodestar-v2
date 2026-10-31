@@ -450,13 +450,8 @@
       "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9 | 2026-10-31T01:26Z PR #250 head 39566a36 (~1,800, 45% tests); /search first load unchanged; mount in query/Live.svelte accepted (runner); reviewer session_01MMjhn8yBp4uRAjAcidcd4c | 01:27Z CI: e2e:typecheck fails (suggest fixture kind:string); author fixes locally, pushes with review round | 01:39Z review CHANGES: Enter does not close the assist list, so the next Tab picks a suggestion (breaks search-results.keyboard e2e); riding: Natural preview stale text, active index jump, BuilderRow note. Reviewer kept for delta"
     },
     "S-search-5": {
-      "status": "pending",
-      "model": "sonnet",
-      "session": null,
-      "pr": null,
-      "attempt": 0,
-      "review_rounds": 0,
-      "notes": ""
+      "status": "running",
+      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ"
     },
     "S-search-6": {
       "status": "pending",
