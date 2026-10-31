@@ -16,7 +16,7 @@
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import ChartPanel from '../overview/ChartPanel.svelte';
 	import type { Route } from '../overview/href';
-	import { csvHref, stageHref, STAGES, type Stage } from '../overview/links';
+	import { csvHref, searchHref, stageHref, STAGES, type Stage } from '../overview/links';
 	import LinkedBars from '../overview/LinkedBars.svelte';
 	import { apiQuery, parseQuery, RANGES, searchFor, type InsightsQuery } from '../overview/query';
 	import Skeleton from '../overview/Skeleton.svelte';
@@ -24,6 +24,7 @@
 	import {
 		binEdges,
 		binLabel,
+		edgeLabels,
 		fetchBars,
 		formatMetric,
 		indexBars,
@@ -43,7 +44,11 @@
 	const locale = $derived(currentLocale());
 	const params = $derived(page.url.searchParams);
 	const query = $derived(parseQuery(params));
-	const reason = $derived(stage === 'fetch' ? params.get('reason') || undefined : undefined);
+	// Only a known loss name is sent; anything else is ignored, not a 400 the user cannot fix.
+	const reason = $derived.by(() => {
+		const r = stage === 'fetch' ? params.get('reason') : null;
+		return r && r in reasons ? r : undefined;
+	});
 
 	let data = $state.raw<StageResponse>();
 	let phase = $state<'loading' | 'ready' | 'error'>('loading');
@@ -129,7 +134,7 @@
 	const model = $derived<StageModel | undefined>(data ? mapStage(stage, data) : undefined);
 	const extraBars = $derived.by<BarsSpec[]>(() => {
 		if (!data) return [];
-		if (stage === 'fetch') return fetchBars(data as never, reasonName, locale).bars;
+		if (stage === 'fetch') return fetchBars(data as never, reasonName, locale);
 		if (stage === 'understand') return understandBars(data as never, groupName, typeName, locale);
 		if (stage === 'index') return [indexBars(data as never, typeName, locale)];
 		return [];
@@ -164,15 +169,30 @@
 	const unit = $derived(
 		bucket === 'hour' ? m.insights_overview_per_hour() : m.insights_overview_per_day()
 	);
-	const withContext = (path: string, q: InsightsQuery) =>
-		path + searchFor(new URLSearchParams(), q);
+	const withContext = (path: string, q: InsightsQuery, keep?: string) => {
+		const s = searchFor(new URLSearchParams(), q);
+		if (!keep) return path + s;
+		return `${path}${s}${s ? '&' : '?'}reason=${encodeURIComponent(keep)}`;
+	};
 	const overviewHref = $derived(withContext('/insights', query));
 	const stageLink = (s: Stage) => stageHref(s, query, { compare: true, reason: undefined });
 	const staleReason: Record<string, () => string> = {
 		paused: () => m.insights_overview_stale_paused(),
 		writer_stalled: () => m.insights_overview_stale_writer()
 	};
-	const csv = (panel: string) => csvHref(panel, query);
+	const csv = (panel: string) =>
+		csvHref(panel, query) + (reason ? `&reason=${encodeURIComponent(reason)}` : '');
+	const hrefFor = (barId: string, key: string) => {
+		if (stage === 'fetch') {
+			return reason ? undefined : stageHref('fetch', query, { compare: true, reason: key });
+		}
+		if (stage === 'understand') {
+			return searchHref(barId === 'by-group' ? 'group' : 'type', key, query);
+		}
+		return undefined;
+	};
+	const noData = (series: { values: (number | null)[] }[]) =>
+		series.every((s) => s.values.every((v) => v === null));
 
 	const metricText = (x: Metric, v: number | null | undefined) => formatMetric(x, v, locale);
 	const hasPrev = (x: Metric) => query.compare && x.previous !== undefined;
@@ -191,7 +211,7 @@
 					>{m.insights_overview_title()}</a
 				>
 			</li>
-			<li aria-current="page"><span class="ins-muted">/</span> {names[stage]()}</li>
+			<li><span class="ins-muted">/</span> <span aria-current="page">{names[stage]()}</span></li>
 		</ol>
 	</nav>
 	<h1 class="ins-heading" tabindex="-1">{names[stage]()}</h1>
@@ -218,13 +238,17 @@
 					<a
 						class="ins-link"
 						href={resolve(
-							withContext(`/insights/${stage}`, {
-								...query,
-								range: r,
-								compare: r !== 'all' && query.compare,
-								from: query.from,
-								to: query.to
-							}) as Route
+							withContext(
+								`/insights/${stage}`,
+								{
+									...query,
+									range: r,
+									compare: r !== 'all' && query.compare,
+									from: query.from,
+									to: query.to
+								},
+								reason
+							) as Route
 						)}
 						aria-current={query.range === r ? 'true' : undefined}
 						data-testid="insights-range-{r}">{rangeNames[r]?.()}</a
@@ -236,10 +260,12 @@
 			<a
 				class="ins-link"
 				href={resolve(
-					withContext(`/insights/${stage}`, { ...query, compare: !query.compare }) as Route
+					withContext(`/insights/${stage}`, { ...query, compare: !query.compare }, reason) as Route
 				)}
-				data-on={query.compare}
-				data-testid="insights-stage-compare">{m.insights_overview_compare()}</a
+				aria-current={query.compare ? 'true' : undefined}
+				data-testid="insights-stage-compare"
+				>{m.insights_overview_compare()}:
+				{query.compare ? m.insights_stage_compare_on() : m.insights_stage_compare_off()}</a
 			>
 		{/if}
 		{#if reason}
@@ -312,56 +338,70 @@
 			<section class="ins-section" aria-labelledby="ins-{c.id}-h">
 				<h2 id="ins-{c.id}-h" class="ins-heading">{c.title}</h2>
 				<p class="ins-sub">{m.insights_stage_time_event({ tz })}</p>
-				<ChartPanel
-					id="ins-{c.id}"
-					title={c.title}
-					summary={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
-					caption={c.title}
-					columns={[
-						{ key: 'at', label: m.insights_overview_col_time() },
-						...c.series.map((s) => ({ key: s.key, label: s.label, numeric: true }))
-					]}
-					rows={data.trend.map((p, i) => ({
-						at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
-						...Object.fromEntries(c.series.map((s) => [s.key, formatCount(s.values[i], locale)]))
-					}))}
-					csv={c.csv}
-					{query}
-					forceTable={failedChart}
-					testid="insights-chart-{c.id}"
-				>
-					<LineChart
-						{times}
-						series={c.series.flatMap((s, i) => [
-							{ label: s.label, values: s.values, token: `--data-${i + 1}` },
-							...(query.compare && s.previous
-								? [
-										{
-											label: `${s.label} · ${m.insights_overview_previous_period()}`,
-											values: s.previous,
-											token: '--color-muted-text'
-										}
-									]
-								: [])
-						])}
-						label={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
-						{unit}
-						format={formatCount}
-						axisFormat={formatCompact}
-						{bucket}
-						timeZone={tz}
-						timeLabel={m.insights_overview_col_time()}
-						onerror={() => (failedChart = true)}
-						testid="insights-line-{c.id}"
-					/>
-				</ChartPanel>
+				{#if noData(c.series)}
+					<p class="ins-sentence" data-testid="insights-chart-{c.id}-empty">
+						{m.insights_stage_nothing_measured()}
+					</p>
+				{:else}
+					<ChartPanel
+						id="ins-{c.id}"
+						title={c.title}
+						summary={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
+						caption={c.title}
+						columns={[
+							{ key: 'at', label: m.insights_overview_col_time() },
+							...c.series.map((s) => ({ key: s.key, label: s.label, numeric: true }))
+						]}
+						rows={data.trend.map((p, i) => ({
+							at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
+							...Object.fromEntries(c.series.map((s) => [s.key, formatCount(s.values[i], locale)]))
+						}))}
+						csv={reason ? undefined : c.csv}
+						{query}
+						forceTable={failedChart}
+						testid="insights-chart-{c.id}"
+					>
+						<LineChart
+							{times}
+							series={c.series.flatMap((s, i) => [
+								{ label: s.label, values: s.values, token: `--data-${i + 1}` },
+								...(query.compare && s.previous
+									? [
+											{
+												label: `${s.label} · ${m.insights_overview_previous_period()}`,
+												values: s.previous,
+												token: '--color-muted-text'
+											}
+										]
+									: [])
+							])}
+							label={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
+							{unit}
+							format={formatCount}
+							axisFormat={formatCompact}
+							{bucket}
+							timeZone={tz}
+							timeLabel={m.insights_overview_col_time()}
+							onerror={() => (failedChart = true)}
+							testid="insights-line-{c.id}"
+						/>
+					</ChartPanel>
+					{#if reason && c.csv}
+						<a
+							class="ins-link"
+							href={resolve(csv(c.csv) as Route)}
+							download
+							data-testid="insights-chart-{c.id}-csv">{m.insights_overview_csv()}</a
+						>
+					{/if}
+				{/if}
 			</section>
 		{/each}
 
 		{#if extraBars.length || model.hists.length}
 			<section class="ins-section" aria-labelledby="ins-s-drivers">
 				<h2 id="ins-s-drivers" class="ins-heading">{m.insights_stage_drivers()}</h2>
-				{#if stage === 'fetch'}<p class="ins-sub">{m.insights_stage_time_cohort()}</p>{/if}
+				{#if stage === 'fetch'}<p class="ins-sub">{m.insights_stage_time_event({ tz })}</p>{/if}
 				{#each extraBars as b (b.id)}
 					<div class="ins-card" data-testid="insights-bars-{b.id}">
 						<div class="ins-card-head">
@@ -375,17 +415,17 @@
 								>
 							{/if}
 						</div>
-						{#if b.items.length}
+						{#if b.unavailable}
+							<p class="ins-muted" data-testid="insights-bars-{b.id}-na">{m.insights_stage_na()}</p>
+						{:else if b.items.length}
 							<LinkedBars
 								items={b.items.map((i) => ({
 									key: i.key,
 									label: i.label,
 									value: i.value,
 									text: i.text,
-									href:
-										stage === 'fetch' && !reason
-											? stageHref('fetch', query, { reason: i.key })
-											: undefined
+									sub: i.sub,
+									href: hrefFor(b.id, i.key)
 								}))}
 								max={Math.max(...b.items.map((i) => i.value))}
 								label={b.title}
@@ -400,19 +440,19 @@
 				{/each}
 				{#each model.hists as h (h.id)}
 					{@const edges = h.bins ? binEdges(h.bins) : undefined}
-					<div class="ins-card" data-testid="insights-hist-{h.id}">
-						<h3 class="ins-card-title">{h.title}</h3>
+					<div data-testid="insights-hist-{h.id}">
 						{#if !h.bins}
-							<p class="ins-muted" data-testid="insights-hist-{h.id}-na">{m.insights_stage_na()}</p>
-						{:else if edges}
-							<Histogram
-								counts={h.bins.map((b) => b.count)}
-								edges={edges.map((e) => formatCount(e, locale))}
-								label={h.title}
-								testid="insights-histogram-{h.id}"
-							/>
+							<div class="ins-card">
+								<h3 class="ins-card-title">{h.title}</h3>
+								<p class="ins-muted" data-testid="insights-hist-{h.id}-na">
+									{m.insights_stage_na()}
+								</p>
+							</div>
 						{:else}
-							<DataTableAlternative
+							<ChartPanel
+								id="ins-hist-{h.id}"
+								title={h.title}
+								summary={m.insights_stage_hist_summary({ title: h.title })}
 								caption={h.title}
 								columns={[
 									{ key: 'bin', label: m.insights_stage_col_range() },
@@ -422,9 +462,19 @@
 									bin: binLabel(b, h.fmt, locale),
 									count: formatCount(b.count, locale)
 								}))}
-								visible
-								testid="insights-hist-{h.id}-table"
-							/>
+								{query}
+								forceTable={!edges}
+								testid="insights-histogram-{h.id}"
+							>
+								{#if edges}
+									<Histogram
+										counts={h.bins.map((b) => b.count)}
+										edges={edgeLabels(edges, h.fmt, locale)}
+										label={h.title}
+										testid="insights-histogram-{h.id}-chart"
+									/>
+								{/if}
+							</ChartPanel>
 						{/if}
 					</div>
 				{/each}
@@ -445,7 +495,9 @@
 										>{m.insights_stage_na()}</span
 									>
 								{:else if hasPrev(x)}
-									<span class="ins-muted">· {metricText(x, x.previous)}</span>
+									<span class="ins-muted" data-testid="insights-stage-{x.key}-previous"
+										>· {metricText(x, x.previous)}</span
+									>
 								{/if}
 							</dd>
 						</div>
@@ -482,3 +534,13 @@
 		{/each}
 	{/if}
 </div>
+
+<style>
+	/* The current stage, range and Compare state are shown, not only exposed to assistive tech:
+	   weight and underline carry it, not colour. */
+	:global(.ins-link[aria-current]) {
+		font-weight: var(--font-weight-semibold);
+		text-decoration-line: underline;
+		text-decoration-thickness: 2px;
+	}
+</style>

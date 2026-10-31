@@ -131,5 +131,9 @@
 	"insights_stage_serve_col_query": "查询",
 	"insights_stage_serve_col_count": "搜索次数",
 	"insights_stage_serve_col_zero": "无结果",
-	"insights_stage_serve_logging_off": "查询日志已关闭，因此没有可列出的内容。可在“设置 → Insights”中开启。"
+	"insights_stage_serve_logging_off": "查询日志已关闭，因此没有可列出的内容。可在“设置 → Insights”中开启。",
+	"insights_stage_compare_on": "开",
+	"insights_stage_compare_off": "关",
+	"insights_stage_nothing_measured": "此范围内没有测量数据。",
+	"insights_stage_hist_summary": "{title}：各范围内的种子数量（当前）。"
 }

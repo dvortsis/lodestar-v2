@@ -73,6 +73,33 @@ test('fetch: a loss links to its reason and the chip resets it', async ({ page, 
 	await expect(page).not.toHaveURL(/reason=/);
 });
 
+test('fetch: the reason survives a range or Compare change; an unknown reason is ignored', async ({
+	page,
+	mock,
+	go
+}) => {
+	mock.on('getInsightsFetch', fetchFixture());
+	await go('/insights/fetch?reason=no_peers');
+	await expect(page.getByTestId('insights-stage-compare')).toHaveText(/off/);
+	expect(await page.getByTestId('insights-range-24h').getAttribute('href')).toContain(
+		'reason=no_peers'
+	);
+	await page.getByTestId('insights-stage-compare').click();
+	await expect(page).toHaveURL(/compare=1/);
+	await expect(page).toHaveURL(/reason=no_peers/);
+	await expect(page.getByTestId('insights-stage-compare')).toHaveText(/on/);
+	await expect(page.getByTestId('insights-range-7d')).toHaveAttribute('aria-current', 'true');
+	await go('/insights/fetch?reason=bogus');
+	await expect(page.getByTestId('insights-reason-chip')).toHaveCount(0);
+	await expect(page.getByTestId('insights-stage-kpis')).toBeVisible();
+});
+
+test('fetch: null losses read "Not available yet"', async ({ page, mock, go }) => {
+	mock.on('getInsightsFetch', fetchFixture({ losses: null }));
+	await go('/insights/fetch');
+	await expect(page.getByTestId('insights-bars-losses-na')).toHaveText('Not available yet');
+});
+
 test('index: a stale banner shows and missing sizes are not zeros', async ({ page, mock, go }) => {
 	mock.on('getInsightsIndex', indexFixture());
 	await go('/insights/index');

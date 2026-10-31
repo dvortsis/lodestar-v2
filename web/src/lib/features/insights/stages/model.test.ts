@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	binEdges,
 	formatMetric,
+	fetchBars,
 	mapFetch,
 	mapIndex,
 	mapServe,
@@ -127,5 +128,18 @@ describe('binEdges', () => {
 			])
 		).toBeUndefined();
 		expect(binEdges([])).toBeUndefined();
+	});
+});
+
+describe('fetchBars', () => {
+	it('marks a null loss list as unavailable, not as no losses', () => {
+		const [b] = fetchBars(fetchFixture({ losses: null }), (k) => k);
+		expect(b?.unavailable).toBe(true);
+		expect(b?.items).toEqual([]);
+	});
+	it('keeps an empty list as available, and carries each share', () => {
+		expect(fetchBars(fetchFixture({ losses: [] }), (k) => k)[0]?.unavailable).toBe(false);
+		const first = fetchBars(fetchFixture(), (k) => k)[0]?.items[0];
+		expect(first).toMatchObject({ key: 'no_peers', text: '500', sub: '65%' });
 	});
 });

@@ -8,6 +8,7 @@ import {
 	formatLatency,
 	formatPercent,
 	formatScore,
+	formatShare,
 	formatSpan,
 	type MetricValue
 } from '$lib/format';
@@ -64,7 +65,9 @@ export interface Table {
 export interface BarsSpec {
 	id: string;
 	title: string;
-	items: { key: string; label: string; value: number; text: string }[];
+	items: { key: string; label: string; value: number; text: string; sub?: string }[];
+	/** The server sent no list (null): not available, which is not an empty list. */
+	unavailable?: boolean;
 	csv?: string;
 }
 
@@ -433,8 +436,13 @@ export function binEdges(bins: Bin[]): number[] | undefined {
 	return edges;
 }
 
+/** Edge labels for the histogram, in the bins' unit. */
+export function edgeLabels(edges: number[], fmt: 'score' | 'percent', locale?: string): string[] {
+	return edges.map((e) => (fmt === 'score' ? formatScore(e, locale) : formatShare(e, locale)));
+}
+
 export function binLabel(b: Bin, fmt: 'score' | 'percent', locale?: string): string {
-	const f = (n: number) => (fmt === 'score' ? formatScore(n, locale) : formatCount(n, locale));
+	const f = (n: number) => (fmt === 'score' ? formatScore(n, locale) : formatShare(n, locale));
 	return b.hi === null ? `${f(b.lo)}+` : `${f(b.lo)}–${f(b.hi)}`;
 }
 
@@ -472,24 +480,22 @@ export function fetchBars(
 	r: FetchResponse,
 	reasonLabel: (k: string) => string,
 	locale?: string
-): { bars: BarsSpec[]; shares: Record<string, string> } {
-	const losses = r.losses ?? [];
-	return {
-		bars: [
-			{
-				id: 'losses',
-				title: m.insights_stage_fetch_losses(),
-				csv: 'fetch.losses',
-				items: losses.map((l) => ({
-					key: l.key,
-					label: reasonLabel(l.key),
-					value: l.count,
-					text: formatCount(l.count, locale)
-				}))
-			}
-		],
-		shares: Object.fromEntries(losses.map((l) => [l.key, formatPercent(l.share, locale, 0)]))
-	};
+): BarsSpec[] {
+	return [
+		{
+			id: 'losses',
+			title: m.insights_stage_fetch_losses(),
+			csv: 'fetch.losses',
+			unavailable: r.losses === null,
+			items: (r.losses ?? []).map((l) => ({
+				key: l.key,
+				label: reasonLabel(l.key),
+				value: l.count,
+				text: formatCount(l.count, locale),
+				sub: formatPercent(l.share, locale, 0)
+			}))
+		}
+	];
 }
 
 export function indexBars(
