@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 41
+  "count": 42
  },
  "tags": {},
  "slices": {
@@ -1698,13 +1698,13 @@
    "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus | 15:54Z PR #283 head ce842e28 (cold broad p95 1M 195->102 ms, gated FILE_P95 150 ms; parallel segment scan); fresh Opus reviewer session_01MMjhn8VhL9DEqTBq434TbW | 16:03Z MERGE at ce842e28 (4 optional); waiting on test ubuntu/windows | 16:27Z merged 697290de; sessions archived"
   },
   "X-import-refile-2": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnB6RBrxKAxCzxkfcCy",
    "pr": 282,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed | 16:08Z re-check MERGE at de5fa5b8 (revert confirmed, all held.insert sites unconditional); waiting on test ubuntu/windows + smoke"
+   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed | 16:08Z re-check MERGE at de5fa5b8 (revert confirmed, all held.insert sites unconditional); waiting on test ubuntu/windows + smoke | 16:33Z merged 1973283b; sessions archived"
   },
   "S-logs-1": {
    "status": "review",
@@ -1732,6 +1732,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus"
+  },
+  "B-held-exact": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2534,7 +2543,6 @@
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
-  "store/src/filter.rs: per-hash hold query (or HeldSet removal generation) so the writer re-holds only hashes the store still holds, covering the sweep arm and backfill's arm (writer.rs:573); until then both insert unconditionally (over-strict, safe) (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
   "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers"
  ],
