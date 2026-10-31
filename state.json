@@ -1713,7 +1713,7 @@
    "pr": 284,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments | 16:12Z PR #284 open; cause: VirtualList/index-client/state/sse became shared chunks; option 1 taken (5 limits raised by measured overage, +21..92 B, commented); fresh Opus reviewer session_01MMjhnC5NDGN9r8aNpTgnqw + security pass"
+   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments | 16:12Z PR #284 open; cause: VirtualList/index-client/state/sse became shared chunks; option 1 taken (5 limits raised by measured overage, +21..92 B, commented); fresh Opus reviewer session_01MMjhnC5NDGN9r8aNpTgnqw + security pass | 16:22Z CHANGES at e5389d33 (security clean): B1 scroll-up never pauses, B2 held unbounded, B3 SR flood, B4 load-earlier stuck; opt 5-9 folded; relayed"
   },
   "M-security-settings-2": {
    "status": "pending",
