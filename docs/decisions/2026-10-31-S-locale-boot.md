@@ -18,6 +18,8 @@ Refinement of §10.12 / §10.10.8 (Language & region); no owner decision changes
   import in `shared.ts` re-split chunks and pushed the Alerts route 560 B over its limit; an explicit `timeZone` option still wins.
   Charts and `RelativeTime` go through those, so they follow the setting. Insights passes the server's
   `range.tz` explicitly and `'UTC'` for UTC-labelled ranges; those stay as they are.
+- **Worker safety.** `lib/format` is imported by the file-tree web worker, so it may not import `$lib/i18n` or any `.svelte` module: an earlier head did, the worker failed to load and the tree fell back to the main thread (`detail.routes` "build in the worker"). `format/worker-safe.test.ts` guards it.
+- **Passive viewers.** The layout also wakes the fetch after 30 s, so a wall display that nobody touches still syncs.
 - **First day of week.** `firstDayOfWeek()` (`lib/i18n/week.svelte.ts`, kept out of the boot bundle) returns
   0/1/6 from the setting, or the language's own (`Intl.Locale` week info), else Monday. Automatic uses `navigator.language` (its region
   gives en-GB a Monday). No week-based UI can use it yet: the Insights custom range is a native

@@ -67,8 +67,7 @@ export function dateFormat(
 	// '' or a zone this browser doesn't know (a setting saved elsewhere) must not break rendering.
 	// The display zone setting registers itself on load (i18n/locale.svelte.ts); importing it here
 	// would move this module between chunks and cost routes size (decisions file).
-	const zone =
-		(timeZone ?? (globalThis as { lodestarZone?: () => string }).lodestarZone?.()) || undefined;
+	const zone = (timeZone ?? globalThis.lodestarZone?.()) || undefined;
 	const id = `${locale}|${zone ?? ''}|${key}`;
 	let f = dateFormats.get(id);
 	if (!f) {

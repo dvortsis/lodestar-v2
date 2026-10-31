@@ -71,4 +71,4 @@ export function displayTimeZone(): string {
 }
 
 // The shared formatters read the setting through this hook, so they need no import of this module.
-(globalThis as { lodestarZone?: () => string }).lodestarZone = displayTimeZone;
+globalThis.lodestarZone = displayTimeZone;

@@ -18,3 +18,5 @@ setZone(text(hint?.timeZone));
 const wake = () => void import('$lib/i18n/boot').then((m) => m.bootRegion());
 addEventListener('pointerdown', wake, { once: true });
 addEventListener('keydown', wake, { once: true });
+// A passive viewer (a wall display) still syncs; bootRegion runs its fetch only once.
+setTimeout(wake, 30_000);
