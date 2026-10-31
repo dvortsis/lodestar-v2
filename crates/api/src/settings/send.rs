@@ -320,6 +320,9 @@ fn refusal(code: &str) -> String {
 fn send_failure(e: &ClientError, kind: DownloadClientKind) -> (String, String) {
     let f = test_failure(e).error.expect("a failure");
     match e {
+        // An HTTP status isn't the client refusing the torrent: the
+        // address isn't its API, and the message says so.
+        ClientError::Rejected(why) if super::http_status(why).is_some() => (f.code, f.message),
         // qBittorrent answers a duplicate and an invalid link alike.
         ClientError::Rejected(_) if kind == DownloadClientKind::Qbittorrent => (
             f.code,
@@ -488,6 +491,32 @@ mod tests {
                 (Failed, Some("unreachable")),
                 (Failed, Some("unreachable"))
             ]
+        );
+    }
+
+    /// An HTTP status keeps its own message for every client, qBittorrent
+    /// included; only a refusal without one may be a duplicate.
+    #[test]
+    fn an_http_status_isnt_read_as_a_refused_torrent() {
+        const QB: DownloadClientKind = DownloadClientKind::Qbittorrent;
+        let http = ClientError::Rejected("HTTP 500: Internal Server Error".into());
+        for kind in [QB, TR] {
+            let (code, message) = send_failure(&http, kind);
+            assert_eq!(code, "rejected");
+            assert_eq!(
+                message, "The address answered HTTP 500: it isn't this client's API.",
+                "{kind:?}"
+            );
+        }
+        let refused = ClientError::Rejected("Fails.".into());
+        assert!(
+            send_failure(&refused, QB)
+                .1
+                .contains("may already be in qBittorrent")
+        );
+        assert_eq!(
+            send_failure(&refused, TR).1,
+            "The client refused the torrent."
         );
     }
 
