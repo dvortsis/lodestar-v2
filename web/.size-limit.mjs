@@ -466,7 +466,8 @@ export default [
 	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.1 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.8 KB'),
+	// Raised from 45.8 KB by the runner under owner-decisions §2.26 (docs/decisions/2026-10-31-owner-delegation.md).
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.9 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: settingsFirstView }),
