@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 43
+  "count": 44
  },
  "tags": {},
  "slices": {
@@ -1707,13 +1707,13 @@
    "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed | 16:08Z re-check MERGE at de5fa5b8 (revert confirmed, all held.insert sites unconditional); waiting on test ubuntu/windows + smoke | 16:33Z merged 1973283b; sessions archived"
   },
   "S-logs-1": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhn8Qo9489vR3GMJcVVX",
    "pr": 284,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments | 16:12Z PR #284 open; cause: VirtualList/index-client/state/sse became shared chunks; option 1 taken (5 limits raised by measured overage, +21..92 B, commented); fresh Opus reviewer session_01MMjhnC5NDGN9r8aNpTgnqw + security pass | 16:22Z CHANGES at e5389d33 (security clean): B1 scroll-up never pauses, B2 held unbounded, B3 SR flood, B4 load-earlier stuck; opt 5-9 folded; relayed | 16:33Z fix push 1d11eace; re-check sent | 16:41Z re-check MERGE at 1d11eace; waiting on core playwright + smoke | 16:48Z runner asked author to merge main (both #284/#285 edit .size-limit.mjs + chunk graph) and push once; merge on green"
+   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments | 16:12Z PR #284 open; cause: VirtualList/index-client/state/sse became shared chunks; option 1 taken (5 limits raised by measured overage, +21..92 B, commented); fresh Opus reviewer session_01MMjhnC5NDGN9r8aNpTgnqw + security pass | 16:22Z CHANGES at e5389d33 (security clean): B1 scroll-up never pauses, B2 held unbounded, B3 SR flood, B4 load-earlier stuck; opt 5-9 folded; relayed | 16:33Z fix push 1d11eace; re-check sent | 16:41Z re-check MERGE at 1d11eace; waiting on core playwright + smoke | 16:48Z runner asked author to merge main (both #284/#285 edit .size-limit.mjs + chunk graph) and push once; merge on green | 17:06Z merged 1eaf8c8b; sessions archived"
   },
   "M-security-settings-2": {
    "status": "running",
@@ -1741,6 +1741,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders"
+  },
+  "S-logs-2": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "17:08Z brief briefs/S-logs-2.md (Settings → Logging; privacy invariants; carries #284 optional); security review"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2548,8 +2557,7 @@
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers",
-  "logs (#284 opt, carry into S-logs-2): LogsPage role=status joins 'Paused' and notice without separator; logs.keyboard scroll test should poll until away-from-bottom before reading scrollTop (possible slow-runner flake)"
+  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
