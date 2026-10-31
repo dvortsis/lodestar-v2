@@ -642,7 +642,7 @@ impl Writer {
             Ok(Some(b)) => {
                 self.candidates.after = b.last;
                 self.candidates.failures = 0;
-                self.hold_refiled(version, b.hashes);
+                self.hold_refiled(b.hashes);
             }
             Ok(None) => {
                 self.candidates.done = true;
@@ -662,17 +662,13 @@ impl Writer {
         }
     }
 
-    /// Tells intake to refuse the hashes of candidates a sweep batch under
-    /// `version` held back, unless the rules changed since: a release may
-    /// already have taken them out of the set, and putting them back would
-    /// refuse a hash the store no longer holds. A hash the store does still
-    /// hold may then be fetched once more; the writer's verdict holds it
-    /// again, and the next start reloads the set from the store.
-    fn hold_refiled(&self, version: u64, hashes: Vec<[u8; 20]>) {
-        if self.filter.current().version == version {
-            for h in hashes {
-                self.held.insert(h);
-            }
+    /// Tells intake to refuse the hashes of candidates a sweep batch held
+    /// back, always: the store holds them now. Over-strict when the rules
+    /// changed since: a hash released in that window stays refused until
+    /// the next start reloads the set (`2026-10-31-X-import-refile-2.md`).
+    fn hold_refiled(&self, hashes: Vec<[u8; 20]>) {
+        for h in hashes {
+            self.held.insert(h);
         }
     }
 
@@ -1275,13 +1271,6 @@ mod tests {
             (w.candidates.version, w.candidates.after, w.candidates.done),
             (Some(current), 0, false)
         );
-
-        // A held hash from a batch under older rules isn't refused: the
-        // restarted sweep settles it.
-        w.hold_refiled(current - 1, vec![[9; 20]]);
-        assert!(!w.held.contains(&[9; 20]));
-        w.hold_refiled(current, vec![[9; 20]]);
-        assert!(w.held.contains(&[9; 20]));
 
         // A store error: the sweep waits, then tries again on a later
         // tick, and isn't marked done. A temporary table shadows the

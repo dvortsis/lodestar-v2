@@ -202,6 +202,8 @@ pub struct CandidateJudgement {
 /// hashes, then its name with your classification rules. A `source_at`
 /// outside `1..=now` counts as discovered now.
 pub fn judge_candidate(engine: &Engine, c: Candidate<'_>, now: i64) -> CandidateJudgement {
+    // As `lodestar_metainfo::InfoHashV2::truncated` and
+    // `WaitingCandidate::hashes` (this crate doesn't depend on metainfo).
     let mut hashes = vec![c.hash];
     if let Some(v2) = c.hash_v2 {
         let mut t = [0u8; 20];

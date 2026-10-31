@@ -499,7 +499,7 @@ async fn the_cli_and_the_server_build_the_same_filter() {
                 name: Some("Vetted list".into()),
                 kind: crate::config::ListKind::Content,
                 format: Some("hashes".into()),
-                action: Default::default(),
+                action: crate::config::ListAction::Quarantine,
                 floor: true,
                 refresh_hours: None,
             });
@@ -511,7 +511,8 @@ async fn the_cli_and_the_server_build_the_same_filter() {
                 name: "Vetted list",
                 kind: 0,
                 format: Some("hashes"),
-                action: lodestar_filter::Action::Drop.code(),
+                // Not a dropping action: the floor blocks whatever it is.
+                action: lodestar_filter::Action::Quarantine.code(),
                 floor: true,
                 interval_secs: 86_400,
             })
@@ -598,5 +599,10 @@ async fn the_cli_and_the_server_build_the_same_filter() {
         let (a, b) = (server.judge(&item, None, 2), cli.judge(&item, None, 2));
         assert_eq!(a.decision, b.decision, "case {i}");
         assert_eq!(a.decision.is_some(), i < 5, "case {i}: {:?}", a.decision);
+        if *hash == hash_of(6) {
+            // Blocked as the floor, not as an ordinary list.
+            let rule = a.decision.as_ref().map(|d| d.rule.id());
+            assert_eq!(rule.as_deref(), Some("CS-1b"), "case {i}");
+        }
     }
 }
