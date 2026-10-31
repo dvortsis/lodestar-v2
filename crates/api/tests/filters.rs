@@ -350,6 +350,64 @@ async fn undo_goes_back_one_step() {
     );
 }
 
+/// A release checks the store before intake may fetch again
+/// (`2026-10-31-B-held-exact.md`): a hash two rules hold stays refused
+/// when one is turned off, and goes when the other is too. The held set
+/// equals what a restart loads from the store throughout.
+#[tokio::test]
+async fn releasing_one_of_two_holds_keeps_the_hash_refused() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let hash = [0x43u8; 20];
+    let sealed = f.api.sealer.as_ref().unwrap().seal("Held.Twice").unwrap();
+    let now = lodestar_api_now();
+    let hold = |rule, held, sealed| Filtered {
+        hashes: std::slice::from_ref(&hash),
+        rule,
+        action: Action::Quarantine.code(),
+        held: Some(held),
+        sealed,
+        evidence: &[],
+        at: now,
+        expires_at: now + 86_400,
+        adult_hold: false,
+    };
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .write(&WriteBatch {
+            filtered: &[
+                hold("CS-3a", Held::Quarantine, Some(&sealed[..])),
+                hold("CS-3b", Held::Tombstone, None),
+            ],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    f.api.held.insert(hash);
+    let agrees = || {
+        let held: std::collections::HashSet<_> = f
+            .api
+            .store
+            .lock()
+            .unwrap()
+            .filter_state()
+            .unwrap()
+            .held
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(f.api.held.snapshot(), held);
+    };
+    for (rule, still) in [("CS-3a", true), ("CS-3b", false)] {
+        let change = json!({ "op": "core_switch", "rule": rule, "on": false });
+        let (status, body) = apply(&f, &c, change, Some(PASSWORD)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(f.api.held.contains(&hash), still, "{rule} off");
+        agrees();
+    }
+}
+
 #[tokio::test]
 async fn quarantine_review_never_shows_names_unasked() {
     let f = fixture();
