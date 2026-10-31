@@ -1155,15 +1155,15 @@ impl Store {
 }
 
 /// Adds `deleted` to the job's removal annotation, written at the first
-/// step that deleted anything, so a removal in many steps is one event.
-/// A removal resumed more than an hour after that annotation starts a new
-/// one, so each spike in `REMOVED` has its marker nearby.
+/// step that deleted anything, so a job's removal is one event however
+/// many steps it takes and however long it pauses between them. The
+/// marker stays at the first step's time.
 fn annotate_removal(tx: &Connection, job: &ImportJob, deleted: u64) -> Result<()> {
     let prefix = format!("job={} source={} removed=", job.id, job.adapter);
     let last: Option<(i64, String)> = tx
         .prepare_cached(
             "SELECT id, detail FROM events
-             WHERE kind = ?1 AND instr(detail, ?2) = 1 AND at >= unixepoch() - 3600
+             WHERE kind = ?1 AND instr(detail, ?2) = 1
              ORDER BY id DESC LIMIT 1",
         )?
         .query_row(params![event::REMOVED, prefix], |r| {
@@ -1756,6 +1756,38 @@ mod tests {
             n("SELECT count(*) FROM import_candidates"),
             n("SELECT count(*) FROM import_membership"),
         )
+    }
+
+    /// A job's removal is one annotation, however long it pauses between
+    /// steps; another job's removal is its own.
+    #[test]
+    fn a_removal_is_one_annotation_per_job() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let (a, b) = (reading(&mut store), reading(&mut store));
+        annotate_removal(&store.conn, &a, 2).unwrap();
+        // Resumed a day later.
+        store
+            .conn
+            .execute("UPDATE events SET at = at - 86400", [])
+            .unwrap();
+        annotate_removal(&store.conn, &a, 3).unwrap();
+        annotate_removal(&store.conn, &b, 1).unwrap();
+        let mut stmt = store
+            .conn
+            .prepare("SELECT detail FROM events WHERE kind = ?1 ORDER BY id")
+            .unwrap();
+        let details: Vec<String> = stmt
+            .query_map([event::REMOVED], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            details,
+            [
+                format!("job={} source=magnetico removed=5", a.id),
+                format!("job={} source=magnetico removed=1", b.id),
+            ]
+        );
     }
 
     /// A crash at each step of the transaction leaves nothing behind, and

@@ -30,16 +30,21 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Mutex, PoisonError};
 
-/// Where a new verified record came from. Only the network today;
-/// imports and recovery get their own origins when they're counted.
+/// Where a new verified record came from. Imports get their own origin
+/// when the server's writer commits them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Origin {
+    /// A key the crawl discovered: the gate's numerator.
     Network = 0,
+    /// A start-time refetch of an incomplete import that stored a new row
+    /// because the imported row was deleted before the fetch committed.
+    Recovery = 1,
 }
 
 /// Every origin, with its label.
-pub const ORIGINS: [(Origin, &str); 1] = [(Origin::Network, "network")];
+pub const ORIGINS: [(Origin, &str); 2] =
+    [(Origin::Network, "network"), (Origin::Recovery, "recovery")];
 
 /// An outcome that doesn't count towards the gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,9 +293,12 @@ impl GateStats {
 
     fn count_searchable(&self, p: Pending, at: i64) {
         self.searchable_new[p.origin as usize].fetch_add(1, Ordering::Relaxed);
-        // A clock stepped back reads as 0, never as a huge wait.
-        self.latency
-            .observe(u64::try_from(at - p.first_seen).unwrap_or(0));
+        // The crawl's latency only. A clock stepped back reads as 0, never
+        // as a huge wait.
+        if p.origin == Origin::Network {
+            self.latency
+                .observe(u64::try_from(at - p.first_seen).unwrap_or(0));
+        }
     }
 }
 
@@ -326,6 +334,21 @@ mod tests {
         assert_eq!(c[LATENCY_BUCKETS.len()], 7, "+Inf");
         assert_eq!(g.latency.sum(), 1 + 2 + 3 + 3600 + 3601 + 99_999);
         assert_eq!(g.searchable_new(Origin::Network), 7);
+    }
+
+    #[test]
+    fn a_recovered_record_is_counted_apart_from_the_network() {
+        let g = GateStats::new(1_000);
+        g.follow();
+        g.committed_new(Origin::Network, 1, 1_000, 1_000);
+        g.committed_new(Origin::Recovery, 2, 1_000, 1_000);
+        g.searchable(2, 1_010);
+        assert_eq!(g.new_verified(Origin::Network), 1);
+        assert_eq!(g.new_verified(Origin::Recovery), 1);
+        assert_eq!(g.searchable_new(Origin::Network), 1);
+        assert_eq!(g.searchable_new(Origin::Recovery), 1);
+        // The latency is the crawl's only.
+        assert_eq!(g.latency.cumulative()[LATENCY_BUCKETS.len()], 1);
     }
 
     #[test]

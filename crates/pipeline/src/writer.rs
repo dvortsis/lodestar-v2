@@ -396,9 +396,17 @@ impl Writer {
             // The gate counts what the store says, whether or not the
             // lease is still current below: a new row is new once, and a
             // second delivery of it reads as already stored.
+            // A refetch that stores a new row (the imported row was deleted
+            // meanwhile) is a recovery, never the network's (B-refetch-funnel).
+            let crawled = crate::in_funnel(c.lease.cohort);
             if new {
+                let origin = if crawled {
+                    Origin::Network
+                } else {
+                    Origin::Recovery
+                };
                 self.gate
-                    .committed_new(Origin::Network, id, c.lease.discovered_at, committed_at);
+                    .committed_new(origin, id, c.lease.discovered_at, committed_at);
             } else {
                 self.gate.exclude(Excluded::AlreadyStored, 1);
             }
@@ -412,14 +420,18 @@ impl Writer {
             let Some(lease) = self.coordinator.complete(&c.results.key, c.results.token) else {
                 continue;
             };
-            self.funnel
-                .record(lease.cohort, lease.source, Stage::Stored, None);
+            if crawled {
+                self.funnel
+                    .record(lease.cohort, lease.source, Stage::Stored, None);
+            }
             if new {
                 self.stats.stored.fetch_add(1, Ordering::Relaxed);
                 // At the fetch's time, as `torrents.metadata_at` holds it,
                 // so `rollup --repair` recounts the same hours (B11b).
-                self.rollups
-                    .add(c.results.metadata_at, metric::STORED, lease.source, 0, 1);
+                if crawled {
+                    self.rollups
+                        .add(c.results.metadata_at, metric::STORED, lease.source, 0, 1);
+                }
             } else {
                 self.stats.existing.fetch_add(1, Ordering::Relaxed);
             }

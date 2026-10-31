@@ -112,13 +112,16 @@ impl Coordinator {
     }
 
     /// The holder lost the key: count it once and end the lease. False
-    /// if the token was stale (nothing was counted).
+    /// if the token was stale (nothing was counted). A refetch's loss
+    /// ends its lease but isn't the funnel's.
     pub fn lost(&self, key: &InfoHash, token: Token, loss: Loss) -> bool {
         let Some(l) = self.complete(key, token) else {
             return false;
         };
-        self.funnel
-            .record(l.cohort, l.source, Stage::Lost, Some(loss));
+        if crate::in_funnel(l.cohort) {
+            self.funnel
+                .record(l.cohort, l.source, Stage::Lost, Some(loss));
+        }
         true
     }
 

@@ -476,6 +476,162 @@ async fn partial_imports_are_refetched() {
     assert!(store.partial_hashes(10).unwrap().is_empty());
 }
 
+/// A start-time refetch completes its import's record but isn't a crawl
+/// discovery (B-refetch-funnel): neither a fetched nor a lost refetch
+/// moves a cohort row, `FUNNEL_EVENTS`, the `STORED` rollup or the gate's
+/// network origin, and a crawl in the same hour keeps exact counts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refetches_stay_out_of_the_funnel() {
+    use lodestar_store::NewTorrent;
+    let (imported, crawled) = (info_dict("Imported.Pack"), info_dict("Crawled.Pack"));
+    let seeds = vec![Seed::v1(imported.clone()), Seed::v1(crawled)];
+    let (refetch, crawl) = (InfoHash(seeds[0].info_hash), InfoHash(seeds[1].info_hash));
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let mut partial = lodestar_metainfo::Info::parse(&imported).unwrap();
+    partial.files.clear();
+    // A second incomplete import nobody serves: a lost refetch.
+    let mut unserved = partial.clone();
+    unserved.v1 = Some(InfoHash([0xdd; 20]));
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let bm = store.register_source("bitmagnet", "1", 0).unwrap();
+    for info in [&partial, &unserved] {
+        store
+            .insert(&[NewTorrent {
+                info,
+                raw_info: None,
+                discovered_at: 1_600_000_000,
+                metadata_at: 1_600_000_000,
+                extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+                source: bm,
+            }])
+            .unwrap();
+    }
+    let (feed, feed_tx) = scripted("feed");
+    let finder = Arc::new(PeerTable {
+        manifest: manifest("finder", &[Kind::PeerFinder]),
+        peers: HashMap::from([(refetch, vec![peer.addr()])]),
+    });
+    let pipeline = Pipeline::start(config(), store, vec![feed, finder])
+        .await
+        .unwrap();
+    feed_tx
+        .send(Found::key(crawl, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    let writer = pipeline.writer_stats();
+    until("both written", || {
+        writer.stored.load(Ordering::Relaxed) == 1 && writer.existing.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("the unserved refetch lost", || {
+        pipeline.pool_stats().lost_count(Loss::NoPeers) == 1
+    })
+    .await;
+    let monitor = pipeline.monitor();
+    until("every lease ended", || {
+        monitor.lease_stats().outstanding.load(Ordering::Relaxed) == 0
+    })
+    .await;
+    let gate = monitor.gate().clone();
+    assert_eq!(gate.new_verified(GateOrigin::Network), 1, "the crawl only");
+    assert_eq!(gate.new_verified(GateOrigin::Recovery), 0);
+    assert_eq!(gate.excluded(Excluded::AlreadyStored), 1, "the refetch");
+    let mut store = pipeline.shutdown().await.unwrap();
+
+    // The record still completes.
+    let id = store.find(&refetch).unwrap().unwrap();
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 1);
+
+    // The crawl's funnel, exactly, in its own hour.
+    let crawl_hour = store
+        .torrent(store.find(&crawl).unwrap().unwrap())
+        .unwrap()
+        .unwrap()
+        .discovered_at
+        .div_euclid(3600);
+    let cohorts = store.cohorts(0, i64::MAX).unwrap();
+    assert!(
+        cohorts.iter().all(|c| c.cohort == crawl_hour),
+        "{cohorts:?}"
+    );
+    let total = |stage: Stage| -> i64 {
+        cohorts
+            .iter()
+            .filter(|c| c.stage == stage as u8)
+            .map(|c| c.count)
+            .sum()
+    };
+    for stage in [
+        Stage::Harvested,
+        Stage::PeerFound,
+        Stage::Fetched,
+        Stage::Stored,
+    ] {
+        assert_eq!(total(stage), 1, "{stage:?}");
+    }
+    assert_eq!(total(Stage::Lost), 0);
+    let events = store.rollup(metric::FUNNEL_EVENTS, 0, i64::MAX).unwrap();
+    let by_stage = |stage: Stage| -> i64 {
+        events
+            .iter()
+            .filter(|c| c.dim == stage as u32)
+            .map(|c| c.value)
+            .sum()
+    };
+    for stage in [
+        Stage::Harvested,
+        Stage::PeerFound,
+        Stage::Fetched,
+        Stage::Stored,
+    ] {
+        assert_eq!(by_stage(stage), 1, "FUNNEL_EVENTS {stage:?}");
+    }
+    assert_eq!(by_stage(Stage::Lost), 0);
+    let stored: i64 = store
+        .rollup(metric::STORED, 0, i64::MAX)
+        .unwrap()
+        .iter()
+        .map(|c| c.value)
+        .sum();
+    assert_eq!(stored, 1);
+}
+
+/// A refetch saved in the fetch queue isn't restored: refetches are queued
+/// afresh from the store's incomplete imports at each start, so one whose
+/// import was removed while the server was stopped is never fetched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_refetch_is_queued_afresh_from_the_store() {
+    use lodestar_pipeline::strategy;
+    use lodestar_store::QueuedKey;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let finder_id = store.register_source("finder", "1", 0).unwrap();
+    let queued = |hash: u8, strategy: u8| QueuedKey {
+        info_hash: InfoHash([hash; 20]),
+        source: finder_id,
+        cohort: 400_000,
+        strategy,
+        priority: 0,
+        attempts: 0,
+        private_source: false,
+    };
+    store
+        .save_fetch_queue(&[queued(0xd1, strategy::REFETCH), queued(0xd2, 0)])
+        .unwrap();
+    let finder = Arc::new(PeerTable {
+        manifest: manifest("finder", &[Kind::PeerFinder]),
+        peers: HashMap::new(),
+    });
+    let pipeline = Pipeline::start(config(), store, vec![finder])
+        .await
+        .unwrap();
+    let monitor = pipeline.monitor();
+    // Only the crawl's key is leased again.
+    assert_eq!(monitor.lease_stats().outstanding.load(Ordering::Relaxed), 1);
+    pipeline.shutdown().await.unwrap();
+}
+
 /// The worker boundary (§19.3): a key found by two sources while it's in
 /// flight is leased once, harvested once and fetched once, and the second
 /// source joins the lease. Keys saved at shutdown are leased again on
