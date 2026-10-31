@@ -9,7 +9,7 @@ Refinement of §10.12 / §10.10.8 (Language & region); no owner decision changes
   request (answered with the SPA page by the preview server) and the code behind it don't fit. The server
   stays authoritative: its answer is applied and re-cached. A failed, offline, malformed or older-than-newest
   answer keeps what is applied and never throws. Order: saved → `navigator.language` → en; "Automatic"
-  (empty) follows the browser. A 401 (login page) re-arms one fetch on the next interaction. A browser with no
+  (empty) follows the browser. A 401 (login page) is not retried; the session module calls `refetchRegion()` when sign-in is confirmed, so the account's values apply without a reload. A browser with no
   hint therefore shows the browser's language until the first interaction. Plain `fetch`, so the API client
   stays out of the first load.
 - **Time zone.** `displayTimeZone()` (the saved zone, else the browser's; a zone the browser doesn't know falls back
@@ -24,9 +24,8 @@ Refinement of §10.12 / §10.10.8 (Language & region); no owner decision changes
   `<input type="date">`, whose week start follows the browser and can't be set, so it is exposed only.
 - **Live update.** `LanguageForm` calls `followSaved()` with all three saved values, so changes apply
   at once and refresh the hint.
-- **Signed out at load.** A 401 re-arms one fetch on the next pointer or key press, so signing in applies the
-  account's values without a reload. A response older than a value applied meanwhile is dropped.
+- **Signed out at load.** The interaction fetch gets a 401 and keeps the hint. `session.svelte.ts` (one line outside the brief's Own list, runner-approved) calls `refetchRegion()` when the session becomes signed in. A response older than a value applied meanwhile is dropped.
 - **Not changed.** Other tabs' changes are picked up on the next load, not live. The hint is per browser and
   isn't cleared on logout; the account's values replace it as soon as the fetch answers.
-- **Size.** Search initial JS 42.8 → 43.0 kB gzipped (limit 45 kB, unchanged). Lighthouse `total-byte-weight` on
-  /search: 98,555 B locally (the previous head measured 102,891 B, CI's figure), against 102,400.
+- **Size.** Search initial JS 42.8 → 43.04 kB gzipped (limit 45 kB, unchanged); the cost is the hint parse and the zone state in the locale chunk, and the formatters' own code stays in their lazy chunks. Lighthouse `total-byte-weight` on /search: 98,758 B locally, where the previous head measured 102,891 B (CI's figure), against 102,400.
+- **"Automatic" and the OS zone.** The browser's zone is re-read whenever the settings are applied (boot, sign-in, saving), not on every format call.

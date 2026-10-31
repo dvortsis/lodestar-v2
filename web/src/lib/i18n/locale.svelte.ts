@@ -62,6 +62,7 @@ let browser = '';
 /** The saved time zone. A zone the browser doesn't know falls back inside the formatters. */
 export function setZone(timeZone: string): void {
 	zone = timeZone;
+	browser = ''; // "Automatic" re-reads the browser's zone whenever the settings are applied
 }
 
 /** The IANA zone dates are shown in: the saved one, else the browser's. Reactive in runes. */

@@ -44,6 +44,8 @@ test('a saved zh language shows zh after a reload', async ({ page, go, mock }) =
 	await expect
 		.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lodestar.region') ?? '{}')))
 		.toMatchObject({ language: 'zh', timeZone: 'Asia/Tokyo', firstDay: 'sunday' });
+	// The server never answers on the reload, so only the cached hint can show zh (before any fetch).
+	await page.route('**/api/v1/settings/preferences', () => new Promise<void>(() => {}));
 	await page.reload();
 	await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
 });

@@ -22,6 +22,9 @@ export function setSession(status: SessionStatus): void {
 	const initialConfirmation = session.status === 'unknown' && status === 'signed_in';
 	session.status = status;
 	if (!initialConfirmation) clearDetailCaches(status === 'signed_in');
+	// Signing in: the account's language, zone and week replace the cached hint (lib/i18n/boot.ts).
+	if (status === 'signed_in' && !initialConfirmation)
+		void import('$lib/i18n/boot').then((m) => m.refetchRegion());
 }
 
 /**

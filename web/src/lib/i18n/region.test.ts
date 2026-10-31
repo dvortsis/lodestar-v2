@@ -116,6 +116,19 @@ describe('boot', () => {
 		expect(currentLocale()).toBe('zh');
 		expect(displayTimeZone()).toBe('Asia/Tokyo');
 	});
+	it('makes no further request after a 401, and one after sign-in', async () => {
+		get.mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
+		const { bootRegion, refetchRegion, resetBoot } = await import('./boot');
+		resetBoot();
+		await bootRegion();
+		for (const key of ['a', 'b', 'c']) window.dispatchEvent(new KeyboardEvent('keydown', { key }));
+		window.dispatchEvent(new MouseEvent('pointerdown'));
+		expect(get).toHaveBeenCalledTimes(1);
+		get.mockResolvedValue(ok({ fields: { language: { value: 'zh' } } }));
+		refetchRegion();
+		await vi.waitFor(() => expect(currentLocale()).toBe('zh'));
+		expect(get).toHaveBeenCalledTimes(2);
+	});
 	it('a 401, a 500 or a malformed body keeps the hint', async () => {
 		localStorage.setItem(REGION_CACHE, JSON.stringify({ ...auto, language: 'zh' }));
 		applyRegion(readRegionHint());
@@ -137,5 +150,25 @@ describe('boot', () => {
 			await expect(bootRegion()).resolves.toBeUndefined();
 			expect(currentLocale()).toBe('zh');
 		}
+	});
+});
+
+describe('layout hint', () => {
+	it('a malformed or missing hint leaves the browser language', async () => {
+		for (const raw of [null, '{not json', '"x"', '{"language":3}']) {
+			vi.resetModules();
+			applyLocale('en');
+			if (raw === null) localStorage.removeItem(REGION_CACHE);
+			else localStorage.setItem(REGION_CACHE, raw);
+			await import('../../routes/+layout');
+			expect(currentLocale()).toBe('en');
+		}
+	});
+	it('applies the cached language', async () => {
+		vi.resetModules();
+		localStorage.setItem(REGION_CACHE, JSON.stringify({ language: 'zh' }));
+		const locale = await import('./locale.svelte');
+		await import('../../routes/+layout');
+		expect(locale.currentLocale()).toBe('zh');
 	});
 });
