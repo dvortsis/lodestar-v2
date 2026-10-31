@@ -3,6 +3,7 @@
 	// the list is one tab stop, and `x` selects the active row.
 	import { m } from '$lib/paraglide/messages.js';
 	import type { SearchHit } from '../results/ResultRow.svelte';
+	import './bulk.css';
 	import { pick } from './ops';
 	import { selection } from './selection.svelte';
 

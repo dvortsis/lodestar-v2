@@ -19,6 +19,7 @@
 		download,
 		exportHashes
 	} from './actions';
+	import './bulk.css';
 	import { selection } from './selection.svelte';
 
 	const locale = $derived(currentLocale());
@@ -37,8 +38,11 @@
 						? m.search_bulk_too_many({ max: formatCount(EXPORT_MAX, locale) })
 						: m.search_bulk_failed()
 			});
-		else if (!r.copied) toast.push({ kind: 'error', text: m.search_results_copy_failed() });
-		else
+		else if (!r.copied) {
+			// The clipboard refused (a slow answer ends the click's permission): the detail view's
+			// copy shows the text in its manual field.
+			void import('$lib/features/detail/magnet').then((mod) => mod.copyMagnet({ magnet: r.text }));
+		} else
 			toast.push({
 				kind: 'success',
 				text: (r.count === 1 ? m.search_bulk_copied_one : m.search_bulk_copied_other)({

@@ -2,6 +2,7 @@
 // hashes (the server builds the magnets), Compare links to `/compare`. Each returns a result the
 // bar reports; none throws.
 import { copyText } from '$lib/util/clipboard';
+import { isMagnet } from '$lib/util/magnet';
 
 // lib/api owns the base path but doesn't export it, and the client only reads JSON.
 const BASE = '/api/v1';
@@ -48,7 +49,7 @@ export async function exportHashes(
 export async function copyMagnets(hashes: readonly string[], fetcher?: typeof fetch) {
 	const r = await exportHashes(hashes, 'magnets', fetcher);
 	if (!r.ok) return r;
-	const lines = r.text.split('\n').filter((l) => l.startsWith('magnet:?'));
+	const lines = r.text.split('\n').filter((l) => isMagnet(l));
 	if (lines.length === 0) return { ok: false as const, reason: 'failed' as const };
 	const copied = await copyText(lines.join('\n'));
 	return {
@@ -68,5 +69,5 @@ export function download(text: string, filename: string, type: string) {
 	document.body.appendChild(a);
 	a.click();
 	a.remove();
-	URL.revokeObjectURL(url);
+	setTimeout(() => URL.revokeObjectURL(url), 0);
 }

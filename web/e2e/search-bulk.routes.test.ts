@@ -128,11 +128,10 @@ test('the selection survives the next page and clears on a new query', async ({
 	await expect(page.getByTestId('table-row-52')).toHaveCount(1);
 	await expect(count(page)).toHaveText('1 selected');
 	await expect(page.getByTestId('table-select-1')).toBeChecked();
-	// A new query starts over.
-	await go('/search?q=other&view=table');
-	await expect(page.getByTestId('table-row-1')).toBeVisible();
+	// A new query (a sort change in the page, not a reload) starts over.
+	await page.getByLabel('Sort').selectOption({ label: 'Largest' });
 	await expect(page.getByTestId('bulk-bar')).toHaveCount(0);
-	await expect(page.getByTestId('table-select-1')).toHaveCount(0);
+	await expect(page.getByTestId('table-select-1')).not.toBeChecked();
 });
 
 for (const mode of ['light', 'dark'] as const) {

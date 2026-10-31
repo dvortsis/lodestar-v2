@@ -363,7 +363,7 @@ const pickLazy = [
 ];
 const bulkLazy = [
 	...new Set(
-		ownChunk('src/lib/features/search/bulk/BulkBar.svelte', [], false, [
+		ownChunk('src/lib/features/search/bulk/BulkBar.svelte', [/^chunk:magnet$/], false, [
 			...engagedSearch,
 			...resultsLazy
 		])
@@ -472,8 +472,8 @@ export default [
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
-	entry('Search bulk bar (on demand)', bulkLazy, '2.8 KB'),
-	entry('Search row checkboxes (on demand)', pickLazy, '1.3 KB'),
+	entry('Search bulk bar (on demand)', bulkLazy, '3.4 KB'),
+	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
 	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),

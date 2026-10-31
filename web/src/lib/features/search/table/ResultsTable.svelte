@@ -11,13 +11,14 @@
 	import { formatBytes, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { DEFAULT_SORT, search } from '$lib/state/search.svelte';
+	import { search } from '$lib/state/search.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import { showBidi } from '$lib/util/bidi';
 	import { TYPE_LABELS as TYPE } from '$lib/util/content-labels';
 	import { ensureSearchPath } from '../query/path';
 	import type { SearchHit } from '../results/ResultRow.svelte';
+	import { results } from '../results/results.svelte';
 	import { pick, selectAll } from '../bulk/ops';
 	import { selection } from '../bulk/selection.svelte';
 	import {
@@ -61,7 +62,7 @@
 
 	function sortBy(field: string) {
 		ensureSearchPath();
-		void search.setSort(nextSort(search.sort === DEFAULT_SORT ? DEFAULT_SORT : search.sort, field));
+		void search.setSort(nextSort(search.sort, field));
 	}
 
 	function save(next: ColumnPrefs) {
@@ -82,6 +83,12 @@
 			scroller?.parentElement?.querySelector<HTMLElement>('[data-testid="table-columns"]')?.focus()
 		);
 	}
+
+	// A new query starts at the first row again (the list does the same through its resetKey).
+	$effect(() => {
+		void results.shown;
+		active = 0;
+	});
 
 	let scroller = $state<HTMLElement>();
 	let sentinel = $state<HTMLElement>();

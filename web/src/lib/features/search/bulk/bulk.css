@@ -1,0 +1,38 @@
+/* The bulk bar and the list rows' checkbox (BulkBar.svelte, RowPick.svelte). Token variables only. */
+@reference "../../../../app.css";
+
+/* The bulk bar (BulkBar.svelte): sticky under the list. */
+.bb {
+	position: sticky;
+	bottom: calc(var(--spacing) * 2);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+	padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+}
+.bb-count {
+	margin: 0;
+	margin-inline-end: auto;
+	font-variant-numeric: tabular-nums;
+}
+.bb-hint {
+	margin: 0;
+	color: var(--color-muted-text);
+	font-size: var(--text-small);
+}
+.rp-pick {
+	display: flex;
+	align-items: center;
+	padding-inline-start: calc(var(--spacing) * 3);
+}
+
+@media (pointer: coarse) {
+	.rp-pick {
+		min-width: var(--target-min);
+		min-height: var(--target-min);
+	}
+}

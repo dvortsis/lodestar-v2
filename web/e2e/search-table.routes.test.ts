@@ -111,6 +111,20 @@ test('the next page arrives from the scroll sentinel', async ({ page, go, mock }
 	await expect(page.getByTestId('results-end')).toBeAttached();
 });
 
+test('a new query puts the first row back in the tab order', async ({ page, go, mock }) => {
+	server(mock, (sent) =>
+		sent.cursor === null && JSON.stringify(sent).includes('-size')
+			? body(hits(5), { total: 5 })
+			: body(hits(50), { total: 50 })
+	);
+	await go('/search?q=lantern&view=table');
+	await tableRow(page, 40).focus();
+	await expect(tableRow(page, 40)).toHaveAttribute('tabindex', '0');
+	await page.getByLabel('Sort').selectOption({ label: 'Largest' });
+	await expect(tableRow(page, 40)).toHaveCount(0);
+	await expect(tableRow(page, 1)).toHaveAttribute('tabindex', '0');
+});
+
 for (const mode of ['light', 'dark'] as const) {
 	test.describe(`axe, Riverstone ${mode}`, () => {
 		test.use({ themeId: `riverstone-${mode}`, colorMode: mode });
