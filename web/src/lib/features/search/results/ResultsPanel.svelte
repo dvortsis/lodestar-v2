@@ -32,6 +32,7 @@
 	import { appearanceHref, searchHref } from './links';
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
+	import { selection } from '../bulk/selection.svelte';
 
 	interface Props {
 		/** Focus the query bar (the empty state's next step). */
@@ -52,6 +53,25 @@
 	const density = $derived<Density>(
 		page.url.searchParams.get('density') === 'compact' ? 'compact' : 'comfortable'
 	);
+
+	const tableView = $derived(page.url.searchParams.get('view') === 'table');
+	// Table mode, the bulk bar and `x` load on demand (S-search-5): the list's first load is unchanged.
+	let Table = $state<typeof import('../table/ResultsTable.svelte').default>();
+	$effect(() => {
+		if (tableView && !Table)
+			void import('../table/ResultsTable.svelte').then((mod) => (Table = mod.default));
+	});
+	let Bar = $state<typeof import('../bulk/BulkBar.svelte').default>();
+	let Pick = $state<typeof import('../bulk/RowPick.svelte').default>();
+	$effect(() => {
+		if (selection.count > 0 && !Bar)
+			void import('../bulk/BulkBar.svelte').then((mod) => (Bar = mod.default));
+		if ((selection.mode || selection.count > 0) && !tableView && !Pick)
+			void import('../bulk/RowPick.svelte').then((mod) => (Pick = mod.default));
+	});
+	const hashes = $derived(results.hits.map((h) => h.hash));
+	// A new query starts a new selection; a new page (the same query) keeps it.
+	$effect(() => selection.follow(results.shown));
 
 	// The query the rows follow. No query in the URL: the empty state. A query that hasn't parsed
 	// (in flight, or a syntax error): no new load, so the last good rows stay.
@@ -142,11 +162,15 @@
 		void import('$lib/features/detail/commands').then((mod) => mod.registerDetailCommands());
 		let offKeys: (() => void) | undefined;
 		void Promise.all([import('$lib/keys'), import('./commands')]).then(([{ keys }, cmd]) => {
-			if (!gone)
-				offKeys = cmd.registerResultsCommands(keys, {
-					next: () => move(1),
-					previous: () => move(-1)
-				});
+			if (gone) return;
+			offKeys = cmd.registerResultsCommands(keys, {
+				next: () => move(1),
+				previous: () => move(-1),
+				select: () => {
+					const hit = results.hits[active];
+					if (hit) selection.toggle(hit.hash);
+				}
+			});
 		});
 		return () => {
 			clearTimeout(giveUp);
@@ -160,6 +184,8 @@
 
 	/** j/k: the next or previous row becomes active (and takes focus unless the drawer is open). */
 	let list = $state<{ move: (delta: number) => void; moveTo: (index: number) => void }>();
+	let grid = $state<{ move: (delta: number) => void; moveTo: (index: number) => void }>();
+	const nav = () => (tableView ? grid : list);
 
 	// The sentinel's fallback for the keyboard and AT: a visible "Load more". Focus stays on it while
 	// a page loads (`loading` keeps it focusable). When it goes (the last page, an error) or comes
@@ -189,8 +215,8 @@
 			return;
 		}
 		// From outside the list, j/k go to the active row first (row 1 on a fresh list).
-		if (listEl?.contains(document.activeElement)) list?.move(by);
-		else list?.moveTo(active);
+		if (listEl?.contains(document.activeElement)) nav()?.move(by);
+		else nav()?.moveTo(active);
 	}
 
 	/**
@@ -198,9 +224,7 @@
 	 * its details are fetched ahead (150 ms idle). Focus leaving the list clears the target.
 	 */
 	function focusIn(event: FocusEvent) {
-		const hash = (event.target as HTMLElement)
-			.closest('[role="row"]')
-			?.querySelector<HTMLElement>('[data-hash]')?.dataset.hash;
+		const hash = hashOf(event.target);
 		if (!hash) return;
 		setCommandTarget(hash); // synchronous: a `c` right after the focus moves must see it
 		void detailMod().then((mod) => {
@@ -208,6 +232,12 @@
 			detail = mod;
 			mod.prefetchDetail(hash);
 		});
+	}
+	/** The hash of the row (a list row or a table row) holding `target`. */
+	function hashOf(target: EventTarget | null) {
+		return (target as HTMLElement)
+			.closest('[role="row"], tr')
+			?.querySelector<HTMLElement>('[data-hash]')?.dataset.hash;
 	}
 	function focusOut(event: FocusEvent) {
 		if (listEl?.contains(event.relatedTarget as Node | null)) return;
@@ -220,7 +250,7 @@
 		detail = mod;
 		const rowEl = listEl
 			?.querySelector<HTMLElement>(`[data-hash="${CSS.escape(hit.hash)}"]`)
-			?.closest<HTMLElement>('[role="row"]');
+			?.closest<HTMLElement>('[role="row"], tr');
 		mod.openDetail(hit.hash, {
 			hit,
 			returnFocus: () => rowEl ?? null,
@@ -281,12 +311,21 @@
 					: m.search_results_announce_other({ count });
 	}
 
+	// §10.13: the selection count, politely, through the same region as the result count.
+	let announced = selection.count;
+	$effect(() => {
+		const n = selection.count;
+		if (n === announced) return;
+		announced = n;
+		void import('../bulk/ops').then(
+			(ops) => (said = ops.countText(n, (c) => formatCount(c, locale)))
+		);
+	});
+
 	/** §10.1: details are fetched ahead on hover too (the 150 ms idle is `prefetchDetail`'s). */
 	let hovered: string | undefined;
 	function pointerOver(event: PointerEvent) {
-		const hash = (event.target as HTMLElement)
-			.closest('[role="row"]')
-			?.querySelector<HTMLElement>('[data-hash]')?.dataset.hash;
+		const hash = hashOf(event.target);
 		if (!hash || hash === hovered) return;
 		hovered = hash;
 		void detailMod().then((mod) => {
@@ -300,7 +339,7 @@
 	function keyDown(event: KeyboardEvent) {
 		if (!(event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) return;
 		const more = (event.target as HTMLElement)
-			.closest('[role="row"]')
+			.closest('[role="row"], tr')
 			?.querySelector<HTMLButtonElement>('[data-row-more]');
 		if (!more) return;
 		event.preventDefault();
@@ -438,38 +477,54 @@
 			     the interactive elements, this wrapper only listens. -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
-				class="rp-list"
+				class:rp-list={!tableView}
 				bind:this={listEl}
 				onfocusin={focusIn}
 				onfocusout={focusOut}
 				onpointerover={pointerOver}
 				onkeydown={keyDown}
 			>
-				<VirtualList
-					bind:this={list}
-					items={results.hits}
-					role="grid"
-					getKey={(h) => h.hash}
-					label={m.search_results_label()}
-					estimateSize={rowHeight}
-					resetKey={results.shown ?? ''}
-					bind:activeIndex={active}
-					onActivate={(_i, hit) => void open(hit)}
-					hasMore={results.hasMore}
-					loadingMore={results.loadingMore}
-					onLoadMore={() => void results.loadMore()}
-					loadMoreLabel={m.search_results_loading_more()}
-				>
-					{#snippet row(hit)}
-						<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
-							<ResultRow {hit} {density} {matched} testid="result-{hit.hash}">
-								{#snippet actions(h)}
-									{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
-								{/snippet}
-							</ResultRow>
-						</div>
-					{/snippet}
-				</VirtualList>
+				{#if tableView}
+					{#if Table}
+						<Table
+							bind:this={grid}
+							hits={results.hits}
+							hasMore={results.hasMore}
+							onLoadMore={() => void results.loadMore()}
+							onOpen={(h: SearchHit) => void open(h)}
+							bind:active
+						/>
+					{/if}
+				{:else}
+					<VirtualList
+						bind:this={list}
+						items={results.hits}
+						role="grid"
+						getKey={(h) => h.hash}
+						label={m.search_results_label()}
+						estimateSize={rowHeight}
+						resetKey={results.shown ?? ''}
+						bind:activeIndex={active}
+						onActivate={(_i, hit) => void open(hit)}
+						hasMore={results.hasMore}
+						loadingMore={results.loadingMore}
+						onLoadMore={() => void results.loadMore()}
+						loadMoreLabel={m.search_results_loading_more()}
+					>
+						{#snippet row(hit)}
+							<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
+								{#if Pick && (selection.mode || selection.count > 0)}
+									<Pick {hit} rows={hashes} />
+								{/if}
+								<ResultRow {hit} {density} {matched} testid="result-{hit.hash}">
+									{#snippet actions(h)}
+										{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
+									{/snippet}
+								</ResultRow>
+							</div>
+						{/snippet}
+					</VirtualList>
+				{/if}
 			</div>
 			<div bind:this={foot}>
 				<div class="rp-foot">
@@ -497,6 +552,7 @@
 					</Banner>
 				{/if}
 			</div>
+			{#if Bar && selection.count > 0}<Bar />{/if}
 		{/if}
 	{/if}
 </section>

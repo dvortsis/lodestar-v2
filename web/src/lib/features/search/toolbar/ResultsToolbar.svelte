@@ -14,7 +14,8 @@
 	import { DEFAULT_SORT, search } from '$lib/state/search.svelte';
 	import { ensureSearchPath } from '../query/path';
 	import { results } from '../results/results.svelte';
-	import { SORTS, densityHref, sortValue } from './toolbar';
+	import { selection } from '../bulk/selection.svelte';
+	import { SORTS, sortValue, viewParamHref } from './toolbar';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
@@ -43,11 +44,17 @@
 		void search.setSort(next);
 	}
 
-	function setDensity(next: string) {
+	const view = $derived(page.url.searchParams.get('view') === 'table' ? 'table' : 'list');
+
+	function setParam(key: 'density' | 'view', next: string) {
 		ensureSearchPath();
 		// A view parameter, not a search: it replaces the entry, so Back still walks searches.
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- densityHref() keeps this page's own path
-		void goto(densityHref(page.url, next), { replaceState: true, keepFocus: true, noScroll: true });
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewParamHref() keeps this page's own path
+		void goto(viewParamHref(page.url, key, next), {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
 	}
 
 	let Dialog = $state<typeof import('$lib/features/alerts/SaveSearchDialog.svelte').default>();
@@ -89,8 +96,24 @@
 					{ value: 'comfortable', label: m.search_toolbar_comfortable() },
 					{ value: 'compact', label: m.search_toolbar_compact() }
 				]}
-				onchange={setDensity}
+				onchange={(v) => setParam('density', v)}
 			/>
+			<SegmentedControl
+				dense
+				label={m.search_table_view()}
+				value={view}
+				options={[
+					{ value: 'list', label: m.search_table_view_list() },
+					{ value: 'table', label: m.search_table_view_table() }
+				]}
+				onchange={(v) => setParam('view', v)}
+			/>
+			<Button
+				dense
+				aria-pressed={selection.mode}
+				data-testid="select-mode"
+				onclick={() => (selection.mode = !selection.mode)}>{m.search_bulk_mode()}</Button
+			>
 			<Button dense loading={saving} onclick={() => void save()}>{m.search_toolbar_save()}</Button>
 		</div>
 	</div>

@@ -48,3 +48,7 @@ The active-filter strip sits under the bar inside the `<search>` landmark. It lo
 - `onescape` returns true when a popup took the key. The Syntax popover closes there today, and the listbox should join it.
 - The element has `role="combobox"`, `aria-autocomplete="list"`, `aria-haspopup="listbox"` and `aria-expanded="false"`. The listbox sets `aria-controls` and `aria-expanded` while it is shown, and `aria-activedescendant` for the active option.
 - Token spans carry `qt-*` classes (`bar.css`); `tokenize.ts` is the highlighter only. The server parses (`/parse`).
+
+## Table mode, selection and the bulk bar (S-search-5)
+
+Decisions: `docs/decisions/2026-10-31-S-search-5.md`. `table/` (`ResultsTable`, `ColumnChooser`, `columns.ts`) loads when the URL has `view=table`; `bulk/` (`selection.svelte.ts` store, `BulkBar`, `RowPick`, `ops.ts`, `actions.ts`) loads when select mode or a selection starts. The toolbar writes `view` like `density`. Selection follows `results.shown`. Send and saved views are deferred.
