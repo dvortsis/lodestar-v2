@@ -2313,6 +2313,10 @@ impl FiltersApi {
             .flat_map(|f| f.hashes.iter().copied())
             .collect();
         let pending = self.held.pend(&holding);
+        #[cfg(test)]
+        if let Some(f) = tests::CORRECT_MARKED.get() {
+            f(&store, &self.held, &holding);
+        }
         let written = store.set_enrichments_at(generation, &[(id, r.enriched)], &refiled);
         let settled = pending.settle(|hs| store.held_among(hs));
         let written = written.map_err(internal)?;
@@ -3003,7 +3007,13 @@ mod tests {
     use super::*;
     use lodestar_filter::{Core, CsList, Lists, Switches};
 
+    /// Runs in `correct` right after it marks its hashes pending, before
+    /// its store write (`2026-10-31-B-held-precommit.md`).
+    pub(super) type CorrectHook = fn(&Store, &HeldSet, &[[u8; 20]]);
+
     thread_local! {
+        pub(super) static CORRECT_MARKED: std::cell::Cell<Option<CorrectHook>> =
+            const { std::cell::Cell::new(None) };
         /// A pending re-queue text that fails every time it's redone.
         pub(super) static FAIL_REQUEUE: std::cell::RefCell<Option<String>> =
             const { std::cell::RefCell::new(None) };
@@ -3046,6 +3056,98 @@ mod tests {
         push_pending_requeue(&mut api.store(), "lexb").unwrap();
         assert!(api.resume_requeues(0).is_err());
         assert_eq!(pending_requeues(&api.store()).unwrap(), ["fails", "lexb"]);
+    }
+
+    /// `correct` marks a new hold before its store write: at the mark the
+    /// store doesn't hold it yet, and a release's M landing there (reading
+    /// the store as not holding it) can't make it fetchable. After the
+    /// write's reconcile it's held, as the store has it, with no mark left.
+    #[test]
+    fn correct_marks_a_new_hold_before_its_write() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        use lodestar_filter::TermSet;
+        use std::sync::atomic::AtomicUsize;
+        static HOOKS: AtomicUsize = AtomicUsize::new(0);
+        fn marked(store: &Store, held: &HeldSet, hs: &[[u8; 20]]) {
+            HOOKS.fetch_add(1, Ordering::Relaxed);
+            assert!(!hs.is_empty() && held.pending_len() > 0);
+            assert!(
+                store.held_among(hs).unwrap().iter().all(|h| !h),
+                "marked before the write"
+            );
+            held.remove_released(hs, |hs| store.held_among(hs)).unwrap();
+            assert!(hs.iter().all(|h| held.contains(h)), "pending, so refused");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+        let name = "Holiday Rolea one two three four five six seven eight nine Lexa.mp4";
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"name".to_vec(),
+                    OwnedValue::Bytes(name.as_bytes().to_vec()),
+                ),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: lodestar_store::SourceId::new(0).unwrap(),
+            }])
+            .unwrap();
+        let hash = info.primary_hash().0;
+        let api = FiltersApi {
+            store: Arc::new(Mutex::new(store)),
+            // Stand-in terms: only the Adult-only CS-5a catches them.
+            engine: Arc::new(Handle::new(Engine::new(Core::new(
+                Lists {
+                    sexual: TermSet::of(&["lexa"]),
+                    child_roles: TermSet::of(&["rolea"]),
+                    codes: TermSet::of(&["codex"]),
+                },
+                CsList::default(),
+                Switches::default(),
+            )))),
+            held: Default::default(),
+            sealer: None,
+            ips: Default::default(),
+            index: None,
+            reenrich: Default::default(),
+            jobs: Default::default(),
+            quarantine_secs: 86_400,
+            shutdown: Default::default(),
+        };
+        api.held.insert(hash);
+        CORRECT_MARKED.set(Some(marked));
+        let r = api.correct(&CorrectBody {
+            hash: hash.iter().map(|b| format!("{b:02x}")).collect(),
+            adult: Some(true),
+            not_junk: false,
+        });
+        CORRECT_MARKED.set(None);
+        assert_eq!(r.unwrap().held_by.as_deref(), Some("CS-5a"));
+        assert_eq!(HOOKS.load(Ordering::Relaxed), 1, "the hook ran");
+        assert!(api.held.contains(&hash));
+        assert_eq!(api.held.pending_len(), 0);
+        let stored: HashSet<_> = api
+            .store()
+            .filter_state()
+            .unwrap()
+            .held
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(api.held.snapshot(), stored);
     }
 
     fn done() -> ApiResult<Assessment> {
