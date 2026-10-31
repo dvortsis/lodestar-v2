@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 33
+  "count": 34
  },
  "tags": {},
  "slices": {
@@ -1635,13 +1635,13 @@
    "notes": "08:16Z brief briefs/X-polish-1031.md (folds #266/#267 optional findings + bench zero-result class + recovery caching) | 10:39Z launched Opus | 11:43Z PR #274 head fb81cf7d (items 1-8; recovery bench worst p95 6.97 ms); accepted tests/search_recovery.rs; fresh Opus reviewer | 12:17Z MERGE (3 optional), merged fdda32dd; sessions archived"
   },
   "S-search-live-ui": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhnD9bVCz6npaStdoxhh",
    "pr": 275,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file | 12:20Z CHANGES at 07d6c069 (B1 registration key vs shown key + follow(null); B2 re-register on return from hidden/bfcache/stream outage; B3 words-only test misses Recover path; opt 4-6 folded); relayed to author | 12:35Z fix push 9b680509; re-check sent to same reviewer | 12:42Z re-check MERGE at 9b680509 (3 optional); ci-ok/web/lighthouse green, playwright+smoke running"
+   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file | 12:20Z CHANGES at 07d6c069 (B1 registration key vs shown key + follow(null); B2 re-register on return from hidden/bfcache/stream outage; B3 words-only test misses Recover path; opt 4-6 folded); relayed to author | 12:35Z fix push 9b680509; re-check sent to same reviewer | 12:42Z re-check MERGE at 9b680509 (3 optional); ci-ok/web/lighthouse green, playwright+smoke running | 12:47Z merged 67c03cdf (all checks green); sessions archived"
   },
   "B-import-server-1": {
    "status": "running",
@@ -1669,6 +1669,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus"
+  },
+  "X-polish-1031b": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2405,14 +2414,10 @@
   "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
   "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (§10.18 lists them; deferred in #243, §2.19 owner flag)",
   "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
-  "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)",
   "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)",
-  "CR-1a-H polish: cap `order` growth in hints::capture between ticks; a send_failed test (#246 review optional)",
   "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
   "API: SuggestItem has no approximate flag (counts never show ≈) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
   "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (§10.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
-  "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")",
-  "API: add a test that fails on duplicate utoipa component names (two ToSchema types with the same name silently overwrite each other; #255 fixed DiscoverResponse and HistogramBin). Latent: Channel (api/dto/system.rs vs lodestar/settings/updates.rs), Mode (settings/preferences.rs vs updates.rs) if they ever enter the spec",
   "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
   "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
   "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)",
