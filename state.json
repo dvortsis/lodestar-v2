@@ -2222,15 +2222,15 @@
     },
     {
       "item": "FYI (\u00a72.19) #246 CR-1a-H (merged, switch off by default): candidate defaults TTL 60 s, not-before 60 s, 20,000-IP guard, 1 hinted attempt per family, new HINT_CAPACITY 20,000 hashes; hints kept per harvested hash in the actor (loosens the plan's \"discard on eviction\"; TTL bounds it); the guard also keeps ordinary routing off a hinted IP for 60 s. CR-SIM screen: null result (no gain beyond the noise floor; ~94% of hints expire because harvest outpaces lookups). Live A/B can still run, or drop the candidate.",
-      "status": "to-send"
+      "status": "sent 2026-10-31T02:00Z"
     },
     {
       "item": "FYI (\u00a72.19, content safety) #249 LU-1-neutralize (merged): the LU-1 pack rule now honours CSX-5 Neutralize terms like the other keyword pack rules (\u00a720.5.5). Refinement: a lure word inside a joined word (MyPassword) stays LU-1 evidence when only `password` is neutralized; neutralizing the whole word removes it (fails safe). The junk score itself is unchanged by Neutralize.",
-      "status": "to-send"
+      "status": "sent 2026-10-31T02:00Z"
     },
     {
       "item": "FYI (\u00a72.19) #251 CR-1a-S part 1 (merged, dht.streaming_peers off by default): candidate defaults STREAM_BATCH 8, STREAM_QUEUE 2, one pending batch, STREAM_SEEN 32 (the spec's proposed bounds). Screen (part 2): healthy +7.5% with 8/8 seeds better, high-latency +7.7% and admission-pressure +2.9% within noise; time to first fetch 4.6-16x faster; conversion unchanged. A live A/B candidate.",
-      "status": "to-send"
+      "status": "sent 2026-10-31T02:00Z"
     }
   ],
   "external_gates": {
