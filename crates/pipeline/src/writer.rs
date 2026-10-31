@@ -129,6 +129,35 @@ pub(crate) struct CandidateSweep {
     pub after: i64,
     /// Nothing is left to judge under `version`.
     pub done: bool,
+    /// After a store error, when the flush tick lets it try again (Unix
+    /// seconds); it waits until then.
+    pub retry_at: Option<i64>,
+    /// Store errors in a row, for the backoff.
+    pub failures: u32,
+}
+
+impl CandidateSweep {
+    /// Has a batch to judge now.
+    fn ready(&self) -> bool {
+        !self.done && self.retry_at.is_none()
+    }
+
+    /// A store error (`SQLITE_BUSY` past the busy timeout, say): waits,
+    /// longer after each error in a row, and tries the same batch again.
+    fn failed(&mut self, now: i64) {
+        self.failures = self.failures.saturating_add(1);
+        let backoff = REFILE_RETRY_FIRST
+            .saturating_mul(1 << (self.failures - 1).min(10))
+            .min(REFILE_RETRY_MAX);
+        self.retry_at = Some(now.saturating_add(backoff));
+    }
+
+    /// Ends the wait once it's due.
+    fn retry_due(&mut self, now: i64) {
+        if self.retry_at.is_some_and(|at| now >= at) {
+            self.retry_at = None;
+        }
+    }
 }
 
 /// A result under a current lease, ready to commit.
@@ -190,13 +219,14 @@ impl Writer {
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
                 () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
-                () = std::future::ready(()), if !self.candidates.done => self.refile_candidates().await,
+                () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
                         self.backfill_done = false;
                     }
                     self.note_engine();
+                    self.candidates.retry_due(unix_now());
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
@@ -611,21 +641,34 @@ impl Writer {
             }
             Ok(Some(b)) => {
                 self.candidates.after = b.last;
-                for h in b.hashes {
-                    self.held.insert(h);
-                }
+                self.candidates.failures = 0;
+                self.hold_refiled(b.hashes);
             }
-            Ok(None) => self.candidates.done = true,
-            Err(e) => {
-                // Tried again at the next rule change or start. The error
-                // carries no candidate's name.
+            Ok(None) => {
                 self.candidates.done = true;
+                self.candidates.failures = 0;
+            }
+            Err(e) => {
+                // The same batch again after a backoff, so names the
+                // current rules hold don't stay at rest until the next
+                // rule change or start. The error carries no name.
+                self.candidates.failed(unix_now());
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::log_events::ENRICHMENT_FAILED,
                     error = crate::log_events::store_error(&e)
                 );
             }
+        }
+    }
+
+    /// Tells intake to refuse the hashes of candidates a sweep batch held
+    /// back, always: the store holds them now. Over-strict when the rules
+    /// changed since: a hash released in that window stays refused until
+    /// the next start reloads the set (`2026-10-31-X-import-refile-2.md`).
+    fn hold_refiled(&self, hashes: Vec<[u8; 20]>) {
+        for h in hashes {
+            self.held.insert(h);
         }
     }
 
@@ -711,6 +754,10 @@ const BACKFILL_BATCH: usize = 256;
 
 /// Import candidates judged per refile step: one short transaction each.
 const REFILE_BATCH: usize = 512;
+/// The wait after a refile sweep's first store error in a row, doubling
+/// after each further one up to the cap (seconds).
+const REFILE_RETRY_FIRST: i64 = 5;
+const REFILE_RETRY_MAX: i64 = 300;
 
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
@@ -1172,7 +1219,7 @@ mod tests {
         capture::install();
         let mut w = writer(store, coordinator, gate);
         async fn sweep(w: &mut Writer) {
-            while !w.candidates.done {
+            while w.candidates.ready() {
                 w.refile_candidates().await;
             }
         }
@@ -1217,7 +1264,7 @@ mod tests {
         w.candidates = CandidateSweep {
             version: Some(current - 1),
             after: 7,
-            done: false,
+            ..CandidateSweep::default()
         };
         w.refile_candidates().await;
         assert_eq!(
@@ -1225,10 +1272,71 @@ mod tests {
             (Some(current), 0, false)
         );
 
+        // A store error: the sweep waits, then tries again on a later
+        // tick, and isn't marked done. A temporary table shadows the
+        // candidates with an unreadable row.
+        let conn = |w: &Writer, sql: &str| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .execute_batch(sql)
+                .unwrap();
+        };
+        conn(
+            &w,
+            "CREATE TEMP TABLE import_candidates
+                 (id INTEGER, hash BLOB, hash_v2 BLOB, name BLOB, size INTEGER, source_at INTEGER);
+             INSERT INTO temp.import_candidates VALUES (1, x'00', NULL, NULL, NULL, NULL);",
+        );
+        w.candidates = CandidateSweep {
+            version: Some(current),
+            ..CandidateSweep::default()
+        };
+        let errors = w.stats.errors.load(Ordering::Relaxed);
+        let before = unix_now();
+        w.refile_candidates().await;
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), errors + 1);
+        let at = w.candidates.retry_at.expect("waits after an error");
+        assert!(at >= before + REFILE_RETRY_FIRST, "{at} {before}");
+        assert!(!w.candidates.done && !w.candidates.ready());
+        w.candidates.retry_due(at - 1);
+        assert!(!w.candidates.ready(), "not before it's due");
+        w.candidates.retry_due(at);
+        assert!(w.candidates.ready());
+        let before = unix_now();
+        w.refile_candidates().await;
+        let again = w.candidates.retry_at.expect("waits longer");
+        assert!(again >= before + 2 * REFILE_RETRY_FIRST, "{again} {before}");
+        conn(&w, "DROP TABLE temp.import_candidates;");
+        w.candidates.retry_due(again);
+        sweep(&mut w).await;
+        assert!(w.candidates.done && w.candidates.failures == 0);
+
+        // The sink is live: the error's event reached it (so the checks
+        // below would see a name that reached one).
+        assert!(!capture::lines("pipeline.enrichment_failed").is_empty());
         // Nothing the sweep logged carries a candidate's name.
         for needle in ["Rolea", "Lexa", "Plain Film"] {
             assert_eq!(capture::lines(needle), Vec::<String>::new());
         }
+    }
+
+    /// The refile sweep's backoff doubles after each error in a row, up to
+    /// its cap.
+    #[test]
+    fn the_refile_backoff_doubles_to_a_cap() {
+        let mut c = CandidateSweep::default();
+        let waits: Vec<i64> = (0..10)
+            .map(|_| {
+                c.failed(1_000);
+                c.retry_at.unwrap() - 1_000
+            })
+            .collect();
+        assert_eq!(waits, [5, 10, 20, 40, 80, 160, 300, 300, 300, 300]);
+        c.failures = u32::MAX;
+        c.failed(i64::MAX);
+        assert_eq!(c.retry_at, Some(i64::MAX));
     }
 
     /// Every log event this test binary emits, rendered with every field

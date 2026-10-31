@@ -256,3 +256,63 @@ fn a_waiting_candidate_prints_no_name() {
     let printed = format!("{c:?}");
     assert!(!printed.to_lowercase().contains("secretname"), "{printed}");
 }
+
+/// An Is adult classification rule makes a waiting candidate adult, so
+/// the Adult-only core checks it: an adult hold, as at import (§20.9).
+#[test]
+fn a_class_rule_makes_an_adult_hold() {
+    // A child role and a sexual term too far apart for the core's general
+    // window, inside its adult one.
+    let name = "Studiox Rolea one two three four five six seven eight nine Lexa";
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let job = imported(&mut store, &[name.to_owned(), "Plain Film".to_owned()]);
+    let filter = stand_in();
+    let sealer = Sealer::new(&[9; 32]);
+    sweep(&mut store, &filter, Some(&sealer), 10);
+    assert_eq!(store.import_job(job.id).unwrap().unwrap(), job, "not adult");
+
+    filter.update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+    sweep(&mut store, &filter, Some(&sealer), 10);
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1, "{q:?}");
+    assert_eq!((q[0].hash, q[0].rule.as_str()), (hash(1), "CS-5a"));
+    assert!(q[0].adult_hold);
+    assert_eq!(sealer.open(q[0].sealed.as_deref().unwrap()).unwrap(), name);
+    let after = store.import_job(job.id).unwrap().unwrap();
+    assert_eq!((after.open_candidates, after.counters.quarantined), (1, 1));
+    assert!(after.counters.conserved());
+}
+
+/// The import driver and the sweep share one judgement
+/// (`lodestar_filter::reclassify::judge_candidate`), and it checks a
+/// hybrid's truncated v2 hash against the engine's lists too.
+#[test]
+fn the_shared_judgement_checks_a_hybrids_v2_hash() {
+    use lodestar_filter::reclassify::{Candidate, judge_candidate};
+    let filter = stand_in();
+    filter.update(|c| c.cs.add_hash([7; 20], Origin::Reported));
+    let candidate = |hash_v2| Candidate {
+        hash: [1; 20],
+        hash_v2,
+        name: "Plain Film",
+        size: None,
+        source_at: None,
+    };
+    let j = judge_candidate(&filter.current(), candidate(Some([7; 32])), T);
+    assert_eq!(j.hashes, [[1; 20], [7; 20]]);
+    assert_eq!(j.verdict.decision.map(|d| d.action), Some(Action::Drop));
+    let j = judge_candidate(&filter.current(), candidate(None), T);
+    assert_eq!(j.hashes, [[1; 20]]);
+    assert!(j.verdict.decision.is_none());
+    // A v2 hash whose truncation is the primary counts once.
+    let mut v2 = [1; 32];
+    v2[20] = 2;
+    assert_eq!(
+        judge_candidate(&filter.current(), candidate(Some(v2)), T)
+            .hashes
+            .len(),
+        1
+    );
+    // Its `Debug` gives no name.
+    assert!(!format!("{:?}", candidate(None)).contains("Plain"));
+}

@@ -238,48 +238,34 @@ struct CandidateHold {
     adult_hold: bool,
 }
 
-/// What the engine makes of one waiting candidate, as the import driver
-/// judges it (`sources-importers`, `judge_candidate`): a hash on the
-/// floor's or a dropping list first, then the name, with no files.
+/// What the engine makes of one waiting candidate: the judgement the
+/// import driver makes too (`lodestar_filter::reclassify::judge_candidate`),
+/// kept only when it drops or quarantines.
 fn judge_candidate(
     engine: &lodestar_filter::Engine,
     c: &lodestar_store::import::WaitingCandidate,
     sealer: Option<&Sealer>,
     now: i64,
 ) -> Option<CandidateHold> {
-    use lodestar_filter::{Action, Facts, Item};
-    let hashes = c.hashes();
+    use lodestar_filter::Action;
+    use lodestar_filter::reclassify::{Candidate, adult_hold, judge_candidate};
     let name = c
         .name
         .as_deref()
         .map(String::from_utf8_lossy)
         .unwrap_or_default();
-    let (decision, fix) = match engine.blocked_hash(&hashes) {
-        Some(d) => (Some(d), None),
-        None => {
-            let (_, class) = enrich_corrected(&name, &[], Correction::default());
-            let facts = Facts {
-                class: &class,
-                size: c.size.unwrap_or(0),
-                piece_len: 0,
-                flags: 0,
-                discovered_at: c
-                    .source_at
-                    .filter(|at| (1..=now).contains(at))
-                    .unwrap_or(now),
-                now,
-            };
-            let item = Item {
-                hashes: &hashes,
-                name: &name,
-                files: &[],
-                content_type: class.content_type,
-            };
-            let (v, says) = engine.judge_classified(&item, Some(&facts), now);
-            (v.decision, rule_fix(says, &class))
-        }
-    };
-    let d = decision?;
+    let j = judge_candidate(
+        engine,
+        Candidate {
+            hash: c.hash.0,
+            hash_v2: c.hash_v2.map(|h| h.0),
+            name: &name,
+            size: c.size,
+            source_at: c.source_at,
+        },
+        now,
+    );
+    let d = j.verdict.decision?;
     let held = match d.action {
         Action::Drop => lodestar_store::Held::Tombstone,
         Action::Quarantine => lodestar_store::Held::Quarantine,
@@ -290,7 +276,7 @@ fn judge_candidate(
         .flatten();
     Some(CandidateHold {
         id: c.id,
-        hashes,
+        hashes: j.hashes,
         rule: d.rule.id(),
         action: d.action.code(),
         held,
@@ -298,15 +284,11 @@ fn judge_candidate(
         evidence: d.evidence_codes(),
         // Held by the Adult-only core only because your rule made it
         // adult: a tombstone when the quarantine ends (§20.9).
-        adult_hold: fix == Some(true) && lodestar_filter::reclassify::adult_hold(&d),
+        adult_hold: j.fix == Some(true) && adult_hold(&d),
     })
 }
 
-/// What a classification rule's say changes: Is adult (`true`) or Not
-/// adult (`false`) where it differs from detection, else nothing.
-pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {
-    says.filter(|adult| *adult != (class.content_type == lodestar_classify::ContentType::Adult))
-}
+pub use lodestar_filter::reclassify::rule_fix;
 
 /// The stored enrichment with a classification rule's fix (or detection's
 /// own when `None`).
