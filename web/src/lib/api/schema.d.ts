@@ -1372,6 +1372,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/search/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The index's size, growth and rebuild: what the search page's "Cold
+         *     start" and "Index rebuilding" states show (§10.4). The thresholds are
+         *     the server's, so the UI only reads the flags.
+         */
+        get: operations["searchIndexState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/revoke-others": {
         parameters: {
             query?: never;
@@ -2650,6 +2671,31 @@ export interface components {
             corrections: number;
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
+        };
+        /** @description One top-level clause and what the query gives without it. */
+        ClauseRemoval: {
+            /** @description `without` as canonical query text. */
+            canonical: string;
+            /** @description The clause as query text (`trackers:>=3`). */
+            clause: string;
+            /**
+             * @description The clause's position among the AST's top-level clauses, as the
+             *     active-filter strip numbers them.
+             */
+            index: number;
+            /**
+             * @description Matches without the clause. Absent when the shared deadline passed
+             *     before it was fully counted (never 0 or a guess for that): show
+             *     nothing for it.
+             */
+            total?: number;
+            /**
+             * @description `total` is an estimate, by the same rule as `/search`'s
+             *     `total_approx`: shown with "≈".
+             */
+            total_approx: boolean;
+            /** @description The query without the clause: search with it to remove it. */
+            without: components["schemas"]["AstNode"];
         };
         /** @description `POST /collections`. */
         CollectionCreate: {
@@ -4327,6 +4373,36 @@ export interface components {
             range: components["schemas"]["InsightsRange"];
             trend: components["schemas"]["IndexPoint"][];
         };
+        /**
+         * @description A rebuild's progress, as `event: rebuild` sends it, with when it
+         *     started.
+         */
+        IndexRebuild: {
+            /**
+             * Format: int64
+             * @description Torrents in the new index so far.
+             */
+            done: number;
+            /** @description Why it stopped, once `failed`. */
+            error: string | null;
+            /** @description The index serving meanwhile, e.g. `v3-t1`. */
+            from: string;
+            phase: components["schemas"]["RebuildPhase"];
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            started_at: number;
+            /** @description The index being built. */
+            to: string;
+            /**
+             * Format: int64
+             * @description Torrents to build before finishing.
+             */
+            total: number;
+            /** @description Fields that match nothing until the swap. */
+            unavailable: string[];
+        };
         /** @description `GET /insights/index`. */
         IndexResponse: {
             kpi: components["schemas"]["IndexKpi"];
@@ -5986,10 +6062,85 @@ export interface components {
             trackers_reporting: number | null;
         };
         /**
+         * @description `GET /search/state`: the index's size, growth and rebuild, for the
+         *     search page's "Cold start" and "Index rebuilding" states (§10.4).
+         * @example {
+         *       "cold_start": false,
+         *       "growing": true,
+         *       "growth_hours": 24,
+         *       "growth_per_hour": 2104.5,
+         *       "rebuild": null,
+         *       "searchable_torrents": 84210,
+         *       "unavailable": [],
+         *       "updated_at": 1792681200
+         *     }
+         */
+        SearchIndexState: {
+            /**
+             * @description Fewer than 1,000 searchable torrents: the full-page "The index is
+             *     still growing" state (§10.19).
+             */
+            cold_start: boolean;
+            /**
+             * @description Fewer than 1,000,000 searchable torrents: the "still growing"
+             *     banner (decision S-search-2a).
+             */
+            growing: boolean;
+            /**
+             * Format: double
+             * @description Hours of the last 24 whole UTC hours the index was measured in
+             *     (`COVERAGE` seconds on its index dim, `docs/metrics.md` §7.7),
+             *     which `growth_per_hour` averages over.
+             */
+            growth_hours: number;
+            /**
+             * Format: double
+             * @description Torrents that became searchable in the last 24 whole UTC hours
+             *     (the `NEWLY_SEARCHABLE` rollup), per hour of `growth_hours`; null
+             *     when nothing was measured.
+             */
+            growth_per_hour: number | null;
+            rebuild: null | components["schemas"]["IndexRebuild"];
+            /**
+             * Format: int64
+             * @description Documents in the search index (as `/stats`'s
+             *     `searchable_torrents`).
+             */
+            searchable_torrents: number;
+            /**
+             * @description Fields the serving index lacks: clauses on them match nothing
+             *     until a rebuild adds them.
+             */
+            unavailable: string[];
+            /**
+             * Format: int64
+             * @description Unix seconds these numbers were read.
+             */
+            updated_at: number;
+        };
+        /**
          * @description A note on what a search left out.
          * @enum {string}
          */
         SearchNotice: "adult_hidden";
+        /**
+         * @description Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the
+         *     query (the `of` of a root `and`), each with the total the
+         *     query has without it, counted on the same snapshot and with the same
+         *     visibility as the search (filter-hidden torrents and Adult stay out
+         *     as they did; removing `adult:…` or `hidden:…` never brings them back).
+         *
+         *     [`MAX_CLAUSES`]: lodestar_search::recovery::MAX_CLAUSES
+         */
+        SearchRecovery: {
+            /** @description In query order. */
+            clauses: components["schemas"]["ClauseRemoval"][];
+            /**
+             * @description Top-level clauses past the 8 counted (filters are counted before
+             *     free text), left out.
+             */
+            skipped: number;
+        };
         /**
          * @description `POST /search`'s body, and `GET /search`'s parameters (where `ast` is
          *     refused: send an AST with POST).
@@ -6070,6 +6221,12 @@ export interface components {
             notices: components["schemas"]["SearchNotice"][];
             /** @description Hits before this page. */
             offset: number;
+            /**
+             * @description Present only on a first page with no matches whose query has two
+             *     or more top-level clauses: what removing each would give (§10.4
+             *     "No results").
+             */
+            recovery?: components["schemas"]["SearchRecovery"];
             /**
              * @description Few exact matches: plural forms in titles were included too (§8),
              *     ranked after the exact ones.
@@ -10464,6 +10621,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    searchIndexState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchIndexState"];
                 };
             };
             default: components["responses"]["Error"];
