@@ -4304,6 +4304,29 @@ export interface components {
             /** Format: int64 */
             index_bytes: number;
         };
+        /** @description `GET /insights/discover` (§10.9.5, `docs/metrics.md` §6.8, §7.7). */
+        InsightsDiscoverResponse: {
+            /** @description Yield by IPv4 / IPv6. Null until leases carry the address family. */
+            by_ip_family: components["schemas"]["SegmentYield"][] | null;
+            /**
+             * @description Keys reported, rediscovered and dropped, by the source that
+             *     reported them. Event time.
+             */
+            by_source: components["schemas"]["DiscoverSource"][];
+            /**
+             * @description Keys reported, by harvest strategy: the DHT's (BEP 51 sample,
+             *     get_peers, announce, lookup), refetch, and each other source's own
+             *     codes. Event time: volume, not yield.
+             */
+            by_strategy: components["schemas"]["StrategyCount"][];
+            kpi: components["schemas"]["DiscoverKpi"];
+            previous?: components["schemas"]["DiscoverPrevious"];
+            range: components["schemas"]["InsightsRange"];
+            stale: null | components["schemas"]["Stale"];
+            trend: components["schemas"]["DiscoverPoint"][];
+            /** Format: int64 */
+            updated_at: number;
+        };
         /**
          * @description `event: insights`, every 30 s while anyone subscribes: the default
          *     `7d` overview's stage strip (`docs/metrics.md` §6.1, §7.5, §7.7). A
@@ -8902,7 +8925,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DiscoverResponse"];
+                    "application/json": components["schemas"]["InsightsDiscoverResponse"];
                 };
             };
             default: components["responses"]["Error"];

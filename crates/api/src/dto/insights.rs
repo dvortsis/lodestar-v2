@@ -485,7 +485,7 @@ pub struct QueryRow {
 
 /// `GET /insights/discover` (§10.9.5, `docs/metrics.md` §6.8, §7.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct DiscoverResponse {
+pub struct InsightsDiscoverResponse {
     /// Yield by IPv4 / IPv6. Null until leases carry the address family.
     #[schema(required = true)]
     pub by_ip_family: Option<Vec<SegmentYield>>,
