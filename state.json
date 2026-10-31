@@ -1550,7 +1550,7 @@
     },
     "IMP-4": {
       "status": "review",
-      "notes": "2026-10-31T01:15Z brief briefs/IMP-4.md; Opus session_01MMjhnBDAVMU76chqoEU4Hh; planned 4a/4b split | 02:13Z 4a PR #253 head 608ae777 (~1,900, half tests); reviewer session_01MMjhnD7kNMtMN3bmgrHVtu; 4b building. Owner flags: paused job must be cancelled before remove; remove keeps private candidates and rows vouched by another source/user data; refused source -> source_unavailable"
+      "notes": "2026-10-31T01:15Z brief briefs/IMP-4.md; Opus session_01MMjhnBDAVMU76chqoEU4Hh; planned 4a/4b split | 02:13Z 4a PR #253 head 608ae777 (~1,900, half tests); reviewer session_01MMjhnD7kNMtMN3bmgrHVtu; 4b building. Owner flags: paused job must be cancelled before remove; remove keeps private candidates and rows vouched by another source/user data; refused source -> source_unavailable | 02:29Z #253 review MERGE (security-review clean); optional findings folded into 4b; merge on green ci-ok"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
