@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 38
+  "count": 39
  },
  "tags": {},
  "slices": {
@@ -880,13 +880,13 @@
    "notes": "2026-10-31T03:47Z brief briefs/S-settings-2.md; Sonnet session_01MMjhnBtMgHN6ooQJhwduav; /security-review (secrets) | 03:48Z blocked: server lacks integrations/notifications/trackers/insights settings sections, /settings/test kinds beyond download_client, clear-usage-data. Runner: ship Language & region now; S-settings-2b after backend | 04:21Z PR #259 head 28fcde8d (Language & region); settings first view 41.49->43.05 KB (cap 45); reviewer session_01MMjhn9kzbwB6kjpx4obcML | 04:38Z review MERGE; author pushes marker + small fixes (TZ $derived, Intl zone check, drop non-server keys from map, size comment); runner delta-checks; baselines via marker | 04:45Z 976f250b runner delta-checked (Intl zone check before form.set, external-change resync, settings_screen_* skipped by map generator) -> MERGE after baselines regenerate and marker is removed | 2026-10-31T05:20Z #259 MERGED 3484e13a (Language & region only; Settings baselines regenerated, Settings-only). Author archived. 2b waits on B-settings-sections + M-settings-engine-2"
   },
   "M-security-settings": {
-   "status": "pending",
+   "status": "launching",
    "model": "opus",
    "session": null,
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86"
+   "notes": "from #86 | 15:15Z brief briefs/M-security-settings.md; security review"
   },
   "B-log1": {
    "status": "merged",
@@ -1671,13 +1671,13 @@
    "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA | 14:05Z MERGE at 29201097 (3 optional); waiting on ci-ok (windows). Runner §2.26: merge as is; follow-up X-search-files-2 gates cold file-clause class at §3 FILE_P95 150 ms at CI size + investigates cold broad clause at 1M (211 ms > §3 150 ms row) + IdPart proptest + recency-index charge | 14:08Z merged 4d47440a; sessions archived"
   },
   "X-polish-1031b": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnApMYvpxgsjfykU8zf",
    "pr": 279,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p | 14:25Z MERGE at 48c0f1b6 (3 optional); waiting on test ubuntu/windows | 14:39Z test(windows) red: dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS 10055 (40 nodes; runner env). Runner re-ran failed jobs once (run 41208855560)"
+   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p | 14:25Z MERGE at 48c0f1b6 (3 optional); waiting on test ubuntu/windows | 14:39Z test(windows) red: dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS 10055 (40 nodes; runner env). Runner re-ran failed jobs once (run 41208855560) | 15:12Z windows re-run green; merged 8a51dbea; sessions archived"
   },
   "B-import-refile": {
    "status": "merged",
