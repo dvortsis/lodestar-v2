@@ -62,7 +62,9 @@ pub(crate) struct WorkerFunnel {
 
 impl Funnel for WorkerFunnel {
     fn record(&self, cohort: i64, source: SourceId, stage: Stage, loss: Option<Loss>) {
-        self.counts.record(cohort, source, stage, loss);
+        if crate::in_funnel(cohort) {
+            self.counts.record(cohort, source, stage, loss);
+        }
     }
 
     fn admitted(&self, _key: &InfoHash, _cohort: i64, _source: SourceId) {}

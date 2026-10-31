@@ -480,7 +480,7 @@ code has one, and a code with none is never compacted):
 
 | Code | Name | Dim / key | Written by | Time base |
 |---|---|---|---|---|
-| 14 | `FUNNEL_EVENTS` | dim = `Stage` code, key = `Loss` code (0 for a stage reached) | the writer, from the funnel rows it flushes, at the flush hour | Event time (within the 5 s flush) |
+| 14 | `FUNNEL_EVENTS` | dim = `Stage` code, key = `Loss` code (0 for a stage reached) | the writer, from the funnel rows it flushes, at the flush hour. Crawl keys only: a start-time refetch of an incomplete import writes no funnel row (B-refetch-funnel) | Event time (within the 5 s flush) |
 | 15 | `REMOVED` | dim = content type, or 255 `UNCLASSIFIED`; key 0 | the store's `torrents_removed` trigger, for a searchable torrent deleted by any path | Event time (the delete) |
 
 **`insights_state`** (one row each): `compacted_before_day`,
@@ -488,6 +488,15 @@ code has one, and a code with none is never compacted):
 (the first hour metric 14 counts; buckets before it are unknown, never 0; 0 on a store created with V11)
 and `imported` (searchable imports: seeded at the V11 upgrade, raised by
 each searchable range, lowered by the trigger).
+
+**Refetches stay out of the funnel** (B-refetch-funnel). At each start the
+pipeline queues up to 50,000 incomplete imports (`FILES_PARTIAL`) to fetch
+their file lists. They aren't crawl discoveries, so neither the cohort
+funnel (`cohort_hour`) nor `FUNNEL_EVENTS` nor the `STORED` rollup counts
+their peer found, fetched, stored or lost; the record is still completed.
+They show in the gate's counters (mostly `already_stored`, and any other
+exclusion a fetch can meet; never `origin="network"`) and in the fetch
+pool's own counters (`fetch_*`, which count every fetch).
 
 **Removals** are lifecycle events (§10.9.3): a searchable torrent deleted
 (a filter relabel, `delete_torrents`, retention) is counted in
@@ -561,7 +570,10 @@ per-type list while hidden (totals count it, as on the overview).
 `400` with `field: "panel"`. The rows are the panel endpoint's own JSON
 (the same builder and cache entry). RFC 4180, `\r\n`, a header of field
 names: `period` (`current`, or `previous` with `compare=1` where the panel
-has one), then the fields sorted, nested objects as `parent.child`, and
+has one), then the fields sorted (but `annotations`: `at`, `kind`, `text`,
+then the `import.*` fields, so readers of the pre-IMP-5 columns by position
+keep working; B-refetch-funnel), any field beyond a panel's own after them,
+nested objects as `parent.child`, and
 each time (`at`, `cohort`, `since`) followed by an ISO-8601 `…_utc`. A
 panel's header is the same whether or not it has rows. Numbers raw (ratios
 0–1, times in Unix seconds), **null empty, never 0**; text through
@@ -607,6 +619,7 @@ What the digest prints, from the overview and nothing else (no sums, rates,
 |---|---|---|---|
 | Searchable torrents | `kpi.searchable`, Δ `kpi.searchable_delta` | `formatCount`, `formatDelta` | `—` |
 | New searchable | `kpi.new_searchable`, Δ `kpi.new_searchable_delta` | `formatCount`, `formatDelta` | (never null) |
+| + N imported | `kpi.new_searchable_imported` | `formatCount`, as "+ N imported" on a line under New searchable, never added into it or its Δ (B-refetch-funnel) | 0: the line is left out |
 | Yield | `kpi.yield`, Δ `kpi.yield_delta` | `formatPercent` f = 1, `formatDelta` percent | `— (No completed cohorts yet)` |
 | Time to searchable | `kpi.time_to_searchable_p50_s` and `_p95_s`, Δs `…_delta_s` | `≈` + `formatSpan`, `formatDelta` in `formatSpan`'s unit | `— (No completed cohorts yet)` |
 | Health | `kpi.health.{state, reason}` | text | no reason: the state alone |
@@ -748,11 +761,11 @@ The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes w
 
 | Series | Type | Meaning |
 | --- | --- | --- |
-| `metadata_new_verified_total{origin}` | counter | New rows the writer committed (`Inserted::New`), once per key. `origin` is `network` today; `import` and `recovery` are reserved and not rendered until they're counted. **Imports never reach it:** `lodestar import` writes through `Store::commit_import_batch` in its own process with the server stopped, not through the writer, and a network fetch of a stored import counts as `already_stored` (IMP-5). An import's own counts (new, merged, filtered) are its job's, shown on the `import_finished` annotation. |
+| `metadata_new_verified_total{origin}` | counter | New rows the writer committed (`Inserted::New`), once per key. `origin` is `network` (the crawl's, the gate's numerator) or `recovery`: a start-time refetch of an incomplete import that stored a new row because the imported row was deleted (a filter relabel or retention) while the fetch was in flight, which is rare and never the crawl's (B-refetch-funnel). `import` is reserved and not rendered until it's counted. **Imports never reach it:** `lodestar import` writes through `Store::commit_import_batch` in its own process with the server stopped, not through the writer, and a network fetch of a stored import counts as `already_stored` (IMP-5). An import's own counts (new, merged, filtered) are its job's, shown on the `import_finished` annotation. |
 | `searchable_new_total{origin}` | counter | Of those, records an index commit has reached (its watermark ≥ the row's id), once per key. A record can be counted one index commit late (see the decision). Stays 0 with search off. |
 | `metadata_excluded_total{reason}` | counter | Outcomes that never count towards the gate, by `reason`. Once per key: `already_stored` (fetched and verified, but the store had it: refetched imports, have-filter misses; once per key except for the stale-lease race the decision describes), `filtered` (a drop rule, or the floor's hash list in prepare), `quarantined`, `invalid_metainfo` (hashed to the key but not usable metainfo), `failed_verification` (metadata that didn't hash to the key as its last fetch failure before the pool gave it up: the pool's terminal `Loss::Invalid` caused by `FailureKind::HashMismatch`, see [the decision](decisions/2026-10-30-CR-gate-hash-mismatch.md). A protocol or handshake violation as that last failure is the same `invalid` loss but isn't counted here, and a key whose last failure was anything else is only in `fetch_lost_total` under that reason), `store_failed` (its transaction failed). Event counts, possibly several per key: `rediscovered` (each sighting of a stored torrent, not fetched) and `duplicate` (a result under a lease no longer current; the current holder's result is counted on its own). |
 | `fetch_failures_total{kind}` | counter | Failed fetch attempts by kind: `unreachable`, `timed_out`, `refused`, `encryption_failed`, `invalid` (a handshake or protocol violation), `oversize`, `hash_mismatch` (metadata that didn't hash to the key; split out of `invalid` on 2026-10-30, [decision](decisions/2026-10-30-CR-gate-hash-mismatch.md)). `/api/status` `fetch.failures` has the same keys |
-| `discovery_to_searchable_seconds` | histogram | Whole seconds from the key's first sighting in this run (the lease's discovery time; for a key restored from the fetch queue, this run's start) to the index commit that made it searchable. Buckets `le`: 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, `+Inf`. `_count` equals the `+Inf` bucket. |
+| `discovery_to_searchable_seconds` | histogram | Whole seconds from the key's first sighting in this run (the lease's discovery time; for a key restored from the fetch queue, this run's start) to the index commit that made it searchable. `origin="network"` records only. Buckets `le`: 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, `+Inf`. `_count` equals the `+Inf` bucket. |
 | `discovery_to_searchable_dropped_total` | counter | Latency measurements lost to a full bound: the writer's 4,096-entry hand-off or the 65,536-entry wait queue (oldest evicted). The record still counts in `searchable_new_total`, without a latency, once an index commit passes the highest id dropped. |
 
 Imports, recovery and every excluded reason are separate series, so a stricter filter moves `filtered` or `quarantined`, never the numerator. Rows a rule only hides, demotes or flags are stored and indexed, so they count (see the decision). Keys lost for other reasons (no peers, time-outs) are in `fetch_lost_total{reason}`. Like the other `/metrics` series, these are process-lifetime and carry no hash or endpoint labels.

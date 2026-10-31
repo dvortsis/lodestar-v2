@@ -1305,6 +1305,10 @@ mod tests {
         for id in 1..=3 {
             g.committed_new(Origin::Network, id, 100, 100);
         }
+        // Recovered refetches (B-refetch-funnel), not yet searchable.
+        for id in 10..15 {
+            g.committed_new(Origin::Recovery, id, 100, 100);
+        }
         g.searchable(2, 103);
         // Two more observations, so `_count` differs from the searchable
         // count and from every bucket below `+Inf`.
@@ -1321,6 +1325,8 @@ mod tests {
             "# TYPE lodestar_metadata_new_verified_total counter",
             "lodestar_metadata_new_verified_total{origin=\"network\"} 3",
             "lodestar_searchable_new_total{origin=\"network\"} 2",
+            "lodestar_metadata_new_verified_total{origin=\"recovery\"} 5",
+            "lodestar_searchable_new_total{origin=\"recovery\"} 0",
             "lodestar_metadata_excluded_total{reason=\"already_stored\"} 10",
             "lodestar_metadata_excluded_total{reason=\"rediscovered\"} 11",
             "lodestar_metadata_excluded_total{reason=\"filtered\"} 12",
