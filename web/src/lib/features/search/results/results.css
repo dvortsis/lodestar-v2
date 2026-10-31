@@ -10,6 +10,8 @@
 .search-grid {
 	@apply grid gap-6;
 	position: relative;
+	/* One shrinkable track: a wide table scrolls inside itself (table mode) instead of widening it. */
+	grid-template-columns: minmax(0, 1fr);
 	@variant x-large {
 		grid-template-columns: var(--rail-width) minmax(var(--results-min-width), 1fr);
 	}
@@ -119,4 +121,16 @@
 	margin: 0;
 	color: var(--color-muted-text);
 	font-size: var(--text-small);
+}
+/* The list row's select checkbox sits before the row (select mode). */
+.rp-cell:has(> .rp-pick) {
+	display: flex;
+	align-items: center;
+}
+.rp-cell > .rp-pick {
+	flex: none;
+	margin-inline-start: calc(var(--spacing) * 3);
+}
+.rp-cell > .rr-row {
+	flex: 1 1 0;
 }

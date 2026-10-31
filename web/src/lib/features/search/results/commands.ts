@@ -7,7 +7,7 @@ import { SEARCH_SCOPE } from '../query/commands';
 
 export function registerResultsCommands(
 	keys: typeof Keys,
-	move: { next: () => void; previous: () => void }
+	move: { next: () => void; previous: () => void; select: () => void }
 ): () => void {
 	const offs = [
 		keys.register({
@@ -23,6 +23,14 @@ export function registerResultsCommands(
 			section: () => m.search_page_title(),
 			scope: SEARCH_SCOPE,
 			run: move.previous
+		}),
+		// `x` selects the active row (S-search-5; the default key is `results.select`).
+		keys.register({
+			id: 'results.select',
+			title: () => m.search_bulk_mode(),
+			section: () => m.search_page_title(),
+			scope: SEARCH_SCOPE,
+			run: move.select
 		})
 	];
 	return () => offs.forEach((off) => off());

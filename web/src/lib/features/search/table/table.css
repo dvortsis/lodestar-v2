@@ -1,0 +1,158 @@
+/* Table mode and its column chooser (ResultsTable.svelte). A plain sheet imported by the table
+   chunk, never on the bare first load; token variables only. */
+@reference "../../../../app.css";
+
+.rt {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+}
+.rt-bar {
+	display: flex;
+	justify-content: flex-end;
+}
+/* The table scrolls here, both ways: at narrow widths the page itself never scrolls sideways. */
+/* Positioned, so absolutely placed descendants (visually hidden text) are clipped here too. */
+.rt-scroll {
+	position: relative;
+	max-height: calc(100dvh - var(--query-bar-height) * 4);
+	min-height: calc(var(--row-height-comfortable) * 6);
+	overflow: auto;
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-box);
+}
+.rt-table {
+	width: 100%;
+	min-width: max-content;
+	border-collapse: separate;
+	border-spacing: 0;
+	font-size: var(--text-body);
+	line-height: var(--text-body--line-height);
+}
+.rt-table th,
+.rt-table td {
+	box-sizing: border-box;
+	padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+	text-align: start;
+	white-space: nowrap;
+	border-block-end: 1px solid var(--color-base-300);
+	font-variant-numeric: tabular-nums;
+}
+/* §10.4: table mode is single-line rows at the compact height, whatever the density. */
+.rt-table td,
+.rt-table tbody th {
+	height: var(--row-height-compact);
+	padding-block: var(--spacing);
+}
+.rt-table thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--color-base-100);
+	color: var(--color-muted-text);
+	font-size: var(--text-small);
+	font-weight: var(--font-weight-semibold);
+}
+.rt-num {
+	text-align: end !important;
+}
+.rt-name {
+	max-width: calc(var(--spacing) * 96);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-weight: var(--font-weight-medium);
+}
+.rt-check {
+	width: calc(var(--spacing) * 10);
+	text-align: center !important;
+}
+.rt-sort {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--spacing);
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.rt-sort:focus-visible,
+.rt-table tbody tr:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: calc(var(--focus-ring-offset) * -1);
+}
+.rt-table tbody tr {
+	cursor: pointer;
+}
+.rt-table tbody tr:hover,
+.rt-table tbody tr.rt-selected {
+	background: var(--color-base-200);
+}
+.rt-sentinel {
+	height: 1px;
+}
+.rt-chooser {
+	align-self: flex-end;
+	padding: calc(var(--spacing) * 3);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+}
+.rt-chooser ul {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.rt-chooser li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: calc(var(--spacing) * 4);
+}
+.rt-move {
+	display: flex;
+	gap: var(--spacing);
+}
+.rt-reset {
+	margin-top: calc(var(--spacing) * 2);
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--color-primary);
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+/* The bulk bar (BulkBar.svelte): sticky under the list. */
+.bb {
+	position: sticky;
+	bottom: calc(var(--spacing) * 2);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+	padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+}
+.bb-count {
+	margin: 0;
+	margin-inline-end: auto;
+	font-variant-numeric: tabular-nums;
+}
+.bb-hint {
+	margin: 0;
+	color: var(--color-muted-text);
+	font-size: var(--text-small);
+}
+.rp-pick {
+	display: flex;
+	align-items: center;
+	padding-inline-start: calc(var(--spacing) * 3);
+}

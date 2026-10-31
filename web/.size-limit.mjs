@@ -283,7 +283,16 @@ const RESULTS = [
 		(manifest[k].css ?? []).some((c) => /\/row\.[^/]*\.css$/.test(c))
 	)
 ];
-const resultsOnDemand = [/features\/detail\//, /^chunk:magnet$/, /^chunk:Menu$/];
+// Table mode, its column chooser and the bulk bar load on demand (S-search-5): their own entries.
+const tableOnDemand = [/search\/table\/(ResultsTable|ColumnChooser)\.svelte$/];
+const bulkOnDemand = [/search\/bulk\/(BulkBar|RowPick)\.svelte$/, /search\/bulk\/ops\.ts$/];
+const resultsOnDemand = [
+	/features\/detail\//,
+	/^chunk:magnet$/,
+	/^chunk:Menu$/,
+	...tableOnDemand,
+	...bulkOnDemand
+];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
 // link it loads only with the first interaction, so the panel really does fetch what they share.
@@ -320,6 +329,44 @@ const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/];
 const toolbarLazy = [
 	...new Set(
 		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))
+	)
+];
+
+// Table mode (S-search-5): the table with its row and header code; the column chooser loads on its
+// first open. The bulk bar loads with the first selected row. Both beyond the results panel.
+const tableLazy = [
+	...new Set(
+		ownChunk(
+			'src/lib/features/search/table/ResultsTable.svelte',
+			[/search\/table\/ColumnChooser\.svelte$/],
+			false,
+			[...engagedSearch, ...resultsLazy]
+		)
+	)
+];
+const chooserLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/table/ColumnChooser.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy,
+			...tableLazy
+		])
+	)
+];
+const pickLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/bulk/RowPick.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
+];
+const bulkLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/bulk/BulkBar.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
 	)
 ];
 
@@ -419,6 +466,10 @@ export default [
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
+	entry('Search table mode (on demand)', tableLazy, '99 KB'),
+	entry('Search column chooser (on demand)', chooserLazy, '99 KB'),
+	entry('Search bulk bar (on demand)', bulkLazy, '99 KB'),
+	entry('Search row checkboxes (on demand)', pickLazy, '99 KB'),
 	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),
