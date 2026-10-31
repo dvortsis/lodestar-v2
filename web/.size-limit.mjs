@@ -283,11 +283,16 @@ const RESULTS = [
 		(manifest[k].css ?? []).some((c) => /\/row\.[^/]*\.css$/.test(c))
 	)
 ];
+// Table mode, its column chooser and the bulk bar load on demand (S-search-5): their own entries.
+const tableOnDemand = [/search\/table\/(ResultsTable|ColumnChooser)\.svelte$/];
+const bulkOnDemand = [/search\/bulk\/(BulkBar|RowPick)\.svelte$/, /search\/bulk\/ops\.ts$/];
 const resultsOnDemand = [
 	/features\/detail\//,
 	/features\/search\/(live|cards)\//,
 	/^chunk:magnet$/,
-	/^chunk:Menu$/
+	/^chunk:Menu$/,
+	...tableOnDemand,
+	...bulkOnDemand
 ];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
@@ -325,6 +330,44 @@ const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/];
 const toolbarLazy = [
 	...new Set(
 		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))
+	)
+];
+
+// Table mode (S-search-5): the table with its row and header code; the column chooser loads on its
+// first open. The bulk bar loads with the first selected row. Both beyond the results panel.
+const tableLazy = [
+	...new Set(
+		ownChunk(
+			'src/lib/features/search/table/ResultsTable.svelte',
+			[/search\/table\/ColumnChooser\.svelte$/],
+			false,
+			[...engagedSearch, ...resultsLazy]
+		)
+	)
+];
+const chooserLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/table/ColumnChooser.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy,
+			...tableLazy
+		])
+	)
+];
+const pickLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/bulk/RowPick.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
+];
+const bulkLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/bulk/BulkBar.svelte', [/^chunk:magnet$/], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
 	)
 ];
 
@@ -465,14 +508,22 @@ export default [
 	// Beyond Live's mount set (runner, 2026-10-24: 41.5 KB, under the 45 KB per-view cap). VirtualList
 	// and its virtualiser are 12 KB of it, the panel 5.2 KB, the row 3.9 KB, the row actions 1.9 KB;
 	// the rest is what the shell's Chrome would bring too (the key registry, the event client).
-	entry('Search results (lazy)', resultsLazy, '41.5 KB'),
+	// runner, 2026-10-31, S-search-5: +1.5 KB for the view switch, selection store, `x` key and announce;
+	// still under the 45 KB per-view cap (§10.1).
+	entry('Search results (lazy)', resultsLazy, '43.2 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
-	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
-	entry('Search live banner (lazy)', liveLazy, '1.45 KB'),
-	entry('Search cards (lazy)', cardsLazy, '6.1 KB'),
+	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
+	// still under the 45 KB per-view cap (§10.1).
+	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
+	entry('Search live banner (lazy)', liveLazy, '1.52 KB'),
+	entry('Search cards (lazy)', cardsLazy, '6.16 KB'),
+	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
+	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
+	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
+	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
 	entry('Natural phrasing (on demand)', naturalLazy, '1.64 KB'),
 	entry('Builder (on demand)', builderLazy, '5.69 KB'),

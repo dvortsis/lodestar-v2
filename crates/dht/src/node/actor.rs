@@ -1441,11 +1441,13 @@ impl Actor {
         // CR-1a-S: a streaming request's peers go out as they arrive,
         // checked against the endpoint policy above.
         if !streamed.is_empty()
-            && let Some(Reply::Stream(stream)) = owner
-                .and_then(|o| self.peer_requests.get_mut(&o))
-                .and_then(|r| r.reply.as_mut())
+            && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
+            && let Some(Reply::Stream(stream)) = r.reply.as_mut()
         {
             stream.offer(&streamed, &self.stats);
+            if stream.first_sent() {
+                first_batch(&self.stats, r.started);
+            }
         }
         self.drive_lookup(sockets, lid);
     }
@@ -2159,6 +2161,9 @@ impl Actor {
         for r in self.peer_requests.values_mut() {
             if let Some(Reply::Stream(stream)) = &mut r.reply {
                 stream.flush(&self.stats);
+                if stream.first_sent() {
+                    first_batch(&self.stats, r.started);
+                }
             }
         }
         while !self.paused && self.active_get_peers < MAX_GET_PEERS {
@@ -2346,6 +2351,15 @@ impl Actor {
         }
         self.save()
     }
+}
+
+/// CR-1a-S: a session's first batch went out, `started` after its request began.
+fn first_batch(stats: &Stats, started: Instant) {
+    let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    stats
+        .peer_stream_first_batch_millis
+        .fetch_add(ms, Ordering::Relaxed);
+    Stats::inc(&stats.peer_stream_first_batches);
 }
 
 /// A harvest source as a label.

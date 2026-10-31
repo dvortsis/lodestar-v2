@@ -129,6 +129,10 @@ async fn early_batch_arrives_while_the_lookup_still_owns_its_slot() {
     drained(&a);
     let snap = a.stats.snapshot();
     assert_eq!((snap.peer_stream_batches, snap.lookups_completed), (2, 1));
+    assert_eq!(
+        snap.peer_stream_first_batches, 1,
+        "the first batch counts once"
+    );
     assert_eq!(terminals(&a, LookupEnd::Complete), 1);
 }
 

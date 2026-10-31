@@ -20,10 +20,11 @@ export function sortValue(sort: string): string {
 	return SORTS.some((s) => s.value === v) ? v : DEFAULT_SORT;
 }
 
-/** This page with `density` set; Comfortable is the default, so it drops the parameter. */
-export function densityHref(url: URL, density: string): string {
+/** This page with the view parameter `key` set to `value`; the default drops the parameter. */
+export function viewParamHref(url: URL, key: 'density' | 'view', value: string): string {
 	const u = new URL(url);
-	if (density === 'compact' || density === 'cards') u.searchParams.set('density', density);
-	else u.searchParams.delete('density');
+	if (value === 'compact' || value === 'table' || value === 'cards') u.searchParams.set(key, value);
+	else u.searchParams.delete(key);
 	return u.pathname + u.search + u.hash;
 }
+export const densityHref = (url: URL, density: string) => viewParamHref(url, 'density', density);

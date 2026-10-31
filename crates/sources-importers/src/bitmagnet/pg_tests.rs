@@ -951,3 +951,83 @@ fn commit(store: &mut Store, job: i64, seq: u64, b: &Batch) -> &'static str {
         BatchCommitted::Replayed { .. } => "replayed",
     }
 }
+
+/// IMP-4's driver end to end over Bitmagnet: the filter, privacy and the
+/// three states, then a replay that adds nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_driver_imports_through_the_filter() {
+    use crate::driver::{self, Adapter, Ended};
+    use lodestar_filter::{Core, CsList, Engine, Lists, Origin, Switches};
+    let Some((base, _serial)) = base().await else {
+        return;
+    };
+    let fx = Fixture::new(&base, "driver", Some(Layout::V0_10)).await;
+    let mut private = row(3, "over_threshold", &[]);
+    private.private = true;
+    insert(
+        &fx.db,
+        Layout::V0_10,
+        &[
+            row(1, "single", &[]),
+            row(2, "multi", &[("a", 1000), ("b/c", 2000)]),
+            private,
+            row(4, "multi", &[("x", 5)]),
+        ],
+    )
+    .await;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let source = store.register_source(PLUGIN_ID, "1", NOW).unwrap();
+    let mut engine = Engine::new(Core::new(
+        Lists::shipped().unwrap(),
+        CsList::default(),
+        Switches::default(),
+    ));
+    engine.core.cs.add_hash([4; 20], Origin::Confirmed);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let opts = driver::Options {
+        source,
+        filter: driver::Filter {
+            engine: &engine,
+            sealer: None,
+            quarantine_secs: 3_600,
+            class_gen: store.class_gen().unwrap(),
+        },
+        stop: &stop,
+        limit: None,
+        now: || NOW,
+    };
+    let mut a = Adapter::Bitmagnet(fx.open().await);
+    let id = reading_job(
+        &mut store,
+        &match &a {
+            Adapter::Bitmagnet(s) => s.identity(),
+            Adapter::Magnetico(_) => unreachable!(),
+        },
+    )
+    .id;
+    let r = driver::run(&mut store, id, &mut a, &opts).await.unwrap();
+    assert_eq!(r.ended, Ended::Exhausted);
+    let c = r.counters;
+    assert_eq!((c.read, c.new, c.filtered), (4, 3, 1));
+    assert!(c.conserved());
+    assert!(store.find(&InfoHash([4; 20])).unwrap().is_none());
+    let tid = store.find(&InfoHash([3; 20])).unwrap().unwrap();
+    let q = store.import_quality(tid).unwrap().unwrap();
+    assert_eq!(
+        (q.completeness, q.verification, q.privacy),
+        (
+            Completeness::Partial,
+            Verification::Unverified,
+            Privacy::Private
+        )
+    );
+    assert_ne!(
+        store.torrent(tid).unwrap().unwrap().flags & flags::PRIVATE,
+        0
+    );
+    assert_eq!(
+        store.import_job(id).unwrap().unwrap().phase,
+        Phase::Indexing
+    );
+    fx.drop_db().await;
+}

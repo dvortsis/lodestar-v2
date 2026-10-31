@@ -1469,3 +1469,243 @@ proptest! {
         prop_assert_eq!(job(&store, j.id).seq, seq);
     }
 }
+
+/// IMP-4: removing a job's records deletes what only it inserted, keeps
+/// what another job or a network fetch vouches for, and takes back its
+/// provenance and candidates, in bounded steps.
+#[test]
+fn removing_a_job_takes_back_only_what_it_alone_added() {
+    let mut store = mem();
+    let src = source(&mut store);
+    // Stored before the import: the job only merges into it.
+    let crawled = prepared(&store, "Crawled");
+    store
+        .write(&WriteBatch {
+            prepared: &[PreparedTorrent {
+                torrent: &crawled,
+                discovered_at: T,
+                metadata_at: T,
+                extra_flags: 0,
+                source: DHT,
+                verified: true,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    let names = ["Crawled", "Alone", "Shared", "Fetched", "Other"];
+    let p: Vec<Prepared> = names.iter().map(|n| prepared(&store, n)).collect();
+    let a = reading(&mut store, b"ds-a");
+    let records = [
+        torrent(&p[0], Privacy::Private),
+        torrent(&p[1], Privacy::Unknown),
+        torrent(&p[2], Privacy::Unknown),
+        // Partial, so a verified fetch upgrades it.
+        ImportRecord::Torrent(ImportTorrent {
+            completeness: Completeness::Partial,
+            repair: repair::MISSING_FILES,
+            ..match torrent(&p[3], Privacy::Unknown) {
+                ImportRecord::Torrent(t) => t,
+                _ => unreachable!(),
+            }
+        }),
+        candidate([7; 20], Some(b"Waiting"), None),
+    ];
+    let out = outcomes(
+        store
+            .commit_import_batch(&batch(a.id, 1, src, &records))
+            .unwrap(),
+    );
+    let ids: Vec<i64> = out
+        .iter()
+        .filter_map(|o| match o {
+            RecordOutcome::New(id) | RecordOutcome::Merged(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    // Another job sees "Shared" and inserts "Other".
+    let b = reading(&mut store, b"ds-b");
+    outcomes(
+        store
+            .commit_import_batch(&batch(
+                b.id,
+                1,
+                src,
+                &[
+                    torrent(&p[2], Privacy::Unknown),
+                    torrent(&p[4], Privacy::Unknown),
+                ],
+            ))
+            .unwrap(),
+    );
+    // The crawler fetches "Fetched" and verifies it.
+    store
+        .write(&WriteBatch {
+            prepared: &[PreparedTorrent {
+                torrent: &prepared(&store, "Fetched"),
+                discovered_at: T,
+                metadata_at: T,
+                extra_flags: 0,
+                source: DHT,
+                verified: true,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(store.import_job_members(a.id, 0, 10).unwrap().len(), 4);
+
+    let err = store.remove_import_job_records(a.id, 2).unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    let a = store
+        .cancel_import_job(a.id, job(&store, a.id).revision, T)
+        .unwrap();
+    let reindexed = count(&store, "SELECT count(*) FROM reindex_log");
+    let mut total = lodestar_store::import::Removed::default();
+    let mut calls = 0;
+    while !total.done {
+        total.add(store.remove_import_job_records(a.id, 2).unwrap());
+        calls += 1;
+        assert!(calls < 10, "removal must finish");
+    }
+    assert!(calls >= 3, "bounded steps: {calls}");
+    assert_eq!(
+        (
+            total.torrents,
+            total.kept_shared,
+            total.kept_verified,
+            total.provenance,
+            total.candidates
+        ),
+        (1, 1, 1, 1, 1)
+    );
+    assert!(store.torrent(ids[1]).unwrap().is_none(), "Alone is gone");
+    for kept in [ids[0], ids[2], ids[3]] {
+        assert!(store.torrent(kept).unwrap().is_some());
+    }
+    assert_eq!(
+        count(&store, "SELECT count(*) FROM reindex_log") - reindexed,
+        1,
+        "the indexer drops the deleted row"
+    );
+    assert!(store.import_job_members(a.id, 0, 10).unwrap().is_empty());
+    assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 0);
+    assert_eq!(store.import_job_members(b.id, 0, 10).unwrap().len(), 2);
+    // A verified row's privacy never took the import's.
+    assert_eq!(quality(&store, ids[0]).map(|q| q.2), Some(Privacy::Public));
+    assert_eq!(job(&store, a.id).counters, a.counters, "history stays");
+    // Removing again finds nothing.
+    let again = store.remove_import_job_records(a.id, 2).unwrap();
+    assert_eq!(
+        again,
+        lodestar_store::import::Removed {
+            done: true,
+            ..Default::default()
+        }
+    );
+}
+
+/// IMP-4 review: overlapping pilots remove cleanly in either order, a
+/// paused job is refused (resuming it would skip what was removed), and a
+/// row the crawler or you have touched since stays.
+#[test]
+fn overlapping_pilots_remove_in_any_order_and_touched_rows_stay() {
+    for a_first in [true, false] {
+        let mut store = mem();
+        // The crawler's source first, so the adapter's bit is another.
+        assert_eq!(store.register_source("dht", "1", T).unwrap(), DHT);
+        let src = source(&mut store);
+        let p: Vec<Prepared> = ["Both", "Seen", "Yours", "Private"]
+            .iter()
+            .map(|n| prepared(&store, n))
+            .collect();
+        let a = reading(&mut store, b"ds-a");
+        let out = outcomes(
+            store
+                .commit_import_batch(&batch(
+                    a.id,
+                    1,
+                    src,
+                    &[
+                        torrent(&p[0], Privacy::Unknown),
+                        torrent(&p[1], Privacy::Unknown),
+                        torrent(&p[2], Privacy::Unknown),
+                        ImportRecord::Candidate(ImportCandidate {
+                            privacy: Privacy::Private,
+                            ..match candidate([7; 20], None, Some(5)) {
+                                ImportRecord::Candidate(c) => c,
+                                _ => unreachable!(),
+                            }
+                        }),
+                    ],
+                ))
+                .unwrap(),
+        );
+        let RecordOutcome::New(both) = out[0] else {
+            panic!("{out:?}")
+        };
+        let (seen, yours) = match (out[1], out[2]) {
+            (RecordOutcome::New(s), RecordOutcome::New(y)) => (s, y),
+            o => panic!("{o:?}"),
+        };
+        // The 100k pilot over the same source merges what the 10k one
+        // inserted.
+        let b = reading(&mut store, b"ds-b");
+        store
+            .commit_import_batch(&batch(b.id, 1, src, &[torrent(&p[0], Privacy::Unknown)]))
+            .unwrap();
+        // The crawler reports one; you label another.
+        store
+            .write(&WriteBatch {
+                touches: &[lodestar_store::Touch {
+                    hash: p[1].info_hash,
+                    sources: 1 << DHT.get(),
+                    at: T,
+                    public: true,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        store
+            .set_user_item(
+                yours,
+                &lodestar_store::UserItemUpdate {
+                    favourite: Some(true),
+                    hidden: None,
+                    labels: None,
+                    note: None,
+                },
+                T,
+            )
+            .unwrap();
+
+        let paused = store
+            .pause_import_job(a.id, job(&store, a.id).revision, T)
+            .unwrap();
+        assert!(matches!(
+            store.remove_import_job_records(paused.id, 10),
+            Err(Error::Invalid(_))
+        ));
+        for j in [a.id, b.id] {
+            store
+                .cancel_import_job(j, job(&store, j).revision, T)
+                .unwrap();
+        }
+        let order = if a_first { [a.id, b.id] } else { [b.id, a.id] };
+        let mut first = store.remove_import_job_records(order[0], 0).unwrap();
+        while !first.done {
+            first.add(store.remove_import_job_records(order[0], 0).unwrap());
+        }
+        let second = store.remove_import_job_records(order[1], 10).unwrap();
+        assert!(second.done);
+        assert!(
+            store.torrent(both).unwrap().is_none(),
+            "a_first={a_first}: the shared row goes with its last job"
+        );
+        assert!(store.torrent(seen).unwrap().is_some(), "the crawler saw it");
+        assert!(store.torrent(yours).unwrap().is_some(), "it's yours");
+        let removed_a = if a_first { first } else { second };
+        assert_eq!((removed_a.kept_seen, removed_a.kept_yours), (1, 1));
+        assert_eq!(removed_a.kept_private_candidates, 1);
+        assert_eq!(count(&store, "SELECT count(*) FROM import_candidates"), 1);
+        assert_eq!(count(&store, "SELECT count(*) FROM import_membership"), 0);
+    }
+}

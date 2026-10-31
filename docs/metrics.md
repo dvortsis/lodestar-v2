@@ -717,6 +717,26 @@ These series count only with `dht.responder_hints` on ([the decision](decisions/
 
 `dht_hint_queries_total` + the sum of `dht_hint_fallbacks_total` = hints found at a leg's start. `dht_hint_useful_total` ≤ `dht_hint_queries_total`.
 
+## Streaming peers (CR-1a-S, 2026-10-31)
+
+These series count only with `dht.streaming_peers` on ([the decision](decisions/2026-10-31-CR-1a-S.md)); with it off they're exported and stay 0. A streaming lookup hands the pool its peers in batches of at most 8 as they arrive, with at most 2 queued and 1 held back per lookup, instead of one list at the end. No series has an infohash or endpoint label. Counts are per logical lookup (one session covers both address families), not unique hashes.
+
+| Series | Meaning |
+|---|---|
+| `dht_peer_stream_batches_total` | Batches the DHT sent to streaming lookups. |
+| `dht_peer_stream_backpressure_total` | Peers dropped because the caller's batches were full: past the held-back batch, and any held back when the lookup ended. This is a measured loss, not an error. |
+| `dht_peer_stream_seen_full_total` | Peers ignored because the lookup had already seen 32 distinct ones. |
+| `dht_peer_stream_terminals_total{kind}` | Streaming lookups the DHT ended: `complete`, `deadline` (the 25 s request deadline) or `cancelled` (the pool had let go). |
+| `dht_peer_stream_first_batch_seconds_total` | Time from a streaming request's start to its first batch. |
+| `dht_peer_stream_first_batches_total` | Streaming requests that sent a batch. The ratio of the two rates is the mean time to the first batch. |
+| `fetch_stream_batches_total` | Batches the pool read. |
+| `fetch_stream_peers_capped_total` | Streamed peers a key turned away because it already held its 32 peers. Apart from `dht_peer_stream_backpressure_total`. |
+| `fetch_stream_terminals_total{kind}` | Lookup ends the pool saw: `complete`, `deadline`, `cancelled`, or `source_failed` (the finder went without an end, never counted as success). |
+| `fetch_stream_first_fetch_seconds_total` | Time from a key's first kept batch to its first fetch start. |
+| `fetch_stream_first_fetches_total` | Keys whose first fetch followed a streamed batch. The ratio of the two rates is the mean wait. |
+
+`fetch_stream_batches_total` ≤ `dht_peer_stream_batches_total`: the pool doesn't read a batch queued for a lookup it has already let go of.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

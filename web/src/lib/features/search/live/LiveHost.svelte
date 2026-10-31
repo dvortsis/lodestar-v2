@@ -7,6 +7,7 @@
 	import { search } from '$lib/state/search.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import { selection } from '../bulk/selection.svelte';
 	import { results, type ResultsQuery } from '../results/results.svelte';
 	import { createLive } from './live.svelte';
 
@@ -32,10 +33,10 @@
 				? { query: q, total: results.total, approx: results.totalApprox }
 				: null;
 		},
-		// Scrolled deep: nothing should change under the user. S-search-5's selection joins here.
+		// Scrolled deep, or a selection held (S-search-5): nothing should change under the user.
 		paused: () => {
 			const g = grid();
-			return !!g && g.scrollTop > g.clientHeight * 2;
+			return selection.mode || selection.count > 0 || (!!g && g.scrollTop > g.clientHeight * 2);
 		},
 		announce: (n) =>
 			announce(
