@@ -1544,7 +1544,7 @@
   },
   "IMP-5": {
    "status": "review",
-   "notes": "2026-10-31T04:16Z brief briefs/IMP-5.md; Opus session_01MMjhnC7NGYBuokKAXrGFGL | 05:45Z PR #262 head 6cbaa657; p95 +3.0%; fresh Opus reviewer session_01MMjhnAhvqsh9pRSPLHzeUS",
+   "notes": "2026-10-31T04:16Z brief briefs/IMP-5.md; Opus session_01MMjhnC7NGYBuokKAXrGFGL | 05:45Z PR #262 head 6cbaa657; p95 +3.0%; fresh Opus reviewer session_01MMjhnAhvqsh9pRSPLHzeUS | 06:05Z reviewer MERGE at 6cbaa657 (5 optional: removal-annotation window, CSV column order, digest +N imported, interrupted-job note, time bases); 1-4 folded into B-refetch-funnel",
    "pr": 262
   },
   "B-settings-sections": {
@@ -1568,6 +1568,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "2026-10-31T05:40Z brief briefs/B-search-recovery.md (S-search-6 deferrals); security-review | 05:40Z launched Opus session_01MMjhnBAr5sYz7fjwdtTNVb"
+  },
+  "B-refetch-funnel": {
+   "status": "queued",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "06:06Z brief briefs/B-refetch-funnel.md; launch after #262 merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
