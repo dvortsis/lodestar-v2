@@ -12,7 +12,7 @@
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import type { SettingsForm } from '../form';
 	import type { LoggingCatalog } from './catalog.svelte';
-	import { eventLabel } from './event-labels';
+	import { eventLabel, loadEventNames } from './event-labels.svelte';
 	import { kindLabel, timeLeft } from './labels';
 	import { ahead, carriers, type LogKind, type OptIn } from './rules';
 
@@ -61,6 +61,7 @@
 	const ctx = () => ({ catalog, form, signal: leaving.signal });
 
 	// What follows on the screen (the outputs, the log files) loads on its own, after this.
+	void loadEventNames();
 	let Tail = $state.raw<typeof import('./Tail.svelte').default>();
 	import('./Tail.svelte').then(
 		(mod) => (Tail = mod.default),

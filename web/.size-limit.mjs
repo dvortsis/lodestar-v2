@@ -284,7 +284,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
 	/features\/settings\/security\/icon\.ts$/
 ];
-const securityLoader = [/features\/settings\/(security|logging|about)\/body\.ts$/];
+const securityLoader = [/features\/(?:settings\/(?:security|logging|about)|filters)\/body\.ts$/];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
 const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
@@ -310,6 +310,8 @@ const settingsLoggingFiles = [
 	/features\/settings\/logging\/(LogFiles|Preview|Outputs|Tail)\.svelte$/,
 	/features\/settings\/logging\/outputs\.ts$/
 ];
+// The events' plain names and help (S-logs-3): their own chunk, loaded after the event list shows.
+const settingsLoggingNames = [/features\/settings\/logging\/event-names\.ts$/];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
 // The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
 // module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
@@ -332,6 +334,7 @@ const settingsFirstView = [
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
+	...settingsLoggingNames,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
@@ -361,8 +364,13 @@ const settingsLoggingLazy = requireMeasuredJs(
 	onDemandOf('/settings/[section]', settingsLogging).filter(
 		(f) =>
 			!onDemandOf('/settings/[section]', settingsOnDemand).includes(f) &&
-			!onDemandOf('/settings/[section]', settingsLoggingFiles).includes(f)
+			!onDemandOf('/settings/[section]', settingsLoggingFiles).includes(f) &&
+			!onDemandOf('/settings/[section]', settingsLoggingNames).includes(f)
 	)
+);
+const settingsLoggingNamesLazy = requireMeasuredJs(
+	'Settings logging event names (on demand)',
+	onDemandOf('/settings/[section]', settingsLoggingNames)
 );
 const settingsLoggingFilesLazy = requireMeasuredJs(
 	'Settings logging files and preview (on demand)',
@@ -389,6 +397,10 @@ const registryLazyKeys = Object.keys(manifest).filter((key) =>
 );
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
 const aboutBody = /features\/settings\/about\/AboutScreen\.svelte$/;
+// Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
+// body is of code already loaded.
+const filtersLater = [/features\/filters\/screens\/Queue\.svelte$/];
+const filtersBody = /features\/filters\/screens\/FiltersScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
 		.filter(
@@ -399,6 +411,7 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
 		// The same for About's parts: they load from its body, whose chunk holds what they share.
 		.filter((key) => !(settingsAboutParts.some((re) => re.test(from)) && aboutBody.test(key)))
+		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
 if (staticHits.length)
@@ -425,6 +438,11 @@ const appearancePicker = [new RegExp(`${APPEARANCE}/ThemePicker\\.svelte$`)];
 const appearanceEditor = [new RegExp(`${APPEARANCE}/ThemeEditor\\.svelte$`)];
 // The 18+ dialog (Bits UI overlays) loads with the first turn-on of Show adult content.
 const appearanceAdult = [/features\/filters\/flows\/AdultConfirmDialog\.svelte$/];
+// Filters & Safety (S-filters): the change dialogs load on the first change, and the review queue
+// and the override editor on their own, so its first view stops at them (own entries below).
+const filtersDialogs = [
+	/features\/filters\/flows\/(?:ChangeDialog|OverrideDialog|RevealNameDialog)\.svelte$/
+];
 const appearanceLater = [...appearancePicker, ...appearanceEditor, ...appearanceAdult];
 const settingsHandBuilt = bodyKeys.map((key) => ({
 	name: key
@@ -445,10 +463,13 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsAboutParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
+					...settingsLoggingNames,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
-					...appearanceLater
+					...appearanceLater,
+					// Filters' own dialogs and queue stop only Filters' first view.
+					...(/FiltersScreen\.svelte$/.test(key) ? [...filtersDialogs, ...filtersLater] : [])
 				],
 				false,
 				settingsShellView
@@ -526,6 +547,30 @@ const settingsAdultLazy = requireMeasuredJs(
 	'Appearance 18+ dialog (on demand)',
 	adultKey ? ownChunk(adultKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
 );
+const filtersFirst = settingsHandBuilt.find(({ name }) => name === 'FiltersScreen')?.files ?? [];
+const filtersLazy = (res) =>
+	requireMeasuredJs(res.name, [
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => res.keys.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, res.stop ?? [], false, [
+						...settingsShellView,
+						...filtersFirst,
+						...appearanceFirst
+					])
+				)
+		)
+	]);
+const filtersDialogsLazy = filtersLazy({
+	name: 'Filters dialogs (on demand)',
+	keys: filtersDialogs
+});
+const filtersQueueLazy = filtersLazy({
+	name: 'Filters review queue (on demand)',
+	keys: filtersLater,
+	stop: filtersDialogs
+});
 const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
 	editorKey ? ownChunk(editorKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
@@ -818,11 +863,15 @@ export default [
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
-	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
+	// S-logs-3: 0.95 KB for the console format's two option labels (runner decision, §2.26; the
+	// brief allows up to 0.95 KB). Measured 0.89 KB.
+	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.95 KB'),
 	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
+	// S-logs-3: every event's plain name and help, en and zh. Measured 10.73 KB; limit = measured + 10%.
+	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '11.8 KB'),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
@@ -838,6 +887,9 @@ export default [
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
 	entry('Appearance 18+ dialog (on demand)', settingsAdultLazy, '20.6 KB'),
 	entry('Appearance theme editor (on demand)', settingsEditorLazy, '13 KB'),
+	// Filters & Safety: its change dialogs and its review queue, beyond the screen's first view.
+	entry('Filters dialogs (on demand)', filtersDialogsLazy, '34.4 KB'),
+	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),

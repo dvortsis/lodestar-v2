@@ -341,5 +341,7 @@
 	"settings_logoutput_file_total_mib_label": "Total size cap",
 	"settings_logoutput_event_log_errors_label": "Errors to the Windows Event Log",
 	"settings_logging_console_detail_option_private": "Private",
-	"settings_logging_console_detail_option_file": "Same as the file"
+	"settings_logging_console_detail_option_file": "Same as the file",
+	"settings_logging_console_format_option_text": "Plain text (text)",
+	"settings_logging_console_format_option_json": "JSON lines (json)"
 }

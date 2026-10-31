@@ -50,10 +50,16 @@ export type Outcome = { value: unknown } | { refused: Refusal };
 const UNMOUNT_MS = 400;
 
 const open = new Set<() => void>();
+/** Closed dialogs still waiting out `UNMOUNT_MS`: each unmounts now, or when its timer fires. */
+const closing = new Set<() => void>();
 
-/** Closes every open confirmation unanswered, its typed password with it (the screen unmounted). */
+/**
+ * Closes every open confirmation unanswered, its typed password with it (the screen unmounted),
+ * and removes the ones already closed but still waiting to unmount, so no timer outlives it.
+ */
 export function dismissPasswordDialogs(): void {
 	for (const close of [...open]) close();
+	for (const flush of [...closing]) flush();
 }
 
 export async function confirmWithPassword<T>(q: PasswordQuestion<T>): Promise<T | null> {
@@ -79,7 +85,13 @@ export async function confirmWithPassword<T>(q: PasswordQuestion<T>): Promise<T 
 				onclose: (result: { value: unknown } | null) => {
 					if (!open.delete(dismiss)) return;
 					resolve(result ? (result.value as T) : null);
-					setTimeout(() => void unmount(app), UNMOUNT_MS);
+					const flush = () => {
+						clearTimeout(timer);
+						closing.delete(flush);
+						void unmount(app);
+					};
+					const timer = setTimeout(flush, UNMOUNT_MS);
+					closing.add(flush);
 				}
 			}
 		});
