@@ -1680,13 +1680,13 @@
    "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p | 14:25Z MERGE at 48c0f1b6 (3 optional); waiting on test ubuntu/windows"
   },
   "B-import-refile": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnBWPb7p7uonDgG12h9",
-   "pr": null,
+   "pr": 280,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus"
+   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review"
   },
   "X-search-files-2": {
    "status": "running",
@@ -2487,7 +2487,9 @@
   "lib/ui Lazy.svelte: load-failure message lacks role=alert/status (#277 review)",
   "Settings engine: lift the reveal + hash-focus logic shared by SectionForm and screens2/GroupedForm into form/reveal.svelte.ts (#277 review)",
   "hints.rs compact_order: make the amortised bound unconditional (next_compact = max(ORDER_CAPACITY, 2*len)) or skip duplicate push_back (#279 review 1)",
-  "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)"
+  "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
+  "sources-importers: unify judge_candidate with the refile sweep; judge a hybrid's truncated v2 hash (#280)",
+  "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
