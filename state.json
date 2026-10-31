@@ -1760,7 +1760,7 @@
       "pr": 290,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "17:36Z brief briefs/X-requeue-2.md (#286 review opt 1-3; content safety); security review | 17:34Z launched Opus | 18:16Z PR #290 head 6496e7d1 (search.enabled restart-only; start hook is the hook; reuses api.internal_error). Reviewer w/ security-review; subscribed. | 18:23Z told: merges second (after #287) -> bring main with review fixes.",
+      "notes": "17:36Z brief briefs/X-requeue-2.md (#286 review opt 1-3; content safety); security review | 17:34Z launched Opus | 18:16Z PR #290 head 6496e7d1 (search.enabled restart-only; start hook is the hook; reuses api.internal_error). Reviewer w/ security-review; subscribed. | 18:23Z told: merges second (after #287) -> bring main with review fixes. | 18:32Z MERGE at 6496e7d1 (no loosening). Author merging main (#287 filters.rs) + O2 doc line; clean merge -> merge on green, else reviewer re-check.",
       "reviewer": "session_01MMjhnCzxKvgLJq1RkG55sJ"
     },
     "X-settings-registry-slim": {
@@ -2602,7 +2602,8 @@
     "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
-    "X-soak-docker-memrule: in collect.py Docker mode, apply the 1 GiB x5 guardrail to private_bytes (cgroup anon), keep working_set as a gauge; document why (Linux cgroup charges page cache). Small PR; Opus (soak evidence). Only for runs started after it merges."
+    "X-soak-docker-memrule: in collect.py Docker mode, apply the 1 GiB x5 guardrail to private_bytes (cgroup anon), keep working_set as a gauge; document why (Linux cgroup charges page cache). Small PR; Opus (soak evidence). Only for runs started after it merges.",
+    "X-requeue cap (optional O1, #290): classify.requeue_pending is bounded per distinct text, not overall, while search is off; admin add/remove of many queries grows it. Fix = cap that collapses to a full re-mark (mark all unenriched). Low; admin-only."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
