@@ -1823,13 +1823,13 @@
       "reviewer": "session_01MMjhn9dGmekFXHRR8v4YnR"
     },
     "X-build-stable-name": {
-      "status": "pr-review",
+      "status": "pr-fixing",
       "model": "sonnet",
       "session": "session_01MMjhnB5apyKG6jubZNaGRA",
       "pr": 296,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head. | 21:21Z head 70494f28 (toolbar 4.65 KB + security.test dismissAll teardown fix; flake not reproduced locally, CI is the test). Reviewer launched; subscribed."
+      "review_rounds": 1,
+      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head. | 21:21Z head 70494f28 (toolbar 4.65 KB + security.test dismissAll teardown fix; flake not reproduced locally, CI is the test). Reviewer launched; subscribed. | 21:33Z review CHANGES: Dockerfile web stage builds without GITHUB_SHA -> every image UI version 0.0.0 (breaks stale-deploy recovery, ui_build_id). Fix: ARG REVISION + GITHUB_SHA=$REVISION. CI green otherwise (security flake gone on this run)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2346,7 +2346,8 @@
     "tailwind_bang": "Tailwind content scan reads JS like `if (!list)` as daisyUI's `!list` important-class and adds ~155 B to first-load CSS (found in S-logs-2b). Watch for `!word` patterns matching class names in Svelte/TS.",
     "build_noise": "Each web build embeds a timestamp and random app id; every size entry moves a few bytes per build. Results toolbar (4.6 KB) and Alert/Search sit within that noise on main. Fix queued: X-build-stable-name.",
     "match_guard_deadlock": "Rust: a MutexGuard created in a match/if-let scrutinee lives until the end of the whole match, so re-locking inside an arm deadlocks (X-polish-1031d). Bind to a let first. Reviewers of store/api code should grep for `match .*store()` / `if let .*lock()` patterns.",
-    "verify_premise": "A reviewer's root-cause claim (#289: 'resync remounts the list') turned out false; a follow-up slice (#295) was briefed on it. Lesson: before briefing a follow-up from a review finding, have the finding verified (e.g. mount counter / failing test on main)."
+    "verify_premise": "A reviewer's root-cause claim (#289: 'resync remounts the list') turned out false; a follow-up slice (#295) was briefed on it. Lesson: before briefing a follow-up from a review finding, have the finding verified (e.g. mount counter / failing test on main).",
+    "alert_search_headroom": "After #296: Alert 45,972-45,982/46,000 B and Search results 43,274-43,282/43,300 B; the SHA moves them 8-10 B per commit. If either flips red on a commit, runner may raise by 0.05 KB citing SHA gzip variance (same rationale as Results toolbar), or better find real bytes to cut."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
