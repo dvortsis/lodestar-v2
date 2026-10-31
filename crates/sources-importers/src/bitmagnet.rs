@@ -1332,6 +1332,23 @@ impl Source {
         self.cancel.clone()
     }
 
+    /// PostgreSQL's own estimate of the `torrents` rows (`reltuples`, as of
+    /// the last `ANALYZE`): what `inspect` estimates from, with no
+    /// `count(*)` scan. `None` when the table was never analysed.
+    pub async fn estimate_rows(&self) -> Result<Option<u64>, Refusal> {
+        let row = self
+            .client
+            .query_one(
+                "SELECT c.reltuples::float8 FROM pg_catalog.pg_class c \
+                 WHERE c.oid = 'public.torrents'::pg_catalog.regclass",
+                &[],
+            )
+            .await
+            .map_err(map_err)?;
+        let n: f64 = row.get(0);
+        Ok((n >= 0.0).then_some(n as u64))
+    }
+
     /// Reads the next batch after `position` (empty to start). `None` when
     /// the source is exhausted. `now` is the batch time.
     ///
@@ -1725,6 +1742,13 @@ fn read_cursor(path: &Path, dataset: &[u8; 32]) -> Result<Vec<u8>, ImportError> 
     let pos = unhex(pos).ok_or_else(|| ImportError::Io(std::io::Error::other("bad cursor")))?;
     parse_position(&pos)?;
     Ok(pos)
+}
+
+/// The position saved in the legacy `import-bitmagnet` cursor file at
+/// `path`, if it was read from this dataset; empty when there's no file.
+/// IMP-4 binds it to a job once, explicitly (IMP-1: never automatically).
+pub fn legacy_cursor(path: &Path, dataset: &[u8; 32]) -> Result<Vec<u8>, ImportError> {
+    read_cursor(path, dataset)
 }
 
 fn write_cursor(path: &Path, dataset: &[u8; 32], position: &[u8]) -> Result<(), ImportError> {
