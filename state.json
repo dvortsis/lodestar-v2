@@ -450,8 +450,8 @@
       "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9 | 2026-10-31T01:26Z PR #250 head 39566a36 (~1,800, 45% tests); /search first load unchanged; mount in query/Live.svelte accepted (runner); reviewer session_01MMjhn8yBp4uRAjAcidcd4c | 01:27Z CI: e2e:typecheck fails (suggest fixture kind:string); author fixes locally, pushes with review round | 01:39Z review CHANGES: Enter does not close the assist list, so the next Tab picks a suggestion (breaks search-results.keyboard e2e); riding: Natural preview stale text, active index jump, BuilderRow note. Reviewer kept for delta | 02:06Z delta MERGE at caf0a614 (race fix sound; e2e/search 288/288 x3); merge on ci-ok+Web+E2E green | 02:10Z merged #250 (f563d8a5); author archived"
     },
     "S-search-5": {
-      "status": "review",
-      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6) | 02:59Z #254 head 2221d1d6 ready; reviewer session_01MMjhnBdpKEkRUctbRZBxoY | 03:23Z review CHANGES: bulk copy fallback flattens lines (input) -> textarea fallback; axe test missing wait; riding: export toast wording, decisions notes. Reviewer kept for delta"
+      "status": "merged",
+      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6) | 02:59Z #254 head 2221d1d6 ready; reviewer session_01MMjhnBdpKEkRUctbRZBxoY | 03:23Z review CHANGES: bulk copy fallback flattens lines (input) -> textarea fallback; axe test missing wait; riding: export toast wording, decisions notes. Reviewer kept for delta | 03:46Z merged #254 (2f9d4dd8); sessions archived"
     },
     "S-search-6": {
       "status": "running",
@@ -2228,7 +2228,7 @@
     },
     {
       "item": "FYI (\u00a72.19) #254 S-search-5: runner raised two runner-set lazy-chunk limits: Search results (lazy) 41.5 -> 43.2 KB (still under the 45 KB per-view cap) and Results toolbar (lazy) 4.4 -> 4.6 KB; Search first load unchanged. Bulk Send and saved views deferred (need a send-to-client endpoint / server views)",
-      "status": "to-send-at-merge"
+      "status": "to-send"
     }
   ],
   "external_gates": {
@@ -2258,7 +2258,8 @@
     "API: a send-to-client HTTP endpoint (single + bulk, Partial/duplicate semantics per \u00a7architecture ~2567) for Search bulk Send and row Send (S-search-5 deferral)",
     "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")",
     "API: add a test that fails on duplicate utoipa component names (two ToSchema types with the same name silently overwrite each other; #255 fixed DiscoverResponse and HistogramBin). Latent: Channel (api/dto/system.rs vs lodestar/settings/updates.rs), Mode (settings/preferences.rs vs updates.rs) if they ever enter the spec",
-    "Pipeline: one shared filter loader so the import CLI and the server cannot drift (#257); server-side import slice: online import through the writer, jobs indexing->complete"
+    "Pipeline: one shared filter loader so the import CLI and the server cannot drift (#257); server-side import slice: online import through the writer, jobs indexing->complete",
+    "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
