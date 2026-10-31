@@ -65,3 +65,9 @@ Push the evidence the same way as `soak/cr0-final`: aggregates and hourly data o
 - Windows MSI service run: PASS. 7 h 10 m uptime, 69.7 min after suppression ended, Defender exclusion on, clean stop (2.89 s) and restart from snapshot, 17.0 stored/min after suppression, private memory 423.6 MiB, 353 handles.
 - Windows portable zip: PASS.
 - Unraid 24 h soak: baseline running from 2026-10-31T03:37:39Z to 2026-11-01T03:37:39Z, then the gluetun leg (at least 2 h). At sample 443: 10,131 torrents, 493 MiB private, 0 restarts.
+
+## Unraid v051-rc2-main, owner report (2026-10-31, baseline +1.33 h)
+- Sample 470, elapsed 28,229 s, health 200, metrics_ok true.
+- 10,423 torrents (+1,460 since warmup began, 1 h 50 m: about 800/hour, 13.3/min).
+- Working set 646.53 MiB, private 487.66 MiB (sample 443: 627.5 / 493.2).
+- Baseline ends 2026-11-01T03:37:39Z, then the gluetun leg (≥ 2 h measured) on the same digest and volume.
