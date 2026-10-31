@@ -454,13 +454,8 @@
       "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ"
     },
     "S-search-6": {
-      "status": "pending",
-      "model": "sonnet",
-      "session": null,
-      "pr": null,
-      "attempt": 0,
-      "review_rounds": 0,
-      "notes": ""
+      "status": "running",
+      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4"
     },
     "S-compare": {
       "status": "merged",
