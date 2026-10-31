@@ -1713,7 +1713,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet"
+   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
