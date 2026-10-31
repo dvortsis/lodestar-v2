@@ -5,6 +5,8 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { coreSwitch, floorRemoval, packSwitch } from './ops';
 	import type { Ask } from './types';
 	import type { Overview } from './model.svelte';
@@ -44,7 +46,7 @@
 		{/each}
 	</ul>
 	<p class="text-muted-text" data-testid="filters-cs1-count">
-		{m.filters_cs1_count({ count: o.cs1_entries })}
+		{m.filters_cs1_count({ count: formatCount(o.cs1_entries, currentLocale()) })}
 	</p>
 </section>
 
@@ -56,7 +58,9 @@
 			{#each o.pending_floor_removals as p (p.source)}
 				<li class="flex flex-wrap items-center gap-3" data-testid="pending-{p.source}">
 					<Mono wrap>{p.name}</Mono>
-					<span>{m.filters_pending_entries({ count: p.entries })}</span>
+					<span data-testid="pending-count"
+						>{m.filters_pending_entries({ count: formatCount(p.entries, currentLocale()) })}</span
+					>
 					<Button
 						dense
 						onclick={() =>

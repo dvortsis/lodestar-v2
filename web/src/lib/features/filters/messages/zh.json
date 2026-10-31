@@ -106,5 +106,6 @@
 	"filters_queue_confirm": "确认为虐待内容",
 	"filters_queue_confirm_title": "确认为虐待内容",
 	"filters_decisions_heading": "过去 30 天的判定",
-	"filters_decisions_count": "{count} 次判定"
+	"filters_decisions_count": "{count} 次判定",
+	"filters_stale": "无法刷新过滤器。显示的内容可能已过期。"
 }

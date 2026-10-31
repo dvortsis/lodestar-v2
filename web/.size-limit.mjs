@@ -423,13 +423,7 @@ const appearanceAdult = [/features\/filters\/flows\/AdultConfirmDialog\.svelte$/
 const filtersDialogs = [
 	/features\/filters\/flows\/(?:ChangeDialog|OverrideDialog|RevealNameDialog)\.svelte$/
 ];
-const appearanceLater = [
-	...appearancePicker,
-	...appearanceEditor,
-	...appearanceAdult,
-	...filtersDialogs,
-	...filtersLater
-];
+const appearanceLater = [...appearancePicker, ...appearanceEditor, ...appearanceAdult];
 const settingsHandBuilt = bodyKeys.map((key) => ({
 	name: key
 		.split('/')
@@ -451,7 +445,9 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
-					...appearanceLater
+					...appearanceLater,
+					// Filters' own dialogs and queue stop only Filters' first view.
+					...(/FiltersScreen\.svelte$/.test(key) ? [...filtersDialogs, ...filtersLater] : [])
 				],
 				false,
 				settingsShellView

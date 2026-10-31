@@ -36,16 +36,40 @@
 		}
 	};
 
+	let heading = $state<HTMLElement>();
+	// A change can remove the row whose button opened the dialog; focus then falls to the page's top
+	// rather than to <body> (§10.13).
+	function keepFocus() {
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				if (!document.activeElement || document.activeElement === document.body) heading?.focus();
+			})
+		);
+	}
+
 	onMount(model.load);
 	onDestroy(model.destroy);
 </script>
 
-<h1 class="text-title font-semibold">{m.filters_title()}</h1>
+<h1 class="text-title font-semibold" tabindex="-1" bind:this={heading}>
+	{m.filters_title()}
+</h1>
 <p class="text-muted-text">{m.filters_purpose()}</p>
 
 {#if dialogFailed}
 	<div data-testid="filters-dialog-failed">
 		<Banner kind="error">{m.filters_dialog_failed()}</Banner>
+	</div>
+{/if}
+
+{#if model.overview && model.failed}
+	<div data-testid="filters-stale">
+		<Banner kind="warning">
+			{m.filters_stale()}
+			{#snippet action()}
+				<Button onclick={model.load} data-testid="filters-reload">{m.filters_retry()}</Button>
+			{/snippet}
+		</Banner>
 	</div>
 {/if}
 
@@ -91,5 +115,6 @@
 		applyLabel={model.pending.applyLabel}
 		shadowDays={model.pending.shadowDays}
 		onapplied={model.load}
+		onclose={keepFocus}
 	/>
 {/if}

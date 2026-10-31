@@ -27,7 +27,8 @@ export function createModel() {
 	let failed = $state(false);
 	let adult = $state(false);
 	let pending = $state.raw<Pending>({ title: '' });
-	let dialog = $state(false);
+	let destroyed = false;
+	let creating: Promise<ChangeFlow> | undefined;
 	// The flow's module is shared with other screens' dialogs, so it loads with the first change.
 	let flow = $state.raw<ChangeFlow | null>(null);
 	let ctl: AbortController | undefined;
@@ -56,9 +57,14 @@ export function createModel() {
 
 	/** Previews `change` through the flow's dialog; nothing is sent until the dialog says so. */
 	async function start(change: Change, p: Pending) {
-		flow ??= (await import('../flows/flow.svelte')).createChangeFlow();
+		// One flow, however many activations arrive while its module loads.
+		creating ??= import('../flows/flow.svelte').then((m) => m.createChangeFlow());
+		const f = await creating;
+		// A screen that went away meanwhile starts nothing (its preview job would never be cancelled).
+		if (destroyed) return;
+		flow = f;
 		pending = p;
-		flow.start(change);
+		f.start(change);
 	}
 
 	return {
@@ -77,17 +83,13 @@ export function createModel() {
 		get pending() {
 			return pending;
 		},
-		get dialog() {
-			return dialog;
-		},
-		set dialog(v: boolean) {
-			dialog = v;
-		},
 		load,
 		start,
 		destroy() {
+			destroyed = true;
 			ctl?.abort();
-			flow?.cancel();
+			// An apply already sent can't be cancelled: let its answer go (flows README).
+			if (flow && flow.state.kind !== 'applying') flow.cancel();
 		}
 	};
 }

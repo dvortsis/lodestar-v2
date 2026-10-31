@@ -10,6 +10,8 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { confirmAbuse, falsePositive, release } from './ops';
 	import type { Model, Queue } from './model.svelte';
 	import type { Ask } from './types';
@@ -48,10 +50,16 @@
 			if (!isAbort(e)) failed = true;
 		}
 	}
-	// A change moves the rule-set version: read the queue again (and on first show).
+	// Any new overview (a change applied, a reload) reads the queue again; a release doesn't bump the
+	// rule-set version, so don't compare versions.
 	$effect(() => {
-		void model.overview?.version;
+		void model.overview;
 		void load();
+	});
+	// A page of nothing but adult holds (hidden while 18+ is off) reads on to the next one, so the
+	// screen never says "nothing" or offers "more" for what it can't show.
+	$effect(() => {
+		if (queue?.next_cursor && rows.length === 0) void load(queue.next_cursor);
 	});
 	onDestroy(() => ctl?.abort());
 
@@ -77,7 +85,7 @@
 		</Banner>
 	{:else if queue === null}
 		<p role="status" class="sr-only">{m.filters_loading()}</p>
-	{:else if rows.length === 0}
+	{:else if rows.length === 0 && !queue.next_cursor}
 		<p class="text-muted-text" data-testid="queue-empty">{m.filters_queue_empty()}</p>
 	{/if}
 	<ul class="flex flex-col gap-2">
@@ -120,20 +128,23 @@
 			</li>
 		{/each}
 	</ul>
-	{#if queue?.next_cursor}
+	{#if queue?.next_cursor && rows.length > 0}
 		<div>
 			<Button onclick={() => load(queue?.next_cursor ?? undefined)} data-testid="queue-more"
 				>{m.filters_queue_more()}</Button
 			>
 		</div>
 	{/if}
-	{#if queue && queue.decisions_30d.length}
+	<!-- Per-rule counts include the adult-only rules, so they show only with 18+ on. -->
+	{#if queue && model.adult && queue.decisions_30d.length}
 		<h3 class="text-label font-semibold">{m.filters_decisions_heading()}</h3>
 		<ul class="flex flex-col gap-1" data-testid="filters-decisions">
 			{#each queue.decisions_30d as d (d.rule + d.action + d.shadow)}
 				<li class="flex flex-wrap items-center gap-2">
 					<Badge>{d.rule}</Badge>
-					<span>{m.filters_decisions_count({ count: d.count })}</span>
+					<span data-testid="decision-count"
+						>{m.filters_decisions_count({ count: formatCount(d.count, currentLocale()) })}</span
+					>
 					{#if d.shadow}<Badge variant="info">{m.filters_rule_shadow()}</Badge>{/if}
 				</li>
 			{/each}

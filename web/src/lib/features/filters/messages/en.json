@@ -196,5 +196,6 @@
 	"filters_queue_confirm": "Confirm as abuse",
 	"filters_queue_confirm_title": "Confirm as abuse material",
 	"filters_decisions_heading": "Decisions in the last 30 days",
-	"filters_decisions_count": "{count} decisions"
+	"filters_decisions_count": "{count} decisions",
+	"filters_stale": "The filters couldn't be refreshed. What's shown may be out of date."
 }

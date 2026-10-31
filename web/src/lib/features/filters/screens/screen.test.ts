@@ -19,9 +19,13 @@ const overview = (over: Record<string, unknown> = {}) => ({
 	cs1_entries: 12,
 	exceptions: [{ id: 3, rule: 'CS-4a', hashes: [H] }],
 	ip_ranges: 0,
-	overrides: [],
+	overrides: [
+		{ id: 8, keyword: 'x', strength: 'override', scope: null, expires_at: null, shadow_until: null }
+	],
 	packs: [{ id: 'malware', on: true, rules: [] }],
-	pending_floor_removals: [],
+	pending_floor_removals: [
+		{ source: 'file:/a', kind: 'file', name: '/a', entries: 2, hashes: [H] }
+	],
 	quarantine: 2,
 	rules: [
 		{ id: 5, query: 'name:"x"', action: 'hide', enabled: true, shadow_until: null, unless: null }
@@ -31,11 +35,27 @@ const overview = (over: Record<string, unknown> = {}) => ({
 	...over
 });
 const queue = {
-	decisions_30d: [],
+	decisions_30d: [{ rule: 'CS-5a', action: 'quarantine', count: 37, shadow: false }],
 	next_cursor: null,
 	quarantine: [
-		{ hash: H, rule: 'CS-4a', at: 1, expires_at: 2, sealed: true, adult_hold: false },
-		{ hash: HA, rule: 'CS-5a', at: 1, expires_at: 2, sealed: true, adult_hold: true }
+		{
+			hash: H,
+			rule: 'CS-4a',
+			at: 1,
+			expires_at: 2,
+			sealed: true,
+			adult_hold: false,
+			name: 'SECRET-NAME'
+		},
+		{
+			hash: HA,
+			rule: 'CS-5a',
+			at: 1,
+			expires_at: 2,
+			sealed: true,
+			adult_hold: true,
+			name: 'SECRET-NAME'
+		}
 	]
 };
 const content = (show: boolean) => ({ revision: 1, fields: { show_adult: { value: show } } });
@@ -92,11 +112,37 @@ describe('loosening actions and Cancel', () => {
 			await waitFor(() => expect(screen.queryByTestId('change-dialog')).toBeNull());
 			expect(net.to('/filters/apply')).toHaveLength(0);
 		});
-	it('release: Cancel sends no apply', async () => {
-		setup(true);
+	const more: [string, string][] = [
+		['release', `queue-release-${H}`],
+		['false positive', `queue-fp-${H}`],
+		['confirm', `queue-confirm-${H}`],
+		['remove override', 'override-remove-8'],
+		['remove rule', 'rule-remove-5'],
+		['floor removal', 'pending-remove-file:/a'],
+		['undo', 'filters-undo']
+	];
+	for (const [name, id] of more)
+		it(`${name}: previews first, Cancel sends no apply`, async () => {
+			setup(true);
+			job(weakening());
+			await fireEvent.click(await screen.findByTestId(id));
+			await screen.findByTestId('change-password');
+			expect(net.to('/filters/preview/jobs').length).toBeGreaterThan(0);
+			await fireEvent.click(screen.getByTestId('change-cancel'));
+			await waitFor(() => expect(screen.queryByTestId('change-dialog')).toBeNull());
+			expect(net.to('/filters/apply')).toHaveLength(0);
+		});
+	it('add Always allow: previews first, Cancel sends no apply', async () => {
+		setup();
 		job(weakening());
-		await fireEvent.click(await screen.findByTestId(`queue-release-${H}`));
-		await fireEvent.click(await screen.findByTestId('change-cancel'));
+		await screen.findByTestId('allow-add');
+		await fireEvent.input(document.querySelector('input[name="allow-query"]')!, {
+			target: { value: 'type:movie' }
+		});
+		await fireEvent.click(screen.getByTestId('allow-add'));
+		await screen.findByTestId('change-password');
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await waitFor(() => expect(screen.queryByTestId('change-dialog')).toBeNull());
 		expect(net.to('/filters/apply')).toHaveLength(0);
 	});
 	it('a weakening change asks for the password before any apply', async () => {
@@ -122,6 +168,18 @@ describe('a failed request keeps the safer state', () => {
 		expect(row.textContent).toContain('On');
 		expect(row.textContent).not.toContain('Off');
 	});
+	it('a failed reload after an apply says the screen may be out of date', async () => {
+		setup();
+		job(weakening());
+		net.on('POST /filters/apply', { body: { applied: true, assessment: weakening(), version: 5 } });
+		await fireEvent.click(await screen.findByTestId('core-switch-CS-4a'));
+		await fireEvent.input(await screen.findByTestId('change-password'), {
+			target: { value: 'pw' }
+		});
+		net.error('GET /filters', 500, 'down');
+		await fireEvent.click(screen.getByTestId('change-apply'));
+		await screen.findByTestId('filters-stale');
+	});
 	it('an unreadable overview shows an error and no controls', async () => {
 		net = mockFetch();
 		net.error('GET /filters', 500, 'down');
@@ -138,6 +196,25 @@ describe('held items and adult', () => {
 		await screen.findByTestId(`queue-${H}`);
 		expect(screen.queryByTestId(`queue-${HA}`)).toBeNull();
 		expect(document.body.textContent).not.toContain('CS-5a');
+		expect(screen.queryByTestId('filters-decisions')).toBeNull();
+	});
+	it('a page of only adult holds with more to come never says nothing is waiting', async () => {
+		setup(false);
+		net.on(
+			'GET /filters/queue',
+			{
+				body: {
+					decisions_30d: [],
+					next_cursor: 'c1',
+					quarantine: [
+						{ hash: HA, rule: 'CS-5a', at: 1, expires_at: 2, sealed: true, adult_hold: true }
+					]
+				}
+			},
+			{ body: queue }
+		);
+		await screen.findByTestId(`queue-${H}`);
+		expect(screen.queryByTestId(`queue-${HA}`)).toBeNull();
 	});
 	it('an unreadable setting counts as off', async () => {
 		setup();
@@ -161,6 +238,7 @@ describe('held items and adult', () => {
 		expect(screen.getByTestId('filters-queue').querySelector('img')).toBeNull();
 		expect(net.to('/filters/apply')).toHaveLength(0);
 		expect(screen.queryByTestId('reveal-name')).toBeNull();
+		expect(document.body.textContent).not.toContain('SECRET-NAME');
 	});
 });
 
