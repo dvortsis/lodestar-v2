@@ -539,8 +539,9 @@ impl Services {
         // shutdown so open downloads end rather than hold it.
         let jobs = Arc::new(lodestar_api::jobs::Jobs::default());
         let logs = crate::logging::source();
-        // Classification re-queues a stop cut short run again now, in the
-        // background; the shutdown stops them, and they stay pending.
+        // Classification re-queues a stop cut short, or made while search
+        // was off, run again now, in the background; the shutdown stops
+        // them, and they stay pending.
         let requeues = api.filters.clone();
         let requeue_stop = requeues.as_ref().map(|f| f.shutdown.clone());
         if let Some(f) = requeues {
