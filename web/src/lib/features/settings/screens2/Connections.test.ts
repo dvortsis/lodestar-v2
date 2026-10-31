@@ -270,7 +270,7 @@ describe('Notifications', () => {
 			await discord.findByLabelText('New value for Discord webhook address'),
 			'https://discord.com/api/webhooks/1/x'
 		);
-		const send = discord.getByRole('button', { name: 'Send test to Discord' });
+		const send = await discord.findByRole('button', { name: 'Send test to Discord' });
 		await fireEvent.click(send);
 		await until(() => expect(discord.getByTestId('test-result').textContent).toContain('404'));
 		await fireEvent.click(send);

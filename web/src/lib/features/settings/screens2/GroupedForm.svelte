@@ -3,7 +3,7 @@
 	// for what only a hand-built screen has: a test button, a danger zone. `widgets` maps a field
 	// name to the control that stands in for the JSON fallback of a shape the schema can't say
 	// (a list of cards, a choice of channels); the form registers them for its own life.
-	import { onDestroy, untrack, type Component, type Snippet } from 'svelte';
+	import { onDestroy, untrack, type Snippet } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatCount } from '$lib/format';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -12,24 +12,25 @@
 	import type { SettingsForm as Form } from '../form';
 	import SettingField from '../form/SettingField.svelte';
 	import SettingsForm from '../form/SettingsForm.svelte';
-	import { registerWidget, type WidgetProps } from '../form/widgets';
+	import { registerWidget } from '../form/widgets';
+	import LazyWidget from './LazyWidget.svelte';
 
 	interface Props {
 		id: string;
 		fields: FieldSpec[];
-		/** Field name → the registered widget name and control that renders it. */
-		widgets?: Record<string, Component<WidgetProps>>;
+		/** Fields shown by a widget of `widgets.ts` instead of the engine's control. */
+		widgets?: string[];
 		/** Runs once with the form, before it first renders (a screen's gates). */
 		setup?: (form: Form) => (() => void) | void;
 		after?: Snippet<[group: string, form: Form]>;
 		end?: Snippet<[form: Form]>;
 	}
-	let { id, fields: served, widgets = {}, setup, after, end }: Props = $props();
+	let { id, fields: served, widgets = [], setup, after, end }: Props = $props();
 
-	const names = untrack(() => Object.keys(widgets));
+	const names = untrack(() => widgets);
 	const widgetName = (field: string) => `${id}.${field}`;
 	const unregister = untrack(() =>
-		names.map((name) => registerWidget(widgetName(name), widgets[name]!))
+		names.map((name) => registerWidget(widgetName(name), LazyWidget))
 	);
 	const form = untrack(() =>
 		createSettingsForm({

@@ -27,11 +27,11 @@ export const screens: Screen[] = [
 		icon: IconRadar,
 		sections: ['trackers']
 	},
+	// A hand-built screen's purpose is its body's heading line (lazy), so it isn't carried here.
 	{
 		id: 'integrations',
 		group: 'connections',
 		title: () => m.settings_screen_integrations_title(),
-		purpose: () => m.settings_screen_integrations_purpose(),
 		icon: IconPlugs,
 		load: () => import('./IntegrationsScreen.svelte')
 	},
@@ -39,7 +39,6 @@ export const screens: Screen[] = [
 		id: 'notifications',
 		group: 'connections',
 		title: () => m.settings_screen_notifications_title(),
-		purpose: () => m.settings_screen_notifications_purpose(),
 		icon: IconBell,
 		load: () => import('./NotificationsScreen.svelte')
 	},
@@ -47,7 +46,6 @@ export const screens: Screen[] = [
 		id: 'insights',
 		group: 'connections',
 		title: () => m.settings_screen_insights_title(),
-		purpose: () => m.settings_screen_insights_purpose(),
 		icon: IconChart,
 		load: () => import('./InsightsScreen.svelte')
 	}
