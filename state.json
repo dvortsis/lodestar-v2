@@ -886,7 +886,7 @@
    "pr": 285,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 15:15Z brief briefs/M-security-settings.md; security review | 15:13Z launched Opus | 16:12Z PR #285 part 1 (screen, password dialog, change password, sessions, secure cookies) head 102ff245 with .update-snapshots; NOT ready until baselines checked. Part 2 (API keys/feed tokens, auth mode, trusted proxy) needs its own launch. Sizes: Security first view 30.20/45, parts 23.82/26; Notifications 44.71->44.79 (0.21 kB headroom); shell/screens.test.ts one line outside Own accepted | 16:34Z ready at 5684c145 (runner checked 50 Settings PNGs only, marker removed); fresh Opus reviewer session_01MMjhnBxxFkro1YRmkG1aRh + security review"
+   "notes": "from #86 | 15:15Z brief briefs/M-security-settings.md; security review | 15:13Z launched Opus | 16:12Z PR #285 part 1 (screen, password dialog, change password, sessions, secure cookies) head 102ff245 with .update-snapshots; NOT ready until baselines checked. Part 2 (API keys/feed tokens, auth mode, trusted proxy) needs its own launch. Sizes: Security first view 30.20/45, parts 23.82/26; Notifications 44.71->44.79 (0.21 kB headroom); shell/screens.test.ts one line outside Own accepted | 16:34Z ready at 5684c145 (runner checked 50 Settings PNGs only, marker removed); fresh Opus reviewer session_01MMjhnBxxFkro1YRmkG1aRh + security review | 16:43Z MERGE at 5684c145 (2 optional); waiting on core playwright"
   },
   "B-log1": {
    "status": "merged",
@@ -1722,7 +1722,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges"
+   "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href)"
   },
   "X-polish-1031c": {
    "status": "running",
@@ -2490,6 +2490,10 @@
   },
   {
    "item": "FYI (§2.26) #284 S-logs-1: adding /logs made 5 existing routes share VirtualList / the virtualiser index client / state/sse as separate chunks; their limits rose by the measured bytes only (Alerts +69 B, Alert +86 B, Search results +92 B, Search cards +21 B, /t/[hash] +35 B). The root cause is legitimate code reuse.",
+   "status": "to-send"
+  },
+  {
+   "item": "FYI (§2.19) #285 M-security-settings part 1: the Security screen restates the engine's leave-guard rules instead of importing them (keeps leave.ts off every Settings page; a table test against the engine's rules follows in part 2); secure cookies is a read-only status line.",
    "status": "to-send"
   }
  ],
