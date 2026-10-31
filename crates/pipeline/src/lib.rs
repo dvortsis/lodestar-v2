@@ -923,7 +923,8 @@ fn prepare(
     // Refetches are queued afresh from the store below, so a saved one
     // whose import was removed while the server was stopped isn't fetched
     // into a new, crawled-looking row (and one saved before they had their
-    // own cohort doesn't land in the funnel).
+    // own cohort doesn't land in the funnel). Matched by strategy, not
+    // cohort, for queues saved before `REFETCH_COHORT`; no plugin uses 200.
     queue.retain(|q| q.strategy != strategy::REFETCH);
     // Imports with incomplete file lists get their info dicts fetched, if
     // there's a peer finder to find them peers.

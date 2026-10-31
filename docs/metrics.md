@@ -494,8 +494,9 @@ pipeline queues up to 50,000 incomplete imports (`FILES_PARTIAL`) to fetch
 their file lists. They aren't crawl discoveries, so neither the cohort
 funnel (`cohort_hour`) nor `FUNNEL_EVENTS` nor the `STORED` rollup counts
 their peer found, fetched, stored or lost; the record is still completed.
-They show only in the gate's `already_stored` and the fetch pool's own
-counters (`fetch_*`, which count every fetch).
+They show in the gate's counters (mostly `already_stored`, and any other
+exclusion a fetch can meet; never `origin="network"`) and in the fetch
+pool's own counters (`fetch_*`, which count every fetch).
 
 **Removals** are lifecycle events (§10.9.3): a searchable torrent deleted
 (a filter relabel, `delete_torrents`, retention) is counted in
@@ -618,6 +619,7 @@ What the digest prints, from the overview and nothing else (no sums, rates,
 |---|---|---|---|
 | Searchable torrents | `kpi.searchable`, Δ `kpi.searchable_delta` | `formatCount`, `formatDelta` | `—` |
 | New searchable | `kpi.new_searchable`, Δ `kpi.new_searchable_delta` | `formatCount`, `formatDelta` | (never null) |
+| + N imported | `kpi.new_searchable_imported` | `formatCount`, as "+ N imported" on a line under New searchable, never added into it or its Δ (B-refetch-funnel) | 0: the line is left out |
 | Yield | `kpi.yield`, Δ `kpi.yield_delta` | `formatPercent` f = 1, `formatDelta` percent | `— (No completed cohorts yet)` |
 | Time to searchable | `kpi.time_to_searchable_p50_s` and `_p95_s`, Δs `…_delta_s` | `≈` + `formatSpan`, `formatDelta` in `formatSpan`'s unit | `— (No completed cohorts yet)` |
 | Health | `kpi.health.{state, reason}` | text | no reason: the state alone |

@@ -623,9 +623,11 @@ async fn a_saved_refetch_is_queued_afresh_from_the_store() {
         manifest: manifest("finder", &[Kind::PeerFinder]),
         peers: HashMap::new(),
     });
-    let pipeline = Pipeline::start(config(), store, vec![finder])
-        .await
-        .unwrap();
+    // Lookups that outlast the assertion, so the crawl's key can't be
+    // lost (and its lease ended) before it's checked.
+    let mut slow = config();
+    slow.pool.lookup_wait = Duration::from_secs(120);
+    let pipeline = Pipeline::start(slow, store, vec![finder]).await.unwrap();
     let monitor = pipeline.monitor();
     // Only the crawl's key is leased again.
     assert_eq!(monitor.lease_stats().outstanding.load(Ordering::Relaxed), 1);
