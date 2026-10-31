@@ -5,6 +5,7 @@
 
 mod cli;
 mod config;
+mod filter_load;
 mod fixture;
 mod floor;
 mod fsdetect;

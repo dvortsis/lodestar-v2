@@ -276,6 +276,9 @@ async fn run(
     if let Some(w) = watermark(&follow) {
         store = record(insights, store, w, crate::unix_now()).await?;
     }
+    // Imports found in `indexing` at start (an offline `lodestar import`)
+    // the watermark has already passed, or that added no rows.
+    store = finish_imports(store).await?;
     store = mirror_state(insights, store).await?;
     let mut compaction = Compaction {
         from: crate::unix_now() + insights.compact_after.as_secs() as i64,
@@ -325,6 +328,10 @@ async fn run(
                 if let Some(w) = watermark(&follow) {
                     store = record(insights, store, w, now).await?;
                 }
+                // A job that reached `indexing` while the server runs with
+                // no new rows, or one paused at `indexing` and resumed,
+                // is due without the watermark moving.
+                store = finish_imports(store).await?;
                 store = mirror_state(insights, store).await?;
                 if now >= compaction.from {
                     store = compact(insights, store, &mut compaction, now).await?;
@@ -381,6 +388,9 @@ async fn record(
             // days' sums are out of date. Read them again.
             let sealed = api::sealed_hour(crate::unix_now(), insights.seal_floor());
             let stale = r.first_cohort.filter(|&c| c < sealed);
+            // The watermark moved: an import it passed is searchable now.
+            // Before the bump, so a reader that saw it sees the jobs too.
+            let store = finish_imports(store).await?;
             insights.bump();
             let store = if r.imported > 0 {
                 mirror_state(insights, store).await?
@@ -400,6 +410,23 @@ async fn record(
             step = "searchable_time",
             error = lodestar_log::Error::new(&e)
         ),
+    }
+    Ok(store)
+}
+
+/// Moves the `indexing` import jobs the index watermark has passed to
+/// `complete` (or `complete_with_issues`, which the store picks). The
+/// watermark is the table [`Store::record_searchable`] raises, so a job
+/// completes only once its rows are searchable. A failed write is retried
+/// at the next commit or tick.
+async fn finish_imports(store: Store) -> Result<Store, BoxError> {
+    let (store, r) = blocking(store, |s| s.complete_indexed_import_jobs(crate::unix_now())).await?;
+    if let Err(e) = r {
+        lodestar_log::log_event!(
+            crate::logging::events::INSIGHTS_STEP_FAILED,
+            step = "imports",
+            error = lodestar_log::Error::new(&e)
+        );
     }
     Ok(store)
 }
@@ -994,6 +1021,100 @@ mod tests {
         let hour = crate::unix_now() / 3600;
         let w = store.index_watermarks(hour - 1, hour + 1).unwrap();
         assert_eq!(w.last().map(|r| r.1), Some(9));
+    }
+
+    /// Imports in `indexing` complete when the watermark passes their
+    /// highest new id, not before: one with no new rows at start, another
+    /// at the commit that reaches it. A reader opened before sees each
+    /// change (`lodestar import status` while the server runs). One still
+    /// waiting at shutdown stays in `indexing` for the next start.
+    #[tokio::test]
+    async fn the_recorder_completes_indexed_imports() {
+        use lodestar_store::import::{NewImportJob, Phase};
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let ids: Vec<i64> = {
+            let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+            [(b"ds-empty", 0), (b"ds-first", 5), (b"ds-later", 1000)]
+                .into_iter()
+                .map(|(dataset, max_new_id)| {
+                    let j = store
+                        .create_import_job(&NewImportJob {
+                            adapter: "magnetico",
+                            adapter_ver: 1,
+                            dataset: dataset.as_slice(),
+                            schema_sig: b"sig",
+                            options: b"{}",
+                            credential: None,
+                            at: 1,
+                        })
+                        .unwrap();
+                    let j = store
+                        .set_import_phase(j.id, j.revision, Phase::Indexing, 1)
+                        .unwrap();
+                    // The rows a job inserted end at its highest new id.
+                    store
+                        .connection()
+                        .execute(
+                            "UPDATE import_jobs SET max_new_id = ?1 WHERE id = ?2",
+                            [max_new_id, j.id],
+                        )
+                        .unwrap();
+                    j.id
+                })
+                .collect()
+        };
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let phase = |id: i64| reader.import_job(id).unwrap().unwrap().phase;
+        let hook = Arc::new(CommitHook::default());
+        let stats = Arc::new(IndexStats::default());
+        let insights = Arc::new(Insights::with_clock(Box::new(|| 0), 1));
+        let (stop_tx, stop) = watch::channel(false);
+        let (tx, rx) = mpsc::channel(QUEUE);
+        let follow = Follow {
+            db: db.clone(),
+            store: StoreConfig::default(),
+            index: Some((hook, stats)),
+            paused: Box::new(|| false),
+            searchable: Box::new(|| None),
+            tick: TICK,
+        };
+        let task = {
+            let insights = insights.clone();
+            tokio::spawn(async move { run(&insights, follow, rx, stop).await.unwrap() })
+        };
+        let start = std::time::Instant::now();
+        let until = |done: &dyn Fn() -> bool| {
+            let phases: Vec<_> = ids.iter().map(|&id| phase(id)).collect();
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "timed out: phases {phases:?}, recorded {}",
+                insights.last_recorded()
+            );
+            !done()
+        };
+        while until(&|| phase(ids[0]) == Phase::Complete) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let commit = |max_torrent_id| Committed {
+            docs_added: 1,
+            adult_added: 0,
+            max_torrent_id,
+            at: crate::unix_now() as u64,
+        };
+        let before = insights.last_recorded();
+        tx.send(commit(4)).await.unwrap();
+        while until(&|| insights.last_recorded() != before) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(phase(ids[1]), Phase::Indexing, "not before its last id");
+        tx.send(commit(5)).await.unwrap();
+        while until(&|| phase(ids[1]) == Phase::Complete) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop_tx.send(true).unwrap();
+        task.await.unwrap();
+        assert_eq!(phase(ids[2]), Phase::Indexing, "still waiting");
     }
 
     /// With search off the recorder keeps running and records crawl

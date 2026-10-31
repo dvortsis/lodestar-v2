@@ -450,3 +450,113 @@ fn resume_refuses_another_source_and_any_reader_blocks_writes() {
         matches!(remove(&config, 1, true, true), Err(Failure::Refused(m)) if m.contains("cancel"))
     );
 }
+
+struct NoFetch;
+
+impl lodestar_sources::Fetcher for NoFetch {
+    fn fetch(
+        &self,
+        _peer: std::net::SocketAddr,
+        _key: lodestar_metainfo::InfoHash,
+    ) -> lodestar_sources::BoxFuture<
+        'static,
+        Result<lodestar_peer_wire::Fetched, lodestar_peer_wire::FailureKind>,
+    > {
+        Box::pin(async { Err(lodestar_peer_wire::FailureKind::Refused) })
+    }
+}
+
+/// The CLI's filter is the server's: the same store and config give the
+/// same verdicts through `filter` and through the server's start (the
+/// shared sync, then `Pipeline::start`'s load) for a hash in a config
+/// blocklist file, a CS-1 entry, a CS-8 floor signature, a name your
+/// drop rule matches and a torrent nothing matches. A rule source added
+/// to one path and not the other fails here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cli_and_the_server_build_the_same_filter() {
+    use lodestar_classify::{ContentType, FileInfo};
+    use lodestar_filter::{Item, payload_sig};
+
+    let dir = tempfile::tempdir().unwrap();
+    let blocklist = dir.path().join("floor.txt");
+    let hex: String = hash_of(1).iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(&blocklist, format!("{hex}\n")).unwrap();
+    let floor_files = vec![FileInfo::new(vec!["a.bin".into()], 100 << 20)];
+    let sig = payload_sig(&floor_files).unwrap();
+    assert!(sig.specific);
+    // Each path gets its own data folder, seeded alike, so neither reads
+    // what the other synced into the store.
+    let seeded = |name: &str| {
+        let mut config = data(&dir.path().join(name));
+        config.blocklist.files = vec![blocklist.clone()];
+        let mut store = Store::open(config.db_path(), config.store_config()).unwrap();
+        let origin = lodestar_filter::Origin::Confirmed as u8;
+        store.add_cs_hashes(&[hash_of(2)], origin, 1).unwrap();
+        store.add_cs_sig(sig.sig, 1).unwrap();
+        store
+            .add_rule("badword", lodestar_filter::Action::Drop.code(), None, None)
+            .unwrap();
+        config
+    };
+    let (config, cli_config) = (seeded("server"), seeded("cli"));
+
+    // The server's start: the shared sync on its own connection, then
+    // the pipeline loads the rest from the store.
+    let server = {
+        let handle = Arc::new(lodestar_pipeline::default_filter());
+        let mut control = Store::open(config.db_path(), config.store_config()).unwrap();
+        crate::filter_load::sync_sources(
+            &mut control,
+            &config.subscriptions,
+            &config.blocklist_files().unwrap(),
+            &handle,
+            &Default::default(),
+            unix_now(),
+        )
+        .unwrap();
+        drop(control);
+        let pipeline = lodestar_pipeline::Pipeline::start_with(
+            lodestar_pipeline::PipelineConfig {
+                filter: handle.clone(),
+                ..Default::default()
+            },
+            Store::open(config.db_path(), config.store_config()).unwrap(),
+            Vec::new(),
+            Arc::new(NoFetch),
+        )
+        .await
+        .unwrap();
+        pipeline.shutdown().await.unwrap();
+        handle.current()
+    };
+    let (cli, _) = {
+        let config = cli_config;
+        tokio::task::spawn_blocking(move || {
+            let mut store = Store::open(config.db_path(), config.store_config()).unwrap();
+            filter(&config, &mut store).unwrap()
+        })
+        .await
+        .unwrap()
+    };
+
+    let plain = vec![FileInfo::new(vec!["a.txt".into()], 5)];
+    let cases: [([u8; 20], &str, &[FileInfo]); 5] = [
+        (hash_of(1), "Some release", &plain),
+        (hash_of(2), "Some release", &plain),
+        (hash_of(3), "Some release", &floor_files),
+        (hash_of(4), "Badword release", &plain),
+        (hash_of(5), "Some release", &plain),
+    ];
+    for (i, (hash, name, files)) in cases.iter().enumerate() {
+        let hashes = [*hash];
+        let item = Item {
+            hashes: &hashes,
+            name,
+            files,
+            content_type: ContentType::Other,
+        };
+        let (a, b) = (server.judge(&item, None, 2), cli.judge(&item, None, 2));
+        assert_eq!(a.decision, b.decision, "case {i}");
+        assert_eq!(a.decision.is_some(), i < 4, "case {i}: {:?}", a.decision);
+    }
+}

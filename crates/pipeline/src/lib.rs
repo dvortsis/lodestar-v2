@@ -188,9 +188,35 @@ pub fn default_filter() -> Handle {
     )))
 }
 
-/// Adds the store's filter state to the engine: CS-1 entries, CS-8
-/// signatures and your switches.
-fn load_filter(filter: &Handle, state: &FilterState) {
+/// What the filter is built from in the store: CS-1 entries, CS-8
+/// signatures and your switches ([`FilterState`]), packs and your rules,
+/// and your classification rules. The floor's config files and the
+/// subscribed lists are synced into the store and applied before this
+/// (the binary does that, at the server's start and in `lodestar import`).
+#[derive(Debug, Clone)]
+pub struct StoreFilter {
+    pub state: FilterState,
+    pub rules: RuleSet,
+    pub class_rules: Vec<(i64, String, bool)>,
+}
+
+impl StoreFilter {
+    pub fn read(store: &Store) -> Result<StoreFilter, lodestar_store::Error> {
+        Ok(StoreFilter {
+            state: store.filter_state()?,
+            rules: store.rule_set()?,
+            class_rules: store.class_rules()?,
+        })
+    }
+}
+
+/// Loads the store's filter into `filter`, the one way both the server
+/// and `lodestar import` build it: CS-1 entries, CS-8 signatures and your
+/// switches into the core, then packs, your rules and your
+/// classification rules into the engine. Returns the notes for rules
+/// that no longer parse; they're skipped.
+pub fn load_filter(filter: &Handle, from: &StoreFilter) -> Vec<String> {
+    let state = &from.state;
     filter.update(|core| {
         for (hash, origin) in &state.cs_hashes {
             let origin = Origin::from_code(*origin).unwrap_or_else(|| {
@@ -211,6 +237,11 @@ fn load_filter(filter: &Handle, state: &FilterState) {
             }
         }
     });
+    filter.update_engine(|e| {
+        let mut notes = e.load_rules(&from.rules);
+        notes.extend(e.load_class_rules(&from.class_rules));
+        notes
+    })
 }
 
 #[derive(Debug)]
@@ -439,31 +470,17 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (
-            store,
-            registered,
-            queue,
-            have,
-            backfill_until,
-            stored_at_start,
-            filter_state,
-            rule_set,
-        ) = tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
-            .await
-            .map_err(Error::Join)??;
+        let (store, registered, queue, have, backfill_until, stored_at_start, store_filter) =
+            tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
+                .await
+                .map_err(Error::Join)??;
         lodestar_log::log_event!(
             log_events::STARTING,
             stored = have.len(),
             queued = queue.len()
         );
         let have = Arc::new(have);
-        load_filter(&config.filter, &filter_state);
-        let (rule_set, class_rules) = rule_set;
-        for note in config.filter.update_engine(|e| {
-            let mut notes = e.load_rules(&rule_set);
-            notes.extend(e.load_class_rules(&class_rules));
-            notes
-        }) {
+        for note in load_filter(&config.filter, &store_filter) {
             let (what, rule, reason) = log_events::filter_note(&note);
             lodestar_log::log_event!(
                 log_events::FILTER_RULE_SKIPPED,
@@ -473,7 +490,7 @@ impl Pipeline {
             );
         }
         let held = config.held.clone();
-        for (h, _) in &filter_state.held {
+        for (h, _) in &store_filter.state.held {
             held.insert(*h);
         }
         let funnel = Arc::new(FunnelCounts::default());
@@ -892,8 +909,7 @@ fn prepare(
         Have,
         i64,
         u64,
-        FilterState,
-        (RuleSet, Vec<(i64, String, bool)>),
+        StoreFilter,
     ),
     Error,
 > {
@@ -974,8 +990,7 @@ fn prepare(
         }],
         ..WriteBatch::default()
     })?;
-    let filter = store.filter_state()?;
-    let rules = (store.rule_set()?, store.class_rules()?);
+    let filter = StoreFilter::read(&store)?;
     let mut sources = Vec::with_capacity(ids.len());
     for (m, id) in manifests.iter().zip(&ids) {
         sources.push((*id, state(id), control::saved_priority(&store, m.id)?));
@@ -988,7 +1003,6 @@ fn prepare(
         first_run + backfill,
         stored,
         filter,
-        rules,
     ))
 }
 

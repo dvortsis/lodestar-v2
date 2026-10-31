@@ -161,11 +161,17 @@ impl Services {
                 // Settings and lists change through a second connection, so
                 // they never wait behind the ingest writer for long.
                 let mut control = Store::open(&db, store_config.clone())?;
-                subscriptions::sync_config(&mut control, &subs_config)?;
-                // Before the pipeline loads the floor from the store.
-                floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
+                // The pipeline loads the rest of the filter at its start
+                // (`filter_load`, shared with `lodestar import`).
+                crate::filter_load::sync_sources(
+                    &mut control,
+                    &subs_config,
+                    &blocklist,
+                    &filter,
+                    &subs_ips,
+                    crate::unix_now(),
+                )?;
                 floor::report(&control)?;
-                subscriptions::apply(&control, &filter, &subs_ips)?;
                 // Swarm stats for search and the writer (§7): last run's
                 // snapshot, or rebuilt from SQLite after a crash.
                 let started = std::time::Instant::now();
@@ -680,14 +686,8 @@ impl Handles {
 /// It lives beside the database, not in it, so a copy of the database
 /// alone doesn't reveal names; on Unix only the owner can read it.
 fn seal_key(path: &Path) -> Result<[u8; 32], BoxError> {
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            return bytes
-                .try_into()
-                .map_err(|_| format!("{}: not a 32-byte key", path.display()).into());
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("reading {}: {e}", path.display()).into()),
+    if let Some(key) = crate::filter_load::read_seal_key(path)? {
+        return Ok(key);
     }
     let key = Sealer::generate_key()?;
     let mut options = std::fs::OpenOptions::new();
