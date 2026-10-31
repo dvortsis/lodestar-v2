@@ -917,13 +917,13 @@
       "notes": "from #86 | 15:46Z split: S-logs-1 (/logs live page) now; S-logs-2 (Settings \u2192 Logging) after S-logs-1 + M-security-settings merge"
     },
     "S-about": {
-      "status": "pending",
+      "status": "building",
       "model": "sonnet",
       "session": null,
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "from #86"
+      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet."
     },
     "B-update": {
       "status": "paused",
