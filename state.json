@@ -450,12 +450,12 @@
       "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9 | 2026-10-31T01:26Z PR #250 head 39566a36 (~1,800, 45% tests); /search first load unchanged; mount in query/Live.svelte accepted (runner); reviewer session_01MMjhn8yBp4uRAjAcidcd4c | 01:27Z CI: e2e:typecheck fails (suggest fixture kind:string); author fixes locally, pushes with review round | 01:39Z review CHANGES: Enter does not close the assist list, so the next Tab picks a suggestion (breaks search-results.keyboard e2e); riding: Natural preview stale text, active index jump, BuilderRow note. Reviewer kept for delta | 02:06Z delta MERGE at caf0a614 (race fix sound; e2e/search 288/288 x3); merge on ci-ok+Web+E2E green | 02:10Z merged #250 (f563d8a5); author archived"
     },
     "S-search-5": {
-      "status": "running",
-      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6)"
+      "status": "review",
+      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6) | 02:59Z #254 head 2221d1d6 ready; reviewer session_01MMjhnBdpKEkRUctbRZBxoY"
     },
     "S-search-6": {
       "status": "running",
-      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4 | 02:12Z runner chose (a): cards, rebuild banner, Clear all on empty, live banner via torrents event + throttled limit-1 requery (>=30 s, visible only, exact totals only); deferred per-clause recovery, cold start, query-scoped live"
+      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4 | 02:12Z runner chose (a): cards, rebuild banner, Clear all on empty, live banner via torrents event + throttled limit-1 requery (>=30 s, visible only, exact totals only); deferred per-clause recovery, cold start, query-scoped live | 02:59Z size: wait for #254 (raises results-lazy to 43.2 KB), merge main, re-measure; no limit change if it fits"
     },
     "S-compare": {
       "status": "merged",
@@ -2225,6 +2225,10 @@
     {
       "item": "FYI (\u00a72.19) #253 IMP-4a (merged): import job removal refuses a paused job until cancelled; removal keeps private candidates and rows another source or the user's own data vouches for (they keep IMPORTED but lose membership); a refused source fails the job with source_unavailable; public candidates folded into a removed job's row are removed with it (documented; counting needs a schema change)",
       "status": "to-send"
+    },
+    {
+      "item": "FYI (\u00a72.19) #254 S-search-5: runner raised two runner-set lazy-chunk limits: Search results (lazy) 41.5 -> 43.2 KB (still under the 45 KB per-view cap) and Results toolbar (lazy) 4.4 -> 4.6 KB; Search first load unchanged. Bulk Send and saved views deferred (need a send-to-client endpoint / server views)",
+      "status": "to-send-at-merge"
     }
   ],
   "external_gates": {
