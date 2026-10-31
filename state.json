@@ -1803,13 +1803,13 @@
       "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus. | 21:17Z hang = own deadlock: match on pending_requeues(&self.store())? kept the store MutexGuard alive through the match arm that re-locked (would have hung start-time resume). Fixed with let. Reviewer: grep for the same temporary-guard-in-match pattern. | 21:26Z PR #297 head d7d90e65 (cap 64, \"all\" full re-mark chunked; downgrade drops pending all - reviewer to assess). Reviewer + security review; subscribed."
     },
     "S-logs-2b": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhn9PaFGExdtPTuRLd14",
       "pr": 294,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head. | 20:53Z head 96a637ae (logoutput lazy map; Logging map 0.842/0.86; Notifications ~45.1 noise until #293). Reviewer (session_01MMjhnA5HC3rJjGGgq1dCrL) + security review; subscribed. Order: #293 first, then #294 merges main. | 21:02Z told: merge main (#293) with review fixes, re-measure. | 21:06Z MERGE at 96a637ae. Author: merge main + O1 (disable delete on failed reload) + O2 labels if headroom; one push; runner checks delta, merges on green. | 21:18Z head 0f40f95d (main merged, O1 done, O2 deferred: labels need logging map ~0.95 KB). Merge on green.",
+      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head. | 20:53Z head 96a637ae (logoutput lazy map; Logging map 0.842/0.86; Notifications ~45.1 noise until #293). Reviewer (session_01MMjhnA5HC3rJjGGgq1dCrL) + security review; subscribed. Order: #293 first, then #294 merges main. | 21:02Z told: merge main (#293) with review fixes, re-measure. | 21:06Z MERGE at 96a637ae. Author: merge main + O1 (disable delete on failed reload) + O2 labels if headroom; one push; runner checks delta, merges on green. | 21:18Z head 0f40f95d (main merged, O1 done, O2 deferred: labels need logging map ~0.95 KB). Merge on green. | 21:31Z MERGED 2053f15f; sessions archived (S-logs-2 author session cost ~$50 across 2a+2b).",
       "reviewer": "session_01MMjhnA5HC3rJjGGgq1dCrL"
     },
     "X-form-remount": {
@@ -1819,7 +1819,7 @@
       "pr": 295,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot). | 21:03Z PR #295 head 2603d447. Author: engine never sets loading on resync (premise wrong); body kept mounted anyway. Reviewer told to find real remount cause and prove spec fails on main. Subscribed. | 21:22Z review: no blockers, but nothing remounted (mount counter); #289 cause was details/ontoggle race fixed by 043f495; engine change guards unreachable path, +0.07 KB every Settings first view. Runner \u00a72.26: drop engine change, keep spec as regression guard (+assert open), fix EventList comment/opened + decisions after #294 merges; merge main; one push.",
+      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot). | 21:03Z PR #295 head 2603d447. Author: engine never sets loading on resync (premise wrong); body kept mounted anyway. Reviewer told to find real remount cause and prove spec fails on main. Subscribed. | 21:22Z review: no blockers, but nothing remounted (mount counter); #289 cause was details/ontoggle race fixed by 043f495; engine change guards unreachable path, +0.07 KB every Settings first view. Runner \u00a72.26: drop engine change, keep spec as regression guard (+assert open), fix EventList comment/opened + decisions after #294 merges; merge main; one push. | 21:31Z told to proceed with rework (#294 merged).",
       "reviewer": "session_01MMjhn9dGmekFXHRR8v4YnR"
     },
     "X-build-stable-name": {
@@ -2625,6 +2625,11 @@
       "item": "FYI (\u00a72.19) X-build-stable-name (#296, pending): web builds now deterministic (version = package version + commit SHA); runner raised 'Results toolbar (lazy)' 4.6 -> 4.65 KB because the SHA in the version literal changes gzip by a few bytes per commit.",
       "status": "to-send",
       "at": "2026-10-31T21:14Z"
+    },
+    {
+      "item": "FYI: Settings \u2192 Logging is complete (#289 2a + #294 2b): events, data kinds with duration dialogs and banners, opt-ins, never-logged list, outputs, log files (downloads redact torrent details by default), delete with confirmation. Runner UX calls (\u00a72.26): one size-preview panel instead of per-field; console format shows text/json until event labels land.",
+      "status": "to-send",
+      "at": "2026-10-31T21:31Z"
     }
   ],
   "external_gates": {
