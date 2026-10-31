@@ -35,6 +35,7 @@ const EN = [
 	'Storage & retention',
 	'Search & ranking',
 	'Trackers',
+	'Filters & Safety',
 	'Integrations',
 	'Notifications',
 	'Insights & digest',
