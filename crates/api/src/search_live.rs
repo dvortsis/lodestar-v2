@@ -250,7 +250,8 @@ impl LiveQueries {
         since: i64,
     ) -> Result<SearchLiveRegistration, LiveRefused> {
         let Prepared { query, adult } = p;
-        let mut st = self.screened(self.adult.shown());
+        let shown = self.adult.shown();
+        let mut st = self.screened(shown);
         let mine: Vec<usize> = (0..st.regs.len())
             .filter(|&i| st.regs[i].session == session)
             .collect();
@@ -281,7 +282,9 @@ impl LiveQueries {
         });
         Ok(SearchLiveRegistration {
             id,
-            since: adult.then_some(since),
+            // Prepared while Adult was shown but hidden since: no id
+            // (and the registration is dropped at the next read).
+            since: (adult && shown).then_some(since),
         })
     }
 
