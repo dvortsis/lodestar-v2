@@ -69,6 +69,7 @@ beforeEach(() => {
 	);
 });
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
 	document.body.innerHTML = '';
@@ -432,6 +433,7 @@ describe('API keys and feed tokens', () => {
 
 	async function keysSection() {
 		render(SecurityScreen);
+		await fireEvent.click(await screen.findByTestId('security-keys-heading-show'));
 		const section = await screen.findByTestId('security-keys', {}, { timeout: 10_000 });
 		await within(section).findByText('Sonarr');
 		return section;
@@ -451,6 +453,7 @@ describe('API keys and feed tokens', () => {
 	it('says so when the list can’t be read, and tries again', async () => {
 		replies['GET /keys'] = () => err(500, 'internal', 'boom');
 		render(SecurityScreen);
+		await fireEvent.click(await screen.findByTestId('security-keys-heading-show'));
 		expect(
 			await screen.findByText("Couldn't load the keys.", {}, { timeout: 10_000 })
 		).toBeTruthy();
@@ -483,7 +486,9 @@ describe('API keys and feed tokens', () => {
 	});
 
 	it('shows a new secret once, with Copy, and keeps it nowhere afterwards', async () => {
-		const log = vi.spyOn(console, 'log');
+		const logs = (['log', 'info', 'warn', 'error', 'debug'] as const).map((k) =>
+			vi.spyOn(console, k)
+		);
 		const writeText = vi.fn(async () => {});
 		vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
 		replies['POST /keys'] = () => ({
@@ -519,10 +524,9 @@ describe('API keys and feed tokens', () => {
 		await fireEvent.click(within(reveal).getByTestId('key-secret-done'));
 		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 		await until(() => expect(leaked(SECRET)).toEqual([]));
-		expect(log.mock.calls.flat().join(' ')).not.toContain(SECRET);
+		expect(logs.flatMap((l) => l.mock.calls.flat()).join(' ')).not.toContain(SECRET);
 		expect(within(section).getByText('Feeds')).toBeTruthy();
 		expect(within(section).getByLabelText(/^Name/)).toHaveProperty('value', '');
-		log.mockRestore();
 	});
 
 	it('regenerate needs the password and replaces the row; Cancel sends nothing', async () => {
@@ -569,6 +573,43 @@ describe('API keys and feed tokens', () => {
 		]);
 	});
 
+	it('a refusal that isn’t the password’s closes the dialog and shows on the screen', async () => {
+		replies['POST /keys'] = () => err(409, 'too_many_keys', 'There are 500 keys already.');
+		replies['POST /keys/1/regenerate'] = () =>
+			err(409, 'key_inactive', 'This key is no longer active.');
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		let { dialog, input } = await passwordDialog('Create Radarr?');
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.getByTestId('security-keys-result').textContent).toContain(
+			'Nothing was changed. There are 500 keys already.'
+		);
+
+		await fireEvent.click(within(section).getByRole('button', { name: 'Regenerate Sonarr…' }));
+		({ dialog, input } = await passwordDialog('Regenerate Sonarr?'));
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.getByTestId('security-keys-result').textContent).toContain(
+			'This key is no longer active.'
+		);
+		expect(writes()).toHaveLength(2);
+	});
+
+	it('a refused name shows at the name field', async () => {
+		replies['POST /keys'] = () => err(400, 'invalid', 'That name is taken.', 'name');
+		const section = await keysSection();
+		const field = within(section).getByLabelText(/^Name/);
+		await fireEvent.input(field, { target: { value: 'Sonarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Sonarr?');
+		await confirm(dialog, input, 'right-password');
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(within(section).getByText('That name is taken.')).toBeTruthy();
+		expect(field.getAttribute('aria-invalid')).toBe('true');
+	});
+
 	it('revoke asks first, without the password (B12); Keep it sends nothing', async () => {
 		replies['POST /keys/1/revoke'] = () => ({
 			status: 200,
@@ -607,6 +648,7 @@ describe('Trusted proxy sign-in', () => {
 
 	async function proxySection() {
 		render(SecurityScreen);
+		await fireEvent.click(await screen.findByTestId('security-proxy-show'));
 		const form = await screen.findByTestId('security-proxy', {}, { timeout: 10_000 });
 		const toggle = (await within(form).findByRole('switch')) as HTMLInputElement;
 		return { form, toggle };
@@ -634,6 +676,7 @@ describe('Trusted proxy sign-in', () => {
 	it('says so when the settings can’t be read', async () => {
 		replies['GET /auth/proxy'] = () => err(500, 'internal', 'boom');
 		render(SecurityScreen);
+		await fireEvent.click(await screen.findByTestId('security-proxy-show'));
 		expect(
 			await screen.findByText("Couldn't read the trusted proxy settings.", {}, { timeout: 10_000 })
 		).toBeTruthy();
@@ -697,6 +740,36 @@ describe('Trusted proxy sign-in', () => {
 		expect(within(form).getByTestId('security-proxy-warning')).toBeTruthy();
 		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
 		await passwordDialog('Let more people sign in through the proxy?');
+	});
+
+	it('turning it off is a plain save, with no warning', async () => {
+		replies['GET /auth/proxy'] = () => ({
+			status: 200,
+			body: PROXY({ enabled: true, trusted: ['172.20.0.2/32'] })
+		});
+		const { form, toggle } = await proxySection();
+		await fireEvent.click(toggle);
+		expect(within(form).queryByTestId('security-proxy-warning')).toBeNull();
+		await fireEvent.click(within(form).getByTestId('security-proxy-save'));
+		const { dialog, input } = await passwordDialog('Save trusted proxy sign-in?');
+		expect(dialog.textContent).not.toContain('without a password');
+		await confirm(dialog, input, 'right-password');
+		await until(() =>
+			expect(screen.getByTestId('security-proxy-result').textContent).toContain('Saved.')
+		);
+		expect((writes()[0]!.body as { enabled: boolean }).enabled).toBe(false);
+	});
+
+	it('a new user header while on warns', async () => {
+		replies['GET /auth/proxy'] = () => ({
+			status: 200,
+			body: PROXY({ enabled: true, trusted: ['172.20.0.2/32'] })
+		});
+		const { form } = await proxySection();
+		await fireEvent.input(within(form).getByLabelText(/User header/), {
+			target: { value: 'X-Forwarded-User' }
+		});
+		expect(within(form).getByTestId('security-proxy-warning')).toBeTruthy();
 	});
 
 	it('a refused value closes the dialog and shows at its field', async () => {

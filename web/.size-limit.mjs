@@ -314,6 +314,18 @@ if (staticHits.length)
 	throw new Error(
 		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
 	);
+// The same for Security's later parts: they load only when a Show button is pressed, so nothing may
+// import them statically, or their code would leave the first-view gates unmeasured.
+const laterKeys = Object.keys(manifest).filter((key) =>
+	settingsSecurityLater.some((re) => re.test(key))
+);
+const laterStatic = Object.entries(manifest).flatMap(([from, chunk]) =>
+	(chunk.imports ?? []).filter((key) => laterKeys.includes(key)).map((key) => `${from} -> ${key}`)
+);
+if (laterStatic.length)
+	throw new Error(
+		`Settings: a Security part loaded on request is imported statically:\n  ${laterStatic.join('\n  ')}`
+	);
 // Appearance's theme picker (opened with "Browse themes", with themes.json) and its custom theme
 // editor (opened from the picker, with the build's theme compiler) load on interaction, so a first
 // view stops at them; each has its own entry below.
@@ -670,7 +682,7 @@ export default [
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
-	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '32.4 KB'),
+	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '32.7 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>

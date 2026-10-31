@@ -207,7 +207,10 @@ test.describe('keyboard: Settings → Security keys and proxy', () => {
 
 	test('creates a key, shows its secret once, and keeps it nowhere', async ({ page, go, kbd }) => {
 		await go('/settings/security');
+		await kbd.tabTo(page.getByRole('button', { name: 'Manage keys and tokens' }), 150);
+		await kbd.press('Enter');
 		await expect(page.getByText('Sonarr', { exact: true })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'API keys and feed tokens' })).toBeFocused();
 		await expectNoA11yViolations(page);
 		await kbd.tabTo(page.getByRole('textbox', { name: 'Name' }), 200);
 		await page.keyboard.type('Radarr');
@@ -250,6 +253,8 @@ test.describe('keyboard: Settings → Security keys and proxy', () => {
 
 	test('turns proxy sign-in on behind its warning and the password', async ({ page, go, kbd }) => {
 		await go('/settings/security');
+		await kbd.tabTo(page.getByRole('button', { name: 'Show proxy sign-in settings' }), 150);
+		await kbd.press('Enter');
 		const toggle = page.getByRole('switch', { name: "Sign people in from the proxy's header" });
 		await kbd.tabTo(toggle, 250);
 		await kbd.press('Space');

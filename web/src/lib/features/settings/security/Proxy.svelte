@@ -57,7 +57,7 @@
 		!!live &&
 			(enabled !== live.enabled ||
 				lines(trusted).join('\n') !== live.trusted.join('\n') ||
-				header.trim() !== live.header ||
+				(header.trim() || 'Remote-User') !== live.header ||
 				lines(users).join('\n') !== live.allowed_users.join('\n'))
 	);
 	/** This save turns proxy sign-in on. */
@@ -68,7 +68,11 @@
 		if (!live || !enabled) return false;
 		if (!live.enabled) return true;
 		const now = lines(users);
+		// Typed lines are compared with the server's canonical CIDRs, so `10.0.0.1` against a saved
+		// `10.0.0.1/32` warns too: on the safe side. A new header counts as well, since a header
+		// the proxy doesn't overwrite would let any client name itself.
 		return (
+			(header.trim() || 'Remote-User') !== live.header ||
 			lines(trusted).some((t) => !live.trusted.includes(t)) ||
 			(live.allowed_users.length > 0 &&
 				(now.length === 0 || now.some((u) => !live.allowed_users.includes(u))))
@@ -161,9 +165,6 @@
 	onsubmit={save}
 	data-testid="security-proxy"
 >
-	<h2 id="security-proxy" class="text-label font-semibold">
-		{m.settings_security_proxy_heading()}
-	</h2>
 	<p class="text-muted-text">{m.settings_security_proxy_what()}</p>
 	<p class="text-muted-text">{m.settings_security_proxy_recommend()}</p>
 	<div class="text-muted-text">
