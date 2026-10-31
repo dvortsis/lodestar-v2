@@ -1811,13 +1811,13 @@
       "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow."
     },
     "X-form-remount": {
-      "status": "pending",
+      "status": "building",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhnA1v32xTxqD5BgaaKR",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus)."
+      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
