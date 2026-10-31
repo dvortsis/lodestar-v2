@@ -1671,13 +1671,13 @@
    "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA | 14:05Z MERGE at 29201097 (3 optional); waiting on ci-ok (windows). Runner §2.26: merge as is; follow-up X-search-files-2 gates cold file-clause class at §3 FILE_P95 150 ms at CI size + investigates cold broad clause at 1M (211 ms > §3 150 ms row) + IdPart proptest + recency-index charge | 14:08Z merged 4d47440a; sessions archived"
   },
   "X-polish-1031b": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnApMYvpxgsjfykU8zf",
-   "pr": null,
+   "pr": 279,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus"
+   "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p"
   },
   "B-import-refile": {
    "status": "running",
@@ -2203,7 +2203,8 @@
   "v051_delta": "2026-10-30T10:37Z: draft notes/v051-delta-draft.md vs 744b84d6..1199430f. No class-A (lifecycle/sampler/endpoint) changes on main yet. CR-0f #200 (bootstrap/pause) WILL be class A non-trivial -> the cutoff artifact needs a soak; the Unraid 24h Linux rc soak serves as it (plan §0.4/D2). Live-behaviour changes to weigh: V12 in-place edit + repair_v12 at open (applies to soak data dir), SeekGuard (#181), Info::parse (#177), filter semantics (#179,#192). No targeted test: B2 snapshots metadata() failure branch, E1 setup password guard, A2 msg text, F2 align, F5 dep removal, B3 bench. Refresh at cut incl. #196 #198 #199 #200 #202.",
   "2026-10-30T12:30Z-B3": "Part B3 done: paused old-lineage slices saved as patches under runner-state ports/ (B-update-5 conflicts with F-updater; needs Opus resume after v0.5.1). Pre-swap sessions archived: X-sleeps, B-log1b, M-settings-form, S-discover, B-update. S-settings-1 session (session_01WxWNVVXvmeyCn6M12V9h9h) archive was denied by the permission classifier; left idle for the owner.",
   "heartbeat_2026-10-30T13:07Z": "Heartbeat: IMP-1 running (applying self-review fixes), CR-SIM pushing review fixes, CR-0d #208 CI on a1bac3db; release/v0.5.1 8b67f269: Release+E2E green, CI running. No permission prompts. Heartbeat prompt refreshed (landing plan done).",
-  "2026-10-30T19:17Z": "Before merging any PR that touches web/, read its check runs: 'check + test + build + size' and 'playwright (core…)' must be success, not just ci-ok (the ruleset requires only ci-ok; #217 merged early)."
+  "2026-10-30T19:17Z": "Before merging any PR that touches web/, read its check runs: 'check + test + build + size' and 'playwright (core…)' must be success, not just ci-ok (the ruleset requires only ci-ok; #217 merged early).",
+  "2026-10-31T14:10Z": "cargo test --workspace with debuginfo fills a session disk (~30 GB target/debug); tell slices/reviewers to set CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0"
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
