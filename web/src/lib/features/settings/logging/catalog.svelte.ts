@@ -3,7 +3,10 @@
 // every privacy change reloads it, so what shows is always the server's state (§12.1). The
 // server's clock is kept as an offset, since deadlines are on it, not the browser's.
 import { api, isAbort, type ApiError } from '$lib/api/client';
+import type { components } from '$lib/api/schema';
 import type { Catalog } from './rules';
+
+export type DeploymentKind = components['schemas']['Deployment']['kind'];
 
 /** How often the time left is redrawn, and the catalog reloaded once a deadline passes. */
 export const TICK_MS = 30_000;
@@ -13,6 +16,9 @@ export class LoggingCatalog {
 	error = $state.raw<ApiError | Error>();
 	/** The server's clock, in Unix seconds, as of the last tick. */
 	now = $state(0);
+	/** How Lodestar is installed (`GET /system`), for the Docker hint and the Windows Event Log
+	 * setting; undefined until read, or if it can't be, so neither shows. */
+	deployment = $state<DeploymentKind>();
 	#offset = 0;
 	#seq = 0;
 	#timer: ReturnType<typeof setInterval> | undefined;
@@ -51,6 +57,10 @@ export class LoggingCatalog {
 
 	start(): () => void {
 		void this.load();
+		api.get('/system').then(
+			(s) => (this.deployment = s.deployment.kind),
+			() => {}
+		);
 		this.#timer = setInterval(() => this.tick(), TICK_MS);
 		return () => clearInterval(this.#timer);
 	}

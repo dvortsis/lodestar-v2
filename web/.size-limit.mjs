@@ -189,7 +189,8 @@ const bodyMaps = {
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
-const handBuilt = new Set(Object.values(bodyMaps).flat());
+// The outputs' map (S-logs-2b) belongs to Logging's body too: it loads with its outputs part.
+const handBuilt = new Set([...Object.values(bodyMaps).flat(), 'logoutput']);
 const largestMap = mapName(
 	messageKeys
 		.filter((key) => mapName(key) !== 'group' && !handBuilt.has(mapName(key)))
@@ -215,13 +216,20 @@ const connectionMaps = [
 ];
 const connectionMapFiles = onDemandOf('/settings/[section]', connectionMaps);
 // Logging's map (S-logs-2) has its own entry too, so the existing maps' entries keep their limits.
+// The outputs' labels (S-logs-2b): their own map, loaded with the outputs after Logging's first view.
+const loggingOutputMapFiles = onDemandOf('/settings/[section]', [
+	/features\/settings\/form\/message-maps\/logoutput\.ts$/
+]);
 const loggingMapFiles = onDemandOf('/settings/[section]', [
 	/features\/settings\/form\/message-maps\/logging\.ts$/
 ]);
 const settingsMessagesLazy = requireMeasuredJs(
 	'Settings messages (on demand)',
 	onDemandOf('/settings/[section]', settingsMessages).filter(
-		(f) => !connectionMapFiles.includes(f) && !loggingMapFiles.includes(f)
+		(f) =>
+			!connectionMapFiles.includes(f) &&
+			!loggingMapFiles.includes(f) &&
+			!loggingOutputMapFiles.includes(f)
 	)
 );
 const settingsConnectionMaps = requireMeasuredJs(
@@ -288,6 +296,12 @@ const settingsLogging = [
 	/features\/settings\/logging\/(EventList|ComponentLevels|VerbosityWidget)\.svelte$/,
 	/features\/settings\/logging\/(privacy|icon|parts)\.ts$/
 ];
+// Logging part 2 (S-logs-2b): the log files with the Danger zone, the preview, and the console
+// detail's question load after the first view (or on the first save that needs it).
+const settingsLoggingFiles = [
+	/features\/settings\/logging\/(LogFiles|Preview|Outputs|Tail)\.svelte$/,
+	/features\/settings\/logging\/outputs\.ts$/
+];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
 // The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
 // module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
@@ -308,6 +322,7 @@ const settingsFirstView = [
 	...settingsSecurityLater,
 	...securityLoader,
 	...settingsLogging,
+	...settingsLoggingFiles,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
@@ -328,9 +343,21 @@ const settingsLoggingMap = requireMeasuredJs(
 	'Settings logging messages (on demand)',
 	loggingMapFiles
 );
+const settingsLoggingOutputMap = requireMeasuredJs(
+	'Settings logging output messages (on demand)',
+	loggingOutputMapFiles
+);
 const settingsLoggingLazy = requireMeasuredJs(
 	'Settings logging parts (on demand)',
 	onDemandOf('/settings/[section]', settingsLogging).filter(
+		(f) =>
+			!onDemandOf('/settings/[section]', settingsOnDemand).includes(f) &&
+			!onDemandOf('/settings/[section]', settingsLoggingFiles).includes(f)
+	)
+);
+const settingsLoggingFilesLazy = requireMeasuredJs(
+	'Settings logging files and preview (on demand)',
+	onDemandOf('/settings/[section]', settingsLoggingFiles).filter(
 		(f) => !onDemandOf('/settings/[section]', settingsOnDemand).includes(f)
 	)
 );
@@ -404,6 +431,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsSecurity,
 					...settingsSecurityLater,
 					...settingsLogging,
+					...settingsLoggingFiles,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
@@ -746,7 +774,12 @@ export default [
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
 	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
+	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
+	// 0.70 KB; limit = measured + 10%.
+	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
+	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
+	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	// A new registry entry adds ≈ 65–85 B to every one of these and to "Settings section" (its
