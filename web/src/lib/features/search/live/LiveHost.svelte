@@ -2,13 +2,13 @@
 	// "12 new results · Show" (§10.4 "Live"): the poller and its banner, loaded by the results panel
 	// once there are rows. The announcement goes through the panel's own polite region.
 	import { tick } from 'svelte';
-	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { search } from '$lib/state/search.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Info from '~icons/ph/info-bold';
 	import { selection } from '../bulk/selection.svelte';
+	import { formatCount } from '../results/ResultRow.svelte';
 	import { results, type ResultsQuery } from '../results/results.svelte';
 	import { createLive } from './live.svelte';
 	import './live.css';

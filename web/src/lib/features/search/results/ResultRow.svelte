@@ -2,6 +2,12 @@
 	import type { components } from '$lib/api/schema';
 	export type SearchHit = components['schemas']['SearchHit'];
 	export type Density = 'comfortable' | 'compact';
+	// What the Cards tile and the live banner use of the row's own helpers: they import them from
+	// here, not from the modules, so the bundler keeps them in this chunk (a second importer would
+	// split each one into its own tiny chunk, which Alerts and Discover would then load too).
+	export { formatBytes, formatCount } from '$lib/format';
+	export { showBidi } from '$lib/util/bidi';
+	export { ADULT_LABELS, TYPE_LABELS } from '$lib/util/content-labels';
 </script>
 
 <script lang="ts">

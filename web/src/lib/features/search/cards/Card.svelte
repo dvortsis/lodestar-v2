@@ -6,13 +6,17 @@
 	import ArrowUp from '~icons/ph/arrow-up-bold';
 	import History from '~icons/ph/clock-counter-clockwise-bold';
 	import Warning from '~icons/ph/warning-bold';
-	import { formatBytes, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
-	import { showBidi } from '$lib/util/bidi';
-	import { ADULT_LABELS as ADULT, TYPE_LABELS as TYPE } from '$lib/util/content-labels';
-	import type { SearchHit } from '../results/ResultRow.svelte';
+	import {
+		ADULT_LABELS as ADULT,
+		TYPE_LABELS as TYPE,
+		formatBytes,
+		formatCount,
+		showBidi,
+		type SearchHit
+	} from '../results/ResultRow.svelte';
 
 	interface Props {
 		hit: SearchHit;
