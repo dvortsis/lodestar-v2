@@ -138,6 +138,104 @@ pub fn adult_hold(d: &Decision) -> bool {
         && matches!(d.action, Action::Quarantine | Action::Drop)
 }
 
+/// What a classification rule's say changes: Is adult (`true`) or Not
+/// adult (`false`) where it differs from detection, else nothing.
+pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {
+    says.filter(|adult| *adult != (class.content_type == ContentType::Adult))
+}
+
+/// The engine's verdict on a record about to be stored or held: a hash on
+/// the floor's or a dropping list first, then the full judgement with your
+/// classification rules, and what those rules change (`rule_fix`).
+pub fn judge_with_rules(
+    engine: &Engine,
+    item: &Item,
+    class: &Classification,
+    facts: &Facts<'_>,
+    now: i64,
+) -> (Verdict, Option<bool>) {
+    if let Some(d) = engine.blocked_hash(item.hashes) {
+        let v = Verdict {
+            decision: Some(d),
+            shadow: Vec::new(),
+        };
+        return (v, None);
+    }
+    let (v, says) = engine.judge_classified(item, Some(facts), now);
+    (v, rule_fix(says, class))
+}
+
+/// An import candidate as filtering sees it: no files, and its name and
+/// size only when the source gave them.
+#[derive(Clone, Copy)]
+pub struct Candidate<'a> {
+    pub hash: [u8; 20],
+    /// A hybrid's v2 hash; its truncated form is a swarm hash too.
+    pub hash_v2: Option<[u8; 32]>,
+    pub name: &'a str,
+    pub size: Option<u64>,
+    pub source_at: Option<i64>,
+}
+
+// No name in its `Debug`: it may be one a rule holds.
+impl std::fmt::Debug for Candidate<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Candidate")
+            .field("name_len", &self.name.len())
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What filtering makes of an import candidate.
+#[derive(Debug)]
+pub struct CandidateJudgement {
+    /// Its swarm hashes: the primary, and a hybrid's truncated v2 hash.
+    pub hashes: Vec<[u8; 20]>,
+    pub verdict: Verdict,
+    /// What your classification rules change (`rule_fix`).
+    pub fix: Option<bool>,
+}
+
+/// Judges an import candidate, the same way at import and in the writer's
+/// refile sweep (`docs/decisions/2026-10-31-X-import-refile-2.md`): its
+/// hashes, then its name with your classification rules. A `source_at`
+/// outside `1..=now` counts as discovered now.
+pub fn judge_candidate(engine: &Engine, c: Candidate<'_>, now: i64) -> CandidateJudgement {
+    let mut hashes = vec![c.hash];
+    if let Some(v2) = c.hash_v2 {
+        let mut t = [0u8; 20];
+        t.copy_from_slice(&v2[..20]);
+        if t != c.hash {
+            hashes.push(t);
+        }
+    }
+    let class = classify_corrected(c.name, &[], Correction::default());
+    let facts = Facts {
+        class: &class,
+        size: c.size.unwrap_or(0),
+        piece_len: 0,
+        flags: 0,
+        discovered_at: c
+            .source_at
+            .filter(|at| (1..=now).contains(at))
+            .unwrap_or(now),
+        now,
+    };
+    let item = Item {
+        hashes: &hashes,
+        name: c.name,
+        files: &[],
+        content_type: class.content_type,
+    };
+    let (verdict, fix) = judge_with_rules(engine, &item, &class, &facts, now);
+    CandidateJudgement {
+        hashes,
+        verdict,
+        fix,
+    }
+}
+
 /// What your classification rules say about a stored torrent.
 fn rule_says(
     engine: &Engine,

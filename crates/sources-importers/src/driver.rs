@@ -24,8 +24,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lodestar_classify::{Classification, Correction, FileInfo, file_infos};
-use lodestar_filter::reclassify::{adult_hold, enrich_corrected};
+use lodestar_classify::{Correction, file_infos};
+use lodestar_filter::reclassify::{self, adult_hold, enrich_corrected};
 use lodestar_filter::{Action, Engine, Facts, Item, Sealer, Verdict};
 use lodestar_store::import::{
     BatchCommitted, Control, Decision, ImportBatch, ImportCandidate, ImportCounters, ImportJob,
@@ -658,7 +658,13 @@ fn judge_torrent(
         discovered_at: source_at.filter(|at| (1..=now).contains(at)).unwrap_or(now),
         now,
     };
-    let (verdict, fix) = verdict(filter, &hashes, &p.name, &files, &class, &facts, now);
+    let item = Item {
+        hashes: &hashes,
+        name: &p.name,
+        files: &files,
+        content_type: class.content_type,
+    };
+    let (verdict, fix) = reclassify::judge_with_rules(filter.engine, &item, &class, &facts, now);
     // Your classification rule changes what's stored (§20.9).
     if fix.is_some() {
         let c = Correction {
@@ -670,8 +676,8 @@ fn judge_torrent(
     judged(filter, hashes, &p.name, verdict, fix)
 }
 
-/// A candidate through the filter: the hash lists, and its name when it
-/// has one. It has no files.
+/// A candidate through the filter, as the writer's refile sweep judges it
+/// (`lodestar_filter::reclassify::judge_candidate`).
 fn judge_candidate(filter: &Filter<'_>, rec: &Rec, now: i64) -> Judged {
     let Some(c) = rec.candidate(Decision {
         hits: &[],
@@ -679,52 +685,19 @@ fn judge_candidate(filter: &Filter<'_>, rec: &Rec, now: i64) -> Judged {
     }) else {
         return Judged::default();
     };
-    let hashes = vec![c.hash.0];
     let name = c.name.map(String::from_utf8_lossy).unwrap_or_default();
-    let (_, class) = enrich_corrected(&name, &[], Correction::default());
-    let facts = Facts {
-        class: &class,
-        size: c.size.unwrap_or(0),
-        piece_len: 0,
-        flags: 0,
-        discovered_at: c
-            .source_at
-            .filter(|at| (1..=now).contains(at))
-            .unwrap_or(now),
+    let j = reclassify::judge_candidate(
+        filter.engine,
+        reclassify::Candidate {
+            hash: c.hash.0,
+            hash_v2: c.hash_v2.map(|h| h.0),
+            name: &name,
+            size: c.size,
+            source_at: c.source_at,
+        },
         now,
-    };
-    let (verdict, fix) = verdict(filter, &hashes, &name, &[], &class, &facts, now);
-    judged(filter, hashes, &name, verdict, fix)
-}
-
-/// The engine's verdict: a hash on the floor's or a dropping list first,
-/// then the full judgement with your classification rules.
-fn verdict(
-    filter: &Filter<'_>,
-    hashes: &[[u8; 20]],
-    name: &str,
-    files: &[FileInfo],
-    class: &Classification,
-    facts: &Facts<'_>,
-    now: i64,
-) -> (Verdict, Option<bool>) {
-    if let Some(d) = filter.engine.blocked_hash(hashes) {
-        let v = Verdict {
-            decision: Some(d),
-            shadow: Vec::new(),
-        };
-        return (v, None);
-    }
-    let item = Item {
-        hashes,
-        name,
-        files,
-        content_type: class.content_type,
-    };
-    let (v, says) = filter.engine.judge_classified(&item, Some(facts), now);
-    let fix = says
-        .filter(|adult| *adult != (class.content_type == lodestar_classify::ContentType::Adult));
-    (v, fix)
+    );
+    judged(filter, j.hashes, &name, j.verdict, j.fix)
 }
 
 /// The hits to record, as the writer records ingest's (one per decision,

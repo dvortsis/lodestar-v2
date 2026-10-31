@@ -37,6 +37,7 @@ This decided how urgent each step was. As of `main` on 2026-10-31:
   - This moves a finished job's counters, which IMP-1 otherwise leaves alone. The change is what the job's records are now, which is the truthful reading the brief asks for. `revision` isn't bumped for counters (IMP-1: only phase and control changes bump it).
   - A candidate removed by a hash trigger (a CS-1 entry, a tombstone written elsewhere) still leaves the counters as IMP-1 left them. Unchanged here.
 - **What `candidates` means now:** records the job counted as candidates, minus those a rule later held back (which this sweep moves to `filtered` or `quarantined`). It's neither IMP-1's purely historical count nor the live one: a candidate later stored, or held by a hash trigger, still counts. This refines IMP-1's "historical `candidates` counter" and "advanced only inside the batch transaction"; both lines there now point here.
+- **Only the sweep moves counters or flips `complete_with_issues`.** A hash-trigger removal (a CS-1 hash, a tombstone) and a candidate later stored as a torrent leave both as they were (`2026-10-31-X-import-refile-2.md`).
 - **`open_candidates` is the live count** and so follows by itself.
 - **`complete_with_issues` becomes `complete`** when the sweep removes a job's last waiting candidate and it has no invalid records or dropped file rows: the outcome `set_import_phase` would pick now. That's a phase change, so it bumps `revision`.
 

@@ -1395,12 +1395,18 @@ impl Store {
                 Held::Tombstone => (1, 0),
                 Held::Quarantine => (0, 1),
             };
-            tx.prepare_cached(
-                "UPDATE import_jobs SET candidates = max(candidates - 1, 0),
-                     filtered = filtered + ?2, quarantined = quarantined + ?3, updated_at = ?4
-                 WHERE id = ?1",
-            )?
-            .execute(params![job, filtered, quarantined, at])?;
+            // A job counting no candidates while one waits is a broken
+            // count: moving nothing keeps `filtered` and `quarantined` from
+            // gaining a phantom one.
+            let moved = tx
+                .prepare_cached(
+                    "UPDATE import_jobs SET candidates = candidates - 1,
+                         filtered = filtered + ?2, quarantined = quarantined + ?3,
+                         updated_at = ?4
+                     WHERE id = ?1 AND candidates > 0",
+                )?
+                .execute(params![job, filtered, quarantined, at])?;
+            debug_assert_eq!(moved, 1, "job {job} counts no candidates");
             jobs.insert(job);
             done.push(r.id);
         }
@@ -2244,6 +2250,58 @@ mod tests {
         let job = store.import_job(job.id).unwrap().unwrap();
         assert_eq!((job.counters.candidates, job.counters.filtered), (0, 1));
         assert!(job.counters.conserved());
+
+        // A waiting candidate its job no longer counts (a broken count):
+        // no counter gains a phantom one (debug builds stop at the assert,
+        // and the transaction rolls back).
+        let more = [ImportRecord::Candidate(ImportCandidate {
+            hash: InfoHash([2; 20]),
+            ..match records[0] {
+                ImportRecord::Candidate(c) => c,
+                _ => unreachable!(),
+            }
+        })];
+        store
+            .commit_import_batch(&ImportBatch {
+                job: job.id,
+                seq: 2,
+                position: b"",
+                source: src,
+                source_bytes: 0,
+                at: T,
+                class_gen: None,
+                records: &more,
+            })
+            .unwrap();
+        let id = store.waiting_candidates(0, 1).unwrap()[0].id;
+        store
+            .conn
+            .execute(
+                "UPDATE import_jobs SET candidates = 0 WHERE id = ?1",
+                [job.id],
+            )
+            .unwrap();
+        let other = [[2u8; 20]];
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let held = RefiledCandidate {
+                id,
+                filtered: Filtered {
+                    hashes: &other,
+                    ..refiled(Held::Quarantine).filtered
+                },
+            };
+            store.refile_import_candidates(&[held], T, || true)
+        }));
+        assert_eq!(r.is_err(), cfg!(debug_assertions));
+        let after = store.import_job(job.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                after.counters.candidates,
+                after.counters.filtered,
+                after.counters.quarantined
+            ),
+            (0, 1, 0)
+        );
     }
 
     #[test]
