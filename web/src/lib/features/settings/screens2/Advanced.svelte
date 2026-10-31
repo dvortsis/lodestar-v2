@@ -6,10 +6,21 @@
 	import type { FieldSpec, SettingsForm } from '../form';
 	import SettingField from '../form/SettingField.svelte';
 
-	let { form, specs }: { form: SettingsForm; specs: FieldSpec[] } = $props();
+	let {
+		form,
+		specs,
+		open = false,
+		ontoggle
+	}: {
+		form: SettingsForm;
+		specs: FieldSpec[];
+		open?: boolean;
+		/** The disclosure was opened or closed by the user. */
+		ontoggle?: (open: boolean) => void;
+	} = $props();
 </script>
 
-<details>
+<details {open} ontoggle={(event) => ontoggle?.(event.currentTarget.open)}>
 	<summary class="ls-focus cursor-pointer py-3 text-label"
 		>{m.settings_shell_advanced({ count: formatCount(specs.length) })}</summary
 	>

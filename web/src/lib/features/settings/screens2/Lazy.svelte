@@ -32,5 +32,5 @@
 {#if Part}
 	<Part {...props} />
 {:else if failed}
-	<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
+	<p role="alert" class="text-small text-error">{m.settings_form_chunk_failed()}</p>
 {/if}

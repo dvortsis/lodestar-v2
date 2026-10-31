@@ -395,6 +395,26 @@ describe('Notifications', () => {
 		});
 	});
 
+	it('opens Advanced and focuses a field from the error summary', async () => {
+		server.next(
+			'PATCH /settings',
+			server.err(422, 'invalid_setting', { section: 'notifications', field: 'ntfy_priority' })
+		);
+		await open('notifications');
+		const alerts = within(await screen.findByRole('group', { name: 'Alerts go to' }));
+		await fireEvent.click(await alerts.findByRole('checkbox', { name: 'Discord' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
+		const summary = await screen.findByTestId('error-summary', {}, { timeout: 10_000 });
+		// Advanced is closed, so the field isn't on screen until the link reveals it.
+		await fireEvent.click(within(summary).getByRole('link'));
+		await until(() => {
+			const field = document.querySelector('[data-field="notifications.ntfy_priority"]');
+			expect(field).not.toBeNull();
+			expect(field!.contains(document.activeElement)).toBe(true);
+		});
+		expect(document.querySelector('details')!.open).toBe(true);
+	});
+
 	it('routes events to channels with checkboxes', async () => {
 		await open('notifications');
 		const alerts = within(await screen.findByRole('group', { name: 'Alerts go to' }));
