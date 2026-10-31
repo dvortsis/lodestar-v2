@@ -191,6 +191,34 @@ describe('Assist combobox', () => {
 		expect(accepted).toEqual([['batman', true]]);
 	});
 
+	it('never accepts an answer meant for older text', async () => {
+		let release: ((r: Response) => void) | undefined;
+		respond = (u) =>
+			u.searchParams.get('q') === 'res'
+				? new Promise((resolve) => (release = resolve))
+				: Promise.resolve(json({ items: [] }));
+		mount();
+		await type('res'); // the request leaves and waits
+		el.textContent = 'resx';
+		el.dispatchEvent(new Event('input')); // typed on inside the debounce window
+		release?.(json({ items: ITEMS }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(screen.queryByRole('option')).toBeNull();
+		await key('Tab');
+		expect(accepted).toEqual([]);
+	});
+
+	it('Tab leaves an untouched bar alone, even with recent queries showing', async () => {
+		localStorage.setItem('lodestar.search.recent', JSON.stringify(['big buck bunny']));
+		mount();
+		el.focus();
+		await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+		const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true, bubbles: true });
+		el.dispatchEvent(tab);
+		expect(tab.defaultPrevented).toBe(false);
+		expect(accepted).toEqual([]);
+	});
+
 	it('shows no list when the request fails', async () => {
 		respond = async () => new Response('{}', { status: 500 });
 		mount();

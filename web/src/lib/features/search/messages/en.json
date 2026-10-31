@@ -152,5 +152,7 @@
 	"search_assist_op_gte": "at least",
 	"search_assist_op_lte": "at most",
 	"search_assist_op_gt": "more than",
-	"search_assist_op_lt": "less than"
+	"search_assist_op_lt": "less than",
+	"search_assist_builder_apply": "Apply",
+	"search_assist_builder_stale": "The query changed while this was being checked. Try again."
 }

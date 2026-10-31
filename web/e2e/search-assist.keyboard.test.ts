@@ -161,7 +161,7 @@ test('Builder: a row edit updates the bar, and typing updates the rows', async (
 	await kbd.tabTo(page.getByRole('button', { name: 'Builder' }));
 	await kbd.press('Enter');
 	const builder = page.getByRole('region', { name: 'Query builder' });
-	const row = builder.getByRole('group', { name: 'Remove filter: Resolution: 720p' });
+	const row = builder.getByRole('group', { name: 'Resolution: 720p' });
 	const value = row.getByLabel('Value');
 	await expect(value).toHaveValue('720p');
 	await expectNoA11yViolations(page);

@@ -28,26 +28,30 @@
 	/** Bumped after an add, so the draft row is a fresh, empty one. */
 	let draftKey = $state(0);
 
-	async function commit(index: number | null, row: Row) {
+	function fail(text: string) {
+		error = text;
+		announce(text);
+	}
+
+	/** `at` is the clause being edited (null: a new one); its place is found again after the parse. */
+	async function commit(at: Ast | null, row: Row) {
 		error = '';
-		if (!row.value.trim()) {
-			error = m.search_assist_builder_empty();
-			return;
-		}
+		if (!row.value.trim()) return fail(m.search_assist_builder_empty());
 		try {
 			const parsed = await api.get('/parse', { query: { q: rowText(row) } });
-			if (parsed.ast.op === 'all') {
-				error = m.search_assist_builder_empty();
-				return;
-			}
+			// One clause: a value that reads as several (loose words, `|`) is not a row.
+			if (topLevel(parsed.ast).length !== 1) return fail(m.search_assist_builder_failed());
+			const index = at ? topLevel(ast).indexOf(at) : null;
+			if (index === -1) return fail(m.search_assist_builder_stale());
 			await apply(withNode(ast, index, parsed.ast));
 			if (index === null) draftKey++;
 			announce(m.search_assist_builder_applied({ text: rowText(row) }));
 		} catch (e) {
-			error =
+			fail(
 				e instanceof ApiError && e.code === 'query_syntax'
 					? e.message
-					: m.search_assist_builder_failed();
+					: m.search_assist_builder_failed()
+			);
 		}
 	}
 
@@ -58,7 +62,7 @@
 			await apply(rootWithout(ast, index));
 			announce(m.search_filters_removed({ label }));
 		} catch {
-			error = m.search_assist_builder_failed();
+			fail(m.search_assist_builder_failed());
 		}
 	}
 
@@ -71,15 +75,16 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section class="assist-panel" aria-label={m.search_assist_builder_title()} {onkeydown}>
-	{#each clauses as clause (clause.node)}
+	{#each clauses as clause, i (i)}
 		{@const index = topLevel(ast).indexOf(clause.node)}
 		{@const row = rowOf(clause.node)}
 		{@const removeLabel = m.search_filters_remove({ label: clause.label.text })}
 		{#if row}
 			<BuilderRow
 				{row}
+				label={clause.label.text}
 				{removeLabel}
-				oncommit={(r) => void commit(index, r)}
+				oncommit={(r) => void commit(clause.node, r)}
 				onremove={() => void remove(index, clause.label.text)}
 			/>
 		{:else}
@@ -95,10 +100,15 @@
 		{/if}
 	{/each}
 	{#key draftKey}
-		<BuilderRow row={blank} draft oncommit={(r) => void commit(null, r)} />
+		<BuilderRow
+			row={blank}
+			draft
+			label={m.search_assist_builder_new()}
+			oncommit={(r) => void commit(null, r)}
+		/>
 	{/key}
 	{#if error}
-		<p role="alert" class="assist-note assist-error">{error}</p>
+		<p class="assist-note assist-error">{error}</p>
 	{/if}
 	<div class="assist-row">
 		<Button onclick={close}>{m.search_assist_builder_close()}</Button>

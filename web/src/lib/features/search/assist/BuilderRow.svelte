@@ -1,6 +1,8 @@
 <script lang="ts">
-	// One Builder row: field / operator / value. An existing row commits when a control changes; the
-	// draft row at the end commits with its button. The row only reports text; the server parses it.
+	// One Builder row: field / operator / value. An existing row shows "Apply" once edited (and
+	// Enter in the value applies); the draft row at the end has "Add filter". Changing a select alone
+	// never commits, so an arrow key on a closed select can't rewrite the query. The row only reports
+	// text; the server parses it.
 	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -10,21 +12,33 @@
 
 	interface Props {
 		row: Row;
-		/** A new row: shows an "Add filter" button instead of committing on change. */
+		/** A new row: shows an "Add filter" button. */
 		draft?: boolean;
 		oncommit: (row: Row) => void;
 		onremove?: () => void;
+		/** The group's name (the clause's label). */
+		label: string;
 		removeLabel?: string;
 	}
-	let { row, draft = false, oncommit, onremove, removeLabel }: Props = $props();
+	let { row, draft = false, oncommit, onremove, label, removeLabel }: Props = $props();
 
-	// The row as it was when it mounted; the Builder keys rows by clause, so a new clause is a new row.
-	const start = untrack(() => row);
-	let field = $state(start.field);
-	let op = $state<string>(start.op);
-	let value = $state(start.value);
+	let field = $state(untrack(() => row.field));
+	let op = $state<string>(untrack(() => row.op));
+	let value = $state(untrack(() => row.value));
+
+	// The clause changed under the row (typing in the bar, a commit): show it, keeping focus where
+	// it is, since rows are keyed by position.
+	$effect(() => {
+		const r = row;
+		untrack(() => {
+			field = r.field;
+			op = r.op;
+			value = r.value;
+		});
+	});
 
 	const ops = $derived(OPERATORS[kindOf(field)]);
+	const dirty = $derived(field !== row.field || op !== row.op || value !== row.value);
 	const OP_LABEL: Record<Op, () => string> = {
 		':': m.search_assist_op_is,
 		'>=': m.search_assist_op_gte,
@@ -33,27 +47,22 @@
 		'<': m.search_assist_op_lt
 	};
 
-	function changed() {
+	function fieldChanged() {
 		// A field with other operators: the first one that fits.
 		if (!ops.includes(op as Op)) op = ops[0]!;
-		if (!draft) oncommit({ field, op: op as Op, value });
 	}
-	function add() {
+	function commit() {
 		oncommit({ field, op: op as Op, value });
 	}
 </script>
 
-<div
-	class="assist-row"
-	role="group"
-	aria-label={draft ? m.search_assist_builder_new() : removeLabel}
->
+<div class="assist-row" role="group" aria-label={label}>
 	<label class="assist-field"
 		>{m.search_assist_builder_field()}
 		<Select
 			dense
 			bind:value={field}
-			onchange={changed}
+			onchange={fieldChanged}
 			options={FIELDS.map((f) => ({ value: f.name, label: f.name }))}
 		/></label
 	>
@@ -62,7 +71,6 @@
 		<Select
 			dense
 			bind:value={op}
-			onchange={changed}
 			options={ops.map((o) => ({ value: o, label: OP_LABEL[o]() }))}
 		/></label
 	>
@@ -72,20 +80,24 @@
 			dense
 			mono
 			bind:value
-			onchange={draft ? undefined : changed}
 			onkeydown={(e) => {
-				if (draft && e.key === 'Enter') {
+				if (e.key === 'Enter' && (draft || dirty)) {
 					e.preventDefault();
-					add();
+					commit();
 				}
 			}}
 		/></label
 	>
 	{#if draft}
-		<Button variant="primary" dense onclick={add}>{m.search_assist_builder_add()}</Button>
-	{:else if onremove}
-		<Button variant="quiet" dense aria-label={removeLabel} onclick={onremove}
-			>{m.common_remove()}</Button
-		>
+		<Button variant="primary" dense onclick={commit}>{m.search_assist_builder_add()}</Button>
+	{:else}
+		{#if dirty}
+			<Button variant="primary" dense onclick={commit}>{m.search_assist_builder_apply()}</Button>
+		{/if}
+		{#if onremove}
+			<Button variant="quiet" dense aria-label={removeLabel} onclick={onremove}
+				>{m.common_remove()}</Button
+			>
+		{/if}
 	{/if}
 </div>

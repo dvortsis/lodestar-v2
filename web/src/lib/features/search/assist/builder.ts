@@ -18,7 +18,9 @@ const TAG = [
 	'audio',
 	'lang',
 	'group',
-	'has'
+	'has',
+	'resolved',
+	'adult'
 ] as const satisfies readonly Schema['AstTagKey'][];
 const TEXT = ['name', 'path', 'title'] as const satisfies readonly Schema['AstTextField'][];
 const NUM = [
@@ -45,6 +47,8 @@ export const FIELDS: { name: string; kind: RowKind }[] = [
 	...DATE.map((name) => ({ name, kind: 'date' as const }))
 ];
 
+const BYTES = new Set<string>(['size', 'largest', 'piece']);
+
 export type Op = ':' | '>=' | '<=' | '>' | '<';
 export const OPERATORS: Record<RowKind, Op[]> = {
 	text: [':'],
@@ -65,7 +69,10 @@ export const kindOf = (field: string): RowKind =>
 
 /** The text the server parses for a row: `res:2160p`, `year:>=2020`, `discovered:<7d`. */
 export function rowText(r: Row): string {
-	const value = r.value.trim();
+	let value = r.value.trim();
+	// Words in a text field are one phrase, not a clause and loose words.
+	if (kindOf(r.field) === 'text' && /\s/.test(value) && !value.startsWith('"'))
+		value = `"${value}"`;
 	return `${r.field}:${r.op === ':' ? '' : r.op}${value}`;
 }
 
@@ -82,7 +89,7 @@ export function rowOf(node: Ast): Row | null {
 		case 'word':
 			return node.field === 'any' ? null : { field: node.field, op: ':', value: node.word };
 		case 'range': {
-			if (node.field === 'size') return null; // bytes: a number the user never typed
+			if (BYTES.has(node.field)) return null; // bytes: a number the user never typed
 			const { lo, hi } = node;
 			if (lo !== null && hi !== null)
 				return lo === hi ? { field: node.field, op: ':', value: String(lo) } : null;

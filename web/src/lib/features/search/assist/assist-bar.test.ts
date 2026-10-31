@@ -160,6 +160,16 @@ describe('natural phrasing', () => {
 		await waitFor(() => expect(document.activeElement).toBe(editor));
 	});
 
+	it('Esc closes the preview too', async () => {
+		const { editor } = await setup();
+		await type(editor, '4k movies');
+		await fireEvent.click(screen.getByRole('button', { name: 'Natural phrasing' }));
+		const panel = await screen.findByRole('region', { name: 'Natural phrasing preview' }, LAZY);
+		await fireEvent.keyDown(panel, { key: 'Escape' });
+		expect(screen.queryByRole('region', { name: 'Natural phrasing preview' })).toBeNull();
+		expect(editor.textContent).toBe('4k movies');
+	});
+
 	it('says so when nothing became a filter', async () => {
 		const { editor } = await setup();
 		await type(editor, 'just words');
@@ -178,11 +188,11 @@ describe('the Builder', () => {
 		);
 		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
 		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
-		const row = within(panel).getByRole('group', { name: 'Remove filter: Resolution: 720p' });
+		const row = within(panel).getByRole('group', { name: 'Resolution: 720p' });
 		const value = within(row).getByLabelText('Value') as HTMLInputElement;
 		expect(value.value).toBe('720p');
 		await fireEvent.input(value, { target: { value: '1080p' } });
-		await fireEvent.change(value);
+		await fireEvent.click(within(row).getByRole('button', { name: 'Apply' }));
 		await waitFor(() => expect(editor.textContent).toBe('bunny res:1080p'), LAZY);
 		expect(searchBodies.at(-1)!.ast).toEqual({ op: 'and', of: [word('bunny'), res('1080p')] });
 		expect(requests.some((u) => u.searchParams.get('q') === 'res:1080p')).toBe(true);
@@ -200,13 +210,24 @@ describe('the Builder', () => {
 		await waitFor(() => expect(editor.textContent).toBe('res:720p res:2160p'), LAZY);
 	});
 
+	it('refuses a value that reads as several clauses', async () => {
+		const { editor } = await setup('res:720p');
+		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
+		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
+		const draft = within(panel).getByRole('group', { name: 'New filter' });
+		await fireEvent.input(within(draft).getByLabelText('Value'), { target: { value: 'a b' } });
+		await fireEvent.click(within(draft).getByRole('button', { name: 'Add filter' }));
+		expect(await within(panel).findByText(/Couldn't apply this filter/, {}, LAZY)).toBeTruthy();
+		expect(editor.textContent).toBe('res:720p');
+	});
+
 	it('asks for a value, and removes a row', async () => {
 		await setup('res:720p');
 		await fireEvent.click(screen.getByRole('button', { name: 'Builder' }));
 		const panel = await screen.findByRole('region', { name: 'Query builder' }, LAZY);
 		const draft = within(panel).getByRole('group', { name: 'New filter' });
 		await fireEvent.click(within(draft).getByRole('button', { name: 'Add filter' }));
-		expect((await within(panel).findByRole('alert')).textContent).toMatch(/Enter a value/);
+		expect(await within(panel).findByText(/Enter a value/, {}, LAZY)).toBeTruthy();
 		await fireEvent.click(
 			within(panel).getByRole('button', { name: 'Remove filter: Resolution: 720p' })
 		);

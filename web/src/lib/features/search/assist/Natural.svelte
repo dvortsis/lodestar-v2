@@ -63,7 +63,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section class="assist-panel" aria-label={m.search_assist_natural_title()} {onkeydown}>
 	{#if status === 'loading'}
-		<p role="status" class="assist-note">{m.search_assist_natural_loading()}</p>
+		<p class="assist-note">{m.search_assist_natural_loading()}</p>
 	{:else if status === 'ready' && proposal}
 		<ul class="assist-chips" aria-label={m.search_assist_natural_chips()}>
 			{#each proposal.chips as chip (chip.text + chip.from.start)}
@@ -76,7 +76,7 @@
 			</p>
 		{/if}
 	{:else}
-		<p role="status" class="assist-note">
+		<p class="assist-note">
 			{status === 'none' ? m.search_assist_natural_none() : m.search_assist_natural_failed()}
 			{reason}
 		</p>

@@ -7,7 +7,7 @@ import type { SuggestItem } from './options';
 export const SUGGEST_DEBOUNCE_MS = 120;
 
 export function createSuggester(
-	onitems: (items: SuggestItem[]) => void,
+	onitems: (items: SuggestItem[], forQuery: string) => void,
 	hidden: () => boolean = () => false
 ) {
 	const slot = latest();
@@ -15,15 +15,17 @@ export function createSuggester(
 	return {
 		/** `pos` is the caret in characters. */
 		request(q: string, pos: number) {
+			// The keystroke supersedes the request in flight too, not only the one waiting.
 			clearTimeout(timer);
+			slot.cancel();
 			timer = setTimeout(async () => {
 				try {
 					const r = await slot.run((signal) =>
 						api.get('/suggest', { query: { q, pos, hidden: hidden() || undefined }, signal })
 					);
-					onitems(r.items);
+					onitems(r.items, q);
 				} catch (e) {
-					if (!isAbort(e)) onitems([]);
+					if (!isAbort(e)) onitems([], q);
 				}
 			}, SUGGEST_DEBOUNCE_MS);
 		},

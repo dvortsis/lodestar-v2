@@ -124,15 +124,18 @@
 			else if (s.text) editor.set(s.text, true); // the URL's query, adopted before the editor existed
 		}
 		if (takeSubmit()) submit();
-		// Autocomplete loads as the user starts: already focused or typing, else at the first of either.
-		if (document.activeElement === el || editor.text) void loadAssist();
+		// Autocomplete loads when the user starts: already in the bar, else at the first focus or key.
+		// A pasted link alone loads nothing of it, and shows none of its row (no layout shift).
+		if (document.activeElement === el) void loadAssist();
 		else {
-			const start = () => void loadAssist();
-			el.addEventListener('focus', start, { once: true });
-			el.addEventListener('input', start, { once: true });
+			el.addEventListener('focus', startAssist, { once: true });
+			el.addEventListener('input', startAssist, { once: true });
 		}
 	});
+	const startAssist = () => void loadAssist();
 	onDestroy(() => {
+		el.removeEventListener('focus', startAssist);
+		el.removeEventListener('input', startAssist);
 		editor?.destroy();
 		s.cancelPending();
 	});
@@ -297,17 +300,19 @@
 		<Button variant="quiet" dense>{m.search_filters_clear_all()}</Button>
 	</div>
 {/if}
-<div class="assist-actions">
-	<Button
-		variant="quiet"
-		dense
-		aria-expanded={panel === 'builder'}
-		onclick={() => void openPanel('builder')}>{m.search_assist_builder()}</Button
-	>
-	<Button variant="quiet" dense disabled={blank} onclick={() => void openPanel('natural')}
-		>{m.search_assist_natural()}</Button
-	>
-</div>
+{#if Assist}
+	<div class="assist-actions">
+		<Button
+			variant="quiet"
+			dense
+			aria-expanded={panel === 'builder'}
+			onclick={() => void openPanel('builder')}>{m.search_assist_builder()}</Button
+		>
+		<Button variant="quiet" dense disabled={blank} onclick={() => void openPanel('natural')}
+			>{m.search_assist_natural()}</Button
+		>
+	</div>
+{/if}
 {#if panel === 'natural' && Natural}
 	<Natural
 		text={s.text}

@@ -61,3 +61,17 @@ describe('fields', () => {
 		for (const f of FIELDS) expect(OPERATORS[kindOf(f.name)].length).toBeGreaterThan(0);
 	});
 });
+
+describe('rows and text fields', () => {
+	it('leaves byte-valued ranges and the other tag keys right', () => {
+		for (const field of ['largest', 'piece'] as const)
+			expect(rowOf({ op: 'range', field, lo: 1, hi: null })).toBeNull();
+		expect(FIELDS.map((f) => f.name)).toContain('resolved');
+		expect(rowOf({ op: 'tag', key: 'adult', any: ['no'] })!.field).toBe('adult');
+		expect(FIELDS.map((f) => f.name)).toContain('adult');
+	});
+	it('quotes words in a text field', () => {
+		expect(rowText({ field: 'title', op: ':', value: 'dark knight' })).toBe('title:"dark knight"');
+		expect(rowText({ field: 'title', op: ':', value: 'dune' })).toBe('title:dune');
+	});
+});

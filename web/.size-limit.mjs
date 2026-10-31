@@ -444,9 +444,9 @@ export default [
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
-	entry('Search assist (on demand)', assistLazy, '6.5 KB'),
-	entry('Natural phrasing (on demand)', naturalLazy, '1.7 KB'),
-	entry('Builder (on demand)', builderLazy, '5.5 KB'),
+	entry('Search assist (on demand)', assistLazy, '6.52 KB'),
+	entry('Natural phrasing (on demand)', naturalLazy, '1.66 KB'),
+	entry('Builder (on demand)', builderLazy, '5.41 KB'),
 	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),

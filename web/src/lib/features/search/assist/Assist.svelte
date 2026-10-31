@@ -45,14 +45,16 @@
 	let current = $state('');
 	let open = $state(false);
 	let active = $state(-1);
+	/** The user has typed since the list opened: only then does Tab accept an unchosen option. */
+	let typed = false;
 
 	const options = $derived(buildOptions(current, itemsFor === current ? items : [], recent, saved));
 	const shown = $derived(open && options.length > 0);
 
 	const suggester = createSuggester(
-		(got) => {
+		(got, forQuery) => {
 			items = got;
-			itemsFor = current;
+			itemsFor = forQuery;
 		},
 		() => hidden?.() ?? false
 	);
@@ -87,6 +89,7 @@
 
 	function oninput() {
 		show();
+		typed = true;
 		if (current.trim()) suggester.request(current, charPos(current, caret()));
 		else {
 			suggester.cancel();
@@ -134,7 +137,13 @@
 		} else if (e.key === 'Escape') {
 			take();
 			close();
-		} else if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+		} else if (
+			e.key === 'Tab' &&
+			!e.shiftKey &&
+			!e.ctrlKey &&
+			!e.metaKey &&
+			(typed || active >= 0)
+		) {
 			take();
 			pick(options[Math.max(active, 0)]!);
 		} else if (e.key === 'Enter' && active >= 0) {
@@ -221,7 +230,9 @@
 					>{o.text}</span
 				>
 				{#if o.count !== undefined}
-					<span class="assist-count">{formatCount(o.count, currentLocale())}</span>
+					<span class="assist-count" data-testid="assist-count"
+						>{formatCount(o.count, currentLocale())}</span
+					>
 				{/if}
 			</li>
 		{/each}
