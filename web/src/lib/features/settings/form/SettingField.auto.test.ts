@@ -69,6 +69,22 @@ describe.each(['staged', 'instant'] as const)(
 			await until(() => expect(toggle().checked).toBe(true));
 		});
 
+		it('keeps the box while it has focus, and turns Automatic on when focus leaves', async () => {
+			const { root, toggle } = await open(mode);
+			await fireEvent.click(toggle());
+			const box = (await within(root).findByRole('textbox')) as HTMLInputElement;
+			box.focus();
+			await fireEvent.input(box, { target: { value: 'd' } });
+			await fireEvent.input(box, { target: { value: '' } }); // back to the automatic value
+			if (mode === 'instant')
+				await until(() => expect(server.calls.filter((c) => c.method === 'PATCH')).toHaveLength(2));
+			await until(() => expect(form.dirtyCount).toBe(0));
+			expect(toggle().checked).toBe(false);
+			expect(document.activeElement).toBe(box);
+			box.blur();
+			await until(() => expect(toggle().checked).toBe(true));
+		});
+
 		it('follows a server update to the empty value', async () => {
 			const { toggle } = await open(mode, 'de');
 			expect(toggle().checked).toBe(false);

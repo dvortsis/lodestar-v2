@@ -16,7 +16,7 @@ vi.mock('./message-map', () => ({
 	}
 }));
 
-import { fieldLabel, loadMessages, messagesLoaded, settingText } from './messages';
+import { fieldLabel, loadMessages, messagesFailed, messagesLoaded, settingText } from './messages';
 import { spec } from './testing/values';
 
 describe('loadMessages', () => {
@@ -29,8 +29,11 @@ describe('loadMessages', () => {
 
 	it('settles when a map fails, and the field shows its name', async () => {
 		vi.spyOn(console, 'warn').mockImplementation(() => {});
-		await expect(loadMessages(['broken'])).resolves.toBeUndefined();
+		expect(messagesFailed(['broken'])).toBe(false);
+		await expect(loadMessages(['broken'])).resolves.toBe(false);
 		expect(messagesLoaded(['broken'])).toBe(true);
+		expect(messagesFailed(['broken'])).toBe(true);
+		expect(messagesFailed(['fine'])).toBe(false);
 		const s = spec('broken.a', { labelKey: 'settings.broken.a.label' });
 		expect(fieldLabel(s)).toBe('a');
 	});

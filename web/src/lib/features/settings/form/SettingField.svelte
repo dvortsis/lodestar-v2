@@ -67,13 +67,19 @@
 	// typed 0) and must stay off, and so must the save that follows it.
 	let seen = untrack(() => f.value);
 	let arrived = false; // the value just changed to the automatic one; wait for it to settle
+	// A text being edited keeps its box: typing it back to the automatic value mustn't hide it
+	// (and its focus) mid-edit, so Automatic turns on again once focus leaves.
+	let editing = $state(false);
+	const isEntry = (t: EventTarget | null) =>
+		t instanceof Element && t.matches('input:not([type="checkbox"]), textarea, select');
 	$effect(() => {
 		const v = f.value;
 		const clean = !f.dirty;
+		const still = editing;
 		untrack(() => {
 			if (v !== seen) arrived = v === spec.auto;
 			seen = v;
-			if (arrived && clean) {
+			if (arrived && clean && !still) {
 				manual = false;
 				arrived = false;
 			}
@@ -140,7 +146,13 @@
 	$effect(() => Edit.want(f.conflict || f.pendingReset || f.savedRecently || f.undoUntil));
 </script>
 
-<div id={fieldAnchor(key)} class="ls-field flex flex-col gap-2" data-field={key}>
+<div
+	id={fieldAnchor(key)}
+	class="ls-field flex flex-col gap-2"
+	data-field={key}
+	onfocusin={(e) => (editing = isEntry(e.target))}
+	onfocusout={() => (editing = false)}
+>
 	<Field {help} error={f.error}>
 		{#snippet children(cp)}
 			<div class="flex items-center justify-between gap-2">

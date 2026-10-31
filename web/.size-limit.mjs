@@ -1,7 +1,7 @@
 // §10.1 budgets, gzipped. Size only: the preset-app timing step is disabled (`running: false`).
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
@@ -147,6 +147,20 @@ const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
 // section's map before its fields render, so a first view stops at them. Gated on their own.
 const settingsMessages = [/features\/settings\/form\/message-maps\/\w+\.ts$/];
+// A section's first view does include the maps its form awaits before any field renders: the
+// group headings' and the section's own. The first-view gates count the group map and the
+// largest section map (the worst case) and leave the rest out, so the numbers are honest and a
+// later screen's map is gated the moment it lands. "Settings messages (on demand)" measures all.
+const messageKeys = Object.keys(manifest).filter((key) =>
+	settingsMessages.some((re) => re.test(key))
+);
+const rawSize = (key) => statSync(`.svelte-kit/output/client/${manifest[key].file}`).size;
+const largestMap = messageKeys
+	.filter((key) => !key.endsWith('/group.ts'))
+	.sort((a, b) => rawSize(b) - rawSize(a))[0];
+const settingsMessagesLeftOut = messageKeys
+	.filter((key) => !key.endsWith('/group.ts') && key !== largestMap)
+	.map((key) => new RegExp(`${key.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`));
 const settingsLazy = requireMeasuredJs(
 	'Settings controls (on demand)',
 	onDemandOf('/settings/[section]', settingsOnDemand).filter(
@@ -186,7 +200,7 @@ const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|t
 const settingsFirstView = [
 	...settingsOnDemand,
 	...settingsEdit,
-	...settingsMessages,
+	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
 ];
@@ -229,7 +243,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 				[
 					...settingsOnDemand,
 					...settingsEdit,
-					...settingsMessages,
+					...settingsMessagesLeftOut,
 					...settingsBodyInteractions,
 					...appearanceLater
 				],
@@ -243,7 +257,7 @@ const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
 			appearanceBody,
-			[...settingsOnDemand, ...settingsEdit, ...settingsMessages, ...appearanceLater],
+			[...settingsOnDemand, ...settingsEdit, ...settingsMessagesLeftOut, ...appearanceLater],
 			false,
 			settingsShellView
 		)

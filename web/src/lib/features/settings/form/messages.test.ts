@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EN_FILE, messageKeys, render, renderMap } from './message-map.gen';
 import { LOADERS } from './message-map';
+import { setLocale } from '$lib/paraglide/runtime.js';
 import {
 	fieldHelp,
 	fieldLabel,
@@ -44,6 +45,19 @@ describe('settingText', () => {
 	it('puts a section with an underscore in the same map the generator does', async () => {
 		expect(messagesLoaded(['web_ui'])).toBe(messagesLoaded(['web']));
 		expect(settingText('settings.web_ui.nothing.label')).toBeUndefined();
+	});
+
+	it('follows the language: a key zh has resolves in zh, then back in en', async () => {
+		await loadMessages(['crawler']);
+		const en = settingText('settings.crawler.intensity.label');
+		setLocale('zh', { reload: false });
+		try {
+			expect(settingText('settings.crawler.intensity.label')).toBe('爬取强度');
+			expect(settingText('settings.group.dht')).toBe('对等节点发现');
+		} finally {
+			setLocale('en', { reload: false });
+		}
+		expect(settingText('settings.crawler.intensity.label')).toBe(en);
 	});
 
 	it('never resolves a message outside settings_*', () => {

@@ -15,6 +15,7 @@ export function messageId(key: string): string {
 type MessageMap = Record<string, () => string>;
 const maps: Record<string, MessageMap> = {};
 const loading: Record<string, Promise<void>> = {};
+const failed = new Set<string>();
 
 /**
  * The map a message id lives in: the id's first word after `settings_`, as the generator splits
@@ -32,13 +33,20 @@ export function messagesLoaded(sections: Iterable<string>): boolean {
 	return needed(sections).every((s) => s in maps || !Object.hasOwn(LOADERS, s));
 }
 
+/** Whether any of these sections' maps failed to load (their keys show as field names). */
+export function messagesFailed(sections: Iterable<string>): boolean {
+	return needed(sections).some((s) => failed.has(s));
+}
+
 /**
  * Loads these sections' maps (and the group headings'). A map that can't load leaves its keys
- * missing, which show as the field's name (browsers keep a failed chunk, so it isn't retried).
+ * missing, which show as the field's name (browsers keep a failed chunk, so it isn't retried);
+ * `messagesFailed` says so. Resolves to whether they all loaded.
  */
-export async function loadMessages(sections: Iterable<string>): Promise<void> {
+export async function loadMessages(sections: Iterable<string>): Promise<boolean> {
+	const ids = needed(sections);
 	await Promise.all(
-		needed(sections)
+		ids
 			.filter((s) => Object.hasOwn(LOADERS, s))
 			.map(
 				(s) =>
@@ -48,10 +56,12 @@ export async function loadMessages(sections: Iterable<string>): Promise<void> {
 						},
 						() => {
 							maps[s] = {};
+							failed.add(s);
 						}
 					))
 			)
 	);
+	return !ids.some((s) => failed.has(s));
 }
 
 /** `settings.crawler.intensity.label` → that message's text, or undefined when it's missing. */
