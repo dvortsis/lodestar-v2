@@ -1545,6 +1545,10 @@
     "IMP-5": {
       "status": "running",
       "notes": "2026-10-31T04:16Z brief briefs/IMP-5.md; Opus session_01MMjhnC7NGYBuokKAXrGFGL"
+    },
+    "B-settings-sections": {
+      "status": "running",
+      "notes": "2026-10-31T04:20Z brief briefs/B-settings-sections.md; Opus session_01MMjhnASCY7h5zbDorA5QfV; parts a/b; security-review"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2242,7 +2246,6 @@
     }
   },
   "followups": [
-    "B-settings-sections (backend, Opus, security-review): settings sections + CRUD for integrations (download clients, Torznab/*arr), notification channels + event routing, trackers (list, scrape on/off, cadence, health), insights (digest schedule/channels, query logging, retention); POST /settings/test kinds for torznab and each notification channel (through the SSRF guard); clear-usage-data endpoint. Unblocks S-settings-2b. Also consider the send-to-client endpoint (S-search-5 deferral) in the same lane",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
@@ -2259,7 +2262,6 @@
     "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
     "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
     "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
-    "API: a send-to-client HTTP endpoint (single + bulk, Partial/duplicate semantics per \u00a7architecture ~2567) for Search bulk Send and row Send (S-search-5 deferral)",
     "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")",
     "API: add a test that fails on duplicate utoipa component names (two ToSchema types with the same name silently overwrite each other; #255 fixed DiscoverResponse and HistogramBin). Latent: Channel (api/dto/system.rs vs lodestar/settings/updates.rs), Mode (settings/preferences.rs vs updates.rs) if they ever enter the spec",
     "Pipeline: one shared filter loader so the import CLI and the server cannot drift (#257); server-side import slice: online import through the writer, jobs indexing->complete",
