@@ -564,10 +564,10 @@ mod tests {
         let text = render(p.columns, &rows(&p, &v, true));
         assert_eq!(
             text,
-            "period,at,at_utc,harvested,searchable\r\n\
-             current,3600,1970-01-01T01:00:00Z,5,\r\n\
-             current,7200,1970-01-01T02:00:00Z,-3,0\r\n\
-             previous,0,1970-01-01T00:00:00Z,1,2\r\n"
+            "period,at,at_utc,harvested,searchable,searchable_imported\r\n\
+             current,3600,1970-01-01T01:00:00Z,5,,\r\n\
+             current,7200,1970-01-01T02:00:00Z,-3,0,\r\n\
+             previous,0,1970-01-01T00:00:00Z,1,2,\r\n"
         );
         assert_eq!(render(p.columns, &rows(&p, &v, false)).lines().count(), 3);
         // A field a row lacks is an empty cell; one beyond the columns
