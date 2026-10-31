@@ -1624,7 +1624,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn unhex(t: &str) -> Option<Vec<u8>> {
-    if t.len() % 2 != 0 {
+    if !t.len().is_multiple_of(2) {
         return None;
     }
     (0..t.len())
