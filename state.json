@@ -923,7 +923,7 @@
       "pr": 299,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet. | 22:41Z PR #299 head 3802a214: About 31.9 KB; other Settings +160-205 B (vs #293 note); Alerts route 29,168->29,200 (=limit) - reviewer to root-cause, no raise. Approved shell test edits; marker next push. Reviewer launched; subscribed."
+      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet. | 22:41Z PR #299 head 3802a214: About 31.9 KB; other Settings +160-205 B (vs #293 note); Alerts route 29,168->29,200 (=limit) - reviewer to root-cause, no raise. Approved shell test edits; marker next push. Reviewer launched; subscribed. | 22:51Z E2E core red on 3802a214 (expected: Settings nav baselines; marker rides post-review push)."
     },
     "B-update": {
       "status": "paused",
@@ -1838,7 +1838,7 @@
       "pr": 298,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh). | 22:12Z launched Sonnet. | 22:33Z PR #298 head 685ecc86 (~1.78k lines, mostly messages; event names lazy 10.73 KB; Logging first view 42.79). Opus reviewer launched; subscribed. | 22:39Z web job red = security confirm.ts teardown flake (not theirs); \u00a72.18 comment + one re-run. | 22:40Z review CHANGES: B1 no checked-in generator for event-names.ts. Fold O1 abort, O2 tick jitter, O3 kind_switched wording. Runner checks delta.",
+      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh). | 22:12Z launched Sonnet. | 22:33Z PR #298 head 685ecc86 (~1.78k lines, mostly messages; event names lazy 10.73 KB; Logging first view 42.79). Opus reviewer launched; subscribed. | 22:39Z web job red = security confirm.ts teardown flake (not theirs); \u00a72.18 comment + one re-run. | 22:40Z review CHANGES: B1 no checked-in generator for event-names.ts. Fold O1 abort, O2 tick jitter, O3 kind_switched wording. Runner checks delta. | 22:51Z round 2 fc261568: generator + test, O1-O3 in. Runner: timeout must set error (banner truthfulness, #289 invariant), not silent abort; one more push.",
       "reviewer": "session_01MMjhnAJNz4LPBqsm4Npykf"
     },
     "X-security-confirm-teardown": {
