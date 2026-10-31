@@ -1,7 +1,7 @@
 // A dialog that has closed but is still waiting out its unmount delay must not outlive the screen:
 // dismissing removes it at once and leaves no timer to fire after the DOM is gone.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
+import { fireEvent, screen, within } from '@testing-library/svelte';
 import { initLocale } from '$lib/i18n/locale.svelte';
 import { confirmWithPassword, dismissPasswordDialogs } from './confirm';
 import { dismissReveals, revealSecret } from './reveal';
@@ -34,7 +34,10 @@ function watch400() {
 		cleared.push(id);
 		return realClear(id);
 	}) as typeof clearTimeout);
-	return { cleared: () => set.length > 0 && set.every((id) => cleared.includes(id)) };
+	return {
+		wasSet: () => set.length > 0,
+		cleared: () => set.length > 0 && set.every((id) => cleared.includes(id))
+	};
 }
 
 describe('closed dialogs waiting to unmount', () => {
@@ -53,7 +56,7 @@ describe('closed dialogs waiting to unmount', () => {
 
 		dismissPasswordDialogs();
 		expect(unmountTimer.cleared()).toBe(true);
-		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 
 	it('a closed reveal is removed by dismissReveals, with no timer left', async () => {
@@ -61,12 +64,12 @@ describe('closed dialogs waiting to unmount', () => {
 		const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
 		vi.useFakeTimers();
 		const unmountTimer = watch400();
-		await fireEvent.click(within(dialog).getAllByRole('button').at(-1)!);
+		await fireEvent.click(within(dialog).getByTestId('key-secret-done'));
 		await shown;
 
 		dismissReveals();
 		expect(unmountTimer.cleared()).toBe(true);
-		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 
 	it('the normal path still unmounts after the delay', async () => {
@@ -76,8 +79,9 @@ describe('closed dialogs waiting to unmount', () => {
 		const unmountTimer = watch400();
 		await fireEvent.click(within(dialog).getByTestId('password-dialog-cancel'));
 		await answer;
+		expect(unmountTimer.wasSet()).toBe(true);
 		expect(unmountTimer.cleared()).toBe(false);
 		vi.advanceTimersByTime(400);
-		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 });
