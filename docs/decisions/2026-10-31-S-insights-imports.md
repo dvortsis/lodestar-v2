@@ -10,3 +10,4 @@ Binds the fields IMP-5 added (`docs/decisions/2026-10-31-IMP-5.md`, "What the sc
 - **Index stage:** "Imported" (`new_searchable_imported`) beside "New searchable", shown only above zero. `IndexResponse` carries no annotations, so the page fetches `GET /insights/events` for its range after it renders (best-effort; a failure shows no markers). The Index trend charts are unchanged.
 - **Mock:** the e2e harness answers `getInsightsEvents` with no events by default.
 - **Sizes:** first load +11 B (total 85,720 → 85,731 B, within its limit); Insights stage pages +915 B gzipped (36,058 → 36,973 of 39,700). No limit changed.
+- **Truncation:** when `EventsResponse.truncated` is true, import markers past the 1,000-annotation cap aren't shown on the Index page.

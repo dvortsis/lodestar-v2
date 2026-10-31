@@ -317,7 +317,7 @@
 	"insights_stage_unit_torrents": "torrents",
 	"insights_stage_chart_summary_snapshot": "{title} at the end of each period over {range}, a snapshot.",
 	"insights_import_crawled": "Crawled:",
-	"insights_import_imported": "Imported:",
+	"insights_import_imported": "Imported",
 	"insights_import_plus": "+ {count} imported",
 	"insights_import_delta_note": "Includes an import",
 	"insights_import_started": "Import started",

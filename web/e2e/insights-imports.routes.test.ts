@@ -63,3 +63,15 @@ test('index: Imported beside New searchable, and the removal marker', async ({
 	await expect(marker).toBeFocused();
 	await expectNoA11yViolations(page);
 });
+
+test('index: a failed events request shows the page without import markers', async ({
+	page,
+	mock,
+	go
+}) => {
+	mock.error('getInsightsEvents', 500, 'internal', 'events failed');
+	await go('/insights/index');
+	await expect(page.getByTestId('insights-stage-kpis')).toBeVisible();
+	await expect.poll(() => mock.calls('getInsightsEvents').length).toBeGreaterThan(0);
+	await expect(page.getByTestId('insights-import-markers')).toHaveCount(0);
+});
