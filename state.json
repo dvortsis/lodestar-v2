@@ -1707,13 +1707,13 @@
    "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed | 16:08Z re-check MERGE at de5fa5b8 (revert confirmed, all held.insert sites unconditional); waiting on test ubuntu/windows + smoke"
   },
   "S-logs-1": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01MMjhn8Qo9489vR3GMJcVVX",
-   "pr": null,
+   "pr": 284,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments"
+   "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments | 16:12Z PR #284 open; cause: VirtualList/index-client/state/sse became shared chunks; option 1 taken (5 limits raised by measured overage, +21..92 B, commented); fresh Opus reviewer session_01MMjhnC5NDGN9r8aNpTgnqw + security pass"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2459,6 +2459,10 @@
   },
   {
    "item": "FYI (§2.19) #280 B-import-refile: when filter/class rules change, waiting import candidates are re-judged; a held candidate moves to filtered/quarantined on its job (counters stay conserved), and a finished job whose only issue was waiting candidates flips complete_with_issues -> complete.",
+   "status": "to-send"
+  },
+  {
+   "item": "FYI (§2.26) #284 S-logs-1: adding /logs made 5 existing routes share VirtualList / the virtualiser index client / state/sse as separate chunks; their limits rose by the measured bytes only (Alerts +69 B, Alert +86 B, Search results +92 B, Search cards +21 B, /t/[hash] +35 B). The root cause is legitimate code reuse.",
    "status": "to-send"
   }
  ],
