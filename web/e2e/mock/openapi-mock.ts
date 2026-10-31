@@ -189,6 +189,11 @@ export class OpenApiMock {
 		if (op.id === 'listSavedSearches' && override === undefined) {
 			return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
 		}
+		// The live banner (S-search-live-ui) releases its registration when the query changes or the
+		// page goes away; `DELETE /search/live/{id}` has no example. A 204 by default.
+		if (op.id === 'releaseSearchLive' && override === undefined) {
+			return route.fulfill({ status: 204 });
+		}
 		// The facet rail (S-search-2b) asks for counts beside the results at x-large: no groups by
 		// default, so specs that don't test the rail needn't mock it.
 		if (op.id === 'facetsPost' && override === undefined) {

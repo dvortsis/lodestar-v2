@@ -488,7 +488,7 @@
 			>
 				<p class="rp-empty-title">{m.search_results_none()}</p>
 				{#if clauses.length || (suggested && Recover)}
-					<p>{m.search_results_none_lead()}</p>
+					{#if clauses.length}<p>{m.search_results_none_lead()}</p>{/if}
 					{#if Recover}<Recover recovery={results.recovery} />{/if}
 					{#if clauses.length}
 						<ul class="rp-examples" data-testid="results-none-clauses">
@@ -501,6 +501,8 @@
 							{/each}
 						</ul>
 						<Button onclick={() => void clearFilters()}>{m.search_results_none_clear()}</Button>
+					{:else if !results.notices.includes('adult_hidden')}
+						<p>{m.search_results_none_words()}</p>
 					{/if}
 				{:else if !results.notices.includes('adult_hidden')}
 					<p>{m.search_results_none_words()}</p>

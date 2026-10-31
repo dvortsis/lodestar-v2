@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
 	fresh: 0,
 	reload: vi.fn(async () => {}),
 	reset: vi.fn(),
+	follow: vi.fn(),
 	deps: undefined as undefined | { paused: () => boolean },
 	selection: { mode: false, count: 0 }
 }));
@@ -16,6 +17,7 @@ vi.mock('./live.svelte', () => ({
 			return state.fresh;
 		},
 		start: () => () => {},
+		follow: state.follow,
 		reset: state.reset
 	})
 }));
@@ -37,6 +39,10 @@ it('shows nothing until results are new, and Show reloads from the top', async (
 	expect(screen.getByTestId('results-live').textContent).toBe('1 new result');
 	await fireEvent.click(screen.getByTestId('results-live-show'));
 	expect(state.reset).toHaveBeenCalled();
+	// Show registers again, so the count starts from 0.
+	await vi.waitFor(() => expect(state.follow).toHaveBeenCalledWith(expect.anything(), true), {
+		timeout: 10_000
+	});
 	await vi.waitFor(() => expect(state.reload).toHaveBeenCalledTimes(1), { timeout: 10_000 });
 	// The list owns its active row and focus after Show.
 	await vi.waitFor(() => expect(moveTo).toHaveBeenCalledWith(0), { timeout: 10_000 });
