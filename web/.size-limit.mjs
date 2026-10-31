@@ -617,15 +617,20 @@ export default [
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
+	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
+	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
+	entry('Logs route (own JS + CSS)', own('/logs'), '39.6 KB'),
 	// Owner ruling, 2026-10-30 (S-settings-reconcile): with Settings a production route, Rolldown
 	// re-splits shared chunks (Toggle, format/bytes, Svelte's input bindings) these entries load;
 	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
 	// sections 33.9 → 34.5 KB.
-	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.1 KB'),
+	// Raised by the runner (§2.26): +69 B from the chunk re-split when /logs was added (S-logs-1).
+	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.2 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	// Raised from 45.8 KB by the runner under owner-decisions §2.26 (docs/decisions/2026-10-31-owner-delegation.md).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.9 KB'),
+	// Raised by the runner (§2.26): +86 B from the chunk re-split when /logs was added (S-logs-1).
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '46 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: settingsFirstView }),
@@ -677,7 +682,8 @@ export default [
 	// the rest is what the shell's Chrome would bring too (the key registry, the event client).
 	// runner, 2026-10-31, S-search-5: +1.5 KB for the view switch, selection store, `x` key and announce;
 	// still under the 45 KB per-view cap (§10.1).
-	entry('Search results (lazy)', resultsLazy, '43.2 KB'),
+	// Raised by the runner (§2.26): +92 B from the chunk re-split when /logs was added (S-logs-1).
+	entry('Search results (lazy)', resultsLazy, '43.3 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
@@ -688,7 +694,8 @@ export default [
 	// still under the 45 KB per-view cap (§10.1).
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
 	entry('Search live banner (lazy)', liveLazy, '3.02 KB'),
-	entry('Search cards (lazy)', cardsLazy, '8.19 KB'),
+	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
+	entry('Search cards (lazy)', cardsLazy, '8.3 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
@@ -700,7 +707,8 @@ export default [
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
-	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.5 KB'),
+	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
+	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.6 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
