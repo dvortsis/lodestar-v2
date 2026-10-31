@@ -269,7 +269,7 @@ describe('Notifications', () => {
 		const discord = within(await screen.findByRole('region', { name: 'Discord' }));
 		await fireEvent.click(await discord.findByRole('button', { name: 'Add' }));
 		await type(
-			await discord.findByLabelText('New value for Discord webhook address'),
+			await discord.findByLabelText('New value for Discord webhook'),
 			'https://discord.com/api/webhooks/1/x'
 		);
 		const send = await discord.findByRole('button', { name: 'Send test to Discord' });

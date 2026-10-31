@@ -80,7 +80,7 @@
 	"settings_integrations_label": "集成",
 	"settings_integrations_help": "下载客户端和 Torznab 端点。",
 	"settings_notifications_label": "通知",
-	"settings_notifications_help": "Lodestar 发送警报、更新和健康消息的位置。",
+	"settings_notifications_help": "警报、更新和健康消息的发送位置。",
 	"settings_insights_label": "洞察和摘要",
 	"settings_insights_help": "摘要以及可选的搜索日志。",
 	"settings_trackers_scrape_label": "向 tracker 查询 peer 数",

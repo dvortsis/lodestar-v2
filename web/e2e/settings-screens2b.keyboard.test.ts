@@ -168,7 +168,7 @@ test.describe('keyboard: connection settings screens', () => {
 		const discord = page.getByRole('region', { name: 'Discord' });
 		await kbd.tabTo(discord.getByRole('button', { name: 'Add', exact: true }), 150);
 		await kbd.press('Enter');
-		await kbd.tabTo(discord.getByLabel('New value for Discord webhook address'), 20);
+		await kbd.tabTo(discord.getByLabel('New value for Discord webhook'), 20);
 		await page.keyboard.type('https://discord.com/api/webhooks/1/x');
 		await kbd.tabTo(discord.getByRole('button', { name: 'Send test to Discord' }), 20);
 		await kbd.press('Enter');
