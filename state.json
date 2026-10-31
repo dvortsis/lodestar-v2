@@ -1624,6 +1624,15 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges"
+  },
+  "X-polish-1031": {
+   "status": "queued",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "08:16Z brief briefs/X-polish-1031.md (folds #266/#267 optional findings + bench zero-result class + recovery caching)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2377,10 +2386,7 @@
   },
   "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
   "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
-  "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
-  "bench: a gated zero-result class in bench/search for the recovery pass (author measured p95 <= 6.0 ms, max 10.1 ms on 200k with an uncommitted patch) (#266)",
-  "search: cache SearchRecovery beside the cached empty first page (same fingerprint) to avoid recomputing up to 20 ms per repeat request (#266 review)",
-  "Pipeline/Insights polish from #267 review (Opus): (1) drop saved refetches by strategy AND cohort/source, or test no plugin uses strategy 200 (pipeline/src/lib.rs:928); (2) csv render test per panel: header == period + declared columns; (3) test a crawl sighting of a hash under a refetch lease (Held: no Harvested, stored once as IMPORTED); (4) insights.rs:243 floor should skip strategy REFETCH in the saved queue (old-build saved refetch holds sealing once); (5) decisions note: recovered rows have no import-job provenance"
+  "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
