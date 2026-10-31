@@ -1716,13 +1716,13 @@
    "notes": "15:46Z brief briefs/S-logs-1.md | 15:45Z launched Sonnet | 16:03Z size block: /logs route (35.97 KB, own entry 39.6) re-splits shared chunks, 5 existing entries over by 14-69 B. Runner §2.26: up to 3 builds to fix the root cause (manifest diff, import via owning module or dynamic import); else raise those 5 by measured overage rounded to 0.1 KB with comments | 16:12Z PR #284 open; cause: VirtualList/index-client/state/sse became shared chunks; option 1 taken (5 limits raised by measured overage, +21..92 B, commented); fresh Opus reviewer session_01MMjhnC5NDGN9r8aNpTgnqw + security pass | 16:22Z CHANGES at e5389d33 (security clean): B1 scroll-up never pauses, B2 held unbounded, B3 SR flood, B4 load-earlier stuck; opt 5-9 folded; relayed | 16:33Z fix push 1d11eace; re-check sent | 16:41Z re-check MERGE at 1d11eace; waiting on core playwright + smoke | 16:48Z runner asked author to merge main (both #284/#285 edit .size-limit.mjs + chunk graph) and push once; merge on green"
   },
   "M-security-settings-2": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhn8heAWLA8CbBEw9rbi",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review"
+   "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review | 16:47Z launched Opus"
   },
   "X-polish-1031c": {
    "status": "running",
