@@ -396,9 +396,17 @@ impl Writer {
             // The gate counts what the store says, whether or not the
             // lease is still current below: a new row is new once, and a
             // second delivery of it reads as already stored.
+            // A refetch that stores a new row (the imported row was deleted
+            // meanwhile) is a recovery, never the network's (B-refetch-funnel).
+            let crawled = crate::in_funnel(c.lease.cohort);
             if new {
+                let origin = if crawled {
+                    Origin::Network
+                } else {
+                    Origin::Recovery
+                };
                 self.gate
-                    .committed_new(Origin::Network, id, c.lease.discovered_at, committed_at);
+                    .committed_new(origin, id, c.lease.discovered_at, committed_at);
             } else {
                 self.gate.exclude(Excluded::AlreadyStored, 1);
             }
@@ -412,14 +420,18 @@ impl Writer {
             let Some(lease) = self.coordinator.complete(&c.results.key, c.results.token) else {
                 continue;
             };
-            self.funnel
-                .record(lease.cohort, lease.source, Stage::Stored, None);
+            if crawled {
+                self.funnel
+                    .record(lease.cohort, lease.source, Stage::Stored, None);
+            }
             if new {
                 self.stats.stored.fetch_add(1, Ordering::Relaxed);
                 // At the fetch's time, as `torrents.metadata_at` holds it,
                 // so `rollup --repair` recounts the same hours (B11b).
-                self.rollups
-                    .add(c.results.metadata_at, metric::STORED, lease.source, 0, 1);
+                if crawled {
+                    self.rollups
+                        .add(c.results.metadata_at, metric::STORED, lease.source, 0, 1);
+                }
             } else {
                 self.stats.existing.fetch_add(1, Ordering::Relaxed);
             }
@@ -691,7 +703,14 @@ fn transaction(
                     flags::PRIVATE_SOURCE
                 } else {
                     0
-                } | marks(committing[i].verdict.as_ref()),
+                } | marks(committing[i].verdict.as_ref())
+                    // A refetch's row is an import's, even when it comes
+                    // back new: kept out of the crawl's cohorts and yield.
+                    | if crate::in_funnel(lease.cohort) {
+                        0
+                    } else {
+                        flags::IMPORTED
+                    },
                 source: lease.source,
                 verified: true,
             }
@@ -931,6 +950,50 @@ mod tests {
         assert_eq!(count(&gate), (1, 1, 1, 1));
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
         assert_eq!(w.stats.stored.load(Ordering::Relaxed), 1);
+    }
+
+    /// A refetch is never the network's and never the funnel's: one that
+    /// stores a new row (its imported row was deleted meanwhile) is a
+    /// recovery, kept an import, with no Stored or `STORED`; one whose row
+    /// is there is already stored (B-refetch-funnel).
+    #[tokio::test]
+    async fn a_refetch_commit_is_a_recovery_and_not_the_funnels() {
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel.clone()));
+        let gate = Arc::new(GateStats::new(0));
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate.clone());
+        let (retry, _retry_rx) = mpsc::channel(4);
+        let refetch = |c: &Coordinator| {
+            let mut r = results();
+            r.token = c.restore(
+                r.worker,
+                r.key,
+                lodestar_cluster::RestoredLease {
+                    cohort: crate::REFETCH_COHORT,
+                    source: SourceId::new(1).unwrap(),
+                    sources: 0b10,
+                    strategy: crate::strategy::REFETCH,
+                    discovered_at: 3600,
+                },
+                0,
+            );
+            r
+        };
+        w.commit(vec![refetch(&coordinator)], vec![], vec![], vec![], &retry)
+            .await;
+        assert_eq!(gate.new_verified(Origin::Recovery), 1);
+        assert_eq!(gate.new_verified(Origin::Network), 0);
+        w.commit(vec![refetch(&coordinator)], vec![], vec![], vec![], &retry)
+            .await;
+        assert_eq!(gate.excluded(Excluded::AlreadyStored), 1);
+        assert_eq!(gate.new_verified(Origin::Recovery), 1);
+        assert!(funnel.drain().is_empty(), "no funnel row");
+        assert!(w.rollups.drain().is_empty(), "no STORED");
+        let store = w.store.as_mut().unwrap();
+        let id = store.find(&results().key).unwrap().unwrap();
+        let row = store.torrent(id).unwrap().unwrap();
+        assert_ne!(row.flags & flags::IMPORTED, 0);
     }
 
     fn stored_type(r: &Results) -> ContentType {

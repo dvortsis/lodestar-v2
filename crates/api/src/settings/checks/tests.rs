@@ -456,12 +456,8 @@ async fn email_sends_one_labelled_test_and_uses_the_saved_password_for_its_serve
         got.iter().any(|(c, _)| c == "RCPT TO:<me@example.com>"),
         "{got:?}"
     );
-    let data = &got
-        .iter()
-        .find(|(c, _)| c == "DATA" && !got.is_empty())
-        .unwrap();
     let message = &got.iter().rfind(|(c, _)| c == "DATA").unwrap().1;
-    assert!(message.contains("Lodestar test notification"), "{data:?}");
+    assert!(message.contains("Lodestar test notification"), "{message}");
     seen.lock().unwrap().clear();
     // No password on screen: the saved one, for the saved server only.
     let saved = || Secrets {
@@ -516,6 +512,93 @@ async fn notification_channels_never_reach_loopback_even_when_private_is_allowed
         let r = run(test, None, to("127.0.0.1")).await;
         assert_eq!(code(&r), "blocked", "{r:?}");
     }
+}
+
+/// A qBittorrent Web API that knows `admin` / `pa`.
+async fn qbittorrent() -> SocketAddr {
+    serve(
+        Router::new()
+            .route(
+                "/api/v2/auth/login",
+                post(|body: String| async move {
+                    let ok = form_urlencoded::parse(body.as_bytes())
+                        .any(|(k, v)| k == "password" && v == "pa");
+                    let mut h = HeaderMap::new();
+                    if ok {
+                        h.insert("set-cookie", "SID=abc; path=/".parse().unwrap());
+                    }
+                    (h, if ok { "Ok." } else { "Fails." })
+                }),
+            )
+            .route("/api/v2/app/version", get(|| async { "v4.6.3" }))
+            .route("/api/v2/app/webapiVersion", get(|| async { "2.9.3" })),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_saved_client_password_is_used_only_for_its_url_and_kind() {
+    let addr = qbittorrent().await;
+    let url = format!("http://{addr}/");
+    let secrets = || Secrets {
+        saved: vec![(
+            "integrations",
+            "clients.home.password",
+            vec![("url", json!(url.clone())), ("kind", json!("qbittorrent"))],
+            "pa",
+        )],
+        ..Default::default()
+    };
+    let draft = |url: String, client| {
+        SettingsTest::DownloadClient(DownloadClientDraft {
+            client,
+            id: Some("home".into()),
+            password: None,
+            url,
+            username: Some("admin".into()),
+        })
+    };
+    use crate::settings::DownloadClientKind::{Qbittorrent, Transmission};
+    // The saved client's own address and kind: its password logs in.
+    let r = run(
+        draft(url.clone(), Qbittorrent),
+        api(secrets()),
+        Net::default(),
+    )
+    .await;
+    assert_eq!(
+        (code(&r), r.version.as_deref()),
+        ("ok", Some("v4.6.3")),
+        "{r:?}"
+    );
+    // The same server under another name: no saved password, so the login
+    // fails.
+    let other = format!("http://localhost:{}/", addr.port());
+    let r = run(draft(other, Qbittorrent), api(secrets()), Net::default()).await;
+    assert_eq!(code(&r), "bad_credentials", "{r:?}");
+    // Another kind: none either (the stand-in isn't Transmission, so the
+    // test fails on the protocol, never with the password).
+    let s = Arc::new(secrets());
+    let shared: Arc<dyn SettingsApi> = s.clone();
+    let r = run(
+        draft(url.clone(), Transmission),
+        Some(shared),
+        Net::default(),
+    )
+    .await;
+    assert_ne!(code(&r), "ok", "{r:?}");
+    assert_eq!(
+        *s.asked.lock().unwrap(),
+        ["integrations.clients.home.password"]
+    );
+    assert_eq!(
+        s.saved_secret(
+            "integrations",
+            "clients.home.password",
+            &[("url", json!(url)), ("kind", json!("transmission"))]
+        ),
+        None
+    );
 }
 
 #[test]

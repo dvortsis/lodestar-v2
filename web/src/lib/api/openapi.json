@@ -4729,6 +4729,35 @@
         ]
       }
     },
+    "/search/state": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "The index's size, growth and rebuild: what the search page's \"Cold\nstart\" and \"Index rebuilding\" states show (§10.4). The thresholds are\nthe server's, so the UI only reads the flags.",
+        "operationId": "searchIndexState",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchIndexState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/send": {
       "post": {
         "tags": [
@@ -8580,6 +8609,45 @@
           }
         }
       },
+      "ClauseRemoval": {
+        "type": "object",
+        "description": "One top-level clause and what the query gives without it.",
+        "required": [
+          "index",
+          "clause",
+          "without",
+          "canonical",
+          "total_approx"
+        ],
+        "properties": {
+          "canonical": {
+            "type": "string",
+            "description": "`without` as canonical query text."
+          },
+          "clause": {
+            "type": "string",
+            "description": "The clause as query text (`trackers:>=3`)."
+          },
+          "index": {
+            "type": "integer",
+            "description": "The clause's position among the AST's top-level clauses, as the\nactive-filter strip numbers them.",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "description": "Matches without the clause. Absent when the shared deadline passed\nbefore it was fully counted (never 0 or a guess for that): show\nnothing for it.",
+            "minimum": 0
+          },
+          "total_approx": {
+            "type": "boolean",
+            "description": "`total` is an estimate, by the same rule as `/search`'s\n`total_approx`: shown with \"≈\"."
+          },
+          "without": {
+            "$ref": "#/components/schemas/AstNode",
+            "description": "The query without the clause: search with it to remove it."
+          }
+        }
+      },
       "ClientSend": {
         "type": "object",
         "description": "`POST /send`: torrents to add to a saved download client.",
@@ -10177,7 +10245,7 @@
           },
           "password": {
             "type": "string",
-            "description": "Without it (and with `username`), the saved password, as long as\n`host` and `port` are the saved ones.",
+            "description": "Without it (and with `username`), the saved password, as long as\n`host`, `port` and `security` are the saved ones.",
             "writeOnly": true
           },
           "port": {
@@ -12256,6 +12324,65 @@
             "items": {
               "$ref": "#/components/schemas/IndexPoint"
             }
+          }
+        }
+      },
+      "IndexRebuild": {
+        "type": "object",
+        "description": "A rebuild's progress, as `event: rebuild` sends it, with when it\nstarted.",
+        "required": [
+          "done",
+          "error",
+          "from",
+          "phase",
+          "started_at",
+          "to",
+          "total",
+          "unavailable"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents in the new index so far.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it stopped, once `failed`."
+          },
+          "from": {
+            "type": "string",
+            "description": "The index serving meanwhile, e.g. `v3-t1`."
+          },
+          "phase": {
+            "$ref": "#/components/schemas/RebuildPhase"
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds.",
+            "minimum": 0
+          },
+          "to": {
+            "type": "string",
+            "description": "The index being built."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents to build before finishing.",
+            "minimum": 0
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields that match nothing until the swap."
           }
         }
       },
@@ -15909,12 +16036,110 @@
           }
         }
       },
+      "SearchIndexState": {
+        "type": "object",
+        "description": "`GET /search/state`: the index's size, growth and rebuild, for the\nsearch page's \"Cold start\" and \"Index rebuilding\" states (§10.4).",
+        "required": [
+          "cold_start",
+          "growing",
+          "growth_hours",
+          "growth_per_hour",
+          "rebuild",
+          "searchable_torrents",
+          "unavailable",
+          "updated_at"
+        ],
+        "properties": {
+          "cold_start": {
+            "type": "boolean",
+            "description": "Fewer than 1,000 searchable torrents: the full-page \"The index is\nstill growing\" state (§10.19)."
+          },
+          "growing": {
+            "type": "boolean",
+            "description": "Fewer than 1,000,000 searchable torrents: the \"still growing\"\nbanner (decision S-search-2a)."
+          },
+          "growth_hours": {
+            "type": "number",
+            "format": "double",
+            "description": "Hours of the last 24 whole UTC hours the index was measured in\n(`COVERAGE` seconds on its index dim, `docs/metrics.md` §7.7),\nwhich `growth_per_hour` averages over."
+          },
+          "growth_per_hour": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Torrents that became searchable in the last 24 whole UTC hours\n(the `NEWLY_SEARCHABLE` rollup), per hour of `growth_hours`; null\nwhen nothing was measured."
+          },
+          "rebuild": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IndexRebuild",
+                "description": "The rebuild under way; null when none is."
+              }
+            ]
+          },
+          "searchable_torrents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Documents in the search index (as `/stats`'s\n`searchable_torrents`).",
+            "minimum": 0
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields the serving index lacks: clauses on them match nothing\nuntil a rebuild adds them."
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds these numbers were read."
+          }
+        },
+        "example": {
+          "cold_start": false,
+          "growing": true,
+          "growth_hours": 24.0,
+          "growth_per_hour": 2104.5,
+          "rebuild": null,
+          "searchable_torrents": 84210,
+          "unavailable": [],
+          "updated_at": 1792681200
+        }
+      },
       "SearchNotice": {
         "type": "string",
         "description": "A note on what a search left out.",
         "enum": [
           "adult_hidden"
         ]
+      },
+      "SearchRecovery": {
+        "type": "object",
+        "description": "Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the\nquery (the `of` of a root `and`), each with the total the\nquery has without it, counted on the same snapshot and with the same\nvisibility as the search (filter-hidden torrents and Adult stay out\nas they did; removing `adult:…` or `hidden:…` never brings them back).\n\n[`MAX_CLAUSES`]: lodestar_search::recovery::MAX_CLAUSES",
+        "required": [
+          "clauses",
+          "skipped"
+        ],
+        "properties": {
+          "clauses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClauseRemoval"
+            },
+            "description": "In query order."
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Top-level clauses past the 8 counted (filters are counted before\nfree text), left out.",
+            "minimum": 0
+          }
+        }
       },
       "SearchRequest": {
         "type": "object",
@@ -16054,6 +16279,10 @@
             "type": "integer",
             "description": "Hits before this page.",
             "minimum": 0
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/SearchRecovery",
+            "description": "Present only on a first page with no matches whose query has two\nor more top-level clauses: what removing each would give (§10.4\n\"No results\")."
           },
           "stemmed": {
             "type": "boolean",

@@ -32,6 +32,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/parse"),
     ("GET", "/search"),
     ("POST", "/search"),
+    ("GET", "/search/state"),
     ("GET", "/facets"),
     ("POST", "/facets"),
     ("GET", "/suggest"),

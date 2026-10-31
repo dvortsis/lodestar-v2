@@ -86,6 +86,19 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 /// on later starts.
 const PARTIAL_REFETCH: usize = 50_000;
 
+/// The cohort a queued refetch carries instead of an hour. A refetch
+/// completes an import's record; it isn't a crawl discovery, so no funnel
+/// hook counts it (no cohort row, no `FUNNEL_EVENTS`, no Fetch stage).
+/// The pool reports progress by cohort alone, so the cohort is the flag
+/// that reaches every hook. Far in the future, so it sorts after real
+/// hours and `cohort * 3600` can't overflow.
+pub(crate) const REFETCH_COHORT: i64 = i64::MAX / 3600;
+
+/// Whether a key under `cohort` is the crawl's, and counted in the funnel.
+pub(crate) fn in_funnel(cohort: i64) -> bool {
+    cohort != REFETCH_COHORT
+}
+
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
     pub pool: PoolConfig,
@@ -481,6 +494,12 @@ impl Pipeline {
         ));
         let leases = Arc::new(WorkerLeases::default());
         for q in &queue {
+            // A refetch has no discovery hour: it was found at this start.
+            let discovered_at = if in_funnel(q.cohort) {
+                q.cohort * 3600
+            } else {
+                started_at.div_euclid(3600) * 3600
+            };
             let token = coordinator.restore(
                 WorkerId::LOCAL,
                 q.info_hash,
@@ -489,7 +508,7 @@ impl Pipeline {
                     source: q.source,
                     sources: 1u64 << q.source.get(),
                     strategy: q.strategy,
-                    discovered_at: q.cohort * 3600,
+                    discovered_at,
                 },
                 started_at,
             );
@@ -901,6 +920,12 @@ fn prepare(
         }
     };
     let mut queue = store.load_fetch_queue()?;
+    // Refetches are queued afresh from the store below, so a saved one
+    // whose import was removed while the server was stopped isn't fetched
+    // into a new, crawled-looking row (and one saved before they had their
+    // own cohort doesn't land in the funnel). Matched by strategy, not
+    // cohort, for queues saved before `REFETCH_COHORT`; no plugin uses 200.
+    queue.retain(|q| q.strategy != strategy::REFETCH);
     // Imports with incomplete file lists get their info dicts fetched, if
     // there's a peer finder to find them peers.
     if let Some(finder) = manifests
@@ -915,7 +940,7 @@ fn prepare(
                 queue.push(QueuedKey {
                     info_hash: hash,
                     source: finder,
-                    cohort: now.div_euclid(3600),
+                    cohort: REFETCH_COHORT,
                     strategy: strategy::REFETCH,
                     priority: 0,
                     attempts: 0,

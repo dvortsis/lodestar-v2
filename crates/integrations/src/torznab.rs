@@ -13,7 +13,7 @@ use std::time::Duration;
 use reqwest::{Method, Request, Url};
 
 use crate::clients::{AuthFailure, ClientError};
-use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited};
+use crate::net::{GuardedClient, parse_url, read_limited};
 use crate::secret::Secret;
 
 /// The longest the test waits for the answer.
@@ -27,14 +27,6 @@ const MAX_ANSWER_BYTES: usize = 256 * 1024;
 pub struct TorznabInfo {
     /// `<server version="…">`, when it gives one (digits and dots only).
     pub version: Option<String>,
-}
-
-/// A client for [`caps`] under the download-client policy.
-pub fn client() -> Result<GuardedClient, ClientError> {
-    Ok(GuardedClient::new(
-        NetPolicy::download_client(),
-        TORZNAB_TIMEOUT,
-    )?)
 }
 
 /// Asks `url` for its capabilities with `api_key`.

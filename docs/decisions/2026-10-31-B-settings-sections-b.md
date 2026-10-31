@@ -8,7 +8,7 @@
   - a client's `url` origin and `kind`;
   - the Torznab URL's origin;
   - the ntfy topic URL's origin, for the token;
-  - the SMTP host and port, for the password.
+  - the SMTP host, port and security mode, for the password (so a test can't send it over a downgraded connection).
 
   It's the same rule `SECRET_ENDPOINTS` applies at save, so neither a test nor a save can carry a saved password to another server. `DownloadClientDraft` gains an optional `id` to name the saved client.
 - **Usage data:**

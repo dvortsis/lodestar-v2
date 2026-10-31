@@ -153,15 +153,17 @@ const PANELS: [Panel; 20] = [
         "annotations",
         "/annotations",
         None,
+        // `at,kind,text` first, as before IMP-5, so positional readers
+        // keep working; the import's fields follow.
         &[
             "at",
+            "kind",
+            "text",
             "import.job",
             "import.merged",
             "import.new",
             "import.removed",
             "import.source",
-            "kind",
-            "text",
         ],
     ),
     stage(
@@ -376,18 +378,21 @@ fn rows(p: &Panel, v: &Value, compare: bool) -> Vec<(&'static str, BTreeMap<Stri
     out
 }
 
-/// The CSV text: a header of field names (`period` first, each time
-/// column followed by its `…_utc`), then one line per row.
+/// The CSV text: a header of field names (`period` first, then the
+/// panel's columns in its order, then any other field a row has, sorted;
+/// each time column followed by its `…_utc`), then one line per row.
 fn render(columns: &[&str], rows: &[(&'static str, BTreeMap<String, Value>)]) -> String {
     let mut fields: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
+    let mut extra: Vec<String> = Vec::new();
     for (_, r) in rows {
         for k in r.keys() {
-            if !fields.contains(k) {
-                fields.push(k.clone());
+            if !fields.contains(k) && !extra.contains(k) {
+                extra.push(k.clone());
             }
         }
     }
-    fields.sort();
+    extra.sort();
+    fields.extend(extra);
     let mut columns = vec!["period".to_string()];
     for f in &fields {
         columns.push(f.clone());
@@ -583,6 +588,57 @@ mod tests {
         );
         // Nothing to list: the header alone, all of it.
         assert_eq!(render(&["at", "kind"], &[]), "period,at,at_utc,kind\r\n");
+    }
+
+    /// Every panel lists its columns sorted, but annotations, which keep
+    /// their pre-IMP-5 `at,kind,text` first (B-refetch-funnel).
+    #[test]
+    fn columns_are_sorted_but_the_annotations_lead() {
+        for p in &PANELS {
+            let mut sorted = p.columns.to_vec();
+            sorted.sort();
+            if p.name == "annotations" {
+                assert_eq!(&p.columns[..3], ["at", "kind", "text"]);
+                assert_eq!(&p.columns[3..], &sorted[1..6]);
+            } else {
+                assert_eq!(p.columns, sorted, "{}", p.name);
+            }
+        }
+        let v = json!({"annotations": [
+            {"at": 3600, "kind": "import_removed", "text": "job=1 source=s removed=2",
+             "import": {"job": 1, "merged": null, "new": null, "removed": 2, "source": "s"}},
+            {"at": 7200, "kind": "paused", "text": "", "import": null}
+        ]});
+        let p = panel(Some("annotations")).unwrap();
+        let recs = parse(&render(p.columns, &rows(&p, &v, false)));
+        assert_eq!(
+            recs[0],
+            [
+                "period",
+                "at",
+                "at_utc",
+                "kind",
+                "text",
+                "import.job",
+                "import.merged",
+                "import.new",
+                "import.removed",
+                "import.source"
+            ]
+        );
+        assert_eq!(
+            recs[1][3..],
+            [
+                "import_removed",
+                "job=1 source=s removed=2",
+                "1",
+                "",
+                "",
+                "2",
+                "s"
+            ]
+        );
+        assert_eq!(recs[2][3..], ["paused", "", "", "", "", "", ""]);
     }
 
     #[test]
