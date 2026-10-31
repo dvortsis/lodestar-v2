@@ -192,7 +192,7 @@ async fn a_duplicate_is_rejected_without_loading() {
             .add_magnet(&magnet(), &AddOptions::default())
             .await
             .unwrap_err(),
-        ClientError::Rejected("the torrent is already in the client".into())
+        ClientError::AlreadyThere
     );
     assert_eq!(server.finish().len(), 1);
 }

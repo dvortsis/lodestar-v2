@@ -52,9 +52,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lodestar_api::settings::{
-    FieldPreview, IF_REVISION, Imported, PreviewEstimate, PreviewWarning, Saved, SectionPreview,
-    SectionValues, SettingField, SettingSource, SettingValue, SettingsApi, SettingsBatch,
-    SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
+    FieldPreview, IF_REVISION, Imported, PreviewEstimate, PreviewWarning, Saved, SavedClient,
+    SectionPreview, SectionValues, SettingField, SettingSource, SettingValue, SettingsApi,
+    SettingsBatch, SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
     SettingsSection,
 };
 use lodestar_integrations::{SealedSecret, Secret, SecretStore};
@@ -1367,6 +1367,8 @@ pub struct Registry {
     store: Arc<Mutex<Store>>,
     sections: Vec<Box<dyn Erased>>,
     write: Mutex<()>,
+    /// `POST /send`'s limits, one set per install.
+    send_limits: lodestar_api::settings::SendLimits,
     /// Seals and opens secret fields' saved values.
     sealer: Sealer,
 }
@@ -1433,6 +1435,7 @@ impl Registry {
             store,
             sections: Vec::new(),
             write: Mutex::new(()),
+            send_limits: lodestar_api::settings::SendLimits::new(),
             sealer: Sealer::default(),
         }
     }
@@ -1706,6 +1709,32 @@ impl SettingsApi for Registry {
         endpoints: &[(&str, Value)],
     ) -> Option<String> {
         self.find(section)?.saved_secret(key, endpoints)
+    }
+
+    fn send_limits(&self) -> &lodestar_api::settings::SendLimits {
+        &self.send_limits
+    }
+
+    fn download_client(&self, id: Option<&str>) -> Option<SavedClient> {
+        let entry = self
+            .find(integrations::Integrations::SECTION)?
+            .as_any()
+            .downcast_ref::<Entry<integrations::Integrations>>()?;
+        let section = entry.tx.borrow();
+        let c = match id {
+            Some(id) => section.client(id),
+            None => section.default_client(),
+        }?;
+        Some(SavedClient {
+            id: c.id.clone(),
+            kind: c.kind.api(),
+            url: c.url.clone(),
+            username: c.username.clone(),
+            password: c.password.as_ref().map(|p| p.0.clone()),
+            category: c.category.clone(),
+            save_path: c.save_path.clone(),
+            paused: c.paused,
+        })
     }
 }
 
