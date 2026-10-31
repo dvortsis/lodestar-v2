@@ -498,7 +498,7 @@
     },
     "S-insights-2": {
       "status": "review",
-      "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile | 03:26Z PR #258 head edf8bdeb (4 stages; Discover after #255); reviewer session_01MMjhnAtfzdQU6Nq1uw7Qja | 03:38Z CI: insights.keyboard drill-through hits getInsightsUnderstand with no mock; author adds shared mock fixtures, held for review round | 03:42Z #255 merged (8868a76b; InsightsDiscoverResponse + InsightsHistogramBin); author adds Discover, one push with mock fix + review findings | 03:44Z review CHANGES: Alert route 45.82/45.8 KB (owner limit, chunk re-split) -> fix chunking; snapshot series labelled as rates (\u00a710.9.3); riding zh locale in rows(), compare values in table. Reviewer kept for delta"
+      "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile | 03:26Z PR #258 head edf8bdeb (4 stages; Discover after #255); reviewer session_01MMjhnAtfzdQU6Nq1uw7Qja | 03:38Z CI: insights.keyboard drill-through hits getInsightsUnderstand with no mock; author adds shared mock fixtures, held for review round | 03:42Z #255 merged (8868a76b; InsightsDiscoverResponse + InsightsHistogramBin); author adds Discover, one push with mock fix + review findings | 03:44Z review CHANGES: Alert route 45.82/45.8 KB (owner limit, chunk re-split) -> fix chunking; snapshot series labelled as rates (\u00a710.9.3); riding zh locale in rows(), compare values in table. Reviewer kept for delta | 04:17Z delta MERGE at 1e71c743 (Alert 45.71/45.8; insights e2e 50/50 x3); merge on ci-ok+Web+E2E"
     },
     "S-insights-3": {
       "status": "pending",
@@ -2263,7 +2263,8 @@
     "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")",
     "API: add a test that fails on duplicate utoipa component names (two ToSchema types with the same name silently overwrite each other; #255 fixed DiscoverResponse and HistogramBin). Latent: Channel (api/dto/system.rs vs lodestar/settings/updates.rs), Mode (settings/preferences.rs vs updates.rs) if they ever enter the spec",
     "Pipeline: one shared filter loader so the import CLI and the server cannot drift (#257); server-side import slice: online import through the writer, jobs indexing->complete",
-    "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)"
+    "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
+    "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
