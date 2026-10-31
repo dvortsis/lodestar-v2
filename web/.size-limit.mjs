@@ -284,7 +284,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
 	/features\/settings\/security\/icon\.ts$/
 ];
-const securityLoader = [/features\/settings\/(security|logging)\/body\.ts$/];
+const securityLoader = [/features\/(?:settings\/(?:security|logging)|filters)\/body\.ts$/];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
 const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
@@ -379,6 +379,10 @@ const registryLazyKeys = Object.keys(manifest).filter((key) =>
 	[...settingsAbout, ...settingsIcons].some((re) => re.test(key))
 );
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
+// Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
+// body is of code already loaded.
+const filtersLater = [/features\/filters\/screens\/Queue\.svelte$/];
+const filtersBody = /features\/filters\/screens\/FiltersScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
 		.filter(
@@ -387,6 +391,7 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		// Security's later parts load only from its body, so their imports of that body alone are
 		// of code already loaded; any other body they import still trips this.
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
+		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
 if (staticHits.length)
@@ -413,7 +418,18 @@ const appearancePicker = [new RegExp(`${APPEARANCE}/ThemePicker\\.svelte$`)];
 const appearanceEditor = [new RegExp(`${APPEARANCE}/ThemeEditor\\.svelte$`)];
 // The 18+ dialog (Bits UI overlays) loads with the first turn-on of Show adult content.
 const appearanceAdult = [/features\/filters\/flows\/AdultConfirmDialog\.svelte$/];
-const appearanceLater = [...appearancePicker, ...appearanceEditor, ...appearanceAdult];
+// Filters & Safety (S-filters): the change dialogs load on the first change, and the review queue
+// and the override editor on their own, so its first view stops at them (own entries below).
+const filtersDialogs = [
+	/features\/filters\/flows\/(?:ChangeDialog|OverrideDialog|RevealNameDialog)\.svelte$/
+];
+const appearanceLater = [
+	...appearancePicker,
+	...appearanceEditor,
+	...appearanceAdult,
+	...filtersDialogs,
+	...filtersLater
+];
 const settingsHandBuilt = bodyKeys.map((key) => ({
 	name: key
 		.split('/')
@@ -484,6 +500,30 @@ const settingsAdultLazy = requireMeasuredJs(
 	'Appearance 18+ dialog (on demand)',
 	adultKey ? ownChunk(adultKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
 );
+const filtersFirst = settingsHandBuilt.find(({ name }) => name === 'FiltersScreen')?.files ?? [];
+const filtersLazy = (res) =>
+	requireMeasuredJs(res.name, [
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => res.keys.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, res.stop ?? [], false, [
+						...settingsShellView,
+						...filtersFirst,
+						...appearanceFirst
+					])
+				)
+		)
+	]);
+const filtersDialogsLazy = filtersLazy({
+	name: 'Filters dialogs (on demand)',
+	keys: filtersDialogs
+});
+const filtersQueueLazy = filtersLazy({
+	name: 'Filters review queue (on demand)',
+	keys: filtersLater,
+	stop: filtersDialogs
+});
 const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
 	editorKey ? ownChunk(editorKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
@@ -793,6 +833,9 @@ export default [
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
 	entry('Appearance 18+ dialog (on demand)', settingsAdultLazy, '20.6 KB'),
 	entry('Appearance theme editor (on demand)', settingsEditorLazy, '13 KB'),
+	// Filters & Safety: its change dialogs and its review queue, beyond the screen's first view.
+	entry('Filters dialogs (on demand)', filtersDialogsLazy, '34.4 KB'),
+	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
