@@ -106,8 +106,6 @@ const REPLAY_SECS: i64 = 30 * 86_400;
 const PREVIEW_ROWS: usize = 100_000;
 /// Quarantine rows per review-queue page, at most and by default.
 const QUEUE_PAGE: usize = 1_000;
-/// Released hashes checked against the store per `HeldSet` lock.
-const UNHOLD_CHUNK: usize = 1_024;
 /// Hashes listed per source of pending floor removals.
 const PENDING_HASHES: usize = 1_000;
 /// Floor entries one removal settles at most, and a request may name: a
@@ -1260,17 +1258,12 @@ impl FiltersApi {
     /// holds, asked under `HeldSet`'s lock: a writer batch that held one
     /// again since the release committed keeps it refused
     /// (`2026-10-31-B-held-exact.md`).
-    /// In chunks, so intake never waits behind more than one chunk's
-    /// reads; exactness is per hash, so the lock can drop between them. An
-    /// error after the release committed returns 500 and leaves the rest
-    /// refused until the next start: over-strict, never loose.
+    /// An error after the release committed returns 500 and leaves the
+    /// rest refused until the next start: over-strict, never loose.
     fn unhold(&self, store: &Store, hashes: &[[u8; 20]]) -> ApiResult<()> {
-        for chunk in hashes.chunks(UNHOLD_CHUNK) {
-            self.held
-                .remove_released(chunk, |hs| store.held_among(hs))
-                .map_err(internal)?;
-        }
-        Ok(())
+        self.held
+            .remove_released(hashes, |hs| store.held_among(hs))
+            .map_err(internal)
     }
 
     /// [`release`](Self::release) for many hashes: one transaction and one

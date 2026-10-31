@@ -1537,6 +1537,32 @@ mod tests {
     /// it: held.
     #[tokio::test]
     async fn a_release_racing_a_new_hold_keeps_it_held() {
+        // M between the commit and the writer's check (S, C, M, Q+I): it
+        // finds the new hold and keeps it, then the writer inserts it.
+        fn release_held(store: &mut Store, held: &HeldSet, _: &Handle) {
+            let hashes: Vec<_> = store
+                .filter_state()
+                .unwrap()
+                .held
+                .into_iter()
+                .map(|(h, _)| h)
+                .collect();
+            held.remove_released(&hashes, |hs| store.held_among(hs))
+                .unwrap();
+        }
+        for sweep in [true, false] {
+            let (mut w, stored) = arms_writer();
+            let h = if sweep { [1; 20] } else { stored };
+            w.held.insert(h);
+            w.between = Some(release_held);
+            if sweep {
+                w.refile_candidates().await;
+            } else {
+                w.backfill().await;
+            }
+            assert!(w.held.contains(&h), "S, C, M, Q+I; sweep {sweep}");
+            agrees_with_store(&w);
+        }
         for release_last in [true, false] {
             for sweep in [true, false] {
                 let (mut w, stored) = arms_writer();
