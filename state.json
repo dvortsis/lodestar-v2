@@ -1809,7 +1809,7 @@
       "pr": 294,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head. | 20:53Z head 96a637ae (logoutput lazy map; Logging map 0.842/0.86; Notifications ~45.1 noise until #293). Reviewer (session_01MMjhnA5HC3rJjGGgq1dCrL) + security review; subscribed. Order: #293 first, then #294 merges main.",
+      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head. | 20:53Z head 96a637ae (logoutput lazy map; Logging map 0.842/0.86; Notifications ~45.1 noise until #293). Reviewer (session_01MMjhnA5HC3rJjGGgq1dCrL) + security review; subscribed. Order: #293 first, then #294 merges main. | 21:02Z told: merge main (#293) with review fixes, re-measure.",
       "reviewer": "session_01MMjhnA5HC3rJjGGgq1dCrL"
     },
     "X-form-remount": {
@@ -1822,13 +1822,13 @@
       "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot)."
     },
     "X-build-stable-name": {
-      "status": "pending",
+      "status": "building",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhnB5apyKG6jubZNaGRA",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise)."
+      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
