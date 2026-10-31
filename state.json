@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 44
+  "count": 45
  },
  "tags": {},
  "slices": {
@@ -1725,13 +1725,13 @@
    "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review | 16:47Z launched Opus"
   },
   "X-polish-1031c": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnB2YGwEWRPavZaLyC4",
    "pr": 286,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus | 17:04Z PR #286 head 16c9a72d (services.rs startup hook + settings key classify.requeue_pending accepted); fresh Opus reviewer + security review | 17:20Z MERGE at 16c9a72d (3 optional); waiting on CI"
+   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus | 17:04Z PR #286 head 16c9a72d (services.rs startup hook + settings key classify.requeue_pending accepted); fresh Opus reviewer + security review | 17:20Z MERGE at 16c9a72d (3 optional); waiting on CI | 17:34Z merged 4a35f2ea; sessions archived"
   },
   "B-held-exact": {
    "status": "review",
@@ -1750,6 +1750,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "17:08Z brief briefs/S-logs-2.md (Settings → Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus"
+  },
+  "X-requeue-2": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "17:36Z brief briefs/X-requeue-2.md (#286 review opt 1-3; content safety); security review"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2259,7 +2268,8 @@
   "heartbeat_2026-10-30T13:07Z": "Heartbeat: IMP-1 running (applying self-review fixes), CR-SIM pushing review fixes, CR-0d #208 CI on a1bac3db; release/v0.5.1 8b67f269: Release+E2E green, CI running. No permission prompts. Heartbeat prompt refreshed (landing plan done).",
   "2026-10-30T19:17Z": "Before merging any PR that touches web/, read its check runs: 'check + test + build + size' and 'playwright (core…)' must be success, not just ci-ok (the ruleset requires only ci-ok; #217 merged early).",
   "2026-10-31T14:10Z": "cargo test --workspace with debuginfo fills a session disk (~30 GB target/debug); tell slices/reviewers to set CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0",
-  "2026-10-31T15:51Z": "Lesson: a reviewer's 'optional' suggestion to narrow a safety mechanism (#280 opt 2) went into a brief and was a content-safety loosening caught in #282. Briefs that relax a hold/refusal path must say 'check this doesn't loosen safety' and get a security review."
+  "2026-10-31T15:51Z": "Lesson: a reviewer's 'optional' suggestion to narrow a safety mechanism (#280 opt 2) went into a brief and was a content-safety loosening caught in #282. Briefs that relax a hold/refusal path must say 'check this doesn't loosen safety' and get a security review.",
+  "2026-10-31T17:34Z": "Usage: a reviewer session reports rate_limit status allowed_warning (seven-day). Prioritise safety-critical slices; defer polish-only launches."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
@@ -2561,8 +2571,7 @@
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers",
-  "X-requeue-2 (Opus, content safety, #286 review): filters.rs requeue clears classify.requeue_pending when there's no search index (search disabled) -> a later re-enable leaves matches unmarked (pre-existing gap for adds too). Keep the entry unless an index was present, dedupe identical texts, and re-queue rules added while search was off on re-enable; resume_requeues should log+keep a failing entry and continue (stop only on shutdown); add a sibling-stop test in search files.rs (injected failing segment)"
+  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
