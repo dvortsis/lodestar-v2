@@ -1686,7 +1686,7 @@
    "pr": 280,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review"
+   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review | 14:42Z MERGE at 61e73241 (6 optional); waiting on CI"
   },
   "X-search-files-2": {
    "status": "running",
@@ -2490,7 +2490,8 @@
   "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
   "sources-importers: unify judge_candidate with the refile sweep; judge a hybrid's truncated v2 hash (#280)",
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
-  "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline"
+  "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
+  "X-import-refile-2 (Opus, #280 review optional 1-6): writer.rs retry the candidate sweep after a transient store error (retry_at on flush tick) instead of done=true; insert into HeldSet only if filter version unchanged; store/import.rs ~1399 drop the candidates clamp (or skip counter move at 0); make the no-name log test assert a live sink; decisions note that hash-trigger removals/stored candidates don't flip CWI; add a class-rule (adult_hold) candidate test"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
