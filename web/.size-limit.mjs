@@ -173,20 +173,6 @@ const mapName = (key) =>
 		.replace(/\.(ts|svelte)$/, '');
 const gzSize = (key) =>
 	gzipSync(readFileSync(`.svelte-kit/output/client/${manifest[key].file}`)).length;
-const GENERATED_SECTIONS = [
-	'crawler',
-	'transport',
-	'network',
-	'storage',
-	'search',
-	'general',
-	'trackers'
-];
-const largestMap = mapName(
-	messageKeys
-		.filter((key) => GENERATED_SECTIONS.includes(mapName(key)))
-		.sort((a, b) => gzSize(b) - gzSize(a))[0]
-);
 const bodyMaps = {
 	AppearanceScreen: ['preferences'],
 	KeyboardScreen: ['preferences'],
@@ -195,6 +181,14 @@ const bodyMaps = {
 	NotificationsScreen: ['notifications'],
 	InsightsScreen: ['insights']
 };
+// A generated screen can show any section no hand-built body names, so a new section's map joins the
+// worst case the moment it lands.
+const handBuilt = new Set(Object.values(bodyMaps).flat());
+const largestMap = mapName(
+	messageKeys
+		.filter((key) => mapName(key) !== 'group' && !handBuilt.has(mapName(key)))
+		.sort((a, b) => gzSize(b) - gzSize(a))[0]
+);
 const mapsLeftOut = (keep) =>
 	messageKeys
 		.filter((key) => mapName(key) !== 'group' && !keep.includes(mapName(key)))

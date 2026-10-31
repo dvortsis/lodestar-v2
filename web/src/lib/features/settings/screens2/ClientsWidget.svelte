@@ -11,7 +11,7 @@
 	import ClientCard from './ClientCard.svelte';
 	import { blankClient, MAX_CLIENTS, move, toClients, type Client } from './clients';
 
-	let { form, key }: WidgetProps = $props();
+	let { form, key, controlProps }: WidgetProps = $props();
 
 	const f = $derived(form.field(key));
 	const list = $derived(toClients(f.value));
@@ -70,7 +70,12 @@
 	}
 </script>
 
-<div class="flex flex-col gap-4" aria-labelledby={undefined}>
+<div
+	role="group"
+	aria-labelledby={controlProps['aria-labelledby']}
+	aria-describedby={controlProps['aria-describedby']}
+	class="flex flex-col gap-4"
+>
 	{#if list.length === 0}
 		<p class="text-muted-text">{m.settings_screen_clients_empty()}</p>
 	{/if}

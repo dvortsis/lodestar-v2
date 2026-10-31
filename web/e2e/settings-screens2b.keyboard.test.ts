@@ -175,6 +175,17 @@ test.describe('keyboard: connection settings screens', () => {
 		await expect(discord.getByTestId('test-result')).toHaveText('Test message sent.');
 		expect(tests).toEqual([{ kind: 'discord', url: 'https://discord.com/api/webhooks/1/x' }]);
 		expect(backend.patches).toHaveLength(0);
+		// A route saves by keyboard, and the typed address isn't part of it.
+		await kbd.tabTo(
+			page.getByRole('group', { name: 'Alerts go to' }).getByRole('checkbox', { name: 'Discord' }),
+			40
+		);
+		await kbd.press('Space');
+		await kbd.press('Control+s');
+		await expect(page.getByTestId('save-bar')).toContainText('Saved');
+		expect(backend.patches).toEqual([
+			{ notifications: { if_revision: 1, route_alerts: ['discord'] } }
+		]);
 	});
 
 	test('Insights asks before recording searches, and before clearing usage data', async ({

@@ -197,9 +197,11 @@
 		</span>
 		<Field
 			label={m.settings_screen_client_password_new()}
-			help={saved
-				? m.settings_screen_client_password_help()
-				: m.settings_screen_client_password_unsaved()}
+			help={password !== ''
+				? m.settings_screen_client_password_pending()
+				: saved
+					? m.settings_screen_client_password_help()
+					: m.settings_screen_client_password_unsaved()}
 			error={problem || undefined}
 		>
 			{#snippet children(cp)}
@@ -216,6 +218,7 @@
 		<div class="flex flex-wrap gap-2">
 			<Button
 				dense
+				aria-label={m.settings_screen_client_password_save_named({ name })}
 				disabled={locked || !saved || password === '' || busy}
 				onclick={() =>
 					run(
@@ -227,6 +230,7 @@
 				<Button
 					dense
 					variant="danger"
+					aria-label={m.settings_screen_client_password_remove_named({ name })}
 					disabled={!saved || busy}
 					onclick={() => run(onremovepassword)}>{m.settings_form_secret_remove()}</Button
 				>

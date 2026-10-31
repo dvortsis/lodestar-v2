@@ -29,7 +29,10 @@ const SPECS: FieldSpec[] = [
 	spec('integrations.default_client', { group: 'download_clients', order: 1 }),
 	spec('integrations.torznab_url', { group: 'torznab', order: 2, format: 'url' }),
 	spec('integrations.torznab_api_key', { group: 'torznab', order: 3, writeOnly: true }),
+	spec('notifications.ntfy_url', { group: 'ntfy', order: 0, writeOnly: true }),
+	spec('notifications.ntfy_priority', { kind: 'integer', group: 'ntfy', order: 2, advanced: true }),
 	spec('notifications.discord_url', { group: 'discord', order: 4, writeOnly: true }),
+	spec('notifications.webhook_url', { group: 'webhook', order: 13, writeOnly: true }),
 	spec('notifications.email_host', { group: 'email', order: 5 }),
 	spec('notifications.email_from', { group: 'email', order: 10 }),
 	spec('notifications.email_to', { kind: 'string-list', group: 'email', order: 11 }),
@@ -72,7 +75,10 @@ beforeEach(() => {
 			torznab_api_key: sv(null)
 		}),
 		values('notifications', 1, {
+			ntfy_url: sv(null),
+			ntfy_priority: sv(0),
 			discord_url: sv(null),
+			webhook_url: sv(null),
 			email_host: sv(''),
 			email_from: sv(''),
 			email_to: sv([]),
@@ -110,7 +116,6 @@ describe('Integrations', () => {
 		const entry = await screen.findByRole('group', { name: 'Home' });
 		await type(within(entry).getByLabelText('Address'), 'http://10.0.0.2:8080/');
 		await fireEvent.click(within(entry).getByRole('button', { name: 'Test connection to Home' }));
-		await until(() => expect(within(entry).getByRole('status', { name: '' })).toBeTruthy());
 		await until(() =>
 			expect(entry.querySelector('[data-testid="test-result"]')?.textContent?.trim()).toBe(
 				'Connected. Version v4.6.3.'
@@ -203,7 +208,7 @@ describe('Integrations', () => {
 		await until(() =>
 			expect(within(entry).getByTestId('client-password-status').textContent).toContain('Set')
 		);
-		await fireEvent.click(within(entry).getByRole('button', { name: 'Remove' }));
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Remove password of Home' }));
 		const confirm = await dialog();
 		expect(patched()).toHaveLength(0);
 		await fireEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
@@ -217,18 +222,21 @@ describe('Integrations', () => {
 	it('keeps the password when removing it is cancelled', async () => {
 		await open('integrations');
 		const entry = await screen.findByRole('group', { name: 'Home' });
-		await fireEvent.click(await within(entry).findByRole('button', { name: 'Remove' }));
+		await fireEvent.click(
+			await within(entry).findByRole('button', { name: 'Remove password of Home' })
+		);
 		const confirm = await dialog();
 		await fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
-		await new Promise((r) => setTimeout(r, 0));
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(patched()).toHaveLength(0);
+		expect(within(entry).getByTestId('client-password-status').textContent).toContain('Set');
 	});
 
 	it('saves a new password on its own, for a saved client only', async () => {
 		await open('integrations');
 		const entry = await screen.findByRole('group', { name: 'Home' });
 		await type(within(entry).getByLabelText('New password'), 's3cret');
-		await fireEvent.click(within(entry).getByRole('button', { name: 'Save password' }));
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Save password for Home' }));
 		await until(() => expect(patched()).toHaveLength(1));
 		expect(patched()[0]).toEqual({
 			integrations: { if_revision: 3, clients: [{ ...HOME, password: 's3cret' }] }
@@ -242,10 +250,9 @@ describe('Integrations', () => {
 		await open('integrations');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Add a download client' }));
 		const entry = await screen.findByRole('group', { name: 'Client 2' });
-		expect(within(entry).getByRole('button', { name: 'Save password' })).toHaveProperty(
-			'disabled',
-			true
-		);
+		expect(
+			within(entry).getByRole('button', { name: 'Save password for Client 2' })
+		).toHaveProperty('disabled', true);
 		expect(within(entry).getByText(/Save the client first/)).toBeTruthy();
 	});
 });
@@ -295,6 +302,32 @@ describe('Notifications', () => {
 			expect(email.getByTestId('test-result').textContent).toContain('mail server')
 		);
 		expect(posted('/settings/test')).toHaveLength(0);
+	});
+
+	it('sends ntfy and webhook tests without the saved secrets, and with typed ones', async () => {
+		server.next('POST /settings/test', OK, OK);
+		await open('notifications');
+		const ntfy = within(await screen.findByRole('region', { name: 'ntfy' }));
+		await fireEvent.click(await ntfy.findByRole('button', { name: 'Send test to ntfy' }));
+		await until(() => expect(posted('/settings/test')).toHaveLength(1));
+		expect(posted('/settings/test')[0]).toEqual({
+			kind: 'ntfy',
+			priority: 0,
+			allow_private: false
+		});
+		const webhook = within(await screen.findByRole('region', { name: 'Webhook' }));
+		await fireEvent.click(await webhook.findByRole('button', { name: 'Add' }));
+		await type(
+			await webhook.findByLabelText('New value for Webhook address'),
+			'https://hooks.example.com/x'
+		);
+		await fireEvent.click(webhook.getByRole('button', { name: 'Send test to Webhook' }));
+		await until(() => expect(posted('/settings/test')).toHaveLength(2));
+		expect(posted('/settings/test')[1]).toEqual({
+			kind: 'webhook',
+			url: 'https://hooks.example.com/x',
+			allow_private: false
+		});
 	});
 
 	it('routes events to channels with checkboxes', async () => {

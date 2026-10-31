@@ -311,5 +311,8 @@
 	"settings_screen_usage_undone": "This can’t be undone.",
 	"settings_screen_usage_confirm": "Delete {shown} searches",
 	"settings_screen_usage_empty": "There is no usage data to clear.",
-	"settings_screen_usage_done": "Deleted {count} searches."
+	"settings_screen_usage_done": "Deleted {count} searches.",
+	"settings_screen_client_password_save_named": "Save password for {name}",
+	"settings_screen_client_password_remove_named": "Remove password of {name}",
+	"settings_screen_client_password_pending": "Not saved yet. Press Save password: Save changes does not include it."
 }
