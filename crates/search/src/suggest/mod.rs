@@ -265,14 +265,16 @@ fn count_up_to(
 }
 
 impl Cx<'_> {
-    /// `node` as the base query runs it, compiled.
-    fn compiled(&self, node: Node) -> Compiled {
-        self.index.query(&(self.req.restrict)(node), self.req.now)
+    /// `node` as the base query runs it, compiled. Its `file:(…)`
+    /// clauses run on the file index under the request's token.
+    fn compiled(&self, node: Node) -> Result<Compiled> {
+        self.index
+            .query_cancelled(&(self.req.restrict)(node), self.req.now, 0, self.cancel)
     }
 
     /// Torrents the request may see that `node` matches.
     fn visible(&self, node: Node) -> Result<u64> {
-        let c = self.compiled(node);
+        let c = self.compiled(node)?;
         Ok(count::exact(&self.searcher, &c, self.cancel)? as u64)
     }
 
@@ -283,7 +285,7 @@ impl Cx<'_> {
 
     /// Torrents the request may see that `node` matches, up to `n`.
     fn count_up_to(&self, node: Node, n: usize) -> Result<usize> {
-        let c = self.compiled(node);
+        let c = self.compiled(node)?;
         count_up_to(&self.searcher, &c, n, self.cancel)
     }
 
@@ -707,7 +709,7 @@ fn did_you_mean(
     let Ok(ast) = query::parse(q) else {
         return Ok(out);
     };
-    if ast == Node::All || count_up_to(&cx.searcher, &cx.compiled(ast), FEW, cx.cancel)? >= FEW {
+    if ast == Node::All || count_up_to(&cx.searcher, &cx.compiled(ast)?, FEW, cx.cancel)? >= FEW {
         return Ok(out);
     }
     let text = cx.index.fields().text;
