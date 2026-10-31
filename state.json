@@ -1769,6 +1769,15 @@
       "attempt": 0,
       "review_rounds": 0,
       "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB"
+    },
+    "B-held-precommit": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2586,8 +2595,6 @@
     "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
-    "HeldSet: close the ms gap between a new hold's store commit and its HeldSet insert (insert batch hashes before commit, reconcile after) (#287 review opt 4)",
-    "B-held-exact nits (optional, #287 re-check): held.rs:6-9 move CHECK_CHUNK above HeldSet doc; decisions 'Errors fail closed' bullet -> 'that chunk and every later one'. Ride next filter/held PR.",
     "X-soak-docker-memrule: in collect.py Docker mode, apply the 1 GiB x5 guardrail to private_bytes (cgroup anon), keep working_set as a gauge; document why (Linux cgroup charges page cache). Small PR; Opus (soak evidence). Only for runs started after it merges."
   ],
   "main_health": [
