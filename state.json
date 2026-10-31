@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 40
+  "count": 41
  },
  "tags": {},
  "slices": {
@@ -1689,13 +1689,13 @@
    "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review | 14:42Z MERGE at 61e73241 (6 optional); waiting on CI | 15:02Z merged 65a0ba9f; sessions archived"
   },
   "X-search-files-2": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCheHLuJ6F39x4tH69",
    "pr": 283,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus | 15:54Z PR #283 head ce842e28 (cold broad p95 1M 195->102 ms, gated FILE_P95 150 ms; parallel segment scan); fresh Opus reviewer session_01MMjhn8VhL9DEqTBq434TbW | 16:03Z MERGE at ce842e28 (4 optional); waiting on test ubuntu/windows"
+   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus | 15:54Z PR #283 head ce842e28 (cold broad p95 1M 195->102 ms, gated FILE_P95 150 ms; parallel segment scan); fresh Opus reviewer session_01MMjhn8VhL9DEqTBq434TbW | 16:03Z MERGE at ce842e28 (4 optional); waiting on test ubuntu/windows | 16:27Z merged 697290de; sessions archived"
   },
   "X-import-refile-2": {
    "status": "review",
@@ -1723,6 +1723,15 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges"
+  },
+  "X-polish-1031c": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2517,19 +2526,16 @@
   "live.svelte.ts (#275 optional a): a tab hidden >=35 s fires both the visibility and the status path -> two again() calls (one extra POST+DELETE, no leak); debounce a second again() within 1-2 s",
   "live.svelte.ts (#275 optional b): the status $effect calls again(), which reads deps.shown(), so the effect tracks search state; wrap again() in untrack",
   "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under §2.26 if so)",
-  "Filters API: shutdown token for the classification-rule re-queue (X-search-files-perf kept it uncancellable for content safety)",
   "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
   "Logging slice: the §10.10.7 banner while query_logging is on (#277 review; left to §10.10.12)",
   "lib/ui Lazy.svelte: load-failure message lacks role=alert/status (#277 review)",
   "Settings engine: lift the reveal + hash-focus logic shared by SectionForm and screens2/GroupedForm into form/reveal.svelte.ts (#277 review)",
-  "hints.rs compact_order: make the amortised bound unconditional (next_compact = max(ORDER_CAPACITY, 2*len)) or skip duplicate push_back (#279 review 1)",
   "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "store/src/filter.rs: per-hash hold query (or HeldSet removal generation) so the writer re-holds only hashes the store still holds, covering the sweep arm and backfill's arm (writer.rs:573); until then both insert unconditionally (over-strict, safe) (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-  "search files.rs (#283 review): stop sibling segment scans on a non-cancel error (local AtomicBool in stopped()); decisions line that cold file scans share the file pool's 4 threads (include concurrent cold queries in the 10M measurement); comment that tantivy's range size_hint is num_docs/10 (TODO upstream); scan test should pair parts to segments by first id, not position",
   "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers"
  ],
  "main_health": [
