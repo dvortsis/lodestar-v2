@@ -1722,7 +1722,7 @@
       "pr": 288,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review | 16:47Z launched Opus | 17:43Z PR #288 head 9e2ecc06 (+1931 lines, accepted). Runner: revoke w/o password ok (B12); keys/proxy load after first paint not behind Show (change before review); local date helper ok; shared size-gate edit provisional (stricter). Reviewer starts on new head | 17:49Z head c3b8c27a (keys/proxy after first paint; Security 31.39/45 KB). Reviewer session_01MMjhnAQpCbujDp4woSR6sJ w/ security-review; subscribed. | 18:01Z E2E core fail = logs.keyboard scroll race (not this PR); fix rides S-logs-2; cite \u00a72.18 if it recurs.",
+      "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review | 16:47Z launched Opus | 17:43Z PR #288 head 9e2ecc06 (+1931 lines, accepted). Runner: revoke w/o password ok (B12); keys/proxy load after first paint not behind Show (change before review); local date helper ok; shared size-gate edit provisional (stricter). Reviewer starts on new head | 17:49Z head c3b8c27a (keys/proxy after first paint; Security 31.39/45 KB). Reviewer session_01MMjhnAQpCbujDp4woSR6sJ w/ security-review; subscribed. | 18:01Z E2E core fail = logs.keyboard scroll race (not this PR); fix rides S-logs-2; cite \u00a72.18 if it recurs. | 18:10Z re-check MERGE at b26cfbeb (copyText fix). Merge on green web+e2e.",
       "reviewer": "session_01MMjhnAQpCbujDp4woSR6sJ"
     },
     "X-polish-1031c": {
@@ -1744,13 +1744,14 @@
       "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders | 17:30Z PR #287 head 8301f652 (~530 lines; both-sides reconcile, HeldSet::remove deleted); fresh Opus reviewer + security review; will need main after #286 (filters.rs) | 17:42Z MERGE at 8301f652 (4 optional); author to merge main (#286 filters.rs) + fold opt 1-3 in one push; same reviewer re-checks | 17:57Z re-check MERGE at a02cb0b1 (chunking in HeldSet fails closed). Merge on green."
     },
     "S-logs-2": {
-      "status": "running",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhn9PaFGExdtPTuRLd14",
-      "pr": null,
+      "pr": 289,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it."
+      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it. | 18:12Z PR #289 (2a) head 4ea96c7d, ~2.4k lines (split, accepted). Logging 43.77/45; Notifications 45.01/45.1; others +0.1 KB (registry cost). Reviewer started w/ security review; subscribed. 2b next.",
+      "reviewer": "session_01MMjhn8kJAEoHa23dyFCMM5"
     },
     "X-requeue-2": {
       "status": "running",
@@ -2775,7 +2776,8 @@
           "private_slope_h12_14": "-0.40 MiB/h CI[-6.08,+5.28]",
           "working_set_mib": "960-1010, 25 samples >1024, peak 1070.97, max 3 consecutive"
         },
-        "risk": "Docker working set = memory.current - inactive_file includes active page cache charged to the cgroup; 1 GiB x5 stop rule may trip on cache, not a leak. A trip ends collection (reason rss_over_1GiB_for_five_samples) -> analyzer status interrupted -> no gate evidence -> re-run (never stitched). Proposed follow-up: in Docker mode apply the guardrail to anon (private_bytes), keep working set as a recorded gauge."
+        "risk": "Docker working set = memory.current - inactive_file includes active page cache charged to the cgroup; 1 GiB x5 stop rule may trip on cache, not a leak. A trip ends collection (reason rss_over_1GiB_for_five_samples) -> analyzer status interrupted -> no gate evidence -> re-run (never stitched). Proposed follow-up: in Docker mode apply the guardrail to anon (private_bytes), keep working set as a recorded gauge.",
+        "analyzer_14_5h": "analyze_cr0 exit 0 on copy (earlier exit 1 = no python3 on host): coverage_below_required 14.53/24h; private slope 0.58 MiB/h CI[-4.06,5.22] window incomplete; peak private 898 MiB; working set 998 MiB, 2 non-consecutive >1 GiB in last 60"
       },
       "windows_portable": {
         "result": "PASS",
