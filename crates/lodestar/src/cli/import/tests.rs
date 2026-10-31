@@ -332,3 +332,97 @@ fn space_is_estimated_per_torrent_and_refused_when_short() {
     assert_eq!((s.per_record, s.measured), (DEFAULT_RECORD_BYTES, false));
     assert_eq!(s.needed, Some(1_000 * DEFAULT_RECORD_BYTES * 125 / 100));
 }
+
+fn hash_of(i: u32) -> [u8; 20] {
+    let mut h = [0u8; 20];
+    h[..4].copy_from_slice(&i.to_be_bytes());
+    h[19] = 7;
+    h
+}
+
+/// The filter the CLI builds is the server's: a hash in a config
+/// blocklist file (the floor) and a name your drop rule matches are both
+/// refused and tombstoned, through `start` itself.
+#[test]
+fn start_filters_through_the_servers_floor_and_your_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 5);
+    let conn = Connection::open(&src).unwrap();
+    conn.execute(
+        "UPDATE torrents SET name = 'Badword release' WHERE id = 4",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let blocklist = dir.path().join("floor.txt");
+    let hex: String = hash_of(2).iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(&blocklist, format!("# test\n{hex}\n")).unwrap();
+    let mut config = data(&dir.path().join("data"));
+    config.blocklist.files = vec![blocklist];
+    {
+        let mut store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+        store
+            .add_rule("badword", lodestar_filter::Action::Drop.code(), None, None)
+            .unwrap();
+    }
+    block_on(start(&config, &magnetico(&src), None, true, None)).unwrap();
+    let store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+    let j = store.import_job(1).unwrap().unwrap();
+    assert_eq!((j.counters.new, j.counters.filtered), (3, 2));
+    for refused in [2, 4] {
+        let h = hash_of(refused);
+        assert!(
+            store
+                .find(&lodestar_metainfo::InfoHash(h))
+                .unwrap()
+                .is_none()
+        );
+    }
+    // The floor hash is held by the floor's own list, synced from the file;
+    // the rule's drop leaves a tombstone.
+    let floor = store.filter_state().unwrap().cs_hashes;
+    assert!(floor.iter().any(|(h, _)| *h == hash_of(2)));
+    let tombstones = store.tombstones(10).unwrap();
+    assert!(tombstones.iter().any(|t| t.hash == hash_of(4)));
+}
+
+/// A source that changed since the job started blocks `resume`, which
+/// says why and imports nothing; a read-only connection (the server's
+/// readers) is enough to refuse a writing verb.
+#[test]
+fn resume_refuses_another_source_and_any_reader_blocks_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 600);
+    let config = data(&dir.path().join("data"));
+    block_on(start(&config, &magnetico(&src), Some(1), true, None)).unwrap();
+    let other = dir.path().join("other.sqlite3");
+    magnetico_db(&other, 650);
+    let r = block_on(resume(&config, 1, &magnetico(&other), None, true));
+    assert!(
+        matches!(&r, Err(Failure::Failed(m)) if m.contains("isn't the one")),
+        "{r:?}"
+    );
+    let j = job(&config, 1);
+    assert_eq!((j.control, j.counters.read), (Control::Blocked, 500));
+
+    let reader = Store::open_reader(config.db_path(), config.store_config()).unwrap();
+    reader.count().unwrap();
+    for r in [
+        run(
+            &config,
+            ImportArgs {
+                action: Action::Cancel { job: 1 },
+            },
+        ),
+        remove(&config, 1, true, true),
+    ] {
+        assert!(matches!(&r, Err(Failure::Refused(_))), "{r:?}");
+    }
+    drop(reader);
+    // A blocked job must be cancelled before it's removed.
+    assert!(
+        matches!(remove(&config, 1, true, true), Err(Failure::Refused(m)) if m.contains("cancel"))
+    );
+}

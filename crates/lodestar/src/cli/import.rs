@@ -279,7 +279,21 @@ pub fn legacy(config: &Config, args: super::ImportBitmagnetArgs) -> Outcome {
         allow_plaintext_loopback: args.allow_plaintext_loopback,
     };
     let cursor = config.data_dir.join("import-bitmagnet.cursor");
-    block_on(start(config, &source, args.limit, false, Some(&cursor)))
+    block_on(async {
+        // Run again, the old command carried on: so does its new form.
+        let unfinished = {
+            let store = open_exclusive(config)?;
+            let opened = open_source(&source).await?;
+            job_for(&store, &opened.adapter)?.map(|j| j.id)
+        };
+        match unfinished {
+            Some(id) => {
+                eprintln!("Carrying on with job {id}.");
+                resume(config, id, &source, args.limit, false).await
+            }
+            None => start(config, &source, args.limit, false, Some(&cursor)).await,
+        }
+    })
 }
 
 fn block_on(f: impl Future<Output = Outcome>) -> Outcome {
@@ -303,8 +317,25 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
             db.display()
         )));
     }
-    let store = Store::open(&db, config.store_config())
-        .map_err(failed(format!("opening {}", db.display())))?;
+    let in_use = || {
+        Failure::Refused(format!(
+            "the store {} is open in another process. Imports run while Lodestar is stopped: \
+             stop it (and any other lodestar command), import, then start it again.",
+            db.display()
+        ))
+    };
+    let store = match Store::open(&db, config.store_config()) {
+        Ok(s) => s,
+        Err(lodestar_store::Error::Sqlite(e))
+            if matches!(
+                e.sqlite_error_code(),
+                Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+            ) =>
+        {
+            return Err(in_use());
+        }
+        Err(e) => return Err(Failure::Failed(format!("opening {}: {e}", db.display()))),
+    };
     let take = |c: &lodestar_store::rusqlite::Connection| {
         c.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
         // A write takes the lock, which the locking mode then keeps.
@@ -318,11 +349,7 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
                 Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
             ) =>
         {
-            Err(Failure::Refused(format!(
-                "the store {} is open in another process. Imports run while Lodestar is \
-                 stopped: stop it (and any other lodestar command), import, then start it again.",
-                db.display()
-            )))
+            Err(in_use())
         }
         Err(e) => Err(Failure::Failed(format!("locking {}: {e}", db.display()))),
     }
@@ -463,7 +490,7 @@ async fn inspect(config: &Config, args: &SourceArgs, json: bool) -> Outcome {
     let opened = open_source(args).await?;
     let db = config.db_path();
     let store = if db.is_file() {
-        Some(Store::open(&db, config.store_config()).map_err(failed("opening the store"))?)
+        Some(Store::open_reader(&db, config.store_config()).map_err(failed("opening the store"))?)
     } else {
         None
     };
@@ -618,6 +645,27 @@ fn bind_legacy_cursor(
     if position.is_empty() {
         return Ok(());
     }
+    // A crash between binding and setting the file aside leaves it: never
+    // bind it to a second job, which would skip what the first imported.
+    let mut before = None;
+    while let Some(last) = {
+        let page = store
+            .import_jobs(before, 100)
+            .map_err(failed("reading the import jobs"))?;
+        if let Some(other) = page
+            .iter()
+            .find(|j| j.id != job.id && j.adapter == bitmagnet::ADAPTER && j.dataset == dataset)
+        {
+            return Err(Failure::Refused(format!(
+                "{} was already bound to job {}: delete it, then run the import again",
+                path.display(),
+                other.id
+            )));
+        }
+        page.last().map(|j| j.id)
+    } {
+        before = Some(last);
+    }
     let now = unix_now();
     let j = store
         .set_import_phase(job.id, job.revision, Phase::Ready, now)
@@ -702,6 +750,7 @@ fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
         .blocklist_files()
         .map_err(failed("reading the blocklist files"))?;
     crate::floor::sync_files(store, &files, unix_now()).map_err(Failure::Failed)?;
+    crate::subscriptions::sync_config(store, &config.subscriptions).map_err(Failure::Failed)?;
     let handle = lodestar_pipeline::default_filter();
     crate::subscriptions::apply(store, &handle, &Default::default()).map_err(Failure::Failed)?;
     let state = store.filter_state().map_err(failed("reading the filter"))?;
@@ -741,11 +790,28 @@ fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
 /// The seal key the server uses for quarantined names, if it has made
 /// one; without it a quarantine keeps no name.
 fn sealer(config: &Config) -> Option<Sealer> {
-    let key: [u8; 32] = std::fs::read(config.data_dir.join("seal.key"))
-        .ok()?
-        .try_into()
-        .ok()?;
-    Some(Sealer::new(&key))
+    let path = config.data_dir.join("seal.key");
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "lodestar import: can't read {} ({e}): quarantined names won't be kept",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match <[u8; 32]>::try_from(bytes) {
+        Ok(key) => Some(Sealer::new(&key)),
+        Err(_) => {
+            eprintln!(
+                "lodestar import: {} isn't a 32-byte key: quarantined names won't be kept",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 async fn run_job(
@@ -771,9 +837,18 @@ async fn run_job(
         let (stop, cancel) = (stop.clone(), adapter.canceller());
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
-                eprintln!("Pausing after the current batch…");
+                eprintln!("Pausing at the last saved batch… (Ctrl-C again to quit now)");
                 stop.store(true, Ordering::Relaxed);
                 cancel.store(true, Ordering::Relaxed);
+            }
+            // A second one quits at once: every committed batch is safe,
+            // and the job resumes from the last one.
+            if tokio::signal::ctrl_c().await.is_ok() {
+                eprintln!(
+                    "Stopped. Nothing is lost: `lodestar import resume` carries on from the last \
+                     saved batch."
+                );
+                std::process::exit(130);
             }
         });
     }
@@ -818,8 +893,9 @@ async fn run_job(
             refusal_text(&report)
         ))),
         Ended::NotRunning(c) => Err(Failure::Failed(format!(
-            "job {id} is {}, so nothing was imported",
-            c.label()
+            "job {id} is {}: it stopped after {} batch(es) this run, all of them saved",
+            c.label(),
+            report.batches
         ))),
     }
 }
@@ -930,7 +1006,8 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
     if !db.is_file() {
         return Err(Failure::Failed(format!("no store at {}", db.display())));
     }
-    let store = Store::open(&db, config.store_config()).map_err(failed("opening the store"))?;
+    let store =
+        Store::open_reader(&db, config.store_config()).map_err(failed("opening the store"))?;
     let jobs = match id {
         Some(id) => vec![load(&store, id)?],
         None => store
@@ -999,9 +1076,17 @@ fn control(
 fn remove(config: &Config, id: i64, yes: bool, json: bool) -> Outcome {
     let mut store = open_exclusive(config)?;
     let job = load(&store, id)?;
+    let reading = !matches!(job.control, Control::Cancelled | Control::Failed)
+        && job.phase.code() <= Phase::Committing.code();
+    if reading {
+        return Err(Failure::Refused(format!(
+            "job {id} can still read its source: cancel it first with `lodestar import cancel \
+             {id}`, so it can't later resume past what's removed"
+        )));
+    }
     if !yes {
         use std::io::IsTerminal;
-        println!(
+        eprintln!(
             "This takes back the torrents job {id} imported ({} new). Torrents another job, the \
              crawler or you have used since are kept. Back up first with `lodestar backup`.",
             format_count(job.counters.new)
@@ -1012,11 +1097,11 @@ fn remove(config: &Config, id: i64, yes: bool, json: bool) -> Outcome {
                 "no terminal to confirm on; add --yes to remove without asking".into(),
             ));
         }
-        print!("Type yes to remove: ");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
+        eprint!("Type yes to remove: ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
         let mut line = String::new();
         if stdin.read_line(&mut line).is_err() || !line.trim().eq_ignore_ascii_case("yes") {
-            println!("Nothing was changed.");
+            eprintln!("Nothing was changed.");
             return Ok(());
         }
     }
@@ -1042,6 +1127,13 @@ fn remove(config: &Config, id: i64, yes: bool, json: bool) -> Outcome {
             format_count(r.kept_shared + r.kept_verified + r.kept_seen + r.kept_yours),
             format_count(r.provenance)
         );
+        if r.kept_private_candidates > 0 {
+            println!(
+                "{} private torrent(s) still waiting for details were kept: another import may \
+                 have marked them private.",
+                format_count(r.kept_private_candidates)
+            );
+        }
     }
     Ok(())
 }

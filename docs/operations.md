@@ -241,31 +241,46 @@ split are **planned**.
 An import copies the torrents another crawler already found into Lodestar, so a new install doesn't start empty. Lodestar only reads the other database; it never changes it. Each import is a **job** with a number, which you can pause, resume, cancel or take back.
 
 **Before you start:**
-1. **Stop Lodestar.** Imports run while the server is stopped. If it's running, `lodestar import start` refuses and changes nothing. On Unraid, stop the container, then run the commands in its console (or with `docker exec`).
-2. **Back up first:** `lodestar backup`. If the import isn't what you wanted, you can also take it back (below), but a backup is the safe undo.
-3. **Stop the other crawler,** or import a copy of its database. A database that's still being written is refused.
+1. **Back up first, while Lodestar still runs:** `lodestar backup`. On Unraid, open the terminal and run `docker exec Lodestar /lodestar backup`. A backup is the safe undo; you can also take an import back (below).
+2. **Stop the other crawler,** or import a copy of its database. A database that's still being written is refused.
+3. **Stop Lodestar.** Imports run while the server is stopped. If it's running, `lodestar import start` refuses and changes nothing.
+
+**On Unraid (or any Docker install),** a stopped container can't run commands. Instead, start a one-off container from the same image, with the same data folder, and with the folder that holds the Magnetico database:
+```bash
+docker run --rm -it -e PUID=99 -e PGID=100 \
+  -v /mnt/cache/appdata/lodestar:/data \
+  -v /mnt/user/appdata/magnetico:/import \
+  ghcr.io/dvortsis/lodestar-v2:latest \
+  import inspect --source magnetico --path /import/database.sqlite3
+```
+- `/mnt/cache/appdata/lodestar` is your Lodestar **Data** path, and `/mnt/user/appdata/magnetico` the folder with magneticod's `database.sqlite3`. Change both to yours.
+- **Keep the database folder writable** (no `:ro`). SQLite needs to create two small files beside it (see Magnetico, below); a read-only folder is refused with `folder_not_writable`.
+- Everything after the image name is the `lodestar` command. Run each command below the same way, replacing `import inspect …`.
+- `--rm` removes the one-off container when it finishes. Your data stays in the data folder.
+
+Outside Docker, run `lodestar import …` directly.
 
 **Check the source first.** `inspect` only reads. It's safe while Lodestar runs:
 ```bash
-lodestar import inspect --source magnetico --path /data/magnetico/database.sqlite3
+lodestar import inspect --source magnetico --path /import/database.sqlite3
 lodestar import inspect --source bitmagnet --host <host> --password-file <file>
 ```
-It prints what the source is, how many torrents it holds, and how much space the import needs. If the data folder doesn't have room, it says so and the import is refused.
+It prints what the source is, how many torrents it holds, and how much space the import needs. If the data folder doesn't have room, it says so and the import is refused. Free space is checked on Linux and Unraid only, not on Windows.
 
 **Try a pilot, then import the rest.** `--limit` pauses after about that many torrents:
 ```bash
-lodestar import start --source magnetico --path /data/magnetico/database.sqlite3 --limit 10000
+lodestar import start --source magnetico --path /import/database.sqlite3 --limit 10000
 lodestar import status
-lodestar import resume 1 --source magnetico --path /data/magnetico/database.sqlite3
+lodestar import resume 1 --source magnetico --path /import/database.sqlite3
 ```
-- **Ctrl-C pauses the job** after the batch in flight. `resume` carries on from the last saved batch, with the same source flags. Nothing is imported twice.
+- **Ctrl-C pauses the job at the last saved batch.** A second Ctrl-C quits at once. Either way, `resume` carries on from the last saved batch, with the same source flags. Nothing is imported twice.
 - **`resume` checks the source is the same database** the job started on. If it changed, the job is blocked and says why. Start a new job for the new database.
 - **Start Lodestar again afterwards.** It indexes the imported torrents and re-fetches incomplete file lists.
 - **Every imported torrent goes through your content filters,** as found torrents do. A torrent the filters removed earlier is never brought back.
 - Add `--json` to `inspect`, `start`, `resume`, `status` and `remove` for output a script can read.
 
 **Magnetico:**
-- **Two small files appear beside the database:** `database.sqlite3-wal` and `database.sqlite3-shm`. SQLite creates them whenever anything opens the database, even only to read it. They're harmless, and magneticod uses them too. Leave them, or delete them while nothing has the database open.
+- **Two small files appear beside the database:** `database.sqlite3-wal` and `database.sqlite3-shm`. SQLite creates them whenever anything opens the database, even only to read it. They're harmless, and magneticod uses them too. **Leave them.** If magneticod stopped without shutting down cleanly, the `-wal` file holds torrents that aren't in the database file yet, and deleting it loses them.
 - **A database on a network share is refused unless you allow that share:** `--allow-share \\nas\share`. Opening a share can send your Windows account's credentials to that server, so allow only a server you trust.
 - **On Windows, use the database's drive letter** (`D:\magnetico\database.sqlite3`), not a volume path (`\\?\Volume{…}`), which is refused.
 - **magneticod's oldest layouts (v0 and v1) are refused.** Run a current magneticod on the database once, which upgrades it, then import.
@@ -275,7 +290,10 @@ lodestar import resume 1 --source magnetico --path /data/magnetico/database.sqli
 - **Password:** from `--password-file` (keep it `chmod 600`) or the `LODESTAR_IMPORT_PG_PASSWORD` variable. There's no `--password`, because other users on the machine can see a command line.
 - **TLS** is always used and verified, against the system's certificates or the ones in `--ca-file`. For a database on the same machine (a loopback address, or a socket folder such as `--host /var/run/postgresql`), `--allow-plaintext-loopback` skips it.
 - **A database that's still being written is refused.** The check watches the whole PostgreSQL server, so run `VACUUM ANALYZE` on a restored copy before importing, as the restore guide does, and don't import from a server other apps write to.
-- **`lodestar import-bitmagnet`** still works, as the old name for `lodestar import start --source bitmagnet`. If it left a cursor file, the new job carries on from it once.
+- **In a one-off container, `--host localhost` is that container,** not your server. If Bitmagnet's PostgreSQL port is published on the same server, add `--network host` to `docker run` and use `--host 127.0.0.1 --allow-plaintext-loopback`. For a database on another machine, use its address; TLS is then required.
+- **Put the password file in a mounted folder,** for example `-v /mnt/user/appdata/lodestar-import:/secrets:ro` with `--password-file /secrets/pg-password`.
+- **`lodestar import-bitmagnet`** still works, as the old name for `lodestar import start --source bitmagnet`. Run again, it carries on with its unfinished job. If the old command left a cursor file, the new job carries on from it once.
+  - **Torrents the old command imported before this version can't be taken back** with `lodestar import remove`, because it didn't record which import stored them. A backup from before that import is their only undo.
 
 **Taking an import back.** Cancel the job, then remove what it imported:
 ```bash
@@ -285,7 +303,7 @@ lodestar import remove 1
 - `remove` asks first; `--yes` skips the question.
 - **It deletes only what that job alone added.** It keeps a torrent another import also brought in, one Lodestar's crawler has found since, and one you've favourited, labelled, noted or put in a collection.
 - **Filter decisions stay.** A torrent the filters removed during the import stays removed.
-- **A paused job can't be removed:** cancel it first, so it can't later resume past what was removed.
+- **A paused or blocked job can't be removed:** cancel it first, so it can't later resume past what was removed.
 - **Start Lodestar afterwards.** The removed torrents leave search when it starts.
 
 ## 8. Troubleshooting
