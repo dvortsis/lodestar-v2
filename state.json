@@ -1572,13 +1572,13 @@
    "notes": "2026-10-31T05:40Z brief briefs/B-search-recovery.md (S-search-6 deferrals); security-review | 05:40Z launched Opus session_01MMjhnBAr5sYz7fjwdtTNVb | 07:14Z PR #266 head 3be6d08c (parts 1-3; part 4 deferred); out-of-Own files acknowledged; fresh Opus reviewer + security session_01MMjhn94Pqt22iMqTya9EqQ | 07:31Z reviewer MERGE at 3be6d08c (visibility traced, security clean); runner asked small push: growth() crawled-only + measured hours, phrase/NEAR/OR round-trip test; runner checks delta | 07:41Z fix push 5fc96368; runner checked delta (growth key 0 + measured hours, decisions line, phrase/NEAR/OR test): clean; merge on green"
   },
   "B-refetch-funnel": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnCA4Edk7GUWpSXndEL",
    "pr": 267,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "06:06Z brief briefs/B-refetch-funnel.md; launch after #262 merges | 06:14Z launched Opus | 07:18Z PR #267 head 84cb1bdf; accepted pipeline tests + origin=recovery refinement; fresh Opus reviewer session_01MMjhnBnfNfNNoXEroi7mBU"
+   "notes": "06:06Z brief briefs/B-refetch-funnel.md; launch after #262 merges | 06:14Z launched Opus | 07:18Z PR #267 head 84cb1bdf; accepted pipeline tests + origin=recovery refinement; fresh Opus reviewer session_01MMjhnBnfNfNNoXEroi7mBU | 07:48Z reviewer MERGE at 84cb1bdf (5 optional); #267 merged 46720a65; author+reviewer archived"
   },
   "S-insights-imports": {
    "status": "merged",
@@ -2353,7 +2353,8 @@
   "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
   "B-search-live (Opus): part 4 of B-search-recovery, query-scoped live counts via the B9 percolator and SSE, per docs/decisions/2026-10-31-B-search-recovery.md design",
   "bench: a gated zero-result class in bench/search for the recovery pass (author measured p95 <= 6.0 ms, max 10.1 ms on 200k with an uncommitted patch) (#266)",
-  "search: cache SearchRecovery beside the cached empty first page (same fingerprint) to avoid recomputing up to 20 ms per repeat request (#266 review)"
+  "search: cache SearchRecovery beside the cached empty first page (same fingerprint) to avoid recomputing up to 20 ms per repeat request (#266 review)",
+  "Pipeline/Insights polish from #267 review (Opus): (1) drop saved refetches by strategy AND cohort/source, or test no plugin uses strategy 200 (pipeline/src/lib.rs:928); (2) csv render test per panel: header == period + declared columns; (3) test a crawl sighting of a hash under a refetch lease (Held: no Harvested, stored once as IMPORTED); (4) insights.rs:243 floor should skip strategy REFETCH in the saved queue (old-build saved refetch holds sealing once); (5) decisions note: recovered rows have no import-job provenance"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
