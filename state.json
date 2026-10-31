@@ -1581,13 +1581,13 @@
    "notes": "06:06Z brief briefs/B-refetch-funnel.md; launch after #262 merges | 06:14Z launched Opus"
   },
   "S-insights-imports": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01MMjhnCSu1chTDhjfYfPMkm",
-   "pr": null,
+   "pr": 265,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up)"
+   "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
