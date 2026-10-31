@@ -1794,13 +1794,13 @@
       "reviewer": "session_01MMjhn912vzFDE65VeyMNE1"
     },
     "X-polish-1031d": {
-      "status": "building",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhnD1JfZZo9GAX8FrrEh",
-      "pr": null,
+      "pr": 297,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus. | 21:17Z hang = own deadlock: match on pending_requeues(&self.store())? kept the store MutexGuard alive through the match arm that re-locked (would have hung start-time resume). Fixed with let. Reviewer: grep for the same temporary-guard-in-match pattern."
+      "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus. | 21:17Z hang = own deadlock: match on pending_requeues(&self.store())? kept the store MutexGuard alive through the match arm that re-locked (would have hung start-time resume). Fixed with let. Reviewer: grep for the same temporary-guard-in-match pattern. | 21:26Z PR #297 head d7d90e65 (cap 64, \"all\" full re-mark chunked; downgrade drops pending all - reviewer to assess). Reviewer + security review; subscribed."
     },
     "S-logs-2b": {
       "status": "pr-review",
