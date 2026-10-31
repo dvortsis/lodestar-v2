@@ -36,7 +36,7 @@ use tantivy::schema::{
 use tantivy::store::{Compressor, ZstdCompressor};
 use tantivy::{
     BitSet, DocId, DocSet, IndexSettings, Score, Searcher, SegmentOrdinal, SegmentReader,
-    TERMINATED, TantivyDocument, Term,
+    TantivyDocument, Term,
 };
 
 use crate::compile::{ABSENT, folded_word, parts_query, regex_escape, units, word_query};
@@ -464,6 +464,40 @@ impl IdPart {
         }
     }
 
+    /// From a bitset whose bit `i` is id `lo + i`: the same part
+    /// [`IdPart::from_sorted`] makes from those ids, without sorting them.
+    fn from_bits(lo: u64, mut words: Vec<u64>) -> IdPart {
+        let (Some(fw), Some(lw)) = (
+            words.iter().position(|w| *w != 0),
+            words.iter().rposition(|w| *w != 0),
+        ) else {
+            return IdPart::List(Vec::new());
+        };
+        let count: u64 = words.iter().map(|w| u64::from(w.count_ones())).sum();
+        let shift = fw as u64 * 64 + u64::from(words[fw].trailing_zeros());
+        let first = lo + shift;
+        let last = lo + lw as u64 * 64 + u64::from(63 - words[lw].leading_zeros());
+        let need = ((last - first) / 64 + 1) as usize;
+        if need as u64 >= count {
+            let mut ids = Vec::with_capacity(count as usize);
+            for_each_bit(lo, &words, |id| ids.push(id));
+            return IdPart::List(ids);
+        }
+        // Move bit `shift` to bit 0, in place: each word reads only words
+        // at or after its own index.
+        let (skip, s) = ((shift / 64) as usize, (shift % 64) as u32);
+        for i in 0..need {
+            let hi = match s {
+                0 => 0,
+                s => words.get(skip + i + 1).map_or(0, |w| w << (64 - s)),
+            };
+            words[i] = (words[skip + i] >> s) | hi;
+        }
+        words.truncate(need);
+        words.shrink_to_fit();
+        IdPart::Bits { base: first, words }
+    }
+
     fn contains(&self, id: u64) -> bool {
         match self {
             IdPart::List(ids) => ids.binary_search(&id).is_ok(),
@@ -497,15 +531,7 @@ impl IdPart {
     fn for_each(&self, mut f: impl FnMut(u64)) {
         match self {
             IdPart::List(ids) => ids.iter().for_each(|id| f(*id)),
-            IdPart::Bits { base, words } => {
-                for (i, w) in words.iter().enumerate() {
-                    let mut w = *w;
-                    while w != 0 {
-                        f(base + i as u64 * 64 + u64::from(w.trailing_zeros()));
-                        w &= w - 1;
-                    }
-                }
-            }
+            IdPart::Bits { base, words } => for_each_bit(*base, words, f),
         }
     }
 
@@ -545,11 +571,13 @@ impl CacheState {
     fn retained_bytes(&self) -> usize {
         // Charge bucket capacity conservatively (including control bytes and
         // alignment), plus String/Vec capacities and the Arc allocation.
-        // The recency index is charged per entry, with room for its
-        // B-tree nodes' slack.
+        // The recency index is charged three slots an entry: measured
+        // under this cache's pattern (append at the end, hits moved to the
+        // end, pop the first), its nodes take up to 2.5 slots an entry,
+        // since B-tree leaves run half empty (X-search-files-2).
         self.bytes
             + self.map.capacity() * (std::mem::size_of::<(CacheKey, CacheEntry)>() + 16) * 2
-            + self.order.len() * std::mem::size_of::<(u64, CacheKey)>() * 2
+            + self.order.len() * std::mem::size_of::<(u64, CacheKey)>() * 3
     }
 
     fn tick(&mut self) -> u64 {
@@ -660,6 +688,8 @@ impl FileSetCache {
 }
 
 /// The torrents with a file matching `query`, the clause known as `key`.
+/// Segments the cache misses are scanned in parallel on the file index's
+/// executor, as the torrent index's searches are.
 pub(crate) fn torrent_ids(
     searcher: &Searcher,
     query: &dyn Query,
@@ -668,52 +698,154 @@ pub(crate) fn torrent_ids(
     cancel: &crate::CancelToken,
 ) -> crate::index::Result<IdSet> {
     cancel.check()?;
-    let mut weight: Option<Box<dyn Weight>> = None;
-    let mut parts = Vec::new();
-    for seg in searcher.segment_readers() {
+    let segs = searcher.segment_readers();
+    let keys: Vec<CacheKey> = segs
+        .iter()
+        .map(|seg| (key.to_owned(), seg.segment_id(), seg.num_deleted_docs()))
+        .collect();
+    let mut parts: Vec<Option<Arc<IdPart>>> = keys.iter().map(|k| cache.get(k)).collect();
+    let missed: Vec<usize> = (0..segs.len()).filter(|i| parts[*i].is_none()).collect();
+    if !missed.is_empty() {
         cancel.check()?;
-        let k = (key.to_owned(), seg.segment_id(), seg.num_deleted_docs());
-        if let Some(hit) = cache.get(&k) {
-            parts.push(hit);
-            continue;
+        let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+        let scanned = searcher
+            .index()
+            .search_executor()
+            .map(
+                |i: usize| scan_segment(weight.as_ref(), &segs[i], cancel),
+                missed.iter().copied(),
+            )
+            .map_err(|e| crate::cancel::stopped_or(cancel, e))?;
+        cancel.check()?;
+        // Cached only once every segment is whole: a scan cut short
+        // caches nothing.
+        for (i, ids) in missed.into_iter().zip(scanned) {
+            let ids = Arc::new(ids);
+            cache.insert(keys[i].clone(), ids.clone());
+            parts[i] = Some(ids);
         }
-        let w = match &mut weight {
-            Some(w) => w,
-            None => weight.insert(query.weight(EnableScoring::disabled_from_searcher(searcher))?),
-        };
-        let column = seg.fast_fields().u64("torrent")?;
-        let alive = seg.alive_bitset();
-        let mut ids = Vec::new();
-        let mut scorer = w.scorer(seg, 1.0)?;
-        let mut doc = scorer.doc();
-        let mut visited = 0u32;
-        while doc != TERMINATED {
-            if visited.is_multiple_of(crate::cancel::CHECK_EVERY) {
-                cancel.check()?;
-            }
-            visited = visited.wrapping_add(1);
-            if alive.is_none_or(|a| a.is_alive(doc)) {
-                // A torrent's files are added together, so repeats are
-                // mostly adjacent.
-                if let Some(id) = column.first(doc).filter(|id| ids.last() != Some(id)) {
+    }
+    Ok(IdSet {
+        parts: parts.into_iter().flatten().collect(),
+        union: OnceLock::new(),
+    })
+}
+
+/// The ids one segment's scan gathers: a list to sort, or, when the
+/// scorer expects at least one matching file per 64 ids of the segment's
+/// range, a bitset over that range, which needs no sort or dedup. The
+/// bitset is transient (at most 8 bytes per expected file); the part kept
+/// is the same either way.
+enum Gather {
+    List(Vec<u64>),
+    Bits { lo: u64, words: Vec<u64> },
+}
+
+impl Gather {
+    fn push(&mut self, id: u64) {
+        match self {
+            // A torrent's files are added together, so repeats are mostly
+            // adjacent.
+            Gather::List(ids) => {
+                if ids.last() != Some(&id) {
                     ids.push(id);
                 }
             }
-            doc = scorer.advance();
+            Gather::Bits { lo, words } => {
+                match id.checked_sub(*lo).map(|i| (i / 64, i % 64)) {
+                    Some((w, b)) if w < words.len() as u64 => words[w as usize] |= 1 << b,
+                    // Outside the column's stated range (never expected):
+                    // fall back to the list.
+                    _ => {
+                        let mut ids = Vec::new();
+                        for_each_bit(*lo, words, |id| ids.push(id));
+                        ids.push(id);
+                        *self = Gather::List(ids);
+                    }
+                }
+            }
         }
-        cancel.check()?;
-        ids.sort_unstable();
-        cancel.check()?;
-        ids.dedup();
-        cancel.check()?;
-        let ids = Arc::new(IdPart::from_sorted(ids));
-        cache.insert(k, ids.clone());
-        parts.push(ids);
     }
-    Ok(IdSet {
-        parts,
-        union: OnceLock::new(),
-    })
+
+    fn finish(self) -> IdPart {
+        match self {
+            Gather::List(mut ids) => {
+                ids.sort_unstable();
+                ids.dedup();
+                IdPart::from_sorted(ids)
+            }
+            Gather::Bits { lo, words } => IdPart::from_bits(lo, words),
+        }
+    }
+}
+
+/// One file-index segment's torrent ids. Documents come from the scorer
+/// 64 at a time, with their torrent ids read in one call.
+fn scan_segment(
+    weight: &dyn Weight,
+    seg: &SegmentReader,
+    cancel: &crate::CancelToken,
+) -> tantivy::Result<IdPart> {
+    let stopped = || {
+        if cancel.is_stopped() {
+            Err(crate::cancel::interrupted())
+        } else {
+            Ok(())
+        }
+    };
+    stopped()?;
+    let column = seg.fast_fields().u64("torrent")?;
+    let alive = seg.alive_bitset();
+    let mut scorer = weight.scorer(seg, 1.0)?;
+    let span = column.max_value().saturating_sub(column.min_value()) / 64 + 1;
+    let mut gather = if seg.max_doc() > 0 && u64::from(scorer.size_hint()) >= span {
+        Gather::Bits {
+            lo: column.min_value(),
+            words: vec![0; span as usize],
+        }
+    } else {
+        Gather::List(Vec::new())
+    };
+    const BLOCK: usize = tantivy::COLLECT_BLOCK_BUFFER_LEN;
+    const CHECK_BLOCKS: u32 = crate::cancel::CHECK_EVERY / 2 / BLOCK as u32;
+    const _: () = assert!(CHECK_BLOCKS > 0);
+    let mut docs = [0 as DocId; BLOCK];
+    let mut ids = [None; BLOCK];
+    let mut blocks = 0u32;
+    loop {
+        if blocks.is_multiple_of(CHECK_BLOCKS) {
+            stopped()?;
+        }
+        blocks = blocks.wrapping_add(1);
+        let n = scorer.fill_buffer(&mut docs);
+        if n == 0 {
+            break;
+        }
+        // A multivalued column would leave a valueless doc's slot as it
+        // was; `torrent` has one value a file, but don't rely on it.
+        ids[..n].fill(None);
+        column.first_vals(&docs[..n], &mut ids[..n]);
+        for (doc, id) in docs[..n].iter().zip(&ids[..n]) {
+            if let Some(id) = *id
+                && alive.is_none_or(|a| a.is_alive(*doc))
+            {
+                gather.push(id);
+            }
+        }
+    }
+    stopped()?;
+    Ok(gather.finish())
+}
+
+/// Calls `f` with the id of each bit set, in order; bit `i` is `base + i`.
+fn for_each_bit(base: u64, words: &[u64], mut f: impl FnMut(u64)) {
+    for (i, w) in words.iter().enumerate() {
+        let mut w = *w;
+        while w != 0 {
+            f(base + i as u64 * 64 + u64::from(w.trailing_zeros()));
+            w &= w - 1;
+        }
+    }
 }
 
 /// The torrent-index documents whose id is in a set: a `file:(…)` clause
@@ -1075,5 +1207,183 @@ mod cache_regressions {
         let result = torrent_ids(&index.searcher(), &AllQuery, "cold", &cache, &token);
         assert!(matches!(result, Err(crate::index::Error::Cancelled)));
         assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
+    }
+}
+
+#[cfg(test)]
+mod id_part_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Sorted, deduplicated ids: runs of dense ids and lone sparse ones,
+    /// from a random base, so sets cross 64-bit word boundaries at any
+    /// offset and come out in either form.
+    fn ids() -> impl Strategy<Value = Vec<u64>> {
+        (
+            0u64..1 << 40,
+            prop::collection::vec((1u64..300, 0u64..200, any::<bool>()), 0..12),
+        )
+            .prop_map(|(base, runs)| {
+                let mut out = Vec::new();
+                let mut at = base;
+                for (gap, len, dense) in runs {
+                    at += gap;
+                    for i in 0..len {
+                        if dense || i % 37 == 0 {
+                            out.push(at + i);
+                        }
+                    }
+                    at += len;
+                }
+                out
+            })
+    }
+
+    proptest! {
+        /// Both forms answer `contains`, `for_each`, `last` and the
+        /// union exactly as the plain sorted list does.
+        #[test]
+        fn an_id_part_is_its_sorted_list(a in ids(), b in ids()) {
+            let part = IdPart::from_sorted(a.clone());
+            let mut seen = Vec::new();
+            part.for_each(|id| seen.push(id));
+            prop_assert_eq!(&seen, &a);
+            prop_assert_eq!(part.last(), a.last().copied());
+            prop_assert_eq!(part.is_empty(), a.is_empty());
+            prop_assert!(part.heap_bytes() <= a.len() * 8);
+            // Gathered as a bitset from below the least id, or as a list
+            // in any order with repeats, the part is the same.
+            if let (Some(&lo), Some(&hi)) = (a.first(), a.last()) {
+                for below in [0, 1, 63, 64, 65, 200] {
+                    let lo = lo.saturating_sub(below);
+                    let span = (hi - lo) / 64 + 1;
+                    let mut bits = Gather::Bits { lo, words: vec![0; span as usize] };
+                    a.iter().for_each(|id| bits.push(*id));
+                    prop_assert_eq!(bits.finish(), part.clone());
+                }
+            }
+            let mut list = Gather::List(Vec::new());
+            a.iter().rev().chain(&a).for_each(|id| list.push(*id));
+            prop_assert_eq!(list.finish(), part.clone());
+            // A bitset whose range is too small falls back to the list.
+            if a.len() > 1 {
+                let mut short = Gather::Bits { lo: a[1], words: vec![0; 1] };
+                a.iter().rev().for_each(|id| short.push(*id));
+                prop_assert_eq!(short.finish(), part.clone());
+            }
+            if let (Some(&lo), Some(&hi)) = (a.first(), a.last()) {
+                let probes = a.iter().flat_map(|&id| [id.wrapping_sub(1), id, id + 1]);
+                for id in probes.chain([0, lo.saturating_sub(64), hi + 64, u64::MAX]) {
+                    prop_assert_eq!(part.contains(id), a.binary_search(&id).is_ok(), "{}", id);
+                }
+            }
+            // The union over two parts, within the bitset's range.
+            let shift = |v: &[u64]| v.iter().map(|id| id % (1 << 16)).collect::<Vec<_>>();
+            let (mut a, mut b) = (shift(&a), shift(&b));
+            a.sort_unstable();
+            a.dedup();
+            b.sort_unstable();
+            b.dedup();
+            let set = IdSet {
+                parts: vec![
+                    Arc::new(IdPart::from_sorted(a.clone())),
+                    Arc::new(IdPart::from_sorted(b.clone())),
+                ],
+                union: OnceLock::new(),
+            };
+            let mut all: Vec<u64> = a.iter().chain(&b).copied().collect();
+            all.sort_unstable();
+            all.dedup();
+            prop_assert_eq!(set.is_empty(), all.is_empty());
+            match set.union() {
+                None => prop_assert!(all.is_empty()),
+                Some(u) => {
+                    let mut got = Vec::new();
+                    for id in 0..u.max_value() {
+                        if u.contains(id) {
+                            got.push(u64::from(id));
+                        }
+                    }
+                    prop_assert_eq!(&got, &all);
+                }
+            }
+            for &id in all.iter().chain(&[0, 1 << 16]) {
+                prop_assert_eq!(set.contains(id), all.binary_search(&id).is_ok());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+
+    /// Several segments, many files a torrent, some deleted, scanned in
+    /// parallel: the sets are each segment's live torrents, whichever
+    /// way they were gathered, and a second lookup is served from the
+    /// cache.
+    #[test]
+    fn a_parallel_scan_finds_each_segments_live_torrents() {
+        let mut builder = Schema::builder();
+        let torrent = builder.add_u64_field(
+            "torrent",
+            NumericOptions::default().set_indexed().set_fast(),
+        );
+        let mut index = tantivy::Index::create_in_ram(builder.build());
+        index.set_multithread_executor(3).unwrap();
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        // Dense segments (every torrent, five files each), a sparse one
+        // (a torrent every 1,000), and one left with a single torrent.
+        let segments: [Vec<u64>; 4] = [
+            (0..5_000).collect(),
+            (5_000..9_000).collect(),
+            (0..50).map(|i| 9_000 + i * 1_000).collect(),
+            vec![70_000, 70_001, 70_002],
+        ];
+        for ids in &segments {
+            for id in ids {
+                for _ in 0..5 {
+                    let mut doc = TantivyDocument::new();
+                    doc.add_u64(torrent, *id);
+                    writer.add_document(doc).unwrap();
+                }
+            }
+            writer.commit().unwrap();
+        }
+        let deleted = [17u64, 5_001, 19_000, 70_000, 70_001];
+        for id in deleted {
+            writer.delete_term(Term::from_field_u64(torrent, id));
+        }
+        writer.commit().unwrap();
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        assert_eq!(searcher.segment_readers().len(), 4);
+        let cache = FileSetCache::default();
+        let token = crate::CancelToken::new();
+        let set = torrent_ids(&searcher, &AllQuery, "all", &cache, &token).unwrap();
+        let mut forms = Vec::new();
+        // Tantivy orders segments by size, largest first, which here is
+        // the order they were written.
+        for (part, ids) in set.parts.iter().zip(&segments) {
+            let want: Vec<u64> = ids
+                .iter()
+                .copied()
+                .filter(|i| !deleted.contains(i))
+                .collect();
+            let mut got = Vec::new();
+            part.for_each(|id| got.push(id));
+            assert_eq!(got, want);
+            forms.push(matches!(**part, IdPart::Bits { .. }));
+        }
+        assert_eq!(forms, [true, true, false, false]);
+        assert!(set.contains(4_999) && !set.contains(17) && !set.contains(70_000));
+        let (hits, misses) = cache.hits();
+        assert_eq!((hits, misses), (0, 4));
+        let again = torrent_ids(&searcher, &AllQuery, "all", &cache, &token).unwrap();
+        assert_eq!(again, set);
+        assert_eq!(cache.hits(), (4, 4));
     }
 }
