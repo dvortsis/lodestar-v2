@@ -41,7 +41,53 @@
 
 	function submit() {
 		ensureSearchPath();
-		void s.submit();
+		void s.submit().then(() => {
+			if (!s.parseError && s.text.trim()) recordRecent?.(s.text);
+		});
+	}
+
+	// Autocomplete, natural phrasing and the Builder (S-search-4) are their own chunks, loaded on
+	// the first focus or keystroke, or the toggle: never part of the page's first load.
+	let Assist = $state<typeof import('../assist/Assist.svelte').default>();
+	let Natural = $state<typeof import('../assist/Natural.svelte').default>();
+	let Builder = $state<typeof import('../assist/Builder.svelte').default>();
+	let recordRecent: ((q: string) => void) | undefined;
+	let panel = $state<'natural' | 'builder' | null>(null);
+	let assisting: Promise<unknown> | undefined;
+	function loadAssist() {
+		assisting ??= Promise.all([
+			import('../assist/Assist.svelte'),
+			import('../assist/recent'),
+			import('../assist/assist.css')
+		]).then(([a, r]) => {
+			recordRecent = r.addRecent;
+			Assist = a.default;
+		});
+		return assisting;
+	}
+
+	/** An accepted suggestion, an applied preview: the text goes in as typed text would. */
+	function acceptText(text: string, run: boolean) {
+		editor?.set(text);
+		setText(text);
+		editor?.focusEnd();
+		if (run) submit();
+	}
+
+	async function openPanel(which: 'natural' | 'builder') {
+		if (panel === which) return closePanel();
+		const loaded =
+			which === 'natural'
+				? (await import('../assist/Natural.svelte')).default
+				: (await import('../assist/Builder.svelte')).default;
+		await loadAssist();
+		if (which === 'natural') Natural = loaded as typeof Natural;
+		else Builder = loaded as typeof Builder;
+		panel = which;
+	}
+	function closePanel() {
+		panel = null;
+		editor?.focusEnd();
 	}
 
 	// The URL is the state: adopt outside changes (back/forward, a pasted link, a facet click).
@@ -78,8 +124,18 @@
 			else if (s.text) editor.set(s.text, true); // the URL's query, adopted before the editor existed
 		}
 		if (takeSubmit()) submit();
+		// Autocomplete loads when the user starts: already in the bar, else at the first focus or key.
+		// A pasted link alone loads nothing of it, and shows none of its row (no layout shift).
+		if (document.activeElement === el) void loadAssist();
+		else {
+			el.addEventListener('focus', startAssist, { once: true });
+			el.addEventListener('input', startAssist, { once: true });
+		}
 	});
+	const startAssist = () => void loadAssist();
 	onDestroy(() => {
+		el.removeEventListener('focus', startAssist);
+		el.removeEventListener('input', startAssist);
 		editor?.destroy();
 		s.cancelPending();
 	});
@@ -243,5 +299,49 @@
 		<Chip onremove={() => {}} removeLabel=""><span>&nbsp;</span></Chip>
 		<Button variant="quiet" dense>{m.search_filters_clear_all()}</Button>
 	</div>
+{/if}
+{#if Assist}
+	<div class="assist-actions">
+		<Button
+			variant="quiet"
+			dense
+			aria-expanded={panel === 'builder'}
+			onclick={() => void openPanel('builder')}>{m.search_assist_builder()}</Button
+		>
+		<Button variant="quiet" dense disabled={blank} onclick={() => void openPanel('natural')}
+			>{m.search_assist_natural()}</Button
+		>
+	</div>
+{/if}
+{#if panel === 'natural' && Natural}
+	<Natural
+		text={s.text}
+		dismiss={closePanel}
+		{announce}
+		apply={(canonical) => {
+			acceptText(canonical, true);
+			panel = null;
+			announce(m.search_assist_natural_applied());
+		}}
+	/>
+{:else if panel === 'builder' && Builder}
+	<Builder
+		ast={shown}
+		close={closePanel}
+		{announce}
+		apply={async (next) => {
+			ensureSearchPath();
+			await s.setAst(next);
+		}}
+	/>
+{/if}
+{#if Assist}
+	<Assist
+		{el}
+		text={() => editor?.text ?? ''}
+		accept={acceptText}
+		{announce}
+		hidden={() => s.hidden}
+	/>
 {/if}
 <p class="sr-only" aria-live="polite">{said}</p>
