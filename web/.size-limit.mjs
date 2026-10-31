@@ -144,6 +144,9 @@ const settingsOnDemand = [
 // The edit chunk (owner, 2026-10-24; docs/decisions/2026-10-30-S-settings-reconcile.md): the save
 // pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
 // its own, so "Settings controls (on demand)" keeps measuring only the controls.
+// The digest preview (S-insights-3) loads after the Insights & digest screen mounts and fetches on
+// a button press, so every first view stops at it; "Insights digest preview (on demand)" gates it.
+const insightsDigest = [/features\/insights\/digest\/DigestPreview\.svelte$/];
 const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 // The connection screens' parts (S-settings-2b): the controls that stand in for the JSON fallback,
 // the per-group test, the Clear usage data panel and the Privacy dialog load once their fields are
@@ -220,6 +223,18 @@ const settingsConnectionsLazy = requireMeasuredJs(
 	'Settings connection screens (on demand)',
 	onDemandOf('/settings/[section]', settingsConnections)
 );
+const insightsDigestLazy = requireMeasuredJs(
+	'Insights digest preview (on demand)',
+	onDemandOf('/settings/[section]', insightsDigest)
+);
+// The /insights print layout (S-insights-3): its markup, theme swap and print.css, loaded after the
+// overview mounts; measured beyond the overview's own chunks.
+const OVERVIEW = 'src/lib/features/insights/overview/Overview.svelte';
+const PRINT = 'src/lib/features/insights/print/PrintReport.svelte';
+const insightsPrintLazy = requireMeasuredJs(
+	'Insights print layout (on demand)',
+	ownChunk(PRINT, [], false, ownChunk(OVERVIEW, [new RegExp(`${PRINT.replaceAll('/', '\\/')}$`)]))
+);
 const settingsEditLazy = requireMeasuredJs(
 	'Settings edit chunk (on demand)',
 	onDemandOf('/settings/[section]', settingsEdit)
@@ -246,6 +261,7 @@ const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
 const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|toggle\.ts)$/];
 const settingsFirstView = [
 	...settingsOnDemand,
+	...insightsDigest,
 	...settingsEdit,
 	...settingsConnections,
 	...settingsMessagesLeftOut,
@@ -292,6 +308,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsOnDemand,
 					...settingsEdit,
 					...settingsConnections,
+					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
 					...appearanceLater
@@ -596,6 +613,8 @@ export default [
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
+	entry('Insights digest preview (on demand)', insightsDigestLazy, '1.9 KB'),
+	entry('Insights print layout (on demand)', insightsPrintLazy, '1.62 KB'),
 	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),

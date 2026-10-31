@@ -29,7 +29,9 @@
 		>
 			{#snippet after(group)}
 				{#if group === 'digest'}
-					<div data-slot="digest-preview"></div>
+					<div data-slot="digest-preview">
+						<Lazy load={() => import('$lib/features/insights/digest/DigestPreview.svelte')} />
+					</div>
 				{:else if group === 'usage'}
 					<Lazy load={() => import('./ClearUsage.svelte')} />
 				{/if}

@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"insights_digest_preview_title": "Preview",
+	"insights_digest_preview_help": "Shows the digest as it would be sent now, using your saved settings. Unsaved changes are not included.",
+	"insights_digest_preview_button": "Preview digest",
+	"insights_digest_preview_refresh": "Refresh preview",
+	"insights_digest_preview_loading": "Loading the preview…",
+	"insights_digest_preview_error": "The preview could not load: {message}",
+	"insights_digest_preview_off": "The digest is off. Choose Daily or Weekly above and save to turn it on.",
+	"insights_digest_preview_subject": "Subject: {subject}",
+	"insights_digest_preview_label": "Digest text"
+}
