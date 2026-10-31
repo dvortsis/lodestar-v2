@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import SettingField from './SettingField.svelte';
 import { fakeServer } from './testing/fake-server';
 import { dismissAll } from './dialogs';
+import { loadMessages } from './messages';
 import { loadControl } from './controls.svelte';
 import { createSettingsForm, preloadSettingsForm, type SettingsForm } from './form.svelte';
 import { spec, sv, values } from './testing/values';
@@ -76,6 +77,7 @@ let form: SettingsForm;
 // test's timeout (`lazy.test.ts` covers loading them on demand).
 beforeAll(async () => {
 	await Promise.all([
+		loadMessages(['crawler', 'network', 'general', 'preferences']),
 		import('./ConfirmDialog.svelte'),
 		import('./FieldMenu.svelte'),
 		preloadSettingsForm(),

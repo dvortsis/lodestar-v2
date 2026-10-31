@@ -544,6 +544,44 @@ struct Change {
     reason: Option<Reason>,
 }
 
+/// `events.kind` codes for the trend annotations an import writes (§10.9.2
+/// events), after `lodestar_pipeline::event`'s 1–5. Persisted: append
+/// only. `detail` is `key=value` words: `job` and `source` always, `new`
+/// and `merged` (the job's counters then) on `FINISHED`, `removed` on
+/// `REMOVED`.
+pub mod event {
+    /// The job began reading its source (`ready → reading`).
+    pub const STARTED: u32 = 6;
+    /// It stopped writing records: reading ended (`indexing`), or it was
+    /// cancelled or failed after it began.
+    pub const FINISHED: u32 = 7;
+    /// Its records were taken back; `removed` counts the torrents
+    /// deleted, summed over the removal's steps.
+    pub const REMOVED: u32 = 8;
+}
+
+/// The annotations a phase or control change writes, oldest first. A job
+/// may skip phases forward, so one change can both begin and finish it.
+fn change_events(before: &ImportJob, after: &ImportJob) -> Vec<u32> {
+    let reading = Phase::Reading.code();
+    let indexing = Phase::Indexing.code();
+    let (began, begins) = (
+        before.phase.code() >= reading,
+        after.phase.code() >= reading,
+    );
+    let mut out = Vec::new();
+    if begins && !began {
+        out.push(event::STARTED);
+    }
+    let ended = matches!(after.control, Control::Cancelled | Control::Failed);
+    if before.phase.code() < indexing
+        && (after.phase.code() >= indexing || (ended && (began || begins)))
+    {
+        out.push(event::FINISHED);
+    }
+    out
+}
+
 impl Store {
     /// Creates a job at [`Phase::Inspecting`], with an empty cursor. At
     /// most one unfinished job may use a source identity.
@@ -662,6 +700,14 @@ impl Store {
             ],
         )?;
         let changed = load(&tx, id)?;
+        for kind in change_events(&job, &changed) {
+            let mut detail = format!("job={id} source={}", changed.adapter);
+            if kind == event::FINISHED {
+                let c = &changed.counters;
+                detail.push_str(&format!(" new={} merged={}", c.new, c.merged));
+            }
+            crate::insights::write(&tx, &[], &[], &[crate::Event { at, kind, detail }])?;
+        }
         tx.commit()?;
         Ok(changed)
     }
@@ -1090,6 +1136,9 @@ impl Store {
                       LIMIT ?3)",
             )?
             .execute(params![job, Privacy::Private.code(), room as i64])? as u64;
+        if out.torrents > 0 {
+            annotate_removal(&tx, &j, out.torrents)?;
+        }
         out.done = members.len() < limit && (out.candidates as usize) < room;
         if out.done {
             out.kept_private_candidates = tx
@@ -1103,6 +1152,38 @@ impl Store {
         tx.commit()?;
         Ok(out)
     }
+}
+
+/// Adds `deleted` to the job's removal annotation, written at the first
+/// step that deleted anything, so a removal in many steps is one event.
+/// A removal resumed more than an hour after that annotation starts a new
+/// one, so each spike in `REMOVED` has its marker nearby.
+fn annotate_removal(tx: &Connection, job: &ImportJob, deleted: u64) -> Result<()> {
+    let prefix = format!("job={} source={} removed=", job.id, job.adapter);
+    let last: Option<(i64, String)> = tx
+        .prepare_cached(
+            "SELECT id, detail FROM events
+             WHERE kind = ?1 AND instr(detail, ?2) = 1 AND at >= unixepoch() - 3600
+             ORDER BY id DESC LIMIT 1",
+        )?
+        .query_row(params![event::REMOVED, prefix], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()?;
+    match last {
+        Some((id, detail)) => {
+            let before: u64 = detail[prefix.len()..].parse().unwrap_or(0);
+            tx.prepare_cached("UPDATE events SET detail = ?2 WHERE id = ?1")?
+                .execute(params![id, format!("{prefix}{}", before + deleted)])?;
+        }
+        None => {
+            tx.prepare_cached(
+                "INSERT INTO events (at, kind, detail) VALUES (unixepoch(), ?1, ?2)",
+            )?
+            .execute(params![event::REMOVED, format!("{prefix}{deleted}")])?;
+        }
+    }
+    Ok(())
 }
 
 /// What one [`Store::remove_import_job_records`] call did.

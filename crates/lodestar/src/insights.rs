@@ -655,7 +655,16 @@ mod tests {
         ] {
             assert_eq!(codes::event_name(kind), Some(name));
         }
-        assert_eq!(codes::EVENTS.len(), 5);
+        // After the pipeline's, the store's import annotations (IMP-5).
+        for (kind, name) in [
+            (lodestar_store::import::event::STARTED, "import_started"),
+            (lodestar_store::import::event::FINISHED, "import_finished"),
+            (lodestar_store::import::event::REMOVED, "import_removed"),
+        ] {
+            assert!(kind > event::INTENSITY);
+            assert_eq!(codes::event_name(kind), Some(name));
+        }
+        assert_eq!(codes::EVENTS.len(), 8);
         assert_eq!((codes::PAUSE, codes::RESUME), (event::PAUSE, event::RESUME));
         assert_eq!(codes::metric::STORED, metric::STORED);
         assert_eq!(codes::metric::NEWLY_SEARCHABLE, metric::NEWLY_SEARCHABLE);

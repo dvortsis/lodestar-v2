@@ -129,16 +129,24 @@ pub struct Kpi {
     /// `searchable`; null until Insights' state is read at start.
     #[schema(required = true)]
     pub imported: Option<u64>,
-    /// Torrents that first became searchable in the range, imports
-    /// included. Event time; 0 is real.
+    /// Crawled torrents that first became searchable in the range:
+    /// imports excluded (`new_searchable_imported`). Event time; 0 is
+    /// real.
     pub new_searchable: u64,
     /// `new_searchable` less `previous.kpi.new_searchable`; null without
     /// `compare=1` (and for `all`).
     #[schema(required = true)]
     pub new_searchable_delta: Option<i64>,
+    /// Imported torrents that first became searchable in the range (an
+    /// import's records, indexed). Event time; 0 is real.
+    pub new_searchable_imported: u64,
     /// Documents in the search index now; null when search is off.
     #[schema(required = true)]
     pub searchable: Option<u64>,
+    /// Of `searchable`, the crawled ones: `searchable` less `imported`;
+    /// null when either is null.
+    #[schema(required = true)]
+    pub searchable_crawled: Option<u64>,
     /// The change since the previous period's end: now's count less
     /// `previous.kpi.searchable`. Null without `compare=1`, for `all`,
     /// with search off, or with no snapshot from then.
@@ -195,9 +203,14 @@ pub struct TrendPoint {
     /// Unique hashes first harvested in the bucket. Always ≈.
     #[schema(required = true)]
     pub harvested: Option<u64>,
-    /// Torrents newly searchable in the bucket.
+    /// Crawled torrents newly searchable in the bucket (imports
+    /// excluded).
     #[schema(required = true)]
     pub searchable: Option<u64>,
+    /// Imported torrents newly searchable in the bucket; null and 0 as
+    /// for `searchable`.
+    #[schema(required = true)]
+    pub searchable_imported: Option<u64>,
 }
 
 /// A trend annotation.
@@ -205,11 +218,36 @@ pub struct TrendPoint {
 pub struct Annotation {
     /// Unix seconds.
     pub at: i64,
-    /// `restart`, `stopped`, `paused`, `resumed` or `intensity`.
+    /// `restart`, `stopped`, `paused`, `resumed`, `intensity`,
+    /// `import_started`, `import_finished` or `import_removed`.
     pub kind: String,
     /// The event's detail: the version for `restart`, the new level for
-    /// `intensity`; empty when there's none.
+    /// `intensity`, `key=value` words for an import (as `import`); empty
+    /// when there's none.
     pub text: String,
+    /// An import annotation's job and counts; null for other kinds.
+    #[schema(required = true)]
+    pub import: Option<ImportNote>,
+}
+
+/// What an import annotation says, so a step in the trend is explained.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImportNote {
+    /// The import job's id.
+    pub job: i64,
+    /// Its adapter: `magnetico` or `bitmagnet`.
+    pub source: String,
+    /// `import_finished`: records the job stored new (novel). Null
+    /// otherwise.
+    #[schema(required = true)]
+    pub new: Option<u64>,
+    /// `import_finished`: records the store already had, merged as
+    /// provenance only (already known). Null otherwise.
+    #[schema(required = true)]
+    pub merged: Option<u64>,
+    /// `import_removed`: torrents the removal deleted. Null otherwise.
+    #[schema(required = true)]
+    pub removed: Option<u64>,
 }
 
 /// One discovery cohort (or a UTC day of them) in the funnel (§10.9.3).
@@ -396,6 +434,7 @@ pub struct PreviousStages {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct PreviousKpi {
     pub new_searchable: u64,
+    pub new_searchable_imported: u64,
     /// Searchable at the period's end: the last hourly snapshot in the
     /// day before it ends. Null when there's none (search off, or not
     /// running then).
@@ -693,7 +732,8 @@ pub struct UnderstandKpi {
     /// Junk score distribution. Null until scores are rolled up.
     #[schema(required = true)]
     pub junk_distribution: Option<Vec<InsightsHistogramBin>>,
-    /// Torrents that became searchable in the range. Event time.
+    /// Crawled torrents that became searchable in the range, imports
+    /// excluded. Event time.
     pub newly_searchable: u64,
     /// Parser confidence distribution. Null until rolled up.
     #[schema(required = true)]
@@ -762,8 +802,11 @@ pub struct IndexKpi {
     /// Segment merges. Null until the index reports them.
     #[schema(required = true)]
     pub merges: Option<u64>,
-    /// Torrents that became searchable in the range. Event time.
+    /// Crawled torrents that became searchable in the range, imports
+    /// excluded. Event time.
     pub new_searchable: u64,
+    /// Imported torrents that became searchable in the range. Event time.
+    pub new_searchable_imported: u64,
     /// Days until the disk is full. Null while free space is unknown.
     #[schema(required = true)]
     pub projection_days: Option<u64>,
@@ -810,8 +853,12 @@ pub struct TrackerHealth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct IndexPoint {
     pub at: i64,
+    /// Crawled torrents newly searchable (imports excluded).
     #[schema(required = true)]
     pub new_searchable: Option<u64>,
+    /// Imported torrents newly searchable.
+    #[schema(required = true)]
+    pub new_searchable_imported: Option<u64>,
     #[schema(required = true)]
     pub removed: Option<u64>,
     /// The bucket's last searchable snapshot (a gauge: the last hour's);

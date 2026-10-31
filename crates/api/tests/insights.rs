@@ -402,6 +402,11 @@ fn story(f: &Fixture) {
                 detail: "aggressive".into(),
             },
             Event {
+                at: NOW - 2 * 3600,
+                kind: lodestar_store::import::event::FINISHED,
+                detail: "job=3 source=bitmagnet new=2 merged=1".into(),
+            },
+            Event {
                 at: NOW - 60,
                 kind: 99,
                 detail: "from a later build".into(),
@@ -653,6 +658,22 @@ async fn goldens() {
     // The story's numbers, read back.
     assert_eq!(day["kpi"]["searchable"], 1000);
     assert_eq!(day["kpi"]["imported"], 40);
+    assert_eq!(day["kpi"]["searchable_crawled"], 960);
+    let import = day["annotations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["kind"] == "import_finished")
+        .expect("the import's annotation");
+    assert_eq!(
+        (
+            &import["import"]["job"],
+            &import["import"]["new"],
+            &import["import"]["merged"]
+        ),
+        (&Value::from(3), &Value::from(2), &Value::from(1)),
+        "novel against already known"
+    );
     assert_eq!(day["kpi"]["searchable_delta"], Value::Null);
     assert!(day.get("previous").is_none());
     assert_eq!(day["stages"]["fetch"], 7);
@@ -697,7 +718,9 @@ async fn gaps_are_null_and_zeros_are_zero() {
     }
     assert_eq!(at(NOW_H - 3)["searchable"], 0, "measured, nothing new");
     assert_eq!(at(NOW_H - 3)["harvested"], 0);
-    assert_eq!(at(NOW_H - 5)["searchable"], 6);
+    // Crawled only: the hour's two imports are apart (IMP-5).
+    assert_eq!(at(NOW_H - 5)["searchable"], 4);
+    assert_eq!(at(NOW_H - 5)["searchable_imported"], 2);
     assert_eq!(at(NOW_H - 5)["harvested"], 8);
     assert_eq!(at(NOW_H - 2)["searchable"], 1);
     assert_eq!(v["ingest_per_hour"], 0, "the last full hour was measured");
@@ -707,7 +730,16 @@ async fn gaps_are_null_and_zeros_are_zero() {
         .iter()
         .map(|a| a["kind"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["restart", "paused", "resumed", "intensity"]);
+    assert_eq!(
+        kinds,
+        [
+            "restart",
+            "paused",
+            "resumed",
+            "import_finished",
+            "intensity"
+        ]
+    );
     let e = json_get(
         &f,
         &cookie,
@@ -814,9 +846,10 @@ async fn the_funnel_reconciles() {
     let total = &v["funnel_total"];
     assert_eq!(total["stages"]["stored"], stored);
     assert_eq!(total["stages"]["searchable"], searchable);
-    let mut sum_new = 0;
+    let (mut sum_new, mut sum_imported) = (0, 0);
     for p in v["trend"].as_array().unwrap() {
         sum_new += p["searchable"].as_u64().unwrap_or(0);
+        sum_imported += p["searchable_imported"].as_u64().unwrap_or(0);
     }
     let all_searchable = c
         .query_row(
@@ -825,8 +858,13 @@ async fn the_funnel_reconciles() {
             |r| r.get::<_, i64>(0),
         )
         .unwrap() as u64;
-    assert_eq!(sum_new, all_searchable, "imports are newly searchable too");
-    assert_eq!(v["kpi"]["new_searchable"], all_searchable);
+    // Crawled and imported are apart, in the same hours (IMP-5).
+    let imported = all_searchable - searchable;
+    assert!(imported > 0, "the story imports something");
+    assert_eq!(sum_new, searchable, "the trend is the crawl's");
+    assert_eq!(sum_imported, imported, "imports have their own series");
+    assert_eq!(v["kpi"]["new_searchable"], searchable);
+    assert_eq!(v["kpi"]["new_searchable_imported"], imported);
 
     for entry in v["funnel"].as_array().unwrap() {
         let st = &entry["stages"];
@@ -1154,8 +1192,8 @@ fn year_of_rollups(db: &Path) {
         for h in NOW_H - 365 * 24..=NOW_H {
             // Harvested, rediscovered, dropped and stored by source and
             // strategy (1–4); M4's scrape and search counters (5–9);
-            // newly searchable by type (10), the delay histogram (11) and
-            // coverage (12): about 100 rows an hour.
+            // newly searchable by type and import (10), the delay
+            // histogram (11) and coverage (12): about 110 rows an hour.
             for source in 0..2 {
                 for strategy in 0..3 {
                     r.execute(params![h, 1, source, strategy, 900]).unwrap();
@@ -1174,6 +1212,9 @@ fn year_of_rollups(db: &Path) {
             }
             for t in 0..12 {
                 r.execute(params![h, 10, t, 0, 10]).unwrap();
+                // Imports in every hour: the crawled/imported split's
+                // worst case (IMP-5).
+                r.execute(params![h, 10, t, 1, 2]).unwrap();
             }
             for b in 80..110 {
                 r.execute(params![h, 11, 0, b, 4]).unwrap();

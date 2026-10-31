@@ -1232,7 +1232,9 @@ mod tests {
                 imported: Some(40),
                 new_searchable: 1_240,
                 new_searchable_delta: Some(-3),
+                new_searchable_imported: 0,
                 searchable: Some(84_210),
+                searchable_crawled: Some(84_170),
                 searchable_delta: Some(1_240),
                 time_to_searchable_p50_s: Some(720),
                 time_to_searchable_p50_delta_s: Some(-45),
@@ -1244,6 +1246,7 @@ mod tests {
             previous: Some(PreviousPeriod {
                 kpi: PreviousKpi {
                     new_searchable: 1_243,
+                    new_searchable_imported: 0,
                     searchable: Some(82_970),
                     time_to_searchable_p50_s: Some(765),
                     time_to_searchable_p95_s: Some(0),
