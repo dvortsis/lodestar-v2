@@ -1838,7 +1838,16 @@
       "pr": 298,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh). | 22:12Z launched Sonnet. | 22:33Z PR #298 head 685ecc86 (~1.78k lines, mostly messages; event names lazy 10.73 KB; Logging first view 42.79). Opus reviewer launched; subscribed."
+      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh). | 22:12Z launched Sonnet. | 22:33Z PR #298 head 685ecc86 (~1.78k lines, mostly messages; event names lazy 10.73 KB; Logging first view 42.79). Opus reviewer launched; subscribed. | 22:39Z web job red = security confirm.ts teardown flake (not theirs); \u00a72.18 comment + one re-run."
+    },
+    "X-security-confirm-teardown": {
+      "status": "building",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "22:39Z security.test teardown flake recurred on #298 via security/confirm.ts:82 pending unmount timer (#296 fixed only form/dialogs). Sonnet fix slice launched; also hunts same setTimeout-unmount pattern elsewhere."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
