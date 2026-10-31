@@ -302,14 +302,15 @@ const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on dema
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
 const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
 const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
-// Security's later parts load only from its body, so their imports of it are of code already loaded.
-const staticHits = Object.entries(manifest)
-	.filter(([from]) => !settingsSecurityLater.some((re) => re.test(from)))
-	.flatMap(([from, chunk]) =>
-		(chunk.imports ?? [])
-			.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
-			.map((key) => `${from} -> ${key}`)
-	);
+const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
+const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
+	(chunk.imports ?? [])
+		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+		// Security's later parts load only from its body, so their imports of that body alone are
+		// of code already loaded; any other body they import still trips this.
+		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
+		.map((key) => `${from} -> ${key}`)
+);
 if (staticHits.length)
 	throw new Error(
 		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
@@ -682,7 +683,7 @@ export default [
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
-	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '32.7 KB'),
+	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>

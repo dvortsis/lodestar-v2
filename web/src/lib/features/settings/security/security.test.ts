@@ -69,6 +69,7 @@ beforeEach(() => {
 	);
 });
 afterEach(() => {
+	delete (document as { execCommand?: unknown }).execCommand;
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
@@ -489,6 +490,7 @@ describe('API keys and feed tokens', () => {
 		);
 		const writeText = vi.fn(async () => {});
 		vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+		vi.stubGlobal('isSecureContext', true);
 		replies['POST /keys'] = () => ({
 			status: 201,
 			body: { key: KEY(3, 'Feeds', { kind: 'feed_token', scopes: ['feeds'] }), secret: SECRET }
@@ -525,6 +527,35 @@ describe('API keys and feed tokens', () => {
 		expect(logs.flatMap((l) => l.mock.calls.flat()).join(' ')).not.toContain(SECRET);
 		expect(within(section).getByText('Feeds')).toBeTruthy();
 		expect(within(section).getByLabelText(/^Name/)).toHaveProperty('value', '');
+	});
+
+	it('over plain HTTP, Copy falls back, or says so and selects the secret', async () => {
+		vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
+		vi.stubGlobal('isSecureContext', false);
+		const exec = vi.fn(() => false);
+		Object.defineProperty(document, 'execCommand', { value: exec, configurable: true });
+		replies['POST /keys'] = () => ({
+			status: 201,
+			body: { key: KEY(3, 'Radarr'), secret: SECRET }
+		});
+		const section = await keysSection();
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		await fireEvent.click(within(section).getByTestId('security-key-create'));
+		const { dialog, input } = await passwordDialog('Create Radarr?');
+		await confirm(dialog, input, 'right-password');
+		const reveal = await screen.findByRole('dialog', { name: 'Copy the secret for Radarr' });
+		const shown = within(reveal).getByTestId('key-secret') as HTMLInputElement;
+		await fireEvent.click(within(reveal).getByTestId('key-secret-copy'));
+		expect(
+			await within(reveal).findByText("Couldn't copy. Select the text and copy it yourself.")
+		).toBeTruthy();
+		expect(exec).toHaveBeenCalledWith('copy');
+		expect(document.activeElement).toBe(shown);
+		expect(shown.selectionEnd! - shown.selectionStart!).toBe(SECRET.length);
+
+		exec.mockReturnValue(true);
+		await fireEvent.click(within(reveal).getByTestId('key-secret-copy'));
+		expect(await within(reveal).findByText('Copied.')).toBeTruthy();
 	});
 
 	it('regenerate needs the password and replaces the row; Cancel sends nothing', async () => {

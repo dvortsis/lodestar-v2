@@ -6,6 +6,7 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
+	import { copyText } from '$lib/util/clipboard';
 	import Result from './Result.svelte';
 
 	let { name, secret, onclose }: { name: string; secret: string; onclose: () => void } = $props();
@@ -19,15 +20,14 @@
 		onclose();
 	}
 
-	function copy() {
-		// The write runs in the click, where browsers allow it.
-		navigator.clipboard.writeText(secret).then(
-			() => (copied = 'done'),
-			() => {
-				copied = 'failed';
-				input()?.select();
-			}
-		);
+	async function copy() {
+		// `copyText` uses the clipboard API where it can, and the textarea fallback on plain HTTP (the
+		// usual LAN setup, not a secure context). 'manual' leaves the secret selected for Ctrl+C.
+		if ((await copyText(secret)) === 'copied') copied = 'done';
+		else {
+			copied = 'failed';
+			input()?.select();
+		}
 	}
 </script>
 
