@@ -1689,13 +1689,13 @@
    "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review | 14:42Z MERGE at 61e73241 (6 optional); waiting on CI | 15:02Z merged 65a0ba9f; sessions archived"
   },
   "X-search-files-2": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnCheHLuJ6F39x4tH69",
-   "pr": null,
+   "pr": 283,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus"
+   "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus | 15:54Z PR #283 head ce842e28 (cold broad p95 1M 195->102 ms, gated FILE_P95 150 ms; parallel segment scan); fresh Opus reviewer session_01MMjhn8VhL9DEqTBq434TbW"
   },
   "X-import-refile-2": {
    "status": "review",
@@ -2514,7 +2514,8 @@
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
-  "store/src/filter.rs: per-hash hold query (or HeldSet removal generation) so the writer re-holds only hashes the store still holds, covering the sweep arm and backfill's arm (writer.rs:573); until then both insert unconditionally (over-strict, safe) (#282)"
+  "store/src/filter.rs: per-hash hold query (or HeldSet removal generation) so the writer re-holds only hashes the store still holds, covering the sweep arm and backfill's arm (writer.rs:573); until then both insert unconditionally (over-strict, safe) (#282)",
+  "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
