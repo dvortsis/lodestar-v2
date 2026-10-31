@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { components } from '$lib/api/schema';
-import { bannerFor, suggestions, type IndexState } from './recover';
+import { bannerFor, type IndexState } from './recover';
+import { suggestions } from './suggestions';
 
 type Clause = components['schemas']['ClauseRemoval'];
 const clause = (over: Partial<Clause>): Clause => ({

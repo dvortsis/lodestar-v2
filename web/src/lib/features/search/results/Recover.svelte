@@ -1,17 +1,19 @@
 <script lang="ts">
 	// "Removing {clause} gives {N}" (§10.4 No results): one button per counted clause, each one
 	// search of the server's reduced query. Loaded only for an empty answer that carries counts.
+	import type { components } from '$lib/api/schema';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
-	import type { Suggestion } from './recover';
+	import { suggestions, type Suggestion } from './suggestions';
 
 	interface Props {
-		items: Suggestion[];
+		recovery: components['schemas']['SearchRecovery'] | null;
 		apply: (item: Suggestion) => void;
 	}
-	let { items, apply }: Props = $props();
+	let { recovery, apply }: Props = $props();
+	const items = $derived(suggestions(recovery));
 	const locale = $derived(currentLocale());
 </script>
 

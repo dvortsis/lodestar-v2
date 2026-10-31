@@ -30,7 +30,8 @@
 	import { EXAMPLES } from '../query/examples';
 	import { ensureSearchPath } from '../query/path';
 	import { appearanceHref, searchHref } from './links';
-	import { bannerFor, suggestions, type IndexState, type Suggestion } from './recover';
+	import { bannerFor, type IndexState } from './recover';
+	import type { Suggestion } from './suggestions';
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
 	import { selection } from '../bulk/selection.svelte';
@@ -118,11 +119,11 @@
 		!!figures?.cold_start &&
 			(results.status === 'empty' || (results.status === 'ready' && !results.hits.length))
 	);
-	const suggested = $derived(results.status === 'ready' ? suggestions(results.recovery) : []);
+	const suggested = $derived(results.status === 'ready' && !!results.recovery?.clauses.length);
 	let Recover = $state<typeof import('./Recover.svelte').default>();
 	let Index = $state<typeof import('./IndexState.svelte').default>();
 	$effect(() => {
-		if (suggested.length && !Recover)
+		if (suggested && !Recover)
 			void import('./Recover.svelte').then((mod) => (Recover = mod.default));
 		if ((banner || fullCold) && !Index)
 			void import('./IndexState.svelte').then((mod) => (Index = mod.default));
@@ -477,8 +478,8 @@
 				<p class="rp-empty-title">{m.search_results_none()}</p>
 				{#if clauses.length}
 					<p>{m.search_results_none_lead()}</p>
-					{#if Recover && suggested.length}<Recover
-							items={suggested}
+					{#if Recover && suggested}<Recover
+							recovery={results.recovery}
 							apply={(i) => void applySuggestion(i)}
 						/>{/if}
 					<ul class="rp-examples" data-testid="results-none-clauses">
