@@ -2132,16 +2132,16 @@ const CORRECTIONS_CHUNK: usize = 500;
 const MAX_REQUEUE: usize = 1_000_000;
 /// The `settings` key holding the re-queues not yet finished: a JSON list
 /// of query texts, one per distinct query, written before the rule change
-/// and removed once its marks are in; or, past [`MAX_PENDING`], the JSON
-/// string [`PENDING_ALL`]: a full re-mark of every stored torrent.
+/// and removed once its marks are in.
 const REQUEUE_PENDING: &str = "classify.requeue_pending";
+/// Set (to `1`) past [`MAX_PENDING`] texts: a full re-mark of every stored
+/// torrent, which covers the list. Its own key, so a binary that doesn't
+/// know it leaves it alone, and the next start that does still runs it.
+const REQUEUE_ALL: &str = "classify.requeue_all";
 /// Distinct query texts pending at most. With search off nothing clears
 /// them, so an admin changing many different rules would grow the list
 /// without limit; past this it collapses into one full re-mark.
 const MAX_PENDING: usize = 64;
-/// The stored value of a full re-mark. A JSON string, never a list item,
-/// so no query text can be taken for it or clear it.
-const PENDING_ALL: &str = "\"all\"";
 
 /// What re-queues are pending.
 #[derive(Debug, PartialEq)]
@@ -2153,10 +2153,10 @@ enum Pending {
 }
 
 fn pending_requeues(store: &Store) -> ApiResult<Pending> {
-    let text = store.setting_text(REQUEUE_PENDING).map_err(internal)?;
-    if text.as_deref() == Some(PENDING_ALL) {
+    if store.setting_text(REQUEUE_ALL).map_err(internal)?.is_some() {
         return Ok(Pending::All);
     }
+    let text = store.setting_text(REQUEUE_PENDING).map_err(internal)?;
     // Unreadable (never written so): nothing can be recovered from it,
     // and it mustn't block rule changes, so it's started afresh.
     Ok(Pending::Texts(
@@ -2166,18 +2166,21 @@ fn pending_requeues(store: &Store) -> ApiResult<Pending> {
 }
 
 fn set_pending_requeues(store: &mut Store, pending: &Pending) -> ApiResult<()> {
-    let text = match pending {
-        Pending::Texts(list) if list.is_empty() => {
-            return store
-                .update_settings_text(&[], &[REQUEUE_PENDING])
-                .map_err(internal);
+    match pending {
+        // Cleared: both keys, since a full re-mark covers the list too.
+        Pending::Texts(list) if list.is_empty() => store
+            .update_settings_text(&[], &[REQUEUE_PENDING, REQUEUE_ALL])
+            .map_err(internal),
+        Pending::Texts(list) => {
+            let text = serde_json::to_string(list).map_err(internal)?;
+            store
+                .set_settings_text(&[(REQUEUE_PENDING, &text)])
+                .map_err(internal)
         }
-        Pending::Texts(list) => serde_json::to_string(list).map_err(internal)?,
-        Pending::All => PENDING_ALL.to_owned(),
-    };
-    store
-        .set_settings_text(&[(REQUEUE_PENDING, &text)])
-        .map_err(internal)
+        Pending::All => store
+            .update_settings_text(&[(REQUEUE_ALL, "1")], &[REQUEUE_PENDING])
+            .map_err(internal),
+    }
 }
 
 /// Records a re-queue of `query` as pending, before the rule change it
@@ -2487,6 +2490,8 @@ impl FiltersApi {
         let added = push_pending_requeue(&mut store, &q)?;
         let Some(q) = store.remove_class_rule(id).map_err(internal)? else {
             // Only its own entry: one already there is another change's.
+            // If its push collapsed the list to a full re-mark, that stays:
+            // deliberately conservative, since the drop never clears it.
             if added {
                 drop_pending_requeue(&mut store, &q)?;
             }
@@ -2623,8 +2628,16 @@ impl FiltersApi {
         while lo < last {
             stop()?;
             let hi = lo.saturating_add(chunk).min(last);
-            let ids: Vec<i64> = (lo + 1..=hi).collect();
-            n += self.store().mark_unenriched(&ids).map_err(internal)?;
+            // One range UPDATE per chunk, as `mark_unenriched_after` does.
+            n += self
+                .store()
+                .connection()
+                .execute(
+                    "UPDATE torrent_parsed SET parser_ver = 0
+                     WHERE torrent_id > ?1 AND torrent_id <= ?2",
+                    [lo, hi],
+                )
+                .map_err(internal)?;
             lo = hi;
         }
         self.reenrich.store(true, Ordering::Release);
@@ -3133,13 +3146,13 @@ mod tests {
         assert!(push_pending_requeue(&mut store, "one-more").unwrap());
         assert_eq!(pending_requeues(&store).unwrap(), Pending::All);
         assert_eq!(
-            store.setting_text(REQUEUE_PENDING).unwrap().as_deref(),
-            Some(PENDING_ALL)
+            store.setting_text(REQUEUE_ALL).unwrap().as_deref(),
+            Some("1")
         );
+        assert_eq!(store.setting_text(REQUEUE_PENDING).unwrap(), None);
         assert!(!push_pending_requeue(&mut store, "later").unwrap());
-        // A text that reads as the stored value is still only a text.
+        // No single text's clear undoes it.
         drop_pending_requeue(&mut store, "word0").unwrap();
-        drop_pending_requeue(&mut store, PENDING_ALL).unwrap();
         drop_pending_requeue(&mut store, "all").unwrap();
         assert_eq!(pending_requeues(&store).unwrap(), Pending::All);
     }
@@ -3187,10 +3200,18 @@ mod tests {
         });
         assert_eq!(api.resume_requeues(0).unwrap(), 1);
         assert_eq!(pending_requeues(&api.store()).unwrap(), Pending::All);
-        // Undisturbed: done, so cleared.
+        // An older binary ran meanwhile: it doesn't know the full re-mark's
+        // key, so it kept its own list beside it.
+        api.store()
+            .set_settings_text(&[(REQUEUE_PENDING, r#"["old"]"#)])
+            .unwrap();
+        assert_eq!(pending_requeues(&api.store()).unwrap(), Pending::All);
+        // Undisturbed: done, so cleared, the list it covers too.
         ALL_MARKED.with(|h| h.set(None));
         assert_eq!(api.resume_requeues(0).unwrap(), 1);
         assert_eq!(pending_requeues(&api.store()).unwrap(), texts(&[]));
+        assert_eq!(api.store().setting_text(REQUEUE_ALL).unwrap(), None);
+        assert_eq!(api.store().setting_text(REQUEUE_PENDING).unwrap(), None);
     }
 
     /// One pending re-queue failing every time doesn't hold up the rest:

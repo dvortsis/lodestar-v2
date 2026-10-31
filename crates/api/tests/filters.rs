@@ -1211,17 +1211,19 @@ async fn past_the_cap_the_pending_requeues_become_a_full_remark() {
 
 /// The pending re-queues, as stored; a full re-mark reads as `<all>`.
 fn pending(api: &FiltersApi) -> Vec<String> {
-    let text = api
-        .store
-        .lock()
+    let store = api.store.lock().unwrap();
+    if store
+        .setting_text("classify.requeue_all")
         .unwrap()
-        .setting_text("classify.requeue_pending")
-        .unwrap();
-    match text.as_deref() {
-        Some("\"all\"") => vec!["<all>".into()],
-        Some(t) => serde_json::from_str(t).unwrap(),
-        None => Vec::new(),
+        .is_some()
+    {
+        return vec!["<all>".into()];
     }
+    store
+        .setting_text("classify.requeue_pending")
+        .unwrap()
+        .map(|t| serde_json::from_str(&t).unwrap())
+        .unwrap_or_default()
 }
 
 /// The next start: a fresh store handle on the same file, a new shutdown
