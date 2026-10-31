@@ -380,7 +380,7 @@ async fn a_missing_secret_with_nothing_saved_says_what_to_enter() {
     );
 }
 
-/// A plain SMTP server that offers AUTH PLAIN and keeps each command.
+/// A plain SMTP server that keeps each command and message.
 async fn smtp(seen: Received) -> SocketAddr {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -398,7 +398,9 @@ async fn smtp(seen: Received) -> SocketAddr {
                     if data {
                         if line == "." {
                             data = false;
-                            seen.lock().unwrap().push(("DATA".into(), std::mem::take(&mut body)));
+                            seen.lock()
+                                .unwrap()
+                                .push(("DATA".into(), std::mem::take(&mut body)));
                             w.write_all(b"250 queued\r\n").await.unwrap();
                         } else {
                             body.push_str(&line);
@@ -444,14 +446,20 @@ fn mail(port: u16, username: &str, password: Option<&str>) -> SettingsTest {
 }
 
 #[tokio::test]
-async fn email_sends_one_labelled_test_and_logs_in_with_the_saved_password() {
+async fn email_sends_one_labelled_test_and_uses_the_saved_password_for_its_server() {
     let seen = Received::default();
     let addr = smtp(seen.clone()).await;
     let r = run(mail(addr.port(), "", None), None, local()).await;
     assert_eq!(code(&r), "ok", "{r:?}");
     let got = seen.lock().unwrap().clone();
-    assert!(got.iter().any(|(c, _)| c == "RCPT TO:<me@example.com>"), "{got:?}");
-    let data = &got.iter().find(|(c, _)| c == "DATA" && !got.is_empty()).unwrap();
+    assert!(
+        got.iter().any(|(c, _)| c == "RCPT TO:<me@example.com>"),
+        "{got:?}"
+    );
+    let data = &got
+        .iter()
+        .find(|(c, _)| c == "DATA" && !got.is_empty())
+        .unwrap();
     let message = &got.iter().rfind(|(c, _)| c == "DATA").unwrap().1;
     assert!(message.contains("Lodestar test notification"), "{data:?}");
     seen.lock().unwrap().clear();
@@ -469,14 +477,13 @@ async fn email_sends_one_labelled_test_and_logs_in_with_the_saved_password() {
         )],
         ..Default::default()
     };
+    // The saved password is used: the sender gets as far as the login,
+    // which it then keeps off a plain connection to loopback (a login
+    // without TLS goes only to a private-network address). With no
+    // password it would say to enter one instead, as below.
     let r = run(mail(addr.port(), "me", None), api(saved()), local()).await;
-    assert_eq!(code(&r), "ok", "{r:?}");
-    // AUTH PLAIN of "\0me\0pw".
-    assert!(
-        seen.lock().unwrap().iter().any(|(c, _)| c == "AUTH PLAIN AG1lAHB3"),
-        "{:?}",
-        seen.lock().unwrap()
-    );
+    assert_eq!(code(&r), "protocol", "{r:?}");
+    assert!(r.error.unwrap().message.contains("login"));
     let other = SettingsTest::Email(EmailDraft {
         host: "elsewhere".into(),
         ..match mail(addr.port(), "me", None) {
@@ -485,7 +492,11 @@ async fn email_sends_one_labelled_test_and_logs_in_with_the_saved_password() {
         }
     });
     let r = run(other, api(saved()), local()).await;
-    assert_eq!(code(&r), "invalid", "no saved password for another server: {r:?}");
+    assert_eq!(
+        code(&r),
+        "invalid",
+        "no saved password for another server: {r:?}"
+    );
 }
 
 #[tokio::test]

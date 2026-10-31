@@ -1246,11 +1246,12 @@ impl<T: Section> Erased for Entry<T> {
         let current = self.effective_map(&state.saved);
         // Every field that says where the secret goes must be given, and
         // point where the saved one does.
-        let same = |names: &[&str], saved: &dyn Fn(&str) -> Option<Value>| {
-            names.iter().all(|n| {
+        let same = |bound: &[Endpoint], saved: &dyn Fn(&str) -> Option<Value>| {
+            bound.iter().all(|b| {
+                let n = b.field();
                 endpoints
                     .iter()
-                    .any(|(e, v)| e == n && endpoint(Some(v)) == endpoint(saved(n).as_ref()))
+                    .any(|(e, v)| *e == n && b.key(Some(v)) == b.key(saved(n).as_ref()))
             })
         };
         if let Some((field, rest)) = key.split_once('.') {
@@ -1267,7 +1268,9 @@ impl<T: Section> Erased for Entry<T> {
                 .iter()
                 .filter_map(Value::as_object)
                 .find(|i| i.get("id").and_then(Value::as_str) == Some(id))?;
-            if !same(&["url", "kind"], &|n| item.get(n).cloned()) {
+            if !same(&[Endpoint::Url("url"), Endpoint::Value("kind")], &|n| {
+                item.get(n).cloned()
+            }) {
                 return None;
             }
             return item.get(k)?.as_str().map(str::to_string);

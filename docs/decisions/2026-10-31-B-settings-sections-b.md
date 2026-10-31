@@ -17,9 +17,12 @@
     - so is an Adult torrent while "Show adult content" is off, with the same check as the detail view;
     - quarantined and tombstoned torrents aren't stored, so they're `not_found`.
 
+    - a private torrent (BEP 27 `flags::PRIVATE`, or found only through a private source, `flags::PRIVATE_SOURCE`, §18.7) is refused as `private`: a magnet with no trackers would make the client look the hash up on the public DHT, leaking it;
+    - the magnet is built from the stored torrent's v1 hash, never the request's, and two hashes naming one torrent (a v1 hash and its truncated v2 hash) send it once (`same_torrent`).
+
     Your own Hide mark (`user_items`) doesn't block a send: it's your choice, not a filter.
   - **Duplicates and partial sends** follow the adapters (§9):
-    - when the client finds every torrent already there, they all count as `duplicate`, which is sent;
+    - when the client finds every torrent already there, they all count as `duplicate`, which is sent (and counted in `sent`). This is recognised by `clients::is_already_there`, not by the error's wording;
     - `ClientError::Partial { sent }` marks the first `sent` sendable torrents as sent and the rest as failed, so nothing is resent.
   - **Rate-limited:** two sends at a time (`429 sends_busy`) and 30 a minute across the server (`429 send_rate_limited`). Nothing is sent past either limit.
   - Magnets carry the hash and the name only. Appending the best trackers (§9's toggle) is left to the slice that builds that toggle.
@@ -28,6 +31,8 @@
   - `POST /usage/clear` deletes the whole query log and needs `{"confirm": true}`; without it the answer is `428 confirmation_required`.
   - §10.10.7 puts "clear usage data" in the **destructive** class: a dialog with the exact count, and no password (passwords are for weakening content protection and for security changes). So the brief's fresh-password fallback wasn't needed.
   - Today the query log is the only usage data Lodestar keeps.
+  - **The dialog shows the count, not a size.** §10.10.7 asks for both, but the store has no size for one table without a store change (out of this slice's scope), and the log is small: one short row per search, kept at most 30 days. A size can join `UsageStats` when the store reports one.
+- **Test coverage of the senders:** Torznab, ntfy, the webhook and email are tested against local stand-in servers, reached through a test-only policy (`Email::with_policy`, documented as for tests only). Discord's URL must be `https://discord.com/…`, which no local stand-in can serve, so its sending is covered by `crates/integrations` `discord.rs`'s own replay tests. Here, its URL checks and SSRF refusal are tested. An email login can't complete against a loopback stand-in, because a login without TLS goes only to a private address. The test holds that the saved password is used for the saved server and refused for another.
 - **Not wired yet, as follow-ups:**
   - nothing writes the query log from searches yet (`insights.query_logging` has nothing to gate), and the 30-day prune doesn't read `query_retention_days`;
   - sends aren't counted in the Serve stage's `sends` metric (`docs/metrics.md` §6.7);

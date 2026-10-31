@@ -262,7 +262,11 @@ async fn deliver(
     let mut magnets = Vec::new();
     for (_, v) in &checked {
         if let Ok(t) = v {
-            let uri = format!("magnet:?xt=urn:btih:{}&dn={}", t.hash, percent_encode(&t.name));
+            let uri = format!(
+                "magnet:?xt=urn:btih:{}&dn={}",
+                t.hash,
+                percent_encode(&t.name)
+            );
             // Built from a stored hash: it always parses.
             if let Ok(m) = Magnet::parse(&uri) {
                 magnets.push(m);
@@ -312,7 +316,9 @@ fn results<T>(
         Some(Err(ClientError::Partial { sent, cause })) => {
             (sent.min(sendable), false, Some(*cause))
         }
-        Some(Err(e)) if lodestar_integrations::clients::is_already_there(&e) => (sendable, true, None),
+        Some(Err(e)) if lodestar_integrations::clients::is_already_there(&e) => {
+            (sendable, true, None)
+        }
         Some(Err(e)) => (0, false, Some(e)),
     };
     let failure = cause.map(|e| test_failure(&e).error.expect("a failure"));
@@ -415,7 +421,7 @@ mod tests {
         assert_eq!(outcomes(&r)[2], (Failed, Some("bad_credentials")));
         assert!(r[2].message.as_ref().unwrap().ends_with('.'));
         // A hidden one is never in the send.
-        let (r, _) = results(vec![("h".into(), Err("adult_hidden"))], None);
+        let (r, _) = results::<()>(vec![("h".into(), Err("adult_hidden"))], None);
         assert_eq!(outcomes(&r), [(Refused, Some("adult_hidden"))]);
     }
 

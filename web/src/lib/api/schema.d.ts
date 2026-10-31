@@ -2715,7 +2715,7 @@ export interface components {
         /** @description One torrent's result. */
         ClientSendItem: {
             /**
-             * @description `not_found`, `hidden` or `adult_hidden` when refused; the
+             * @description `not_found`, `hidden`, `adult_hidden`, `private` or `same_torrent` when refused; the
              *     connection test's codes when failed; null otherwise.
              */
             code: string | null;

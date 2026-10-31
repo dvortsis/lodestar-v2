@@ -26,12 +26,14 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 use tower::ServiceExt;
 
-/// In id order: visible, hidden by a filter rule, Adult, visible.
-const NAMES: [&str; 4] = [
+/// In id order: visible, hidden by a filter rule, Adult, visible, found
+/// only through a private source.
+const NAMES: [&str; 5] = [
     "Big.Movie.2019.1080p.mkv",
     "Hidden.By.Rule.2019.mkv",
     "Studio.Scene.XXX.1080p.mp4",
     "Other.Movie.2018.720p.mkv",
+    "Private.Tracker.Only.2018.mkv",
 ];
 
 fn raw(name: &str) -> Vec<u8> {
@@ -130,7 +132,11 @@ fn fixture(client: Option<SavedClient>) -> Fixture {
             raw_info: Some(raw),
             discovered_at: 1_700_000_000 + i as i64,
             metadata_at: 1_700_000_100,
-            extra_flags: if i == 1 { flags::HIDDEN } else { 0 },
+            extra_flags: match i {
+                1 => flags::HIDDEN,
+                4 => flags::PRIVATE_SOURCE,
+                _ => 0,
+            },
             source: SourceId::new(0).unwrap(),
         })
         .collect();
@@ -257,6 +263,7 @@ async fn only_visible_torrents_are_sent_each_with_its_result() {
             ("refused", "hidden"),
             ("refused", "adult_hidden"),
             ("sent", "-"),
+            ("refused", "private"),
             ("refused", "not_found"),
         ]
     );
@@ -268,7 +275,9 @@ async fn only_visible_torrents_are_sent_each_with_its_result() {
     let sent = added.lock().unwrap().clone();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains(&f.hashes[0]) && sent[0].contains(&f.hashes[3]));
-    assert!(!sent[0].contains(&f.hashes[1]) && !sent[0].contains(&f.hashes[2]));
+    for i in [1, 2, 4] {
+        assert!(!sent[0].contains(&f.hashes[i]), "torrent {i} was sent");
+    }
     assert!(
         !v.to_string().contains(&addr.to_string()),
         "the address isn't repeated"

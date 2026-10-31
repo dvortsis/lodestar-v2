@@ -684,6 +684,15 @@ pub fn is_already_there(e: &ClientError) -> bool {
     matches!(e, ClientError::Rejected(why) if why == ALREADY_THERE)
 }
 
+#[cfg(test)]
+#[test]
+fn an_all_duplicate_add_is_recognised_by_its_kind_not_its_wording() {
+    assert!(is_already_there(&already_there()));
+    assert!(!is_already_there(&ClientError::Rejected(
+        "HTTP 409: already".into()
+    )));
+}
+
 /// The error for an HTTP status an adapter has no meaning for.
 pub(crate) fn rejected_status(status: u16, body: &[u8]) -> ClientError {
     ClientError::Rejected(format!("HTTP {status}: {}", client_reason(body)))

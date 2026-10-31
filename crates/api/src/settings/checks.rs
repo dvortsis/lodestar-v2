@@ -201,7 +201,10 @@ fn torznab_failure(e: &ClientError) -> SettingsTestResult {
         ClientError::Rejected(why) => Some(match why.strip_prefix("HTTP ") {
             Some(status) => format!(
                 "The address answered HTTP {}: it isn't a Torznab endpoint.",
-                status.chars().take_while(char::is_ascii_digit).collect::<String>()
+                status
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
             ),
             None => "The endpoint refused the request.".to_string(),
         }),
@@ -365,9 +368,8 @@ pub(crate) fn delivery_failure(e: &DeliveryError) -> SettingsTestResult {
     let code = match e {
         DeliveryError::Blocked(_) => "blocked",
         DeliveryError::InvalidEndpoint(_) => "invalid",
-        DeliveryError::Rejected { status: 401 | 403 } | DeliveryError::SmtpRejected { code: 535 } => {
-            "bad_credentials"
-        }
+        DeliveryError::Rejected { status: 401 | 403 }
+        | DeliveryError::SmtpRejected { code: 535 } => "bad_credentials",
         DeliveryError::Rejected { .. } | DeliveryError::SmtpRejected { .. } => "rejected",
         DeliveryError::Unreachable => "unreachable",
         DeliveryError::Timeout => "timeout",
