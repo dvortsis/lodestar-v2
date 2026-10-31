@@ -548,13 +548,13 @@
       "notes": ""
     },
     "S-appearance": {
-      "status": "review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhnCiTtdnyHjCTG1QFHP",
       "pr": 243,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note) | 22:43Z PR #243 head 8139b6a7 (baseline regen marker on purpose); fresh Opus reviewer launched; scope calls (filters dropped, start-up hook deferred) for review | 22:45Z CI fix 996c1e19 (e2e typecheck) | 2026-10-30T23:53Z delta MERGE at aa79c4f5 (baselines 88dd35c6 Settings-only; marker removed); merge on green ci-ok+Web+E2E"
+      "notes": " | 2026-10-30T21:49Z launched (sonnet); deps met via #217 screen registry; no budget raises allowed | 21:52Z runner OK: (a) split web/scripts/themes-core.ts (pure, byte-identical outputs); custom palettes per browser in localStorage as a \u00a72.19 refinement (theme id still saved to the server; unknown id falls back to Riverstone with a note) | 22:43Z PR #243 head 8139b6a7 (baseline regen marker on purpose); fresh Opus reviewer launched; scope calls (filters dropped, start-up hook deferred) for review | 22:45Z CI fix 996c1e19 (e2e typecheck) | 2026-10-30T23:53Z delta MERGE at aa79c4f5 (baselines 88dd35c6 Settings-only; marker removed); merge on green ci-ok+Web+E2E | 2026-10-31T00:02Z merged #243 (b3fc117b); ci-ok, Web, E2E green; sessions archived"
     },
     "M-filters-dialogs": {
       "status": "merged",
@@ -1550,6 +1550,10 @@
     "CR-1a-H": {
       "status": "running",
       "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3"
+    },
+    "S-theme-boot": {
+      "status": "running",
+      "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2204,6 +2208,11 @@
       "item": "FYI (\u00a72.19) on #240 merge: pack guards (FK-2 trailer/sample, SC-1 trainer/mod/offline) read the torrent as it is, so neutralizing never widens a pack rule; FK-2 (guard-only keywords) unchanged. LU-1's lure-file reason is a stated follow-up.",
       "at": "2026-10-30T22:20Z",
       "status": "merged #240 (0cfaac67); FYI flagged"
+    },
+    {
+      "id": "flag-243",
+      "what": "\u00a72.19 flags from #243 S-appearance (merged): custom themes kept per browser (server stores only the id); Light-first/Dark-first filters deferred (need an origin-mode field in web/themes/*.json); start-up hook deferred, now being built as S-theme-boot",
+      "status": "to-send"
     }
   ],
   "external_gates": {
@@ -2214,7 +2223,6 @@
     }
   },
   "followups": [
-    "S-theme-boot (immediate, after #243): shell start-up hook that fetches the account's saved theme and applies/caches it, so a new browser or device follows the account (\u00a710.18); #243 review scope call; also move themes.ts `let generation` above applyTheme's JSDoc (#243 delta nit)",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
