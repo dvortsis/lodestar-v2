@@ -42,8 +42,9 @@
 	// The labels and help of these fields' sections: nothing renders before they're in, so a raw
 	// key never flashes. Already loaded (a return visit) renders at once.
 	const sections = untrack(() => form.specs.map((spec) => spec.section));
-	let labelsReady = $state(messagesLoaded(sections));
-	if (!labelsReady) void loadMessages(sections).then(() => (labelsReady = true));
+	const inPlace = messagesLoaded(sections);
+	let labelsReady = $state(inPlace);
+	if (!inPlace) void loadMessages(sections).then(() => (labelsReady = true));
 
 	let summaryShown = $state(false);
 	let summaryFocus = $state(0);
