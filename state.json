@@ -507,7 +507,7 @@
    "pr": 281,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "14:30Z brief briefs/S-insights-3.md (print layout + digest preview at data-slot) | 14:28Z launched Sonnet | 14:53Z PR #281 head 03951827 (preview 1.71/1.9 KB, print 1.47/1.62 KB, InsightsScreen first view 44.43); Overview.svelte mount accepted; fresh Opus reviewer session_01MMjhnCiSuPbJajcNpB8RkZ | 15:09Z CHANGES at 03951827: B1 one-page print depends on viewport (uPlot canvas width; 2 pages at 800/1024 px); B2 print hides .ins-sub, losing §10.9.3 time bases + gap note; opt legend, afterprint note; relayed | 15:26Z round-2 CHANGES at 7728f74d: funnel labels hidden (.ins-link), funnel bars vanish without background graphics (print-color-adjust); relayed"
+   "notes": "14:30Z brief briefs/S-insights-3.md (print layout + digest preview at data-slot) | 14:28Z launched Sonnet | 14:53Z PR #281 head 03951827 (preview 1.71/1.9 KB, print 1.47/1.62 KB, InsightsScreen first view 44.43); Overview.svelte mount accepted; fresh Opus reviewer session_01MMjhnCiSuPbJajcNpB8RkZ | 15:09Z CHANGES at 03951827: B1 one-page print depends on viewport (uPlot canvas width; 2 pages at 800/1024 px); B2 print hides .ins-sub, losing §10.9.3 time bases + gap note; opt legend, afterprint note; relayed | 15:26Z round-2 CHANGES at 7728f74d: funnel labels hidden (.ins-link), funnel bars vanish without background graphics (print-color-adjust); relayed | 15:36Z round-3 MERGE at 21490b97; waiting on playwright core + smoke"
   },
   "S-settings-1": {
    "status": "paused",
