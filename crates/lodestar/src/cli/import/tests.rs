@@ -274,42 +274,66 @@ fn a_legacy_cursor_is_bound_once_to_its_own_dataset() {
     let config = data(&dir.path().join("data"));
     let mut store = open_exclusive(&config).unwrap();
     let dataset = [5u8; 32];
-    let job = store
-        .create_import_job(&NewImportJob {
-            adapter: bitmagnet::ADAPTER,
-            adapter_ver: 1,
-            dataset: &dataset,
-            schema_sig: &[6; 32],
-            options: b"",
-            credential: None,
-            at: NOW,
-        })
-        .unwrap();
+    let new_job = |store: &mut Store, options: &[u8]| {
+        store
+            .create_import_job(&NewImportJob {
+                adapter: bitmagnet::ADAPTER,
+                adapter_ver: 1,
+                dataset: &dataset,
+                schema_sig: &[6; 32],
+                options,
+                credential: None,
+                at: NOW,
+            })
+            .unwrap()
+    };
     let cursor = dir.path().join("import-bitmagnet.cursor");
     let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let position = bitmagnet::position(&[9; 20]);
-    // Another database's cursor is refused, and stays where it is.
-    std::fs::write(
-        &cursor,
-        format!("bitmagnet-cursor-v2 {} {}\n", hex(&[1; 32]), hex(&position)),
-    )
-    .unwrap();
-    assert!(matches!(
-        bind_legacy_cursor(&mut store, &job, &cursor, &dataset),
-        Err(Failure::Refused(_))
-    ));
+    let write = |set: &[u8]| {
+        std::fs::write(
+            &cursor,
+            format!("bitmagnet-cursor-v2 {} {}\n", hex(set), hex(&position)),
+        )
+        .unwrap()
+    };
+    // Another database's cursor is refused before any job exists, and
+    // again on a rerun: nothing was left behind to resume past it.
+    write(&[1; 32]);
+    for _ in 0..2 {
+        assert!(matches!(
+            check_legacy_cursor(&store, &cursor, &dataset),
+            Err(Failure::Refused(_))
+        ));
+        assert!(store.import_jobs(None, 10).unwrap().is_empty());
+    }
     assert!(cursor.exists());
-    std::fs::write(
-        &cursor,
-        format!("bitmagnet-cursor-v2 {} {}\n", hex(&dataset), hex(&position)),
-    )
-    .unwrap();
-    bind_legacy_cursor(&mut store, &job, &cursor, &dataset).unwrap();
+    // No file: nothing to bind.
+    let none = dir.path().join("none.cursor");
+    assert_eq!(check_legacy_cursor(&store, &none, &dataset).unwrap(), None);
+
+    // A plain `import start` job of the same database isn't a binding.
+    let plain = new_job(&mut store, b"");
+    store
+        .cancel_import_job(plain.id, plain.revision, NOW)
+        .unwrap();
+    write(&dataset);
+    let checked = check_legacy_cursor(&store, &cursor, &dataset)
+        .unwrap()
+        .unwrap();
+    let job = new_job(&mut store, LEGACY_BOUND);
+    bind_legacy_cursor(&mut store, &job, &cursor, &checked).unwrap();
     let j = store.import_job(job.id).unwrap().unwrap();
     assert_eq!((j.seq, &j.position, j.counters.read), (1, &position, 0));
     assert!(!cursor.exists(), "set aside, so it's bound once");
-    // No file: nothing to bind.
-    bind_legacy_cursor(&mut store, &j, &cursor, &dataset).unwrap();
+
+    // A crash left the file in place: it's never bound to a second job.
+    write(&dataset);
+    let r = check_legacy_cursor(&store, &cursor, &dataset);
+    assert!(
+        matches!(&r, Err(Failure::Refused(m)) if m.contains(&format!("job {}", job.id))),
+        "{r:?}"
+    );
 }
 
 #[test]

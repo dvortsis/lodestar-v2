@@ -606,6 +606,12 @@ async fn start(
     }
     let a = &opened.adapter;
     let (dataset, schema_sig) = a.identity();
+    // The old command's cursor is checked before the job exists, so a
+    // refusal leaves nothing behind for a rerun to resume past it.
+    let legacy = match legacy_cursor {
+        Some(path) => check_legacy_cursor(&store, path, &dataset)?.map(|p| (path, p)),
+        None => None,
+    };
     let now = unix_now();
     let job = store
         .create_import_job(&NewImportJob {
@@ -613,27 +619,27 @@ async fn start(
             adapter_ver: a.version(),
             dataset: &dataset,
             schema_sig: &schema_sig,
-            options: b"",
+            options: if legacy.is_some() { LEGACY_BOUND } else { b"" },
             credential: None,
             at: now,
         })
         .map_err(failed("creating the import job"))?;
-    if let Some(path) = legacy_cursor {
-        bind_legacy_cursor(&mut store, &job, path, &dataset)?;
+    if let Some((path, position)) = legacy {
+        bind_legacy_cursor(&mut store, &job, path, &position)?;
     }
     eprintln!("Import job {} started.", job.id);
     run_job(config, &mut store, job.id, &mut opened.adapter, limit, json).await
 }
 
-/// Binds the legacy cursor file's position to the new job as its first
-/// batch, with no records, then sets the file aside so it's bound once.
-/// A file from another database is refused, never skipped past (IMP-3).
-fn bind_legacy_cursor(
-    store: &mut Store,
-    job: &ImportJob,
-    path: &Path,
-    dataset: &[u8; 32],
-) -> Outcome {
+/// The options of a job a legacy cursor file was bound to.
+const LEGACY_BOUND: &[u8] = b"legacy-cursor";
+
+/// The legacy cursor file's position, if there's one for this dataset,
+/// checked before any job is created. A file from another database is
+/// refused, never skipped past (IMP-3); so is one already bound to a job
+/// (a crash between binding and setting the file aside left it), which
+/// would skip what that job imported.
+fn check_legacy_cursor(store: &Store, path: &Path, dataset: &[u8; 32]) -> Outcome<Option<Vec<u8>>> {
     let position = bitmagnet::legacy_cursor(path, dataset).map_err(|e| {
         Failure::Refused(format!(
             "{} ({}): delete it to start over; torrents already imported are kept and \
@@ -643,29 +649,32 @@ fn bind_legacy_cursor(
         ))
     })?;
     if position.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    // A crash between binding and setting the file aside leaves it: never
-    // bind it to a second job, which would skip what the first imported.
     let mut before = None;
-    while let Some(last) = {
+    loop {
         let page = store
             .import_jobs(before, 100)
             .map_err(failed("reading the import jobs"))?;
-        if let Some(other) = page
-            .iter()
-            .find(|j| j.id != job.id && j.adapter == bitmagnet::ADAPTER && j.dataset == dataset)
-        {
+        if let Some(bound) = page.iter().find(|j| {
+            j.adapter == bitmagnet::ADAPTER && j.dataset == dataset && j.options == LEGACY_BOUND
+        }) {
             return Err(Failure::Refused(format!(
                 "{} was already bound to job {}: delete it, then run the import again",
                 path.display(),
-                other.id
+                bound.id
             )));
         }
-        page.last().map(|j| j.id)
-    } {
-        before = Some(last);
+        match page.last() {
+            Some(last) => before = Some(last.id),
+            None => return Ok(Some(position)),
+        }
     }
+}
+
+/// Binds a checked legacy position to the new job as its first batch,
+/// with no records, then sets the file aside so it's bound once.
+fn bind_legacy_cursor(store: &mut Store, job: &ImportJob, path: &Path, position: &[u8]) -> Outcome {
     let now = unix_now();
     let j = store
         .set_import_phase(job.id, job.revision, Phase::Ready, now)
@@ -678,7 +687,7 @@ fn bind_legacy_cursor(
         .commit_import_batch(&lodestar_store::import::ImportBatch {
             job: j.id,
             seq: 1,
-            position: &position,
+            position,
             source,
             source_bytes: 0,
             at: now,

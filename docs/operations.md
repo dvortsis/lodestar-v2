@@ -231,11 +231,12 @@ split are **planned**.
     snapshot until it is deleted.
   - `lodestar stats` shows how many snapshots there are and their total
     size.
-- **`lodestar backup`, using SQLite's online backup (planned).** Until then,
-  back up with the service stopped: copy `lodestar.db` (including `-wal`),
-  `seal.key`, `auth.json` and `config.toml`. The index can be rebuilt, so it
-  can be skipped.
+- **`lodestar backup`** makes a consistent copy of the store, `config.toml`,
+  `seal.key` and `auth.json` in a new `backups/lodestar-backup-<time>` folder
+  inside the data folder (or `--to <folder>`). It's safe while Lodestar runs.
+  The search index isn't copied: Lodestar rebuilds it from the store.
 - **Update notices** inside the app are planned. Lodestar sends no telemetry.
+
 ### Importing from Magnetico or Bitmagnet
 
 An import copies the torrents another crawler already found into Lodestar, so a new install doesn't start empty. Lodestar only reads the other database; it never changes it. Each import is a **job** with a number, which you can pause, resume, cancel or take back.
@@ -303,7 +304,7 @@ lodestar import remove 1
 - `remove` asks first; `--yes` skips the question.
 - **It deletes only what that job alone added.** It keeps a torrent another import also brought in, one Lodestar's crawler has found since, and one you've favourited, labelled, noted or put in a collection.
 - **Filter decisions stay.** A torrent the filters removed during the import stays removed.
-- **A paused or blocked job can't be removed:** cancel it first, so it can't later resume past what was removed.
+- **A job that can still read its source can't be removed:** one that's paused, blocked or running before it reached the end of the source. Cancel it first, so it can't later resume past what was removed. A job that read its whole source (it says `indexing`) can be removed as it is.
 - **Start Lodestar afterwards.** The removed torrents leave search when it starts.
 
 ## 8. Troubleshooting
