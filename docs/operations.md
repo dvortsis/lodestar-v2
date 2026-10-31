@@ -16,7 +16,7 @@ not built yet; don't rely on it. Unmarked statements describe the code on
 
 | Area | Today | Planned |
 |---|---|---|
-| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import-bitmagnet --host <host>`, `--version`, `--help` | `reindex`, `backup`, `rollback`, `import`, `vacuum`, `stats`, `companion`, `worker` |
+| Binary | `lodestar serve` (default), `lodestar healthcheck`, `lodestar import` (with `import-bitmagnet` as its old name), `--version`, `--help` | `reindex`, `backup`, `rollback`, `vacuum`, `stats`, `companion`, `worker` |
 | Settings | `config.toml` and the `LODESTAR_*` variables below | Editing settings in the UI (milestone B2) |
 | Packaging | Unraid templates and a systemd unit (`packaging/`) | Docker image and compose file, release tarballs, Windows MSI |
 | Workers | — | Worker mode (`LODESTAR_JOIN`, `LODESTAR_TOKEN`, cluster port 8091), Lodestar v0.6+ |
@@ -195,7 +195,7 @@ Today, under `LODESTAR_DATA_DIR`:
 | `auth.json` | Admin password hash and session key (mode 0600) |
 | `seal.key` | Key for sealed values; **back it up with the database** |
 | `config.toml` | Optional settings |
-| `import-bitmagnet.cursor` | Resume point of a bitmagnet import |
+| `import-bitmagnet.cursor` | Resume point of the old `import-bitmagnet` command; the next import from the same database picks it up once and renames it `….bound-to-job-<N>` |
 
 Swarm-statistics hot columns are plain in-memory atomics. A clean shutdown
 snapshots them to `hot/*.col`; after a crash they're rebuilt from the
@@ -236,26 +236,57 @@ split are **planned**.
   `seal.key`, `auth.json` and `config.toml`. The index can be rebuilt, so it
   can be skipped.
 - **Update notices** inside the app are planned. Lodestar sends no telemetry.
-- **Importing from bitmagnet:** stop Lodestar and bitmagnet, then run
-  `lodestar import-bitmagnet --host <host> --password-file <file>`. It reads
-  the bitmagnet database read-only, can be resumed, and accepts `--limit N`.
-  - **Connection:** `--port` (5432), `--dbname` (`bitmagnet`) and `--user`
-    (`bitmagnet_reader`, the read-only role from
-    `docs/operations/imports/bitmagnet-restore.md`).
-  - **Password:** from `--password-file` (keep it `chmod 600`) or the
-    `LODESTAR_IMPORT_PG_PASSWORD` variable. There's no `--password`, because
-    other users on the machine can see a command line.
-  - **TLS:** always used and verified, against the system's certificates or
-    the ones in `--ca-file`. To skip TLS for a database on the same machine
-    (a loopback address, or a socket folder such as
-    `--host /var/run/postgresql`), add `--allow-plaintext-loopback`.
-  - **A database that's still being written is refused.** Stop bitmagnet, or
-    import a restored copy. The check watches the whole PostgreSQL server, so
-    run `VACUUM ANALYZE` on the restored copy before importing, as the restore
-    guide does, and don't import from a server other apps write to.
+### Importing from Magnetico or Bitmagnet
 
-  Start Lodestar again afterwards; it indexes the imported torrents and
-  re-fetches incomplete file lists.
+An import copies the torrents another crawler already found into Lodestar, so a new install doesn't start empty. Lodestar only reads the other database; it never changes it. Each import is a **job** with a number, which you can pause, resume, cancel or take back.
+
+**Before you start:**
+1. **Stop Lodestar.** Imports run while the server is stopped. If it's running, `lodestar import start` refuses and changes nothing. On Unraid, stop the container, then run the commands in its console (or with `docker exec`).
+2. **Back up first:** `lodestar backup`. If the import isn't what you wanted, you can also take it back (below), but a backup is the safe undo.
+3. **Stop the other crawler,** or import a copy of its database. A database that's still being written is refused.
+
+**Check the source first.** `inspect` only reads. It's safe while Lodestar runs:
+```bash
+lodestar import inspect --source magnetico --path /data/magnetico/database.sqlite3
+lodestar import inspect --source bitmagnet --host <host> --password-file <file>
+```
+It prints what the source is, how many torrents it holds, and how much space the import needs. If the data folder doesn't have room, it says so and the import is refused.
+
+**Try a pilot, then import the rest.** `--limit` pauses after about that many torrents:
+```bash
+lodestar import start --source magnetico --path /data/magnetico/database.sqlite3 --limit 10000
+lodestar import status
+lodestar import resume 1 --source magnetico --path /data/magnetico/database.sqlite3
+```
+- **Ctrl-C pauses the job** after the batch in flight. `resume` carries on from the last saved batch, with the same source flags. Nothing is imported twice.
+- **`resume` checks the source is the same database** the job started on. If it changed, the job is blocked and says why. Start a new job for the new database.
+- **Start Lodestar again afterwards.** It indexes the imported torrents and re-fetches incomplete file lists.
+- **Every imported torrent goes through your content filters,** as found torrents do. A torrent the filters removed earlier is never brought back.
+- Add `--json` to `inspect`, `start`, `resume`, `status` and `remove` for output a script can read.
+
+**Magnetico:**
+- **Two small files appear beside the database:** `database.sqlite3-wal` and `database.sqlite3-shm`. SQLite creates them whenever anything opens the database, even only to read it. They're harmless, and magneticod uses them too. Leave them, or delete them while nothing has the database open.
+- **A database on a network share is refused unless you allow that share:** `--allow-share \\nas\share`. Opening a share can send your Windows account's credentials to that server, so allow only a server you trust.
+- **On Windows, use the database's drive letter** (`D:\magnetico\database.sqlite3`), not a volume path (`\\?\Volume{…}`), which is refused.
+- **magneticod's oldest layouts (v0 and v1) are refused.** Run a current magneticod on the database once, which upgrades it, then import.
+
+**Bitmagnet:**
+- **Connection:** `--host`, `--port` (5432), `--dbname` (`bitmagnet`) and `--user` (`bitmagnet_reader`, the read-only role from `docs/operations/imports/bitmagnet-restore.md`).
+- **Password:** from `--password-file` (keep it `chmod 600`) or the `LODESTAR_IMPORT_PG_PASSWORD` variable. There's no `--password`, because other users on the machine can see a command line.
+- **TLS** is always used and verified, against the system's certificates or the ones in `--ca-file`. For a database on the same machine (a loopback address, or a socket folder such as `--host /var/run/postgresql`), `--allow-plaintext-loopback` skips it.
+- **A database that's still being written is refused.** The check watches the whole PostgreSQL server, so run `VACUUM ANALYZE` on a restored copy before importing, as the restore guide does, and don't import from a server other apps write to.
+- **`lodestar import-bitmagnet`** still works, as the old name for `lodestar import start --source bitmagnet`. If it left a cursor file, the new job carries on from it once.
+
+**Taking an import back.** Cancel the job, then remove what it imported:
+```bash
+lodestar import cancel 1
+lodestar import remove 1
+```
+- `remove` asks first; `--yes` skips the question.
+- **It deletes only what that job alone added.** It keeps a torrent another import also brought in, one Lodestar's crawler has found since, and one you've favourited, labelled, noted or put in a collection.
+- **Filter decisions stay.** A torrent the filters removed during the import stays removed.
+- **A paused job can't be removed:** cancel it first, so it can't later resume past what was removed.
+- **Start Lodestar afterwards.** The removed torrents leave search when it starts.
 
 ## 8. Troubleshooting
 

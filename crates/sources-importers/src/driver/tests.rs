@@ -99,6 +99,7 @@ fn opts<'a>(source: SourceId, engine: &'a Engine, stop: &'a AtomicBool) -> Optio
         stop,
         limit: None,
         now,
+        progress: None,
     }
 }
 
@@ -581,4 +582,53 @@ fn changes_between_batches_stop_the_run_truthfully() {
         (Control::Blocked, 2, 1_000)
     );
     assert!(j.counters.conserved());
+}
+
+/// The pilots' pass line (IMP-4b decisions file): 100,000 synthetic
+/// Magnetico torrents, three files each, into a file-backed store through
+/// the full filter. Run it in release, on its own:
+/// `cargo test --release -p lodestar-sources-importers -- --ignored throughput --nocapture`.
+#[test]
+#[ignore = "a measurement: run in release, see the decisions file"]
+fn throughput_on_a_synthetic_100k_source() {
+    const N: u32 = 100_000;
+    let dir = tempfile::tempdir().unwrap();
+    let rows: Vec<TorrentRow> = (1..=N)
+        .map(|i| TorrentRow {
+            name: Value::Text(format!(
+                "Some.Show.S01E{:02}.1080p.WEB.h264-GROUP {i}",
+                i % 24
+            )),
+            ..TorrentRow::good(
+                i,
+                &[
+                    ("Show/ep.mkv", 1_000_000),
+                    ("Show/ep.nfo", 900),
+                    ("Show/Sample/s.mkv", 50_000),
+                ],
+            )
+        })
+        .collect();
+    let path = fixture(dir.path(), "a.sqlite3", &rows);
+    let source_bytes = std::fs::metadata(&path).unwrap().len();
+    let db = dir.path().join("lodestar.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let source = store.register_source(magnetico::ADAPTER, "1", NOW).unwrap();
+    let engine = engine();
+    let stop = AtomicBool::new(false);
+    let mut a = adapter(&path);
+    let id = create(&mut store, &a);
+    let started = std::time::Instant::now();
+    let r = block_on(run(&mut store, id, &mut a, &opts(source, &engine, &stop))).unwrap();
+    let secs = started.elapsed().as_secs_f64();
+    store.checkpoint().unwrap();
+    assert_eq!((r.ended, r.counters.new), (Ended::Exhausted, u64::from(N)));
+    let store_bytes = std::fs::metadata(&db).unwrap().len();
+    println!(
+        "throughput: {N} torrents in {secs:.1} s = {:.0}/s; source {} MiB, store {} MiB = {} B a torrent",
+        f64::from(N) / secs,
+        source_bytes >> 20,
+        store_bytes >> 20,
+        store_bytes / u64::from(N)
+    );
 }

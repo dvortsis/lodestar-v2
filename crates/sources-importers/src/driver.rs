@@ -203,7 +203,7 @@ impl std::fmt::Debug for Filter<'_> {
 }
 
 /// What a run may do besides reading.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Options<'a> {
     /// The adapter's registered source ([`Store::register_source`] under
     /// the adapter's name).
@@ -217,6 +217,18 @@ pub struct Options<'a> {
     pub limit: Option<u64>,
     /// The clock, in Unix seconds.
     pub now: fn() -> i64,
+    /// Called after each committed batch with the job's counters.
+    pub progress: Option<&'a dyn Fn(&ImportCounters)>,
+}
+
+impl std::fmt::Debug for Options<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("source", &self.source)
+            .field("filter", &self.filter)
+            .field("limit", &self.limit)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How a run ended.
@@ -510,6 +522,9 @@ pub async fn run(
                 report.batches += 1;
                 report.records += records.len() as u64;
                 report.counters = counters;
+                if let Some(p) = opts.progress {
+                    p(&counters);
+                }
                 for (label, count) in &batch.findings {
                     *report.findings.entry(label).or_default() += count;
                 }

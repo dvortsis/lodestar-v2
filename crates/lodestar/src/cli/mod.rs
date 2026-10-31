@@ -9,12 +9,15 @@
 //! - `reindex`: rebuild the search index at the next start;
 //! - `rollup --repair`: recount the Insights rollups from the store,
 //!   server stopped;
-//! - `stats`: counts, sizes and the index's state, read-only.
+//! - `stats`: counts, sizes and the index's state, read-only;
+//! - `import`: bring a Magnetico or Bitmagnet database in (IMP-4), with
+//!   `import-bitmagnet` kept as its old name.
 //!
 //! Each refuses while B-update's rollback journal exists (§12.2), and the
 //! offline ones refuse while anything has the store open ([`lock`]).
 
 mod backup;
+mod import;
 mod lock;
 mod reindex;
 mod rollback;
@@ -72,8 +75,10 @@ pub enum Command {
     },
     /// Exit 0 if the local instance answers /healthz, 1 otherwise
     Healthcheck,
-    /// Import a bitmagnet database (read-only, resumable); run it while
-    /// the server is stopped
+    /// Import a Magnetico or Bitmagnet database: inspect, start, status,
+    /// pause, resume, cancel, remove (see `lodestar import --help`)
+    Import(import::ImportArgs),
+    /// The old name for `lodestar import start --source bitmagnet`
     ImportBitmagnet(ImportBitmagnetArgs),
     /// Show the blocklist catalog ([subscriptions] catalog keys)
     Lists,
@@ -187,8 +192,8 @@ pub fn parse() -> Cli {
     Cli::parse()
 }
 
-/// Runs a maintenance command; `serve`, `healthcheck`, `import-bitmagnet`
-/// and `lists` are the binary's own (main.rs).
+/// Runs a maintenance command; `serve`, `healthcheck` and `lists` are the
+/// binary's own (main.rs).
 /// `dropped` is what the PUID/PGID drop did, logged once the config (and
 /// so the log filter) is loaded.
 pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Report) -> ExitCode {
@@ -225,10 +230,11 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Reindex => ("reindex", reindex::run(&config)),
         Command::Stats(a) => ("stats", stats::run(&config, a.json)),
         Command::Rollup(a) => ("rollup", rollup::run(&config, a.since)),
-        Command::Serve { .. }
-        | Command::Healthcheck
-        | Command::ImportBitmagnet(_)
-        | Command::Lists => unreachable!("main.rs runs these"),
+        Command::Import(a) => ("import", import::run(&config, a)),
+        Command::ImportBitmagnet(a) => ("import-bitmagnet", import::legacy(&config, a)),
+        Command::Serve { .. } | Command::Healthcheck | Command::Lists => {
+            unreachable!("main.rs runs these")
+        }
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,

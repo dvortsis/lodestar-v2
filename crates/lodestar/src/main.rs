@@ -34,8 +34,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use lodestar_store::Store;
-
 use crate::cli::Command;
 use crate::config::Config;
 use crate::services::{BoxError, Services};
@@ -68,6 +66,7 @@ fn main() -> ExitCode {
         } => None,
         Command::Serve { fixture: None, .. }
         | Command::ImportBitmagnet(_)
+        | Command::Import(_)
         | Command::Backup(_)
         | Command::Rollback(_)
         | Command::Vacuum
@@ -112,35 +111,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::ImportBitmagnet(args) => {
-            let config = match load(config_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("config: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            if let Err(e) = cli::util::refuse_during_update_rollback(&config.data_dir) {
-                eprintln!("lodestar import-bitmagnet: {e}");
-                return ExitCode::from(3);
-            }
-            init_logging(&config.log);
-            dropped.log(&config.data_dir);
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("starting the runtime: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            match runtime.block_on(import_bitmagnet(config, args)) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => command_failed("import-bitmagnet", &*e),
-            }
-        }
         Command::Serve {
             fixture: Some(dir), ..
         } => fixture::serve(dir, config_path.as_deref()),
@@ -283,60 +253,6 @@ async fn serve_as(config: Config, child: Supervised) -> Result<Option<u8>, BoxEr
         return Err(format!("restarting: {}", system::restart::reexec()).into());
     }
     Ok(None)
-}
-
-/// `lodestar import-bitmagnet`: everything from a bitmagnet database into
-/// the store; the server indexes it and re-fetches incomplete file lists
-/// on its next start.
-async fn import_bitmagnet(config: Config, args: cli::ImportBitmagnetArgs) -> Result<(), BoxError> {
-    use lodestar_sources_importers::bitmagnet;
-    let mut settings = bitmagnet::Settings::new(&args.host, &args.dbname, &args.user);
-    settings.port = args.port;
-    settings.tls = if args.allow_plaintext_loopback {
-        bitmagnet::Tls::PlaintextLoopback
-    } else {
-        bitmagnet::Tls::Verify {
-            ca_file: args.ca_file,
-        }
-    };
-    settings.password = match &args.password_file {
-        Some(path) => {
-            if let Some(warning) = bitmagnet::password_file_warning(path) {
-                eprintln!("lodestar import-bitmagnet: {warning}");
-            }
-            Some(bitmagnet::Password::from_file(path)?)
-        }
-        None => bitmagnet::Password::from_env(),
-    };
-    let limit = args.limit;
-    std::fs::create_dir_all(&config.data_dir)?;
-    let mut store = Store::open(config.db_path(), config.store_config())?;
-    let source =
-        store.register_source(bitmagnet::PLUGIN_ID, env!("CARGO_PKG_VERSION"), unix_now())?;
-    let opts = bitmagnet::Options {
-        cursor: Some(config.data_dir.join("import-bitmagnet.cursor")),
-        limit,
-        ..bitmagnet::Options::default()
-    };
-    let started = std::time::Instant::now();
-    let report = bitmagnet::import(&settings, &mut store, source, &opts, |r| {
-        if r.read % 100_000 < opts.batch as u64 {
-            lodestar_log::log_event!(
-                logging::events::APP_IMPORT_PROGRESS,
-                read = r.read,
-                new = r.new,
-                per_second = (r.read as f64 / started.elapsed().as_secs_f64()) as u64
-            );
-        }
-    })
-    .await?;
-    store.checkpoint()?;
-    println!(
-        "Imported from bitmagnet: {} read, {} new, {} already stored, {} skipped. \
-         {} have incomplete file lists and will be re-fetched by the server.",
-        report.read, report.new, report.existing, report.skipped, report.partial
-    );
-    Ok(())
 }
 
 fn unix_now() -> i64 {
