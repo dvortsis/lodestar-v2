@@ -5,11 +5,27 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { withDensity, type Route } from '$lib/shell/nav';
 	import NavIcon from './NavIcon.svelte';
-	import { groups, matchesScreen, screens } from './screens';
+	import { aboutOf, groups, matchesScreen, screens, type About } from './screens';
 	let { children }: { children: Snippet } = $props();
 	let query = $state('');
+	// The purpose lines the filter also matches load the first time it's used (screens.ts `about`);
+	// until then, and for a screen whose chunk fails, it matches titles only.
+	let abouts = $state.raw<Record<string, About>>({});
+	let asked = false;
+	$effect(() => {
+		if (asked || !query.trim()) return;
+		asked = true;
+		for (const screen of screens)
+			if (screen.about)
+				void aboutOf(screen).then(
+					(about) => (abouts = { ...abouts, [screen.id]: about }),
+					() => {}
+				);
+	});
 	const overview = $derived(page.url.pathname.replace(/\/$/, '') === '/settings');
-	const matches = $derived(screens.filter((screen) => matchesScreen(screen, query)));
+	const matches = $derived(
+		screens.filter((screen) => matchesScreen(screen, query, abouts[screen.id]))
+	);
 	const href = (path: string) => resolve(withDensity(path, page.url.searchParams) as Route);
 </script>
 

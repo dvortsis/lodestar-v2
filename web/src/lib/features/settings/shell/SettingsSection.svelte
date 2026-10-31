@@ -1,7 +1,10 @@
 <script lang="ts" module>
 	import type { Component } from 'svelte';
+	import type { About } from './screens';
 	// Loaded bodies, so a return visit renders at once instead of showing the loading line again.
 	const bodies = new WeakMap<object, Component>();
+	// Loaded purpose lines and notices (`Screen.about`), for the same reason.
+	const abouts = new WeakMap<object, About>();
 </script>
 
 <script lang="ts">
@@ -10,7 +13,7 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { loadSettingsIndex, type SettingsIndexView } from '../form/schema';
-	import { screens, screenFields, type Screen } from './screens';
+	import { aboutOf, screens, screenFields, type Screen } from './screens';
 	let { section }: { section: string } = $props();
 	let index = $state<SettingsIndexView>();
 	let failed = $state(false);
@@ -19,6 +22,10 @@
 	let SectionForm =
 		$state<Component<{ screen: Screen; fields: ReturnType<typeof screenFields> }>>();
 	let formFailed = $state(false);
+	// The screen's purpose line and notice: their own small chunk, loaded with the form, so the
+	// registry carries no long strings (screens.ts). Keyed by screen, so another screen's never
+	// shows; the purpose line shows once it's in, the notice with the form.
+	let about = $state<{ id: string; value: About }>();
 	const screen = $derived(screens.find((screen) => screen.id === section));
 	const generated = $derived(!!screen?.sections?.length);
 	const fields = $derived(screen && index ? screenFields(screen, index) : []);
@@ -44,6 +51,28 @@
 			},
 			() => {
 				if (live) failed = true;
+			}
+		);
+		return () => {
+			live = false;
+		};
+	});
+	$effect(() => {
+		const current = screen;
+		if (!current?.sections?.length || untrack(() => about?.id) === current.id) return;
+		const known = abouts.get(current);
+		if (known) {
+			about = { id: current.id, value: known };
+			return;
+		}
+		let live = true;
+		void aboutOf(current).then(
+			(value) => {
+				abouts.set(current, value);
+				if (live) about = { id: current.id, value };
+			},
+			() => {
+				if (live) formFailed = true;
 			}
 		);
 		return () => {
@@ -87,7 +116,8 @@
 	{#if !screen}
 		<p>{m.settings_shell_unavailable()}</p>
 	{:else}
-		{#if screen.purpose}<p class="text-muted-text">{screen.purpose()}</p>{/if}
+		{@const text = about?.id === screen.id ? about.value : undefined}
+		{#if text?.purpose}<p class="text-muted-text">{text.purpose()}</p>{/if}
 		{#if failed}
 			<Banner kind="error"
 				>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}
@@ -96,12 +126,12 @@
 			>
 		{:else if formFailed}
 			{@render chunkFailed()}
-		{:else if !index || !SectionForm}
+		{:else if !index || !SectionForm || !text}
 			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 		{:else if !fields.length}
 			<p>{m.settings_shell_server_unavailable()}</p>
 		{:else}
-			{#if screen.notice}<Banner>{screen.notice()}</Banner>{/if}
+			{#if text.notice}<Banner>{text.notice()}</Banner>{/if}
 			{#if fields.some((field) => field.danger && field.danger !== 'disruptive')}<Banner
 					>{m.settings_shell_guarded_readonly()}</Banner
 				>{/if}

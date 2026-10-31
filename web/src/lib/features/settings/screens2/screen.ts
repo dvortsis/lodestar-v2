@@ -4,12 +4,15 @@ import IconLanguage from '~icons/ph/translate';
 import { m } from '$lib/paraglide/messages.js';
 import type { Screen } from '../shell/screens';
 
+// One lazy module for the purpose lines, shared by every entry (one preload list).
+const about = () => import('./about').then((mod) => mod.ABOUT);
+
 export const screens: Screen[] = [
 	{
 		id: 'language',
 		group: 'preferences',
 		title: () => m.settings_screen_language_title(),
-		purpose: () => m.settings_screen_language_purpose(),
+		about,
 		icon: IconLanguage,
 		load: () => import('./LanguageScreen.svelte')
 	},
@@ -19,7 +22,7 @@ export const screens: Screen[] = [
 		id: 'trackers',
 		group: 'library',
 		title: () => m.settings_screen_trackers_title(),
-		purpose: () => m.settings_screen_trackers_purpose(),
+		about,
 		iconLoad: () => import('./icons').then((m) => ({ default: m.trackers })),
 		sections: ['trackers']
 	},
