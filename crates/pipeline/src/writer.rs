@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
-use lodestar_filter::{Action, Decision, Engine, Facts, Handle, HeldSet, Item, Sealer, Verdict};
+use lodestar_filter::{
+    Action, Decision, Engine, Facts, Handle, HeldSet, Item, Pending, Sealer, Verdict,
+};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::hot::flags as hot_flags;
@@ -120,14 +122,24 @@ pub(crate) struct Writer {
     /// check, so tests can land a release or a rule change exactly there.
     #[cfg(test)]
     pub(crate) between: Option<fn(&mut Store, &HeldSet, &Handle)>,
+    /// Runs right after a batch marks its hashes pending, before its store
+    /// commit, in every arm (`2026-10-31-B-held-precommit.md`).
+    #[cfg(test)]
+    pub(crate) marked: Option<MarkedHook>,
 }
 
-/// After a batch that held `hashes` committed: tells intake to refuse
-/// those the store still holds, asked under `HeldSet`'s lock, so a
-/// release since isn't undone and a hold is never missed
-/// (`2026-10-31-B-held-exact.md`). On a store error every hash goes in.
-fn hold_committed(store: &Store, held: &HeldSet, hashes: &[[u8; 20]]) {
-    if let Err(e) = held.insert_held(hashes, |hs| store.held_among(hs)) {
+/// A test hook run with the hashes a batch just marked pending.
+#[cfg(test)]
+pub(crate) type MarkedHook = fn(&HeldSet, &Handle, &[[u8; 20]]);
+
+/// After a batch that marked `pending` committed or rolled back: tells
+/// intake to refuse those the store holds and clears the marks, asked
+/// under `HeldSet`'s lock, so a release since isn't undone and a hold is
+/// never missed (`2026-10-31-B-held-exact.md`,
+/// `2026-10-31-B-held-precommit.md`). On a store error every hash goes in.
+fn hold_committed(store: &Store, pending: Option<Pending<'_>>) {
+    let Some(pending) = pending else { return };
+    if let Err(e) = pending.settle(|hs| store.held_among(hs)) {
         lodestar_log::log_event!(
             crate::log_events::ENRICHMENT_FAILED,
             error = crate::log_events::store_error(&e)
@@ -411,7 +423,27 @@ impl Writer {
         let now = unix_now();
         let quarantine_until = now + self.cfg.quarantine_secs;
         let backfill_until = self.cfg.backfill_until;
+        // Marked before the commit, so intake refuses them from before the
+        // store holds them (`2026-10-31-B-held-precommit.md`).
+        let holding: Vec<[u8; 20]> = committing
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.verdict.as_ref().map(|h| h.action),
+                    Some(Action::Drop | Action::Quarantine)
+                )
+            })
+            .flat_map(|c| c.results.torrent.swarm_hashes().map(|h| h.0))
+            .collect();
+        let held = self.held.clone();
+        #[cfg(test)]
+        let (between, marked, filter) = (self.between, self.marked, self.filter.clone());
         let (store, committing, touches, swarm, result) = tokio::task::spawn_blocking(move || {
+            let pending = (!holding.is_empty()).then(|| held.pend(&holding));
+            #[cfg(test)]
+            if let (Some(f), Some(_)) = (marked, &pending) {
+                f(&held, &filter, &holding);
+            }
             let result = transaction(
                 &mut store,
                 &committing,
@@ -425,6 +457,12 @@ impl Writer {
                 quarantine_until,
                 class_gen,
             );
+            #[cfg(test)]
+            if let (Some(f), Some(_)) = (between, &pending) {
+                f(&mut store, &held, &filter);
+            }
+            // Committed or rolled back: the store says which hold.
+            hold_committed(&store, pending);
             (store, committing, touches, swarm, result)
         })
         .await
@@ -515,9 +553,6 @@ impl Writer {
             };
             counter.fetch_add(1, Ordering::Relaxed);
             self.gate.exclude(excluded, 1);
-            for h in c.results.torrent.swarm_hashes() {
-                self.held.insert(h.0);
-            }
             self.coordinator
                 .lost(&c.results.key, c.results.token, Loss::Blocked);
         }
@@ -575,7 +610,7 @@ impl Writer {
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
         #[cfg(test)]
-        let between = self.between;
+        let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
             let ctx = crate::enrich::Backfill {
@@ -583,16 +618,28 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
             };
-            let result = crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, &ctx);
-            if let Ok(Some(b)) = &result
-                && !b.rejected
-            {
+            let pending = std::cell::RefCell::new(None);
+            let mark = |hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
                 #[cfg(test)]
-                if let Some(f) = between {
-                    f(&mut store, &held, &filter);
+                if let Some(f) = marked {
+                    f(&held, &filter, hs);
                 }
-                hold_committed(&store, &held, &b.held);
+            };
+            let result = crate::enrich::enrich_stored_marking(
+                &mut store,
+                after,
+                BACKFILL_BATCH,
+                &ctx,
+                &mark,
+            );
+            let pending = pending.into_inner();
+            #[cfg(test)]
+            if let (Some(f), Some(_)) = (between, &pending) {
+                f(&mut store, &held, &filter);
             }
+            // Committed, rejected or failed: the store says which hold.
+            hold_committed(&store, pending);
             (store, result)
         })
         .await
@@ -646,7 +693,7 @@ impl Writer {
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
         #[cfg(test)]
-        let between = self.between;
+        let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
             let ctx = crate::enrich::Backfill {
@@ -654,23 +701,30 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
             };
-            let result = crate::enrich::refile_candidates(
+            let pending = std::cell::RefCell::new(None);
+            let mark = |hs: &[[u8; 20]]| {
+                *pending.borrow_mut() = Some(held.pend(hs));
+                #[cfg(test)]
+                if let Some(f) = marked {
+                    f(&held, &filter, hs);
+                }
+            };
+            let result = crate::enrich::refile_candidates_marking(
                 &mut store,
                 &filter,
                 version,
                 after,
                 REFILE_BATCH,
                 &ctx,
+                &mark,
             );
-            if let Ok(Some(b)) = &result
-                && !b.rejected
-            {
-                #[cfg(test)]
-                if let Some(f) = between {
-                    f(&mut store, &held, &filter);
-                }
-                hold_committed(&store, &held, &b.hashes);
+            let pending = pending.into_inner();
+            #[cfg(test)]
+            if let (Some(f), Some(_)) = (between, &pending) {
+                f(&mut store, &held, &filter);
             }
+            // Committed, rejected or failed: the store says which hold.
+            hold_committed(&store, pending);
             (store, result)
         })
         .await
@@ -1052,6 +1106,7 @@ mod tests {
             health: None,
             candidates: Default::default(),
             between: None,
+            marked: None,
         }
     }
 
@@ -1594,6 +1649,94 @@ mod tests {
                 agrees_with_store(&w);
             }
         }
+    }
+
+    /// Intake refuses a batch's hashes from its pre-commit mark to its
+    /// reconcile, in all three writer arms: a release reconciling before
+    /// the commit (M, reading the store as not holding them) can't make
+    /// them fetchable, and after the reconcile the set equals the store's
+    /// with no mark left (`2026-10-31-B-held-precommit.md`).
+    #[tokio::test]
+    async fn a_new_hold_is_refused_from_before_its_commit() {
+        use std::sync::atomic::AtomicUsize;
+        static HOOKS: AtomicUsize = AtomicUsize::new(0);
+        fn marked(held: &HeldSet, _: &Handle, hs: &[[u8; 20]]) {
+            HOOKS.fetch_add(1, Ordering::Relaxed);
+            assert!(!hs.is_empty() && held.pending_len() > 0);
+            // M before C: the store doesn't hold them yet.
+            held.remove_released::<()>(hs, |c| Ok(vec![false; c.len()]))
+                .unwrap();
+            for h in hs {
+                assert!(held.contains(h), "pending, so refused");
+                assert!(!held.snapshot().contains(h), "M removed the old entry");
+            }
+        }
+        fn between(store: &mut Store, held: &HeldSet, _: &Handle) {
+            HOOKS.fetch_add(1, Ordering::Relaxed);
+            assert!(held.pending_len() > 0, "C done, Q+I not yet");
+            for (h, _) in store.filter_state().unwrap().held {
+                assert!(held.contains(&h), "committed, so refused");
+            }
+        }
+        for arm in 0..3 {
+            HOOKS.store(0, Ordering::Relaxed);
+            let (mut w, stored) = arms_writer();
+            w.marked = Some(marked);
+            w.between = Some(between);
+            let h = match arm {
+                0 => {
+                    w.held.insert([1; 20]);
+                    w.refile_candidates().await;
+                    [1; 20]
+                }
+                1 => {
+                    w.held.insert(stored);
+                    w.backfill().await;
+                    stored
+                }
+                _ => {
+                    // The ingest commit, of a fetch the class rule holds.
+                    let funnel = Arc::new(FunnelCounts::default());
+                    let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+                    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+                    w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+                    w.filter
+                        .update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+                    w.marked = Some(marked);
+                    w.between = Some(between);
+                    let r = leased(&w.coordinator, results());
+                    let h = r.key.0;
+                    w.held.insert(h);
+                    let (retry, _rx) = mpsc::channel(4);
+                    w.commit(vec![r], vec![], vec![], vec![], &retry).await;
+                    assert_eq!(w.stats.quarantined.load(Ordering::Relaxed), 1);
+                    h
+                }
+            };
+            assert_eq!(
+                HOOKS.load(Ordering::Relaxed),
+                2,
+                "arm {arm}: marked before C"
+            );
+            assert!(w.held.contains(&h), "arm {arm}: held");
+            assert_eq!(w.held.pending_len(), 0, "arm {arm}: no mark left");
+            agrees_with_store(&w);
+        }
+    }
+
+    /// A batch the store refuses (the rules moved between its mark and its
+    /// commit) leaves no mark and no hold behind: the store holds nothing.
+    #[tokio::test]
+    async fn a_rolled_back_batch_leaves_nothing_refused() {
+        fn change_rules(_: &HeldSet, filter: &Handle, _: &[[u8; 20]]) {
+            filter.update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+        }
+        let (mut w, _) = arms_writer();
+        w.marked = Some(change_rules);
+        w.refile_candidates().await;
+        assert!(!w.held.contains(&[1; 20]), "rolled back, so fetchable");
+        assert_eq!(w.held.pending_len(), 0);
+        agrees_with_store(&w);
     }
 
     /// Without anything in between, both arms hold, and the set equals

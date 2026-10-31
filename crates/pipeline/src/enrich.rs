@@ -83,6 +83,19 @@ pub fn enrich_stored_with(
     limit: usize,
     ctx: &Backfill<'_>,
 ) -> Result<Option<Backfilled>, lodestar_store::Error> {
+    enrich_stored_marking(store, after, limit, ctx, &|_| {})
+}
+
+/// [`enrich_stored_with`], calling `mark` with the swarm hashes the batch
+/// will hold just before its store write, so intake can refuse them from
+/// before the commit (`2026-10-31-B-held-precommit.md`).
+pub fn enrich_stored_marking(
+    store: &mut Store,
+    after: i64,
+    limit: usize,
+    ctx: &Backfill<'_>,
+    mark: &dyn Fn(&[[u8; 20]]),
+) -> Result<Option<Backfilled>, lodestar_store::Error> {
     // The generation first, then the rules: rules read after a change
     // are never older than the generation they're written under.
     let generation = store.class_gen()?;
@@ -110,6 +123,14 @@ pub fn enrich_stored_with(
         .iter()
         .map(|r| r.refiled(now, now + ctx.quarantine_secs))
         .collect();
+    let held: Vec<[u8; 20]> = refilings
+        .iter()
+        .filter(|r| r.held.is_some())
+        .flat_map(|r| r.hashes.iter().copied())
+        .collect();
+    if !held.is_empty() {
+        mark(&held);
+    }
     let Some(enriched) = store.set_enrichments_at(generation, &batch, &refiled)? else {
         return Ok(Some(Backfilled {
             last: after,
@@ -117,11 +138,6 @@ pub fn enrich_stored_with(
             ..Backfilled::default()
         }));
     };
-    let held = refilings
-        .iter()
-        .filter(|r| r.held.is_some())
-        .flat_map(|r| r.hashes.iter().copied())
-        .collect();
     Ok(Some(Backfilled {
         last,
         enriched,
@@ -162,6 +178,20 @@ pub fn refile_candidates(
     after: i64,
     limit: usize,
     ctx: &Backfill<'_>,
+) -> Result<Option<CandidatesRefiled>, lodestar_store::Error> {
+    refile_candidates_marking(store, handle, version, after, limit, ctx, &|_| {})
+}
+
+/// [`refile_candidates`], calling `mark` with the swarm hashes the batch
+/// will hold just before its store write (`2026-10-31-B-held-precommit.md`).
+pub fn refile_candidates_marking(
+    store: &mut Store,
+    handle: &Handle,
+    version: u64,
+    after: i64,
+    limit: usize,
+    ctx: &Backfill<'_>,
+    mark: &dyn Fn(&[[u8; 20]]),
 ) -> Result<Option<CandidatesRefiled>, lodestar_store::Error> {
     let rejected = || {
         Ok(Some(CandidatesRefiled {
@@ -205,6 +235,8 @@ pub fn refile_candidates(
     let written = if refiled.is_empty() {
         Some(Vec::new())
     } else {
+        let marked: Vec<[u8; 20]> = held.iter().flat_map(|h| h.hashes.iter().copied()).collect();
+        mark(&marked);
         store.refile_import_candidates(&refiled, now, || handle.current().version == version)?
     };
     let Some(ids) = written else {

@@ -1831,6 +1831,23 @@ async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
         *b = u8::from_str_radix(&hash[2 * i..2 * i + 2], 16).unwrap();
     }
     assert!(f.api.held.contains(&raw), "refused at intake");
+    // Marked before the commit and reconciled after it: no mark left, and
+    // the set is the store's (`2026-10-31-B-held-precommit.md`).
+    assert_eq!(f.api.held.pending_len(), 0);
+    {
+        let held: std::collections::HashSet<_> = f
+            .api
+            .store
+            .lock()
+            .unwrap()
+            .filter_state()
+            .unwrap()
+            .held
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(f.api.held.snapshot(), held);
+    }
 
     // An adult hold: held by the Adult-only core only because you said
     // it's adult.
