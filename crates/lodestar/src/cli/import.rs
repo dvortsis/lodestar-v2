@@ -755,7 +755,7 @@ async fn resume(
 /// (`filter_load`): the store's floor, subscribed lists, CS-1 entries and
 /// switches, packs and your rules. The classification rules' generation
 /// is read first, as the writer does.
-pub(crate) fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
+fn filter(config: &Config, store: &mut Store) -> Outcome<(Arc<Engine>, i64)> {
     let class_gen = store.class_gen().map_err(failed("reading the rules"))?;
     let files = config
         .blocklist_files()
@@ -1034,8 +1034,8 @@ fn status(config: &Config, id: Option<i64>, json: bool) -> Outcome {
         );
         if j.phase == Phase::Indexing && j.control == Control::Running {
             println!(
-                "  Waiting for the search index: the job completes once the running server has \
-                 indexed these torrents."
+                "  Waiting for the search index: the job completes once the running server, with \
+                 search on, has indexed these torrents."
             );
         }
     }

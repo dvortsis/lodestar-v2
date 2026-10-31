@@ -763,7 +763,8 @@ impl Store {
     /// waits until it runs again. Only reads when nothing is due (one
     /// pass over `import_jobs`, a row per job), so it's cheap to call
     /// often.
-    /// Returns the jobs completed.
+    /// Returns the jobs completed, or the first error once every due job
+    /// was tried.
     pub fn complete_indexed_import_jobs(&mut self, at: i64) -> Result<Vec<ImportJob>> {
         let due: Vec<(i64, i64)> = {
             let mut stmt = self.conn.prepare_cached(
@@ -779,16 +780,19 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?
         };
         let mut done = Vec::with_capacity(due.len());
+        let mut failed = None;
         for (id, revision) in due {
             match self.set_import_phase(id, revision, Phase::Complete, at) {
                 Ok(job) => done.push(job),
                 // Paused, cancelled or removed since it was read: the
                 // revision guard refuses, and the job waits or is gone.
                 Err(Error::Invalid(_) | Error::NotFound(_)) => {}
-                Err(e) => return Err(e),
+                // One job's error doesn't hold the others back; the
+                // first is returned once every job was tried.
+                Err(e) => failed = failed.or(Some(e)),
             }
         }
-        Ok(done)
+        failed.map_or(Ok(done), Err)
     }
 
     /// Pauses a running or blocked job. It stays paused across restarts.

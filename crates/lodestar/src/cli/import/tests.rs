@@ -481,12 +481,14 @@ async fn the_cli_and_the_server_build_the_same_filter() {
     let blocklist = dir.path().join("floor.txt");
     let hex: String = hash_of(1).iter().map(|b| format!("{b:02x}")).collect();
     std::fs::write(&blocklist, format!("{hex}\n")).unwrap();
-    let mut config = data(&dir.path().join("data"));
-    config.blocklist.files = vec![blocklist];
     let floor_files = vec![FileInfo::new(vec!["a.bin".into()], 100 << 20)];
     let sig = payload_sig(&floor_files).unwrap();
     assert!(sig.specific);
-    {
+    // Each path gets its own data folder, seeded alike, so neither reads
+    // what the other synced into the store.
+    let seeded = |name: &str| {
+        let mut config = data(&dir.path().join(name));
+        config.blocklist.files = vec![blocklist.clone()];
         let mut store = Store::open(config.db_path(), config.store_config()).unwrap();
         let origin = lodestar_filter::Origin::Confirmed as u8;
         store.add_cs_hashes(&[hash_of(2)], origin, 1).unwrap();
@@ -494,7 +496,9 @@ async fn the_cli_and_the_server_build_the_same_filter() {
         store
             .add_rule("badword", lodestar_filter::Action::Drop.code(), None, None)
             .unwrap();
-    }
+        config
+    };
+    let (config, cli_config) = (seeded("server"), seeded("cli"));
 
     // The server's start: the shared sync on its own connection, then
     // the pipeline loads the rest from the store.
@@ -526,7 +530,7 @@ async fn the_cli_and_the_server_build_the_same_filter() {
         handle.current()
     };
     let (cli, _) = {
-        let config = config.clone();
+        let config = cli_config;
         tokio::task::spawn_blocking(move || {
             let mut store = Store::open(config.db_path(), config.store_config()).unwrap();
             filter(&config, &mut store).unwrap()

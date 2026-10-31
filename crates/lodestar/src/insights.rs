@@ -388,9 +388,10 @@ async fn record(
             // days' sums are out of date. Read them again.
             let sealed = api::sealed_hour(crate::unix_now(), insights.seal_floor());
             let stale = r.first_cohort.filter(|&c| c < sealed);
-            insights.bump();
             // The watermark moved: an import it passed is searchable now.
+            // Before the bump, so a reader that saw it sees the jobs too.
             let store = finish_imports(store).await?;
+            insights.bump();
             let store = if r.imported > 0 {
                 mirror_state(insights, store).await?
             } else {
@@ -1084,7 +1085,12 @@ mod tests {
         };
         let start = std::time::Instant::now();
         let until = |done: &dyn Fn() -> bool| {
-            assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+            let phases: Vec<_> = ids.iter().map(|&id| phase(id)).collect();
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "timed out: phases {phases:?}, recorded {}",
+                insights.last_recorded()
+            );
             !done()
         };
         while until(&|| phase(ids[0]) == Phase::Complete) {
