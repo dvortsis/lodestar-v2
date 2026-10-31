@@ -11,6 +11,7 @@
 //! outstanding is capped by the [`Intensity`] preset.
 
 mod actor;
+mod hints;
 mod lookup;
 mod peers;
 mod proof;
@@ -151,6 +152,10 @@ pub struct Config {
     /// the full suppression after every start. It needs `state_path` and
     /// no `sample_start_delay` override; without them it acts as off.
     pub restart: Option<RestartConfig>,
+    /// CR-1a-H's responder hints (`dht.responder_hints`): a lookup first
+    /// asks the BEP 51 responder that listed its hash. Off allocates no
+    /// hint state and sends nothing differently.
+    pub responder_hints: bool,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -216,6 +221,7 @@ impl Default for Config {
             allow_private: false,
             paused: false,
             restart: None,
+            responder_hints: false,
         }
     }
 }
@@ -305,6 +311,25 @@ pub struct Stats {
     pub scrapes_with_responders: AtomicU64,
     /// Packets to or from a blocklisted address, not sent or ignored.
     pub denied: AtomicU64,
+    /// Sum of owned requests' run times, admission to answer, in ms.
+    pub peer_lookup_millis: AtomicU64,
+    /// Owned requests answered to a waiting caller: the time sum's count.
+    pub peer_lookups_answered: AtomicU64,
+    /// CR-1a-H: hints kept, and refused at capture by [`HintReject`].
+    pub hints_captured: AtomicU64,
+    pub hint_capture_rejected: [AtomicU64; HintReject::ALL.len()],
+    /// Hints that reached the TTL before any lookup asked for them.
+    pub hints_expired: AtomicU64,
+    /// Hinted `get_peers` sent, and hints not used by [`HintFallback`].
+    pub hint_queries: AtomicU64,
+    pub hint_fallbacks: [AtomicU64; HintFallback::ALL.len()],
+    /// Hinted replies that carried peers.
+    pub hint_useful: AtomicU64,
+    /// Ordinary lookup queries skipped by a retained per-IP restriction.
+    pub hint_guard_skips: AtomicU64,
+    /// Gauges: hashes holding hints, and IPs the guard restricts.
+    pub hints_held: AtomicU64,
+    pub hint_guard_entries: AtomicU64,
 }
 
 impl Stats {
@@ -373,6 +398,111 @@ impl Stats {
             scrapes_dropped: g(&self.scrapes_dropped),
             scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
+            peer_lookup_millis: g(&self.peer_lookup_millis),
+            peer_lookups_answered: g(&self.peer_lookups_answered),
+            hints_captured: g(&self.hints_captured),
+            hint_capture_rejected: std::array::from_fn(|i| g(&self.hint_capture_rejected[i])),
+            hints_expired: g(&self.hints_expired),
+            hint_queries: g(&self.hint_queries),
+            hint_fallbacks: std::array::from_fn(|i| g(&self.hint_fallbacks[i])),
+            hint_useful: g(&self.hint_useful),
+            hint_guard_skips: g(&self.hint_guard_skips),
+            hints_held: g(&self.hints_held),
+            hint_guard_entries: g(&self.hint_guard_entries),
+        }
+    }
+}
+
+/// Why a captured hint wasn't used and the lookup went straight to
+/// ordinary routing (`dht_hint_fallbacks_total{reason}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintFallback {
+    /// Its age reached the TTL.
+    Expired,
+    /// Port 0 or an unsupported address encoding, at send.
+    Invalid,
+    /// A private, reserved or blocklisted address, at send.
+    Private,
+    /// No socket of its address family.
+    Family,
+    /// The per-IP guard, the query rate or the outstanding cap.
+    Throttled,
+    /// The per-IP guard is full of unexpired restrictions.
+    GuardFull,
+    /// The socket refused the send.
+    SendFailed,
+}
+
+impl HintFallback {
+    pub const ALL: [HintFallback; 7] = [
+        HintFallback::Expired,
+        HintFallback::Invalid,
+        HintFallback::Private,
+        HintFallback::Family,
+        HintFallback::Throttled,
+        HintFallback::GuardFull,
+        HintFallback::SendFailed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HintFallback::Expired => "expired",
+            HintFallback::Invalid => "invalid",
+            HintFallback::Private => "private",
+            HintFallback::Family => "family",
+            HintFallback::Throttled => "throttled",
+            HintFallback::GuardFull => "guard_full",
+            HintFallback::SendFailed => "send_failed",
+        }
+    }
+
+    pub(crate) fn count(self, stats: &Stats) {
+        Stats::inc(&stats.hint_fallbacks[self as usize]);
+    }
+}
+
+/// Why a responder wasn't kept as a hint
+/// (`dht_hint_capture_rejected_total{reason}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintReject {
+    /// Port 0 or an unsupported address encoding.
+    Invalid,
+    /// A private, reserved or blocklisted address.
+    Private,
+    /// No socket of its address family.
+    Family,
+    /// The hint table is full of fresh hints.
+    Full,
+}
+
+impl HintReject {
+    pub const ALL: [HintReject; 4] = [
+        HintReject::Invalid,
+        HintReject::Private,
+        HintReject::Family,
+        HintReject::Full,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HintReject::Invalid => "invalid",
+            HintReject::Private => "private",
+            HintReject::Family => "family",
+            HintReject::Full => "full",
+        }
+    }
+
+    pub(crate) fn count(self, stats: &Stats) {
+        Stats::inc(&stats.hint_capture_rejected[self as usize]);
+    }
+
+    /// The same check failing at send.
+    pub(crate) fn at_send(self) -> HintFallback {
+        match self {
+            HintReject::Invalid => HintFallback::Invalid,
+            HintReject::Private => HintFallback::Private,
+            HintReject::Family => HintFallback::Family,
+            HintReject::Full => HintFallback::GuardFull,
         }
     }
 }
@@ -551,6 +681,19 @@ pub struct StatsSnapshot {
     pub scrapes_dropped: u64,
     pub scrapes_with_responders: u64,
     pub denied: u64,
+    pub peer_lookup_millis: u64,
+    pub peer_lookups_answered: u64,
+    pub hints_captured: u64,
+    /// By [`HintReject::ALL`].
+    pub hint_capture_rejected: [u64; HintReject::ALL.len()],
+    pub hints_expired: u64,
+    pub hint_queries: u64,
+    /// By [`HintFallback::ALL`].
+    pub hint_fallbacks: [u64; HintFallback::ALL.len()],
+    pub hint_useful: u64,
+    pub hint_guard_skips: u64,
+    pub hints_held: u64,
+    pub hint_guard_entries: u64,
 }
 
 impl StatsSnapshot {

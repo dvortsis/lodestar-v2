@@ -180,6 +180,10 @@ pub struct Dht {
     /// 32 request permits, and queues for one otherwise. Off by default
     /// (docs/decisions/2026-10-30-CR-ADM.md); not in the Settings UI.
     pub coordinated_admission: bool,
+    /// CR-1a-H: a peer lookup first asks the BEP 51 responder that listed
+    /// the hash. Off by default (docs/decisions/2026-10-30-CR-1a-H.md);
+    /// not in the Settings UI.
+    pub responder_hints: bool,
 }
 
 impl Default for Dht {
@@ -197,6 +201,7 @@ impl Default for Dht {
             safe_restart: false,
             restart_witness_dir: None,
             coordinated_admission: false,
+            responder_hints: false,
         }
     }
 }
@@ -661,6 +666,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_COORDINATED_ADMISSION", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_RESPONDER_HINTS") {
+            config.dht.responder_hints = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_RESPONDER_HINTS", &v))?;
+        }
         // Packaging sets this (the Docker image, the systemd unit).
         if let Some(v) = env("LODESTAR_DHT_WITNESS_DIR").filter(|v| !v.is_empty()) {
             config.dht.restart_witness_dir = Some(PathBuf::from(v));
@@ -719,6 +729,7 @@ impl Config {
                 .dht
                 .safe_restart
                 .then(|| dht::RestartConfig::new(self.dht.restart_witness_dir.clone())),
+            responder_hints: self.dht.responder_hints,
             ..dht::Config::default()
         }
     }
@@ -1216,6 +1227,37 @@ mod tests {
             Some(PathBuf::from("/var/lib/lodestar-witness"))
         );
         assert!(c.layers.in_env("LODESTAR_DHT_WITNESS_DIR"));
+    }
+
+    #[test]
+    fn responder_hints_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.responder_hints);
+        assert!(!c.dht_config().responder_hints);
+        let env = |k: &str| (k == "LODESTAR_DHT_RESPONDER_HINTS").then(|| "true".to_string());
+        assert!(
+            Config::load(None, env)
+                .unwrap()
+                .dht_config()
+                .responder_hints
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nresponder_hints = true\n").unwrap();
+        assert!(
+            Config::load(Some(&path), no_env)
+                .unwrap()
+                .dht_config()
+                .responder_hints
+        );
+        std::fs::write(&path, "[dht]\nresponder_hints = \"yes\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_RESPONDER_HINTS").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
     }
 
     #[test]

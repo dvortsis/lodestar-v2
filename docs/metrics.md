@@ -697,6 +697,26 @@ These series count only with `dht.coordinated_admission` on ([the decision](deci
 
 With one finder (the DHT), `fetch_admission_grants_total` = `dht_peer_permit_returns_total` + `fetch_admission_permit_returns_total{boundary=~"finder_full|finder_closed"}` + `fetch_admission_permits_in_use`. A persistent gap means a leaked or duplicated permit; a brief one is a permit in transit between the pool and the actor. At shutdown, a request still in the DHT plugin's channel returns its permit without being counted.
 
+## Responder hints (CR-1a-H, 2026-10-30)
+
+These series count only with `dht.responder_hints` on ([the decision](decisions/2026-10-30-CR-1a-H.md)); with it off they're exported and stay 0, except `dht_peer_lookup_seconds_total` and `dht_peer_lookups_answered_total`, which always count. A hint is the BEP 51 responder that listed a hash new to us, kept for one direct `get_peers` before ordinary routing. No series has an infohash or endpoint label. Counts are per family leg, not per logical lookup.
+
+| Series | Meaning |
+|---|---|
+| `dht_peer_lookup_seconds_total` | Run time of owned peer requests answered to a waiting caller, admission to answer. |
+| `dht_peer_lookups_answered_total` | Those requests. The ratio of the two rates is the mean lookup duration. |
+| `dht_hints_captured_total` | Responders kept as a hint (at most one per address family per hash, never refreshed). |
+| `dht_hint_capture_rejected_total{reason}` | Responders not kept: `invalid` (port 0, unsupported encoding), `private` (private, reserved or blocklisted), `family` (no socket of its family), `full` (20,000 hashes already hold fresh hints). |
+| `dht_hints_expired_total` | Hints that reached 60 s before any lookup asked for their hash, dropped unused. |
+| `dht_hint_queries_total` | Hinted `get_peers` sent. |
+| `dht_hint_fallbacks_total{reason}` | Hints a leg didn't use, going straight to ordinary routing: `expired` (age ≥ 60 s), `invalid`, `private`, `family` (the checks repeated at send), `throttled` (the per-IP guard, the request's RPC budget, the query rate or the outstanding cap), `guard_full` (20,000 restrictions, until the next tick prunes expired ones), `send_failed`. |
+| `dht_hint_useful_total` | Hinted replies that carried peers. |
+| `dht_hint_guard_skips_total` | Ordinary lookup queries not sent because their IP holds a retained hint restriction. |
+| `dht_hints_held` | Gauge: hashes holding hints now. |
+| `dht_hint_guard_entries` | Gauge: IPs with a retained restriction now (at most 20,000). |
+
+`dht_hint_queries_total` + the sum of `dht_hint_fallbacks_total` = hints found at a leg's start. `dht_hint_useful_total` ≤ `dht_hint_queries_total`.
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

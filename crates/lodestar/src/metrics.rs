@@ -459,6 +459,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             );
         }
         render_permit_returns(&mut o, d);
+        render_hints(&mut o, d);
         o.one(
             "dht_peer_cancelled_total",
             "counter",
@@ -950,6 +951,89 @@ fn render_permit_returns(o: &mut Out, d: &StatsSnapshot) {
     }
 }
 
+/// CR-1a-H's responder-hint families (docs/metrics.md).
+fn render_hints(o: &mut Out, d: &StatsSnapshot) {
+    use lodestar_dht::node::{HintFallback, HintReject};
+    o.one(
+        "dht_peer_lookup_seconds_total",
+        "counter",
+        "Run time of completed peer requests, admission to answer.",
+        format_args!("{:.3}", d.peer_lookup_millis as f64 / 1000.0),
+    );
+    o.one(
+        "dht_peer_lookups_answered_total",
+        "counter",
+        "Peer requests answered to a waiting caller.",
+        d.peer_lookups_answered,
+    );
+    o.one(
+        "dht_hints_captured_total",
+        "counter",
+        "Sample responders kept as hints for a new hash.",
+        d.hints_captured,
+    );
+    o.family(
+        "dht_hint_capture_rejected_total",
+        "counter",
+        "Sample responders not kept as hints, by reason.",
+    );
+    for (i, why) in HintReject::ALL.iter().enumerate() {
+        o.value(
+            "dht_hint_capture_rejected_total",
+            &format!("reason=\"{}\"", why.as_str()),
+            d.hint_capture_rejected[i],
+        );
+    }
+    o.one(
+        "dht_hints_expired_total",
+        "counter",
+        "Hints that expired before any lookup asked for them.",
+        d.hints_expired,
+    );
+    o.one(
+        "dht_hint_queries_total",
+        "counter",
+        "Direct get_peers sent to a hinted responder.",
+        d.hint_queries,
+    );
+    o.family(
+        "dht_hint_fallbacks_total",
+        "counter",
+        "Hints not used, the leg going straight to ordinary routing, by reason.",
+    );
+    for (i, why) in HintFallback::ALL.iter().enumerate() {
+        o.value(
+            "dht_hint_fallbacks_total",
+            &format!("reason=\"{}\"", why.as_str()),
+            d.hint_fallbacks[i],
+        );
+    }
+    o.one(
+        "dht_hint_useful_total",
+        "counter",
+        "Hinted get_peers replies that carried peers.",
+        d.hint_useful,
+    );
+    o.one(
+        "dht_hint_guard_skips_total",
+        "counter",
+        "Ordinary lookup queries skipped by a retained hint restriction.",
+        d.hint_guard_skips,
+    );
+    o.one(
+        "dht_hints_held",
+        "gauge",
+        "Hashes holding responder hints.",
+        d.hints_held,
+    );
+    o.one(
+        "dht_hint_guard_entries",
+        "gauge",
+        "IPs the hint guard restricts.",
+        d.hint_guard_entries,
+    );
+}
+
 /// CR-0d's restart-proof families (docs/metrics.md).
 fn render_restart(o: &mut Out, d: &StatsSnapshot) {
     // CR-0d: why sampling is or isn't running, one label set to 1.
@@ -1206,6 +1290,50 @@ mod tests {
         render_admission(&mut o, &p);
         render_permit_returns(&mut o, &d);
         let out = o.0;
+        let mut d = StatsSnapshot {
+            peer_lookup_millis: 2_500,
+            peer_lookups_answered: 10,
+            hints_captured: 1,
+            hints_expired: 9,
+            hint_queries: 2,
+            hint_useful: 3,
+            hint_guard_skips: 4,
+            hints_held: 5,
+            hint_guard_entries: 6,
+            ..StatsSnapshot::default()
+        };
+        d.hint_capture_rejected[3] = 7;
+        d.hint_fallbacks[5] = 8;
+        let mut h = Out(String::new());
+        render_hints(&mut h, &d);
+        for line in [
+            "lodestar_dht_peer_lookup_seconds_total 2.500",
+            "lodestar_dht_peer_lookups_answered_total 10",
+            "lodestar_dht_hints_captured_total 1",
+            "lodestar_dht_hints_expired_total 9",
+            "lodestar_dht_hint_capture_rejected_total{reason=\"full\"} 7",
+            "lodestar_dht_hint_capture_rejected_total{reason=\"invalid\"} 0",
+            "lodestar_dht_hint_queries_total 2",
+            "lodestar_dht_hint_fallbacks_total{reason=\"guard_full\"} 8",
+            "lodestar_dht_hint_fallbacks_total{reason=\"send_failed\"} 0",
+            "lodestar_dht_hint_useful_total 3",
+            "lodestar_dht_hint_guard_skips_total 4",
+            "# TYPE lodestar_dht_hints_held gauge",
+            "lodestar_dht_hints_held 5",
+            "lodestar_dht_hint_guard_entries 6",
+        ] {
+            assert!(
+                h.0.lines().any(|l| l == line),
+                "missing {line:?} in\n{}",
+                h.0
+            );
+        }
+        assert_eq!(
+            h.0.lines()
+                .filter(|l| l.contains("fallbacks_total{"))
+                .count(),
+            7
+        );
         for line in [
             "# TYPE lodestar_fetch_admission_waits_total counter",
             "lodestar_fetch_admission_waits_total{kind=\"requeue\"} 3",
