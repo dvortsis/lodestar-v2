@@ -1698,13 +1698,13 @@
    "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus"
   },
   "X-import-refile-2": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnB6RBrxKAxCzxkfcCy",
-   "pr": null,
+   "pr": 282,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus"
+   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2502,7 +2502,9 @@
   "hints.rs compact_order: make the amortised bound unconditional (next_compact = max(ORDER_CAPACITY, 2*len)) or skip duplicate push_back (#279 review 1)",
   "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
-  "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline"
+  "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
+  "store/src/filter.rs: per-hash hold query so the writer can re-check a hash after a rule change without the HeldSet window (#282)",
+  "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
