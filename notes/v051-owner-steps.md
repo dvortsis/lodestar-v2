@@ -71,3 +71,14 @@ Push the evidence the same way as `soak/cr0-final`: aggregates and hourly data o
 - 10,423 torrents (+1,460 since warmup began, 1 h 50 m: about 800/hour, 13.3/min).
 - Working set 646.53 MiB, private 487.66 MiB (sample 443: 627.5 / 493.2).
 - Baseline ends 2026-11-01T03:37:39Z, then the gluetun leg (≥ 2 h measured) on the same digest and volume.
+
+## v0.5.1-rc.2 release checksums (2026-10-31)
+
+SHA256SUMS from the draft release for tag `v0.5.1-rc.2` (`6be95525`). The minisign signature verifies against `packaging/keys/lodestar-release.pub`, and all four files match.
+
+```text
+26590dd87ee9e073a9491ec7610e3335e50b92b36bfe6fae4bee88cf01d09aca  lodestar-0.5.1-rc.2-aarch64-linux-musl.tar.gz
+6348fad5e6466beaca93e9573af3810c39c84e3f3097af533e572818e3e2a92a  lodestar-0.5.1-rc.2-x86_64-linux-musl.tar.gz
+bf32947908d10995d9faa58d28e237409e3df9f4d848b8cc7f17d739f6d959d3  lodestar-0.5.1-rc.2-x86_64-windows-portable.zip
+99c2fbcb92401297f477e1f15e625dd5366278e78a2453eda14dd3afffca0dd8  lodestar-0.5.1-x86_64.msi
+```
