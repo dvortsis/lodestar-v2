@@ -876,13 +876,8 @@
       "catch_ups": 1
     },
     "S-settings-2": {
-      "status": "pending",
-      "model": "sonnet",
-      "session": null,
-      "pr": null,
-      "attempt": 0,
-      "review_rounds": 0,
-      "notes": "from #86"
+      "status": "running",
+      "notes": "2026-10-31T03:47Z brief briefs/S-settings-2.md; Sonnet session_01MMjhnBtMgHN6ooQJhwduav; /security-review (secrets)"
     },
     "M-security-settings": {
       "status": "pending",
