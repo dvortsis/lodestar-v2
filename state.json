@@ -1722,7 +1722,7 @@
       "pr": 288,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review | 16:47Z launched Opus | 17:43Z PR #288 head 9e2ecc06 (+1931 lines, accepted). Runner: revoke w/o password ok (B12); keys/proxy load after first paint not behind Show (change before review); local date helper ok; shared size-gate edit provisional (stricter). Reviewer starts on new head | 17:49Z head c3b8c27a (keys/proxy after first paint; Security 31.39/45 KB). Reviewer session_01MMjhnAQpCbujDp4woSR6sJ w/ security-review; subscribed.",
+      "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges | carry #285 optional: extract securityLeave() pure fn + table test vs form/leave leaveDecision; ChangePassword ask() .catch -> location.assign(to.href) | 16:50Z brief briefs/M-security-settings-2.md; security review | 16:47Z launched Opus | 17:43Z PR #288 head 9e2ecc06 (+1931 lines, accepted). Runner: revoke w/o password ok (B12); keys/proxy load after first paint not behind Show (change before review); local date helper ok; shared size-gate edit provisional (stricter). Reviewer starts on new head | 17:49Z head c3b8c27a (keys/proxy after first paint; Security 31.39/45 KB). Reviewer session_01MMjhnAQpCbujDp4woSR6sJ w/ security-review; subscribed. | 18:01Z E2E core fail = logs.keyboard scroll race (not this PR); fix rides S-logs-2; cite \u00a72.18 if it recurs.",
       "reviewer": "session_01MMjhnAQpCbujDp4woSR6sJ"
     },
     "X-polish-1031c": {
@@ -1750,7 +1750,7 @@
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued"
+      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it."
     },
     "X-requeue-2": {
       "status": "running",
