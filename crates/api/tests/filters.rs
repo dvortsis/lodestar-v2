@@ -1133,11 +1133,93 @@ async fn a_rule_added_with_search_off_is_requeued_once_search_is_on() {
     assert!(pending(&on).is_empty());
 }
 
-/// The pending re-queues, as stored.
+/// Past 64 distinct pending texts with search off, the list becomes one
+/// full re-mark: it survives starts with search off and a shutdown, and
+/// the first start with search on marks every stored torrent.
+#[tokio::test]
+async fn past_the_cap_the_pending_requeues_become_a_full_remark() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let (a, _) = store_torrent(&f, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
+    let (b, _) = store_torrent(&f, "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30);
+    enrich_all(&mut f.api.store.lock().unwrap());
+    for i in 0..=64 {
+        let (status, _, body) = call(
+            &f.app,
+            post(
+                "/api/v1/classify/rules",
+                Some(&c),
+                json!({ "query": format!("word{i}"), "adult": true }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let id = body["id"].as_i64().unwrap();
+        let (status, _, body) = call(
+            &f.app,
+            post(
+                "/api/v1/classify/rules/remove",
+                Some(&c),
+                json!({ "id": id }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if i < 64 {
+            assert_eq!(pending(&f.api).len(), i + 1, "one entry per text");
+        }
+    }
+    assert_eq!(pending(&f.api), ["<all>"]);
+
+    // Starts with search off keep it.
+    assert_eq!(f.api.resume_requeues(0).unwrap(), 0);
+    let off = restart(&f, None);
+    assert_eq!(off.resume_requeues(0).unwrap(), 0);
+    assert_eq!(pending(&off), ["<all>"]);
+    drop(off);
+
+    let index = SearchIndex::in_memory().unwrap();
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+    }
+    let index: lodestar_search::SearchHandle = index.into();
+    let marked = |api: &FiltersApi| {
+        api.store
+            .lock()
+            .unwrap()
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+    };
+    // A shutdown before it's done keeps it.
+    let stopping = restart(&f, Some(index.clone()));
+    stopping.shutdown.cancel();
+    assert!(stopping.resume_requeues(0).is_err());
+    assert_eq!(pending(&stopping), ["<all>"]);
+    drop(stopping);
+
+    // Search on: every stored torrent is marked, and it's cleared.
+    let on = restart(&f, Some(index));
+    assert!(marked(&on).is_empty());
+    assert_eq!(on.resume_requeues(0).unwrap(), 1);
+    assert_eq!(marked(&on), vec![a, b], "every stored torrent");
+    assert!(on.reenrich.load(std::sync::atomic::Ordering::Acquire));
+    assert!(pending(&on).is_empty());
+}
+
+/// The pending re-queues, as stored; a full re-mark reads as `<all>`.
 fn pending(api: &FiltersApi) -> Vec<String> {
-    api.store
-        .lock()
+    let store = api.store.lock().unwrap();
+    if store
+        .setting_text("classify.requeue_all")
         .unwrap()
+        .is_some()
+    {
+        return vec!["<all>".into()];
+    }
+    store
         .setting_text("classify.requeue_pending")
         .unwrap()
         .map(|t| serde_json::from_str(&t).unwrap())

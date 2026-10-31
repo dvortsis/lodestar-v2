@@ -201,8 +201,12 @@ def summarize(rows, max_gap, intensity="balanced"):
             "measurement_coverage": {name: 0 for name in GAUGES},
             "health_failed_samples": sum(r.get("health") != 200 for r in selected),
             "metrics_failed_samples": sum(not usable(r) for r in selected),
+            # Working set, kept under its old key for older consumers; in
+            # Docker mode it's the cgroup's, page cache included.
             "rss_max_mib": max((r["working_set_bytes"] / 2**20 for r in selected
                                 if number(r.get("working_set_bytes"))), default=None),
+            "private_max_mib": max((r["private_bytes"] / 2**20 for r in selected
+                                    if number(r.get("private_bytes"))), default=None),
             "rss_change_mib": None,
             "rss_change_mib_per_hour": None,
             "bounds": {name: {"limit": limits[name], "observed_samples": 0, "max": None,
@@ -592,12 +596,14 @@ def markdown(report):
            f"Run: {report['run_state']}. Baseline: {report['baseline_status']}.", "",
            f"Intensity: {report['intensity']}.", "",
            f"Stop reason: {report['stop_reason'] or 'not recorded'}. Clean shutdown: {shutdown}.", "",
-           "| Phase | Samples | Span (h) | Covered (h) | Health failures | Metrics failures | Peak RSS (MiB) | RSS change (MiB/h) |",
-           "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+           ("| Phase | Samples | Span (h) | Covered (h) | Health failures | Metrics failures "
+            "| Peak working set (MiB) | Peak private (MiB) | RSS change (MiB/h) |"),
+           "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for phase, p in report["phases"].items():
         out.append(f"| {phase} | {p['samples']} | {fmt(p['observed_span_seconds']/3600)} | "
                    f"{fmt(p['valid_interval_seconds']/3600)} | {p['health_failed_samples']} | "
-                   f"{p['metrics_failed_samples']} | {fmt(p['rss_max_mib'])} | {fmt(p['rss_change_mib_per_hour'])} |")
+                   f"{p['metrics_failed_samples']} | {fmt(p['rss_max_mib'])} | {fmt(p['private_max_mib'])} | "
+                   f"{fmt(p['rss_change_mib_per_hour'])} |")
     fit = report["memory_fit"]
     verdict = {None: "not judged", True: "meets the bar", False: "misses the bar"}[fit["meets_bar"]]
     ci = fit["ci95_mib_per_hour"]

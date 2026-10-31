@@ -50,6 +50,21 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(report["baseline_status"], "completion_unknown")
         self.assertNotIn("never-export-this", json.dumps(report))
 
+    def test_peak_working_set_and_private_are_separate_columns(self):
+        self.rows([sample(0, 100, private_bytes=20 * 2**20), sample(60, 101, private_bytes=24 * 2**20),
+                   sample(120, 102)])
+        report = analyze(self.root)
+        baseline = report["phases"]["baseline"]
+        self.assertEqual(baseline["rss_max_mib"], 34)  # working set, old key kept
+        self.assertEqual(baseline["private_max_mib"], 24)
+        text = markdown(report)
+        self.assertIn("| Peak working set (MiB) | Peak private (MiB) | RSS change (MiB/h) |", text)
+        self.assertNotIn("Peak RSS", text)
+        self.assertIn("| 34.00 | 24.00 |", text)
+        # Rows without private_bytes (older collectors): unknown, not zero.
+        self.rows([sample(0, 100), sample(60, 101)])
+        self.assertIsNone(analyze(self.root)["phases"]["baseline"]["private_max_mib"])
+
     def test_missing_baseline_and_metrics_are_unknown(self):
         self.rows([sample(0, phase="startup")])
         report = analyze(self.root)
