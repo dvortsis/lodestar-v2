@@ -2637,7 +2637,10 @@ impl FiltersApi {
     /// shutdown stops the loop, and what's left stays for the next start.
     /// A full re-mark is one re-queue. Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
-        let pending = match pending_requeues(&self.store())? {
+        // Read under its own statement: the store guard mustn't live on
+        // into the re-queue, which takes the lock itself.
+        let pending = pending_requeues(&self.store())?;
+        let pending = match pending {
             Pending::All => return Ok(self.requeue_all()?.map_or(0, |_| 1)),
             Pending::Texts(list) => list,
         };
