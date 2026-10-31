@@ -454,8 +454,8 @@
       "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6) | 02:59Z #254 head 2221d1d6 ready; reviewer session_01MMjhnBdpKEkRUctbRZBxoY | 03:23Z review CHANGES: bulk copy fallback flattens lines (input) -> textarea fallback; axe test missing wait; riding: export toast wording, decisions notes. Reviewer kept for delta | 03:46Z merged #254 (2f9d4dd8); sessions archived"
     },
     "S-search-6": {
-      "status": "running",
-      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4 | 02:12Z runner chose (a): cards, rebuild banner, Clear all on empty, live banner via torrents event + throttled limit-1 requery (>=30 s, visible only, exact totals only); deferred per-clause recovery, cold start, query-scoped live | 02:59Z size: wait for #254 (raises results-lazy to 43.2 KB), merge main, re-measure; no limit change if it fits"
+      "status": "review",
+      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4 | 02:12Z runner chose (a): cards, rebuild banner, Clear all on empty, live banner via torrents event + throttled limit-1 requery (>=30 s, visible only, exact totals only); deferred per-clause recovery, cold start, query-scoped live | 02:59Z size: wait for #254 (raises results-lazy to 43.2 KB), merge main, re-measure; no limit change if it fits | 04:28Z #256 ready head 52368405 (CI green; results-lazy 43.06/43.2); fresh reviewer launched"
     },
     "S-compare": {
       "status": "merged",
