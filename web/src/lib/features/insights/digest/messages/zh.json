@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"insights_digest_preview_title": "预览",
+	"insights_digest_preview_help": "按已保存的设置显示此刻会发送的摘要。未保存的更改不包含在内。",
+	"insights_digest_preview_button": "预览摘要",
+	"insights_digest_preview_refresh": "刷新预览",
+	"insights_digest_preview_loading": "正在加载预览…",
+	"insights_digest_preview_error": "无法加载预览:{message}",
+	"insights_digest_preview_off": "摘要已关闭。请在上方选择每日或每周并保存以开启。",
+	"insights_digest_preview_subject": "主题:{subject}",
+	"insights_digest_preview_label": "摘要文本"
+}

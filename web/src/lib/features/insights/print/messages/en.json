@@ -1,0 +1,7 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"insights_print_title": "Insights",
+	"insights_print_range": "Range: {range}",
+	"insights_print_compare": "compared with the period before",
+	"insights_print_footer": "{url} · Generated {time}"
+}
