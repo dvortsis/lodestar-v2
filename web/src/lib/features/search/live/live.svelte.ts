@@ -7,6 +7,7 @@ import { api, isAbort, latest } from '$lib/api/client';
 import type { ResultsQuery } from '../results/results.svelte';
 
 export const INTERVAL_MS = 30_000;
+const DRIFT_MS = 1_000;
 
 export interface LiveDeps {
 	/** The query the rows answer, and its shown total (null: no rows, or not ready). */
@@ -58,7 +59,8 @@ export function createLive(deps: LiveDeps) {
 			// A change the throttle held back is said by a later check, not lost.
 			if (fresh > 0 && fresh !== sinceTotal) {
 				const t = Date.now();
-				if (t - lastAnnounced >= (deps.intervalMs ?? INTERVAL_MS)) {
+				// Slack for timer drift: a tick a little early must not wait a whole interval more.
+				if (t - lastAnnounced >= (deps.intervalMs ?? INTERVAL_MS) - DRIFT_MS) {
 					lastAnnounced = t;
 					sinceTotal = fresh;
 					deps.announce?.(fresh);

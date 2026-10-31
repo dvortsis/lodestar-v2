@@ -33,6 +33,24 @@
 	// tile) and the actions, which are 44 px under a coarse pointer.
 	const height = tokenPx('--row-height-comfortable', 64) * 4;
 
+	// One tab stop: the list gives its active row tabindex 0, but the roving item here is the tile.
+	$effect(() => {
+		if (!host) return;
+		const el = host;
+		const demote = () =>
+			el
+				.querySelectorAll('[role="row"][tabindex="0"]')
+				.forEach((r) => r.setAttribute('tabindex', '-1'));
+		demote();
+		const mo = new MutationObserver(demote);
+		mo.observe(el, {
+			subtree: true,
+			childList: true,
+			attributes: true,
+			attributeFilter: ['tabindex']
+		});
+		return () => mo.disconnect();
+	});
 	$effect(() => {
 		const el = host?.closest<HTMLElement>('.rp-list');
 		return el ? observeColumns(el, (n) => (cols = n)) : undefined;

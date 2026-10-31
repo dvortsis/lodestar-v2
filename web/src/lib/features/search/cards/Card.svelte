@@ -58,7 +58,7 @@
 </script>
 
 <!-- The tile is the open target, as the row is for the list; its buttons stay buttons. -->
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 <div
 	class="cd-tile"
 	role="group"

@@ -389,7 +389,7 @@
 		</Banner>
 	{/if}
 
-	{#if ext.Live}<ext.Live bind:said />{/if}
+	{#if ext.Live}<ext.Live bind:said list={nav} />{/if}
 
 	{#if waiting}
 		<!-- the parse is out: see `waiting` -->

@@ -1,0 +1,21 @@
+/* The live banner (LiveHost.svelte). A plain sheet imported with the lazy chunk: token variables
+   only. It is not a status region on purpose: the panel's throttled announcement is the one voice. */
+.lv-banner {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 3);
+	padding: calc(var(--spacing) * 3);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+}
+.lv-icon {
+	flex: none;
+	width: calc(var(--spacing) * 5);
+	height: calc(var(--spacing) * 5);
+}
+.lv-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}

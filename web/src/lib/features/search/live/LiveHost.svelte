@@ -7,17 +7,25 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { search } from '$lib/state/search.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
-	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import Info from '~icons/ph/info-bold';
 	import { selection } from '../bulk/selection.svelte';
 	import { results, type ResultsQuery } from '../results/results.svelte';
 	import { createLive } from './live.svelte';
+	import './live.css';
 
 	// `said` is the panel's polite region: cleared first so the same text is read again.
-	let { said = $bindable('') }: { said?: string } = $props();
+	// `list` is the panel's navigable list (its `moveTo` keeps the active row in step with focus).
+	let {
+		said = $bindable(''),
+		list
+	}: { said?: string; list: () => { moveTo: (i: number) => void } | undefined } = $props();
+	let frame = 0;
 	const announce = (text: string) => {
 		said = '';
-		requestAnimationFrame(() => (said = text));
+		cancelAnimationFrame(frame);
+		frame = requestAnimationFrame(() => (said = text));
 	};
+	$effect(() => () => cancelAnimationFrame(frame));
 	const locale = $derived(currentLocale());
 	const grid = () => document.querySelector<HTMLElement>('#results [role="grid"]');
 
@@ -52,34 +60,31 @@
 		void results.shown;
 		live.reset();
 	});
-	/** Show: the list again from the top, with focus on its first row (the button has gone). */
+	/** Show: the list again from the top; the list moves its own active row and focus there. */
 	async function show() {
 		await results.reload();
 		live.reset();
 		const g = grid();
 		if (g) g.scrollTop = 0;
 		await tick();
-		requestAnimationFrame(() =>
-			g?.querySelector<HTMLElement>('[data-index="0"]')?.focus({ preventScroll: true })
-		);
+		list()?.moveTo(0);
 	}
 </script>
 
+<!-- Not a live region: the throttled announcement (the panel's) is the only thing spoken. -->
 {#if live.fresh > 0}
-	<Banner kind="info" class="rp-banner">
-		<!-- Hidden from the region: the throttled announcement (the panel's) says it; Show names the count. -->
-		<span aria-hidden="true" data-testid="results-live"
+	<div class="lv-banner rp-banner">
+		<Info class="lv-icon" aria-hidden="true" />
+		<span class="lv-text" data-testid="results-live"
 			>{live.fresh === 1
 				? m.search_live_new_one()
 				: m.search_live_new_other({ count: formatCount(live.fresh, locale) })}</span
 		>
-		{#snippet action()}
-			<Button
-				dense
-				data-testid="results-live-show"
-				aria-label={m.search_live_show_label({ count: formatCount(live.fresh, locale) })}
-				onclick={() => void show()}>{m.search_live_show()}</Button
-			>
-		{/snippet}
-	</Banner>
+		<Button
+			dense
+			data-testid="results-live-show"
+			aria-label={m.search_live_show_label({ count: formatCount(live.fresh, locale) })}
+			onclick={() => void show()}>{m.search_live_show()}</Button
+		>
+	</div>
 {/if}

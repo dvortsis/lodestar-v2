@@ -3,7 +3,7 @@
 // poll runs without waiting; every wait is a condition.
 import type { Request } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
-import { body, expect, hits, row, server } from './search-results.fixtures';
+import { body, expect, hits, row, rowOf, server } from './search-results.fixtures';
 import { test } from './support/test';
 
 function live(mock: Parameters<typeof server>[0], state: { total: number; approx: boolean }) {
@@ -11,7 +11,7 @@ function live(mock: Parameters<typeof server>[0], state: { total: number; approx
 	mock.on('searchPost', (async (request: Request) => {
 		const sent = request.postDataJSON() as { limit: number };
 		if (sent.limit === 1) return body([], { total: state.total, total_approx: state.approx });
-		return body(hits(10), { total: state.total });
+		return body(hits(state.total), { total: state.total });
 	}) as never);
 }
 
@@ -41,6 +41,11 @@ test('new results show a banner; the list holds until Show reloads it', async ({
 	await page.keyboard.press('Enter');
 	await expect(banner).toHaveCount(0);
 	await expect.poll(() => mock.calls('searchPost').length).toBeGreaterThan(calls);
+	// The list owns its active row after Show: focus is on the first row, and j goes to the second
+	// (not to the row the old active index pointed at, past the new results).
+	await expect(rowOf(page, 1)).toBeFocused();
+	await page.keyboard.press('j');
+	await expect(rowOf(page, 2)).toBeFocused();
 });
 
 test('an approximate total says nothing', async ({ page, go, mock }) => {
