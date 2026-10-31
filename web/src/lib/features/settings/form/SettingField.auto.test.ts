@@ -42,15 +42,19 @@ async function open(mode: 'staged' | 'instant', saved = '') {
 describe.each(['staged', 'instant'] as const)(
 	'Automatic with an empty automatic value (%s)',
 	(mode) => {
-		it('stays off when turned off, even after its save', async () => {
-			const { root, toggle } = await open(mode);
-			expect(toggle().checked).toBe(true);
-			await fireEvent.click(toggle());
-			await until(() => expect(toggle().checked).toBe(false));
-			await within(root).findByRole('textbox');
-			if (mode === 'instant') await new Promise((r) => setTimeout(r, 700)); // past the debounce
+		it('stays off when turned off, and when turned off again after being on', async () => {
+			const { root, toggle } = await open(mode, 'de');
 			expect(toggle().checked).toBe(false);
-			expect(within(root).getByRole('textbox')).toBeTruthy();
+			await fireEvent.click(toggle()); // on: stages "" (and in instant mode saves it)
+			await until(() => expect(toggle().checked).toBe(true));
+			if (mode === 'instant')
+				await until(() => expect(server.calls.filter((c) => c.method === 'PATCH')).toHaveLength(1));
+			else await form.save();
+			await until(() => expect(form.dirtyCount).toBe(0));
+			await fireEvent.click(toggle()); // off again, the value still equal to the automatic one
+			await within(root).findByRole('textbox');
+			await until(() => expect(form.dirtyCount).toBe(0));
+			expect(toggle().checked).toBe(false);
 		});
 
 		it('comes back on when Undo or Discard restores the empty value', async () => {

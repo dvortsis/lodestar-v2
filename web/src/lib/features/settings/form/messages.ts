@@ -16,11 +16,16 @@ type MessageMap = Record<string, () => string>;
 const maps: Record<string, MessageMap> = {};
 const loading: Record<string, Promise<void>> = {};
 
-/** The map a server key lives in: its section, or `group` for a group heading. */
-const mapOf = (key: string) => key.split('.')[1] ?? '';
+/**
+ * The map a message id lives in: the id's first word after `settings_`, as the generator splits
+ * it (`message-map.gen.ts`), so a section named `web_ui` shares one map with `web_*`.
+ */
+const mapOf = (id: string) => id.split('_')[1] ?? '';
 
 /** The maps a form of these sections needs: theirs, and the group headings'. */
-const needed = (sections: Iterable<string>) => [...new Set([...sections, 'group'])];
+const needed = (sections: Iterable<string>) => [
+	...new Set([...[...sections].map((s) => mapOf(`settings_${messageId(s)}`)), 'group'])
+];
 
 /** Whether these sections' maps are all in, so a render can't show a raw key. */
 export function messagesLoaded(sections: Iterable<string>): boolean {
@@ -52,7 +57,7 @@ export async function loadMessages(sections: Iterable<string>): Promise<void> {
 /** `settings.crawler.intensity.label` → that message's text, or undefined when it's missing. */
 export function settingText(key: string): string | undefined {
 	const id = messageId(key);
-	const map = maps[mapOf(key)];
+	const map = maps[mapOf(id)];
 	return map && Object.hasOwn(map, id) ? map[id]!() : undefined;
 }
 

@@ -41,6 +41,11 @@ describe('settingText', () => {
 		expect(settingText('settings.transport.utp.label')).toBeTypeOf('string');
 	});
 
+	it('puts a section with an underscore in the same map the generator does', async () => {
+		expect(messagesLoaded(['web_ui'])).toBe(messagesLoaded(['web']));
+		expect(settingText('settings.web_ui.nothing.label')).toBeUndefined();
+	});
+
 	it('never resolves a message outside settings_*', () => {
 		expect(settingText('common.dismiss')).toBeUndefined();
 		expect(settingText('auth.back')).toBeUndefined();

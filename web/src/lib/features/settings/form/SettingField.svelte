@@ -73,12 +73,16 @@
 		untrack(() => {
 			if (v !== seen) arrived = v === spec.auto;
 			seen = v;
-			if (arrived && manual && clean) manual = arrived = false;
+			if (arrived && clean) {
+				manual = false;
+				arrived = false;
+			}
 		});
 	});
 
 	function setAutomatic(on: boolean) {
 		manual = !on;
+		arrived = false; // the user's own change is never an outside one
 		if (on) form.set(key, spec.auto);
 		else {
 			const n = Preview.part?.automaticNumber(f);
