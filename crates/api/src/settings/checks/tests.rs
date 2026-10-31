@@ -380,6 +380,133 @@ async fn a_missing_secret_with_nothing_saved_says_what_to_enter() {
     );
 }
 
+/// A plain SMTP server that offers AUTH PLAIN and keeps each command.
+async fn smtp(seen: Received) -> SocketAddr {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((sock, _)) = listener.accept().await {
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let (r, mut w) = sock.into_split();
+                let mut lines = BufReader::new(r).lines();
+                w.write_all(b"220 fake ESMTP\r\n").await.unwrap();
+                let mut data = false;
+                let mut body = String::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if data {
+                        if line == "." {
+                            data = false;
+                            seen.lock().unwrap().push(("DATA".into(), std::mem::take(&mut body)));
+                            w.write_all(b"250 queued\r\n").await.unwrap();
+                        } else {
+                            body.push_str(&line);
+                            body.push('\n');
+                        }
+                        continue;
+                    }
+                    let upper = line.to_ascii_uppercase();
+                    seen.lock().unwrap().push((line.clone(), String::new()));
+                    let reply: &[u8] = if upper.starts_with("EHLO") {
+                        b"250-fake\r\n250 AUTH PLAIN\r\n"
+                    } else if upper.starts_with("AUTH PLAIN") {
+                        b"235 ok\r\n"
+                    } else if upper == "DATA" {
+                        data = true;
+                        b"354 go\r\n"
+                    } else if upper == "QUIT" {
+                        w.write_all(b"221 bye\r\n").await.unwrap();
+                        break;
+                    } else {
+                        b"250 ok\r\n"
+                    };
+                    w.write_all(reply).await.unwrap();
+                }
+            });
+        }
+    });
+    addr
+}
+
+fn mail(port: u16, username: &str, password: Option<&str>) -> SettingsTest {
+    SettingsTest::Email(EmailDraft {
+        allow_private: true,
+        from: "lodestar@example.com".into(),
+        // A local name, so a login may cross plain SMTP to it.
+        host: "mail".into(),
+        password: password.map(str::to_string),
+        port,
+        security: EmailSecurity::None,
+        to: vec!["me@example.com".into()],
+        username: username.into(),
+    })
+}
+
+#[tokio::test]
+async fn email_sends_one_labelled_test_and_logs_in_with_the_saved_password() {
+    let seen = Received::default();
+    let addr = smtp(seen.clone()).await;
+    let r = run(mail(addr.port(), "", None), None, local()).await;
+    assert_eq!(code(&r), "ok", "{r:?}");
+    let got = seen.lock().unwrap().clone();
+    assert!(got.iter().any(|(c, _)| c == "RCPT TO:<me@example.com>"), "{got:?}");
+    let data = &got.iter().find(|(c, _)| c == "DATA" && !got.is_empty()).unwrap();
+    let message = &got.iter().rfind(|(c, _)| c == "DATA").unwrap().1;
+    assert!(message.contains("Lodestar test notification"), "{data:?}");
+    seen.lock().unwrap().clear();
+    // No password on screen: the saved one, for the saved server only.
+    let saved = || Secrets {
+        saved: vec![(
+            "notifications",
+            "email_password",
+            vec![
+                ("email_host", json!("mail")),
+                ("email_port", json!(addr.port())),
+                ("email_security", json!("none")),
+            ],
+            "pw",
+        )],
+        ..Default::default()
+    };
+    let r = run(mail(addr.port(), "me", None), api(saved()), local()).await;
+    assert_eq!(code(&r), "ok", "{r:?}");
+    // AUTH PLAIN of "\0me\0pw".
+    assert!(
+        seen.lock().unwrap().iter().any(|(c, _)| c == "AUTH PLAIN AG1lAHB3"),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+    let other = SettingsTest::Email(EmailDraft {
+        host: "elsewhere".into(),
+        ..match mail(addr.port(), "me", None) {
+            SettingsTest::Email(d) => d,
+            _ => unreachable!(),
+        }
+    });
+    let r = run(other, api(saved()), local()).await;
+    assert_eq!(code(&r), "invalid", "no saved password for another server: {r:?}");
+}
+
+#[tokio::test]
+async fn notification_channels_never_reach_loopback_even_when_private_is_allowed() {
+    for test in [
+        SettingsTest::Ntfy(NtfyDraft {
+            allow_private: true,
+            priority: 0,
+            token: None,
+            url: Some("http://ntfy.example/topic".into()),
+        }),
+        SettingsTest::Webhook(WebhookDraft {
+            allow_private: true,
+            url: Some("http://hooks.example/x".into()),
+        }),
+    ] {
+        let r = run(test, None, to("127.0.0.1")).await;
+        assert_eq!(code(&r), "blocked", "{r:?}");
+    }
+}
+
 #[test]
 fn every_kind_bounds_its_fields() {
     let long = "a".repeat(MAX_TEST_FIELD + 1);

@@ -189,8 +189,31 @@ async fn torznab(d: TorznabDraft, saved: &Saved, net: &Net) -> SettingsTestResul
             ok: true,
             version: info.version,
         },
-        Err(e) => test_failure(&e),
+        Err(e) => torznab_failure(&e),
     }
+}
+
+/// [`test_failure`]'s codes, in an indexer's words rather than a client's.
+fn torznab_failure(e: &ClientError) -> SettingsTestResult {
+    let mut r = test_failure(e);
+    let message = match e {
+        ClientError::Auth(_) => Some("The endpoint refused the API key.".to_string()),
+        ClientError::Rejected(why) => Some(match why.strip_prefix("HTTP ") {
+            Some(status) => format!(
+                "The address answered HTTP {}: it isn't a Torznab endpoint.",
+                status.chars().take_while(char::is_ascii_digit).collect::<String>()
+            ),
+            None => "The endpoint refused the request.".to_string(),
+        }),
+        ClientError::Protocol(_) => {
+            Some("The address didn't answer like a Torznab endpoint.".to_string())
+        }
+        _ => None,
+    };
+    if let (Some(m), Some(err)) = (message, r.error.as_mut()) {
+        err.message = m;
+    }
+    r
 }
 
 /// A secret on screen, else the saved one with no endpoint to match (a
@@ -297,6 +320,10 @@ async fn email(
                         vec![
                             ("email_host", Value::String(d.host)),
                             ("email_port", Value::from(d.port)),
+                            (
+                                "email_security",
+                                serde_json::to_value(d.security).unwrap_or(Value::Null),
+                            ),
                         ],
                     )
                     .await
@@ -307,9 +334,10 @@ async fn email(
             password: password.ok_or(missing("enter the password"))?,
         });
     }
-    let sender = match &net.resolver {
-        Some(r) => email::Email::with_resolver(&config, Arc::clone(r))?,
-        None => email::Email::new(&config)?,
+    let sender = match (&net.resolver, net.notify_policy) {
+        (Some(r), Some(policy)) => email::Email::with_policy(&config, policy, Arc::clone(r))?,
+        (Some(r), None) => email::Email::with_resolver(&config, Arc::clone(r))?,
+        (None, _) => email::Email::new(&config)?,
     };
     Ok(Box::new(sender))
 }
@@ -337,7 +365,9 @@ pub(crate) fn delivery_failure(e: &DeliveryError) -> SettingsTestResult {
     let code = match e {
         DeliveryError::Blocked(_) => "blocked",
         DeliveryError::InvalidEndpoint(_) => "invalid",
-        DeliveryError::Rejected { status: 401 | 403 } => "bad_credentials",
+        DeliveryError::Rejected { status: 401 | 403 } | DeliveryError::SmtpRejected { code: 535 } => {
+            "bad_credentials"
+        }
         DeliveryError::Rejected { .. } | DeliveryError::SmtpRejected { .. } => "rejected",
         DeliveryError::Unreachable => "unreachable",
         DeliveryError::Timeout => "timeout",

@@ -6,6 +6,12 @@
 //!   torrent while "Show adult content" is off is `adult_hidden`, so a
 //!   pasted hash doesn't get round the preference (§20.9). A quarantined
 //!   or tombstoned torrent isn't stored, so it's `not_found`.
+//! - **Never a private torrent** (BEP 27, or found only through a private
+//!   source, §18.7): `private`. A magnet with no trackers would make the
+//!   client look the hash up on the public DHT, leaking it.
+//! - **The magnet is built from the stored torrent,** never from the
+//!   request: a v1 hash and the same torrent's truncated v2 hash send it
+//!   once.
 //! - **Duplicates and partial sends** follow the adapters (§9): a torrent
 //!   already in the client counts as sent in a bulk send, and a lone one
 //!   is `duplicate`; a bulk send that fails part-way reports the first
@@ -126,9 +132,22 @@ pub(crate) async fn send(
     let adult_shown = s.adult.shown();
     let checked = blocking(move || {
         let store = reader.lock().expect("reader lock");
+        let mut ids = Vec::new();
         hashes
             .into_iter()
-            .map(|h| visible(&store, &h, adult_shown).map(|v| (h, v)))
+            .map(|h| {
+                let v = visible(&store, &h, adult_shown)?;
+                // A v1 hash and the same torrent's v2 hash: sent once.
+                let v = match v {
+                    Ok(t) if ids.contains(&t.id) => Err("same_torrent"),
+                    Ok(t) => {
+                        ids.push(t.id);
+                        Ok(t)
+                    }
+                    Err(code) => Err(code),
+                };
+                Ok((h, v))
+            })
             .collect::<ApiResult<Vec<_>>>()
     })
     .await??;
@@ -161,7 +180,7 @@ fn visible(
     store: &lodestar_store::Store,
     hash: &str,
     adult_shown: bool,
-) -> ApiResult<Result<String, &'static str>> {
+) -> ApiResult<Result<Sendable, &'static str>> {
     let h = crate::user_items::hash_of(hash)?;
     let Some(id) = store.find(&h).map_err(internal)? else {
         return Ok(Err("not_found"));
@@ -172,6 +191,9 @@ fn visible(
     if row.flags & flags::HIDDEN != 0 {
         return Ok(Err("hidden"));
     }
+    if row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE) != 0 {
+        return Ok(Err("private"));
+    }
     if !adult_shown
         && store
             .enrichment(id)
@@ -180,7 +202,20 @@ fn visible(
     {
         return Ok(Err("adult_hidden"));
     }
-    Ok(Ok(row.name))
+    Ok(Ok(Sendable {
+        id,
+        hash: crate::torrents::hex(&row.info_hash.0),
+        name: row.name,
+    }))
+}
+
+/// A torrent that may be sent, as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sendable {
+    id: i64,
+    /// The stored v1 hash, lowercase hex.
+    hash: String,
+    name: String,
 }
 
 fn item(
@@ -200,6 +235,10 @@ fn item(
 fn refusal(code: &str) -> String {
     match code {
         "hidden" => "A filter rule hides this torrent, so it isn't sent.",
+        "private" => {
+            "This torrent is private: it's sent only by its own tracker, never as a magnet link."
+        }
+        "same_torrent" => "Another hash in this send names the same torrent.",
         "adult_hidden" => {
             "This torrent is Adult, which is hidden: turn on Show adult content to send it."
         }
@@ -211,7 +250,7 @@ fn refusal(code: &str) -> String {
 /// Sends the visible torrents and puts every hash's result in order.
 async fn deliver(
     client: SavedClient,
-    checked: Vec<(String, Result<String, &'static str>)>,
+    checked: Vec<(String, Result<Sendable, &'static str>)>,
 ) -> ClientSendResult {
     let id = client.id.clone();
     let opts = AddOptions {
@@ -221,12 +260,12 @@ async fn deliver(
         selected_files: None,
     };
     let mut magnets = Vec::new();
-    for (hash, v) in &checked {
-        if let Ok(name) = v {
-            let uri = format!("magnet:?xt=urn:btih:{hash}&dn={}", percent_encode(name));
-            // Built from a checked hash: it always parses.
+    for (_, v) in &checked {
+        if let Ok(t) = v {
+            let uri = format!("magnet:?xt=urn:btih:{}&dn={}", t.hash, percent_encode(&t.name));
+            // Built from a stored hash: it always parses.
             if let Ok(m) = Magnet::parse(&uri) {
-                magnets.push((hash.clone(), m));
+                magnets.push(m);
             }
         }
     }
@@ -240,10 +279,9 @@ async fn deliver(
             url: client.url.clone(),
             username: Some(client.username.clone()).filter(|u| !u.is_empty()),
         };
-        let list: Vec<Magnet> = magnets.iter().map(|(_, m)| m.clone()).collect();
         let run = async {
             let c = lodestar_integrations::clients::connect(client_config(draft))?;
-            c.add_magnets(&list, &opts).await
+            c.add_magnets(&magnets, &opts).await
         };
         Some(
             tokio::time::timeout(SEND_TIMEOUT, run)
@@ -263,8 +301,8 @@ async fn deliver(
 /// nothing was sendable), and how many went in. A bulk send that fails
 /// part-way took the first `sent` of the sendable ones, in order; one
 /// that found every torrent already there took them all as duplicates.
-fn results(
-    checked: Vec<(String, Result<String, &'static str>)>,
+fn results<T>(
+    checked: Vec<(String, Result<T, &'static str>)>,
     outcome: Option<Result<lodestar_integrations::AddOutcome, ClientError>>,
 ) -> (Vec<ClientSendItem>, usize) {
     let sendable = checked.iter().filter(|(_, v)| v.is_ok()).count();
@@ -274,9 +312,7 @@ fn results(
         Some(Err(ClientError::Partial { sent, cause })) => {
             (sent.min(sendable), false, Some(*cause))
         }
-        Some(Err(ClientError::Rejected(why))) if why.contains("already in the client") => {
-            (sendable, true, None)
-        }
+        Some(Err(e)) if lodestar_integrations::clients::is_already_there(&e) => (sendable, true, None),
         Some(Err(e)) => (0, false, Some(e)),
     };
     let failure = cause.map(|e| test_failure(&e).error.expect("a failure"));

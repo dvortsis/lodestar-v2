@@ -670,9 +670,18 @@ pub(crate) fn partial(sent: usize, cause: ClientError) -> ClientError {
     }
 }
 
+/// The reason [`already_there`] gives.
+const ALREADY_THERE: &str = "the torrent is already in the client";
+
 /// The answer to an add that found every torrent already in the client.
 pub(crate) fn already_there() -> ClientError {
-    ClientError::Rejected("the torrent is already in the client".into())
+    ClientError::Rejected(ALREADY_THERE.into())
+}
+
+/// Whether `e` is [`already_there`]'s answer: every torrent of the add was
+/// in the client already, which a send counts as done (§9).
+pub fn is_already_there(e: &ClientError) -> bool {
+    matches!(e, ClientError::Rejected(why) if why == ALREADY_THERE)
 }
 
 /// The error for an HTTP status an adapter has no meaning for.
