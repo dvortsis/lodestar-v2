@@ -519,13 +519,13 @@
       "notes": "2026-10-23T20:11:46Z launched (sonnet, auto; brief 3 PRs; runner answers: lazy per-section messages if over 45 KB, notify after PR1 to unblock dependents, nav -> /settings, refinements confirmed) | 2026-10-23T20:33Z /settings/[section] 51.1 KB > 45 (owner). Runner: engine diet to M-settings-form-2 (~-7 KB), own cuts (lazy lockout, no screen icons), re-measure after #132+diet; Part 1 PR waits for diet merge; stop if still over | 2026-10-23T22:05Z after #132: size-limit 57.55 KB. Runner chunk-graph trace: runtime only ~4.5 KB; engine chunk 23 KB (all controls+85 msgs). Engine diet target first view ≤11 KB (-12); S-settings-1 own -4 (ConfigDisclosure, SSE, icons, lockout lazy) | 2026-10-23T23:25Z told: merge main (#152), shared own() w/ settingsOnDemand, re-measure; Part 1 waits for owner answer | 2026-10-23T23:35Z ef6ec7f: own()=65.8; shell-excluded 52.3 (Overview 23.5). Told: shell-excluded base in .size-limit.mjs; registry lazy screens (shortcuts/screen.ts static leak), attention trim. Est 48-50; with edit chunk ~40 | 2026-10-23T23:37Z shell-excluded base pushed; screen 51.26 (engine eager ~15.5, runtime/messages 16.7, own ~8.7), Overview 21.9; own cuts ~1 KB left; attention unchanged. Part 1 waits owner A/B/C | 2026-10-24T03:14Z owner chose A; Part 1 after M-settings-form-3 merges | 2026-10-24T03:31Z paused (owner v0.5 priority, usage) | superseded by S-settings-reconcile (build-plan §0) | 2026-10-30T12:30Z old-lineage work saved as runner-state ports/S-settings-1.patch"
     },
     "S-wizard": {
-      "status": "pending",
+      "status": "launching",
       "model": "sonnet",
       "session": null,
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 23:20Z brief briefs/S-wizard.md (part 1: shell, network, how-it-works, intensity, storage, updates, done; part 2: import, client, packs)."
     },
     "S-appearance": {
       "status": "merged",
