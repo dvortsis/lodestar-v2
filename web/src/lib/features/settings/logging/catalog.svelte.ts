@@ -26,12 +26,12 @@ export class LoggingCatalog {
 	#timer: ReturnType<typeof setInterval> | undefined;
 
 	/** Loads the catalog; a reply older than a newer request is dropped. */
-	async load(): Promise<Catalog | undefined> {
+	async load(signal?: AbortSignal): Promise<Catalog | undefined> {
 		const mine = ++this.#seq;
 		this.#busy++;
 		this.#started = Date.now();
 		try {
-			const c = await api.get('/logs/catalog');
+			const c = await api.get('/logs/catalog', { signal });
 			if (mine !== this.#seq) return this.catalog;
 			this.#offset = c.now - Date.now() / 1000;
 			this.catalog = c;
@@ -50,7 +50,9 @@ export class LoggingCatalog {
 	 * stack, yet a request that never settles can't stop them for good. A failed one keeps the last
 	 * catalog (`load` sets only `error`). */
 	refresh() {
-		if (!this.#busy || Date.now() - this.#started >= TICK_MS) void this.load();
+		if (!this.#busy || Date.now() - this.#started >= TICK_MS - 1000) {
+			void this.load(AbortSignal.timeout(TICK_MS));
+		}
 	}
 
 	/** The server's clock now. */

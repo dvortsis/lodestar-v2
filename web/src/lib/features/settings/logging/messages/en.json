@@ -170,7 +170,7 @@
 	"settings_logging_ev_settings_saved_n": "Settings saved",
 	"settings_logging_ev_settings_saved_h": "A setting was changed and saved.",
 	"settings_logging_ev_logging_kind_switched_n": "Data kind switched",
-	"settings_logging_ev_logging_kind_switched_h": "A kind of torrent detail was turned on or off for the logs.",
+	"settings_logging_ev_logging_kind_switched_h": "A kind of identifying detail (names, addresses, paths…) was turned on or off for the logs.",
 	"settings_logging_ev_logging_disk_full_n": "Log disk full",
 	"settings_logging_ev_logging_disk_full_h": "The log file couldn't be written because the disk is full.",
 	"settings_logging_ev_logging_rotation_failed_n": "Log rotation failed",

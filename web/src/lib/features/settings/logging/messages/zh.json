@@ -170,7 +170,7 @@
 	"settings_logging_ev_settings_saved_n": "设置已保存",
 	"settings_logging_ev_settings_saved_h": "某项设置已更改并保存。",
 	"settings_logging_ev_logging_kind_switched_n": "数据类型已切换",
-	"settings_logging_ev_logging_kind_switched_h": "日志中的某类种子详情已开启或关闭。",
+	"settings_logging_ev_logging_kind_switched_h": "日志中的某类可识别详情（名称、地址、路径等）已开启或关闭。",
 	"settings_logging_ev_logging_disk_full_n": "日志磁盘已满",
 	"settings_logging_ev_logging_disk_full_h": "磁盘已满，无法写入日志文件。",
 	"settings_logging_ev_logging_rotation_failed_n": "日志轮转失败",
