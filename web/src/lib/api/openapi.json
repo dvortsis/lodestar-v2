@@ -12073,6 +12073,31 @@
           }
         }
       },
+      "InsightsHistogramBin": {
+        "type": "object",
+        "description": "One bin of a distribution (parser confidence, junk score).",
+        "required": [
+          "count",
+          "hi",
+          "lo"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hi": {
+            "type": "number",
+            "format": "double",
+            "description": "The bin's edges."
+          },
+          "lo": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "InsightsRange": {
         "type": "object",
         "description": "The range as the server normalized it: whole UTC hours, or whole UTC\ndays past 7 days.",
@@ -18195,7 +18220,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/HistogramBin"
+              "$ref": "#/components/schemas/InsightsHistogramBin"
             },
             "description": "Junk score distribution. Null until scores are rolled up."
           },
@@ -18211,7 +18236,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/HistogramBin"
+              "$ref": "#/components/schemas/InsightsHistogramBin"
             },
             "description": "Parser confidence distribution. Null until rolled up."
           },

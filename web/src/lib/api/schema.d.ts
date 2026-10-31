@@ -4360,6 +4360,18 @@ export interface components {
             /** Format: double */
             value: number | null;
         };
+        /** @description One bin of a distribution (parser confidence, junk score). */
+        InsightsHistogramBin: {
+            /** Format: int64 */
+            count: number;
+            /**
+             * Format: double
+             * @description The bin's edges.
+             */
+            hi: number;
+            /** Format: double */
+            lo: number;
+        };
         /**
          * @description The range as the server normalized it: whole UTC hours, or whole UTC
          *     days past 7 days.
@@ -7283,14 +7295,14 @@ export interface components {
              */
             blocked: number | null;
             /** @description Junk score distribution. Null until scores are rolled up. */
-            junk_distribution: components["schemas"]["HistogramBin"][] | null;
+            junk_distribution: components["schemas"]["InsightsHistogramBin"][] | null;
             /**
              * Format: int64
              * @description Torrents that became searchable in the range. Event time.
              */
             newly_searchable: number;
             /** @description Parser confidence distribution. Null until rolled up. */
-            parser_confidence: components["schemas"]["HistogramBin"][] | null;
+            parser_confidence: components["schemas"]["InsightsHistogramBin"][] | null;
             /**
              * Format: int64
              * @description Recent "Fix parse" corrections. Null until counted.
