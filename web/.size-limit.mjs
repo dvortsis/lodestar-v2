@@ -144,11 +144,20 @@ const settingsOnDemand = [
 // pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
 // its own, so "Settings controls (on demand)" keeps measuring only the controls.
 const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
+// The server labels, one generated map per section (M-settings-engine-2): a form loads its
+// section's map before its fields render, so a first view stops at them. Gated on their own.
+const settingsMessages = [/features\/settings\/form\/message-maps\/\w+\.ts$/];
 const settingsLazy = requireMeasuredJs(
 	'Settings controls (on demand)',
 	onDemandOf('/settings/[section]', settingsOnDemand).filter(
-		(f) => !onDemandOf('/settings/[section]', settingsEdit).includes(f)
+		(f) =>
+			!onDemandOf('/settings/[section]', settingsEdit).includes(f) &&
+			!onDemandOf('/settings/[section]', settingsMessages).includes(f)
 	)
+);
+const settingsMessagesLazy = requireMeasuredJs(
+	'Settings messages (on demand)',
+	onDemandOf('/settings/[section]', settingsMessages)
 );
 const settingsEditLazy = requireMeasuredJs(
 	'Settings edit chunk (on demand)',
@@ -177,6 +186,7 @@ const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|t
 const settingsFirstView = [
 	...settingsOnDemand,
 	...settingsEdit,
+	...settingsMessages,
 	...settingsBodies,
 	...settingsExtras
 ];
@@ -216,7 +226,13 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 			...settingsShellView,
 			...ownChunk(
 				key,
-				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions, ...appearanceLater],
+				[
+					...settingsOnDemand,
+					...settingsEdit,
+					...settingsMessages,
+					...settingsBodyInteractions,
+					...appearanceLater
+				],
 				false,
 				settingsShellView
 			)
@@ -227,7 +243,7 @@ const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
 			appearanceBody,
-			[...settingsOnDemand, ...settingsEdit, ...appearanceLater],
+			[...settingsOnDemand, ...settingsEdit, ...settingsMessages, ...appearanceLater],
 			false,
 			settingsShellView
 		)
@@ -264,7 +280,7 @@ const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)
 		...bodyKeys.flatMap((key) =>
 			ownChunk(
 				key,
-				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				[...settingsOnDemand, ...settingsEdit, ...settingsMessages, ...settingsBodyInteractions],
 				true,
 				settingsFormFiles
 			)
@@ -471,6 +487,7 @@ export default [
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>
