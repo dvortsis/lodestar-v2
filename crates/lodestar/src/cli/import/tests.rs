@@ -470,7 +470,8 @@ impl lodestar_sources::Fetcher for NoFetch {
 /// same verdicts through `filter` and through the server's start (the
 /// shared sync, then `Pipeline::start`'s load) for a hash in a config
 /// blocklist file, a CS-1 entry, a CS-8 floor signature, a name your
-/// drop rule matches and a torrent nothing matches. A rule source added
+/// drop rule matches, a hash in a floor-marked subscribed list and a
+/// torrent nothing matches. A rule source added
 /// to one path and not the other fails here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_cli_and_the_server_build_the_same_filter() {
@@ -489,7 +490,46 @@ async fn the_cli_and_the_server_build_the_same_filter() {
     let seeded = |name: &str| {
         let mut config = data(&dir.path().join(name));
         config.blocklist.files = vec![blocklist.clone()];
+        let vetted = "https://example.org/vetted.txt";
+        config
+            .subscriptions
+            .lists
+            .push(crate::config::SubscribedList {
+                url: vetted.into(),
+                name: Some("Vetted list".into()),
+                kind: crate::config::ListKind::Content,
+                format: Some("hashes".into()),
+                action: crate::config::ListAction::Quarantine,
+                floor: true,
+                refresh_hours: None,
+            });
         let mut store = Store::open(config.db_path(), config.store_config()).unwrap();
+        // The list as the app marked it, with a version already fetched.
+        let id = store
+            .add_subscription(&lodestar_store::NewSubscription {
+                url: vetted,
+                name: "Vetted list",
+                kind: 0,
+                format: Some("hashes"),
+                // Not a dropping action: the floor blocks whatever it is.
+                action: lodestar_filter::Action::Quarantine.code(),
+                floor: true,
+                interval_secs: 86_400,
+            })
+            .unwrap();
+        let data = hash_of(6);
+        store
+            .record_refresh(
+                id,
+                1,
+                &lodestar_store::Refresh::Updated {
+                    data: &data,
+                    entries: 1,
+                    etag: None,
+                    last_modified: None,
+                },
+            )
+            .unwrap();
         let origin = lodestar_filter::Origin::Confirmed as u8;
         store.add_cs_hashes(&[hash_of(2)], origin, 1).unwrap();
         store.add_cs_sig(sig.sig, 1).unwrap();
@@ -540,11 +580,12 @@ async fn the_cli_and_the_server_build_the_same_filter() {
     };
 
     let plain = vec![FileInfo::new(vec!["a.txt".into()], 5)];
-    let cases: [([u8; 20], &str, &[FileInfo]); 5] = [
+    let cases: [([u8; 20], &str, &[FileInfo]); 6] = [
         (hash_of(1), "Some release", &plain),
         (hash_of(2), "Some release", &plain),
         (hash_of(3), "Some release", &floor_files),
         (hash_of(4), "Badword release", &plain),
+        (hash_of(6), "Some release", &plain),
         (hash_of(5), "Some release", &plain),
     ];
     for (i, (hash, name, files)) in cases.iter().enumerate() {
@@ -557,6 +598,11 @@ async fn the_cli_and_the_server_build_the_same_filter() {
         };
         let (a, b) = (server.judge(&item, None, 2), cli.judge(&item, None, 2));
         assert_eq!(a.decision, b.decision, "case {i}");
-        assert_eq!(a.decision.is_some(), i < 4, "case {i}: {:?}", a.decision);
+        assert_eq!(a.decision.is_some(), i < 5, "case {i}: {:?}", a.decision);
+        if *hash == hash_of(6) {
+            // Blocked as the floor, not as an ordinary list.
+            let rule = a.decision.as_ref().map(|d| d.rule.id());
+            assert_eq!(rule.as_deref(), Some("CS-1b"), "case {i}");
+        }
     }
 }
