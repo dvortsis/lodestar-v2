@@ -594,6 +594,9 @@ export default [
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
+	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
+	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
+	entry('Logs route (own JS + CSS)', own('/logs'), '39.6 KB'),
 	// Owner ruling, 2026-10-30 (S-settings-reconcile): with Settings a production route, Rolldown
 	// re-splits shared chunks (Toggle, format/bytes, Svelte's input bindings) these entries load;
 	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
