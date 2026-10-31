@@ -16,12 +16,59 @@ use crate::manifest::Manifest;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// How a streamed lookup ended (CR-1a-S). It carries no peers: they came
+/// as batches. A finder never sends [`Terminal::SourceFailed`]; a dropped
+/// terminal sender reads as it, never as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminal {
+    Complete = 0,
+    Deadline = 1,
+    Cancelled = 2,
+    SourceFailed = 3,
+}
+
+impl Terminal {
+    pub const ALL: [Terminal; 4] = [
+        Terminal::Complete,
+        Terminal::Deadline,
+        Terminal::Cancelled,
+        Terminal::SourceFailed,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Terminal::Complete => "complete",
+            Terminal::Deadline => "deadline",
+            Terminal::Cancelled => "cancelled",
+            Terminal::SourceFailed => "source_failed",
+        }
+    }
+}
+
+/// An accepted streaming lookup (CR-1a-S): bounded peer batches as they
+/// arrive, and a separate terminal. Dropping it cancels the work.
+#[derive(Debug)]
+pub struct LookupSession {
+    pub batches: mpsc::Receiver<Vec<SocketAddr>>,
+    pub terminal: oneshot::Receiver<Terminal>,
+}
+
+/// A streaming admission: `Some` acknowledges ownership with the session,
+/// allocated only once the finder admits the request; `None` rejects.
+pub type SessionAdmission = oneshot::Sender<Option<LookupSession>>;
+
 /// A bounded peer lookup. `Some` acknowledges ownership; `None` rejects
 /// without consuming an attempt. Dropping either receiver cancels work.
 #[derive(Debug)]
 pub struct PeerRequest {
     pub key: InfoHash,
     pub admit: oneshot::Sender<Option<oneshot::Receiver<Vec<SocketAddr>>>>,
+    /// Streaming peers (CR-1a-S, `dht.streaming_peers`): the pool asks for
+    /// a [`LookupSession`]. A finder that streams answers here and drops
+    /// `admit`; one that doesn't answers `admit` as before and drops this.
+    /// `None` when the switch is off. Declared before `permit` for the same
+    /// reason as `admit`.
+    pub session: Option<SessionAdmission>,
     /// Coordinated admission (CR-ADM): this request's slot at the finder.
     /// A finder holds it for as long as the request holds a slot and
     /// drops it to give the slot back. `None` when the switch is off.

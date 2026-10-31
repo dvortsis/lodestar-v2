@@ -184,6 +184,10 @@ pub struct Dht {
     /// the hash. Off by default (docs/decisions/2026-10-30-CR-1a-H.md);
     /// not in the Settings UI.
     pub responder_hints: bool,
+    /// CR-1a-S: a peer lookup hands the fetch pool its peers in bounded
+    /// batches as they arrive. Off by default
+    /// (docs/decisions/2026-10-31-CR-1a-S.md); not in the Settings UI.
+    pub streaming_peers: bool,
 }
 
 impl Default for Dht {
@@ -202,6 +206,7 @@ impl Default for Dht {
             restart_witness_dir: None,
             coordinated_admission: false,
             responder_hints: false,
+            streaming_peers: false,
         }
     }
 }
@@ -671,6 +676,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_RESPONDER_HINTS", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_STREAMING_PEERS") {
+            config.dht.streaming_peers = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_STREAMING_PEERS", &v))?;
+        }
         // Packaging sets this (the Docker image, the systemd unit).
         if let Some(v) = env("LODESTAR_DHT_WITNESS_DIR").filter(|v| !v.is_empty()) {
             config.dht.restart_witness_dir = Some(PathBuf::from(v));
@@ -764,6 +774,7 @@ impl Config {
                 max_sockets: sockets,
                 coordinated_admission: self.dht.coordinated_admission,
                 finder_capacity: dht::PEER_REQUEST_CAPACITY,
+                streaming_peers: self.dht.streaming_peers,
                 ..PoolConfig::default()
             },
             fetch,
@@ -1255,6 +1266,28 @@ mod tests {
         assert!(
             Config::load(None, |k: &str| {
                 (k == "LODESTAR_DHT_RESPONDER_HINTS").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn streaming_peers_is_off_unless_asked_for() {
+        let pool = |c: &Config| c.pipeline_config().unwrap().pool;
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.streaming_peers);
+        assert!(!pool(&c).streaming_peers);
+        let env = |k: &str| (k == "LODESTAR_DHT_STREAMING_PEERS").then(|| "true".to_string());
+        assert!(pool(&Config::load(None, env).unwrap()).streaming_peers);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nstreaming_peers = true\n").unwrap();
+        assert!(pool(&Config::load(Some(&path), no_env).unwrap()).streaming_peers);
+        std::fs::write(&path, "[dht]\nstreaming_peers = 1\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_STREAMING_PEERS").then(|| "maybe".to_string())
             })
             .is_err()
         );

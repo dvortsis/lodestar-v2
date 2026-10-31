@@ -5,14 +5,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_dht::node::{Config, Harvest, Node, NodeHandle, Source, StatsSnapshot};
+use lodestar_dht::node::{
+    Config, Harvest, LookupEnd, Node, NodeHandle, SessionAdmit, SessionEnd, Source, StatsSnapshot,
+};
 #[cfg(test)]
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{
-    BoxFuture, Consent, Endpoint, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
-    SourceCtx, SourcePlugin,
+    BoxFuture, Consent, Endpoint, Found, Kind, LookupSession, Manifest, Network, PeerRequest,
+    PluginError, Priority, Risk, SessionAdmission, SourceCtx, SourcePlugin, Terminal,
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// The DHT's harvest strategy codes, for per-strategy metrics. Persisted
 /// in the rollups: append only.
@@ -108,6 +110,65 @@ fn found(h: Harvest) -> Found {
     Found::key(h.info_hash, strategy).with_peers(h.peers)
 }
 
+/// The pool's streaming admission as the DHT actor sees it (CR-1a-S): the
+/// two crates don't depend on each other, so the plugin adapts the session.
+/// Allocates the terminal only when the actor admits the request.
+struct PoolSession(SessionAdmission);
+
+impl SessionAdmit for PoolSession {
+    fn is_closed(&self) -> bool {
+        self.0.is_closed()
+    }
+
+    fn admit(
+        self: Box<Self>,
+        batches: mpsc::Receiver<Vec<std::net::SocketAddr>>,
+    ) -> Option<Box<dyn SessionEnd>> {
+        let (tx, terminal) = oneshot::channel();
+        self.0
+            .send(Some(LookupSession { batches, terminal }))
+            .ok()
+            .map(|()| Box::new(PoolEnd(tx)) as Box<dyn SessionEnd>)
+    }
+
+    fn refuse(self: Box<Self>) {
+        let _ = self.0.send(None);
+    }
+}
+
+struct PoolEnd(oneshot::Sender<Terminal>);
+
+impl SessionEnd for PoolEnd {
+    fn end(self: Box<Self>, end: LookupEnd) {
+        let _ = self.0.send(match end {
+            LookupEnd::Complete => Terminal::Complete,
+            LookupEnd::Deadline => Terminal::Deadline,
+            LookupEnd::Cancelled => Terminal::Cancelled,
+        });
+    }
+}
+
+/// Hands one pool request to the node: a streaming one as a session, the
+/// rest as before.
+fn forward(node: &NodeHandle, request: PeerRequest) {
+    let PeerRequest {
+        key,
+        admit,
+        session,
+        permit,
+    } = request;
+    match session {
+        Some(session) => {
+            // A streaming finder answers the session alone.
+            drop(admit);
+            node.request_session(key, Box::new(PoolSession(session)), permit);
+        }
+        None => {
+            node.request_peers_with(key, admit, permit);
+        }
+    }
+}
+
 async fn next_request(
     rx: &mut Option<mpsc::Receiver<lodestar_sources::PeerRequest>>,
 ) -> Option<lodestar_sources::PeerRequest> {
@@ -149,10 +210,7 @@ impl SourcePlugin for DhtSource {
                         node.handle().set_paused(p).await;
                     }
                     req = next_request(&mut ctx.peer_requests), if requests_open => match req {
-                        Some(request) => {
-                            node.handle()
-                                .request_peers_with(request.key, request.admit, request.permit);
-                        }
+                        Some(request) => forward(&node.handle(), request),
                         None => requests_open = false,
                     },
                     _ = tick.tick() => {
@@ -179,6 +237,37 @@ impl SourcePlugin for DhtSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_adapter_allocates_on_admission_and_maps_every_end() {
+        for (end, want) in [
+            (LookupEnd::Complete, Terminal::Complete),
+            (LookupEnd::Deadline, Terminal::Deadline),
+            (LookupEnd::Cancelled, Terminal::Cancelled),
+        ] {
+            let (tx, mut rx) = oneshot::channel();
+            let admit: Box<dyn SessionAdmit> = Box::new(PoolSession(tx));
+            assert!(!admit.is_closed());
+            let (btx, brx) = mpsc::channel(2);
+            let sender = admit.admit(brx).expect("the pool is waiting");
+            let mut session = rx.try_recv().unwrap().expect("a session");
+            btx.try_send(vec!["10.0.0.1:1".parse().unwrap()]).unwrap();
+            drop(btx);
+            sender.end(end);
+            assert_eq!(session.terminal.try_recv(), Ok(want));
+            assert_eq!(session.batches.try_recv().unwrap().len(), 1);
+        }
+        // Refused: the pool reads a refusal, not a closed admission.
+        let (tx, mut rx) = oneshot::channel();
+        Box::new(PoolSession(tx)).refuse();
+        assert!(matches!(rx.try_recv(), Ok(None)));
+        // A gone pool: nothing is allocated for it.
+        let (tx, rx) = oneshot::channel();
+        drop(rx);
+        let admit: Box<dyn SessionAdmit> = Box::new(PoolSession(tx));
+        assert!(admit.is_closed());
+        assert!(admit.admit(mpsc::channel(2).1).is_none());
+    }
 
     #[test]
     fn harvests_map_to_strategies() {

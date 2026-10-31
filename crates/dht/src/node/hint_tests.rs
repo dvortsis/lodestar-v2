@@ -80,7 +80,7 @@ fn request(
     h: InfoHash,
 ) -> oneshot::Receiver<Vec<SocketAddr>> {
     let (tx, rx) = oneshot::channel();
-    a.start_peer_request(sockets, h, Some(tx), None);
+    a.start_peer_request(sockets, h, Some(tx.into()), None);
     rx
 }
 
@@ -362,4 +362,22 @@ async fn a_hinted_reply_is_routing_help_never_a_peer() {
     let (tid, _) = hinted(&a)[0];
     answer_hint(&mut a, &sockets, tid, vec![]);
     assert_eq!(get(&a.stats.hint_useful), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_hinted_reply_streams_its_peers_to_a_session() {
+    use crate::node::stream::{LookupEnd, LookupSession};
+    let (mut a, sockets, _rx) = actor(true);
+    sample_reply(&mut a, &sockets, at(1001), &[hash(1)]);
+    let (tx, mut admitted) = oneshot::channel::<Option<LookupSession>>();
+    a.on_command(Command::RequestSession(hash(1), Box::new(tx), None));
+    let (h, reply, permit) = a.get_peers_queue.pop_front().unwrap();
+    a.start_peer_request(&sockets, h, reply, permit);
+    let mut s = admitted.try_recv().unwrap().unwrap();
+    let (tid, _) = hinted(&a)[0];
+    answer_hint(&mut a, &sockets, tid, vec![at(7000)]);
+    // The responder's values arrive as a batch; the responder is no peer.
+    assert_eq!(s.batches.try_recv().unwrap(), vec![at(7000)]);
+    assert_eq!(s.terminal.try_recv(), Ok(LookupEnd::Complete));
+    assert!(a.peer_requests.is_empty());
 }
