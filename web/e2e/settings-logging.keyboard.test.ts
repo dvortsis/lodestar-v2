@@ -231,7 +231,7 @@ test.describe('keyboard: Settings → Logging', () => {
 		// A required event can't be turned off, and says why.
 		await kbd.tabTo(page.getByTestId('log-group-system'), 20);
 		await kbd.press('Enter');
-		await expect(page.getByRole('switch', { name: 'app.start' })).toBeDisabled();
+		await expect(page.getByRole('switch', { name: 'Lodestar started' })).toBeDisabled();
 		await expect(page.getByTestId('log-event-app.start')).toContainText('Required');
 		await kbd.press('Control+s');
 		await expect(page.getByTestId('save-bar')).toContainText('Saved');

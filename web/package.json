@@ -29,6 +29,7 @@
 		"e2e:update": "playwright test --update-snapshots",
 		"size": "size-limit",
 		"api:types": "node scripts/api-types.mjs",
+		"event-names": "node scripts/event-names.mjs",
 		"messages": "node --experimental-strip-types scripts/messages.ts && paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide",
 		"lhci": "lhci autorun --config=lighthouserc.json && lhci autorun --config=lighthouserc.desktop.json"
 	},

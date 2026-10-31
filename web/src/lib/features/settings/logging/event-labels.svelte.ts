@@ -1,6 +1,5 @@
 // The event list's names (lazy, with it): components, the data kinds' short badge names, and each
-// event's plain name and help. The catalog names an event's messages (`logs.event.<id>.label`);
-// until they're written (the runner's follow-up), an event without one shows its stable id.
+// event's plain name and help.
 import { m } from '$lib/paraglide/messages.js';
 import type { DataKind, LogEvent } from './rules';
 
@@ -36,9 +35,16 @@ const SHORT: Record<DataKind, () => string> = {
 };
 export const kindShort = (k: string) => SHORT[k as DataKind]?.() ?? k;
 
-/** Event messages by key, once they exist; empty until then. */
-const EVENTS: Record<string, () => string> = {};
-const text = (key: string) => EVENTS[key.replaceAll('.', '_')]?.();
+// Each event's plain name and help are their own chunk (`event-names.ts`), loaded after the event
+// list shows; until then, and for an event the client doesn't know, the name is the stable id.
+let names = $state.raw<typeof import('./event-names').NAMES>();
+let loading: Promise<void> | undefined;
+/** Loads the event names once; the labels below update when they arrive. */
+export const loadEventNames = () =>
+	(loading ??= import('./event-names').then(
+		(mod) => void (names = mod.NAMES),
+		() => void (loading = undefined)
+	));
 
-export const eventLabel = (e: Pick<LogEvent, 'id' | 'label_key'>) => text(e.label_key) ?? e.id;
-export const eventHelp = (e: Pick<LogEvent, 'help_key'>) => text(e.help_key);
+export const eventLabel = (e: Pick<LogEvent, 'id'>) => names?.[e.id]?.[0]() ?? e.id;
+export const eventHelp = (e: Pick<LogEvent, 'id'>) => names?.[e.id]?.[1]();
