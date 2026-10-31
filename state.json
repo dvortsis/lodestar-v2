@@ -547,13 +547,13 @@
       "catch_ups": 1
     },
     "S-filters": {
-      "status": "pending",
+      "status": "building",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhn8oardod2iyMtn27tK",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k)."
+      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet."
     },
     "S-keys": {
       "status": "merged",
