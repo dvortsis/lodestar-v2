@@ -186,15 +186,17 @@ impl Stream {
         if self.pending.is_empty() {
             return;
         }
-        let batch = std::mem::replace(&mut self.pending, Vec::with_capacity(STREAM_BATCH));
-        match self.tx.try_send(batch) {
-            Ok(()) => {
+        // Reserve first, so a full channel costs no allocation.
+        match self.tx.try_reserve() {
+            Ok(permit) => {
+                let batch = std::mem::replace(&mut self.pending, Vec::with_capacity(STREAM_BATCH));
+                permit.send(batch);
                 self.sent = true;
                 Stats::inc(&stats.peer_stream_batches);
             }
-            Err(mpsc::error::TrySendError::Full(batch)) => self.pending = batch,
+            Err(mpsc::error::TrySendError::Full(())) => {}
             // The caller went; cancellation reclaims the request.
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Closed(())) => {}
         }
     }
 
