@@ -362,19 +362,48 @@ fn secrets_set(field: &Field, value: &Value) -> Vec<String> {
 /// Where an endpoint value points, for telling whether a kept secret
 /// would follow it elsewhere: a URL's scheme, host and port; any other
 /// value as it is (an SMTP host name, a port).
-fn endpoint(v: Option<&Value>) -> Option<String> {
+fn endpoint(url: bool, v: Option<&Value>) -> Option<String> {
     let v = v?;
-    if let Some(s) = v.as_str()
+    let Some(s) = v.as_str() else {
+        return Some(v.to_string());
+    };
+    let s = s.trim();
+    if url
         && let Ok(u) = reqwest::Url::parse(s)
+        && matches!(u.scheme(), "http" | "https")
+        && let Some(host) = u.host_str()
     {
         return Some(format!(
             "{}://{}:{}",
             u.scheme(),
-            u.host_str().unwrap_or_default().to_ascii_lowercase(),
+            host.to_ascii_lowercase(),
             u.port_or_known_default().unwrap_or_default()
         ));
     }
-    Some(v.to_string())
+    // A host name, an address (`fd00::25`), a port or a kind: the value
+    // itself, never parsed as a URL.
+    Some(s.to_ascii_lowercase())
+}
+
+/// How an endpoint field is compared ([`Section::SECRET_ENDPOINTS`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endpoint {
+    /// An `http(s)` URL, by its scheme, host and port.
+    Url(&'static str),
+    /// Any other value (an SMTP host, a port, a security mode), whole.
+    Value(&'static str),
+}
+
+impl Endpoint {
+    fn field(self) -> &'static str {
+        match self {
+            Endpoint::Url(f) | Endpoint::Value(f) => f,
+        }
+    }
+
+    fn key(self, v: Option<&Value>) -> Option<String> {
+        endpoint(matches!(self, Endpoint::Url(_)), v)
+    }
 }
 
 /// A patched list's items with the secrets they don't re-send: an item
@@ -401,8 +430,10 @@ fn keep_secrets(field: &Field, old: Option<&Value>, new: &mut Value) {
             match item.get(*k) {
                 None | Some(Value::Null) => match prev
                     .filter(|p| {
-                        p.get("kind") == item.get("kind")
-                            && endpoint(p.get("url")) == endpoint(item.get("url"))
+                        Endpoint::Value("kind").key(p.get("kind"))
+                            == Endpoint::Value("kind").key(item.get("kind"))
+                            && Endpoint::Url("url").key(p.get("url"))
+                                == Endpoint::Url("url").key(item.get("url"))
                     })
                     .and_then(|p| p.get(*k))
                 {
@@ -638,7 +669,7 @@ pub trait Section:
     /// Each secret field with the fields that say where it's sent (the
     /// Torznab key and its URL). A patch that moves one of them elsewhere
     /// without sending the secret again resets the secret.
-    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [&'static str])] = &[];
+    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [Endpoint])] = &[];
     /// Keys a patch may carry beside the fields: confirmations that
     /// [`Section::confirm`] checks and that are never saved.
     const CONFIRMATIONS: &'static [&'static str] = &[];
@@ -942,7 +973,8 @@ impl<T: Section> Entry<T> {
                 continue;
             }
             if endpoints.iter().any(|e| {
-                patch.contains_key(*e) && endpoint(current.get(*e)) != endpoint(moved.get(*e))
+                let f = e.field();
+                patch.contains_key(f) && e.key(current.get(f)) != e.key(moved.get(f))
             }) {
                 next.remove(*secret);
                 fields.push(f);
@@ -1511,10 +1543,25 @@ impl Registry {
                 match value {
                     Some(v) if s.holds_secret(name) => {
                         let field = s.field_meta(name).expect("a planned field");
-                        let text = self.sealer.to_saved(section, field, v).map_err(|e| {
+                        // Never the error's detail: it can name the key
+                        // file's path.
+                        let text = self.sealer.to_saved(section, field, v).map_err(|_| {
                             SettingsFailure::new(
                                 section,
-                                SettingsError::Store(format!("Couldn't seal a secret: {e}.")),
+                                {
+                                    if let Some(field) = s.field(name) {
+                                        log_event!(
+                                            events::SETTINGS_SAVED_IGNORED,
+                                            section = section,
+                                            field = field,
+                                            reason = "key_unavailable"
+                                        );
+                                    }
+                                    SettingsError::Store(
+                                        "Couldn't seal a secret: check the data directory's secrets.key."
+                                            .into(),
+                                    )
+                                },
                             )
                         })?;
                         set.push((key(section, name), text));

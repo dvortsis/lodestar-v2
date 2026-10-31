@@ -1284,6 +1284,35 @@ fn an_empty_secret_resets_and_a_moved_endpoint_drops_its_secret() {
     )
     .unwrap();
     assert_eq!(r.get::<Notifications>().email_password.0, "pw2");
+    // Another IPv6 host, another port, or no encryption: asked again too.
+    for (from, to) in [
+        (
+            json!({ "email_host": "fd00::25" }),
+            json!({ "email_host": "fd00::66" }),
+        ),
+        (json!({ "email_port": 587 }), json!({ "email_port": 2525 })),
+        (
+            json!({ "email_security": "tls" }),
+            json!({ "email_security": "none" }),
+        ),
+    ] {
+        let mut set = json!({ "email_password": "pw3", "email_allow_private": true });
+        set.as_object_mut()
+            .unwrap()
+            .extend(from.as_object().unwrap().clone());
+        r.patch("notifications", patch(set)).unwrap();
+        let err = r.patch("notifications", patch(to.clone())).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("password again"),
+            "{to}: {err:?}"
+        );
+    }
+    r.patch(
+        "notifications",
+        patch(json!({ "email_host": "smtp.evil.example", "email_port": 0,
+                      "email_security": "starttls", "email_password": "pw2" })),
+    )
+    .unwrap();
     // Without a login, nothing is asked.
     r.patch(
         "notifications",

@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{Field, SecretText, Section};
+use super::{Endpoint, Field, SecretText, Section};
 use crate::config::Config;
 
 /// The most download clients the list holds.
@@ -156,8 +156,8 @@ impl Section for Integrations {
         Field::new("torznab_url").group("torznab"),
         Field::new("torznab_api_key").group("torznab").secret(),
     ];
-    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [&'static str])] =
-        &[("torznab_api_key", &["torznab_url"])];
+    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [Endpoint])] =
+        &[("torznab_api_key", &[Endpoint::Url("torznab_url")])];
 
     /// No `config.toml` key or variable backs these (see the module docs).
     fn from_config(_: &Config) -> Self {
@@ -194,7 +194,19 @@ impl Section for Integrations {
                 }
             }
             "torznab_url" if self.torznab_url.is_empty() => Ok(()),
-            "torznab_url" => check_url(&self.torznab_url),
+            "torznab_url" => {
+                check_url(&self.torznab_url)?;
+                // The key goes in its own field, which is sealed.
+                let keyed = reqwest::Url::parse(&self.torznab_url).is_ok_and(|u| {
+                    u.query_pairs().any(|(k, _)| {
+                        k.eq_ignore_ascii_case("apikey") || k.eq_ignore_ascii_case("api_key")
+                    })
+                });
+                if keyed {
+                    return Err("Put the API key in its own field, not the address.".into());
+                }
+                Ok(())
+            }
             "torznab_api_key" => check_text("The API key", &self.torznab_api_key.0),
             _ => Ok(()),
         }
@@ -233,6 +245,22 @@ mod tests {
             assert!(!e.contains("hunter2") && !e.contains("passwd"), "{e}");
         }
         assert!(check_url(&format!("http://x/{}", "a".repeat(MAX_URL))).is_err());
+        // An API key goes in its own, sealed field.
+        for url in [
+            "https://p.lan/api?apikey=k",
+            "https://p.lan/api?t=caps&API_KEY=k",
+        ] {
+            let s = Integrations {
+                torznab_url: url.into(),
+                ..Default::default()
+            };
+            let e = s.check("torznab_url").unwrap_err();
+            assert!(
+                e.contains("its own field")
+                    && !e.contains('k'.to_string().as_str().repeat(2).as_str()),
+                "{e}"
+            );
+        }
     }
 
     #[test]
