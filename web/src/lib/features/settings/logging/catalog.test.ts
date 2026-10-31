@@ -36,7 +36,10 @@ beforeEach(() => {
 		})
 	);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+});
 
 function visible(state: 'visible' | 'hidden') {
 	Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
@@ -80,6 +83,21 @@ describe('LoggingCatalog refresh', () => {
 		c.tick();
 		await until(() => expect(loads).toBe(3));
 		stop();
+	});
+
+	it('reloads again when a request never settles', async () => {
+		const c = new LoggingCatalog();
+		await c.load();
+		hold = true;
+		c.tick();
+		await until(() => expect(loads).toBe(2));
+		const now = Date.now();
+		const spy = vi.spyOn(Date, 'now').mockReturnValue(now + 31_000);
+		c.tick();
+		await until(() => expect(loads).toBe(3));
+		spy.mockRestore();
+		hold = false;
+		release?.();
 	});
 
 	it('keeps the last state when a reload fails', async () => {

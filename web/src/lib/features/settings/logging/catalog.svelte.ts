@@ -22,12 +22,14 @@ export class LoggingCatalog {
 	#offset = 0;
 	#seq = 0;
 	#busy = 0;
+	#started = 0;
 	#timer: ReturnType<typeof setInterval> | undefined;
 
 	/** Loads the catalog; a reply older than a newer request is dropped. */
 	async load(): Promise<Catalog | undefined> {
 		const mine = ++this.#seq;
 		this.#busy++;
+		this.#started = Date.now();
 		try {
 			const c = await api.get('/logs/catalog');
 			if (mine !== this.#seq) return this.catalog;
@@ -44,10 +46,11 @@ export class LoggingCatalog {
 		}
 	}
 
-	/** Reloads unless a load is already under way, so reloads never stack. A failed one keeps the
-	 * last catalog (`load` sets only `error`). */
+	/** Reloads unless a load started within the last tick is still under way, so reloads never
+	 * stack, yet a request that never settles can't stop them for good. A failed one keeps the last
+	 * catalog (`load` sets only `error`). */
 	refresh() {
-		if (!this.#busy) void this.load();
+		if (!this.#busy || Date.now() - this.#started >= TICK_MS) void this.load();
 	}
 
 	/** The server's clock now. */
