@@ -1,3 +1,9 @@
+<script lang="ts" module>
+	// Groups the user opened stay open when a search is cleared, and when the form re-renders the
+	// list (a resync shows the form's loading state for a moment, which remounts it).
+	const opened = $state<Record<string, boolean>>({});
+</script>
+
 <script lang="ts">
 	// The event list (§10.10.12): every catalogued event grouped by component, each group
 	// collapsible with a count ("Fetch · 4 of 11 on"). A row has a toggle, the plain name, the level
@@ -60,8 +66,6 @@
 		return Object.entries(out).filter(([, g]) => g.shown.length);
 	});
 	const filtering = $derived(query.trim() !== '' || changedOnly);
-	// Groups the user opened stay open when a search is cleared.
-	let opened = $state<Record<string, boolean>>({});
 	// "Detailed for 30 minutes" from the live log raises every component's level for now, so more
 	// events record than the saved settings this list shows.
 	const temporary = $derived.by(() => {
