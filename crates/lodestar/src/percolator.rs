@@ -18,6 +18,12 @@
 //! - **Bounded:** [`Store::prune_alerts`] keeps each search's newest
 //!   [`PercolatorConfig::keep`] alerts, at start and hourly (never per
 //!   commit: each prune that deletes scrubs the WAL).
+//! - **Live queries** (`POST /search/live`, B-search-live) join each run
+//!   once its saved searches are recorded and announced, as count-only
+//!   entries on what's left of the same budget, with the same range cap
+//!   ([`lodestar_api::search_live::percolate_live`]). So they never
+//!   delay an alert; when the budget runs out first they're `more`, and
+//!   the next run (straight away) takes them.
 //! - **Logs** name saved-search ids and counts, never a query or a
 //!   torrent name (§12.1).
 //! - **Fixture mode** never starts it (`fixture::unless_offline`), so the
@@ -103,6 +109,8 @@ pub struct Run {
     pub more: bool,
     /// The alerts themselves (ids and torrent ids only).
     pub created: Vec<Alert>,
+    /// Live queries that ran, after the saved searches.
+    pub live: usize,
 }
 
 /// What the task remembers between runs.
@@ -156,6 +164,8 @@ pub fn run_once(
             id: *id,
             watermark: *watermark,
             query: node,
+            utc_offset: 0,
+            count_only: false,
         })
         .collect();
     let cancel = CancelToken::new().with_budget(config.budget);
@@ -202,6 +212,22 @@ pub fn run_once(
             // live event is lost.
             Err(_) => lodestar_log::log_event!(crate::logging::events::ALERTS_ANNOUNCE_FAILED),
         }
+    }
+    // Live queries, after the alerts are out, on what's left of the
+    // budget. They keep no store state, so a failure here only costs
+    // their counts this run.
+    if let Some((hub, _)) = hub
+        && let Ok(live) = lodestar_api::search_live::percolate_live(
+            index,
+            hub.live(),
+            through,
+            limits,
+            now,
+            &cancel,
+        )
+    {
+        run.live = live.ran;
+        run.more |= live.more;
     }
     if let Some(e) = failed {
         return Err(e.into());
@@ -931,6 +957,83 @@ mod tests {
         assert!(log.contains("alerts=1 event=\"alerts.pruned\""), "{log}");
         // No name, query or torrent name: each holds `Zq7`.
         assert!(!log.contains("Zq7"), "{log}");
+    }
+
+    /// Live queries join a run after its saved searches are recorded and
+    /// announced, and count what each would show. Measured at 200 saved
+    /// searches and the most live queries a hub holds (256): the saved
+    /// part of the run is timed alone, then the live part.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_queries_follow_the_saved_searches() {
+        use lodestar_api::events::{EventSources, EventsConfig};
+        use lodestar_api::search_live::percolate_live;
+
+        let mut s = setup(4000);
+        let mut saved = Vec::new();
+        for i in 0..200 {
+            let q = if i == 0 { "Even" } else { "Show" };
+            saved.push(save(&mut s.store, &format!("s{i}"), q, 2000));
+        }
+        let hub = EventHub::start(EventsConfig::default(), EventSources::default());
+        let live = hub.live();
+        for i in 0..256u64 {
+            let q = parse(if i % 2 == 0 { "Even" } else { "Show" }).unwrap();
+            live.register(i / 4, &q, false, 0, 2000).unwrap();
+        }
+        assert_eq!(live.len(), 256);
+        // The saved part alone: what a run without live queries costs.
+        let started = Instant::now();
+        let run = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            4000,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
+        let saved_took = started.elapsed();
+        assert_eq!((run.searches, run.live, run.more), (200, 0, false));
+        assert_eq!(alert_ids(&s.store, saved[0]), evens(2001, 4000));
+        // The live part, over the same range.
+        let started = Instant::now();
+        let limits = PercolateLimits {
+            keep: quick().keep,
+            max_range: quick().max_range,
+        };
+        let token = CancelToken::new().with_budget(quick().budget);
+        let lr = percolate_live(&s.index, live, 4000, limits, NOW, &token).unwrap();
+        let live_took = started.elapsed();
+        assert_eq!((lr.ran, lr.more), (256, false));
+        // 128 x 1000 evens and 128 x 2000 of everything.
+        assert_eq!(lr.matched, 128 * 1000 + 128 * 2000);
+        eprintln!(
+            "2000 new torrents: 200 saved searches {saved_took:?}, then 256 live queries {live_took:?}"
+        );
+        // Through run_once: saved searches first, then the live ones.
+        hub.close();
+        let hub = EventHub::start(EventsConfig::default(), EventSources::default());
+        for i in 0..256u64 {
+            let q = parse("Show").unwrap();
+            hub.live().register(i / 4, &q, false, 0, 3000).unwrap();
+        }
+        save(&mut s.store, "late", "Show", 3000);
+        let run = run_once(
+            &s.index,
+            &mut s.store,
+            Some((&hub, &AdultVisibility::default())),
+            4000,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (run.searches, run.alerts, run.live, run.more),
+            (1, 1000, 256, false)
+        );
+        hub.close();
     }
 
     /// The task over a live index: a commit becomes alerts within the

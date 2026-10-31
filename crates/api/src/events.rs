@@ -4,6 +4,11 @@
 //! ([`EventHub::alerts`], from the percolator); Insights deltas (B11a)
 //! are typed and reserved.
 //!
+//! **Live query counts** (`search_live`, [`crate::search_live`]) are the
+//! one per-session topic: the hub holds the registry, and each client's
+//! task delivers its own session's counts, throttled, outside the ring
+//! and the broadcast.
+//!
 //! **One hub per process.** [`EventHub::publish`] gives each event the id
 //! `<epoch>-<seq>` (a random per-process epoch, a monotonic sequence),
 //! renders its frame once, keeps it in a ring of the last
@@ -40,7 +45,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Extension, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get, post};
 use lodestar_search::{CommitHook, Committed, RebuildProgress, SearchHandle};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, broadcast, mpsc, watch};
@@ -55,15 +60,24 @@ use crate::dto::events::{
 use crate::error::{ApiError, ApiResult};
 use crate::extract::Peer;
 use crate::search::AdultVisibility;
-use crate::{ApiState, Auth, auth};
+use crate::search_live::{LiveConfig, LiveQueries};
+use crate::{ApiState, Auth, auth, search_live};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(events), components(schemas(Event, Topic)))]
+#[openapi(
+    paths(events, search_live::register, search_live::release),
+    components(schemas(Event, Topic))
+)]
 pub(crate) struct ApiDoc;
 
 pub fn routes() -> Router<ApiState> {
-    auth::protected(Router::new().route("/events", get(events)))
+    auth::protected(
+        Router::new()
+            .route("/events", get(events))
+            .route("/search/live", post(search_live::register))
+            .route("/search/live/{id}", delete(search_live::release)),
+    )
 }
 
 /// The hub's sizes and intervals.
@@ -91,6 +105,8 @@ pub struct EventsConfig {
     pub max_streams: usize,
     /// ...and per session (the UI opens one per tab).
     pub max_per_session: usize,
+    /// Live queries (`search_live`).
+    pub live: LiveConfig,
 }
 
 impl Default for EventsConfig {
@@ -106,6 +122,7 @@ impl Default for EventsConfig {
             insights_every: Duration::from_secs(30),
             max_streams: 64,
             max_per_session: 4,
+            live: LiveConfig::default(),
         }
     }
 }
@@ -247,6 +264,8 @@ pub struct EventHub {
     /// "Show adult content", for the `torrents` events and for what's
     /// replayed or delivered of them.
     adult: AdultVisibility,
+    /// Live queries, per session.
+    live: LiveQueries,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -393,14 +412,18 @@ pub struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let mut slots = lock(&self.hub.slots);
-        slots.total -= 1;
-        if let Some(n) = slots.per_session.get_mut(&self.session) {
-            *n -= 1;
-            if *n == 0 {
-                slots.per_session.remove(&self.session);
+        {
+            let mut slots = lock(&self.hub.slots);
+            slots.total -= 1;
+            if let Some(n) = slots.per_session.get_mut(&self.session) {
+                *n -= 1;
+                if *n == 0 {
+                    slots.per_session.remove(&self.session);
+                }
             }
         }
+        // Outside the slots' lock: the registry has its own.
+        self.hub.live.closed(self.session);
     }
 }
 
@@ -413,6 +436,7 @@ impl EventHub {
             .commits
             .clone()
             .map(|hook| (hook, Arc::new(CommitFeed::default())));
+        let live = config.live;
         let hub = Arc::new(EventHub {
             config,
             epoch: format!("{epoch:016x}"),
@@ -423,6 +447,7 @@ impl EventHub {
             closed: watch::channel(false).0,
             commits,
             adult: sources.adult.clone(),
+            live: LiveQueries::new(live, sources.adult.clone()),
             tasks: Mutex::default(),
         });
         let mut tasks = Vec::new();
@@ -486,6 +511,11 @@ impl EventHub {
         lock(&self.slots).total
     }
 
+    /// The live query registry (`POST /search/live`).
+    pub fn live(&self) -> &LiveQueries {
+        &self.live
+    }
+
     /// Open streams subscribed to `topic`.
     pub fn listeners(&self, topic: Topic) -> usize {
         self.listeners[topic as usize].load(Ordering::Relaxed)
@@ -501,6 +531,10 @@ impl EventHub {
     /// Adult was shown ([`Stored::adult_shown`]).
     fn publish_tagged(&self, event: &Event, adult_shown: bool) -> Option<String> {
         let topic = event.topic()?;
+        // Per session: each client's task delivers its own.
+        if topic == Topic::SearchLive {
+            return None;
+        }
         let mut ring = lock(&self.ring);
         ring.seq += 1;
         let seq = ring.seq;
@@ -555,6 +589,8 @@ impl EventHub {
         }
         *mine += 1;
         slots.total += 1;
+        drop(slots);
+        self.live.opened(session);
         Ok(Slot {
             hub: self.clone(),
             session,
@@ -636,6 +672,13 @@ impl EventHub {
         signed_in: impl Fn() -> bool + Send + 'static,
     ) -> Body {
         let mut sub = self.subscribe(topics, last);
+        let session = slot.session;
+        let hub = self.clone();
+        // This session's live query counts, when subscribed to them.
+        let mut live_rx = (topics & Topic::SearchLive.bit() != 0)
+            .then(|| self.live.watch(session))
+            .flatten();
+        let every = self.live.config().every;
         let (out, rx) = mpsc::channel::<Bytes>(self.config.queue.max(1));
         let mut closed = self.closed.subscribe();
         let heartbeat = self.config.heartbeat;
@@ -659,33 +702,68 @@ impl EventHub {
             let start = tokio::time::Instant::now() + heartbeat;
             let mut beat = tokio::time::interval_at(start, heartbeat);
             beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Live counts: a change marks them due; they go out no sooner
+            // than `next_live`, so counts in between are combined.
+            let mut live_due = false;
+            let mut next_live = tokio::time::Instant::now();
+            let mut sent = HashMap::new();
             loop {
-                let frame = tokio::select! {
+                let frames = tokio::select! {
                     biased;
                     _ = closed.wait_for(|c| *c) => break,
                     () = out.closed() => break,
                     item = sub.next() => match item {
-                        Some(Item::Event(s)) => s.frame.clone(),
+                        Some(Item::Event(s)) => vec![s.frame.clone()],
                         Some(Item::Resync(reason)) => {
-                            frame(None, &Event::Resync(ResyncEvent { reason }))
+                            vec![frame(None, &Event::Resync(ResyncEvent { reason }))]
                         }
                         None => break,
                     },
+                    changed = changed(&mut live_rx), if live_rx.is_some() && !live_due => {
+                        match changed {
+                            true => live_due = true,
+                            false => live_rx = None,
+                        }
+                        continue;
+                    }
+                    () = tokio::time::sleep_until(next_live), if live_due => {
+                        live_due = false;
+                        let events = hub.live.updates(session, &mut sent);
+                        if events.is_empty() {
+                            continue;
+                        }
+                        next_live = tokio::time::Instant::now() + every;
+                        events
+                            .into_iter()
+                            .map(|e| frame(None, &Event::SearchLive(e)))
+                            .collect()
+                    }
                     _ = beat.tick() => {
                         // Expired, or the password changed (which ends
                         // every other session): the stream ends with it.
                         if !signed_in() {
                             break;
                         }
-                        Bytes::from_static(b": keep-alive\n\n")
+                        vec![Bytes::from_static(b": keep-alive\n\n")]
                     }
                 };
-                if !send(frame, &closed).await {
-                    break;
+                for frame in frames {
+                    if !send(frame, &closed).await {
+                        return;
+                    }
                 }
             }
         });
         Body::from_stream(Frames { rx, _slot: slot })
+    }
+}
+
+/// Whether `rx` saw a change; false once its sender is gone (or there's
+/// no `rx`).
+async fn changed(rx: &mut Option<watch::Receiver<u64>>) -> bool {
+    match rx {
+        Some(rx) => rx.changed().await.is_ok(),
+        None => false,
     }
 }
 
@@ -925,7 +1003,7 @@ fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
 /// valid (exactly what the guard accepts), or else the trusted proxy's
 /// user, counted per user and client address. An invalid cookie beside
 /// a proxy header is ignored, so it can't open a fresh bucket.
-fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
+pub(crate) fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
     let first = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
     let session = match first
         .filter(|c| auth.verify(c))
@@ -1105,8 +1183,8 @@ mod tests {
                 "id: {id}\nevent: settings\ndata: {{\"revision\":3,\"section\":\"crawler\"}}\n\n"
             )
         );
-        // Seven topics now; the `u8` set has room for one more.
-        assert_eq!(all().count_ones(), 7);
+        // Eight topics now: the `u8` set is full (widen it for a ninth).
+        assert_eq!(all().count_ones(), 8);
     }
 
     #[tokio::test]
@@ -1506,6 +1584,86 @@ mod tests {
             .map(|i| torrents_of(Some(i)).unwrap().max_id)
             .collect();
         assert_eq!(ids_sent, [Some(2), Some(3), None, Some(6)]);
+        h.close();
+    }
+
+    /// The next `search_live` payload on `body`, within 10 s.
+    async fn next_live(body: &mut axum::body::BodyDataStream) -> SearchLiveEventOf {
+        use futures_core::Stream;
+        let read = async {
+            loop {
+                let frame = std::future::poll_fn(|cx| Pin::new(&mut *body).poll_next(cx))
+                    .await
+                    .expect("the stream ended")
+                    .unwrap();
+                let text = String::from_utf8(frame.to_vec()).unwrap();
+                if let Some(rest) = text.strip_prefix("event: search_live\ndata: ") {
+                    assert!(!text.starts_with("id:"), "never replayable");
+                    return serde_json::from_str(rest.trim_end()).unwrap();
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), read)
+            .await
+            .expect("a search_live event within 10 s")
+    }
+
+    type SearchLiveEventOf = crate::dto::events::SearchLiveEvent;
+
+    /// Counts reach only the session that registered, at most once per
+    /// `every` per connection, combined in between; the last connection
+    /// closing releases them.
+    #[tokio::test]
+    async fn live_counts_are_per_session_throttled_and_released_on_close() {
+        let every = Duration::from_secs(2);
+        let h = hub(EventsConfig {
+            live: LiveConfig {
+                every,
+                ..LiveConfig::default()
+            },
+            ..EventsConfig::default()
+        });
+        let live = h.live();
+        let mine = h.acquire(1).unwrap();
+        let theirs = h.acquire(2).unwrap();
+        let mut a = h
+            .stream(mine, Topic::SearchLive.bit(), None, || true)
+            .into_data_stream();
+        let mut b = h.stream(theirs, all(), None, || true).into_data_stream();
+        let node = lodestar_search::parse("x").unwrap();
+        let id = live.register(1, &node, false, 0, 0).unwrap().id;
+        let key = live.due()[0].key;
+        live.record(&[(key, 0, 10, 1)]);
+        let first = next_live(&mut a).await;
+        let at = std::time::Instant::now();
+        assert_eq!(
+            (first.id.as_str(), first.matched, first.through),
+            (id.as_str(), 1, None)
+        );
+        // Three more runs at once: one event, after the throttle.
+        for (from, to) in [(10, 11), (11, 12), (12, 13)] {
+            live.record(&[(key, from, to, 1)]);
+        }
+        let second = next_live(&mut a).await;
+        assert_eq!(second.matched, 4, "combined");
+        assert!(at.elapsed() >= every / 2, "throttled: {:?}", at.elapsed());
+        // Publishing it on the broadcast does nothing.
+        assert_eq!(
+            h.publish(&Event::SearchLive(second.clone())),
+            None,
+            "per session only"
+        );
+        // The other session sees only its own.
+        let id2 = live.register(2, &node, false, 0, 0).unwrap().id;
+        let key2 = live.due().iter().find(|d| d.key != key).unwrap().key;
+        live.record(&[(key2, 0, 5, 7)]);
+        let got = next_live(&mut b).await;
+        assert_eq!((got.id, got.matched), (id2, 7));
+        // Session 1's last connection closes: its query goes with it.
+        drop(a);
+        assert_eq!(live.len(), 1);
+        drop(b);
+        assert!(live.is_empty());
         h.close();
     }
 

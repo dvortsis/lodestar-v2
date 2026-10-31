@@ -25,6 +25,11 @@
 //!
 //! No store writes here: the caller records the result in one
 //! transaction per range ([`lodestar_store::Store::record_percolation`]).
+//!
+//! **Live queries** (`POST /search/live`, B-search-live) run here too, as
+//! [`Due::count_only`] entries: they keep no ids, only
+//! [`Matched::count`], and carry their own visibility clauses and time
+//! zone ([`Due::utc_offset`]).
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -51,13 +56,18 @@ pub struct PercolateLimits {
     pub max_range: i64,
 }
 
-/// A saved search due to run.
+/// A saved search (or a live query) due to run.
 #[derive(Debug, Clone, Copy)]
 pub struct Due<'a> {
     pub id: i64,
     /// The highest id already evaluated against it.
     pub watermark: i64,
     pub query: &'a Node,
+    /// The user's zone for `time:`, in seconds east of UTC. Saved
+    /// searches run at 0.
+    pub utc_offset: i32,
+    /// Keep no ids, only [`Matched::count`] (a live query's count).
+    pub count_only: bool,
 }
 
 /// One search's result: every torrent id in `(watermark, through]` it
@@ -70,6 +80,8 @@ pub struct Matched {
     pub torrent_ids: Vec<i64>,
     /// More matched than `keep`; the lowest were left out.
     pub truncated: bool,
+    /// Every match in the range, kept or not.
+    pub count: u64,
 }
 
 /// What one run did.
@@ -131,7 +143,7 @@ pub fn percolate(
             out.stopped = true;
             break;
         }
-        let compiled = index.query(d.query, now);
+        let compiled = index.query_at(d.query, now, d.utc_offset);
         let range: Box<dyn Query> = Box::new(RangeQuery::new(
             Bound::Excluded(term(d.watermark)),
             Bound::Included(term(end)),
@@ -145,7 +157,7 @@ pub fn percolate(
             // swarm range until it is (M4).
             hot: compiled.hot.as_ref(),
             inner: TopIds {
-                keep: limits.keep,
+                keep: if d.count_only { 0 } else { limits.keep },
                 // The first search of a run always completes.
                 cancel: (!out.matched.is_empty()).then(|| cancel.clone()),
                 stopped: stopped.clone(),
@@ -156,7 +168,7 @@ pub fn percolate(
                 out.stopped = true;
                 break;
             }
-            Ok((ids, truncated)) => {
+            Ok((ids, truncated, count)) => {
                 if end < upto {
                     out.capped += 1;
                 }
@@ -164,7 +176,8 @@ pub fn percolate(
                     id: d.id,
                     through: end,
                     torrent_ids: ids,
-                    truncated,
+                    truncated: truncated && !d.count_only,
+                    count,
                 });
             }
             Err(_) => {
@@ -189,7 +202,7 @@ fn collect(
     collector: &PostFilter<'_, TopIds>,
     (after, upto): (i64, i64),
     cancel: &CancelToken,
-) -> Result<(Vec<i64>, bool)> {
+) -> Result<(Vec<i64>, bool, u64)> {
     let weight = q.weight(EnableScoring::disabled_from_searcher(searcher))?;
     let mut fruits = Vec::new();
     for (ord, seg) in searcher.segment_readers().iter().enumerate() {
@@ -218,8 +231,8 @@ fn may_hold(seg: &SegmentReader, after: i64, upto: i64) -> Result<bool> {
     Ok(hi > after && lo <= upto)
 }
 
-/// Collects the `keep` highest torrent ids, highest first, and whether
-/// any match was left out. With a token, it stops collecting once the
+/// Collects the `keep` highest torrent ids, highest first, whether any
+/// match was left out, and how many matched in all. With a token, it stops collecting once the
 /// token does (checked every [`CHECK_EVERY`] documents) and sets
 /// `stopped`: the result is then incomplete and isn't used.
 struct TopIds {
@@ -234,6 +247,7 @@ struct TopIdsSegment {
     /// A min-heap of the highest ids so far.
     heap: BinaryHeap<Reverse<u64>>,
     over: bool,
+    count: u64,
     cancel: Option<CancelToken>,
     stopped: Arc<AtomicBool>,
     since_check: u32,
@@ -269,7 +283,7 @@ fn push(heap: &mut BinaryHeap<Reverse<u64>>, keep: usize, id: u64, over: &mut bo
 }
 
 impl Collector for TopIds {
-    type Fruit = (Vec<i64>, bool);
+    type Fruit = (Vec<i64>, bool, u64);
     type Child = TopIdsSegment;
 
     fn for_segment(
@@ -282,6 +296,7 @@ impl Collector for TopIds {
             keep: self.keep,
             heap: BinaryHeap::new(),
             over: false,
+            count: 0,
             cancel: self.cancel.clone(),
             stopped: self.stopped.clone(),
             since_check: 0,
@@ -292,15 +307,16 @@ impl Collector for TopIds {
         false
     }
 
-    fn merge_fruits(&self, fruits: Vec<(Vec<u64>, bool)>) -> tantivy::Result<Self::Fruit> {
-        let over = fruits.iter().any(|(_, o)| *o);
-        let (ids, cut) = top(fruits.into_iter().flat_map(|(ids, _)| ids), self.keep);
-        Ok((ids, over || cut))
+    fn merge_fruits(&self, fruits: Vec<(Vec<u64>, bool, u64)>) -> tantivy::Result<Self::Fruit> {
+        let over = fruits.iter().any(|(_, o, _)| *o);
+        let count = fruits.iter().map(|(_, _, n)| n).sum();
+        let (ids, cut) = top(fruits.into_iter().flat_map(|(ids, _, _)| ids), self.keep);
+        Ok((ids, over || cut, count))
     }
 }
 
 impl SegmentCollector for TopIdsSegment {
-    type Fruit = (Vec<u64>, bool);
+    type Fruit = (Vec<u64>, bool, u64);
 
     fn collect(&mut self, doc: DocId, _: Score) {
         if let Some(cancel) = &self.cancel {
@@ -316,8 +332,13 @@ impl SegmentCollector for TopIdsSegment {
                 }
             }
         }
-        if let Some(id) = self.col.first(doc) {
+        self.count += 1;
+        if self.keep > 0
+            && let Some(id) = self.col.first(doc)
+        {
             push(&mut self.heap, self.keep, id, &mut self.over);
+        } else if self.keep == 0 {
+            self.over = true;
         }
     }
 
@@ -325,6 +346,7 @@ impl SegmentCollector for TopIdsSegment {
         (
             self.heap.into_iter().map(|Reverse(id)| id).collect(),
             self.over,
+            self.count,
         )
     }
 }
@@ -354,6 +376,8 @@ mod tests {
             id: 7,
             watermark,
             query: &node,
+            utc_offset: 0,
+            count_only: false,
         }];
         percolate(index, &due, through, limits, 0, &CancelToken::new()).unwrap()
     }
@@ -402,6 +426,49 @@ mod tests {
         let (index, _) = index_with(50, 2);
         let p = run(&index, "Common size:<1003B", 0, 50, ALL);
         assert_eq!(ids(&p), [3, 2]);
+    }
+
+    /// A live query keeps no ids but counts every match, past `keep`,
+    /// in its own zone.
+    #[test]
+    fn count_only_counts_every_match_and_keeps_no_ids() {
+        let (index, _) = index_with(100, 3);
+        let node = parse("Half").unwrap();
+        let due = [
+            Due {
+                id: 1,
+                watermark: 10,
+                query: &node,
+                utc_offset: 0,
+                count_only: true,
+            },
+            Due {
+                id: 2,
+                watermark: 10,
+                query: &node,
+                utc_offset: 3600,
+                count_only: false,
+            },
+        ];
+        let limits = PercolateLimits {
+            keep: 3,
+            max_range: i64::MAX,
+        };
+        let p = percolate(&index, &due, 100, limits, 0, &CancelToken::new()).unwrap();
+        let want = expected("half", 100, 10, 100).len() as u64;
+        assert!(want > 3);
+        let (live, saved) = (&p.matched[0], &p.matched[1]);
+        assert_eq!(
+            (live.count, live.torrent_ids.len(), live.truncated),
+            (want, 0, false)
+        );
+        assert_eq!(
+            (saved.count, saved.torrent_ids.len(), saved.truncated),
+            (want, 3, true)
+        );
+        // An empty list of searches still reports the snapshot.
+        let p = percolate(&index, &[], i64::MAX, limits, 0, &CancelToken::new()).unwrap();
+        assert_eq!((p.snapshot_max, p.matched.len()), (100, 0));
     }
 
     #[test]
@@ -478,6 +545,8 @@ mod tests {
                 id,
                 watermark: 0,
                 query: &node,
+                utc_offset: 0,
+                count_only: false,
             })
             .collect();
         let token = CancelToken::new();
@@ -563,7 +632,7 @@ mod tests {
             .weight(EnableScoring::disabled_from_searcher(&searcher))
             .unwrap();
         let seg = &searcher.segment_readers()[0];
-        let (ids, _) = collector.collect_segment(weight.as_ref(), 0, seg).unwrap();
+        let (ids, _, _) = collector.collect_segment(weight.as_ref(), 0, seg).unwrap();
         assert!(stopped.load(Ordering::Relaxed));
         assert_eq!(ids.len(), CHECK_EVERY as usize - 1);
         // Without a token the same scan collects every document.
@@ -572,7 +641,8 @@ mod tests {
             cancel: None,
             stopped: Arc::default(),
         };
-        let (ids, _) = free.collect_segment(weight.as_ref(), 0, seg).unwrap();
+        let (ids, _, n) = free.collect_segment(weight.as_ref(), 0, seg).unwrap();
+        assert_eq!(n, u64::from(seg.num_docs()));
         assert!(seg.num_docs() > CHECK_EVERY);
         assert_eq!(ids.len(), seg.num_docs() as usize);
     }

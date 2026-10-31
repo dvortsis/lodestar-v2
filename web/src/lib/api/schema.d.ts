@@ -1372,6 +1372,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/search/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Registers a live query: the count of new matches for `q` (or `ast`)
+         *     arrives as `search_live` events on `/events`, to this session only.
+         * @description The query is validated and bounded as `/search` bounds it, and runs
+         *     with the same visibility: torrents a filter rule hid unless `hidden`,
+         *     and no Adult while "Show adult content" is off. Changing that setting
+         *     releases every live query: register again. A session holds at most 4
+         *     (a fifth replaces the oldest); one is released when the session's last
+         *     `/events` connection closes, after 10 minutes without one, or with
+         *     `DELETE /search/live/{id}`. Register again after `/events` reconnects.
+         */
+        post: operations["registerSearchLive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/live/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Releases one of this session's live queries. */
+        delete: operations["releaseSearchLive"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search/state": {
         parameters: {
             query?: never;
@@ -3494,6 +3538,10 @@ export interface components {
             data: components["schemas"]["UpdatesEvent"];
             /** @enum {string} */
             event: "updates";
+        } | {
+            data: components["schemas"]["SearchLiveEvent"];
+            /** @enum {string} */
+            event: "search_live";
         } | {
             data: components["schemas"]["ResyncEvent"];
             /** @enum {string} */
@@ -6119,6 +6167,72 @@ export interface components {
             updated_at: number;
         };
         /**
+         * @description `event: search_live`: one of your live queries (`POST /search/live`)
+         *     has new matches. `matched` counts every match since it was made, so
+         *     a missed event loses nothing. Each connection gets at most one per
+         *     live query every 5 s; counts in between are combined. Sent only to
+         *     the session that made it, never replayed (it has no `id:`), and only
+         *     torrents search would show count: none a filter rule hid (unless the
+         *     query asked for them) and no Adult while "Show adult content" is off.
+         * @example {
+         *       "id": "4f1c9a0b7d2e8a61",
+         *       "matched": 3,
+         *       "through": 48250
+         *     }
+         */
+        SearchLiveEvent: {
+            /** @description The registration's id. */
+            id: string;
+            /**
+             * Format: int64
+             * @description Matches since the registration was made; at least 1.
+             */
+            matched: number;
+            /**
+             * Format: int64
+             * @description The highest torrent id checked so far. **Null while Adult is
+             *     hidden** (see `SearchLiveRegistration.since`).
+             */
+            through: number | null;
+        };
+        /**
+         * @description A live query's registration: listen for `search_live` events with
+         *     its `id` on `/events?topics=search_live` (or every topic).
+         * @example {
+         *       "id": "4f1c9a0b7d2e8a61",
+         *       "since": 48211
+         *     }
+         */
+        SearchLiveRegistration: {
+            /** @description Names it in `search_live` events and in `DELETE /search/live/{id}`. */
+            id: string;
+            /**
+             * Format: int64
+             * @description The highest torrent id searchable when it was made: matches are
+             *     counted after it. **Null while Adult is hidden**, as `torrents`'
+             *     `max_id` is: a real id would show, in its gap from a later one,
+             *     how many hidden torrents arrived.
+             */
+            since: number | null;
+        };
+        /**
+         * @description `POST /search/live`: the query whose new matches to count, as `/search`
+         *     takes it.
+         */
+        SearchLiveRequest: {
+            ast?: null | components["schemas"]["AstNode"];
+            /** @description Include torrents a filter rule hid (§20.3), as `/search` does. */
+            hidden?: boolean | null;
+            /** @description The query text. Send `q` or `ast`, not both. */
+            q?: string | null;
+            /**
+             * Format: int32
+             * @description The user's zone for `time:`, in minutes east of UTC (−840 to 840);
+             *     0 by default.
+             */
+            tz?: number | null;
+        };
+        /**
          * @description A note on what a search left out.
          * @enum {string}
          */
@@ -7361,7 +7475,7 @@ export interface components {
          * @description What a client subscribes to with `?topics=`.
          * @enum {string}
          */
-        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings" | "updates";
+        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights" | "settings" | "updates" | "search_live";
         /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
@@ -10621,6 +10735,118 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    registerSearchLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchLiveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchLiveRegistration"];
+                };
+            };
+            /** @description `query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `bad_tz`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many live queries are registered (`too_many_live_queries`). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Search is off (`search_disabled`), or live updates aren't served (`events_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    releaseSearchLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The registration's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `live_query_not_found`: none by that id for this session (it may have been released already). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Live updates aren't served (`events_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
