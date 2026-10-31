@@ -3440,7 +3440,7 @@ export interface components {
             host: string;
             /**
              * @description Without it (and with `username`), the saved password, as long as
-             *     `host` and `port` are the saved ones.
+             *     `host`, `port` and `security` are the saved ones.
              */
             password?: string;
             /**
