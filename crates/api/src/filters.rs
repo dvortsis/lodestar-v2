@@ -2130,27 +2130,51 @@ const MAX_CORRECTIONS: usize = 10_000;
 const CORRECTIONS_CHUNK: usize = 500;
 /// Stored torrents one classification rule change re-queues at most.
 const MAX_REQUEUE: usize = 1_000_000;
-/// The `settings` key holding the queries of re-queues not yet finished:
-/// a JSON list, one entry per rule change, written before the change and
-/// removed once its marks are in.
+/// The `settings` key holding the re-queues not yet finished: a JSON list
+/// of query texts, one per distinct query, written before the rule change
+/// and removed once its marks are in; or, past [`MAX_PENDING`], the JSON
+/// string [`PENDING_ALL`]: a full re-mark of every stored torrent.
 const REQUEUE_PENDING: &str = "classify.requeue_pending";
+/// Distinct query texts pending at most. With search off nothing clears
+/// them, so an admin changing many different rules would grow the list
+/// without limit; past this it collapses into one full re-mark.
+const MAX_PENDING: usize = 64;
+/// The stored value of a full re-mark. A JSON string, never a list item,
+/// so no query text can be taken for it or clear it.
+const PENDING_ALL: &str = "\"all\"";
 
-fn pending_requeues(store: &Store) -> ApiResult<Vec<String>> {
-    let text = store.setting_text(REQUEUE_PENDING).map_err(internal)?;
-    // Unreadable (never written so): nothing can be recovered from it,
-    // and it mustn't block rule changes, so it's started afresh.
-    Ok(text
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default())
+/// What re-queues are pending.
+#[derive(Debug, PartialEq)]
+enum Pending {
+    /// These query texts' matches.
+    Texts(Vec<String>),
+    /// Every stored torrent: the texts passed [`MAX_PENDING`].
+    All,
 }
 
-fn set_pending_requeues(store: &mut Store, list: &[String]) -> ApiResult<()> {
-    if list.is_empty() {
-        return store
-            .update_settings_text(&[], &[REQUEUE_PENDING])
-            .map_err(internal);
+fn pending_requeues(store: &Store) -> ApiResult<Pending> {
+    let text = store.setting_text(REQUEUE_PENDING).map_err(internal)?;
+    if text.as_deref() == Some(PENDING_ALL) {
+        return Ok(Pending::All);
     }
-    let text = serde_json::to_string(list).map_err(internal)?;
+    // Unreadable (never written so): nothing can be recovered from it,
+    // and it mustn't block rule changes, so it's started afresh.
+    Ok(Pending::Texts(
+        text.and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default(),
+    ))
+}
+
+fn set_pending_requeues(store: &mut Store, pending: &Pending) -> ApiResult<()> {
+    let text = match pending {
+        Pending::Texts(list) if list.is_empty() => {
+            return store
+                .update_settings_text(&[], &[REQUEUE_PENDING])
+                .map_err(internal);
+        }
+        Pending::Texts(list) => serde_json::to_string(list).map_err(internal)?,
+        Pending::All => PENDING_ALL.to_owned(),
+    };
     store
         .set_settings_text(&[(REQUEUE_PENDING, &text)])
         .map_err(internal)
@@ -2160,23 +2184,34 @@ fn set_pending_requeues(store: &mut Store, list: &[String]) -> ApiResult<()> {
 /// follows, so a stop anywhere after the change leaves it to redo. A query
 /// already pending isn't added twice, so while there's no search index to
 /// clear them the list holds one entry per query text; [`FiltersApi::requeue`] keeps an
-/// entry a later rule change still needs. `true` when it was added.
+/// entry a later rule change still needs. Past [`MAX_PENDING`] texts the
+/// list becomes a full re-mark, which covers every query from then on.
+/// `true` when it was added.
 fn push_pending_requeue(store: &mut Store, query: &str) -> ApiResult<bool> {
-    let mut list = pending_requeues(store)?;
+    let Pending::Texts(mut list) = pending_requeues(store)? else {
+        return Ok(false);
+    };
     if list.iter().any(|q| q == query) {
         return Ok(false);
     }
+    if list.len() >= MAX_PENDING {
+        set_pending_requeues(store, &Pending::All)?;
+        return Ok(true);
+    }
     list.push(query.to_owned());
-    set_pending_requeues(store, &list)?;
+    set_pending_requeues(store, &Pending::Texts(list))?;
     Ok(true)
 }
 
-/// Clears one pending re-queue of `query` once its marks are in.
+/// Clears one pending re-queue of `query` once its marks are in. A full
+/// re-mark stays: one query's marks don't cover it.
 fn drop_pending_requeue(store: &mut Store, query: &str) -> ApiResult<()> {
-    let mut list = pending_requeues(store)?;
+    let Pending::Texts(mut list) = pending_requeues(store)? else {
+        return Ok(());
+    };
     if let Some(i) = list.iter().position(|q| q == query) {
         list.remove(i);
-        set_pending_requeues(store, &list)?;
+        set_pending_requeues(store, &Pending::Texts(list))?;
     }
     Ok(())
 }
@@ -2562,6 +2597,37 @@ impl FiltersApi {
         Ok((Some(n), truncated))
     }
 
+    /// The full re-mark ([`Pending::All`]): marks every stored torrent, and
+    /// clears it on the same terms as [`FiltersApi::requeue`] clears a
+    /// text: only once an index is there and the marking is all done, with
+    /// no rule change since it began. `None` without a search index.
+    fn requeue_all(&self) -> ApiResult<Option<usize>> {
+        if self.index.is_none() {
+            return Ok(None);
+        }
+        let stop = || {
+            if self.shutdown.is_stopped() {
+                Err(stopping())
+            } else {
+                Ok(())
+            }
+        };
+        stop()?;
+        let generation = self.store().class_gen().map_err(internal)?;
+        // The same path as the torrents an index hasn't reached yet, from
+        // the first id.
+        let n = self.store().mark_unenriched_after(0).map_err(internal)?;
+        self.reenrich.store(true, Ordering::Release);
+        stop()?;
+        let mut store = self.store();
+        if store.class_gen().map_err(internal)? == generation
+            && pending_requeues(&store)? == Pending::All
+        {
+            set_pending_requeues(&mut store, &Pending::Texts(Vec::new()))?;
+        }
+        Ok(Some(n))
+    }
+
     /// Redoes the pending re-queues: those a stop cut short, and those
     /// made while search was off (run at every start, in the background;
     /// search is turned on by a restart). Each one an index finishes is
@@ -2569,9 +2635,12 @@ impl FiltersApi {
     /// the rest still run: its error is logged where it happens, by type
     /// only (`api.internal_error`), never with the query. Only the
     /// shutdown stops the loop, and what's left stays for the next start.
-    /// Returns how many an index finished.
+    /// A full re-mark is one re-queue. Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
-        let pending = pending_requeues(&self.store())?;
+        let pending = match pending_requeues(&self.store())? {
+            Pending::All => return Ok(self.requeue_all()?.map_or(0, |_| 1)),
+            Pending::Texts(list) => list,
+        };
         let mut done = 0;
         for text in &pending {
             match self.requeue_text(text, now) {
@@ -3019,6 +3088,41 @@ mod tests {
             const { std::cell::RefCell::new(None) };
     }
 
+    fn texts(list: &[&str]) -> Pending {
+        Pending::Texts(list.iter().map(|q| (*q).to_owned()).collect())
+    }
+
+    /// Below the cap the texts are deduped; past it they collapse into one
+    /// full re-mark, which no later push or single-text clear undoes.
+    #[test]
+    fn pending_requeues_collapse_into_a_full_remark_past_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+        let qs: Vec<String> = (0..MAX_PENDING).map(|i| format!("word{i}")).collect();
+        for q in &qs {
+            assert!(push_pending_requeue(&mut store, q).unwrap());
+            assert!(!push_pending_requeue(&mut store, q).unwrap(), "deduped");
+        }
+        let refs: Vec<&str> = qs.iter().map(String::as_str).collect();
+        assert_eq!(pending_requeues(&store).unwrap(), texts(&refs));
+        // A repeat at the cap is still deduped, not collapsed.
+        assert!(!push_pending_requeue(&mut store, "word0").unwrap());
+        assert_eq!(pending_requeues(&store).unwrap(), texts(&refs));
+        // One more distinct text: a full re-mark.
+        assert!(push_pending_requeue(&mut store, "one-more").unwrap());
+        assert_eq!(pending_requeues(&store).unwrap(), Pending::All);
+        assert_eq!(
+            store.setting_text(REQUEUE_PENDING).unwrap().as_deref(),
+            Some(PENDING_ALL)
+        );
+        assert!(!push_pending_requeue(&mut store, "later").unwrap());
+        // A text that reads as the stored value is still only a text.
+        drop_pending_requeue(&mut store, "word0").unwrap();
+        drop_pending_requeue(&mut store, PENDING_ALL).unwrap();
+        drop_pending_requeue(&mut store, "all").unwrap();
+        assert_eq!(pending_requeues(&store).unwrap(), Pending::All);
+    }
+
     /// One pending re-queue failing every time doesn't hold up the rest:
     /// it stays, and the others are done and cleared.
     #[test]
@@ -3030,7 +3134,7 @@ mod tests {
         }
         assert_eq!(
             pending_requeues(&store).unwrap(),
-            ["fails", "lexb", "other"]
+            texts(&["fails", "lexb", "other"])
         );
         let api = FiltersApi {
             store: Arc::new(Mutex::new(store)),
@@ -3050,12 +3154,15 @@ mod tests {
         };
         FAIL_REQUEUE.with(|f| *f.borrow_mut() = Some("fails".into()));
         assert_eq!(api.resume_requeues(0).unwrap(), 2);
-        assert_eq!(pending_requeues(&api.store()).unwrap(), ["fails"]);
+        assert_eq!(pending_requeues(&api.store()).unwrap(), texts(&["fails"]));
         // Only the shutdown stops the loop.
         api.shutdown.cancel();
         push_pending_requeue(&mut api.store(), "lexb").unwrap();
         assert!(api.resume_requeues(0).is_err());
-        assert_eq!(pending_requeues(&api.store()).unwrap(), ["fails", "lexb"]);
+        assert_eq!(
+            pending_requeues(&api.store()).unwrap(),
+            texts(&["fails", "lexb"])
+        );
     }
 
     /// `correct` marks a new hold before its store write: at the mark the
