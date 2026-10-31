@@ -53,8 +53,9 @@
 </script>
 
 <!-- Moving a column moves its focused button in the DOM, which drops focus: Esc is heard on the window. -->
-<svelte:window onkeydown={(e) => e.key === 'Escape' && onclose()} />
+<svelte:window onkeydown={escape} />
 <div
+	bind:this={root}
 	class="rt-chooser"
 	role="group"
 	aria-label={m.search_table_columns()}
