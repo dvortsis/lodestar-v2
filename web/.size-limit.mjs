@@ -497,7 +497,7 @@ export default [
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
-	entry('Search bulk bar (on demand)', bulkLazy, '3.4 KB'),
+	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
 	entry('Natural phrasing (on demand)', naturalLazy, '1.64 KB'),

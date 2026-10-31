@@ -84,6 +84,37 @@ test('Copy magnets sends the selected hashes and copies what the server built', 
 	);
 });
 
+test('a refused clipboard shows every magnet, one per line, to copy by hand', async ({
+	page,
+	go
+}) => {
+	await page.addInitScript(() => {
+		Object.defineProperty(navigator, 'clipboard', {
+			value: { writeText: () => Promise.reject(new Error('denied')) }
+		});
+		document.execCommand = () => false;
+	});
+	await page.route('**/api/v1/export', (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: 'text/plain',
+			body: `magnet:?xt=urn:btih:${hashOf(1)}\nmagnet:?xt=urn:btih:${hashOf(2)}\n`
+		})
+	);
+	await go('/search?q=lantern');
+	await page.getByTestId('select-mode').click();
+	await pick(page, 1).check();
+	await pick(page, 2).check();
+	await page.getByTestId('bulk-copy').click();
+	const text = page.getByTestId('bulk-manual-text');
+	await expect(text).toBeFocused();
+	await expect(text).toHaveValue(
+		`magnet:?xt=urn:btih:${hashOf(1)}\nmagnet:?xt=urn:btih:${hashOf(2)}`
+	);
+	await page.getByTestId('bulk-manual-close').click();
+	await expect(page.getByTestId('bulk-manual')).toHaveCount(0);
+});
+
 test('a failed export says so and keeps the selection', async ({ page, go }) => {
 	await page.route('**/api/v1/export', (route) => route.fulfill({ status: 500, body: '{}' }));
 	await go('/search?q=lantern');
@@ -148,6 +179,8 @@ for (const mode of ['light', 'dark'] as const) {
 				await go('/search?q=lantern&view=table');
 				await page.getByTestId('select-mode').click();
 				await page.getByTestId('table-select-1').check();
+				await expect(page.getByTestId('bulk-bar')).toBeVisible();
+				await expect(count(page)).toHaveText('1 selected');
 				await expectNoA11yViolations(page);
 			});
 		}

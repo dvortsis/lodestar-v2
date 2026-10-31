@@ -142,7 +142,7 @@
 	"search_bulk_compare_hint": "Select {min} to {max} torrents to compare.",
 	"search_bulk_copied_one": "Copied 1 magnet link.",
 	"search_bulk_copied_other": "Copied {count} magnet links.",
-	"search_bulk_exported": "Exported {count} torrents.",
+	"search_bulk_exported": "Exported the selection.",
 	"search_bulk_failed": "Couldn't reach Lodestar. Check that it's running, then try again.",
 	"search_bulk_too_many": "Select at most {max} torrents for one export.",
 	"search_assist_label": "Suggestions",
@@ -182,5 +182,7 @@
 	"search_assist_op_gt": "more than",
 	"search_assist_op_lt": "less than",
 	"search_assist_builder_apply": "Apply",
-	"search_assist_builder_stale": "The query changed while this was being checked. Try again."
+	"search_assist_builder_stale": "The query changed while this was being checked. Try again.",
+	"search_bulk_manual_label": "Your browser blocked copying. Select these magnet links and copy them.",
+	"search_bulk_manual_close": "Close"
 }

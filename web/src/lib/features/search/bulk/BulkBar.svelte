@@ -2,6 +2,7 @@
 	// The bulk bar (§10.4): Copy magnets, Export and Compare (2–5) for the selected rows. Each reports
 	// through a toast; the count is announced by the panel's polite region. Send waits for an API to
 	// send to (docs/decisions/2026-10-31-S-search-5.md). Loaded when the first row is selected.
+	import { tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { formatCount } from '$lib/format';
@@ -22,8 +23,11 @@
 	import './bulk.css';
 	import { selection } from './selection.svelte';
 
+	const id = $props.id();
 	const locale = $derived(currentLocale());
 	const n = $derived(selection.count);
+	let manual = $state<string | null>(null);
+	let manualEl = $state<HTMLTextAreaElement>();
 	let busy = $state<'copy' | 'export' | null>(null);
 
 	async function copy() {
@@ -39,9 +43,13 @@
 						: m.search_bulk_failed()
 			});
 		else if (!r.copied) {
-			// The clipboard refused (a slow answer ends the click's permission): the detail view's
-			// copy shows the text in its manual field.
-			void import('$lib/features/detail/magnet').then((mod) => mod.copyMagnet({ magnet: r.text }));
+			// The clipboard refused (a slow answer ends the click's permission): show every magnet,
+			// one per line, selected, for Ctrl+C. (Detail's manual field is a single line.)
+			manual = r.text;
+			void tick().then(() => {
+				manualEl?.focus();
+				manualEl?.select();
+			});
 		} else
 			toast.push({
 				kind: 'success',
@@ -66,7 +74,7 @@
 		download(r.text, r.filename, 'text/csv');
 		toast.push({
 			kind: 'success',
-			text: m.search_bulk_exported({ count: formatCount(n, locale) })
+			text: m.search_bulk_exported()
 		});
 	}
 
@@ -104,4 +112,19 @@
 	<Button dense variant="quiet" onclick={() => (selection.mode = false)} data-testid="bulk-clear"
 		>{m.search_bulk_clear()}</Button
 	>
+	{#if manual !== null}
+		<div class="bb-manual" data-testid="bulk-manual">
+			<label for="{id}-manual">{m.search_bulk_manual_label()}</label>
+			<textarea
+				id="{id}-manual"
+				bind:this={manualEl}
+				readonly
+				rows="4"
+				value={manual}
+				data-testid="bulk-manual-text"></textarea>
+			<Button dense variant="quiet" onclick={() => (manual = null)} data-testid="bulk-manual-close"
+				>{m.search_bulk_manual_close()}</Button
+			>
+		</div>
+	{/if}
 </div>

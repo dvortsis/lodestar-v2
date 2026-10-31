@@ -142,7 +142,9 @@
 	"search_bulk_compare_hint": "请选择 {min} 到 {max} 个种子进行对比。",
 	"search_bulk_copied_one": "已复制 1 个磁力链接。",
 	"search_bulk_copied_other": "已复制 {count} 个磁力链接。",
-	"search_bulk_exported": "已导出 {count} 个种子。",
+	"search_bulk_exported": "已导出所选种子。",
 	"search_bulk_failed": "无法连接 Lodestar。请确认它正在运行，然后重试。",
-	"search_bulk_too_many": "一次导出最多可选择 {max} 个种子。"
+	"search_bulk_too_many": "一次导出最多可选择 {max} 个种子。",
+	"search_bulk_manual_label": "浏览器阻止了复制。请选中这些磁力链接并手动复制。",
+	"search_bulk_manual_close": "关闭"
 }

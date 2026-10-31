@@ -36,3 +36,22 @@
 		min-height: var(--target-min);
 	}
 }
+
+/* The multi-line manual copy field, shown when the clipboard refuses. */
+.bb-manual {
+	display: flex;
+	flex: 1 1 100%;
+	flex-direction: column;
+	gap: var(--spacing);
+}
+.bb-manual textarea {
+	box-sizing: border-box;
+	width: 100%;
+	padding: calc(var(--spacing) * 2);
+	border: 1px solid var(--color-field-border);
+	border-radius: var(--radius-field);
+	background: var(--color-base-100);
+	color: inherit;
+	font-family: var(--font-mono);
+	font-size: var(--text-small);
+}

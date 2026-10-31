@@ -55,6 +55,18 @@ describe('copyMagnets', () => {
 		expect(writes).toEqual(['magnet:?xt=urn:btih:a\nmagnet:?xt=urn:btih:b']);
 	});
 
+	it('reports a refused clipboard as not copied, with the text to show', async () => {
+		Object.assign(navigator, {
+			clipboard: { writeText: async () => Promise.reject(new Error('denied')) }
+		});
+		const r = await copyMagnets(
+			['a', 'b'],
+			reply('magnet:?xt=urn:btih:a\nmagnet:?xt=urn:btih:b\n')
+		);
+		expect(r).toMatchObject({ ok: true, copied: false, count: 2 });
+		expect(r.ok && r.text).toBe('magnet:?xt=urn:btih:a\nmagnet:?xt=urn:btih:b');
+	});
+
 	it('fails when the server wrote no magnet', async () => {
 		expect(await copyMagnets(['a'], reply('\n'))).toEqual({ ok: false, reason: 'failed' });
 	});
