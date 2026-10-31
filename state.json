@@ -451,7 +451,7 @@
     },
     "S-search-5": {
       "status": "running",
-      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views"
+      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6)"
     },
     "S-search-6": {
       "status": "running",
@@ -498,7 +498,7 @@
     },
     "S-insights-2": {
       "status": "running",
-      "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc"
+      "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile"
     },
     "S-insights-3": {
       "status": "pending",
@@ -1545,7 +1545,7 @@
     },
     "IMP-4": {
       "status": "review",
-      "notes": "2026-10-31T01:15Z brief briefs/IMP-4.md; Opus session_01MMjhnBDAVMU76chqoEU4Hh; planned 4a/4b split | 02:13Z 4a PR #253 head 608ae777 (~1,900, half tests); reviewer session_01MMjhnD7kNMtMN3bmgrHVtu; 4b building. Owner flags: paused job must be cancelled before remove; remove keeps private candidates and rows vouched by another source/user data; refused source -> source_unavailable | 02:29Z #253 review MERGE (security-review clean); optional findings folded into 4b; merge on green ci-ok"
+      "notes": "2026-10-31T01:15Z brief briefs/IMP-4.md; Opus session_01MMjhnBDAVMU76chqoEU4Hh; planned 4a/4b split | 02:13Z 4a PR #253 head 608ae777 (~1,900, half tests); reviewer session_01MMjhnD7kNMtMN3bmgrHVtu; 4b building. Owner flags: paused job must be cancelled before remove; remove keeps private candidates and rows vouched by another source/user data; refused source -> source_unavailable | 02:29Z #253 review MERGE (security-review clean); optional findings folded into 4b; merge on green ci-ok | 02:50Z merged #253 IMP-4a (467c349b); 4b PR next"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2221,6 +2221,10 @@
     {
       "item": "FYI (\u00a72.19) #251 CR-1a-S part 1 (merged, dht.streaming_peers off by default): candidate defaults STREAM_BATCH 8, STREAM_QUEUE 2, one pending batch, STREAM_SEEN 32 (the spec's proposed bounds). Screen (part 2): healthy +7.5% with 8/8 seeds better, high-latency +7.7% and admission-pressure +2.9% within noise; time to first fetch 4.6-16x faster; conversion unchanged. A live A/B candidate.",
       "status": "sent 2026-10-31T02:00Z"
+    },
+    {
+      "item": "FYI (\u00a72.19) #253 IMP-4a (merged): import job removal refuses a paused job until cancelled; removal keeps private candidates and rows another source or the user's own data vouches for (they keep IMPORTED but lose membership); a refused source fails the job with source_unavailable; public candidates folded into a removed job's row are removed with it (documented; counting needs a schema change)",
+      "status": "to-send"
     }
   ],
   "external_gates": {
