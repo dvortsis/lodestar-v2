@@ -192,8 +192,8 @@ pub struct SearchResponse {
     pub total_approx: bool,
 }
 
-/// Zero-result recovery: the first [`MAX_CLAUSES`] top-level clauses
-/// of the query (the `of` of a root `and`), each with the total the
+/// Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the
+/// query (the `of` of a root `and`), each with the total the
 /// query has without it, counted on the same snapshot and with the same
 /// visibility as the search (filter-hidden torrents and Adult stay out
 /// as they did; removing `adult:…` or `hidden:…` never brings them back).
@@ -203,7 +203,8 @@ pub struct SearchResponse {
 pub struct SearchRecovery {
     /// In query order.
     pub clauses: Vec<ClauseRemoval>,
-    /// Top-level clauses past the first 8, not counted.
+    /// Top-level clauses past the 8 counted (filters are counted before
+    /// free text), left out.
     pub skipped: usize,
 }
 
@@ -222,12 +223,13 @@ pub struct ClauseRemoval {
     /// `without` as canonical query text.
     pub canonical: String,
     /// Matches without the clause. Absent when the shared deadline passed
-    /// before it was counted (never 0 for that): show nothing for it.
+    /// before it was fully counted (never 0 or a guess for that): show
+    /// nothing for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub total: Option<usize>,
-    /// `total` is an estimate (sampled, or its exact count was cut
-    /// short): shown with "≈".
+    /// `total` is an estimate, by the same rule as `/search`'s
+    /// `total_approx`: shown with "≈".
     pub total_approx: bool,
 }
 
@@ -237,7 +239,7 @@ pub struct ClauseRemoval {
 #[schema(example = json!({
     "cold_start": false,
     "growing": true,
-    "growth_hours": 24,
+    "growth_hours": 24.0,
     "growth_per_hour": 2104.5,
     "rebuild": null,
     "searchable_torrents": 84210,
@@ -252,12 +254,12 @@ pub struct SearchIndexState {
     /// banner (decision S-search-2a).
     pub growing: bool,
     /// Hours of the last 24 whole UTC hours the index was measured in
-    /// (the `COVERAGE` rollup's index dim), which `growth_per_hour`
-    /// averages over.
-    pub growth_hours: u32,
-    /// Torrents that became searchable per hour (the `NEWLY_SEARCHABLE`
-    /// rollup, `docs/metrics.md` §7.7), averaged over `growth_hours`;
-    /// null when none was measured.
+    /// (`COVERAGE` seconds on its index dim, `docs/metrics.md` §7.7),
+    /// which `growth_per_hour` averages over.
+    pub growth_hours: f64,
+    /// Torrents that became searchable in the last 24 whole UTC hours
+    /// (the `NEWLY_SEARCHABLE` rollup), per hour of `growth_hours`; null
+    /// when nothing was measured.
     #[schema(required = true)]
     pub growth_per_hour: Option<f64>,
     /// The rebuild under way; null when none is.

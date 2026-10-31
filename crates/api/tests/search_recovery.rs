@@ -159,9 +159,27 @@ async fn get(f: &Fixture, c: &str, uri: &str) -> Value {
     body
 }
 
+/// The search, again until every clause is counted: counts share a
+/// 20 ms deadline, which a loaded runner can miss (a missed count is
+/// absent). Gives up after 10 s with what it saw.
 async fn search(f: &Fixture, c: &str, q: &str, more: &str) -> Value {
     let q: String = form_urlencoded::byte_serialize(q.as_bytes()).collect();
-    get(f, c, &format!("/api/v1/search?q={q}{more}")).await
+    let uri = format!("/api/v1/search?q={q}{more}");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let body = get(f, c, &uri).await;
+        let missing = body["recovery"]["clauses"]
+            .as_array()
+            .is_some_and(|cs| cs.iter().any(|c| c.get("total").is_none()));
+        if !missing {
+            return body;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "{uri}: still uncounted: {body}"
+        );
+        tokio::task::yield_now().await;
+    }
 }
 
 /// `(clause, total)` per counted clause, in order.
@@ -216,6 +234,16 @@ async fn an_empty_result_counts_each_clause_removed() {
     }
     let body = search(&f, &c, "movie nosuchword", "&offset=1").await;
     assert!(body.get("recovery").is_none(), "{body}");
+    // Past eight clauses, free text is left out first; the filter counts.
+    let body = search(&f, &c, "xa xb xc xd xe xf xg xh movie -size:>1TB", "").await;
+    assert_eq!(body["recovery"]["skipped"], 2);
+    let shown: Vec<u64> = body["recovery"]["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(shown, [0, 1, 2, 3, 4, 5, 6, 9]);
 }
 
 #[tokio::test]
@@ -270,8 +298,8 @@ async fn index_state_reads_size_growth_and_cold_start() {
     assert_eq!(body["unavailable"], json!([]));
     // Nothing measured: null, not 0.
     assert_eq!(body["growth_per_hour"], Value::Null);
-    assert_eq!(body["growth_hours"], 0);
-    // Two hours measured, one not: 30 and 10 over the two measured.
+    assert_eq!(body["growth_hours"], 0.0);
+    // An hour and a half measured over two hours: 45 made searchable.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -288,14 +316,16 @@ async fn index_state_reads_size_growth_and_cold_start() {
         .add_counters(&[
             counter(12, hour - 2, 0, 3600),
             counter(12, hour - 1, 0, 1800),
-            // The crawl dim alone isn't the index measured.
+            // The crawl dim isn't the index measured.
             counter(12, hour - 3, 1, 3600),
             counter(10, hour - 1, 4, 30),
-            counter(10, hour - 2, 2, 10),
-            counter(10, hour - 3, 2, 500),
+            counter(10, hour - 2, 2, 15),
+            // Older than 24 hours.
+            counter(12, hour - 30, 0, 3600),
+            counter(10, hour - 30, 2, 500),
         ])
         .unwrap();
     let body = get(&f, &c, "/api/v1/search/state").await;
-    assert_eq!(body["growth_hours"], 2);
-    assert_eq!(body["growth_per_hour"], 20.0);
+    assert_eq!(body["growth_hours"], 1.5);
+    assert_eq!(body["growth_per_hour"], 30.0);
 }

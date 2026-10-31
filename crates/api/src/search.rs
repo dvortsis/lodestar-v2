@@ -12,7 +12,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
 use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
-use lodestar_search::recovery::{self, MAX_CLAUSES, RECOVERY_BUDGET};
+use lodestar_search::recovery::{self, RECOVERY_BUDGET};
 use lodestar_search::{
     CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
     RebuildProgress, SearchSpec, Sort, Start, WEIGHTS, parse,
@@ -451,8 +451,14 @@ async fn run_search(
         };
         let (page, explained) = paged.map_err(failed)?;
         // An empty first page: what removing each clause would give.
+        // The search itself has succeeded: only a client that's gone
+        // fails it now. Any other failure of the counts leaves them out.
         let recovery = if served == 0 && total.value == 0 {
-            recover(&lease, &ast, visibility, &cancel).map_err(failed)?
+            match recover(&lease, &ast, visibility, &cancel) {
+                Ok(r) => r,
+                Err(e @ SearchError::Cancelled) => return Err(failed(e)),
+                Err(_) => None,
+            }
         } else {
             None
         };
@@ -561,7 +567,8 @@ fn recover(
         .collect();
     let totals = recovery::totals_on(lease, &queries, cancel, RECOVERY_BUDGET)?;
     let top = recovery::top_level(ast);
-    let clauses = removals
+    let skipped = top.len() - removals.len();
+    let mut clauses: Vec<ClauseRemoval> = removals
         .into_iter()
         .zip(totals)
         .map(|((index, without), total)| ClauseRemoval {
@@ -573,10 +580,9 @@ fn recover(
             total_approx: total.is_some_and(|t| t.approx),
         })
         .collect();
-    Ok(Some(SearchRecovery {
-        clauses,
-        skipped: top.len().saturating_sub(MAX_CLAUSES),
-    }))
+    // Counted filters first; shown in query order.
+    clauses.sort_by_key(|c| c.index);
+    Ok(Some(SearchRecovery { clauses, skipped }))
 }
 
 /// Below this many searchable torrents the search page shows its
@@ -627,7 +633,7 @@ pub(crate) async fn index_state(
 /// The response, from what was read.
 fn state_of(
     searchable: u64,
-    (growth_per_hour, growth_hours): (Option<f64>, u32),
+    (growth_per_hour, growth_hours): (Option<f64>, f64),
     progress: Option<RebuildProgress>,
     missing: &[String],
     now: i64,
@@ -663,27 +669,27 @@ fn state_of(
 }
 
 /// Torrents made searchable per hour over the last [`GROWTH_HOURS`]
-/// whole UTC hours, counting only the hours the index was measured in
-/// (a `COVERAGE` row on its index dim), and how many those were. Nothing
-/// measured is `None`, not 0.
-fn growth(store: &Store, now: i64) -> lodestar_store::Result<(Option<f64>, u32)> {
+/// whole UTC hours: every `NEWLY_SEARCHABLE` row in them, as Insights'
+/// trend counts them, over the time the index was measured (`COVERAGE`
+/// seconds on its index dim, at most an hour per hour), and that time in
+/// hours. Nothing measured is `None`, not 0.
+fn growth(store: &Store, now: i64) -> lodestar_store::Result<(Option<f64>, f64)> {
     let to = now.div_euclid(3600);
     let from = to - GROWTH_HOURS;
     store.read_snapshot(|st| {
-        let covered: std::collections::BTreeSet<i64> = st
+        let measured: i64 = st
             .rollup_sums(metric::COVERAGE, from, to, RollupBy::HourDim)?
-            .into_iter()
-            .filter(|c| c.dim == metric::COVERAGE_INDEX && c.value > 0)
-            .map(|c| c.hour)
-            .collect();
-        let newly: i64 = st
-            .rollup_sums(metric::NEWLY_SEARCHABLE, from, to, RollupBy::Hour)?
             .iter()
-            .filter(|c| covered.contains(&c.hour))
+            .filter(|c| c.dim == metric::COVERAGE_INDEX)
+            .map(|c| c.value.clamp(0, 3600))
+            .sum();
+        let newly: i64 = st
+            .rollup_sums(metric::NEWLY_SEARCHABLE, from, to, RollupBy::Total)?
+            .iter()
             .map(|c| c.value)
             .sum();
-        let hours = covered.len() as u32;
-        Ok(((hours > 0).then(|| newly as f64 / f64::from(hours)), hours))
+        let hours = measured as f64 / 3600.0;
+        Ok(((measured > 0).then(|| newly as f64 / hours), hours))
     })
 }
 
@@ -1141,7 +1147,7 @@ mod tests {
     #[test]
     fn index_state_flags_and_rebuild() {
         use lodestar_search::{IndexVersion, RebuildPhase as P};
-        let at = |n| state_of(n, (None, 0), None, &[], 7);
+        let at = |n| state_of(n, (None, 0.0), None, &[], 7);
         assert!(at(999).cold_start && at(999).growing);
         assert!(!at(1_000).cold_start && at(1_000).growing);
         assert!(!at(1_000_000).growing);
@@ -1163,7 +1169,7 @@ mod tests {
             error: None,
         };
         let missing = ["year".to_string()];
-        let got = state_of(84_210, (Some(2_104.5), 24), Some(progress), &missing, 9);
+        let got = state_of(84_210, (Some(2_104.5), 24.0), Some(progress), &missing, 9);
         assert_eq!(
             got.rebuild,
             Some(IndexRebuild {
@@ -1178,7 +1184,10 @@ mod tests {
             })
         );
         assert_eq!(got.unavailable, missing);
-        assert_eq!((got.growth_per_hour, got.growth_hours), (Some(2_104.5), 24));
+        assert_eq!(
+            (got.growth_per_hour, got.growth_hours),
+            (Some(2_104.5), 24.0)
+        );
         assert!(!got.cold_start && got.growing);
     }
 }

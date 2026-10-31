@@ -3,10 +3,10 @@
 //! snapshot the empty answer came from.
 //!
 //! The cost is bounded three ways: at most [`MAX_CLAUSES`] clauses, one
-//! deadline shared by every count, and the same sampled estimate a total
-//! uses (`count.rs`). A count the deadline cut off before any estimate
-//! is `None`, never 0; one cut off during its exact pass keeps the
-//! estimate, marked approximate.
+//! deadline shared by every count, and the same rules a total follows
+//! (`count.rs`): exact up to twice the threshold, estimated (`approx`)
+//! above it. A count the deadline cut off, anywhere in it, is `None`,
+//! never 0 or a rough estimate, and so is every count after it.
 
 use std::time::Duration;
 
@@ -15,15 +15,15 @@ use crate::compile::has_stem_alternative;
 use crate::count::{self, Policy, Total};
 use crate::index::{Error, Result, STEM_FALLBACK_BELOW};
 use crate::lease::Lease;
-use crate::query::Node;
+use crate::query::{Node, TextField};
 
 /// Clauses counted at most. The active-filter strip rarely holds more,
-/// and a count of a narrowed query takes 1–3 ms, so eight fit in
-/// [`RECOVERY_BUDGET`] with room for the search itself.
+/// and on the bench corpus all of them together fit [`RECOVERY_BUDGET`]
+/// (decision B-search-recovery).
 pub const MAX_CLAUSES: usize = 8;
 
-/// The deadline every count of one response shares, inside §3's 30 ms
-/// for a search.
+/// The deadline every count of one response shares, after the search
+/// itself.
 pub const RECOVERY_BUDGET: Duration = Duration::from_millis(20);
 
 /// The top-level clauses of `node` (the `of` of a root `And`, else the
@@ -53,18 +53,38 @@ pub fn without_clause(node: &Node, index: usize) -> Node {
     }
 }
 
-/// The removals worth counting: every top-level clause of a query that
+/// The removals worth counting: the top-level clauses of a query that
 /// has at least two (removing a query's only clause browses everything),
-/// the first [`MAX_CLAUSES`] of them. Each is the clause's index and the
-/// query without it.
+/// at most [`MAX_CLAUSES`] of them: structured clauses (the filter
+/// strip's chips) first, then free text, each group in query order. Each
+/// is the clause's index and the query without it.
 pub fn removals(node: &Node) -> Vec<(usize, Node)> {
     let clauses = top_level(node);
     if clauses.len() < 2 {
         return Vec::new();
     }
-    (0..clauses.len().min(MAX_CLAUSES))
+    let (text, chips): (Vec<usize>, Vec<usize>) =
+        (0..clauses.len()).partition(|&i| free_text(&clauses[i]));
+    chips
+        .into_iter()
+        .chain(text)
+        .take(MAX_CLAUSES)
         .map(|i| (i, without_clause(node, i)))
         .collect()
+}
+
+/// Free text in any field, which stays in the search bar rather than
+/// getting a chip (`clauses.ts`'s `isFreeText`).
+fn free_text(node: &Node) -> bool {
+    match node {
+        Node::Word { field, .. }
+        | Node::Phrase { field, .. }
+        | Node::Near { field, .. }
+        | Node::Prefix { field, .. }
+        | Node::Fuzzy { field, .. } => *field == TextField::Any,
+        Node::Or { of } => of.iter().all(free_text),
+        _ => false,
+    }
 }
 
 /// The total of each of `queries` on `lease`'s snapshot (at its `now` and
@@ -101,45 +121,22 @@ pub(crate) fn totals_with(
     Ok(out)
 }
 
-/// One query's total, as a lease taken for it would count it.
+/// One query's total, as a lease taken for it would count it. Out of
+/// time anywhere, the stem fallback's pass included, it's `OutOfTime`:
+/// a count without its fallback could be lower than the search shows.
 fn total(lease: &Lease, node: &Node, deadline: &CancelToken, policy: Policy) -> Result<Total> {
     let index = lease.index();
+    let searcher = lease.searcher();
     let compile =
         |stems| index.compile_cancelled(node, lease.now(), lease.utc_offset(), stems, deadline);
-    let mut best = count_within(lease, &compile(false)?, deadline, policy)?;
+    let mut best = count::total_with(searcher, &compile(false)?, deadline, policy)?;
     if best.value < STEM_FALLBACK_BELOW && has_stem_alternative(node) {
-        let wider = count_within(lease, &compile(true)?, deadline, policy)?;
+        let wider = count::total_with(searcher, &compile(true)?, deadline, policy)?;
         if wider.value > best.value {
             best = wider;
         }
     }
     Ok(best)
-}
-
-/// [`count::total_with`], except that an exact pass the deadline cuts
-/// short keeps its estimate (approximate) instead of failing.
-fn count_within(
-    lease: &Lease,
-    compiled: &crate::index::Compiled,
-    deadline: &CancelToken,
-    policy: Policy,
-) -> Result<Total> {
-    let searcher = lease.searcher();
-    let estimate = count::estimate_with(searcher, compiled, deadline, policy.sample_above)?;
-    if !estimate.approx {
-        return Ok(estimate);
-    }
-    if estimate.value > policy.exact_up_to.saturating_mul(2) {
-        return Ok(estimate);
-    }
-    match count::exact(searcher, compiled, deadline) {
-        Ok(value) => Ok(Total {
-            value,
-            approx: false,
-        }),
-        Err(Error::OutOfTime) => Ok(estimate),
-        Err(e) => Err(e),
-    }
 }
 
 #[cfg(test)]
@@ -194,6 +191,17 @@ mod tests {
     }
 
     #[test]
+    fn filters_are_counted_before_free_text() {
+        let ast = parse("the big film 1998 extended trackers:>=3 size:>1GB").unwrap();
+        let order: Vec<usize> = removals(&ast).iter().map(|(i, _)| *i).collect();
+        assert_eq!(order, [5, 6, 0, 1, 2, 3, 4]);
+        // Past eight, free text is what's left out.
+        let ast = parse("a b c d e f g h trackers:>=3").unwrap();
+        let order: Vec<usize> = removals(&ast).iter().map(|(i, _)| *i).collect();
+        assert_eq!(order, [8, 0, 1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
     fn at_most_eight_clauses_are_counted() {
         let q: Vec<String> = (0..12).map(|i| format!("w{i}")).collect();
         let got = removals(&parse(&q.join(" ")).unwrap());
@@ -220,10 +228,11 @@ mod tests {
         };
         let rare = |n: &str| n.contains("Rare");
         let big = |i: usize| 1000 + i as u64 > 1500;
+        // In counting order: the size filter first, then the free text.
         let want = [
+            0,                                // without the size
             0,                                // without `rare`
             count(&|i, n| rare(n) && big(i)), // without `nosuchword`
-            0,                                // without the size
         ];
         for (i, w) in want.iter().enumerate() {
             assert_eq!(
@@ -235,7 +244,7 @@ mod tests {
                 "clause {i}"
             );
         }
-        assert!(want[1] > 0);
+        assert!(want[2] > 0);
     }
 
     #[test]
