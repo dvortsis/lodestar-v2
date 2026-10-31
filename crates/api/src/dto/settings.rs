@@ -393,7 +393,7 @@ pub struct EmailDraft {
     pub from: String,
     pub host: String,
     /// Without it (and with `username`), the saved password, as long as
-    /// `host` and `port` are the saved ones.
+    /// `host`, `port` and `security` are the saved ones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, write_only)]
     pub password: Option<String>,
