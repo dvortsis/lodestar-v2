@@ -1391,7 +1391,7 @@
     },
     "IMP-3": {
       "status": "review",
-      "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values | 2026-10-30T23:30Z brief briefs/IMP-3.md; Opus session | session_01MMjhnAbQvQcWYHV3NmXLW6 | 2026-10-31T00:21Z PR #248 head 1e4a62cc (~3.6k, one PR by runner decision); reviewer session_01MMjhnBARHyqHn6ax5vCKyf | 2026-10-31T00:35Z review CHANGES: B1 implicit cast on FilesStatus enum runs source code as importer role (refuse via pg_cast check + test); riding: indclass pg_catalog check, stale decisions line 128, VACUUM ANALYZE line. Reviewer kept for delta"
+      "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values | 2026-10-30T23:30Z brief briefs/IMP-3.md; Opus session | session_01MMjhnAbQvQcWYHV3NmXLW6 | 2026-10-31T00:21Z PR #248 head 1e4a62cc (~3.6k, one PR by runner decision); reviewer session_01MMjhnBARHyqHn6ax5vCKyf | 2026-10-31T00:35Z review CHANGES: B1 implicit cast on FilesStatus enum runs source code as importer role (refuse via pg_cast check + test); riding: indclass pg_catalog check, stale decisions line 128, VACUUM ANALYZE line. Reviewer kept for delta | 2026-10-31T00:48Z fixed 89e51061 (enum_eq, per-batch cast recheck, full-snapshot quiescence, indclass); delta MERGE (exploits re-run on PG16); merge on green ci-ok"
     },
     "F-filters-xcpu": {
       "status": "merged",
