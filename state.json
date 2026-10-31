@@ -553,7 +553,7 @@
       "pr": 300,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet. | 22:58Z PR #300 (2a) head f1781c2d: Filters 32.96 KB; no about/iconLoad (Alert/Search headroom); no queue expiry yet. Opus reviewer + security review; subscribed. | 23:09Z MERGE at f1781c2d (invariants verified; security reviewed by hand). Author: after baselines, one push removing marker + O1/O2 + doc fix; runner checks delta, merges on green; then 2b. | 23:38Z merged #300 2a (17ed97ec). 2b (Block this…, Adult facets) started in the same session on slice/S-filters-2b.",
+      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet. | 22:58Z PR #300 (2a) head f1781c2d: Filters 32.96 KB; no about/iconLoad (Alert/Search headroom); no queue expiry yet. Opus reviewer + security review; subscribed. | 23:09Z MERGE at f1781c2d (invariants verified; security reviewed by hand). Author: after baselines, one push removing marker + O1/O2 + doc fix; runner checks delta, merges on green; then 2b. | 23:38Z merged #300 2a (17ed97ec). 2b (Block this…, Adult facets) started in the same session on slice/S-filters-2b. | 23:48Z 2b size block: Block-this hooks +0.3 KB on Search results/drawer//t and flows-chunk regroup (Filters first view 32.99->59.48). Runner chose B: 2b = Adult facets only; 2c = hooks after X-alert-search-headroom (asked it to isolate filters/flows + overlays).",
       "reviewer": "session_01MMjhnBh8166qRogaECZ665"
     },
     "S-keys": {
@@ -2726,7 +2726,8 @@
     "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
     "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
-    "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs."
+    "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
+    "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
