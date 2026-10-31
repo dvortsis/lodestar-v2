@@ -359,15 +359,17 @@ impl Store {
     /// Ends expired quarantine and removes filter hits older than
     /// `hits_before`. An expired quarantine is released (its hash becomes
     /// fetchable again), except an adult hold, which becomes a tombstone:
-    /// its sealed name goes, its hash stays refused (§20.9). Returns the
-    /// released hashes and how many hits were removed.
+    /// its sealed name goes, its hash stays refused (§20.9). A hash that's
+    /// also tombstoned isn't released: the tombstone still refuses it.
+    /// Returns the released hashes and how many hits were removed.
     pub fn purge_filter(&mut self, now: i64, hits_before: i64) -> Result<(Vec<[u8; 20]>, usize)> {
         let tx = crate::begin_write(&mut self.conn)?;
         let mut expired = Vec::new();
         {
             let mut stmt = tx.prepare(
                 "SELECT hash FROM quarantine
-                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) != ?2",
+                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) != ?2
+                   AND hash NOT IN (SELECT hash FROM tombstones)",
             )?;
             let adult = ADULT_HOLD;
             for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
@@ -678,6 +680,30 @@ mod tests {
         let adult = s.tombstones_before(None, true, 10).unwrap();
         assert_eq!(adult.len(), 1);
         assert!(adult[0].adult_hold);
+    }
+
+    /// An expired quarantine on a hash that's also tombstoned isn't
+    /// reported as released: the writer drops what's released from its
+    /// held set, and the tombstone still refuses the hash.
+    #[test]
+    fn an_expired_quarantine_under_a_tombstone_is_not_released() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for (table, h) in [("quarantine", 1u8), ("quarantine", 2), ("tombstones", 2)] {
+            let sql = if table == "quarantine" {
+                "INSERT INTO quarantine (hash, rule, sealed, at, expires_at)
+                 VALUES (?1, 'CS-3', NULL, 10, 20)"
+            } else {
+                "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-4', 10)"
+            };
+            s.conn.execute(sql, [&[h; 20][..]]).unwrap();
+        }
+        let (released, _) = s.purge_filter(100, 0).unwrap();
+        assert_eq!(released, vec![[1; 20]]);
+        assert!(s.quarantined(10).unwrap().is_empty());
+        assert_eq!(
+            s.filter_state().unwrap().held,
+            vec![([2; 20], Held::Tombstone)]
+        );
     }
 
     /// Deleting a held hash through any of the store's paths leaves its

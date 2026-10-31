@@ -190,6 +190,15 @@ if (staticHits.length)
 	throw new Error(
 		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
 	);
+// Appearance's theme picker (opened with "Browse themes", with themes.json) and its custom theme
+// editor (opened from the picker, with the build's theme compiler) load on interaction, so a first
+// view stops at them; each has its own entry below.
+const APPEARANCE = 'src/lib/features/appearance';
+const appearancePicker = [new RegExp(`${APPEARANCE}/ThemePicker\\.svelte$`)];
+const appearanceEditor = [new RegExp(`${APPEARANCE}/ThemeEditor\\.svelte$`)];
+// The 18+ dialog (Bits UI overlays) loads with the first turn-on of Show adult content.
+const appearanceAdult = [/features\/filters\/flows\/AdultConfirmDialog\.svelte$/];
+const appearanceLater = [...appearancePicker, ...appearanceEditor, ...appearanceAdult];
 const settingsHandBuilt = bodyKeys.map((key) => ({
 	name: key
 		.split('/')
@@ -200,13 +209,40 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 			...settingsShellView,
 			...ownChunk(
 				key,
-				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions, ...appearanceLater],
 				false,
 				settingsShellView
 			)
 		])
 	])
 }));
+const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
+const appearanceFirst = appearanceBody
+	? ownChunk(
+			appearanceBody,
+			[...settingsOnDemand, ...settingsEdit, ...appearanceLater],
+			false,
+			settingsShellView
+		)
+	: [];
+const appearanceKey = (re) => Object.keys(manifest).find((key) => re.test(key));
+const pickerKey = appearanceKey(appearancePicker[0]);
+const editorKey = appearanceKey(appearanceEditor[0]);
+const settingsPickerLazy = requireMeasuredJs(
+	'Appearance theme picker (on demand)',
+	pickerKey
+		? ownChunk(pickerKey, appearanceEditor, false, [...settingsShellView, ...appearanceFirst])
+		: []
+);
+const adultKey = appearanceKey(appearanceAdult[0]);
+const settingsAdultLazy = requireMeasuredJs(
+	'Appearance 18+ dialog (on demand)',
+	adultKey ? ownChunk(adultKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
+);
+const settingsEditorLazy = requireMeasuredJs(
+	'Appearance theme editor (on demand)',
+	editorKey ? ownChunk(editorKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
+);
 const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
 	...new Set([
 		...extraKeys.flatMap((key) =>
@@ -350,6 +386,10 @@ export default [
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(`Settings ${name} (first view)`, files, '45 KB')
 	),
+	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
+	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
+	entry('Appearance 18+ dialog (on demand)', settingsAdultLazy, '20.6 KB'),
+	entry('Appearance theme editor (on demand)', settingsEditorLazy, '13 KB'),
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),

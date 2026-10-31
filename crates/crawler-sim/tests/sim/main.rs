@@ -306,7 +306,7 @@ fn rate_limits_drop_queries() {
 }
 
 /// An hour of the admission-pressure network: too slow for every CI run.
-/// `cargo test -p lodestar-sources --test sim -- --ignored`
+/// `cargo test -p lodestar-crawler-sim --test sim -- --ignored`
 #[test]
 #[ignore = "stress: about a minute of wall time"]
 fn admission_pressure_hour() {
@@ -319,7 +319,7 @@ fn admission_pressure_hour() {
 }
 
 /// The noise floor A/B comparisons have to clear: each baseline's stored
-/// count over seeds 1..=8. `cargo test -p lodestar-sources --test sim noise_floor -- --ignored --nocapture`
+/// count over seeds 1..=8. `cargo test -p lodestar-crawler-sim --test sim noise_floor -- --ignored --nocapture`
 #[test]
 #[ignore = "measurement: about 15 s of wall time"]
 fn noise_floor() {
@@ -361,7 +361,7 @@ fn coordinated_admission_stops_capacity_refusals() {
 
 /// The CR-ADM screen: both arms on every `SCREEN_SEEDS` seed, per scenario,
 /// with what the brief asks the PR to report.
-/// `cargo test -p lodestar-sources --test sim coordinated_admission_screen -- --ignored --nocapture`
+/// `cargo test -p lodestar-crawler-sim --test sim coordinated_admission_screen -- --ignored --nocapture`
 #[test]
 #[ignore = "measurement: a few minutes of wall time"]
 fn coordinated_admission_screen() {

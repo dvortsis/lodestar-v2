@@ -1,0 +1,202 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { ApiError } from '$lib/api/client';
+
+const get = vi.hoisted(() => vi.fn());
+const patch = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/client', async (orig) => ({
+	...(await orig<typeof import('$lib/api/client')>()),
+	api: { get, patch }
+}));
+
+import AppearanceScreen from './AppearanceScreen.svelte';
+import { narrow } from './prefs';
+
+configure({ defaultHidden: true });
+
+const field = (value: unknown, extra = {}) => ({ value, env: null, read_only: false, ...extra });
+const prefs = (over: Record<string, unknown> = {}, revision = 4) => ({
+	section: 'preferences',
+	revision,
+	fields: {
+		theme: field('riverstone'),
+		theme_dark: field(''),
+		mode: field('system'),
+		density: field('comfortable'),
+		motion: field('system'),
+		illustrations: field(true),
+		...Object.fromEntries(Object.entries(over).map(([k, v]) => [k, field(v)]))
+	}
+});
+const content = (on = false) => ({
+	section: 'content',
+	revision: 2,
+	fields: { show_adult: field(on) }
+});
+
+beforeEach(() => {
+	vi.stubGlobal('matchMedia', () => ({
+		matches: false,
+		addEventListener() {},
+		removeEventListener() {}
+	}));
+	get
+		.mockReset()
+		.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content' ? content() : prefs()
+		);
+	patch.mockReset().mockResolvedValue({ revision: 5 });
+	document.documentElement.removeAttribute('style');
+	delete document.documentElement.dataset.density;
+});
+
+describe('narrow', () => {
+	it('refuses a malformed preference', () => {
+		expect(narrow(prefs({ mode: 'sepia' }).fields)).toBeUndefined();
+		expect(narrow(prefs({ theme: 'Bad Id' }).fields)).toBeUndefined();
+		expect(narrow(prefs().fields)?.density).toBe('comfortable');
+	});
+});
+
+describe('AppearanceScreen', () => {
+	it('has one h1 and applies a change at once, saving with the revision', async () => {
+		render(AppearanceScreen);
+		expect(await screen.findByRole('heading', { level: 1, name: 'Appearance' })).toBeTruthy();
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		expect(document.documentElement.dataset.density).toBe('compact');
+		await waitFor(() => expect(patch).toHaveBeenCalled());
+		expect(patch.mock.calls[0]![1].body).toEqual({ density: 'compact', if_revision: 4 });
+		expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
+	});
+
+	it('Undo puts the previous value back', async () => {
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Reduced' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(patch.mock.calls[1]![1].body.motion).toBe('system');
+	});
+
+	it('puts the old value back and says so when the save fails', async () => {
+		patch.mockRejectedValue(new ApiError(500, 'internal', 'x'));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		expect(await screen.findByText(/Couldn't save that change/)).toBeTruthy();
+		expect(document.documentElement.dataset.density).toBe('comfortable');
+	});
+
+	it('sends confirm_adult with the real 18+ dialog, and nothing on Cancel', async () => {
+		render(AppearanceScreen);
+		const contentCalls = () =>
+			patch.mock.calls.filter(
+				(c) => c[0] === '/settings/{section}' && c[1].path.section === 'content'
+			);
+		await fireEvent.click(await screen.findByRole('switch', { name: 'Show adult content' }));
+		await screen.findByRole('dialog', { name: 'Show adult content?' }, { timeout: 5000 });
+		await fireEvent.click(screen.getByTestId('adult-cancel'));
+		await waitFor(() => expect(screen.queryByTestId('adult-cancel')).toBeNull());
+		expect(contentCalls()).toHaveLength(0);
+		expect(
+			(screen.getByRole('switch', { name: 'Show adult content' }) as HTMLInputElement).checked
+		).toBe(false);
+		await fireEvent.click(screen.getByRole('switch', { name: 'Show adult content' }));
+		await screen.findByRole('dialog', { name: 'Show adult content?' }, { timeout: 5000 });
+		await fireEvent.click(screen.getByTestId('adult-show'));
+		await waitFor(() => expect(contentCalls()).toHaveLength(1));
+		expect(contentCalls()[0]![1].body).toEqual({ show_adult: true, confirm_adult: true });
+	});
+
+	it('shows the switch as the server has it when turning adult off fails', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content' ? content(true) : prefs()
+		);
+		patch.mockRejectedValue(new ApiError(500, 'internal', 'x'));
+		render(AppearanceScreen);
+		const toggle = await screen.findByRole('switch', { name: 'Show adult content' });
+		expect((toggle as HTMLInputElement).checked).toBe(true);
+		await fireEvent.click(toggle);
+		expect(await screen.findByText(/Couldn't change this setting/)).toBeTruthy();
+		await waitFor(() =>
+			expect(
+				(screen.getByRole('switch', { name: 'Show adult content' }) as HTMLInputElement).checked
+			).toBe(true)
+		);
+	});
+
+	it('locks adult content set by the environment', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content'
+				? {
+						...content(false),
+						fields: { show_adult: field(false, { env: 'LODESTAR_SHOW_ADULT' }) }
+					}
+				: prefs()
+		);
+		render(AppearanceScreen);
+		const toggle = await screen.findByRole('switch', { name: 'Show adult content' });
+		expect((toggle as HTMLInputElement).disabled).toBe(true);
+		expect(screen.getByText(/LODESTAR_SHOW_ADULT/)).toBeTruthy();
+	});
+
+	it('saves one change at a time, each with the revision the last one returned', async () => {
+		let release!: () => void;
+		patch.mockImplementationOnce(() => new Promise((r) => (release = () => r({ revision: 5 }))));
+		patch.mockResolvedValueOnce({ revision: 6 });
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }));
+		expect(patch).toHaveBeenCalledTimes(1);
+		release();
+		await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(patch.mock.calls[0]![1].body.if_revision).toBe(4);
+		expect(patch.mock.calls[1]![1].body.if_revision).toBe(5);
+	});
+
+	it('a failed save puts back only its own field', async () => {
+		patch.mockResolvedValueOnce({ revision: 5 });
+		patch.mockRejectedValueOnce(new ApiError(500, 'internal', 'x'));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Reduced' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+		await screen.findByText(/Couldn't save that change/);
+		expect(screen.getByRole('radio', { name: 'Reduced' }).getAttribute('aria-checked')).toBe(
+			'true'
+		);
+		expect(screen.getByRole('radio', { name: 'Comfortable' }).getAttribute('aria-checked')).toBe(
+			'true'
+		);
+	});
+
+	it('reloads on a stale revision', async () => {
+		patch.mockRejectedValueOnce(new ApiError(409, 'stale_revision', 'x'));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await waitFor(() =>
+			expect(get.mock.calls.filter((c) => c[1].path.section === 'preferences').length).toBe(2)
+		);
+	});
+
+	it('does not save a field the environment sets, and says which', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content'
+				? content()
+				: {
+						...prefs(),
+						fields: {
+							...prefs().fields,
+							density: field('comfortable', { env: 'LODESTAR_DENSITY' })
+						}
+					}
+		);
+		render(AppearanceScreen);
+		expect(await screen.findByText(/density \(LODESTAR_DENSITY\)/)).toBeTruthy();
+		const compact = screen.getByRole('radio', { name: 'Compact' }) as HTMLInputElement;
+		expect(compact.disabled).toBe(true);
+	});
+
+	it('shows a load failure', async () => {
+		get.mockRejectedValue(new ApiError(500, 'internal', 'x'));
+		render(AppearanceScreen);
+		expect(await screen.findByText(/Couldn't load your appearance/)).toBeTruthy();
+	});
+});

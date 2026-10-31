@@ -17,6 +17,12 @@ use tokio::sync::{Mutex, mpsc};
 use super::transport::{RecvSocket, SendSocket};
 use super::{Config, Harvest, Node, NodeHandle, StatsSnapshot};
 
+/// The sampler's cooldown floor and ceiling, so the simulator's checks
+/// track the sampler's own rules.
+pub use super::sampler::{
+    MAX_INTERVAL as SAMPLE_MAX_INTERVAL, MIN_INTERVAL as SAMPLE_MIN_INTERVAL,
+};
+
 /// A datagram the node sent: destination and bytes.
 pub type Outbound = (SocketAddr, Vec<u8>);
 /// A datagram for the node: bytes and source.

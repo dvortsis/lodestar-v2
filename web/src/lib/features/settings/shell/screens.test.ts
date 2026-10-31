@@ -15,6 +15,7 @@ const fake = (id: string, group: Screen['group']): Screen => ({
 describe('the screen registry', () => {
 	it('finds the generated screens through their screen.ts, in navigation order', () => {
 		expect(screens.map((screen) => screen.id)).toEqual([
+			'appearance',
 			'keyboard',
 			'crawler',
 			'network',
@@ -23,7 +24,9 @@ describe('the screen registry', () => {
 			'general'
 		]);
 		expect(screens.filter((screen) => screen.sections).every((screen) => screen.icon)).toBe(true);
-		// Keyboard is hand-built (S-keys): the route loads its body, which renders its own heading.
+		// Appearance (S-appearance) and Keyboard (S-keys) are hand-built: the route loads their body,
+		// which renders its own heading.
+		expect(byId('appearance').load).toBeTypeOf('function');
 		expect(byId('keyboard').load).toBeTypeOf('function');
 	});
 	it('orders by group, then §10.10.2, then title, and takes every export shape once', () => {

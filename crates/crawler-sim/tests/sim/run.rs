@@ -490,7 +490,7 @@ fn header(s: &Scenario, live: usize, held: usize, distinct: usize) -> String {
     let _ = writeln!(t, "# crawler-sim scenario `{}`", s.name);
     let _ = writeln!(
         t,
-        "# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim"
+        "# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-crawler-sim --test sim"
     );
     let _ = writeln!(
         t,

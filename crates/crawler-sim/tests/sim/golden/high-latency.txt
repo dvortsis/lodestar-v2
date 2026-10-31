@@ -1,5 +1,5 @@
 # crawler-sim scenario `high-latency`
-# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-sources --test sim
+# Golden output. Regenerate: CRAWLER_SIM_BLESS=1 cargo test -p lodestar-crawler-sim --test sim
 seed=1 minutes=10 intensity=Balanced switches=none
 net: nodes=2000 dead=350‰ loss=60‰ error=5‰ rate_limit=Some(20) latency=350+U(1400)ms slow=200‰@3600ms bep51=600‰ interval=300s sample_size=20
 swarm: catalogue=20000 live=9074 held=47280 distinct_held=18069 max_peers=12
