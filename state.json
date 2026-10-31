@@ -2143,7 +2143,9 @@
       "at": "2026-10-30T07:17Z",
       "item": "CR-0 memory gate ruling (slope\u22480 after h1 vs no sustained growth) + full-res h12-24 private fit on soak host",
       "unblocks": "CR-0 acceptance -> v0.5.1 delta mapping",
-      "ref": "PR #189"
+      "ref": "PR #189",
+      "status": "done",
+      "note": "owner accepted on #189 2026-10-30 13:05Z; h12-24 fit upper +0.32 MiB/h <= 2; #214 records it"
     },
     {
       "at": "2026-10-30T08:43Z",
@@ -2236,6 +2238,12 @@
     {
       "item": "FYI (\u00a72.19) #257 IMP-4b (merged): `lodestar import` CLI refuses to run while the server is up (online import is a later slice); per-reason counts printed, not persisted; --allow-share is a flag, not config; throughput ~13,900 torrents/s on a synthetic 100k source, slice pass lines 2,000/s offline and 1,000/s online (author numbers; owner may change). The 10k/100k pilots on your data can start once you want (master plan D5); back up first.",
       "status": "to-send"
+    },
+    {
+      "id": "OC-alerts-limit",
+      "action": "Alerts route size limit 45.8 -> 45.9 KB? #256 S-search-6 leaves it 3 B over (45,803 B) after a chunk-split fix",
+      "unblocks": "#256 merge",
+      "status": "asked 2026-10-31T05:08Z"
     }
   ],
   "external_gates": {
