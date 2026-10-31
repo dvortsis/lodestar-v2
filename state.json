@@ -1734,13 +1734,13 @@
    "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus | 17:04Z PR #286 head 16c9a72d (services.rs startup hook + settings key classify.requeue_pending accepted); fresh Opus reviewer + security review | 17:20Z MERGE at 16c9a72d (3 optional); waiting on CI"
   },
   "B-held-exact": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhn8kGRXFvTNcJrZKLAi",
-   "pr": null,
+   "pr": 287,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders"
+   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders | 17:30Z PR #287 head 8301f652 (~530 lines; both-sides reconcile, HeldSet::remove deleted); fresh Opus reviewer + security review; will need main after #286 (filters.rs)"
   },
   "S-logs-2": {
    "status": "running",
@@ -2503,6 +2503,10 @@
   },
   {
    "item": "FYI (§2.19) #285 M-security-settings part 1: the Security screen restates the engine's leave-guard rules instead of importing them (keeps leave.ts off every Settings page; a table test against the engine's rules follows in part 2); secure cookies is a read-only status line.",
+   "status": "to-send"
+  },
+  {
+   "item": "FYI (§2.19, content safety) #287 B-held-exact: fixes a pre-existing race where releasing a hold at the same moment an import re-held the same hash could leave a held torrent fetchable until restart. Memory now always matches the store's holds; a hash a release frees may stay refused for the few seconds the release runs (over-strict, safe).",
    "status": "to-send"
   }
  ],
