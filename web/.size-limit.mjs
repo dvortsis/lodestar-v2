@@ -799,7 +799,8 @@ export default [
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
-	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
+	// runner §2.26: SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
+	entry('Results toolbar (lazy)', toolbarLazy, '4.65 KB'),
 	entry('Search live banner (lazy)', liveLazy, '3.02 KB'),
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
 	entry('Search cards (lazy)', cardsLazy, '8.3 KB'),
