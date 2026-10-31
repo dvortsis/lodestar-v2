@@ -119,9 +119,5 @@
 	"settings_security_proxy_on_body": "{trusted} 上的任何程序都将能以任何允许的用户身份登录，无需密码。",
 	"settings_security_proxy_on_action": "开启",
 	"settings_security_proxy_saved": "已保存。",
-	"settings_security_keys_teaser": "密钥让其他应用搜索 Lodestar，令牌让订阅阅读器读取你的订阅源。",
-	"settings_security_keys_show": "管理密钥和令牌",
-	"settings_security_proxy_teaser": "除非你开启，否则保持关闭。仅适用于为你登录的反向代理。",
-	"settings_security_proxy_show": "显示代理登录设置",
 	"settings_security_keys_key_failed": "未做任何更改。{reason}"
 }

@@ -119,9 +119,5 @@
 	"settings_security_proxy_on_body": "Anything at {trusted} will be able to sign in as any allowed user, without a password.",
 	"settings_security_proxy_on_action": "Turn on",
 	"settings_security_proxy_saved": "Saved.",
-	"settings_security_keys_teaser": "Keys let other apps search Lodestar, and tokens let feed readers read your feeds.",
-	"settings_security_keys_show": "Manage keys and tokens",
-	"settings_security_proxy_teaser": "Off unless you turned it on. Only for a reverse proxy that signs people in for you.",
-	"settings_security_proxy_show": "Show proxy sign-in settings",
 	"settings_security_keys_key_failed": "Nothing was changed. {reason}"
 }

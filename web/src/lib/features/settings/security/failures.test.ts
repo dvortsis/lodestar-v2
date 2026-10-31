@@ -49,15 +49,11 @@ describe('parts that fail to load', () => {
 			if (fail) throw new Error('chunk failed');
 			return { default: Keys };
 		});
-		render(Later, { id: 's', heading: 'Keys', help: 'Help', show: 'Show', load });
-		await fireEvent.click(screen.getByTestId('s-show'));
+		render(Later, { id: 's', heading: 'Keys', load });
 		expect(await screen.findByText("This part of the screen didn't load.")).toBeTruthy();
 		fail = false;
 		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 		expect(await screen.findByTestId('security-keys')).toBeTruthy();
-		await until(() =>
-			expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Keys' }))
-		);
 	});
 
 	it('a reveal dialog that can’t load sends nothing', async () => {

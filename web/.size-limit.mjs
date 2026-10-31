@@ -314,7 +314,7 @@ if (staticHits.length)
 	throw new Error(
 		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
 	);
-// The same for Security's later parts: they load only when a Show button is pressed, so nothing may
+// The same for Security's later parts: they load by dynamic import after mount, so nothing may
 // import them statically, or their code would leave the first-view gates unmeasured.
 const laterKeys = Object.keys(manifest).filter((key) =>
 	settingsSecurityLater.some((re) => re.test(key))

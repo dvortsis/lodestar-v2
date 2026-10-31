@@ -433,7 +433,6 @@ describe('API keys and feed tokens', () => {
 
 	async function keysSection() {
 		render(SecurityScreen);
-		await fireEvent.click(await screen.findByTestId('security-keys-heading-show'));
 		const section = await screen.findByTestId('security-keys', {}, { timeout: 10_000 });
 		await within(section).findByText('Sonarr');
 		return section;
@@ -453,7 +452,6 @@ describe('API keys and feed tokens', () => {
 	it('says so when the list can’t be read, and tries again', async () => {
 		replies['GET /keys'] = () => err(500, 'internal', 'boom');
 		render(SecurityScreen);
-		await fireEvent.click(await screen.findByTestId('security-keys-heading-show'));
 		expect(
 			await screen.findByText("Couldn't load the keys.", {}, { timeout: 10_000 })
 		).toBeTruthy();
@@ -648,7 +646,6 @@ describe('Trusted proxy sign-in', () => {
 
 	async function proxySection() {
 		render(SecurityScreen);
-		await fireEvent.click(await screen.findByTestId('security-proxy-show'));
 		const form = await screen.findByTestId('security-proxy', {}, { timeout: 10_000 });
 		const toggle = (await within(form).findByRole('switch')) as HTMLInputElement;
 		return { form, toggle };
@@ -676,7 +673,6 @@ describe('Trusted proxy sign-in', () => {
 	it('says so when the settings can’t be read', async () => {
 		replies['GET /auth/proxy'] = () => err(500, 'internal', 'boom');
 		render(SecurityScreen);
-		await fireEvent.click(await screen.findByTestId('security-proxy-show'));
 		expect(
 			await screen.findByText("Couldn't read the trusted proxy settings.", {}, { timeout: 10_000 })
 		).toBeTruthy();
