@@ -130,6 +130,171 @@ pub fn enrich_stored_with(
     }))
 }
 
+/// One batch of the import-candidate refile sweep
+/// (`docs/decisions/2026-10-31-B-import-refile.md`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CandidatesRefiled {
+    /// The last candidate id looked at: the next batch starts after it.
+    pub last: i64,
+    /// Candidates a rule now holds back, removed and counted.
+    pub held: usize,
+    /// Their swarm hashes: intake must refuse them now.
+    pub hashes: Vec<[u8; 20]>,
+    /// The engine changed during the batch, so nothing was written: start
+    /// the sweep again under the new rules.
+    pub rejected: bool,
+}
+
+/// Judges up to `limit` waiting import candidates after `after` (by id)
+/// with the current engine, as an import judges a candidate (the hash
+/// lists, then its name with your classification rules), and holds back
+/// those a drop or quarantine decision now matches (§20.3, §20.9). Other
+/// decisions change nothing: a candidate has no marks, and it's judged
+/// again in full if it's ever stored. `None` when none are left.
+///
+/// `version` is the engine version the sweep runs under; the batch is
+/// judged with the engine only when it's still that version, and its
+/// write is refused if the engine moves on before it commits.
+pub fn refile_candidates(
+    store: &mut Store,
+    handle: &Handle,
+    version: u64,
+    after: i64,
+    limit: usize,
+    ctx: &Backfill<'_>,
+) -> Result<Option<CandidatesRefiled>, lodestar_store::Error> {
+    let rejected = || {
+        Ok(Some(CandidatesRefiled {
+            last: after,
+            rejected: true,
+            ..CandidatesRefiled::default()
+        }))
+    };
+    let engine = handle.current();
+    if engine.version != version {
+        return rejected();
+    }
+    let page = store.waiting_candidates(after, limit)?;
+    let Some(last) = page.last().map(|c| c.id) else {
+        return Ok(None);
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let held: Vec<CandidateHold> = page
+        .iter()
+        .filter_map(|c| judge_candidate(&engine, c, ctx.sealer, now))
+        .collect();
+    let refiled: Vec<_> = held
+        .iter()
+        .map(|h| lodestar_store::import::RefiledCandidate {
+            id: h.id,
+            filtered: lodestar_store::Filtered {
+                hashes: &h.hashes,
+                rule: &h.rule,
+                action: h.action,
+                held: Some(h.held),
+                sealed: h.sealed.as_deref(),
+                evidence: &h.evidence,
+                at: now,
+                expires_at: now + ctx.quarantine_secs,
+                adult_hold: h.adult_hold,
+            },
+        })
+        .collect();
+    let written = if refiled.is_empty() {
+        Some(0)
+    } else {
+        store.refile_import_candidates(&refiled, now, || handle.current().version == version)?
+    };
+    let Some(n) = written else {
+        return rejected();
+    };
+    Ok(Some(CandidatesRefiled {
+        last,
+        held: n,
+        hashes: held.into_iter().flat_map(|h| h.hashes).collect(),
+        rejected: false,
+    }))
+}
+
+/// A candidate's hold, owned until the batch is written. No name in the
+/// clear: only the sealed one, for quarantine.
+struct CandidateHold {
+    id: i64,
+    hashes: Vec<[u8; 20]>,
+    rule: String,
+    action: u8,
+    held: lodestar_store::Held,
+    sealed: Option<Vec<u8>>,
+    evidence: Vec<u8>,
+    adult_hold: bool,
+}
+
+/// What the engine makes of one waiting candidate, as the import driver
+/// judges it (`sources-importers`, `judge_candidate`): a hash on the
+/// floor's or a dropping list first, then the name, with no files.
+fn judge_candidate(
+    engine: &lodestar_filter::Engine,
+    c: &lodestar_store::import::WaitingCandidate,
+    sealer: Option<&Sealer>,
+    now: i64,
+) -> Option<CandidateHold> {
+    use lodestar_filter::{Action, Facts, Item};
+    let hashes = c.hashes();
+    let name = c
+        .name
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    let (decision, fix) = match engine.blocked_hash(&hashes) {
+        Some(d) => (Some(d), None),
+        None => {
+            let (_, class) = enrich_corrected(&name, &[], Correction::default());
+            let facts = Facts {
+                class: &class,
+                size: c.size.unwrap_or(0),
+                piece_len: 0,
+                flags: 0,
+                discovered_at: c
+                    .source_at
+                    .filter(|at| (1..=now).contains(at))
+                    .unwrap_or(now),
+                now,
+            };
+            let item = Item {
+                hashes: &hashes,
+                name: &name,
+                files: &[],
+                content_type: class.content_type,
+            };
+            let (v, says) = engine.judge_classified(&item, Some(&facts), now);
+            (v.decision, rule_fix(says, &class))
+        }
+    };
+    let d = decision?;
+    let held = match d.action {
+        Action::Drop => lodestar_store::Held::Tombstone,
+        Action::Quarantine => lodestar_store::Held::Quarantine,
+        _ => return None,
+    };
+    let sealed = (held == lodestar_store::Held::Quarantine)
+        .then(|| sealer.and_then(|s| s.seal(&name).ok()))
+        .flatten();
+    Some(CandidateHold {
+        id: c.id,
+        hashes,
+        rule: d.rule.id(),
+        action: d.action.code(),
+        held,
+        sealed,
+        evidence: d.evidence_codes(),
+        // Held by the Adult-only core only because your rule made it
+        // adult: a tombstone when the quarantine ends (§20.9).
+        adult_hold: fix == Some(true) && lodestar_filter::reclassify::adult_hold(&d),
+    })
+}
+
 /// What a classification rule's say changes: Is adult (`true`) or Not
 /// adult (`false`) where it differs from detection, else nothing.
 pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {

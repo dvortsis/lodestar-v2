@@ -114,6 +114,21 @@ pub(crate) struct Writer {
     pub hot: Option<Arc<HotColumns>>,
     /// Told about rediscoveries, to scrape them sooner (§5).
     pub health: Option<HealthHandle>,
+    /// The import-candidate refile sweep.
+    pub candidates: CandidateSweep,
+}
+
+/// The sweep that judges waiting import candidates again whenever the
+/// filter engine changes, and once per start
+/// (`docs/decisions/2026-10-31-B-import-refile.md`).
+#[derive(Debug, Default)]
+pub(crate) struct CandidateSweep {
+    /// The engine version it runs under; `None` until the first batch.
+    pub version: Option<u64>,
+    /// The last candidate id it reached.
+    pub after: i64,
+    /// Nothing is left to judge under `version`.
+    pub done: bool,
 }
 
 /// A result under a current lease, ready to commit.
@@ -175,10 +190,19 @@ impl Writer {
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
                 () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
+                () = std::future::ready(()), if !self.candidates.done => self.refile_candidates().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
                         self.backfill_after = 0;
                         self.backfill_done = false;
+                    }
+                    // Rules changed: every waiting candidate is judged again.
+                    let version = self.filter.current().version;
+                    if self.candidates.version != Some(version) {
+                        self.candidates = CandidateSweep {
+                            version: Some(version),
+                            ..CandidateSweep::default()
+                        };
                     }
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
@@ -540,6 +564,66 @@ impl Writer {
         }
     }
 
+    /// Judges the next batch of waiting import candidates under the
+    /// current rules, and holds back those a rule now matches.
+    async fn refile_candidates(&mut self) {
+        let store = self.store.take().expect("store");
+        let filter = self.filter.clone();
+        let version = *self
+            .candidates
+            .version
+            .get_or_insert_with(|| filter.current().version);
+        let after = self.candidates.after;
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let ctx = crate::enrich::Backfill {
+                filter: None,
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+            };
+            let result = crate::enrich::refile_candidates(
+                &mut store,
+                &filter,
+                version,
+                after,
+                REFILE_BATCH,
+                &ctx,
+            );
+            (store, result)
+        })
+        .await
+        .expect("candidate refile task");
+        self.store = Some(store);
+        match result {
+            // The rules changed: all of them again, under the new ones.
+            Ok(Some(b)) if b.rejected => {
+                self.candidates = CandidateSweep {
+                    version: Some(self.filter.current().version),
+                    ..CandidateSweep::default()
+                };
+            }
+            Ok(Some(b)) => {
+                self.candidates.after = b.last;
+                for h in b.hashes {
+                    self.held.insert(h);
+                }
+            }
+            Ok(None) => self.candidates.done = true,
+            Err(e) => {
+                // Tried again at the next rule change or start. The error
+                // carries no candidate's name.
+                self.candidates.done = true;
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                lodestar_log::log_event!(
+                    crate::log_events::ENRICHMENT_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
+        }
+    }
+
     /// Rebuilds the have-filter at twice the size from the store.
     async fn rebuild_have(&mut self) {
         let store = self.store.take().expect("store");
@@ -619,6 +703,9 @@ pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now:
 
 /// Torrents enriched per background step.
 const BACKFILL_BATCH: usize = 256;
+
+/// Import candidates judged per refile step: one short transaction each.
+const REFILE_BATCH: usize = 512;
 
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
@@ -877,6 +964,7 @@ mod tests {
             gate,
             hot: None,
             health: None,
+            candidates: Default::default(),
         }
     }
 
@@ -1021,5 +1109,70 @@ mod tests {
         e.load_class_rules(&[]);
         assert_eq!(rejudge(&e, &mut r, 0, 1000).decision, None);
         assert_eq!((r.fix, stored_type(&r)), (None, detected));
+    }
+
+    /// The writer's sweep holds back a waiting import candidate the core
+    /// now matches, and intake refuses its hash from then on.
+    #[tokio::test]
+    async fn the_writer_refiles_waiting_import_candidates() {
+        use lodestar_store::import::{
+            Decision as Pass, ImportBatch, ImportCandidate, ImportRecord, NewImportJob, Phase,
+            Privacy,
+        };
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("magnetico", "1", 1).unwrap();
+        let job = store
+            .create_import_job(&NewImportJob {
+                adapter: "magnetico",
+                adapter_ver: 1,
+                dataset: b"ds",
+                schema_sig: b"sig",
+                options: b"",
+                credential: None,
+                at: 1,
+            })
+            .unwrap();
+        let job = store
+            .set_import_phase(job.id, job.revision, Phase::Reading, 1)
+            .unwrap();
+        let record = |h: u8, name: &'static [u8]| {
+            ImportRecord::Candidate(ImportCandidate {
+                hash: InfoHash([h; 20]),
+                hash_v2: None,
+                name: Some(name),
+                size: None,
+                privacy: Privacy::Unknown,
+                source_at: None,
+                decision: Pass {
+                    hits: &[],
+                    marks: 0,
+                },
+            })
+        };
+        store
+            .commit_import_batch(&ImportBatch {
+                job: job.id,
+                seq: 1,
+                position: b"",
+                source: src,
+                source_bytes: 0,
+                at: 1,
+                class_gen: None,
+                records: &[record(1, b"Rolea Lexa clip"), record(2, b"Plain Film")],
+            })
+            .unwrap();
+        let mut w = writer(store, coordinator, gate);
+        while !w.candidates.done {
+            w.refile_candidates().await;
+        }
+        assert!(w.held.contains(&[1; 20]));
+        assert!(!w.held.contains(&[2; 20]));
+        let store = w.store.as_ref().unwrap();
+        let job = store.import_job(job.id).unwrap().unwrap();
+        assert_eq!(job.open_candidates, 1);
+        assert!(job.counters.conserved());
     }
 }

@@ -1267,6 +1267,165 @@ impl Removed {
     }
 }
 
+/// A waiting candidate as the refile sweep judges it
+/// (`docs/decisions/2026-10-31-B-import-refile.md`). Its `Debug` gives the
+/// name's length only: a candidate a rule now holds must not reach a log.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WaitingCandidate {
+    pub id: i64,
+    pub hash: InfoHash,
+    pub hash_v2: Option<InfoHashV2>,
+    pub name: Option<Vec<u8>>,
+    pub size: Option<u64>,
+    pub source_at: Option<i64>,
+}
+
+impl WaitingCandidate {
+    /// Its swarm hashes: the primary, and a hybrid's truncated v2 hash.
+    pub fn hashes(&self) -> Vec<[u8; 20]> {
+        let mut out = vec![self.hash.0];
+        if let Some(t) = self.hash_v2.map(|h| h.truncated().0)
+            && t != self.hash.0
+        {
+            out.push(t);
+        }
+        out
+    }
+}
+
+impl fmt::Debug for WaitingCandidate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WaitingCandidate")
+            .field("id", &self.id)
+            .field("name_len", &self.name.as_ref().map(Vec::len))
+            .finish_non_exhaustive()
+    }
+}
+
+/// A waiting candidate a filter rule now holds back, for
+/// [`Store::refile_import_candidates`]. `filtered.held` is always set.
+#[derive(Debug, Clone, Copy)]
+pub struct RefiledCandidate<'a> {
+    pub id: i64,
+    pub filtered: Filtered<'a>,
+}
+
+impl Store {
+    /// Up to `limit` waiting candidates after `after` (by id), of every
+    /// job: one keyset page of the refile sweep.
+    pub fn waiting_candidates(&self, after: i64, limit: usize) -> Result<Vec<WaitingCandidate>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, hash, hash_v2, name, size, source_at FROM import_candidates
+             WHERE id > ?1 ORDER BY id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![after, limit as i64], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, Option<Vec<u8>>>(2)?,
+                r.get::<_, Option<Vec<u8>>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, hash, v2, name, size, source_at) = row?;
+            let hash: [u8; 20] = hash
+                .try_into()
+                .map_err(|_| Error::Corrupt("candidate hash length"))?;
+            let hash_v2 = v2
+                .map(|v| <[u8; 32]>::try_from(v).map(InfoHashV2))
+                .transpose()
+                .map_err(|_| Error::Corrupt("candidate v2 hash length"))?;
+            out.push(WaitingCandidate {
+                id,
+                hash: InfoHash(hash),
+                hash_v2,
+                name,
+                size: size.and_then(|s| u64::try_from(s).ok()),
+                source_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Holds back waiting candidates a filter rule now matches, in one
+    /// transaction, as an import would have held them: the decision is a
+    /// filter hit, the hashes are tombstoned or quarantined (which deletes
+    /// the candidate, `schema.rs`), and its job counts the record under
+    /// `filtered` or `quarantined` instead of `candidates`, so
+    /// [`ImportCounters::conserved`] still holds. A job left with no
+    /// issue moves from [`Phase::CompleteWithIssues`] to
+    /// [`Phase::Complete`].
+    ///
+    /// `current` is asked inside the transaction whether the rules the
+    /// candidates were judged under are still the engine's: when they
+    /// aren't, nothing is written and this returns `None`. A release that
+    /// follows a rule change waits for this transaction, so it always
+    /// sees what was written here. Candidates already gone are skipped.
+    /// Returns how many were held back.
+    pub fn refile_import_candidates(
+        &mut self,
+        refiled: &[RefiledCandidate<'_>],
+        at: i64,
+        current: impl FnOnce() -> bool,
+    ) -> Result<Option<usize>> {
+        let tx = begin_write(&mut self.conn)?;
+        if !current() {
+            return Ok(None);
+        }
+        let mut jobs = std::collections::BTreeSet::new();
+        let mut done = 0;
+        for r in refiled {
+            let Some(held) = r.filtered.held else {
+                continue;
+            };
+            let job: Option<i64> = tx
+                .prepare_cached("SELECT job FROM import_candidates WHERE id = ?1")?
+                .query_row([r.id], |row| row.get(0))
+                .optional()?;
+            let Some(job) = job else { continue };
+            filter::write(&tx, std::slice::from_ref(&r.filtered))?;
+            // The hold's trigger deleted it when the hashes are its own;
+            // this makes sure whatever the caller passed.
+            tx.prepare_cached("DELETE FROM import_candidates WHERE id = ?1")?
+                .execute([r.id])?;
+            let (filtered, quarantined) = match held {
+                Held::Tombstone => (1, 0),
+                Held::Quarantine => (0, 1),
+            };
+            tx.prepare_cached(
+                "UPDATE import_jobs SET candidates = max(candidates - 1, 0),
+                     filtered = filtered + ?2, quarantined = quarantined + ?3, updated_at = ?4
+                 WHERE id = ?1",
+            )?
+            .execute(params![job, filtered, quarantined, at])?;
+            jobs.insert(job);
+            done += 1;
+        }
+        for job in jobs {
+            tx.prepare_cached(
+                "UPDATE import_jobs SET phase = ?2, revision = revision + 1
+                 WHERE id = ?1 AND phase = ?3 AND invalid = 0 AND files_dropped = 0
+                   AND NOT EXISTS (SELECT 1 FROM import_candidates WHERE job = ?1)",
+            )?
+            .execute(params![
+                job,
+                Phase::Complete.code(),
+                Phase::CompleteWithIssues.code()
+            ])?;
+        }
+        tx.commit()?;
+        if done > 0 {
+            // The names leave the WAL too (§20.3: a hold keeps none in
+            // the clear).
+            self.scrub_wal();
+        }
+        Ok(Some(done))
+    }
+}
+
 /// See [`Quality`] for the rule.
 pub(crate) fn quality(conn: &Connection, id: i64) -> Result<Option<Quality>> {
     Ok(conn
