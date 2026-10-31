@@ -83,30 +83,8 @@ pub struct Integrations {
 }
 
 impl Integrations {
-    pub fn client(&self, id: &str) -> Option<&DownloadClient> {
+    fn client(&self, id: &str) -> Option<&DownloadClient> {
         self.clients.iter().find(|c| c.id == id)
-    }
-
-    /// The client a send without a target goes to.
-    pub fn default_client(&self) -> Option<&DownloadClient> {
-        match self.default_client.as_str() {
-            "" => self.clients.first(),
-            id => self.client(id),
-        }
-    }
-}
-
-impl ClientKind {
-    /// The API's name for it.
-    pub fn api(self) -> lodestar_api::settings::DownloadClientKind {
-        use lodestar_api::settings::DownloadClientKind as K;
-        match self {
-            ClientKind::Qbittorrent => K::Qbittorrent,
-            ClientKind::Transmission => K::Transmission,
-            ClientKind::Deluge => K::Deluge,
-            ClientKind::Rtorrent => K::Rtorrent,
-            ClientKind::Aria2 => K::Aria2,
-        }
     }
 }
 
@@ -269,19 +247,15 @@ mod tests {
         assert!(check_url(&format!("http://x/{}", "a".repeat(MAX_URL))).is_err());
         // An API key goes in its own, sealed field.
         for url in [
-            "https://p.lan/api?apikey=k",
-            "https://p.lan/api?t=caps&API_KEY=k",
+            "https://p.lan/api?apikey=hunter2",
+            "https://p.lan/api?t=caps&API_KEY=hunter2",
         ] {
             let s = Integrations {
                 torznab_url: url.into(),
                 ..Default::default()
             };
             let e = s.check("torznab_url").unwrap_err();
-            assert!(
-                e.contains("its own field")
-                    && !e.contains('k'.to_string().as_str().repeat(2).as_str()),
-                "{e}"
-            );
+            assert!(e.contains("its own field") && !e.contains("hunter2"), "{e}");
         }
     }
 

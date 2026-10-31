@@ -1,4 +1,4 @@
-# B-settings-sections decisions (part b: test kinds, usage data, send to client)
+# B-settings-sections decisions (part b: test kinds and usage data)
 
 - **`POST /settings/test` runs six kinds:** `download_client` (as before), `torznab`, `ntfy`, `discord`, `email` and `webhook` (§10.10.8). Each runs on the posted values, through the integrations SSRF guard, under the existing limits (four at a time, 30 s, 2,048 characters a field), saves nothing, and answers the same `SettingsTestResult`.
   - **Torznab** asks `GET <url>?t=caps&apikey=…` under the download-client policy: an indexer manager is usually on this machine or the LAN, like a companion (§18.10). The form's own query and fragment are dropped, so only the test's parameters go. `version` is the caps document's `<server version>`, kept only when it's a plain number. `401`, `403` and Torznab error codes 100–199 are `bad_credentials`. The check lives in `lodestar_integrations::torznab`, because only the integrations crate makes outbound HTTP (`GuardedClient`).
@@ -11,21 +11,6 @@
   - the SMTP host and port, for the password.
 
   It's the same rule `SECRET_ENDPOINTS` applies at save, so neither a test nor a save can carry a saved password to another server. `DownloadClientDraft` gains an optional `id` to name the saved client.
-- **`POST /send`** takes 1–100 hashes and an optional client `id` (otherwise the default client). It uses the client's saved category, save path and paused setting, and answers one result per hash, in order: `sent`, `duplicate`, `refused` (`not_found`, `hidden`, `adult_hidden`) or `failed` (with the test's codes).
-  - **Only what you can see is sent:**
-    - a torrent a filter rule hides (`flags::HIDDEN`) is refused;
-    - so is an Adult torrent while "Show adult content" is off, with the same check as the detail view;
-    - quarantined and tombstoned torrents aren't stored, so they're `not_found`.
-
-    - a private torrent (BEP 27 `flags::PRIVATE`, or found only through a private source, `flags::PRIVATE_SOURCE`, §18.7) is refused as `private`: a magnet with no trackers would make the client look the hash up on the public DHT, leaking it;
-    - the magnet is built from the stored torrent's v1 hash, never the request's, and two hashes naming one torrent (a v1 hash and its truncated v2 hash) send it once (`same_torrent`).
-
-    Your own Hide mark (`user_items`) doesn't block a send: it's your choice, not a filter.
-  - **Duplicates and partial sends** follow the adapters (§9):
-    - when the client finds every torrent already there, they all count as `duplicate`, which is sent (and counted in `sent`). This is recognised by `clients::is_already_there`, not by the error's wording;
-    - `ClientError::Partial { sent }` marks the first `sent` sendable torrents as sent and the rest as failed, so nothing is resent.
-  - **Rate-limited:** two sends at a time (`429 sends_busy`) and 30 a minute across the server (`429 send_rate_limited`). Nothing is sent past either limit.
-  - Magnets carry the hash and the name only. Appending the best trackers (§9's toggle) is left to the slice that builds that toggle.
 - **Usage data:**
   - `GET /usage` gives the count of logged searches, for the dialog.
   - `POST /usage/clear` deletes the whole query log and needs `{"confirm": true}`; without it the answer is `428 confirmation_required`.
@@ -33,13 +18,13 @@
   - Today the query log is the only usage data Lodestar keeps.
   - **The dialog shows the count, not a size.** §10.10.7 asks for both, but the store has no size for one table without a store change (out of this slice's scope), and the log is small: one short row per search, kept at most 30 days. A size can join `UsageStats` when the store reports one.
 - **Test coverage of the senders:** Torznab, ntfy, the webhook and email are tested against local stand-in servers, reached through a test-only policy (`Email::with_policy`, documented as for tests only). Discord's URL must be `https://discord.com/…`, which no local stand-in can serve, so its sending is covered by `crates/integrations` `discord.rs`'s own replay tests. Here, its URL checks and SSRF refusal are tested. An email login can't complete against a loopback stand-in, because a login without TLS goes only to a private address. The test holds that the saved password is used for the saved server and refused for another.
+- **A failure to seal has its own log event,** `settings.seal_failed` (`section`, `field`), in place of `settings.saved_ignored` with `reason=key_unavailable`, which part a's decisions file named: the save was refused, not a saved value skipped. Still no path or error detail.
+- **`POST /send` is in part c** (the runner's split): its visibility, private-torrent and rate-limit rules get their own PR and review.
 - **Not wired yet, as follow-ups:**
   - nothing writes the query log from searches yet (`insights.query_logging` has nothing to gate), and the 30-day prune doesn't read `query_retention_days`;
-  - sends aren't counted in the Serve stage's `sends` metric (`docs/metrics.md` §6.7);
   - notification routing has no deliverer.
-- **The new endpoints live under the `settings` module** (`settings/{checks,send,usage}.rs`), with their routes and OpenAPI paths in `settings::routes` and `settings::ApiDoc`, so no shared file changed. A test holds that each of the module's schemas reaches `/openapi.json` exactly as defined, so a same-named schema in another module can't silently replace it (#255's class). The new types have distinct names: `ClientSend*`, `Usage*`, `*Draft`, `EmailSecurity`.
+- **The new endpoints live under the `settings` module** (`settings/{checks,usage}.rs`), with their routes and OpenAPI paths in `settings::routes` and `settings::ApiDoc`, so no shared file changed. A test holds that each of the module's schemas reaches `/openapi.json` exactly as defined, so a same-named schema in another module can't silently replace it (#255's class). The new types have distinct names: `Usage*`, `*Draft`, `EmailSecurity`.
 
 ## What S-settings-2b binds to
 - **Test connection / Send test:** `POST /settings/test` with `kind` and the card's values. Leave a secret out to use the saved one; send it to test a new one. Show `error.message` inline and `version` on success.
-- **Send** (S-search-5): `POST /send` `{hashes, client?}`. Show each result's `message`; `sent` is the count to announce.
 - **Clear usage data:** `GET /usage` for the dialog's count, then `POST /usage/clear` `{confirm: true}` from the Danger zone.

@@ -18,8 +18,7 @@
 //!   endpoint's connection test, or sends a notification channel's test
 //!   message, on unsaved values, through the integrations SSRF guard
 //!   ([`checks`]).
-//! - `POST /send` sends torrents to a saved download client ([`send`]);
-//!   `GET /usage` and `POST /usage/clear` count and clear usage data
+//! - `GET /usage` and `POST /usage/clear` count and clear usage data
 //!   ([`usage`]).
 //! - `GET /settings/export` and `POST /settings/import` move saved
 //!   settings between installs as TOML.
@@ -69,7 +68,6 @@ use crate::extract::{Json as JsonBody, Path, Query, same_origin_json};
         test,
         export,
         import,
-        send::send,
         usage::usage,
         usage::clear
     ),
@@ -83,29 +81,6 @@ pub const IF_REVISION: &str = "if_revision";
 
 /// The largest file `POST /settings/import` reads.
 pub const MAX_IMPORT: usize = 64 * 1024;
-
-/// A saved download client, as `POST /send` uses it. Its `Debug` shows
-/// neither the address nor the password.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SavedClient {
-    pub id: String,
-    pub kind: DownloadClientKind,
-    pub url: String,
-    pub username: String,
-    pub password: Option<String>,
-    pub category: String,
-    pub save_path: String,
-    pub paused: bool,
-}
-
-impl fmt::Debug for SavedClient {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SavedClient")
-            .field("id", &self.id)
-            .field("kind", &self.kind)
-            .finish_non_exhaustive()
-    }
-}
 
 /// What the settings routes ask of the registry. Calls may block on the
 /// database; the handlers make them off the async runtime.
@@ -130,7 +105,7 @@ pub trait SettingsApi: Send + Sync + fmt::Debug {
     /// [`SettingsApi::save`]'s checks).
     fn import(&self, import: SettingsImport, dry_run: bool) -> Result<Imported, SettingsFailure>;
 
-    /// A saved secret, for a test or a send on values that leave it out
+    /// A saved secret, for a test on values that leave it out
     /// (the form never has it: secrets are write-only). `key` is a secret
     /// field (`torznab_api_key`) or a list item's secret
     /// (`clients.<id>.password`). It's given only when `endpoints` (each
@@ -143,12 +118,6 @@ pub trait SettingsApi: Send + Sync + fmt::Debug {
         _key: &str,
         _endpoints: &[(&str, serde_json::Value)],
     ) -> Option<String> {
-        None
-    }
-
-    /// A saved download client, by id or (`None`) the default one, with
-    /// its password: what `POST /send` sends to.
-    fn download_client(&self, _id: Option<&str>) -> Option<SavedClient> {
         None
     }
 
@@ -360,7 +329,6 @@ pub fn routes() -> Router<ApiState> {
             .route("/settings/export", get(export))
             .route("/settings/import", post(import))
             .route("/settings/{section}", get(section).patch(patch))
-            .route("/send", post(send::send))
             .route("/usage", get(usage::usage))
             .route("/usage/clear", post(usage::clear)),
     )
@@ -838,10 +806,7 @@ pub(crate) async fn import(
 }
 
 mod checks;
-mod send;
 mod usage;
-
-pub use send::{MAX_HASHES, MAX_SENDS};
 
 #[cfg(test)]
 mod tests {
@@ -854,7 +819,7 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    /// A schema of this module (the new send, usage and test bodies among
+    /// A schema of this module (the new usage and test bodies among
     /// them) that shares its name with another module's would be replaced
     /// in the merged document without a word (#255's class): each must
     /// reach `/openapi.json` exactly as this module defines it.
@@ -863,7 +828,7 @@ mod tests {
         let own = serde_json::to_value(ApiDoc::openapi()).unwrap();
         let all = serde_json::to_value(crate::openapi::document()).unwrap();
         let own = own["components"]["schemas"].as_object().unwrap();
-        assert!(own.contains_key("ClientSendResult") && own.contains_key("TorznabDraft"));
+        assert!(own.contains_key("UsageStats") && own.contains_key("TorznabDraft"));
         for (name, schema) in own {
             assert_eq!(&all["components"]["schemas"][name], schema, "{name}");
         }

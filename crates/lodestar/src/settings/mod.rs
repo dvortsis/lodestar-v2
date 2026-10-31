@@ -52,9 +52,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lodestar_api::settings::{
-    FieldPreview, IF_REVISION, Imported, PreviewEstimate, PreviewWarning, Saved, SavedClient,
-    SectionPreview, SectionValues, SettingField, SettingSource, SettingValue, SettingsApi,
-    SettingsBatch, SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
+    FieldPreview, IF_REVISION, Imported, PreviewEstimate, PreviewWarning, Saved, SectionPreview,
+    SectionValues, SettingField, SettingSource, SettingValue, SettingsApi, SettingsBatch,
+    SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
     SettingsSection,
 };
 use lodestar_integrations::{SealedSecret, Secret, SecretStore};
@@ -1601,10 +1601,9 @@ impl Registry {
                                 {
                                     if let Some(field) = s.field(name) {
                                         log_event!(
-                                            events::SETTINGS_SAVED_IGNORED,
+                                            events::SETTINGS_SEAL_FAILED,
                                             section = section,
-                                            field = field,
-                                            reason = "key_unavailable"
+                                            field = field
                                         );
                                     }
                                     SettingsError::Store(
@@ -1707,28 +1706,6 @@ impl SettingsApi for Registry {
         endpoints: &[(&str, Value)],
     ) -> Option<String> {
         self.find(section)?.saved_secret(key, endpoints)
-    }
-
-    fn download_client(&self, id: Option<&str>) -> Option<SavedClient> {
-        let entry = self
-            .find(integrations::Integrations::SECTION)?
-            .as_any()
-            .downcast_ref::<Entry<integrations::Integrations>>()?;
-        let section = entry.tx.borrow();
-        let c = match id {
-            Some(id) => section.client(id),
-            None => section.default_client(),
-        }?;
-        Some(SavedClient {
-            id: c.id.clone(),
-            kind: c.kind.api(),
-            url: c.url.clone(),
-            username: c.username.clone(),
-            password: c.password.as_ref().map(|p| p.0.clone()),
-            category: c.category.clone(),
-            save_path: c.save_path.clone(),
-            paused: c.paused,
-        })
     }
 }
 

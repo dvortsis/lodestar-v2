@@ -1300,12 +1300,6 @@ fn saved_secrets_are_given_only_for_their_own_server() {
     );
     assert_eq!(ask("integrations", "torznab_url", &[]), None);
     assert_eq!(ask("notifications", "discord_url", &[]), None, "none saved");
-    // The send's client: the default, or by id, with its password.
-    let c = r.download_client(None).unwrap();
-    assert_eq!((c.id.as_str(), c.category.as_str()), ("home", "tv"));
-    assert_eq!(c.password.as_deref(), Some("pa"));
-    assert!(!format!("{c:?}").contains("pa\""));
-    assert!(r.download_client(Some("nas")).is_none());
 }
 
 #[test]
