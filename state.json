@@ -1549,6 +1549,13 @@
     "B-settings-sections": {
       "status": "running",
       "notes": "2026-10-31T04:20Z brief briefs/B-settings-sections.md; Opus session_01MMjhnASCY7h5zbDorA5QfV; parts a/b; security-review"
+    },
+    "M-settings-engine-2": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_01MMjhnCv77szJz5C9itzYPf",
+      "branch": "slice/M-settings-engine-2",
+      "notes": "2026-10-31T05:21Z launched (brief briefs/M-settings-engine-2.md); before S-settings-2b"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2259,7 +2266,6 @@
     }
   },
   "followups": [
-    "M-settings-engine-2 (BEFORE S-settings-2b; Opus or careful Sonnet): (1) per-screen/per-section settings message maps loaded with the screen body instead of one static MESSAGES map in the engine chunk (every engine-backed section now ~43.1/45 KB; four more screens would pass the owner 45 KB cap); (2) fix SettingField.svelte:45-81 snap-back: in instant mode, turning Automatic off on an x-auto \"\" field re-arms manual=false (only snap back on external value changes: Discard/Undo/Use theirs, or skip set when unchanged); then restore x-auto on LanguageForm (#259 workaround)",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
