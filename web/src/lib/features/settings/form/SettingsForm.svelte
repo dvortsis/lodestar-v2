@@ -256,6 +256,7 @@
 <div
 	class="ls-form flex flex-col gap-6"
 	class:ls-form-bar={barShown}
+	aria-busy={form.status === 'loading' || undefined}
 	role="presentation"
 	{onkeydown}
 >
@@ -295,17 +296,18 @@
 		<NoticePart.part {form} />
 	{/if}
 
-	{#if form.status === 'loading' || !labelsReady}
-		<p class="text-muted-text" aria-busy="true">{m.settings_form_loading()}</p>
-	{:else if form.status === 'load-error'}
+	{#if form.status === 'load-error'}
 		<Banner kind="error">
 			{m.settings_form_load_error()}
 			{#snippet action()}
 				<Button dense onclick={() => void form.retry()}>{m.settings_form_retry()}</Button>
 			{/snippet}
 		</Banner>
-	{:else}
+	{/if}
+	{#if form.loaded && labelsReady}
 		{@render children()}
+	{:else if form.status !== 'load-error'}
+		<p class="text-muted-text" aria-busy="true">{m.settings_form_loading()}</p>
 	{/if}
 
 	<!-- One polite live region: saves, conflicts, "Updated elsewhere" (§10.10.11). -->
