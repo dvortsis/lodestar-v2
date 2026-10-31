@@ -39,8 +39,8 @@ use lodestar_pipeline::metric::{self, coverage};
 use lodestar_search::{CommitHook, Committed, IndexStats};
 use lodestar_sources::Stage;
 use lodestar_store::{
-    CompactOptions, Counter, RepairCodes, RepairOptions, Repaired, SearchableCodes, Store,
-    StoreConfig,
+    CompactOptions, Counter, QueuedKey, RepairCodes, RepairOptions, Repaired, SearchableCodes,
+    Store, StoreConfig,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -224,6 +224,17 @@ pub fn spawn(
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// The oldest cohort the saved fetch queue holds back from sealing. A
+/// refetch isn't the funnel's, and the pipeline drops saved ones at start,
+/// so one saved by an older build (under a real hour) holds nothing back.
+fn queue_floor(queue: &[QueuedKey]) -> Option<i64> {
+    queue
+        .iter()
+        .filter(|k| k.strategy != lodestar_pipeline::strategy::REFETCH)
+        .map(|k| k.cohort)
+        .min()
+}
+
 async fn run(
     insights: &Arc<Insights>,
     follow: Follow,
@@ -240,7 +251,7 @@ async fn run(
     (store, queued) = blocking(store, |s| s.load_fetch_queue()).await?;
     match queued {
         Ok(q) => {
-            if let Some(oldest) = q.iter().map(|k| k.cohort).min() {
+            if let Some(oldest) = queue_floor(&q) {
                 insights.floor.store(oldest, Ordering::Release);
                 insights.floor_until.store(
                     crate::unix_now() + (api::RETRY_HORIZON_HOURS + 1) * 3600,
@@ -578,6 +589,35 @@ mod tests {
     use lodestar_sources::Loss;
 
     use super::*;
+
+    #[test]
+    fn a_saved_refetch_holds_no_cohort_back() {
+        use lodestar_pipeline::strategy;
+        let key = |cohort, strategy| QueuedKey {
+            info_hash: lodestar_metainfo::InfoHash([1; 20]),
+            source: lodestar_store::SourceId::new(1).unwrap(),
+            cohort,
+            strategy,
+            priority: 0,
+            attempts: 0,
+            private_source: false,
+        };
+        // Saved by a build before refetches had their own cohort.
+        let old_refetch = key(400_000, strategy::REFETCH);
+        assert_eq!(queue_floor(&[old_refetch]), None);
+        assert_eq!(
+            queue_floor(&[old_refetch, key(400_010, strategy::SAMPLE)]),
+            Some(400_010)
+        );
+        assert_eq!(
+            queue_floor(&[
+                key(400_020, strategy::LOOKUP),
+                key(400_010, strategy::SAMPLE)
+            ]),
+            Some(400_010)
+        );
+        assert_eq!(queue_floor(&[]), None);
+    }
 
     #[test]
     fn coverage_splits_at_hours() {
