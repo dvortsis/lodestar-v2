@@ -189,7 +189,8 @@ const bodyMaps = {
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
-const handBuilt = new Set(Object.values(bodyMaps).flat());
+// The outputs' map (S-logs-2b) belongs to Logging's body too: it loads with its outputs part.
+const handBuilt = new Set([...Object.values(bodyMaps).flat(), 'logoutput']);
 const largestMap = mapName(
 	messageKeys
 		.filter((key) => mapName(key) !== 'group' && !handBuilt.has(mapName(key)))
@@ -215,13 +216,20 @@ const connectionMaps = [
 ];
 const connectionMapFiles = onDemandOf('/settings/[section]', connectionMaps);
 // Logging's map (S-logs-2) has its own entry too, so the existing maps' entries keep their limits.
+// The outputs' labels (S-logs-2b): their own map, loaded with the outputs after Logging's first view.
+const loggingOutputMapFiles = onDemandOf('/settings/[section]', [
+	/features\/settings\/form\/message-maps\/logoutput\.ts$/
+]);
 const loggingMapFiles = onDemandOf('/settings/[section]', [
 	/features\/settings\/form\/message-maps\/logging\.ts$/
 ]);
 const settingsMessagesLazy = requireMeasuredJs(
 	'Settings messages (on demand)',
 	onDemandOf('/settings/[section]', settingsMessages).filter(
-		(f) => !connectionMapFiles.includes(f) && !loggingMapFiles.includes(f)
+		(f) =>
+			!connectionMapFiles.includes(f) &&
+			!loggingMapFiles.includes(f) &&
+			!loggingOutputMapFiles.includes(f)
 	)
 );
 const settingsConnectionMaps = requireMeasuredJs(
@@ -316,6 +324,10 @@ const settingsShellView = own('/settings/[section]', {
 const settingsLoggingMap = requireMeasuredJs(
 	'Settings logging messages (on demand)',
 	loggingMapFiles
+);
+const settingsLoggingOutputMap = requireMeasuredJs(
+	'Settings logging output messages (on demand)',
+	loggingOutputMapFiles
 );
 const settingsLoggingLazy = requireMeasuredJs(
 	'Settings logging parts (on demand)',
@@ -737,10 +749,10 @@ export default [
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
-	// Raised for S-logs-2b, pending the runner's ruling (§2.26): the map now holds the outputs'
-	// labels, help and options. Measured 1.35 KB; limit = measured + 10%. It sits in Logging's first
-	// view, which stays at 44.57 of 45 KB.
-	entry('Settings logging messages (on demand)', settingsLoggingMap, '1.48 KB'),
+	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
+	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
+	// 0.70 KB; limit = measured + 10%.
+	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),

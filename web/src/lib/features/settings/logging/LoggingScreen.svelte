@@ -14,6 +14,17 @@
 	import LoggingForm from './LoggingForm.svelte';
 	import type { CatalogHolder, CatalogKey } from './context';
 
+	// The outputs' labels and help live in their own map (`settings.logoutput.*`), loaded with the
+	// outputs after the first view, so the first view carries only the events' (runner, §2.26).
+	const toOutputMap = (f: FieldSpec): FieldSpec =>
+		f.group === 'events'
+			? f
+			: {
+					...f,
+					labelKey: f.labelKey.replace('settings.logging.', 'settings.logoutput.'),
+					helpKey: f.helpKey.replace('settings.logging.', 'settings.logoutput.')
+				};
+
 	/** The groups this screen's form shows (not the live log's temporary verbosity); the data kinds
 	 * and opt-ins are sent on their own. */
 	const FORM_GROUPS = ['events', 'console', 'file', 'event_log'];
@@ -57,7 +68,8 @@
 				if (live)
 					fields = index
 						.fieldsOf(['logging'])
-						.filter((f) => FORM_GROUPS.includes(f.group) && !f.name.startsWith('temporary'));
+						.filter((f) => FORM_GROUPS.includes(f.group) && !f.name.startsWith('temporary'))
+						.map(toOutputMap);
 			},
 			() => {
 				if (live) failed = true;

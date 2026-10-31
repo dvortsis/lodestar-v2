@@ -8,6 +8,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import type { FieldSpec, SettingsForm } from '../form';
 	import SettingField from '../form/SettingField.svelte';
+	import { loadMessages, messagesLoaded } from '../form/messages';
 	import type { DeploymentKind } from './catalog.svelte';
 	import Preview from './Preview.svelte';
 
@@ -36,13 +37,19 @@
 		)
 	);
 	let toggled = $state<Record<string, boolean>>({});
+
+	// The outputs' labels are in their own map (`settings.logoutput.*`): the fields render once it's in,
+	// so no raw key shows. A map that can't load shows the fields by name, as the engine does.
+	const inPlace = messagesLoaded(['logoutput']);
+	let labels = $state(inPlace);
+	if (!inPlace) void loadMessages(['logoutput']).finally(() => (labels = true));
 </script>
 
 {#snippet fields(specs: FieldSpec[])}
 	{#each specs as s (s.key)}<SettingField {form} key={s.key} />{/each}
 {/snippet}
 
-{#each shown as g (g.id)}
+{#each labels ? shown : [] as g (g.id)}
 	{@const specs = inGroup(g.id)}
 	{@const advanced = specs.filter((s) => s.advanced)}
 	<section class="flex flex-col gap-6" aria-labelledby="logging-{g.id}">

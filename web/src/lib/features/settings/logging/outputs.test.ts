@@ -14,6 +14,15 @@ import Preview from './Preview.svelte';
 vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 
+// The outputs' labels are in the `logoutput` map, as LoggingScreen points them.
+const out = (key: `logging.${string}`, over: Parameters<typeof spec>[1]) => {
+	const name = key.split('.')[1];
+	return spec(key, {
+		labelKey: `settings.logoutput.${name}.label`,
+		helpKey: `settings.logoutput.${name}.help`,
+		...over
+	});
+};
 const SPECS = [
 	spec('logging.verbosity', {
 		kind: 'enum',
@@ -21,11 +30,11 @@ const SPECS = [
 		group: 'events',
 		preview: true
 	}),
-	spec('logging.console_format', { kind: 'enum', enum: ['text', 'json'], group: 'console' }),
-	spec('logging.file_enabled', { kind: 'boolean', group: 'file', preview: true }),
-	spec('logging.file_folder', { group: 'file', advanced: true }),
-	spec('logging.file_size_mib', { kind: 'integer', group: 'file', advanced: true, preview: true }),
-	spec('logging.event_log_errors', { kind: 'boolean', group: 'event_log', advanced: true })
+	out('logging.console_format', { kind: 'enum', enum: ['text', 'json'], group: 'console' }),
+	out('logging.file_enabled', { kind: 'boolean', group: 'file', preview: true }),
+	out('logging.file_folder', { group: 'file', advanced: true }),
+	out('logging.file_size_mib', { kind: 'integer', group: 'file', advanced: true, preview: true }),
+	out('logging.event_log_errors', { kind: 'boolean', group: 'event_log', advanced: true })
 ];
 
 let server: ReturnType<typeof fakeServer>;
