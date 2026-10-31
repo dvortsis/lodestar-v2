@@ -38,9 +38,9 @@ use utoipa::OpenApi;
 
 pub use crate::dto::insights::{
     Annotation, Bucket, Conversion, EventsQuery, EventsResponse, Fix, FunnelCohort, FunnelStages,
-    FunnelTotal, Health, HealthState, InsightsException, InsightsRange, Kpi, OverviewQuery,
-    OverviewResponse, PausedSpan, PreviousKpi, PreviousPeriod, PreviousStages, SegmentCount,
-    SegmentMover, SegmentYield, Segments, Serve, Severity, Stages, Stale, TrendPoint,
+    FunnelTotal, Health, HealthState, ImportNote, InsightsException, InsightsRange, Kpi,
+    OverviewQuery, OverviewResponse, PausedSpan, PreviousKpi, PreviousPeriod, PreviousStages,
+    SegmentCount, SegmentMover, SegmentYield, Segments, Serve, Severity, Stages, Stale, TrendPoint,
 };
 use crate::error::{ApiError, ApiResult, internal};
 
@@ -153,14 +153,21 @@ pub mod codes {
         (10, "unreachable"),
     ];
 
-    /// `events.kind` → annotation kind (`lodestar_pipeline::event`).
-    pub const EVENTS: [(u32, &str); 5] = [
+    /// `events.kind` → annotation kind (`lodestar_pipeline::event`, then
+    /// the store's import annotations, `lodestar_store::import::event`).
+    pub const EVENTS: [(u32, &str); 8] = [
         (1, "restart"),
         (2, "stopped"),
         (3, "paused"),
         (4, "resumed"),
         (5, "intensity"),
+        (IMPORT_STARTED, "import_started"),
+        (IMPORT_FINISHED, "import_finished"),
+        (IMPORT_REMOVED, "import_removed"),
     ];
+    pub const IMPORT_STARTED: u32 = lodestar_store::import::event::STARTED;
+    pub const IMPORT_FINISHED: u32 = lodestar_store::import::event::FINISHED;
+    pub const IMPORT_REMOVED: u32 = lodestar_store::import::event::REMOVED;
     pub const PAUSE: u32 = 3;
     pub const RESUME: u32 = 4;
 
@@ -458,8 +465,11 @@ pub fn warm(
 /// One sealed UTC day's sums: what [`read_period`] would read for it.
 #[derive(Debug, Default)]
 struct DayRows {
-    /// Newly searchable in the day; `None` with no row.
+    /// Crawled torrents newly searchable in the day; `None` with no row.
     newly: Option<i64>,
+    /// Imported ones (`key` 1), apart; `None` with no row.
+    newly_imported: Option<i64>,
+    /// Crawled only.
     newly_by_dim: BTreeMap<u32, i64>,
     stored: i64,
     /// Fetches by event time (`FUNNEL_EVENTS`, the `Fetched` stage).
@@ -468,6 +478,18 @@ struct DayRows {
     /// Summed over the day (`cohort` = the day's first hour).
     cohorts: Vec<CohortCount>,
     delays: BTreeMap<i64, i64>,
+}
+
+impl DayRows {
+    /// One `NEWLY_SEARCHABLE` row (by hour, dim and key): imports apart.
+    fn add_newly(&mut self, c: &Counter) {
+        if c.key == 0 {
+            *self.newly.get_or_insert(0) += c.value;
+            *self.newly_by_dim.entry(c.dim).or_default() += c.value;
+        } else {
+            *self.newly_imported.get_or_insert(0) += c.value;
+        }
+    }
 }
 
 /// The sealed days `from..to` (whole days), from the cache, reading the
@@ -499,10 +521,8 @@ fn sealed_days(
             .map(|d| (d, DayRows::default()))
             .collect();
         let day = |h: i64| h.div_euclid(24) * 24;
-        for c in store.rollup_sums(metric::NEWLY_SEARCHABLE, a, b, RollupBy::HourDim)? {
-            let d = read.get_mut(&day(c.hour)).expect("in range");
-            *d.newly.get_or_insert(0) += c.value;
-            *d.newly_by_dim.entry(c.dim).or_default() += c.value;
+        for c in store.rollup_sums(metric::NEWLY_SEARCHABLE, a, b, RollupBy::All)? {
+            read.get_mut(&day(c.hour)).expect("in range").add_newly(&c);
         }
         for c in store.rollup_sums(metric::STORED, a, b, RollupBy::Hour)? {
             read.get_mut(&day(c.hour)).expect("in range").stored += c.value;
@@ -567,10 +587,8 @@ fn compacted_days(store: &Store, from: i64, to: i64) -> lodestar_store::Result<V
     fn at(read: &mut BTreeMap<i64, DayRows>, h: i64) -> &mut DayRows {
         read.get_mut(&h).expect("in range")
     }
-    for c in both(metric::NEWLY_SEARCHABLE, RollupBy::HourDim)? {
-        let d = at(&mut read, c.hour);
-        *d.newly.get_or_insert(0) += c.value;
-        *d.newly_by_dim.entry(c.dim).or_default() += c.value;
+    for c in both(metric::NEWLY_SEARCHABLE, RollupBy::All)? {
+        at(&mut read, c.hour).add_newly(&c);
     }
     for c in both(metric::STORED, RollupBy::Hour)? {
         at(&mut read, c.hour).stored += c.value;
@@ -942,7 +960,9 @@ fn percentile(hist: &BTreeMap<i64, u64>, q: f64) -> Option<u64> {
 /// The rollup rows of one period, read in one snapshot.
 #[derive(Debug, Default)]
 struct PeriodRows {
+    /// `NEWLY_SEARCHABLE` by hour and key: `key` 0 crawled, 1 imported.
     newly_by_hour: Vec<Counter>,
+    /// By dim and key.
     newly_by_dim: Vec<Counter>,
     stored_by_hour: Vec<Counter>,
     coverage: Vec<Counter>,
@@ -991,9 +1011,14 @@ fn read_period(
             metric::NEWLY_SEARCHABLE,
             split,
             w.to_h,
-            RollupBy::Hour,
+            RollupBy::HourKey,
         )?,
-        newly_by_dim: store.rollup_sums(metric::NEWLY_SEARCHABLE, split, w.to_h, RollupBy::Dim)?,
+        newly_by_dim: store.rollup_sums(
+            metric::NEWLY_SEARCHABLE,
+            split,
+            w.to_h,
+            RollupBy::DimKey,
+        )?,
         stored_by_hour: store.rollup_sums(metric::STORED, split, w.to_h, RollupBy::Hour)?,
         coverage: store.rollup_sums(metric::COVERAGE, split, w.to_h, RollupBy::HourDim)?,
         cohorts_old: store.cohort_sums(split, cut, w.grain)?,
@@ -1040,6 +1065,9 @@ fn read_period(
         if let Some(n) = day.newly {
             rows.newly_by_hour.push(row(d, 0, 0, n));
         }
+        if let Some(n) = day.newly_imported {
+            rows.newly_by_hour.push(row(d, 0, 1, n));
+        }
         for (&dim, &n) in &day.newly_by_dim {
             rows.newly_by_dim.push(row(0, dim, 0, n));
         }
@@ -1082,7 +1110,9 @@ struct Period {
     /// Fetched by event time; `None` when the window starts before fetches
     /// were counted (an unknown, not a 0).
     fetch: Option<u64>,
+    /// Crawled only.
     new_searchable: u64,
+    new_searchable_imported: u64,
     yield_: Option<f64>,
     p50: Option<u64>,
     p95: Option<u64>,
@@ -1115,14 +1145,15 @@ fn period(w: &Window, now_h: i64, rows: &PeriodRows, st: &InsightsState) -> Peri
         (None, None, None)
     };
     // Trend: rows win; otherwise 0 where measured, a gap where not.
-    let sum_by_bucket = |rows: &[Counter]| -> BTreeMap<i64, u64> {
+    let sum_by_bucket = |rows: &[Counter], imported: bool| -> BTreeMap<i64, u64> {
         let mut out = BTreeMap::new();
-        for c in rows {
+        for c in rows.iter().filter(|c| (c.key != 0) == imported) {
             *out.entry(w.bucket_of(c.hour)).or_default() += c.value.max(0) as u64;
         }
         out
     };
-    let newly = sum_by_bucket(&rows.newly_by_hour);
+    let newly = sum_by_bucket(&rows.newly_by_hour, false);
+    let imported = sum_by_bucket(&rows.newly_by_hour, true);
     let mut covered: BTreeMap<(i64, u32), i64> = BTreeMap::new();
     for c in &rows.coverage {
         *covered.entry((w.bucket_of(c.hour), c.dim)).or_default() += c.value;
@@ -1137,14 +1168,16 @@ fn period(w: &Window, now_h: i64, rows: &PeriodRows, st: &InsightsState) -> Peri
                 .filter(|(a, _)| a.harvested_rows)
                 .map(|(a, _)| a.get(codes::HARVESTED))
                 .or_else(|| is_covered(b, metric::COVERAGE_CRAWL).then_some(0));
-            let searchable = newly
-                .get(&b)
-                .copied()
-                .or_else(|| is_covered(b, metric::COVERAGE_INDEX).then_some(0));
+            let indexed = |rows: &BTreeMap<i64, u64>| {
+                rows.get(&b)
+                    .copied()
+                    .or_else(|| is_covered(b, metric::COVERAGE_INDEX).then_some(0))
+            };
             TrendPoint {
                 at: b * 3600,
                 harvested,
-                searchable,
+                searchable: indexed(&newly),
+                searchable_imported: indexed(&imported),
             }
         })
         .collect();
@@ -1162,6 +1195,7 @@ fn period(w: &Window, now_h: i64, rows: &PeriodRows, st: &InsightsState) -> Peri
         stages: (discover, understand),
         fetch: (w.from_h >= st.funnel_events_since_hour).then_some(rows.fetched.max(0) as u64),
         new_searchable: newly.values().sum(),
+        new_searchable_imported: imported.values().sum(),
         yield_,
         p50,
         p95,
@@ -1261,8 +1295,10 @@ fn type_lists(
 
 fn segments(rows: &PeriodRows, c: &Cohorts, names: &BTreeMap<u8, String>, adult: bool) -> Segments {
     let (by_content_type, by_group) = type_lists(
+        // Crawled only: imports are apart (`kpi.new_searchable_imported`).
         rows.newly_by_dim
             .iter()
+            .filter(|r| r.key == 0)
             .map(|r| (r.dim, r.value.max(0) as u64)),
         adult,
     );
@@ -1300,9 +1336,41 @@ fn annotations(events: &[Event]) -> Vec<Annotation> {
                 at: e.at,
                 kind: kind.into(),
                 text: e.detail.clone(),
+                import: import_note(e),
             })
         })
         .collect()
+}
+
+/// An import annotation's `key=value` detail (`lodestar_store::import::
+/// event`); `None` for other kinds, or a detail without a job.
+fn import_note(e: &Event) -> Option<ImportNote> {
+    if !matches!(
+        e.kind,
+        codes::IMPORT_STARTED | codes::IMPORT_FINISHED | codes::IMPORT_REMOVED
+    ) {
+        return None;
+    }
+    let mut note = ImportNote {
+        job: 0,
+        source: String::new(),
+        new: None,
+        merged: None,
+        removed: None,
+    };
+    let mut job = None;
+    for (k, v) in e.detail.split(' ').filter_map(|w| w.split_once('=')) {
+        match k {
+            "job" => job = v.parse().ok(),
+            "source" => note.source = v.into(),
+            "new" => note.new = v.parse().ok(),
+            "merged" => note.merged = v.parse().ok(),
+            "removed" => note.removed = v.parse().ok(),
+            _ => {}
+        }
+    }
+    note.job = job?;
+    Some(note)
 }
 
 /// `cohort_stalled`: hashes in progress, the crawler running the last
@@ -1509,6 +1577,7 @@ fn build(
                 segments: segments(&pr, &q.cohorts, &names, adult),
                 kpi: PreviousKpi {
                     new_searchable: q.new_searchable,
+                    new_searchable_imported: q.new_searchable_imported,
                     searchable: searchable_then,
                     time_to_searchable_p50_s: q.p50,
                     time_to_searchable_p95_s: q.p95,
@@ -1551,7 +1620,9 @@ fn build(
                 new_searchable_delta: previous
                     .as_ref()
                     .map(|q| p.new_searchable as i64 - q.kpi.new_searchable as i64),
+                new_searchable_imported: p.new_searchable_imported,
                 searchable: None,
+                searchable_crawled: None,
                 searchable_delta: None,
                 time_to_searchable_p50_delta_s: previous
                     .as_ref()
@@ -1678,6 +1749,10 @@ fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
     }
     r.kpi.searchable = s.searchable;
     r.kpi.imported = s.imported;
+    r.kpi.searchable_crawled = s
+        .searchable
+        .zip(s.imported)
+        .map(|(all, imported)| all.saturating_sub(imported));
     r.stages.index = s.searchable;
     r.updated_at = s.now;
     // The change since the previous period's end, removals included:
@@ -1835,7 +1910,9 @@ fn windows(w: Window, compare: bool, compacted: i64) -> (Window, Option<Window>)
 }
 
 /// Trend annotations (`restart`, `stopped`, `paused`, `resumed`,
-/// `intensity`; other events are skipped) and the paused spans
+/// `intensity`, and an import's `import_started`, `import_finished` and
+/// `import_removed` with its counts; other events are skipped) and the
+/// paused spans
 /// overlapping `from..to`, so the client draws gaps.
 #[utoipa::path(
     operation_id = "getInsightsEvents",
@@ -2067,6 +2144,46 @@ mod tests {
         assert!(r.paused.is_empty());
     }
 
+    #[test]
+    fn import_annotations_carry_their_counts() {
+        let e = |kind, detail: &str| Event {
+            at: 7,
+            kind,
+            detail: detail.into(),
+        };
+        let note = |e: &Event| annotations(std::slice::from_ref(e))[0].import.clone();
+        assert_eq!(
+            note(&e(
+                codes::IMPORT_FINISHED,
+                "job=4 source=magnetico new=10 merged=3"
+            )),
+            Some(ImportNote {
+                job: 4,
+                source: "magnetico".into(),
+                new: Some(10),
+                merged: Some(3),
+                removed: None,
+            })
+        );
+        assert_eq!(
+            note(&e(
+                codes::IMPORT_REMOVED,
+                "job=4 source=magnetico removed=9"
+            ))
+            .map(|n| n.removed),
+            Some(Some(9))
+        );
+        let started = note(&e(codes::IMPORT_STARTED, "job=5 source=bitmagnet")).unwrap();
+        assert_eq!((started.job, started.new), (5, None));
+        // No job: no note, but the annotation stays.
+        assert_eq!(note(&e(codes::IMPORT_STARTED, "garbled")), None);
+        assert_eq!(note(&e(5, "job=1")), None, "other kinds have none");
+        // The store's codes follow the pipeline's without overlap.
+        for (code, _) in &codes::EVENTS[5..] {
+            assert!(*code > lodestar_pipeline::event::INTENSITY);
+        }
+    }
+
     /// The sealed days' sums give exactly what reading every hour gives.
     #[test]
     fn sealed_days_read_as_their_hours() {
@@ -2087,6 +2204,8 @@ mod tests {
             };
             counters.extend([
                 c(codes::metric::NEWLY_SEARCHABLE, (k % 3) as u32, 0, k + 1),
+                // Imports apart (key 1), in the same hours (IMP-5).
+                c(codes::metric::NEWLY_SEARCHABLE, (k % 2) as u32, 1, k % 4),
                 c(codes::metric::STORED, 0, 0, k),
                 c(
                     codes::metric::COVERAGE,
@@ -2128,8 +2247,22 @@ mod tests {
             );
             assert_eq!(a.trend, b.trend);
             assert_eq!(
-                (a.stages, a.new_searchable, a.yield_, a.p50, a.p95),
-                (b.stages, b.new_searchable, b.yield_, b.p50, b.p95)
+                (
+                    a.stages,
+                    a.new_searchable,
+                    a.new_searchable_imported,
+                    a.yield_,
+                    a.p50,
+                    a.p95
+                ),
+                (
+                    b.stages,
+                    b.new_searchable,
+                    b.new_searchable_imported,
+                    b.yield_,
+                    b.p50,
+                    b.p95
+                )
             );
             assert_eq!(funnel(&a.cohorts), funnel(&b.cohorts));
             let names = BTreeMap::new();
@@ -2222,6 +2355,8 @@ mod tests {
             };
             counters.extend([
                 c(codes::metric::NEWLY_SEARCHABLE, (k % 3) as u32, 0, k + 1),
+                // Imports apart (key 1), in the same hours (IMP-5).
+                c(codes::metric::NEWLY_SEARCHABLE, (k % 2) as u32, 1, k % 4),
                 c(codes::metric::STORED, 0, 0, k),
                 c(
                     codes::metric::COVERAGE,
@@ -2293,6 +2428,7 @@ mod tests {
                         p.stages,
                         p.fetch,
                         p.new_searchable,
+                        p.new_searchable_imported,
                         p.yield_,
                         p.p50,
                         p.p95,
@@ -2331,7 +2467,7 @@ mod tests {
             },
         );
         assert_eq!(after, before);
-        assert_eq!(before[1].9, Some(77), "the compacted day's gauge");
+        assert_eq!(before[1].10, Some(77), "the compacted day's gauge");
         assert!(before[0].2.is_some_and(|n| n > 0));
         // Fetches weren't counted before `funnel_events_since_hour`.
         let late = InsightsState {

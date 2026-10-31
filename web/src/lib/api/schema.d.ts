@@ -737,7 +737,9 @@ export interface paths {
         };
         /**
          * Trend annotations (`restart`, `stopped`, `paused`, `resumed`,
-         *     `intensity`; other events are skipped) and the paused spans
+         *     `intensity`, and an import's `import_started`, `import_finished` and
+         *     `import_removed` with its counts; other events are skipped) and the
+         *     paused spans
          *     overlapping `from..to`, so the client draws gaps.
          */
         get: operations["getInsightsEvents"];
@@ -2163,11 +2165,16 @@ export interface components {
              * @description Unix seconds.
              */
             at: number;
-            /** @description `restart`, `stopped`, `paused`, `resumed` or `intensity`. */
+            import: null | components["schemas"]["ImportNote"];
+            /**
+             * @description `restart`, `stopped`, `paused`, `resumed`, `intensity`,
+             *     `import_started`, `import_finished` or `import_removed`.
+             */
             kind: string;
             /**
              * @description The event's detail: the version for `restart`, the new level for
-             *     `intensity`; empty when there's none.
+             *     `intensity`, `key=value` words for an import (as `import`); empty
+             *     when there's none.
              */
             text: string;
         };
@@ -4263,6 +4270,33 @@ export interface components {
             section: string;
             to: unknown;
         };
+        /** @description What an import annotation says, so a step in the trend is explained. */
+        ImportNote: {
+            /**
+             * Format: int64
+             * @description The import job's id.
+             */
+            job: number;
+            /**
+             * Format: int64
+             * @description `import_finished`: records the store already had, merged as
+             *     provenance only (already known). Null otherwise.
+             */
+            merged: number | null;
+            /**
+             * Format: int64
+             * @description `import_finished`: records the job stored new (novel). Null
+             *     otherwise.
+             */
+            new: number | null;
+            /**
+             * Format: int64
+             * @description `import_removed`: torrents the removal deleted. Null otherwise.
+             */
+            removed: number | null;
+            /** @description Its adapter: `magnetico` or `bitmagnet`. */
+            source: string;
+        };
         /**
          * @description `POST /settings/import`: the diff, and whether it was applied.
          * @example {
@@ -4348,9 +4382,15 @@ export interface components {
             merges: number | null;
             /**
              * Format: int64
-             * @description Torrents that became searchable in the range. Event time.
+             * @description Crawled torrents that became searchable in the range, imports
+             *     excluded. Event time.
              */
             new_searchable: number;
+            /**
+             * Format: int64
+             * @description Imported torrents that became searchable in the range. Event time.
+             */
+            new_searchable_imported: number;
             /**
              * Format: int64
              * @description Days until the disk is full. Null while free space is unknown.
@@ -4391,8 +4431,16 @@ export interface components {
         IndexPoint: {
             /** Format: int64 */
             at: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Crawled torrents newly searchable (imports excluded).
+             */
             new_searchable: number | null;
+            /**
+             * Format: int64
+             * @description Imported torrents newly searchable.
+             */
+            new_searchable_imported: number | null;
             /** Format: int64 */
             removed: number | null;
             /**
@@ -4662,8 +4710,9 @@ export interface components {
             imported: number | null;
             /**
              * Format: int64
-             * @description Torrents that first became searchable in the range, imports
-             *     included. Event time; 0 is real.
+             * @description Crawled torrents that first became searchable in the range:
+             *     imports excluded (`new_searchable_imported`). Event time; 0 is
+             *     real.
              */
             new_searchable: number;
             /**
@@ -4674,9 +4723,21 @@ export interface components {
             new_searchable_delta: number | null;
             /**
              * Format: int64
+             * @description Imported torrents that first became searchable in the range (an
+             *     import's records, indexed). Event time; 0 is real.
+             */
+            new_searchable_imported: number;
+            /**
+             * Format: int64
              * @description Documents in the search index now; null when search is off.
              */
             searchable: number | null;
+            /**
+             * Format: int64
+             * @description Of `searchable`, the crawled ones: `searchable` less `imported`;
+             *     null when either is null.
+             */
+            searchable_crawled: number | null;
             /**
              * Format: int64
              * @description The change since the previous period's end: now's count less
@@ -5515,6 +5576,8 @@ export interface components {
         PreviousKpi: {
             /** Format: int64 */
             new_searchable: number;
+            /** Format: int64 */
+            new_searchable_imported: number;
             /**
              * Format: int64
              * @description Searchable at the period's end: the last hourly snapshot in the
@@ -7452,9 +7515,16 @@ export interface components {
             harvested: number | null;
             /**
              * Format: int64
-             * @description Torrents newly searchable in the bucket.
+             * @description Crawled torrents newly searchable in the bucket (imports
+             *     excluded).
              */
             searchable: number | null;
+            /**
+             * Format: int64
+             * @description Imported torrents newly searchable in the bucket; null and 0 as
+             *     for `searchable`.
+             */
+            searchable_imported: number | null;
         };
         /**
          * @description Why a section isn't available. Stable keys; the UI words them.
@@ -7472,7 +7542,8 @@ export interface components {
             junk_distribution: components["schemas"]["InsightsHistogramBin"][] | null;
             /**
              * Format: int64
-             * @description Torrents that became searchable in the range. Event time.
+             * @description Crawled torrents that became searchable in the range, imports
+             *     excluded. Event time.
              */
             newly_searchable: number;
             /** @description Parser confidence distribution. Null until rolled up. */

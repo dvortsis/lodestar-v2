@@ -15,17 +15,18 @@ function trend(points: number, offset = 0): Trend[] {
 	return Array.from({ length: points }, (_, i) => ({
 		at: NOW - (points - i) * HOUR - offset,
 		searchable: i === 7 || i === 8 ? null : 100 + i * 7,
-		harvested: i === 7 || i === 8 ? null : 900 + i * 13
+		harvested: i === 7 || i === 8 ? null : 900 + i * 13,
+		searchable_imported: i === 7 || i === 8 ? null : 0
 	}));
 }
 
 export function overviewFixture(over: Partial<Overview> = {}): Overview {
 	return {
 		annotations: [
-			{ at: NOW - 30 * HOUR, kind: 'restart', text: '2.4.1' },
-			{ at: NOW - 20 * HOUR, kind: 'paused', text: '' },
-			{ at: NOW - 18 * HOUR, kind: 'resumed', text: '' },
-			{ at: NOW - 10 * HOUR, kind: 'intensity', text: 'aggressive' }
+			{ at: NOW - 30 * HOUR, kind: 'restart', text: '2.4.1', import: null },
+			{ at: NOW - 20 * HOUR, kind: 'paused', text: '', import: null },
+			{ at: NOW - 18 * HOUR, kind: 'resumed', text: '', import: null },
+			{ at: NOW - 10 * HOUR, kind: 'intensity', text: 'aggressive', import: null }
 		],
 		exceptions: [
 			{
@@ -84,7 +85,9 @@ export function overviewFixture(over: Partial<Overview> = {}): Overview {
 			imported: 4321,
 			new_searchable: 7891,
 			new_searchable_delta: null,
+			new_searchable_imported: 0,
 			searchable: 1_234_567,
+			searchable_crawled: 1_230_246,
 			searchable_delta: null,
 			time_to_searchable_p50_delta_s: null,
 			time_to_searchable_p50_s: 5400,
@@ -145,3 +148,25 @@ export const COMPARE_KPI = {
 	searchable_delta: 56_789,
 	yield_delta: -0.032
 } as const;
+
+/** An import in the range: started, finished (3 new, 1 already known), and later removed. */
+export const IMPORT_ANNOTATIONS: Overview['annotations'] = [
+	{
+		at: NOW - 40 * HOUR,
+		kind: 'import_started',
+		text: 'job=7 source=bitmagnet',
+		import: { job: 7, source: 'bitmagnet', new: null, merged: null, removed: null }
+	},
+	{
+		at: NOW - 38 * HOUR,
+		kind: 'import_finished',
+		text: 'job=7 source=bitmagnet new=250000 merged=1234',
+		import: { job: 7, source: 'bitmagnet', new: 250_000, merged: 1234, removed: null }
+	},
+	{
+		at: NOW - 6 * HOUR,
+		kind: 'import_removed',
+		text: 'job=7 source=bitmagnet removed=4321',
+		import: { job: 7, source: 'bitmagnet', new: null, merged: null, removed: 4321 }
+	}
+];

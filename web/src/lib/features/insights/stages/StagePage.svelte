@@ -23,6 +23,8 @@
 	import ChartPanel from '../overview/ChartPanel.svelte';
 	import type { Route } from '../overview/href';
 	import { csvHref, searchHref, stageHref, STAGES, type Stage } from '../overview/links';
+	import ImportMarkers from '../overview/ImportMarkers.svelte';
+	import type { Annotation } from '../overview/imports';
 	import LinkedBars from '../overview/LinkedBars.svelte';
 	import { apiQuery, parseQuery, RANGES, searchFor, type InsightsQuery } from '../overview/query';
 	import Skeleton from '../overview/Skeleton.svelte';
@@ -86,6 +88,23 @@
 			phase = 'error';
 		}
 	}
+	// The Index page explains a removal spike with the import markers in its range. They load after
+	// the page and are best-effort: no markers is the page as it was.
+	let marks = $state.raw<Annotation[]>([]);
+	$effect(() => {
+		const d = data;
+		marks = [];
+		if (stage !== 'index' || !d || phase !== 'ready') return;
+		const ctl = new AbortController();
+		api
+			.get('/insights/events', {
+				query: { from: d.range.from, to: d.range.to },
+				signal: ctl.signal
+			})
+			.then((r) => (marks = r.annotations))
+			.catch(() => {});
+		return () => ctl.abort();
+	});
 	const key = $derived(JSON.stringify([stage, query, reason]));
 	$effect(() => {
 		const [, q, r] = JSON.parse(key) as [string, InsightsQuery, string | undefined];
@@ -445,6 +464,8 @@
 				{/if}
 			</section>
 		{/each}
+
+		{#if stage === 'index'}<ImportMarkers annotations={marks} {tz} />{/if}
 
 		{#if extraBars.length || model.hists.length}
 			<section class="ins-section" aria-labelledby="ins-s-drivers">

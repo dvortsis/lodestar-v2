@@ -538,7 +538,9 @@ fn understand(
     let blocked = per_bucket(&ev, |d, k| {
         d == u32::from(codes::LOST) && k == i64::from(blocked_code)
     });
-    let newly = read_metric(c, metric::NEWLY_SEARCHABLE)?;
+    // Crawled only: imports never went through Understand's pipeline.
+    let mut newly = read_metric(c, metric::NEWLY_SEARCHABLE)?;
+    newly.retain(|&(_, _, key), _| key == 0);
     let cov = c.coverage()?;
     let trend =
         c.w.buckets()
@@ -575,7 +577,9 @@ fn understand(
 /// One window of Index: (kpi, trend, removed_by_type).
 fn index(c: &Ctx<'_>) -> lodestar_store::Result<(IndexKpi, Vec<IndexPoint>, Vec<RemovedCount>)> {
     use codes::metric;
-    let newly = per_bucket(&read_metric(c, metric::NEWLY_SEARCHABLE)?, |_, _| true);
+    let newly_rows = read_metric(c, metric::NEWLY_SEARCHABLE)?;
+    let newly = per_bucket(&newly_rows, |_, key| key == 0);
+    let imported = per_bucket(&newly_rows, |_, key| key != 0);
     let removed_rows = read_metric(c, metric::REMOVED)?;
     let removed = per_bucket(&removed_rows, |_, _| true);
     let searchable = last_per_bucket(c, metric::SEARCHABLE)?;
@@ -587,6 +591,7 @@ fn index(c: &Ctx<'_>) -> lodestar_store::Result<(IndexKpi, Vec<IndexPoint>, Vec<
                 IndexPoint {
                     at: b * 3600,
                     new_searchable: point(&newly, b, m),
+                    new_searchable_imported: point(&imported, b, m),
                     // Deletes happen paused or not: a bucket with any coverage
                     // was measured.
                     removed: point(&removed, b, m || measured(&cov, b, metric::COVERAGE_CRAWL)),
@@ -615,6 +620,7 @@ fn index(c: &Ctx<'_>) -> lodestar_store::Result<(IndexKpi, Vec<IndexPoint>, Vec<
         index_lag_s: None,
         merges: None,
         new_searchable: total(&newly),
+        new_searchable_imported: total(&imported),
         projection_days: None,
         rebuild: None,
         removed: total(&removed),

@@ -76,6 +76,7 @@ export const test = base.extend<
 			mock.on('getInsightsUnderstand', understandFixture());
 			mock.on('getInsightsIndex', indexFixture());
 			mock.on('getInsightsServe', serveFixture());
+			mock.on('getInsightsEvents', { annotations: [], paused: [], truncated: false });
 			await use(mock);
 			mock.assertNoFailures();
 		},

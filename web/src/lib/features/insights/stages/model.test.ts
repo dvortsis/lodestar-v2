@@ -104,6 +104,16 @@ describe('mapIndex', () => {
 	});
 });
 
+describe('mapIndex imports', () => {
+	it('adds an Imported metric only above zero, apart from New searchable', () => {
+		expect(mapIndex(indexFixture()).kpis.some((k) => k.key === 'new_imported')).toBe(false);
+		const base = indexFixture();
+		const model = mapIndex(indexFixture({ kpi: { ...base.kpi, new_searchable_imported: 900 } }));
+		expect(find(model.kpis, 'new_imported').value).toBe(900);
+		expect(find(model.kpis, 'new').value).toBe(1357);
+	});
+});
+
 describe('snapshot series', () => {
 	it('flags the total on the Index page as a snapshot chart, and the new/removed chart as not', () => {
 		const charts = mapIndex(indexFixture()).charts;

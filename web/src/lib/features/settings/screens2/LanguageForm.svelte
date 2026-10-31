@@ -12,14 +12,13 @@
 	import TimeZoneWidget from './TimeZoneWidget.svelte';
 
 	let { fields: served }: { fields: FieldSpec[] } = $props();
-	// Automatic is these widgets' own first choice: an empty value follows the browser. The engine's
-	// Automatic switch can't turn off for an empty text in instant mode, so the spec drops `x-auto`.
-	const fields = untrack(() => served.map((spec) => ({ ...spec, auto: undefined })));
 	const unregister = [
 		registerWidget('language', LanguageWidget),
 		registerWidget('time-zone', TimeZoneWidget)
 	];
-	const form = untrack(() => createSettingsForm({ id: 'language', fields, mode: 'instant' }));
+	const form = untrack(() =>
+		createSettingsForm({ id: 'language', fields: served, mode: 'instant' })
+	);
 	onDestroy(() => {
 		form.destroy();
 		for (const off of unregister) off();

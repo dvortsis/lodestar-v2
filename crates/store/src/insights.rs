@@ -214,6 +214,9 @@ pub enum RollupBy {
     Key,
     HourDim,
     HourKey,
+    /// (dim, key) over the range: a split by key (imports apart) without
+    /// one row per hour.
+    DimKey,
     /// Every (hour, dim, key) the metric has.
     All,
 }
@@ -514,6 +517,10 @@ impl Store {
             RollupBy::HourKey => (
                 "r.hour, 0, r.key",
                 "GROUP BY r.hour, r.key ORDER BY r.hour, r.key",
+            ),
+            RollupBy::DimKey => (
+                "0, r.dim, r.key",
+                "GROUP BY r.dim, r.key ORDER BY r.dim, r.key",
             ),
             RollupBy::All => (
                 "r.hour, r.dim, r.key",

@@ -13,6 +13,7 @@
 	import { lazyPart } from './lazy.svelte';
 	import { loadEdit, loadedEdit, preloadSettingsForm, type SettingsForm } from './form.svelte';
 	import { hardNavigate, leaveDecision } from './leave';
+	import { loadMessages, messagesFailed, messagesLoaded } from './messages';
 	import type { FieldKey } from './types';
 	import { widgetFor } from './widgets';
 
@@ -37,6 +38,19 @@
 		onReveal,
 		children
 	}: Props = $props();
+
+	// The labels and help of these fields' sections: nothing renders before they're in, so a raw
+	// key never flashes. Already loaded (a return visit) renders at once.
+	const sections = untrack(() => form.specs.map((spec) => spec.section));
+	const inPlace = messagesLoaded(sections);
+	let labelsReady = $state(inPlace);
+	// A map that didn't load leaves the fields' names for labels: say so, like any lazy part.
+	let labelsFailed = $state(messagesFailed(sections));
+	if (!inPlace)
+		void loadMessages(sections).then((ok) => {
+			labelsFailed = !ok;
+			labelsReady = true;
+		});
 
 	let summaryShown = $state(false);
 	let summaryFocus = $state(0);
@@ -81,8 +95,9 @@
 	// The edit chunk didn't load: nothing can be saved from this page until a reload. A stored
 	// draft whose offer didn't load says so on its own.
 	const partFailed = $derived(
-		!form.draftUnavailable &&
-			(BarPart.failed || SummaryPart.failed || NoticePart.failed || DraftPart.failed)
+		labelsFailed ||
+			(!form.draftUnavailable &&
+				(BarPart.failed || SummaryPart.failed || NoticePart.failed || DraftPart.failed))
 	);
 
 	// After the first view, while the browser is idle: the edit chunk (and on an instant form
@@ -280,7 +295,7 @@
 		<NoticePart.part {form} />
 	{/if}
 
-	{#if form.status === 'loading'}
+	{#if form.status === 'loading' || !labelsReady}
 		<p class="text-muted-text" aria-busy="true">{m.settings_form_loading()}</p>
 	{:else if form.status === 'load-error'}
 		<Banner kind="error">

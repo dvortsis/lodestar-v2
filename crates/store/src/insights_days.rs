@@ -368,6 +368,10 @@ impl Store {
                 "r.day * 24, 0, r.key",
                 "GROUP BY r.day, r.key ORDER BY r.day, r.key",
             ),
+            RollupBy::DimKey => (
+                "0, r.dim, r.key",
+                "GROUP BY r.dim, r.key ORDER BY r.dim, r.key",
+            ),
             RollupBy::All => (
                 "r.day * 24, r.dim, r.key",
                 "GROUP BY r.day, r.dim, r.key ORDER BY r.day, r.dim, r.key",
@@ -425,6 +429,7 @@ impl Store {
                 "(hour / 24) * 24 AS d, 0, key",
                 "GROUP BY d, key ORDER BY d, key",
             ),
+            RollupBy::DimKey => ("0, dim, key", "GROUP BY dim, key ORDER BY dim, key"),
             RollupBy::All => (
                 "(hour / 24) * 24 AS d, dim, key",
                 "GROUP BY d, dim, key ORDER BY d, dim, key",
