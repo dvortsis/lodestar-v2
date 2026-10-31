@@ -49,6 +49,7 @@ if (preloaded.length)
 		`The search route's first load preloads JS it doesn't run yet:\n  ${preloaded.join('\n  ')}`
 	);
 
+const stageLazy = [/uplot/i];
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
 // A route's own JS and CSS is its first view (runner decision, §2.19): static imports, plus dynamic
@@ -510,6 +511,18 @@ export default [
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
 		'34.5 KB' // owner ruling, 2026-10-30: see the Alerts entries
+	),
+	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
+	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
+	entry(
+		'Insights stage pages (own JS + CSS)',
+		own('/insights/[stage]', { onDemand: stageLazy }),
+		'39.7 KB'
+	),
+	entry(
+		'Insights stage charts (uPlot, on demand)',
+		onDemandOf('/insights/[stage]', stageLazy),
+		'24.2 KB'
 	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
