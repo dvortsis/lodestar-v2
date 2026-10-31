@@ -1740,7 +1740,7 @@
    "pr": 287,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders | 17:30Z PR #287 head 8301f652 (~530 lines; both-sides reconcile, HeldSet::remove deleted); fresh Opus reviewer + security review; will need main after #286 (filters.rs)"
+   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders | 17:30Z PR #287 head 8301f652 (~530 lines; both-sides reconcile, HeldSet::remove deleted); fresh Opus reviewer + security review; will need main after #286 (filters.rs) | 17:42Z MERGE at 8301f652 (4 optional); author to merge main (#286 filters.rs) + fold opt 1-3 in one push; same reviewer re-checks"
   },
   "S-logs-2": {
    "status": "running",
@@ -2584,7 +2584,8 @@
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-  "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)"
+  "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
+  "HeldSet: close the ms gap between a new hold's store commit and its HeldSet insert (insert batch hashes before commit, reconcile after) (#287 review opt 4)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
