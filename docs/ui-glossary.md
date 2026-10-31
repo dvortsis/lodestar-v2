@@ -54,6 +54,8 @@ Terms the core terms depend on, and the truthful-state strings from §10.14.
 | `hidden_by_filters` | Hidden by filters | Hidden by a content-filter rule, with a "why" per item (§20). Distinct from junk. | 已被过滤器隐藏 (TBD) |
 | `searchable` | Searchable | Indexed and returned by search. | 可搜索 (TBD) |
 | `harvested` | Harvested | A key Lodestar collected from a discovery source (e.g. the DHT), before any metadata. | 已收集 (TBD) |
+| `crawled` | Crawled | A torrent Lodestar found and fetched itself from the network (the DHT and other discovery sources). Only crawled torrents count in discovery cohorts, the funnel and yield. | 抓取 (TBD) |
+| `imported` | Imported | A torrent added from another database by an import (`lodestar import`), not found by the crawl. Shown next to crawled counts ("+ 1,240 imported"), never added into them. | 导入 (TBD) |
 | `yield` | Yield | The share of harvested keys that became searchable (completed cohorts only). | 转化率 (TBD) |
 | `in_library` | In library | Already in your download client or library. | 已在库中 (TBD) |
 | `safe_restart` | Safe restart | The switch (`[dht] safe_restart`, off by default) that lets a clean restart skip the six-hour sampling wait (CR-0d). | 安全重启 (TBD) |
