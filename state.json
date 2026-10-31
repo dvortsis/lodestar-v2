@@ -1623,7 +1623,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot | 09:49Z launched Sonnet"
+   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot | 09:49Z launched Sonnet | 10:04Z blocked on size gates (msg lost: used SendMessage transport); 12:40Z runner decided (§2.26): baseline main, new entry for 4 section maps at measured+10%, lazy-split first views <=45 kB, scoped registry exception to lazy-load purpose/icons, <=1% residual -> runner"
   },
   "X-polish-1031": {
    "status": "merged",
@@ -1641,7 +1641,7 @@
    "pr": 275,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file | 12:20Z CHANGES at 07d6c069 (B1 registration key vs shown key + follow(null); B2 re-register on return from hidden/bfcache/stream outage; B3 words-only test misses Recover path; opt 4-6 folded); relayed to author"
+   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file | 12:20Z CHANGES at 07d6c069 (B1 registration key vs shown key + follow(null); B2 re-register on return from hidden/bfcache/stream outage; B3 words-only test misses Recover path; opt 4-6 folded); relayed to author | 12:35Z fix push 9b680509; re-check sent to same reviewer"
   },
   "B-import-server-1": {
    "status": "running",
@@ -2049,7 +2049,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 32,
- "last_heartbeat": "2026-10-31T09:39Z",
+ "last_heartbeat": "2026-10-31T12:40Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": [],
