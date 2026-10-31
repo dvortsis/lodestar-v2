@@ -1357,8 +1357,6 @@ mod tests {
         }
     }
 
-    /// The refile sweep's backoff doubles after each error in a row, up to
-    /// its cap.
     /// A writer whose store has one waiting import candidate the core
     /// holds ([1; 20]) and one stored torrent an Is adult rule makes CS-5a
     /// hold, for the two arms of `hold_committed`.
@@ -1531,6 +1529,47 @@ mod tests {
         }
     }
 
+    /// The hole before this slice: a release deletes its row (S), a batch
+    /// holds the hash again and inserts it (C, I), and only then does the
+    /// release update the set (M). M asks the store, finds the new hold
+    /// and keeps it. In the reverse order (S, M, C, I) the batch's insert
+    /// comes last. Either way, in both arms, the set ends as the store has
+    /// it: held.
+    #[tokio::test]
+    async fn a_release_racing_a_new_hold_keeps_it_held() {
+        for release_last in [true, false] {
+            for sweep in [true, false] {
+                let (mut w, stored) = arms_writer();
+                let h = if sweep { [1; 20] } else { stored };
+                // S has run: the store holds nothing, the set still has h.
+                w.held.insert(h);
+                let release = |w: &Writer| {
+                    let store = w.store.as_ref().unwrap();
+                    w.held
+                        .remove_released(&[h], |hs| store.held_among(hs))
+                        .unwrap();
+                };
+                if !release_last {
+                    release(&w);
+                    assert!(!w.held.contains(&h), "M ran before the hold");
+                }
+                if sweep {
+                    w.refile_candidates().await;
+                } else {
+                    w.backfill().await;
+                }
+                if release_last {
+                    release(&w);
+                }
+                assert!(
+                    w.held.contains(&h),
+                    "release_last {release_last}, sweep {sweep}"
+                );
+                agrees_with_store(&w);
+            }
+        }
+    }
+
     /// Without anything in between, both arms hold, and the set equals
     /// what a restart loads from the store; a purge that expires the
     /// quarantine drops it from both.
@@ -1544,9 +1583,15 @@ mod tests {
         agrees_with_store(&w);
         w.purge().await;
         agrees_with_store(&w);
-        assert!(w.held.len() < 2, "the purge released a quarantine");
+        assert!(
+            !w.held.contains(&[1; 20]),
+            "the sweep's quarantine, expired"
+        );
+        assert!(w.held.contains(&stored), "the adult hold, now a tombstone");
     }
 
+    /// The refile sweep's backoff doubles after each error in a row, up to
+    /// its cap.
     #[test]
     fn the_refile_backoff_doubles_to_a_cap() {
         let mut c = CandidateSweep::default();

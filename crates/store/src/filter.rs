@@ -696,6 +696,38 @@ mod tests {
         assert!(adult[0].adult_hold);
     }
 
+    #[test]
+    fn held_among_reads_both_tables() {
+        let mut s = Store::open_in_memory(crate::StoreConfig::default()).unwrap();
+        let tx = s.conn.transaction().unwrap();
+        let f = |h: &'static [[u8; 20]], held| Filtered {
+            hashes: h,
+            rule: "U-1",
+            action: 4,
+            held: Some(held),
+            sealed: None,
+            evidence: &[],
+            at: 10,
+            expires_at: 20,
+            adult_hold: false,
+        };
+        write(
+            &tx,
+            &[
+                f(&[[1; 20]], Held::Tombstone),
+                f(&[[2; 20]], Held::Quarantine),
+            ],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            s.held_among(&[[1; 20], [2; 20], [3; 20]]).unwrap(),
+            vec![true, true, false]
+        );
+        s.release(&[1; 20]).unwrap();
+        assert_eq!(s.held_among(&[[1; 20]]).unwrap(), vec![false]);
+    }
+
     /// An expired quarantine on a hash that's also tombstoned isn't
     /// reported as released: the writer drops what's released from its
     /// held set, and the tombstone still refuses the hash.

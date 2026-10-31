@@ -23,13 +23,6 @@ impl HeldSet {
             .insert(hash);
     }
 
-    pub fn remove(&self, hash: &[u8; 20]) {
-        self.0
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(hash);
-    }
-
     /// Inserts those of `hashes` the store still holds, after a batch that
     /// held them committed. `held_among` asks the store, per hash, while
     /// the write lock is held, so a release can't remove a hash between
