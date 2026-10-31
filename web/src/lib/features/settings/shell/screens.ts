@@ -4,11 +4,12 @@
 // `/settings/[section]` finds it here. Keep screen.ts small, since every Settings page loads it: a
 // hand-built screen's body and a screen's extras are dynamic imports (`load`, `extra`).
 //
-// What an entry costs (X-settings-registry-slim, gzipped, on every Settings first view): ≈ 25 B for
-// its title in en and zh, and ≈ 40–60 B for the entry with its `iconLoad` and `load` (each new
-// chunk Vite names in the preload lists adds ≈ 10 B; Logging's entry measured 81 B in #289). The
-// navigation shows every title on first paint, so titles stay here: in the shell's own chunk they
-// would cost the same on every first view, and a feature couldn't register itself. Keep the rest off:
+// What an entry costs on every Settings first view, measured by inserting entries into the built
+// chunk, gzip -9 (X-settings-registry-slim): 25 B for its title in en and zh, and ≈ 40–60 B for
+// the entry with its `iconLoad` and `load` (each new chunk Vite names in the preload lists adds
+// ≈ 10 B; Logging's entry measured 81 B in #289). The navigation shows every title on first paint,
+// so titles stay here: in the shell's chunk they would cost the same on every first view, and a
+// feature couldn't register itself. Keep the rest off:
 // - a purpose line or notice goes in the file's lazy `about` module (`About`), never in the entry;
 // - an icon goes through `iconLoad` (an eager Phosphor icon is ≈ 300–400 B);
 // - a large body is forwarded through a tiny `body.ts` (Security, Logging), so its long preload

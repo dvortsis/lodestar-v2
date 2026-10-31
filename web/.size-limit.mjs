@@ -292,8 +292,9 @@ const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/
 // The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
 // module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
 // and when the filter is first used. The overview and a hand-built screen's first view stop at them;
-// "Settings screen purposes (on demand)" gates them.
-const settingsAbout = [/features\/(?:settings\/)?[^/]+\/about\.ts$/];
+// "Settings screen purposes (on demand)" gates them. Named per registry file on purpose, so no
+// other `about.ts` is left out of a first view: a new registry file's `about.ts` joins this list.
+const settingsAbout = [/features\/settings\/screens2?\/about\.ts$/];
 // The generated screens' navigation icons (X-settings-registry-slim), loaded after the navigation
 // shows like the connection screens' (`Screen.iconLoad`); every first view stops at them.
 const settingsIcons = [/features\/settings\/screens\/icons\.ts$/];
@@ -346,10 +347,16 @@ const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on dema
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
 const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
 const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
+// The registry's lazy purposes and icons (X-settings-registry-slim) are left out the same way.
+const registryLazyKeys = Object.keys(manifest).filter((key) =>
+	[...settingsAbout, ...settingsIcons].some((re) => re.test(key))
+);
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
-		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+		.filter(
+			(key) => bodyKeys.includes(key) || extraKeys.includes(key) || registryLazyKeys.includes(key)
+		)
 		// Security's later parts load only from its body, so their imports of that body alone are
 		// of code already loaded; any other body they import still trips this.
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
@@ -357,7 +364,7 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 );
 if (staticHits.length)
 	throw new Error(
-		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
+		`Settings: a screen body, extra, purpose or icon module is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
 	);
 // The same for Security's later parts: they load by dynamic import after mount, so nothing may
 // import them statically, or their code would leave the first-view gates unmeasured.
