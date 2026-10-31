@@ -6290,6 +6290,12 @@ export interface components {
             read_only: boolean;
             /** @description A change takes effect at the next restart. */
             restart_required: boolean;
+            /**
+             * @description For a list whose items hold credentials (a download client's
+             *     password): which are set, as `<item id>.<key>`. The values are
+             *     never sent. Left out when empty.
+             */
+            secrets_set?: string[];
             source: components["schemas"]["SettingSource"];
             /** @description Any JSON value, of the type the section's schema gives the field. */
             value: unknown;

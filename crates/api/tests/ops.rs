@@ -57,6 +57,7 @@ impl SettingsApi for FakeSettings {
                         read_only: env.is_some(),
                         env,
                         restart_required: false,
+                        secrets_set: Vec::new(),
                         source: SettingSource::Default,
                         value: v.clone(),
                     };
