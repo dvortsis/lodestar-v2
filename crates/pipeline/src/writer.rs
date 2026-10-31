@@ -196,14 +196,7 @@ impl Writer {
                         self.backfill_after = 0;
                         self.backfill_done = false;
                     }
-                    // Rules changed: every waiting candidate is judged again.
-                    let version = self.filter.current().version;
-                    if self.candidates.version != Some(version) {
-                        self.candidates = CandidateSweep {
-                            version: Some(version),
-                            ..CandidateSweep::default()
-                        };
-                    }
+                    self.note_engine();
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
@@ -561,6 +554,18 @@ impl Writer {
                     error = crate::log_events::store_error(&e)
                 );
             }
+        }
+    }
+
+    /// When the rules changed since the candidate sweep started (or
+    /// finished), starts it again from the first candidate.
+    fn note_engine(&mut self) {
+        let version = self.filter.current().version;
+        if self.candidates.version != Some(version) {
+            self.candidates = CandidateSweep {
+                version: Some(version),
+                ..CandidateSweep::default()
+            };
         }
     }
 
@@ -1164,15 +1169,103 @@ mod tests {
                 records: &[record(1, b"Rolea Lexa clip"), record(2, b"Plain Film")],
             })
             .unwrap();
+        capture::install();
         let mut w = writer(store, coordinator, gate);
-        while !w.candidates.done {
-            w.refile_candidates().await;
+        async fn sweep(w: &mut Writer) {
+            while !w.candidates.done {
+                w.refile_candidates().await;
+            }
         }
+        sweep(&mut w).await;
         assert!(w.held.contains(&[1; 20]));
         assert!(!w.held.contains(&[2; 20]));
-        let store = w.store.as_ref().unwrap();
-        let job = store.import_job(job.id).unwrap().unwrap();
-        assert_eq!(job.open_candidates, 1);
-        assert!(job.counters.conserved());
+        let open = |w: &Writer| {
+            let store = w.store.as_ref().unwrap();
+            let job = store.import_job(job.id).unwrap().unwrap();
+            assert!(job.counters.conserved());
+            job.open_candidates
+        };
+        assert_eq!(open(&w), 1);
+
+        // A rule added after the sweep finished: the flush tick starts it
+        // again, and the plain candidate goes too.
+        w.note_engine();
+        assert!(w.candidates.done, "same rules, no new sweep");
+        w.filter.update_engine(|e| {
+            let notes = e.load_rules(&lodestar_store::RuleSet {
+                rules: vec![lodestar_store::RuleRow {
+                    id: 1,
+                    query: "plain".into(),
+                    action: Action::Drop.code(),
+                    enabled: true,
+                    shadow_until: None,
+                    unless_query: None,
+                }],
+                ..Default::default()
+            });
+            assert!(notes.is_empty(), "{notes:?}");
+        });
+        w.note_engine();
+        assert!(!w.candidates.done);
+        sweep(&mut w).await;
+        assert!(w.held.contains(&[2; 20]));
+        assert_eq!(open(&w), 0);
+
+        // A batch under rules that changed since is refused, and the
+        // sweep starts over under the current ones.
+        let current = w.filter.current().version;
+        w.candidates = CandidateSweep {
+            version: Some(current - 1),
+            after: 7,
+            done: false,
+        };
+        w.refile_candidates().await;
+        assert_eq!(
+            (w.candidates.version, w.candidates.after, w.candidates.done),
+            (Some(current), 0, false)
+        );
+
+        // Nothing the sweep logged carries a candidate's name.
+        for needle in ["Rolea", "Lexa", "Plain Film"] {
+            assert_eq!(capture::lines(needle), Vec::<String>::new());
+        }
+    }
+
+    /// Every log event this test binary emits, rendered with every field
+    /// shown (no mask), so a name that reached one would be seen.
+    mod capture {
+        use lodestar_log::{Mask, Record, Sink};
+        use std::sync::{Mutex, Once};
+
+        static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+        struct Capture;
+
+        impl Sink for Capture {
+            fn record(&self, r: &Record<'_>) {
+                let line = format!("{} {}", r.event.id, r.text(Mask(u32::MAX), None));
+                LINES.lock().unwrap_or_else(|e| e.into_inner()).push(line);
+            }
+        }
+
+        static CAPTURE: Capture = Capture;
+
+        pub(super) fn install() {
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                let _ = lodestar_log::set_sink(&CAPTURE);
+            });
+        }
+
+        pub(super) fn lines(needle: &str) -> Vec<String> {
+            let needle = needle.to_lowercase();
+            LINES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|l| l.to_lowercase().contains(&needle))
+                .cloned()
+                .collect()
+        }
     }
 }

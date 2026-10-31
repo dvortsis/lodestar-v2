@@ -1364,19 +1364,19 @@ impl Store {
     /// aren't, nothing is written and this returns `None`. A release that
     /// follows a rule change waits for this transaction, so it always
     /// sees what was written here. Candidates already gone are skipped.
-    /// Returns how many were held back.
+    /// Returns the ids of those it held back.
     pub fn refile_import_candidates(
         &mut self,
         refiled: &[RefiledCandidate<'_>],
         at: i64,
         current: impl FnOnce() -> bool,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Option<Vec<i64>>> {
         let tx = begin_write(&mut self.conn)?;
         if !current() {
             return Ok(None);
         }
         let mut jobs = std::collections::BTreeSet::new();
-        let mut done = 0;
+        let mut done = Vec::new();
         for r in refiled {
             let Some(held) = r.filtered.held else {
                 continue;
@@ -1402,7 +1402,7 @@ impl Store {
             )?
             .execute(params![job, filtered, quarantined, at])?;
             jobs.insert(job);
-            done += 1;
+            done.push(r.id);
         }
         for job in jobs {
             tx.prepare_cached(
@@ -1417,7 +1417,7 @@ impl Store {
             ])?;
         }
         tx.commit()?;
-        if done > 0 {
+        if !done.is_empty() {
             // The names leave the WAL too (§20.3: a hold keeps none in
             // the clear).
             self.scrub_wal();
@@ -2174,6 +2174,76 @@ mod tests {
         let n = |sql: &str| -> i64 { store.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         assert_eq!(n("SELECT count(*) FROM import_candidates"), 0);
         assert_eq!(n("SELECT count(*) FROM snapshot_deletions"), 0);
+    }
+
+    /// A refile judged under rules that changed before it commits writes
+    /// nothing: no hold, no hit, no counter.
+    #[test]
+    fn a_stale_refile_writes_nothing() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("magnetico", "1", T).unwrap();
+        let job = reading(&mut store);
+        let records = [ImportRecord::Candidate(ImportCandidate {
+            hash: InfoHash([1; 20]),
+            hash_v2: None,
+            name: Some(b"c"),
+            size: None,
+            privacy: Privacy::Unknown,
+            source_at: None,
+            decision: PASS,
+        })];
+        store
+            .commit_import_batch(&ImportBatch {
+                job: job.id,
+                seq: 1,
+                position: b"",
+                source: src,
+                source_bytes: 0,
+                at: T,
+                class_gen: None,
+                records: &records,
+            })
+            .unwrap();
+        let before = state(&store, job.id);
+        let id = store.waiting_candidates(0, 1).unwrap()[0].id;
+        let hashes = [[1u8; 20]];
+        let refiled = |held| RefiledCandidate {
+            id,
+            filtered: Filtered {
+                hashes: &hashes,
+                rule: "1",
+                action: 5,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at: T,
+                expires_at: T + 1,
+                adult_hold: false,
+            },
+        };
+        for held in [Held::Tombstone, Held::Quarantine] {
+            let r = store
+                .refile_import_candidates(&[refiled(held)], T, || false)
+                .unwrap();
+            assert_eq!(r, None);
+        }
+        let n = |sql: &str| -> i64 { store.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(state(&store, job.id), before);
+        assert_eq!(n("SELECT count(*) FROM tombstones"), 0);
+        assert_eq!(n("SELECT count(*) FROM quarantine"), 0);
+        assert_eq!(n("SELECT count(*) FROM filter_hits"), 0);
+        // Current, it holds the candidate back, once.
+        let r = store
+            .refile_import_candidates(&[refiled(Held::Tombstone)], T, || true)
+            .unwrap();
+        assert_eq!(r, Some(vec![id]));
+        let r = store
+            .refile_import_candidates(&[refiled(Held::Tombstone)], T, || true)
+            .unwrap();
+        assert_eq!(r, Some(vec![]), "already gone");
+        let job = store.import_job(job.id).unwrap().unwrap();
+        assert_eq!((job.counters.candidates, job.counters.filtered), (0, 1));
+        assert!(job.counters.conserved());
     }
 
     #[test]

@@ -203,17 +203,24 @@ pub fn refile_candidates(
         })
         .collect();
     let written = if refiled.is_empty() {
-        Some(0)
+        Some(Vec::new())
     } else {
         store.refile_import_candidates(&refiled, now, || handle.current().version == version)?
     };
-    let Some(n) = written else {
+    let Some(ids) = written else {
         return rejected();
     };
+    // Only the candidates the store held back: one already gone has no
+    // hold behind it for intake to honour.
+    let hashes = held
+        .into_iter()
+        .filter(|h| ids.contains(&h.id))
+        .flat_map(|h| h.hashes)
+        .collect();
     Ok(Some(CandidatesRefiled {
         last,
-        held: n,
-        hashes: held.into_iter().flat_map(|h| h.hashes).collect(),
+        held: ids.len(),
+        hashes,
         rejected: false,
     }))
 }
