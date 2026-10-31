@@ -4,13 +4,12 @@
 	// name to the control that stands in for the JSON fallback of a shape the schema can't say
 	// (a list of cards, a choice of channels); the form registers them for its own life.
 	import { onDestroy, untrack, type Snippet } from 'svelte';
-	import { m } from '$lib/paraglide/messages.js';
-	import { formatCount } from '$lib/format';
 	import { createSettingsForm, groupFields, settingText, type FieldSpec } from '../form';
 	import type { SettingsForm as Form } from '../form';
 	import SettingField from '../form/SettingField.svelte';
 	import SettingsForm from '../form/SettingsForm.svelte';
 	import { registerWidget } from '../form/widgets';
+	import Lazy from './Lazy.svelte';
 	import LazyWidget from './LazyWidget.svelte';
 
 	interface Props {
@@ -53,14 +52,7 @@
 			<h2 class="text-body-lg font-semibold">{settingText(group.labelKey) ?? group.group}</h2>
 			{#each group.essentials as spec (spec.key)}<SettingField {form} key={spec.key} />{/each}
 			{#if group.advanced.length}
-				<details>
-					<summary class="ls-focus cursor-pointer py-3 text-label"
-						>{m.settings_shell_advanced({ count: formatCount(group.advanced.length) })}</summary
-					>
-					<div class="flex flex-col gap-6 pt-4">
-						{#each group.advanced as spec (spec.key)}<SettingField {form} key={spec.key} />{/each}
-					</div>
-				</details>
+				<Lazy load={() => import('./Advanced.svelte')} props={{ form, specs: group.advanced }} />
 			{/if}
 			{@render after?.(group.group, form)}
 		</section>

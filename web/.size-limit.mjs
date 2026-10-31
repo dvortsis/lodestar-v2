@@ -149,7 +149,7 @@ const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 // the per-group test, the Clear usage data panel and the Privacy dialog load once their fields are
 // on the page or on an interaction, so a first view stops at them. Gated on their own below.
 const settingsConnections = [
-	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget)\.svelte$/,
+	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget|Advanced|LoadFailed)\.svelte$/,
 	/features\/settings\/screens2\/privacy\.ts$/,
 	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
 	/features\/settings\/screens2\/icons\.ts$/
@@ -598,7 +598,7 @@ export default [
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
 	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
-	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '12.9 KB'),
+	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>

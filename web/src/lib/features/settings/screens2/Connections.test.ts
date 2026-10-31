@@ -246,6 +246,71 @@ describe('Integrations', () => {
 		);
 	});
 
+	it('keeps the password for the saved address: editing the address waits for Save', async () => {
+		await open('integrations');
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await type(within(entry).getByLabelText('New password'), 'pw-for-b');
+		const save = within(entry).getByRole('button', { name: 'Save password for Home' });
+		await until(() => expect(save).toHaveProperty('disabled', false));
+		await type(within(entry).getByLabelText('Address'), 'http://other.lan:8080/');
+		await until(() => expect(save).toHaveProperty('disabled', true));
+		expect(within(entry).getByText(/Save your changes first/)).toBeTruthy();
+		expect(patched()).toHaveLength(0);
+	});
+
+	it('keeps focus on a move button of the client that moved', async () => {
+		server.change('integrations', {
+			clients: sv([HOME, { ...HOME, id: 'work', name: 'Work' }], 'db', {
+				secrets_set: ['home.password']
+			})
+		});
+		await open('integrations');
+		const home = await screen.findByRole('group', { name: 'Home' });
+		const down = within(home).getByRole('button', { name: 'Move Home down' });
+		down.focus();
+		await fireEvent.click(down);
+		// Home is last now, so Down is disabled and focus goes to its Up.
+		await until(() =>
+			expect(document.activeElement).toBe(
+				within(screen.getByRole('group', { name: 'Home' })).getByRole('button', {
+					name: 'Move Home up'
+				})
+			)
+		);
+	});
+
+	it('says the password state is unknown when it could not be checked', async () => {
+		// The form's own load comes first; the cards' check for set passwords is the second request.
+		server.next(
+			'GET /settings/integrations',
+			() => ({
+				status: 200,
+				body: structuredClone(server.sections.get('integrations'))
+			}),
+			server.err(500, 'internal')
+		);
+		await open('integrations');
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await until(() =>
+			expect(within(entry).getByTestId('client-password-status').textContent).toContain(
+				'Couldn’t check'
+			)
+		);
+		expect(within(entry).queryByRole('button', { name: 'Remove password of Home' })).toBeNull();
+	});
+
+	it('does not reuse the id of a removed client that is still saved', async () => {
+		server.change('integrations', {
+			clients: sv([{ ...HOME, id: 'client-1' }], 'db', { secrets_set: ['client-1.password'] })
+		});
+		await open('integrations');
+		const entry = await screen.findByRole('group', { name: 'Home' });
+		await fireEvent.click(within(entry).getByRole('button', { name: 'Remove client Home' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Add a download client' }));
+		const added = await screen.findByTestId('client-entry');
+		expect(added.getAttribute('data-client')).not.toBe('client-1');
+	});
+
 	it('adds a client whose password waits for it to be saved', async () => {
 		await open('integrations');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Add a download client' }));

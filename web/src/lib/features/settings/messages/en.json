@@ -314,5 +314,7 @@
 	"settings_screen_usage_done": "Deleted {count} searches.",
 	"settings_screen_client_password_save_named": "Save password for {name}",
 	"settings_screen_client_password_remove_named": "Remove password of {name}",
-	"settings_screen_client_password_pending": "Not saved yet. Use Save password."
+	"settings_screen_client_password_pending": "Not saved yet. Use Save password.",
+	"settings_screen_client_password_changed": "Save your changes first, then save the password.",
+	"settings_screen_client_password_unknown": "Couldn’t check"
 }

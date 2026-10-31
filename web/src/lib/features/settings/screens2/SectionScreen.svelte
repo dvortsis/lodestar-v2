@@ -5,8 +5,7 @@
 	// engine's fields. A load failure shows the shell's usual banner.
 	import type { Snippet } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import Button from '$lib/ui/controls/Button.svelte';
-	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import Lazy from './Lazy.svelte';
 	import { loadSettingsIndex } from '../form/schema';
 	import type { FieldSpec } from '../form/types';
 
@@ -44,11 +43,7 @@
 <h1 class="text-title font-semibold">{title}</h1>
 <p class="text-muted-text">{purpose}</p>
 {#if failed}
-	<Banner kind="error"
-		>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}
-				>{m.settings_form_retry()}</Button
-			>{/snippet}</Banner
-	>
+	<Lazy load={() => import('./LoadFailed.svelte')} props={{ onretry: () => attempt++ }} />
 {:else if !fields}
 	<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 {:else if !fields.length}

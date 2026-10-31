@@ -2,6 +2,7 @@
 	// `integrations.clients` (§10.10.8): the download clients as cards, standing in for the JSON
 	// fallback. Add, remove and reorder stage the list like any edit; Save sends it. A password is
 	// its own request (never staged, so never in a stored draft), as is removing one (§10.10.7).
+	import { tick } from 'svelte';
 	import { ApiError } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -17,7 +18,8 @@
 	const list = $derived(toClients(f.value));
 	const saved = $derived(toClients(f.saved));
 	// `<id>.password` for each client with one, as the server reports it.
-	let secrets = $state<string[]>([]);
+	// Null while unknown: the check failed, and "Not set" would be a guess.
+	let secrets = $state<string[] | null>([]);
 	let latest = 0;
 	$effect(() => {
 		void f.saved; // a save, an event or a resync changed what's saved: ask again
@@ -26,7 +28,9 @@
 			(s) => {
 				if (mine === latest) secrets = s.fields.clients?.secrets_set ?? [];
 			},
-			() => {}
+			() => {
+				if (mine === latest) secrets = null;
+			}
 		);
 	});
 
@@ -36,6 +40,25 @@
 	// The server has a client with this id: a test can use its saved password and a password can be
 	// saved for it (the server only keeps one for a saved client).
 	const isSaved = (c: Client) => saved.some((x) => x.id === c.id);
+	// Its saved password goes with the saved address and kind; edit either and it would be stored
+	// against the old server, so the password waits for the client to be saved (B-settings part a).
+	const unchanged = (c: Client) =>
+		saved.some((x) => x.id === c.id && x.url === c.url && x.kind === c.kind);
+
+	/** Moves a client and keeps focus on a move button of the same client (§10.10.11). */
+	async function reorder(i: number, by: -1 | 1) {
+		const id = list[i]!.id;
+		set(move(list, i, i + by));
+		await tick();
+		const entry = [...document.querySelectorAll<HTMLElement>('[data-client]')].find(
+			(el) => el.dataset.client === id
+		);
+		const want = entry?.querySelector<HTMLButtonElement>(`[data-move="${by < 0 ? 'up' : 'down'}"]`);
+		const other = entry?.querySelector<HTMLButtonElement>(
+			`[data-move="${by < 0 ? 'down' : 'up'}"]`
+		);
+		(want && !want.disabled ? want : other)?.focus();
+	}
 
 	/** The saved list with one password changed, in a request of its own. Null on success. */
 	async function password(id: string, value: string): Promise<string | null> {
@@ -86,10 +109,11 @@
 			count={list.length}
 			locked={f.locked}
 			saved={isSaved(client)}
-			secretSet={secrets.includes(`${client.id}.password`)}
+			unchanged={unchanged(client)}
+			secretSet={secrets === null ? null : secrets.includes(`${client.id}.password`)}
 			onchange={(change) => patch(i, change)}
 			onremove={() => set(list.filter((_, j) => j !== i))}
-			onmove={(by) => set(move(list, i, i + by))}
+			onmove={(by) => reorder(i, by)}
 			onpassword={(value) => password(client.id, value)}
 			onremovepassword={() => removePassword(client)}
 		/>
@@ -98,7 +122,8 @@
 		<div>
 			<Button
 				disabled={list.length >= MAX_CLIENTS}
-				onclick={() => set([...list, blankClient(list)])}>{m.settings_screen_client_add()}</Button
+				onclick={() => set([...list, blankClient([...list, ...saved])])}
+				>{m.settings_screen_client_add()}</Button
 			>
 			{#if list.length >= MAX_CLIENTS}
 				<span class="text-small text-muted-text"
