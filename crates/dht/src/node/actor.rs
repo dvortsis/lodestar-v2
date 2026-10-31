@@ -19,11 +19,12 @@ use super::peers::PeerStore;
 use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
+use super::stream::{LookupEnd, SessionAdmit, Stream};
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
     Command, Config, DhtEstimate, ExternalVotes, Harvest, HintFallback, HintReject, Intensity,
-    PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats,
+    PeerAdmission, PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -315,15 +316,70 @@ struct Family {
 
 /// A queued lookup: its hash, the owned request's reply (none for a
 /// harvest-only lookup) and its admission permit (CR-ADM), if it has one.
-type QueuedLookup = (
-    InfoHash,
-    Option<oneshot::Sender<Vec<SocketAddr>>>,
-    Option<PeerPermit>,
-);
+type QueuedLookup = (InfoHash, Option<Reply>, Option<PeerPermit>);
+
+/// Where an owned request's peers go: one final vector, or a streaming
+/// session (CR-1a-S).
+enum Reply {
+    Final(oneshot::Sender<Vec<SocketAddr>>),
+    Stream(Box<Stream>),
+}
+
+impl Reply {
+    /// The caller has gone: dropped its receiver, or its whole session.
+    fn is_closed(&self) -> bool {
+        match self {
+            Reply::Final(tx) => tx.is_closed(),
+            Reply::Stream(s) => s.is_closed(),
+        }
+    }
+}
+
+impl From<oneshot::Sender<Vec<SocketAddr>>> for Reply {
+    fn from(tx: oneshot::Sender<Vec<SocketAddr>>) -> Reply {
+        Reply::Final(tx)
+    }
+}
+
+/// An owned request's admission, as the caller asked for it.
+enum Admit {
+    Final(PeerAdmission),
+    Stream(Box<dyn SessionAdmit>),
+}
+
+impl Admit {
+    fn is_closed(&self) -> bool {
+        match self {
+            Admit::Final(tx) => tx.is_closed(),
+            Admit::Stream(s) => s.is_closed(),
+        }
+    }
+
+    /// Acknowledges the admission; the session is allocated only now.
+    /// `None` when the caller went before it heard.
+    fn accept(self) -> Option<Reply> {
+        match self {
+            Admit::Final(admit) => {
+                let (tx, rx) = oneshot::channel();
+                admit.send(Some(rx)).ok().map(|()| Reply::Final(tx))
+            }
+            Admit::Stream(admit) => Stream::admit(admit).map(|s| Reply::Stream(Box::new(s))),
+        }
+    }
+
+    fn refuse(self) {
+        match self {
+            Admit::Final(admit) => {
+                let _ = admit.send(None);
+            }
+            Admit::Stream(admit) => admit.refuse(),
+        }
+    }
+}
 
 struct PeerRequest {
     hash: InfoHash,
-    reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
+    reply: Option<Reply>,
     /// Held until the request gives its slot back (CR-ADM).
     permit: Option<PeerPermit>,
     remaining: usize,
@@ -331,6 +387,8 @@ struct PeerRequest {
     sent: usize,
     peers: Set<SocketAddr>,
     started: Instant,
+    /// Its deadline ran out (a streaming terminal says so).
+    expired: bool,
 }
 
 struct Actor {
@@ -454,9 +512,16 @@ pub(crate) async fn run(
     // Requests still in the command channel hold permits too.
     commands.close();
     while let Ok(cmd) = commands.try_recv() {
-        if let Command::RequestPeers(_, admit, permit) = cmd {
-            drop(admit);
-            PermitReturn::Shutdown.release(&actor.stats, permit);
+        match cmd {
+            Command::RequestPeers(_, admit, permit) => {
+                drop(admit);
+                PermitReturn::Shutdown.release(&actor.stats, permit);
+            }
+            Command::RequestSession(_, admit, permit) => {
+                drop(admit);
+                PermitReturn::Shutdown.release(&actor.stats, permit);
+            }
+            _ => {}
         }
     }
     actor.release_permits();
@@ -677,34 +742,10 @@ impl Actor {
                 }
             }
             Command::RequestPeers(hash, admit, permit) => {
-                self.drop_cancelled_queued();
-                if !admit.is_closed()
-                    && !self.paused
-                    && self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS
-                {
-                    let (tx, rx) = oneshot::channel();
-                    if admit.send(Some(rx)).is_ok() {
-                        Stats::inc(&self.stats.peer_admitted);
-                        self.get_peers_queue.push_back((hash, Some(tx), permit));
-                    } else {
-                        Stats::inc(&self.stats.peer_ack_failed);
-                        PermitReturn::AckFailed.release(&self.stats, permit);
-                    }
-                } else {
-                    Stats::inc(&self.stats.peer_rejected);
-                    // Exclusive precedence; keep the existing total's boundary.
-                    if admit.is_closed() {
-                        Stats::inc(&self.stats.peer_rejected_caller_closed);
-                    } else if self.paused {
-                        Stats::inc(&self.stats.peer_rejected_paused);
-                    } else {
-                        Stats::inc(&self.stats.peer_rejected_capacity);
-                    }
-                    // The refusal goes first: a caller woken by the returned
-                    // permit then already has it to read.
-                    let _ = admit.send(None);
-                    PermitReturn::Refused.release(&self.stats, permit);
-                }
+                self.admit_request(hash, Admit::Final(admit), permit);
+            }
+            Command::RequestSession(hash, admit, permit) => {
+                self.admit_request(hash, Admit::Stream(admit), permit);
             }
             Command::Scrape(hash, reply) => {
                 Stats::inc(&self.stats.scrapes_requested);
@@ -1331,6 +1372,8 @@ impl Actor {
         let Some(lookup) = self.lookups.get_mut(&lid) else {
             return;
         };
+        let owner = lookup.owner;
+        let mut streamed = Vec::new();
         match (r, consistent) {
             (Some(r), true) => {
                 let nodes = if self.families[lookup.family].ipv6 {
@@ -1361,6 +1404,7 @@ impl Actor {
                     .filter(|p| endpoint_allowed(cfg, *p) && unique.insert(*p))
                     .take(64)
                     .collect();
+                streamed.clone_from(&peers);
                 match pending.id {
                     Some(id) => {
                         if lookup.scrape {
@@ -1388,6 +1432,15 @@ impl Actor {
                 None => lookup.extra_in_flight = lookup.extra_in_flight.saturating_sub(1),
             },
         }
+        // CR-1a-S: a streaming request's peers go out as they arrive,
+        // checked against the endpoint policy above.
+        if !streamed.is_empty()
+            && let Some(Reply::Stream(stream)) = owner
+                .and_then(|o| self.peer_requests.get_mut(&o))
+                .and_then(|r| r.reply.as_mut())
+        {
+            stream.offer(&streamed, &self.stats);
+        }
         self.drive_lookup(sockets, lid);
     }
 
@@ -1412,11 +1465,42 @@ impl Actor {
         }
     }
 
+    /// Admits or refuses an owned request, final or streaming alike.
+    fn admit_request(&mut self, hash: InfoHash, admit: Admit, permit: Option<PeerPermit>) {
+        self.drop_cancelled_queued();
+        if !admit.is_closed()
+            && !self.paused
+            && self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS
+        {
+            if let Some(reply) = admit.accept() {
+                Stats::inc(&self.stats.peer_admitted);
+                self.get_peers_queue.push_back((hash, Some(reply), permit));
+            } else {
+                Stats::inc(&self.stats.peer_ack_failed);
+                PermitReturn::AckFailed.release(&self.stats, permit);
+            }
+        } else {
+            Stats::inc(&self.stats.peer_rejected);
+            // Exclusive precedence; keep the existing total's boundary.
+            if admit.is_closed() {
+                Stats::inc(&self.stats.peer_rejected_caller_closed);
+            } else if self.paused {
+                Stats::inc(&self.stats.peer_rejected_paused);
+            } else {
+                Stats::inc(&self.stats.peer_rejected_capacity);
+            }
+            // The refusal goes first: a caller woken by the returned
+            // permit then already has it to read.
+            admit.refuse();
+            PermitReturn::Refused.release(&self.stats, permit);
+        }
+    }
+
     fn start_peer_request(
         &mut self,
         sockets: &[SendSocket],
         hash: InfoHash,
-        reply: Option<oneshot::Sender<Vec<SocketAddr>>>,
+        reply: Option<Reply>,
         permit: Option<PeerPermit>,
     ) {
         if reply.as_ref().is_some_and(|r| r.is_closed()) {
@@ -1442,6 +1526,7 @@ impl Actor {
                 sent: 0,
                 peers: Set::default(),
                 started: Instant::now(),
+                expired: false,
             },
         );
         // Hints serve pool requests only, not the legacy harvest-only
@@ -1706,11 +1791,14 @@ impl Actor {
                 LOOKUP_DEADLINE
             }
             || request.is_some_and(|r| now.duration_since(r.started) >= LOOKUP_DEADLINE);
-        let cancelled = request.is_some_and(|r| r.reply.as_ref().is_some_and(|s| s.is_closed()))
+        let cancelled = request.is_some_and(|r| r.reply.as_ref().is_some_and(Reply::is_closed))
             || self.scrape_waiters.get(&lid).is_some_and(|s| s.is_closed());
         if expired || cancelled {
             if expired {
                 Stats::inc(&self.stats.lookup_deadlines);
+                if let Some(r) = l.owner.and_then(|o| self.peer_requests.get_mut(&o)) {
+                    r.expired = true;
+                }
             }
             self.finish_lookup(lid);
             true
@@ -1736,7 +1824,7 @@ impl Actor {
         let slots = owner
             .and_then(|o| self.peer_requests.get(&o))
             .map_or(3, |r| {
-                if r.reply.as_ref().is_some_and(|s| s.is_closed()) {
+                if r.reply.as_ref().is_some_and(Reply::is_closed) {
                     0
                 } else {
                     3usize
@@ -1843,9 +1931,12 @@ impl Actor {
             let Some(r) = self.peer_requests.get_mut(&owner) else {
                 return;
             };
-            for p in done.peers {
-                if r.peers.len() < 64 {
-                    r.peers.insert(p);
+            // A stream sent its peers as they came.
+            if !matches!(r.reply, Some(Reply::Stream(_))) {
+                for p in done.peers {
+                    if r.peers.len() < 64 {
+                        r.peers.insert(p);
+                    }
                 }
             }
             r.remaining -= 1;
@@ -1854,7 +1945,27 @@ impl Actor {
                 self.active_get_peers -= 1;
                 let mut peers: Vec<_> = r.peers.into_iter().collect();
                 peers.sort_unstable();
-                if let Some(reply) = r.reply {
+                if let Some(Reply::Stream(stream)) = r.reply {
+                    // A cancelled request isn't a completed lookup.
+                    if stream.is_closed() {
+                        Stats::inc(&self.stats.peer_cancelled);
+                        PermitReturn::CancelledActive.release(&self.stats, r.permit);
+                    } else {
+                        Stats::inc(&self.stats.lookups_completed);
+                        let ms = r.started.elapsed().as_millis();
+                        self.stats
+                            .peer_lookup_millis
+                            .fetch_add(u64::try_from(ms).unwrap_or(u64::MAX), Ordering::Relaxed);
+                        Stats::inc(&self.stats.peer_lookups_answered);
+                        PermitReturn::Completed.release(&self.stats, r.permit);
+                    }
+                    let end = if r.expired {
+                        LookupEnd::Deadline
+                    } else {
+                        LookupEnd::Complete
+                    };
+                    stream.finish(end, &self.stats);
+                } else if let Some(Reply::Final(reply)) = r.reply {
                     // A cancelled request isn't a completed lookup.
                     if reply.is_closed() {
                         Stats::inc(&self.stats.peer_cancelled);
@@ -2037,6 +2148,12 @@ impl Actor {
             .store(self.sampler.cooling() as u64, Ordering::Relaxed);
         if now_i.duration_since(self.last_summary.0) >= crate::log_events::SUMMARY_EVERY {
             self.summarize(now_i);
+        }
+        // A batch held back on a full channel goes once there's room.
+        for r in self.peer_requests.values_mut() {
+            if let Some(Reply::Stream(stream)) = &mut r.reply {
+                stream.flush(&self.stats);
+            }
         }
         while !self.paused && self.active_get_peers < MAX_GET_PEERS {
             let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
@@ -2320,13 +2437,13 @@ mod tests {
             .insert(candidate(remote), Contact::Response, 0);
         let hash = InfoHash([9; 20]);
         let (tx, rx) = oneshot::channel();
-        a.start_peer_request(&sockets, hash, Some(tx), None);
+        a.start_peer_request(&sockets, hash, Some(tx.into()), None);
         let old_tid = *a.pending.keys().next().unwrap();
         drop(rx);
         a.scrape_tick(&sockets, Instant::now());
         assert_peer_ownership_drained(&a);
         let (tx, mut rx) = oneshot::channel();
-        a.start_peer_request(&sockets, hash, Some(tx), None);
+        a.start_peer_request(&sockets, hash, Some(tx.into()), None);
         let new_tid = *a.pending.keys().next().unwrap();
         assert_ne!(old_tid, new_tid);
         deliver_reply(
@@ -2381,7 +2498,7 @@ mod tests {
             }
             let peer: SocketAddr = "127.0.0.1:60000".parse().unwrap();
             let (tx, mut rx) = oneshot::channel();
-            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx), None);
+            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx.into()), None);
             let tids: Vec<_> = a.pending.keys().copied().collect();
             assert_eq!(tids.len(), 2);
             reply(&mut a, &sockets, tids[0], vec![peer]);
@@ -2397,7 +2514,7 @@ mod tests {
             assert_eq!(a.stats.snapshot().lookups_completed, 1);
 
             let (tx, mut rx) = oneshot::channel();
-            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx), None);
+            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx.into()), None);
             assert_eq!(a.pending.len(), 2);
             for request in a.peer_requests.values_mut() {
                 request.started -= LOOKUP_DEADLINE;
@@ -2466,13 +2583,13 @@ mod tests {
 
         // Running: cancelled, completed, and cancelled before it started.
         let (tx, rx) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([6; 20]), Some(tx), permit());
+        a.start_peer_request(&sockets, InfoHash([6; 20]), Some(tx.into()), permit());
         drop(rx);
         a.scrape_tick(&sockets, Instant::now());
         assert_eq!(returns(&a, PermitReturn::CancelledActive), 1);
         assert_peer_ownership_drained(&a);
         let (tx, mut rx) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx), permit());
+        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx.into()), permit());
         assert_eq!(sem.available_permits(), MAX_GET_PEERS - 1);
         let tid = *a.pending.keys().next().unwrap();
         reply(&mut a, &sockets, tid, vec![]);
@@ -2480,14 +2597,14 @@ mod tests {
         assert_eq!(returns(&a, PermitReturn::Completed), 1);
         let (tx, rx) = oneshot::channel();
         drop(rx);
-        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx), permit());
+        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx.into()), permit());
         assert_eq!(returns(&a, PermitReturn::CancelledQueued), 2);
         assert_peer_ownership_drained(&a);
 
         // Shutdown: one queued, one running.
         let _queued = admit(&mut a, permit()).unwrap();
         let (tx, _running) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([9; 20]), Some(tx), permit());
+        a.start_peer_request(&sockets, InfoHash([9; 20]), Some(tx.into()), permit());
         assert_eq!(sem.available_permits(), MAX_GET_PEERS - 2);
         a.release_permits();
         assert_eq!(returns(&a, PermitReturn::Shutdown), 2);
@@ -2552,7 +2669,7 @@ mod tests {
             let sem = Arc::new(Semaphore::new(1));
             let (tx, mut rx) = oneshot::channel();
             let permit = sem.clone().try_acquire_owned().unwrap();
-            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx), Some(permit));
+            a.start_peer_request(&sockets, InfoHash([10; 20]), Some(tx.into()), Some(permit));
             let tids: Vec<_> = a.pending.keys().copied().collect();
             assert_eq!(tids.len(), 2, "both families accepted");
             reply(&mut a, &sockets, tids[0], vec![]);
@@ -2565,7 +2682,7 @@ mod tests {
             // Cancelled with both legs out: still one return.
             let (tx, rx) = oneshot::channel();
             let permit = sem.clone().try_acquire_owned().unwrap();
-            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx), Some(permit));
+            a.start_peer_request(&sockets, InfoHash([11; 20]), Some(tx.into()), Some(permit));
             drop(rx);
             a.scrape_tick(&sockets, Instant::now());
             assert_peer_ownership_drained(&a);
@@ -2914,7 +3031,7 @@ mod tests {
             .table
             .insert(candidate(remote), Contact::Response, 0);
         let (tx, mut rx) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx), None);
+        a.start_peer_request(&sockets, InfoHash([8; 20]), Some(tx.into()), None);
         assert_eq!(a.pending.len(), 1);
         let tid = *a.pending.keys().next().unwrap();
         let tid_bytes = tid.to_be_bytes();
@@ -3046,7 +3163,7 @@ mod tests {
                 .insert(candidate(addr.parse().unwrap()), Contact::Response, 0);
         }
         let (tx, rx) = oneshot::channel();
-        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx), None);
+        a.start_peer_request(&sockets, InfoHash([7; 20]), Some(tx.into()), None);
         assert_eq!(a.active_get_peers, 1);
         assert_eq!(a.lookups.len(), 2);
         assert_eq!(a.pending.len(), 2);
@@ -3531,3 +3648,7 @@ mod restart_wire {
 #[cfg(test)]
 #[path = "hint_tests.rs"]
 mod hint_tests;
+
+#[cfg(test)]
+#[path = "stream_tests.rs"]
+mod stream_tests;

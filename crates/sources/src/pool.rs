@@ -29,7 +29,7 @@ use tokio::task::{Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 
 use crate::funnel::{Funnel, Loss, Stage};
-use crate::plugin::{BoxFuture, Discovery, PeerRequest, Shutdown};
+use crate::plugin::{BoxFuture, Discovery, LookupSession, PeerRequest, Shutdown, Terminal};
 
 mod admission;
 use admission::{Admission, Class, Grant, WaitKind, Waiter};
@@ -109,6 +109,11 @@ pub struct PoolConfig {
     /// Permits per finder under coordinated admission: the finder's own
     /// cap on owned requests (the DHT's `PEER_REQUEST_CAPACITY`).
     pub finder_capacity: usize,
+    /// Streaming peers (CR-1a-S, `dht.streaming_peers`): ask finders for a
+    /// [`LookupSession`], so a fetch can start on the first batch while the
+    /// lookup keeps its slot until it ends. Off, the pool behaves exactly
+    /// as before the switch existed.
+    pub streaming_peers: bool,
 }
 
 impl Default for PoolConfig {
@@ -126,6 +131,7 @@ impl Default for PoolConfig {
             paused: false,
             coordinated_admission: false,
             finder_capacity: 32,
+            streaming_peers: false,
         }
     }
 }
@@ -186,6 +192,18 @@ pub struct PoolStats {
     /// Gauges: keys waiting for a lookup, and permits requests hold.
     pub admission_waiters: AtomicU64,
     pub admission_permits_in_use: AtomicU64,
+    /// Streaming peers (CR-1a-S); all zero with the switch off. Batches
+    /// read from sessions, and their peers an entry turned away because it
+    /// already held `max_peers_per_key` (not producer backpressure).
+    pub stream_batches: AtomicU64,
+    pub stream_peers_capped: AtomicU64,
+    /// Session terminals seen, by [`Terminal::ALL`]; a dropped terminal
+    /// sender counts as `source_failed`.
+    pub stream_terminals: [AtomicU64; 4],
+    /// Time from a key's first batch to its first fetch start: the sum in
+    /// milliseconds, and its count.
+    pub stream_first_fetch_millis: AtomicU64,
+    pub stream_first_fetches: AtomicU64,
 }
 
 impl PoolStats {
@@ -330,6 +348,7 @@ pub fn spawn(
         task_keys: HashMap::new(),
         recent: HashSet::new(),
         recent_order: VecDeque::new(),
+        first_batch: HashMap::new(),
     };
     for (source, weight) in weights {
         pool.source(source).weight = weight.max(1);
@@ -404,6 +423,14 @@ enum FinderReply {
         oneshot::Receiver<Option<oneshot::Receiver<Vec<SocketAddr>>>>,
     ),
     Completion(oneshot::Receiver<Vec<SocketAddr>>),
+    /// A streaming request's admission (CR-1a-S): the finder answers the
+    /// session, or, if it doesn't stream, the ordinary admission.
+    StreamAdmission(
+        usize,
+        oneshot::Receiver<Option<oneshot::Receiver<Vec<SocketAddr>>>>,
+        oneshot::Receiver<Option<LookupSession>>,
+    ),
+    Session(LookupSession),
 }
 
 struct Request {
@@ -419,6 +446,12 @@ struct Request {
     /// attempt isn't used.
     answered: bool,
     replies: Vec<FinderReply>,
+    /// Sent as a streaming request (CR-1a-S). Accepted, it owns its lookup
+    /// apart from the entry's state, until every finder's terminal or the
+    /// deadline; its `generation` then fences its own deadline timer.
+    streaming: bool,
+    /// A batch has brought peers.
+    batched: bool,
 }
 
 struct Pool {
@@ -454,6 +487,9 @@ struct Pool {
     task_keys: HashMap<Id, (InfoHash, SocketAddr)>,
     recent: HashSet<InfoHash>,
     recent_order: VecDeque<InfoHash>,
+    /// Streaming peers: when keys not yet fetched got their first batch,
+    /// for the first-batch-to-fetch time. At most one per entry.
+    first_batch: HashMap<InfoHash, Instant>,
 }
 
 /// A queued copy still stands for its entry: the entry waits for a
@@ -683,12 +719,14 @@ impl Pool {
     }
 
     /// Merges peers into a key; a key that was waiting becomes ready.
-    fn add_peers(&mut self, key: InfoHash, peers: &[SocketAddr]) {
+    /// Returns how many new peers the entry's cap turned away.
+    fn add_peers(&mut self, key: InfoHash, peers: &[SocketAddr]) -> usize {
         let cap = self.cfg.max_peers_per_key;
         let Some(e) = self.entries.get_mut(&key) else {
-            return;
+            return 0;
         };
         let before = e.peers.len();
+        let mut capped = 0;
         for p in peers
             .iter()
             .copied()
@@ -697,23 +735,29 @@ impl Pool {
             if !self.fetcher.allows(p) {
                 continue;
             }
+            if e.peers.contains(&p) {
+                continue;
+            }
             if e.peers.len() >= cap {
-                break;
+                capped += 1;
+                continue;
             }
-            if !e.peers.contains(&p) {
-                e.peers.push(p);
-            }
+            e.peers.push(p);
         }
         if e.peers.len() == before {
-            return;
+            return capped;
         }
         if !e.had_peers {
             e.had_peers = true;
             self.funnel
                 .record(e.cohort, e.source, Stage::PeerFound, None);
         }
-        match e.state {
+        let state = e.state;
+        match state {
             State::Ready | State::Fetching => {}
+            // CR-1a-S: peers make the key socket-eligible, but an accepted
+            // stream keeps its lookup slot until its terminal.
+            State::Lookup if self.owns_stream(&key) => self.make_ready(key),
             State::Lookup => {
                 self.lookups -= 1;
                 self.requests.remove(&key);
@@ -721,6 +765,14 @@ impl Pool {
             }
             State::LookupQueued | State::Backoff => self.make_ready(key),
         }
+        capped
+    }
+
+    /// An accepted streaming request holds this key's lookup (CR-1a-S).
+    fn owns_stream(&self, key: &InfoHash) -> bool {
+        self.requests
+            .get(key)
+            .is_some_and(|r| r.streaming && r.accepted)
     }
 
     fn make_ready(&mut self, key: InfoHash) {
@@ -876,8 +928,23 @@ impl Pool {
                     None => None,
                 };
                 let (admit, rx) = oneshot::channel();
-                match finder.try_send(PeerRequest { key, admit, permit }) {
-                    Ok(()) => replies.push(FinderReply::Admission(i, rx)),
+                let (session, session_rx) = if self.cfg.streaming_peers {
+                    let (tx, rx) = oneshot::channel();
+                    (Some(tx), Some(rx))
+                } else {
+                    (None, None)
+                };
+                let request = PeerRequest {
+                    key,
+                    admit,
+                    session,
+                    permit,
+                };
+                match finder.try_send(request) {
+                    Ok(()) => replies.push(match session_rx {
+                        Some(session) => FinderReply::StreamAdmission(i, rx, session),
+                        None => FinderReply::Admission(i, rx),
+                    }),
                     Err(mpsc::error::TrySendError::Full(r)) => {
                         self.stats.finder_full.fetch_add(1, Ordering::Relaxed);
                         if r.permit.is_some() {
@@ -915,6 +982,8 @@ impl Pool {
                 accepted: false,
                 answered: false,
                 replies,
+                streaming: self.cfg.streaming_peers,
+                batched: false,
             },
         );
         self.lookups += 1;
@@ -1019,6 +1088,10 @@ impl Pool {
         let Some(mut request) = self.requests.remove(&key) else {
             return;
         };
+        if request.streaming {
+            self.poll_stream(key, request);
+            return;
+        }
         if !self
             .entries
             .get(&key)
@@ -1112,6 +1185,154 @@ impl Pool {
         }
     }
 
+    /// [`poll_request`](Self::poll_request) for a streaming request
+    /// (CR-1a-S). Batches make the key socket-eligible without releasing
+    /// the lookup; a finder's terminal releases only that finder, after its
+    /// queued batches are drained; the last one releases the logical lookup
+    /// once. The request is the receivers' fence: it leaves the map with
+    /// its entry, so nothing stale can reach a recreated one.
+    fn poll_stream(&mut self, key: InfoHash, mut request: Request) {
+        use tokio::sync::oneshot::error::TryRecvError;
+        let Some(e) = self.entries.get(&key) else {
+            return;
+        };
+        let untouched = e.state == State::Lookup && e.generation == request.generation;
+        let mut waiting = Vec::new();
+        let mut peers = Vec::new();
+        let mut said_no = Vec::new();
+        for reply in std::mem::take(&mut request.replies) {
+            let reply = match reply {
+                FinderReply::StreamAdmission(finder, mut admit, mut session) => {
+                    // A finder that streams answers the session; one that
+                    // doesn't answers the ordinary admission.
+                    let answer = match session.try_recv() {
+                        Ok(Some(s)) => Ok(FinderReply::Session(s)),
+                        Ok(None) => Err(true),
+                        Err(closed) => match admit.try_recv() {
+                            Ok(Some(done)) => Ok(FinderReply::Completion(done)),
+                            Ok(None) => Err(true),
+                            Err(TryRecvError::Closed) if closed == TryRecvError::Closed => {
+                                Err(false)
+                            }
+                            Err(_) => {
+                                waiting.push(FinderReply::StreamAdmission(finder, admit, session));
+                                continue;
+                            }
+                        },
+                    };
+                    match answer {
+                        Ok(reply) => {
+                            if !request.accepted {
+                                self.entries.get_mut(&key).expect("present").attempts += 1;
+                                request.accepted = true;
+                            }
+                            if request.coordinated
+                                && let Some(a) = &mut self.admission
+                            {
+                                a.clear_hold(finder);
+                            }
+                            reply
+                        }
+                        Err(refused) => {
+                            request.refused |= refused;
+                            said_no.push(finder);
+                            continue;
+                        }
+                    }
+                }
+                other => other,
+            };
+            match reply {
+                FinderReply::Session(mut session) => {
+                    self.drain_batches(&mut session, &mut peers);
+                    let end = match session.terminal.try_recv() {
+                        Ok(end) => end,
+                        Err(TryRecvError::Empty) => {
+                            waiting.push(FinderReply::Session(session));
+                            continue;
+                        }
+                        // Never success: the finder went without saying.
+                        Err(TryRecvError::Closed) => Terminal::SourceFailed,
+                    };
+                    // The finder closed its batches before the terminal, so
+                    // whatever it queued is there now.
+                    self.drain_batches(&mut session, &mut peers);
+                    self.stats.stream_terminals[end as usize].fetch_add(1, Ordering::Relaxed);
+                    if end != Terminal::SourceFailed {
+                        request.answered = true;
+                    }
+                }
+                FinderReply::Completion(mut rx) => match rx.try_recv() {
+                    Ok(found) => {
+                        request.answered = true;
+                        peers.extend(found);
+                    }
+                    Err(TryRecvError::Empty) => waiting.push(FinderReply::Completion(rx)),
+                    Err(TryRecvError::Closed) => {}
+                },
+                FinderReply::Admission(..) | FinderReply::StreamAdmission(..) => {
+                    unreachable!("answered above")
+                }
+            }
+        }
+        request.replies = waiting;
+        let finished = request.replies.is_empty();
+        if !peers.is_empty() {
+            request.batched = true;
+        }
+        if finished && !request.accepted {
+            self.stats.lookup_unaccepted.fetch_add(1, Ordering::Relaxed);
+        }
+        if request.coordinated {
+            self.hold_finders(said_no.iter());
+        }
+        if finished && !request.accepted && request.coordinated {
+            self.requeue_refused(key, request.refused, &[]);
+            return;
+        }
+        // Accepted and dropped before anything came (a pause, a shutdown):
+        // cancelled, so the attempt isn't used.
+        if finished && request.accepted && !request.answered && !request.batched && untouched {
+            self.requeue_cancelled(key, request.coordinated);
+            return;
+        }
+        self.requests.insert(key, request);
+        let e = &self.entries[&key];
+        if !peers.is_empty() && !e.fetch_started && !self.first_batch.contains_key(&key) {
+            self.first_batch.insert(key, Instant::now());
+        }
+        let capped = self.add_peers(key, &peers);
+        self.stats
+            .stream_peers_capped
+            .fetch_add(capped as u64, Ordering::Relaxed);
+        if finished {
+            // Every finder is done: the logical lookup ends, once.
+            self.requests.remove(&key);
+            self.lookups -= 1;
+            if self.entries[&key].state == State::Lookup {
+                self.back_off(key);
+            }
+        }
+    }
+
+    /// Reads a session's queued batches: at most two, so bounded.
+    fn drain_batches(&self, session: &mut LookupSession, peers: &mut Vec<SocketAddr>) {
+        while let Ok(batch) = session.batches.try_recv() {
+            self.stats.stream_batches.fetch_add(1, Ordering::Relaxed);
+            peers.extend(batch);
+        }
+    }
+
+    /// Ends a key's streaming lookup at its deadline (CR-1a-S): every
+    /// finder is cancelled, and a key with no peer left to try backs off.
+    fn stream_deadline(&mut self, key: InfoHash) {
+        self.requests.remove(&key);
+        self.lookups -= 1;
+        if self.entries[&key].state == State::Lookup {
+            self.back_off(key);
+        }
+    }
+
     /// Every accepting finder dropped the request unanswered: give the
     /// attempt back and queue the key for the next lookup slot, with no
     /// back-off. A paused pool holds it until it resumes.
@@ -1180,6 +1401,14 @@ impl Pool {
                 continue;
             };
             if e.generation != generation {
+                // A stream's deadline outlives its entry's state changes.
+                if self
+                    .requests
+                    .get(&key)
+                    .is_some_and(|r| r.streaming && r.generation == generation)
+                {
+                    self.stream_deadline(key);
+                }
                 continue;
             }
             match e.state {
@@ -1199,8 +1428,9 @@ impl Pool {
                             .replies
                             .iter()
                             .filter_map(|reply| match reply {
-                                FinderReply::Admission(finder, _) => Some(*finder),
-                                FinderReply::Completion(_) => None,
+                                FinderReply::Admission(finder, _)
+                                | FinderReply::StreamAdmission(finder, ..) => Some(*finder),
+                                FinderReply::Completion(_) | FinderReply::Session(_) => None,
                             })
                             .collect();
                         self.requeue_refused(key, r.refused, &silent);
@@ -1267,6 +1497,15 @@ impl Pool {
             e.state = State::Fetching;
             e.fetch_started = true;
             e.generation = next_generation(&mut self.generations);
+            if let Some(at) = self.first_batch.remove(&key) {
+                let ms = Instant::now().duration_since(at).as_millis();
+                self.stats
+                    .stream_first_fetch_millis
+                    .fetch_add(u64::try_from(ms).unwrap_or(u64::MAX), Ordering::Relaxed);
+                self.stats
+                    .stream_first_fetches
+                    .fetch_add(1, Ordering::Relaxed);
+            }
             *self.per_ip.entry(peer.ip()).or_insert(0) += 1;
             let handle = self.tasks.spawn(self.fetcher.fetch(peer, key));
             self.task_keys.insert(handle.id(), (key, peer));
@@ -1371,6 +1610,11 @@ impl Pool {
         match result {
             Ok(fetched) => {
                 let e = self.entries.remove(&key).expect("present");
+                // A verified result cancels every finder still streaming.
+                if self.requests.remove(&key).is_some() {
+                    self.lookups -= 1;
+                }
+                self.first_batch.remove(&key);
                 self.stats.fetched.fetch_add(1, Ordering::Relaxed);
                 self.funnel.record(e.cohort, e.source, Stage::Fetched, None);
                 self.remember(key);
@@ -1395,6 +1639,11 @@ impl Pool {
                     self.lose(key, Loss::Oversize);
                 } else if e.has_untried() {
                     self.make_ready(key);
+                } else if self.requests.get(&key).is_some_and(|r| r.streaming) {
+                    // CR-1a-S: the lookup still runs; wait for its next
+                    // batch or its end, with no second lookup.
+                    e.state = State::Lookup;
+                    e.generation = next_generation(&mut self.generations);
                 } else {
                     self.back_off(key);
                 }
@@ -1461,7 +1710,11 @@ impl Pool {
         if e.state == State::Lookup {
             self.requests.remove(&key);
             self.lookups -= 1;
+        } else if self.requests.remove(&key).is_some() {
+            // A stream's lookup, while its key is ready or fetching.
+            self.lookups -= 1;
         }
+        self.first_batch.remove(&key);
         if e.state == State::LookupQueued {
             self.waiting -= 1;
             if self.admission.is_some() && loss == Loss::Evicted {

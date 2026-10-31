@@ -80,7 +80,7 @@ fn request(
     h: InfoHash,
 ) -> oneshot::Receiver<Vec<SocketAddr>> {
     let (tx, rx) = oneshot::channel();
-    a.start_peer_request(sockets, h, Some(tx), None);
+    a.start_peer_request(sockets, h, Some(tx.into()), None);
     rx
 }
 
