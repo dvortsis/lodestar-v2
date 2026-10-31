@@ -7,6 +7,7 @@ import { expectNoA11yViolations } from './a11y';
 import { expect, test } from './support/test';
 
 type Ast = components['schemas']['AstNode'];
+type SuggestItem = components['schemas']['SuggestItem'];
 
 const toAst = (q: string): Ast => {
 	const of = q
@@ -56,26 +57,25 @@ test.beforeEach(async ({ mock }) => {
 	mock.on('listSavedSearches', []);
 	mock.on('suggest', (request: Request) => {
 		const q = new URL(request.url()).searchParams.get('q') ?? '';
-		return {
-			items: q.startsWith('2160')
-				? [
-						{
-							kind: 'chip',
-							text: 'res:2160p',
-							insert: 'res:2160p',
-							replace: { start: 0, end: q.length },
-							count: 1284
-						},
-						{
-							kind: 'title',
-							text: '2160 Frames',
-							insert: 'title:"2160 Frames"',
-							replace: { start: 0, end: q.length },
-							count: 3
-						}
-					]
-				: []
-		};
+		const items: SuggestItem[] = q.startsWith('2160')
+			? [
+					{
+						kind: 'chip',
+						text: 'res:2160p',
+						insert: 'res:2160p',
+						replace: { start: 0, end: q.length },
+						count: 1284
+					},
+					{
+						kind: 'title',
+						text: '2160 Frames',
+						insert: 'title:"2160 Frames"',
+						replace: { start: 0, end: q.length },
+						count: 3
+					}
+				]
+			: [];
+		return { items };
 	});
 });
 
