@@ -1551,8 +1551,8 @@
       "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk | 2026-10-31T00:17Z PR #247 head 714c8834; reviewer session_01MMjhn9esFoJm482hAgeB7o; timing stays whenEngaged (runner) | 2026-10-31T00:29Z review CHANGES (committed root node_modules vitest cache); fixed b2be0948, runner delta-checked (only .gitignore + removals) -> MERGE; merge on ci-ok+Web+E2E green. Reviewer archived | 2026-10-31T00:38Z merged #247 (c6c443d2); author archived"
     },
     "LU-1-neutralize": {
-      "status": "running",
-      "notes": "2026-10-31T00:07Z brief briefs/LU-1-neutralize.md; Opus session_01MMjhn8dY7oy8283PNtZqEK"
+      "status": "review",
+      "notes": "2026-10-31T00:07Z brief briefs/LU-1-neutralize.md; Opus session_01MMjhn8dY7oy8283PNtZqEK | 2026-10-31T01:10Z PR #249 head 408f5ff1 (~250 lines); review CHANGES: flaky property (www in VOCAB vs SP-1 site_advert) -> compute SP-1 on the unmasked torrent; riding: LU-1 property coverage, semantics test asserts. Owner flag at merge: joined-word lure stays evidence (fails safe)"
     },
     "CR-1a-S": {
       "status": "running",
