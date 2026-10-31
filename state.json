@@ -1548,8 +1548,8 @@
       "notes": "brief briefs/F-rollback-holds.md (from the #241 review: holds plus O1/O2/O3); launch after #241 merges; high priority, content safety | 2026-10-30T23:26Z PR #245 head b36f2ebc; fresh Opus review (runner agent) running; owner flag \u00a72.19 at merge: subscriptions by URL, tombstone over non-adult quarantine, limits O2 / pre-V4 drops holds / filter settings revert | 2026-10-30T23:40Z review CHANGES: B1 carry_lists keeps snapshot subscription_data (live_applied\\copy_applied -> floor.pending), B2 cs_sigs not carried. Runner: core_membership merged on-wins; no tombstone/quarantine collapse, fix purge_filter at root in this PR. Owner flag now: subscriptions by URL, recorded limits (O2, pre-V4, settings revert) | 2026-10-30T23:58Z delta MERGE at 9da3ef98; merge on green ci-ok | 2026-10-31T00:06Z merged #245 (61827d43); author archived; \u00a72.19 flags sent to owner via dashboard session"
     },
     "CR-1a-H": {
-      "status": "running",
-      "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3"
+      "status": "review",
+      "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3 | 2026-10-31T00:15Z PR #246 head 4fd2f14d (~1,580 lines); screen: no gain over noise floor (high-latency +5.1% vs spread 12.1%, healthy -1.2%, admission-pressure -3.7%; ~94% of hints expire unused). Reviewer session_01MMjhnA8skJhDBEEuLw1YjV. Owner flags at merge: HINT_CAPACITY 20,000 hashes (new), per-hash hints in the actor, private-key case moot"
     },
     "S-theme-boot": {
       "status": "running",
