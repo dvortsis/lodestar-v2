@@ -6,21 +6,39 @@ import { latest } from '$lib/api/client';
 import { events } from '$lib/state/events.svelte';
 import { onceLive } from '$lib/features/shortcuts/follow.svelte';
 import { applyLook, familyFor, load, prefersDark, type Appearance } from './prefs';
-import { applyTheme, themeGeneration } from './themes';
+import { THEME_CACHE, applyTheme, themeGeneration } from './themes';
 
 const FALLBACK_MS = 10_000;
 const slot = latest();
 
-/** Whether the page already shows these preferences, so nothing needs touching. */
-function applied(p: Appearance): boolean {
-	const root = document.documentElement;
-	const dark = prefersDark(p.mode);
+const lookShown = (p: Appearance) => {
+	const root = document.documentElement.dataset;
 	return (
-		root.dataset.theme === `${familyFor(p, dark)}-${dark ? 'dark' : 'light'}` &&
-		root.dataset.density === p.density &&
-		root.dataset.motion === p.motion &&
-		root.dataset.illustrations === String(p.illustrations)
+		root.density === p.density &&
+		root.motion === p.motion &&
+		root.illustrations === String(p.illustrations)
 	);
+};
+
+/** Whether the page and the pre-paint cache already hold this theme choice, both modes. */
+function themeShown(p: Appearance): boolean {
+	const dark = prefersDark(p.mode);
+	try {
+		const c = JSON.parse(localStorage.getItem(THEME_CACHE) ?? 'null') as {
+			mode?: string;
+			light?: { id?: string };
+			dark?: { id?: string };
+		} | null;
+		return (
+			document.documentElement.dataset.theme ===
+				`${familyFor(p, dark)}-${dark ? 'dark' : 'light'}` &&
+			c?.mode === p.mode &&
+			c.light?.id === `${familyFor(p, false)}-light` &&
+			c.dark?.id === `${familyFor(p, true)}-dark`
+		);
+	} catch {
+		return false;
+	}
 }
 
 /** Fetches the saved preferences and applies them. Any failure keeps what is applied. */
@@ -29,10 +47,11 @@ export async function refresh(): Promise<void> {
 	try {
 		const loaded = await slot.run((signal) => load(signal));
 		// A choice made on the Appearance screen meanwhile is newer than this answer.
-		if (!loaded || themeGeneration() !== before || applied(loaded.prefs)) return;
-		applyLook(loaded.prefs);
+		if (!loaded || themeGeneration() !== before) return;
+		// The pre-paint script sets the theme only, so the look is set on every start.
+		if (!lookShown(loaded.prefs)) applyLook(loaded.prefs);
 		// A custom theme this browser lacks falls back to Riverstone inside, without an error.
-		await applyTheme(loaded.prefs);
+		if (!themeShown(loaded.prefs)) await applyTheme(loaded.prefs);
 	} catch {
 		// A 401 is the shell's; offline, superseded or a missing themes file keeps what is applied.
 	}

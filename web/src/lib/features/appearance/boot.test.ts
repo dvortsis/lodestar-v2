@@ -14,7 +14,7 @@ vi.mock('$lib/state/events.svelte', () => ({
 	}
 }));
 
-import { startAppearance } from './boot';
+import { refresh, startAppearance } from './boot';
 
 /** Fixture colours, built from numbers so no hex literal sits in a test (the bans). */
 const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
@@ -71,27 +71,34 @@ describe('startAppearance', () => {
 		expect(JSON.parse(localStorage.getItem('lodestar.theme')!).light.id).toBe('nord-light');
 	});
 
-	it('changes nothing when the page already shows the saved values', async () => {
+	it('changes nothing when the page and the cache already show the saved values', async () => {
 		await applyTheme(DEFAULTS);
 		root.dataset.density = DEFAULTS.density;
 		root.dataset.motion = DEFAULTS.motion;
 		root.dataset.illustrations = String(DEFAULTS.illustrations);
-		localStorage.clear();
+		const set = vi.spyOn(Storage.prototype, 'setItem');
 		get.mockResolvedValue(section(DEFAULTS));
-		stop = startAppearance();
-		await vi.waitFor(() => expect(get).toHaveBeenCalled());
-		await Promise.resolve();
-		await Promise.resolve();
-		expect(localStorage.length).toBe(0);
+		await refresh();
+		expect(get).toHaveBeenCalled();
+		expect(set).not.toHaveBeenCalled();
 		expect(fetch).not.toHaveBeenCalled();
+		set.mockRestore();
+	});
+
+	it('refreshes the cache when only the other mode changed', async () => {
+		await applyTheme({ ...DEFAULTS, mode: 'light' });
+		root.dataset.density = DEFAULTS.density;
+		root.dataset.motion = DEFAULTS.motion;
+		root.dataset.illustrations = String(DEFAULTS.illustrations);
+		get.mockResolvedValue(section({ ...DEFAULTS, mode: 'light', theme_dark: 'nord' }));
+		await refresh();
+		expect(JSON.parse(localStorage.getItem('lodestar.theme')!).dark.id).toBe('nord-dark');
 	});
 
 	it('stays silent and leaves the page alone when the fetch fails', async () => {
 		root.dataset.theme = 'riverstone-light';
 		get.mockRejectedValue(new Error('offline'));
-		stop = startAppearance();
-		await vi.waitFor(() => expect(get).toHaveBeenCalled());
-		await Promise.resolve();
+		await refresh();
 		expect(root.dataset.theme).toBe('riverstone-light');
 		expect(root.dataset.density).toBeUndefined();
 	});
@@ -99,12 +106,10 @@ describe('startAppearance', () => {
 	it('does not overwrite a choice made while the fetch was in flight', async () => {
 		let answer!: (v: unknown) => void;
 		get.mockReturnValue(new Promise((r) => (answer = r)));
-		stop = startAppearance();
-		await vi.waitFor(() => expect(get).toHaveBeenCalled());
+		const pending = refresh();
 		await applyTheme({ ...DEFAULTS, theme: 'nord', mode: 'dark' });
 		answer(section({ ...DEFAULTS, density: 'cards' }));
-		await Promise.resolve();
-		await Promise.resolve();
+		await pending;
 		expect(root.dataset.theme).toBe('nord-dark');
 		expect(root.dataset.density).toBeUndefined();
 	});
