@@ -53,7 +53,7 @@ pub(super) fn export(registry: &Registry, include_preferences: bool) -> String {
             .current()
             .into_iter()
             .filter(|(f, _, source, env)| {
-                *source == SettingSource::Db && !env && !f.read_only && !f.secret
+                *source == SettingSource::Db && !env && !f.read_only && !f.holds_secret()
             })
             .collect();
         if saved.is_empty() {
@@ -220,7 +220,7 @@ pub(super) fn import(
             };
             if f.read_only {
                 skipped.push(skip(full, "read_only", None));
-            } else if f.secret {
+            } else if f.holds_secret() {
                 skipped.push(skip(full, "secret", None));
             } else if *env {
                 skipped.push(skip(full, "set_by_environment", f.env));

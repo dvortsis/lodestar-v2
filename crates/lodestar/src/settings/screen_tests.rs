@@ -109,9 +109,16 @@ fn every_field_has_its_form_hints() {
                 m.insert(f.name.to_string(), auto.clone());
                 assert!(entry.plan(&m).is_ok(), "{at}: x-auto {auto} isn't accepted");
             }
-            // No real section holds a secret: credentials live in the
-            // integrations `SecretStore` (§18.10).
-            assert!(!f.secret && p.get("writeOnly").is_none(), "{at}");
+            // `writeOnly` exactly on secrets, and on list items' secret
+            // keys.
+            assert_eq!(p.get("writeOnly") == Some(&json!(true)), f.secret, "{at}");
+            for k in f.secret_keys {
+                assert_eq!(
+                    p["items"]["properties"][*k]["writeOnly"],
+                    json!(true),
+                    "{at}.{k}"
+                );
+            }
         }
     }
     let index = r.index();
@@ -561,7 +568,8 @@ proptest! {
         b in any_batch(),
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let c = config(dir.path(), Some("[fetch]\ntimeout_secs = 30\n"), &[("LODESTAR_DHT_PORT", "7000")]);
+        let mut c = config(dir.path(), Some("[fetch]\ntimeout_secs = 30\n"), &[("LODESTAR_DHT_PORT", "7000")]);
+        c.data_dir = dir.path().to_path_buf();
         let r = registry(dir.path(), &c);
         // Some saved state first, so revisions and saved values vary.
         let _ = r.save(earlier);
@@ -676,11 +684,18 @@ impl Section for Vault {
     }
 }
 
+/// A config whose data directory, where the secrets key goes, is `dir`.
+fn sealed_config(dir: &Path) -> Config {
+    let mut c = config(dir, None, &[]);
+    c.data_dir = dir.to_path_buf();
+    c
+}
+
 fn vault(dir: &Path) -> Registry {
-    let c = config(dir, None, &[]);
+    let c = sealed_config(dir);
     let mut r = Registry::empty(open(dir));
     r.register::<super::crawler::Crawler>(&c).unwrap();
-    r.register_with_secrets::<Vault>(&c).unwrap();
+    r.register::<Vault>(&c).unwrap();
     r
 }
 
@@ -1054,15 +1069,212 @@ fn the_registry_reserves_route_names_and_patch_keys() {
 }
 
 #[test]
-fn a_section_with_a_secret_is_refused_until_secrets_are_sealed() {
+fn secrets_are_sealed_at_rest_and_bound_to_their_field() {
     let dir = tempfile::tempdir().unwrap();
-    let c = config(dir.path(), None, &[]);
-    let store = open(dir.path());
-    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Registry::empty(store.clone()).register::<Vault>(&c)
-    }));
-    let message = *refused.unwrap_err().downcast::<String>().unwrap();
-    assert!(message.contains("sealed storage"), "{message}");
+    let r = vault(dir.path());
+    r.patch(
+        "vault",
+        patch(json!({ "token": "hunter2", "label": "hunter2" })),
+    )
+    .unwrap();
+    let rows = saved(&r);
+    let token = &rows
+        .iter()
+        .find(|(k, _)| k == "settings.vault.token")
+        .unwrap()
+        .1;
+    assert!(
+        token.starts_with("\"sealed:") && !token.contains("hunter2"),
+        "{token}"
+    );
+    // A new registry over the same store and key opens it.
+    drop(r);
+    let r = vault(dir.path());
+    assert_eq!(r.get::<Vault>().token, "hunter2");
+    assert_eq!(
+        r.section("vault").unwrap().fields["token"].source,
+        SettingSource::Db
+    );
+    // A sealed value moved onto another field doesn't open there.
+    let moved = token.clone();
+    r.store
+        .lock()
+        .unwrap()
+        .set_settings_text(&[("settings.vault.label", moved.as_str())])
+        .unwrap();
+    drop(r);
+    let r = vault(dir.path());
+    assert_ne!(r.get::<Vault>().label, "hunter2");
+    // Without the key file, nothing opens: skipped, never fatal.
+    drop(r);
+    std::fs::remove_file(dir.path().join(SecretStore::KEY_FILE)).unwrap();
+    let text = logs(|| {
+        let r = vault(dir.path());
+        assert_eq!(r.get::<Vault>().token, "");
+    });
+    assert!(
+        text.contains("field=token") && text.contains("not_sealed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_new_sections_round_trip_and_check_their_values() {
+    use super::insights::Insights;
+    use super::notifications::Notifications;
+    use super::trackers::Trackers;
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    r.save(batch(json!({
+        "trackers": { "scrape": false, "interval_secs": 10,
+                      "trackers": ["udp://tracker.example:6969/announce"] },
+        "notifications": { "email_host": "smtp.example.com", "email_to": ["me@example.com"],
+                           "route_alerts": ["email", "ntfy"], "ntfy_url": "https://ntfy.sh/x" },
+        "insights": { "query_logging": true, "query_retention_days": 7, "digest": "weekly" }
+    })))
+    .unwrap();
+    drop(r);
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    let t = r.get::<Trackers>();
+    assert_eq!(
+        (t.scrape, t.interval_secs, t.trackers.len()),
+        (false, 10, 1)
+    );
+    let n = r.get::<Notifications>();
+    assert_eq!(n.email_to, ["me@example.com"]);
+    assert_eq!(n.ntfy_url.0, "https://ntfy.sh/x");
+    let i = r.get::<Insights>();
+    assert!(i.query_logging && i.query_retention_days == 7);
+    // Saved tracker values reach the scraper's config at the next start.
+    let eff = r.effective_config(&sealed_config(dir.path()));
+    assert!(!eff.scrape.enabled && eff.scrape.interval_secs == Some(10));
+    for (section, p) in [
+        ("trackers", json!({ "trackers": ["wss://x.example/"] })),
+        ("trackers", json!({ "interval_secs": 3601 })),
+        ("notifications", json!({ "email_to": ["nobody"] })),
+        ("notifications", json!({ "ntfy_priority": 6 })),
+        ("notifications", json!({ "route_health": ["ntfy", "ntfy"] })),
+        ("notifications", json!({ "route_health": ["pager"] })),
+        ("insights", json!({ "query_retention_days": 31 })),
+        ("insights", json!({ "query_retention_days": 0 })),
+        ("integrations", json!({ "default_client": "nas" })),
+        ("integrations", json!({ "torznab_url": "ftp://x/" })),
+    ] {
+        assert!(r.patch(section, patch(p.clone())).is_err(), "{section} {p}");
+    }
+}
+
+#[test]
+fn the_scraper_switch_follows_its_environment_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path(), None, &[("LODESTAR_SCRAPE_ENABLED", "false")]);
+    let r = registry(dir.path(), &c);
+    let f = &r.section("trackers").unwrap().fields["scrape"];
+    assert_eq!(
+        (f.read_only, f.env.as_deref(), &f.value),
+        (true, Some("LODESTAR_SCRAPE_ENABLED"), &json!(false))
+    );
+    assert_eq!(
+        r.patch("trackers", patch(json!({ "scrape": true }))),
+        Err(SettingsError::SetByEnv {
+            field: "scrape".into(),
+            var: "LODESTAR_SCRAPE_ENABLED".into()
+        })
+    );
+}
+
+#[test]
+fn a_registry_with_no_secret_saved_never_creates_the_key_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = vault(dir.path());
+    r.patch("vault", patch(json!({ "label": "home" }))).unwrap();
+    assert!(!dir.path().join(SecretStore::KEY_FILE).exists());
+}
+
+#[test]
+fn list_item_secrets_are_kept_redacted_and_removable() {
+    use super::integrations::Integrations;
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    let item = |pw: Value| {
+        let mut m = json!({
+            "id": "home", "name": "Home", "kind": "qbittorrent",
+            "url": "http://192.168.1.5:8080/"
+        });
+        if !pw.is_null() {
+            m["password"] = pw;
+        }
+        m
+    };
+    let out = r
+        .patch(
+            "integrations",
+            patch(json!({ "clients": [item(json!("hunter2"))] })),
+        )
+        .unwrap();
+    let f = &out.fields["clients"];
+    assert_eq!(f.secrets_set, vec!["home.password".to_string()]);
+    assert!(f.value[0].get("password").is_none(), "{:?}", f.value);
+    assert!(!format!("{out:?}{:?}", r.section("integrations")).contains("hunter2"));
+    // Sent back without it (as GET returned it): kept.
+    r.patch(
+        "integrations",
+        patch(
+            json!({ "clients": [{ "id": "home", "name": "Renamed", "kind": "qbittorrent",
+                                    "url": "http://192.168.1.5:8080/" }] }),
+        ),
+    )
+    .unwrap();
+    let c = r.get::<Integrations>();
+    assert_eq!(c.clients[0].name, "Renamed");
+    assert_eq!(c.clients[0].password.as_ref().unwrap().0, "hunter2");
+    // At rest, sealed; not in the preview, an export or a log line.
+    assert!(saved(&r).iter().all(|(_, v)| !v.contains("hunter2")));
+    let shown = format!(
+        "{:?}{}",
+        r.preview(batch(
+            json!({ "integrations": { "clients": [item(json!("hunter3"))] } })
+        ))
+        .unwrap(),
+        r.export(true)
+    );
+    assert!(!shown.contains("hunter"), "{shown}");
+    // An error never quotes it, even when the item is refused.
+    let err = r
+        .patch(
+            "integrations",
+            patch(
+                json!({ "clients": [{ "id": "home", "name": "x", "kind": "qbittorrent",
+                                        "url": "hunter4://x", "password": "hunter4" }] }),
+            ),
+        )
+        .unwrap_err();
+    assert!(!format!("{err:?}").contains("hunter4"), "{err:?}");
+    // `""` removes it.
+    let out = r
+        .patch(
+            "integrations",
+            patch(json!({ "clients": [item(json!(""))] })),
+        )
+        .unwrap();
+    assert!(out.fields["clients"].secrets_set.is_empty());
+    assert!(r.get::<Integrations>().clients[0].password.is_none());
+    // Import never sets one.
+    let report = r
+        .import(
+            SettingsImport {
+                toml: "[integrations]\nclients = []\ntorznab_api_key = \"x\"\n".into(),
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap()
+        .report;
+    assert!(
+        report.skipped.iter().all(|s| s.reason == "secret"),
+        "{report:?}"
+    );
+    assert_eq!(report.skipped.len(), 2);
 }
 
 /// A section whose check compares two fields.

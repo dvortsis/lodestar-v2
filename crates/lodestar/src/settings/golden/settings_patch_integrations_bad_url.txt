@@ -1,0 +1,2 @@
+422
+{"error":{"code":"invalid_setting","field":"torznab_url","message":"Put the user name and password in their own fields, not the address.","section":"integrations"}}

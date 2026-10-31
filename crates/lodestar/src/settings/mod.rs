@@ -22,26 +22,33 @@
 //!   TOML through the same checks.
 //! - Nothing here reaches filtering state (rules, the floor, packs,
 //!   subscriptions: the filters API's, §20.7), and no field moves files
-//!   at runtime. A secret field (`writeOnly`) is never returned, exported
-//!   or put in an error message.
+//!   at runtime. A secret field (`writeOnly`), or a list field whose items
+//!   hold secrets ([`Field::secret_keys`]), is sealed at rest with the
+//!   integrations [`SecretStore`] and never returned, exported or put in
+//!   an error message.
 //!
 //! See `README.md` for how a later slice adds a section.
 
 pub mod content;
 pub mod crawler;
 pub mod general;
+pub mod insights;
+pub mod integrations;
 pub mod log;
 pub mod logging;
 pub mod network;
+pub mod notifications;
 mod portable;
 pub mod preferences;
 pub mod search;
 pub mod storage;
+pub mod trackers;
 pub mod transport;
 pub mod updates;
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lodestar_api::settings::{
@@ -50,6 +57,7 @@ use lodestar_api::settings::{
     SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
     SettingsSection,
 };
+use lodestar_integrations::{SealedSecret, Secret, SecretStore};
 use lodestar_store::Store;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -77,7 +85,8 @@ pub enum Auto {
 }
 
 /// How a change to a field is confirmed in the UI (§10.10.7, `x-danger`).
-/// The whole vocabulary, though today's sections use only `Disruptive`.
+/// The whole vocabulary, though today's sections use only `Disruptive` and
+/// `Privacy`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Danger {
@@ -141,6 +150,11 @@ pub struct Field {
     pub danger: Option<Danger>,
     /// A credential: never returned, exported or echoed (`writeOnly`).
     pub secret: bool,
+    /// For a list of objects with an `id` key: the keys of each item that
+    /// are credentials (a download client's `password`). Treated like a
+    /// secret field: sealed at rest, never returned, exported or echoed;
+    /// an item sent back without one keeps the saved one ([`keep_secrets`]).
+    pub secret_keys: &'static [&'static str],
 }
 
 impl Field {
@@ -162,7 +176,14 @@ impl Field {
             keywords: false,
             danger: None,
             secret: false,
+            secret_keys: &[],
         }
+    }
+
+    /// Whether its saved value holds a credential, whole or in its items:
+    /// sealed at rest, never shown, exported or quoted.
+    pub const fn holds_secret(&self) -> bool {
+        self.secret || !self.secret_keys.is_empty()
     }
 
     pub const fn file(self, path: &'static str) -> Field {
@@ -260,15 +281,186 @@ impl Field {
         }
     }
 
-    /// A credential. [`Registry::register`] refuses a section with one
-    /// until saved values can be sealed; the tests hold the redaction
-    /// rules the first one will rely on.
-    #[allow(dead_code)]
+    /// A credential: sealed at rest, `writeOnly`, never returned.
     pub const fn secret(self) -> Field {
         Field {
             secret: true,
             ..self
         }
+    }
+
+    /// The credential keys of each item of a list field.
+    pub const fn secret_keys(self, keys: &'static [&'static str]) -> Field {
+        Field {
+            secret_keys: keys,
+            ..self
+        }
+    }
+}
+
+/// A credential in a section's struct: a plain string on the wire (the
+/// registry keeps it out of every answer), but `***` in `Debug`, so a
+/// section printed whole never shows it.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct SecretText(pub String);
+
+impl std::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() { "\"\"" } else { "***" })
+    }
+}
+
+impl SecretText {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// What a client sees of a field's value: nothing of a secret, and each
+/// item of a list without its secret keys.
+fn redact(field: &Field, value: &Value) -> Value {
+    if field.secret {
+        return Value::Null;
+    }
+    let mut v = value.clone();
+    if let Value::Array(items) = &mut v {
+        for item in items.iter_mut().filter_map(Value::as_object_mut) {
+            for k in field.secret_keys {
+                item.remove(*k);
+            }
+        }
+    }
+    v
+}
+
+/// Which item secrets a list field has set, as `<item id>.<key>`.
+fn secrets_set(field: &Field, value: &Value) -> Vec<String> {
+    let Value::Array(items) = value else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items.iter().filter_map(Value::as_object) {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        for k in field.secret_keys {
+            if item
+                .get(*k)
+                .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+            {
+                out.push(format!("{id}.{k}"));
+            }
+        }
+    }
+    out
+}
+
+/// A patched list's items with the secrets they don't re-send: an item
+/// whose `id` matches one in `old` keeps that item's secret when the
+/// patch leaves the key out or sends `null`; `""` removes it.
+fn keep_secrets(field: &Field, old: Option<&Value>, new: &mut Value) {
+    if field.secret_keys.is_empty() {
+        return;
+    }
+    let old_items: Vec<&Map<String, Value>> = match old {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_object).collect(),
+        _ => Vec::new(),
+    };
+    let Value::Array(items) = new else { return };
+    for item in items.iter_mut().filter_map(Value::as_object_mut) {
+        let prev = item.get("id").and_then(Value::as_str).and_then(|id| {
+            old_items
+                .iter()
+                .find(|o| o.get("id").and_then(Value::as_str) == Some(id))
+        });
+        for k in field.secret_keys {
+            match item.get(*k) {
+                None | Some(Value::Null) => match prev.and_then(|p| p.get(*k)) {
+                    Some(v) => {
+                        item.insert(k.to_string(), v.clone());
+                    }
+                    None => {
+                        item.remove(*k);
+                    }
+                },
+                Some(Value::String(s)) if s.is_empty() => {
+                    item.remove(*k);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+/// How a sealed value is saved: a JSON string with this prefix, then the
+/// [`SealedSecret`] in hex.
+const SEALED: &str = "sealed:";
+
+/// The record name a field's sealed value is bound to, so it can't be
+/// moved onto another field.
+fn seal_context(section: &str, field: &str) -> String {
+    format!("{KEY_PREFIX}{section}.{field}")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// The install's [`SecretStore`] (`secrets.key` in the data directory),
+/// opened the first time a secret is saved or read, so a registry with
+/// nothing secret never creates the key file.
+#[derive(Default)]
+struct Sealer {
+    dir: Option<PathBuf>,
+    store: Mutex<Option<Arc<SecretStore>>>,
+}
+
+impl std::fmt::Debug for Sealer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Sealer")
+    }
+}
+
+impl Sealer {
+    fn store(&self) -> Result<Arc<SecretStore>, String> {
+        let mut slot = self.store.lock().expect("sealer lock");
+        if let Some(s) = &*slot {
+            return Ok(Arc::clone(s));
+        }
+        let dir = self.dir.as_deref().ok_or("no data directory")?;
+        let s = Arc::new(SecretStore::open_or_create(dir).map_err(|e| e.to_string())?);
+        *slot = Some(Arc::clone(&s));
+        Ok(s)
+    }
+
+    /// `value` (JSON text) sealed for `context`, as saved JSON text.
+    fn seal(&self, context: &str, value: &Value) -> Result<String, String> {
+        let sealed = self
+            .store()?
+            .seal(context, &Secret::new(value.to_string()))
+            .map_err(|e| e.to_string())?;
+        Ok(Value::String(format!("{SEALED}{}", hex(sealed.as_bytes()))).to_string())
+    }
+
+    /// Saved JSON text back to the value; `None` if it isn't sealed for
+    /// `context` with a key the store has.
+    fn open(&self, context: &str, text: &str) -> Option<Value> {
+        let Ok(Value::String(s)) = serde_json::from_str::<Value>(text) else {
+            return None;
+        };
+        let bytes = unhex(s.strip_prefix(SEALED)?)?;
+        let sealed = SealedSecret::from_bytes(bytes).ok()?;
+        let secret = self.store().ok()?.open(context, &sealed).ok()?;
+        serde_json::from_str(secret.expose()).ok()
     }
 }
 
@@ -348,8 +540,8 @@ struct State {
     revision: u64,
 }
 
-/// A section's state, behind the registry's lock.
-#[derive(Debug)]
+/// A section's state, behind the registry's lock. Its `Debug` names the
+/// section only: the saved values may hold secrets.
 struct Entry<T: Section> {
     /// Each field's value from defaults, file and environment.
     base: Map<String, Value>,
@@ -360,6 +552,14 @@ struct Entry<T: Section> {
     /// The values the services started with.
     running: Map<String, Value>,
     tx: watch::Sender<T>,
+}
+
+impl<T: Section> std::fmt::Debug for Entry<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entry")
+            .field("section", &T::SECTION)
+            .finish_non_exhaustive()
+    }
 }
 
 fn object<T: Serialize>(value: &T) -> Map<String, Value> {
@@ -386,7 +586,7 @@ fn revision_key(section: &str) -> String {
 /// Why a value doesn't deserialize, for people. A secret's message never
 /// quotes the value.
 fn not_valid(field: &Field, e: impl std::fmt::Display) -> String {
-    if field.secret {
+    if field.holds_secret() {
         "Not a valid value.".to_string()
     } else {
         format!("Not a valid value: {e}.")
@@ -398,7 +598,12 @@ fn find<T: Section>(name: &str) -> Option<&'static Field> {
 }
 
 impl<T: Section> Entry<T> {
-    fn new(config: &Config, saved_rows: Vec<(String, String)>, revision: u64) -> Entry<T> {
+    fn new(
+        config: &Config,
+        saved_rows: Vec<(String, String)>,
+        revision: u64,
+        sealer: &Sealer,
+    ) -> Entry<T> {
         let layers = &config.layers;
         let base = object(&T::from_config(config));
         let base_source = T::FIELDS
@@ -448,11 +653,23 @@ impl<T: Section> Entry<T> {
                 ignored("read_only");
                 continue;
             }
-            let value = match serde_json::from_str::<Value>(&text) {
-                Ok(v) => v,
-                Err(_) => {
-                    ignored("not_json");
-                    continue;
+            let value = if field.holds_secret() {
+                // A key file lost or replaced, or a value never sealed:
+                // skipped like any other invalid value.
+                match sealer.open(&seal_context(T::SECTION, field.name), &text) {
+                    Some(v) => v,
+                    None => {
+                        ignored("not_sealed");
+                        continue;
+                    }
+                }
+            } else {
+                match serde_json::from_str::<Value>(&text) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        ignored("not_json");
+                        continue;
+                    }
                 }
             };
             let mut trial = entry.effective_map(&saved);
@@ -530,10 +747,11 @@ impl<T: Section> Entry<T> {
                     env: if env { f.env.map(str::to_string) } else { None },
                     read_only: env || f.read_only,
                     restart_required: f.restart_required,
+                    secrets_set: secrets_set(f, &value),
                     source: self.source(state, f),
                     // A secret is never sent back; `source` says whether
-                    // one is set.
-                    value: if f.secret { Value::Null } else { value },
+                    // one is set, and `secrets_set` which items have one.
+                    value: redact(f, &value),
                 },
             );
         }
@@ -576,6 +794,9 @@ impl<T: Section> Entry<T> {
                 next.remove(name);
                 continue;
             }
+            // List items keep the secrets they don't send again.
+            let mut value = value.clone();
+            keep_secrets(field, self.effective_map(saved).get(name), &mut value);
             // Each field's type and bounds alone first, so an error names
             // the field at fault.
             let mut trial = self.effective_map(saved);
@@ -591,7 +812,7 @@ impl<T: Section> Entry<T> {
             let field = fields.first().copied().unwrap_or(&T::FIELDS[0]);
             // serde may quote any value of the patch: none, if one is a
             // secret.
-            let message = if fields.iter().any(|f| f.secret) {
+            let message = if fields.iter().any(|f| f.holds_secret()) {
                 "Not a valid value.".to_string()
             } else {
                 not_valid(field, e)
@@ -686,6 +907,8 @@ trait Erased: Send + Sync + std::fmt::Debug {
     fn current(&self) -> Vec<(&'static Field, Value, SettingSource, bool)>;
     /// A field's name as declared (`'static`, for a log line).
     fn field(&self, name: &str) -> Option<&'static str>;
+    /// Whether the field's saved value is sealed.
+    fn holds_secret(&self, name: &str) -> bool;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -771,10 +994,7 @@ impl<T: Section> Erased for Entry<T> {
                 } else {
                     Preview::default()
                 };
-                let value = match f.secret {
-                    true => Value::Null,
-                    false => values.get(f.name).cloned().unwrap_or(Value::Null),
-                };
+                let value = redact(f, values.get(f.name).unwrap_or(&Value::Null));
                 Some((
                     name.clone(),
                     FieldPreview {
@@ -837,6 +1057,10 @@ impl<T: Section> Erased for Entry<T> {
         find::<T>(name).map(|f| f.name)
     }
 
+    fn holds_secret(&self, name: &str) -> bool {
+        find::<T>(name).is_some_and(Field::holds_secret)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -862,6 +1086,15 @@ fn schema<T: Section>() -> Value {
             }
             if f.secret {
                 p.insert("writeOnly".into(), true.into());
+            }
+            // Each item's credential keys are write-only too.
+            for k in f.secret_keys {
+                if let Some(Value::Object(item)) = p.get_mut("items")
+                    && let Some(Value::Object(ip)) =
+                        item.get_mut("properties").and_then(|x| x.get_mut(*k))
+                {
+                    ip.insert("writeOnly".into(), true.into());
+                }
             }
             if let Some(format) = f.format {
                 p.insert("format".into(), format.into());
@@ -906,6 +1139,8 @@ pub struct Registry {
     store: Arc<Mutex<Store>>,
     sections: Vec<Box<dyn Erased>>,
     write: Mutex<()>,
+    /// Seals and opens secret fields' saved values.
+    sealer: Sealer,
 }
 
 /// A checked batch: each patched section (by its index in display order)
@@ -928,7 +1163,11 @@ impl Registry {
         registry.register::<transport::Transport>(config)?;
         registry.register::<storage::Storage>(config)?;
         registry.register::<search::Search>(config)?;
+        registry.register::<trackers::Trackers>(config)?;
         registry.register::<content::Content>(config)?;
+        registry.register::<integrations::Integrations>(config)?;
+        registry.register::<notifications::Notifications>(config)?;
+        registry.register::<insights::Insights>(config)?;
         registry.register::<updates::Updates>(config)?;
         registry.register::<preferences::Preferences>(config)?;
         registry.register::<logging::Logging>(config)?;
@@ -966,35 +1205,16 @@ impl Registry {
             store,
             sections: Vec::new(),
             write: Mutex::new(()),
+            sealer: Sealer::default(),
         }
     }
 
     fn register<T: Section>(&mut self, config: &Config) -> Result<(), lodestar_store::Error> {
-        // Saved values are plain JSON text in the store. A secret must be
-        // sealed (the integrations `SecretStore`, context
-        // `settings.<section>.<field>`) before a section may have one.
-        assert!(
-            T::FIELDS.iter().all(|f| !f.secret),
-            "settings section {}: secret fields need sealed storage, which the registry doesn't have yet",
-            T::SECTION
-        );
-        self.register_unchecked::<T>(config)
-    }
-
-    /// [`Registry::register`] without the secret check: the tests hold the
-    /// redaction rules the first sealed secret will rely on.
-    #[cfg(test)]
-    fn register_with_secrets<T: Section>(
-        &mut self,
-        config: &Config,
-    ) -> Result<(), lodestar_store::Error> {
-        self.register_unchecked::<T>(config)
-    }
-
-    fn register_unchecked<T: Section>(
-        &mut self,
-        config: &Config,
-    ) -> Result<(), lodestar_store::Error> {
+        // Secret fields are sealed with the install's key, in the data
+        // directory (context `settings.<section>.<field>`).
+        if self.sealer.dir.is_none() {
+            self.sealer.dir = Some(config.data_dir.clone());
+        }
         assert!(
             self.sections.iter().all(|s| s.name() != T::SECTION),
             "settings section {} registered twice",
@@ -1046,8 +1266,12 @@ impl Registry {
             Err(e) => return Err(e),
         };
         drop(store);
-        self.sections
-            .push(Box::new(Entry::<T>::new(config, rows, revision)));
+        self.sections.push(Box::new(Entry::<T>::new(
+            config,
+            rows,
+            revision,
+            &self.sealer,
+        )));
         Ok(())
     }
 
@@ -1135,9 +1359,24 @@ impl Registry {
             if !planned.changed {
                 continue;
             }
-            let section = self.sections[*i].name();
+            let s = &self.sections[*i];
+            let section = s.name();
             for (name, value) in &planned.fields {
                 match value {
+                    Some(v) if s.holds_secret(name) => {
+                        let text =
+                            self.sealer
+                                .seal(&seal_context(section, name), v)
+                                .map_err(|e| {
+                                    SettingsFailure::new(
+                                        section,
+                                        SettingsError::Store(format!(
+                                            "Couldn't seal a secret: {e}."
+                                        )),
+                                    )
+                                })?;
+                        set.push((key(section, name), text));
+                    }
                     Some(v) => set.push((key(section, name), v.to_string())),
                     None => remove.push(key(section, name)),
                 }
