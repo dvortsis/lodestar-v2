@@ -1,5 +1,6 @@
-period,at,at_utc,kind,text
-current,1799929800,2027-01-14T12:30:00Z,restart,v0.5.0
-current,1799964000,2027-01-14T22:00:00Z,paused,
-current,1799971200,2027-01-15T00:00:00Z,resumed,
-current,1799998200,2027-01-15T07:30:00Z,intensity,aggressive
+period,at,at_utc,import.job,import.merged,import.new,import.removed,import.source,kind,text
+current,1799929800,2027-01-14T12:30:00Z,,,,,,restart,v0.5.0
+current,1799964000,2027-01-14T22:00:00Z,,,,,,paused,
+current,1799971200,2027-01-15T00:00:00Z,,,,,,resumed,
+current,1799994600,2027-01-15T06:30:00Z,3,1,2,,bitmagnet,import_finished,job=3 source=bitmagnet new=2 merged=1
+current,1799998200,2027-01-15T07:30:00Z,,,,,,intensity,aggressive

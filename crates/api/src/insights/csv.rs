@@ -107,7 +107,7 @@ const PANELS: [Panel; 20] = [
         "trend",
         "/trend",
         Some("/previous/trend"),
-        &["at", "harvested", "searchable"],
+        &["at", "harvested", "searchable", "searchable_imported"],
     ),
     overview("funnel", "/funnel", None, FUNNEL),
     // Built from `funnel_total.losses` and `.loss_share`.
@@ -149,7 +149,21 @@ const PANELS: [Panel; 20] = [
             "value",
         ],
     ),
-    overview("annotations", "/annotations", None, &["at", "kind", "text"]),
+    overview(
+        "annotations",
+        "/annotations",
+        None,
+        &[
+            "at",
+            "import.job",
+            "import.merged",
+            "import.new",
+            "import.removed",
+            "import.source",
+            "kind",
+            "text",
+        ],
+    ),
     stage(
         "discover.trend",
         Stage::Discover,
@@ -212,7 +226,13 @@ const PANELS: [Panel; 20] = [
         Stage::Index,
         "/trend",
         Some("/previous/trend"),
-        &["at", "new_searchable", "removed", "searchable"],
+        &[
+            "at",
+            "new_searchable",
+            "new_searchable_imported",
+            "removed",
+            "searchable",
+        ],
     ),
     stage(
         "index.removed_by_type",
@@ -336,6 +356,16 @@ fn rows(p: &Panel, v: &Value, compare: bool) -> Vec<(&'static str, BTreeMap<Stri
         for item in found.as_array().into_iter().flatten() {
             let mut row = BTreeMap::new();
             flatten("", item, &mut row);
+            // A null object the panel declares by its fields (an
+            // annotation's `import`) is those fields' empty cells, not a
+            // column of its own.
+            row.retain(|k, v| {
+                !(v.is_null()
+                    && p.columns.iter().any(|c| {
+                        c.strip_prefix(k.as_str())
+                            .is_some_and(|r| r.starts_with('.'))
+                    }))
+            });
             out.push((period, row));
         }
     };

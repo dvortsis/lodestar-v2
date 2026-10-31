@@ -1,4 +1,4 @@
 period,key,searchable
-current,movie,3
+current,movie,1
 current,music,1
 current,unclassified,1
