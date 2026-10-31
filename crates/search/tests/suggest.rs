@@ -471,6 +471,30 @@ fn a_cancelled_request_stops() {
     assert!(suggest::suggest(&f.index, &req, &cancel).is_err());
 }
 
+/// `query_cancelled` compiles `file:(…)` clauses under a token: a
+/// stopped one scans no file and caches no set, a live one caches them.
+#[test]
+fn file_clauses_compile_under_a_token() {
+    let f = fixture();
+    let node = parse("file:(ext:mkv) | file:knight").unwrap();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        f.index.query_cancelled(&node, NOW, 0, &cancel),
+        Err(lodestar_search::Error::Cancelled)
+    ));
+    let spent = CancelToken::new().with_budget(std::time::Duration::ZERO);
+    assert!(matches!(
+        f.index.query_cancelled(&node, NOW, 0, &spent),
+        Err(lodestar_search::Error::OutOfTime)
+    ));
+    assert_eq!(f.index.cache_usage().file_set_entries, 0);
+    f.index
+        .query_cancelled(&node, NOW, 0, &CancelToken::new())
+        .unwrap();
+    assert!(f.index.cache_usage().file_set_entries > 0);
+}
+
 /// A phrase excluded with `-` that matches nothing, or whose first match
 /// is after the query's first candidate, is asked about documents behind
 /// it; tantivy's phrase scorer asserted on that in debug builds

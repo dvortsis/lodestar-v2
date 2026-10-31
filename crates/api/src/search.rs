@@ -456,7 +456,7 @@ async fn run_search(
         // A cached page keeps its counts beside it, for as long as it's
         // the page the cache serves.
         let recovery = if served == 0 && total.value == 0 {
-            let key = self::fingerprint(&ast, visibility, sort);
+            let key = recovery_key(&ast, visibility, sort, limit, tz);
             // The result cache doesn't keep a `file:(…)` page, so neither
             // do its counts.
             let kept = cached.as_ref().filter(|_| !shown.has_file_clause());
@@ -935,6 +935,25 @@ pub(crate) fn fingerprint(shown: &Node, v: Visibility, sort: Sort) -> [u8; 8] {
     out
 }
 
+/// A kept recovery's key: the query's [`fingerprint`], plus what else
+/// picks the result-cache entry it's kept beside: the page size, and the
+/// zone when the query has a `time:` clause. Without them, two live pages
+/// that differ only there would take turns overwriting one slot, and
+/// every alternate request would count again (correct, but wasted).
+fn recovery_key(ast: &Node, v: Visibility, sort: Sort, limit: usize, tz: i32) -> [u8; 8] {
+    let mut h = Sha256::new();
+    h.update(b"lodestar-recovery-v1|");
+    h.update(fingerprint(ast, v, sort));
+    h.update((limit as u64).to_le_bytes());
+    if ast.has_time_of_day() {
+        h.update(tz.to_le_bytes());
+    }
+    let d = h.finalize();
+    let mut out = [0; 8];
+    out.copy_from_slice(&d[..8]);
+    out
+}
+
 /// Who holds a lease: the session (leases are capped per client, and
 /// another session's cursor reads as expired).
 pub(crate) fn client_of(headers: &HeaderMap) -> u64 {
@@ -1238,6 +1257,36 @@ mod tests {
         let fresh = Arc::new(0);
         assert_eq!(cache.get_or(&[4; 8], Some(&fresh), || Err(())), Err(()));
         assert!(!cache.lock().contains_key(&[4; 8]));
+    }
+
+    /// Pages that differ only by `limit` (or, with `time:`, by zone) keep
+    /// their own counts, so alternating between them counts once each.
+    #[test]
+    fn recovery_keys_hold_limit_and_the_zone_for_time() {
+        let v = Visibility {
+            hidden: false,
+            adult: false,
+        };
+        let plain = parse("dune").unwrap();
+        let timed = parse("dune time:20:00..23:00").unwrap();
+        let key = |n: &Node, limit, tz| recovery_key(n, v, Sort::Relevance, limit, tz);
+        assert_ne!(key(&plain, 50, 0), key(&plain, 20, 0));
+        assert_eq!(key(&plain, 50, 0), key(&plain, 50, 120));
+        assert_ne!(key(&timed, 50, 0), key(&timed, 50, 120));
+        let cache = RecoveryCache::<u32>::new();
+        let counted = std::cell::Cell::new(0);
+        let (fifty, twenty) = (Arc::new(50), Arc::new(20));
+        for _ in 0..3 {
+            for (limit, page) in [(50, &fifty), (20, &twenty)] {
+                cache
+                    .get_or(&key(&plain, limit, 0), Some(page), || {
+                        counted.set(counted.get() + 1);
+                        Ok::<_, ()>(Some(recovery(&[Some(1)])))
+                    })
+                    .unwrap();
+            }
+        }
+        assert_eq!(counted.get(), 2, "each page counts once");
     }
 
     /// Bounded: when full, retired pages' counts go first, then all.

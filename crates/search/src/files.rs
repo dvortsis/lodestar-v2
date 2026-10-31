@@ -14,8 +14,9 @@
 //! hidden files (BEP 47) are never indexed. The torrent index's paths
 //! still cover every file.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lodestar_classify::Category;
@@ -381,12 +382,12 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
     })
 }
 
-/// The torrents with a file matching one clause: a sorted id list per
-/// file-index segment. Membership checks each list, so they're never
+/// The torrents with a file matching one clause: a sorted id set per
+/// file-index segment. Membership checks each one, so they're never
 /// merged unless a query needs the union.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct IdSet {
-    parts: Vec<Arc<Vec<u64>>>,
+    parts: Vec<Arc<IdPart>>,
     union: OnceLock<Option<BitSet>>,
 }
 
@@ -398,7 +399,7 @@ impl PartialEq for IdSet {
 
 impl IdSet {
     pub fn contains(&self, id: u64) -> bool {
-        self.parts.iter().any(|p| p.binary_search(&id).is_ok())
+        self.parts.iter().any(|p| p.contains(id))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -411,14 +412,110 @@ impl IdSet {
         self.union
             .get_or_init(|| {
                 let max = self.parts.iter().filter_map(|p| p.last()).max()?;
-                let max = u32::try_from(*max).ok().filter(|m| *m < u32::MAX)?;
+                let max = u32::try_from(max).ok().filter(|m| *m < u32::MAX)?;
                 let mut set = BitSet::with_max_value(max + 1);
-                for id in self.parts.iter().flat_map(|p| p.iter()) {
-                    set.insert(*id as u32);
+                for p in &self.parts {
+                    p.for_each(|id| {
+                        set.insert(id as u32);
+                    });
                 }
                 Some(set)
             })
             .as_ref()
+    }
+}
+
+/// One file-index segment's torrent ids, in whichever form is smaller: a
+/// sorted list (64 bits an id), or a bitset over the span from the least
+/// id to the greatest (one bit an id of the span). Torrent ids are given
+/// out in order, so a broad clause's are dense and its bitset a small
+/// fraction of the list: at 200,000 torrents, `file:(ext:mkv)` takes 25 KB
+/// rather than 1.5 MB (X-search-files-perf).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IdPart {
+    List(Vec<u64>),
+    /// Bit `i` of `words` is id `base + i`; the last word's top bit set
+    /// is the greatest id.
+    Bits {
+        base: u64,
+        words: Vec<u64>,
+    },
+}
+
+impl IdPart {
+    /// From sorted, deduplicated ids.
+    fn from_sorted(mut ids: Vec<u64>) -> IdPart {
+        let (Some(&first), Some(&last)) = (ids.first(), ids.last()) else {
+            return IdPart::List(Vec::new());
+        };
+        let words = (last - first) / 64 + 1;
+        if words >= ids.len() as u64 {
+            ids.shrink_to_fit();
+            return IdPart::List(ids);
+        }
+        let mut bits = vec![0u64; words as usize];
+        for id in ids {
+            let i = id - first;
+            bits[(i / 64) as usize] |= 1 << (i % 64);
+        }
+        IdPart::Bits {
+            base: first,
+            words: bits,
+        }
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        match self {
+            IdPart::List(ids) => ids.binary_search(&id).is_ok(),
+            IdPart::Bits { base, words } => id.checked_sub(*base).is_some_and(|i| {
+                words
+                    .get((i / 64) as usize)
+                    .is_some_and(|w| w & (1 << (i % 64)) != 0)
+            }),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            IdPart::List(ids) => ids.is_empty(),
+            // A bitset is only made from at least one id.
+            IdPart::Bits { .. } => false,
+        }
+    }
+
+    fn last(&self) -> Option<u64> {
+        match self {
+            IdPart::List(ids) => ids.last().copied(),
+            IdPart::Bits { base, words } => {
+                let (i, w) = words.iter().enumerate().rev().find(|(_, w)| **w != 0)?;
+                Some(base + i as u64 * 64 + u64::from(63 - w.leading_zeros()))
+            }
+        }
+    }
+
+    /// Calls `f` with each id, in order.
+    fn for_each(&self, mut f: impl FnMut(u64)) {
+        match self {
+            IdPart::List(ids) => ids.iter().for_each(|id| f(*id)),
+            IdPart::Bits { base, words } => {
+                for (i, w) in words.iter().enumerate() {
+                    let mut w = *w;
+                    while w != 0 {
+                        f(base + i as u64 * 64 + u64::from(w.trailing_zeros()));
+                        w &= w - 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The heap bytes it holds, as the cache charges them.
+    fn heap_bytes(&self) -> usize {
+        let words = match self {
+            IdPart::List(ids) => ids.capacity(),
+            IdPart::Bits { words, .. } => words.capacity(),
+        };
+        words.saturating_mul(std::mem::size_of::<u64>())
     }
 }
 
@@ -428,14 +525,18 @@ const CACHE_ENTRIES: usize = 4096;
 type CacheKey = (String, SegmentId, u32);
 
 struct CacheEntry {
-    ids: Arc<Vec<u64>>,
+    ids: Arc<IdPart>,
     bytes: usize,
     used: u64,
 }
 
+/// The sets, and their recency: `order` maps each entry's last use to its
+/// key, so the least recently used is the first, found and evicted in
+/// O(log n) rather than by scanning the map.
 #[derive(Default)]
 struct CacheState {
     map: HashMap<CacheKey, CacheEntry>,
+    order: BTreeMap<u64, CacheKey>,
     bytes: usize,
     clock: u64,
 }
@@ -444,25 +545,68 @@ impl CacheState {
     fn retained_bytes(&self) -> usize {
         // Charge bucket capacity conservatively (including control bytes and
         // alignment), plus String/Vec capacities and the Arc allocation.
-        self.bytes + self.map.capacity() * (std::mem::size_of::<(CacheKey, CacheEntry)>() + 16) * 2
+        // The recency index is charged per entry, with room for its
+        // B-tree nodes' slack.
+        self.bytes
+            + self.map.capacity() * (std::mem::size_of::<(CacheKey, CacheEntry)>() + 16) * 2
+            + self.order.len() * std::mem::size_of::<(u64, CacheKey)>() * 2
+    }
+
+    fn tick(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
+    fn remove(&mut self, key: &CacheKey) {
+        if let Some(old) = self.map.remove(key) {
+            self.order.remove(&old.used);
+            self.bytes -= old.bytes;
+        }
+    }
+
+    /// Drops the least recently used entry; `false` when empty.
+    fn evict(&mut self) -> bool {
+        let Some((_, key)) = self.order.pop_first() else {
+            return false;
+        };
+        let old = self.map.remove(&key).expect("indexed cache entry");
+        self.bytes -= old.bytes;
+        true
     }
 }
 
 pub(crate) struct FileSetCache {
     state: Mutex<CacheState>,
     budget: usize,
+    /// Lookups that found a set, and lookups that didn't, since start.
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl Default for FileSetCache {
     fn default() -> Self {
-        Self {
-            state: Mutex::new(CacheState::default()),
-            budget: CACHE_BYTES,
-        }
+        Self::with_budget(CACHE_BYTES)
     }
 }
 
 impl FileSetCache {
+    fn with_budget(budget: usize) -> Self {
+        Self {
+            state: Mutex::new(CacheState::default()),
+            budget,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
+
+    /// Lookups that found a set, and lookups that didn't, since start.
+    pub fn hits(&self) -> (u64, u64) {
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+        )
+    }
+
     pub fn clear(&self) {
         *self.state.lock().expect("cache lock") = CacheState::default();
     }
@@ -473,46 +617,43 @@ impl FileSetCache {
         (state.map.len() as u64, state.retained_bytes() as u64)
     }
 
-    fn get(&self, key: &CacheKey) -> Option<Arc<Vec<u64>>> {
+    fn get(&self, key: &CacheKey) -> Option<Arc<IdPart>> {
         let mut state = self.state.lock().expect("cache lock");
-        state.clock = state.clock.saturating_add(1);
-        let used = state.clock;
-        let entry = state.map.get_mut(key)?;
-        entry.used = used;
-        Some(entry.ids.clone())
+        let used = state.tick();
+        let Some(entry) = state.map.get_mut(key) else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        let was = std::mem::replace(&mut entry.used, used);
+        let ids = entry.ids.clone();
+        let key = state.order.remove(&was).expect("indexed cache entry");
+        state.order.insert(used, key);
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        Some(ids)
     }
 
-    fn insert(&self, key: CacheKey, ids: Arc<Vec<u64>>) {
+    fn insert(&self, key: CacheKey, ids: Arc<IdPart>) {
+        // The key is held twice: in the map and in the recency index.
         let bytes = key
             .0
             .capacity()
-            .saturating_add(ids.capacity().saturating_mul(std::mem::size_of::<u64>()))
-            .saturating_add(std::mem::size_of::<Vec<u64>>() + 2 * std::mem::size_of::<usize>());
+            .saturating_mul(2)
+            .saturating_add(ids.heap_bytes())
+            .saturating_add(std::mem::size_of::<IdPart>() + 2 * std::mem::size_of::<usize>());
         if bytes > self.budget {
             return;
         }
         let mut state = self.state.lock().expect("cache lock");
-        state.clock = state.clock.saturating_add(1);
-        let used = state.clock;
-        if let Some(old) = state.map.remove(&key) {
-            state.bytes -= old.bytes;
-        }
+        state.remove(&key);
+        let used = state.tick();
         state.bytes += bytes;
+        state.order.insert(used, key.clone());
         state.map.insert(key, CacheEntry { ids, bytes, used });
         while state.map.len() > CACHE_ENTRIES || state.retained_bytes() > self.budget {
-            let Some(key) = state
-                .map
-                .iter()
-                .min_by_key(|(_, v)| v.used)
-                .map(|(k, _)| k.clone())
-            else {
+            if !state.evict() || state.map.is_empty() {
+                // Nothing left but the table's own capacity: start over.
                 *state = CacheState::default();
                 break;
-            };
-            let old = state.map.remove(&key).expect("present cache entry");
-            state.bytes -= old.bytes;
-            if state.map.is_empty() {
-                *state = CacheState::default();
             }
         }
     }
@@ -565,7 +706,7 @@ pub(crate) fn torrent_ids(
         cancel.check()?;
         ids.dedup();
         cancel.check()?;
-        let ids = Arc::new(ids);
+        let ids = Arc::new(IdPart::from_sorted(ids));
         cache.insert(k, ids.clone());
         parts.push(ids);
     }
@@ -771,23 +912,57 @@ mod cache_regressions {
         (format!("clause-{n}"), SegmentId::generate_random(), 0)
     }
 
+    /// Dense ids become a bitset, sparse ones stay a list, and both
+    /// answer membership, the greatest id and iteration the same.
+    #[test]
+    fn id_parts_take_the_smaller_form() {
+        let dense: Vec<u64> = (1_000..3_000).filter(|i| i % 3 != 0).collect();
+        let sparse: Vec<u64> = (0..100).map(|i| i * 1_000 + 7).collect();
+        for (ids, bits) in [(dense, true), (sparse, false), (vec![5], false)] {
+            let part = IdPart::from_sorted(ids.clone());
+            assert_eq!(matches!(part, IdPart::Bits { .. }), bits);
+            assert!(part.heap_bytes() <= ids.len() * 8);
+            let mut seen = Vec::new();
+            part.for_each(|id| seen.push(id));
+            assert_eq!(seen, ids);
+            assert_eq!(part.last(), ids.last().copied());
+            assert!(!part.is_empty());
+            let lo = ids[0].saturating_sub(70);
+            for id in lo..ids.last().unwrap() + 70 {
+                assert_eq!(part.contains(id), ids.binary_search(&id).is_ok(), "{id}");
+            }
+        }
+        assert!(IdPart::from_sorted(Vec::new()).is_empty());
+        let set = IdSet {
+            parts: vec![
+                Arc::new(IdPart::from_sorted((10..200).collect())),
+                Arc::new(IdPart::from_sorted(vec![3, 500])),
+            ],
+            union: OnceLock::new(),
+        };
+        let union = set.union().unwrap();
+        assert_eq!(union.max_value(), 501);
+        for id in 0..600u32 {
+            let want = (10..200).contains(&id) || id == 3 || id == 500;
+            assert_eq!(id < 501 && union.contains(id), want, "{id}");
+            assert_eq!(set.contains(u64::from(id)), want, "{id}");
+        }
+    }
+
     #[test]
     fn retained_capacity_is_bounded_and_oversized_results_still_belong_to_caller() {
-        let cache = FileSetCache {
-            state: Mutex::new(CacheState::default()),
-            budget: 4096,
-        };
+        let cache = FileSetCache::with_budget(4096);
         for n in 0..100 {
             let mut ids = Vec::with_capacity(128);
             ids.push(n as u64);
-            cache.insert(key(n), Arc::new(ids));
+            cache.insert(key(n), Arc::new(IdPart::List(ids)));
             assert!(cache.state.lock().unwrap().retained_bytes() <= cache.budget);
         }
-        let large = Arc::new(vec![1; 1024]);
+        let large = Arc::new(IdPart::List(vec![1; 1024]));
         let k = key(101);
         cache.insert(k.clone(), large.clone());
         assert!(cache.get(&k).is_none());
-        assert_eq!(large.len(), 1024);
+        assert_eq!(*large, IdPart::List(vec![1; 1024]));
         cache.clear();
         assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
     }
@@ -796,7 +971,7 @@ mod cache_regressions {
     fn usage_reports_entries_and_the_charged_bytes() {
         let cache = FileSetCache::default();
         assert_eq!(cache.usage(), (0, 0));
-        cache.insert(key(1), Arc::new(vec![1; 100]));
+        cache.insert(key(1), Arc::new(IdPart::List(vec![1; 100])));
         let (entries, bytes) = cache.usage();
         assert_eq!(entries, 1);
         assert_eq!(bytes, cache.state.lock().unwrap().retained_bytes() as u64);
@@ -805,15 +980,12 @@ mod cache_regressions {
 
     #[test]
     fn hits_refresh_recency_and_replacement_does_not_double_charge() {
-        let cache = FileSetCache {
-            state: Mutex::new(CacheState::default()),
-            // Two 1 KiB vectors and table overhead fit; three vectors do not.
-            budget: 3072,
-        };
+        // Two 1 KiB vectors and table overhead fit; three vectors do not.
+        let cache = FileSetCache::with_budget(3072);
         let a = key(1);
         let b = key(2);
         let c = key(3);
-        let value = || Arc::new(vec![0; 128]);
+        let value = || Arc::new(IdPart::List(vec![0; 128]));
         cache.insert(a.clone(), value());
         cache.insert(b.clone(), value());
         let bytes = cache.state.lock().unwrap().retained_bytes();
@@ -826,9 +998,46 @@ mod cache_regressions {
         assert!(cache.get(&c).is_some());
     }
 
+    /// Past [`CACHE_ENTRIES`], the least recently used set goes first,
+    /// a hit counting as a use, and the recency index stays in step.
+    #[test]
+    fn past_the_entry_cap_the_least_recently_used_goes_first() {
+        let cache = FileSetCache::default();
+        let keys: Vec<CacheKey> = (0..CACHE_ENTRIES + 2).map(key).collect();
+        for k in &keys[..CACHE_ENTRIES] {
+            cache.insert(k.clone(), Arc::new(IdPart::List(vec![1])));
+        }
+        assert!(cache.get(&keys[0]).is_some());
+        cache.insert(keys[CACHE_ENTRIES].clone(), Arc::new(IdPart::List(vec![1])));
+        cache.insert(
+            keys[CACHE_ENTRIES + 1].clone(),
+            Arc::new(IdPart::List(vec![1])),
+        );
+        assert!(cache.get(&keys[1]).is_none());
+        assert!(cache.get(&keys[2]).is_none());
+        for k in [&keys[0], &keys[3], &keys[CACHE_ENTRIES + 1]] {
+            assert!(cache.get(k).is_some());
+        }
+        let state = cache.state.lock().unwrap();
+        assert_eq!(state.map.len(), CACHE_ENTRIES);
+        assert_eq!(state.order.len(), CACHE_ENTRIES);
+        // Oldest first: keys 4, 5, ... then the ones just read.
+        let oldest: Vec<_> = state.order.values().take(2).cloned().collect();
+        assert_eq!(oldest, [keys[4].clone(), keys[5].clone()]);
+        let newest: Vec<_> = state.order.values().rev().take(3).cloned().collect();
+        assert_eq!(
+            newest,
+            [
+                keys[CACHE_ENTRIES + 1].clone(),
+                keys[3].clone(),
+                keys[0].clone()
+            ]
+        );
+        assert!(state.retained_bytes() <= CACHE_BYTES);
+    }
+
     #[test]
     fn cancellation_during_enumeration_stops_before_scanning_every_file() {
-        use std::sync::atomic::Ordering;
         let mut builder = Schema::builder();
         let torrent = builder.add_u64_field("torrent", FAST);
         let index = tantivy::Index::create_in_ram(builder.build());

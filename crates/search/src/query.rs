@@ -1280,6 +1280,12 @@ impl Node {
         }
     }
 
+    /// Whether the query has a `time:` clause, whose matches depend on
+    /// the user's zone.
+    pub fn has_time_of_day(&self) -> bool {
+        crate::compile::has_time_of_day(self)
+    }
+
     /// Whether the query has a `file:(…)` clause, so its results have
     /// matched files ([`SearchIndex::matched_files`]).
     ///

@@ -914,6 +914,20 @@ impl SearchIndex {
         self.compile(node, now, utc_offset, false)
     }
 
+    /// [`SearchIndex::query_at`] under `cancel`: its `file:(…)` clauses
+    /// stop scanning the file index once the token stops, and nothing is
+    /// cached for a scan cut short. `Err(Cancelled)` or `Err(OutOfTime)`
+    /// then.
+    pub fn query_cancelled(
+        &self,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        cancel: &crate::CancelToken,
+    ) -> Result<Compiled> {
+        self.compile_cancelled(node, now, utc_offset, false, cancel)
+    }
+
     /// The same query with the stem tier: each stemmable word also
     /// matches by its light stem in the title (§8). `None` when no word
     /// has a stem alternative, so it would match the same torrents.
@@ -1065,6 +1079,12 @@ impl SearchIndex {
             browse_entries,
             browse_bytes,
         }
+    }
+
+    /// The file-set cache's hits and misses since start (one per clause
+    /// and file-index segment), for benchmarks.
+    pub fn file_cache_hits(&self) -> (u64, u64) {
+        self.files.cache.hits()
     }
 
     /// Empties the browse cache (for benchmarks).
