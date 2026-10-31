@@ -1750,8 +1750,8 @@
       "pr": 289,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it. | 18:12Z PR #289 (2a) head 4ea96c7d, ~2.4k lines (split, accepted). Logging 43.77/45; Notifications 45.01/45.1; others +0.1 KB (registry cost). Reviewer started w/ security review; subscribed. 2b next.",
-      "reviewer": "session_01MMjhn8kJAEoHa23dyFCMM5"
+      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it. | 18:12Z PR #289 (2a) head 4ea96c7d, ~2.4k lines (split, accepted). Logging 43.77/45; Notifications 45.01/45.1; others +0.1 KB (registry cost). Reviewer started w/ security review; subscribed. 2b next. | 18:39Z first reviewer never started (short SHA -> ref_not_found, PENDING 26 min); relaunched on branch. Author holds local main merge bb9b5b02 (.size-limit only; Notifications 45.06/45.1).",
+      "reviewer": "session_01MMjhnCWs8MDDqxc4zdDXXn"
     },
     "X-requeue-2": {
       "status": "pr-review",
@@ -2160,7 +2160,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-10-31T15:38Z",
+  "last_heartbeat": "2026-10-31T18:39Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -2290,7 +2290,8 @@
     "2026-10-30T19:17Z": "Before merging any PR that touches web/, read its check runs: 'check + test + build + size' and 'playwright (core\u2026)' must be success, not just ci-ok (the ruleset requires only ci-ok; #217 merged early).",
     "2026-10-31T14:10Z": "cargo test --workspace with debuginfo fills a session disk (~30 GB target/debug); tell slices/reviewers to set CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0",
     "2026-10-31T15:51Z": "Lesson: a reviewer's 'optional' suggestion to narrow a safety mechanism (#280 opt 2) went into a brief and was a content-safety loosening caught in #282. Briefs that relax a hold/refusal path must say 'check this doesn't loosen safety' and get a security review.",
-    "2026-10-31T17:34Z": "Usage: a reviewer session reports rate_limit status allowed_warning (seven-day). Prioritise safety-critical slices; defer polish-only launches."
+    "2026-10-31T17:34Z": "Usage: a reviewer session reports rate_limit status allowed_warning (seven-day). Prioritise safety-critical slices; defer polish-only launches.",
+    "short_sha": "create_session source_revision must be a full SHA or branch: a 7-8 char SHA fails init (ref_not_found) and the session sits PENDING silently. Heartbeat now checks PENDING > 5 min."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
