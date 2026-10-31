@@ -83,8 +83,30 @@ pub struct Integrations {
 }
 
 impl Integrations {
-    fn client(&self, id: &str) -> Option<&DownloadClient> {
+    pub fn client(&self, id: &str) -> Option<&DownloadClient> {
         self.clients.iter().find(|c| c.id == id)
+    }
+
+    /// The client a send without a target goes to.
+    pub fn default_client(&self) -> Option<&DownloadClient> {
+        match self.default_client.as_str() {
+            "" => self.clients.first(),
+            id => self.client(id),
+        }
+    }
+}
+
+impl ClientKind {
+    /// The API's name for it.
+    pub fn api(self) -> lodestar_api::settings::DownloadClientKind {
+        use lodestar_api::settings::DownloadClientKind as K;
+        match self {
+            ClientKind::Qbittorrent => K::Qbittorrent,
+            ClientKind::Transmission => K::Transmission,
+            ClientKind::Deluge => K::Deluge,
+            ClientKind::Rtorrent => K::Rtorrent,
+            ClientKind::Aria2 => K::Aria2,
+        }
     }
 }
 

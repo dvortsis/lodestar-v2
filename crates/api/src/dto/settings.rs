@@ -290,6 +290,12 @@ pub enum DownloadClientKind {
 #[serde(deny_unknown_fields)]
 pub struct DownloadClientDraft {
     pub client: DownloadClientKind,
+    /// The saved client the form edits. Without `password`, its saved
+    /// password is used, as long as `client` and the address's server are
+    /// the saved ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub id: Option<String>,
     /// The password (qBittorrent, Deluge, Transmission and rTorrent with
     /// authentication) or the RPC secret (Aria2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,12 +320,203 @@ impl std::fmt::Debug for DownloadClientDraft {
     }
 }
 
+/// A Torznab endpoint as the form has it, unsaved.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TorznabDraft {
+    /// Without it, the saved key is used if `url` is on the saved
+    /// endpoint's server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub api_key: Option<String>,
+    #[schema(example = "http://192.168.1.5:9696/1/api")]
+    pub url: String,
+}
+
+/// An ntfy channel as the form has it. A secret left out is the saved
+/// one (the token only while the topic URL's server is the saved one).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NtfyDraft {
+    #[serde(default)]
+    pub allow_private: bool,
+    /// 1–5; 0 leaves ntfy's default.
+    #[serde(default)]
+    pub priority: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub token: Option<String>,
+    /// The topic URL; without it, the saved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub url: Option<String>,
+}
+
+/// A Discord channel as the form has it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscordDraft {
+    /// The webhook URL; without it, the saved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub url: Option<String>,
+}
+
+/// A webhook channel as the form has it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WebhookDraft {
+    #[serde(default)]
+    pub allow_private: bool,
+    /// Where the JSON is posted; without it, the saved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub url: Option<String>,
+}
+
+/// How an email channel's SMTP session is protected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EmailSecurity {
+    Tls,
+    #[default]
+    Starttls,
+    None,
+}
+
+/// An email channel as the form has it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmailDraft {
+    #[serde(default)]
+    pub allow_private: bool,
+    pub from: String,
+    pub host: String,
+    /// Without it (and with `username`), the saved password, as long as
+    /// `host` and `port` are the saved ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub password: Option<String>,
+    /// 0 is the security mode's usual port.
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub security: EmailSecurity,
+    pub to: Vec<String>,
+    /// Empty to send without logging in.
+    #[serde(default)]
+    pub username: String,
+}
+
+macro_rules! no_secrets_debug {
+    ($($t:ident),*) => {$(
+        impl std::fmt::Debug for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                // No address (it can carry a token), no secret.
+                f.debug_struct(stringify!($t)).finish_non_exhaustive()
+            }
+        }
+    )*};
+}
+no_secrets_debug!(
+    TorznabDraft,
+    NtfyDraft,
+    DiscordDraft,
+    WebhookDraft,
+    EmailDraft
+);
+
 /// `POST /settings/test`: what to test, with the values on screen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SettingsTest {
     /// Log in to a download client and ask its version.
     DownloadClient(DownloadClientDraft),
+    /// Ask a Torznab endpoint for its capabilities.
+    Torznab(TorznabDraft),
+    /// Send one test message to ntfy.
+    Ntfy(NtfyDraft),
+    /// Send one test message to Discord.
+    Discord(DiscordDraft),
+    /// Send one test email.
+    Email(EmailDraft),
+    /// Post one test payload to the webhook.
+    Webhook(WebhookDraft),
+}
+
+/// `POST /send`: torrents to add to a saved download client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClientSend {
+    /// The saved client's id; without it, the default client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub client: Option<String>,
+    /// 1 to 100 info hashes (40 hex characters).
+    pub hashes: Vec<String>,
+}
+
+/// What happened to one torrent of a send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientSendOutcome {
+    /// The client took it.
+    Sent,
+    /// It was in the client already, which is where you want it.
+    Duplicate,
+    /// Not sent: unknown here, or hidden from you (`code` says which).
+    Refused,
+    /// The client didn't take it (`code` and `message` say why).
+    Failed,
+}
+
+/// One torrent's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientSendItem {
+    /// `not_found`, `hidden` or `adult_hidden` when refused; the
+    /// connection test's codes when failed; null otherwise.
+    #[schema(required = true)]
+    pub code: Option<String>,
+    pub hash: String,
+    /// A sentence for people; never the client's address or a credential.
+    #[schema(required = true)]
+    pub message: Option<String>,
+    #[schema(inline)]
+    pub outcome: ClientSendOutcome,
+}
+
+/// `POST /send`: the result per torrent, in the order asked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientSendResult {
+    /// The client's id.
+    pub client: String,
+    pub results: Vec<ClientSendItem>,
+    /// How many went in (sent or already there).
+    pub sent: usize,
+}
+
+/// `GET /usage`: the usage data Lodestar keeps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UsageStats {
+    /// Logged searches (only while query logging is on).
+    pub queries: u64,
+}
+
+/// `POST /usage/clear`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UsageClear {
+    /// Must be true: the dialog that showed the count was confirmed
+    /// (§10.10.7, a destructive action).
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+/// `POST /usage/clear`: what was deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UsageCleared {
+    /// Logged searches deleted.
+    pub queries: u64,
 }
 
 /// Why a connection test failed.

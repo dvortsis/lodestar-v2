@@ -1370,6 +1370,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sends torrents to a saved download client (the default one unless
+         *     `client` names another), with its saved category, save path and
+         *     paused setting. Each hash gets a result; hidden ones are refused, never
+         *     sent.
+         */
+        post: operations["sendToClient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/revoke-others": {
         parameters: {
             query?: never;
@@ -1509,11 +1531,16 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Tests a download client with the values on screen, before they're
-         *     saved: logs in and asks its version. It goes through the integrations
-         *     SSRF guard (download clients may be on this machine or the LAN, never
-         *     on link-local, metadata or reserved addresses). Nothing is saved, and
-         *     the result never repeats the URL or a credential.
+         * Tests an integration with the values on screen, before they're saved:
+         *     logs in to a download client and asks its version, asks a Torznab
+         *     endpoint for its capabilities, or sends one clearly labelled test
+         *     message to a notification channel. It goes through the integrations
+         *     SSRF guard (download clients and Torznab may be on this machine or the
+         *     LAN; notification channels never on loopback; nothing on link-local,
+         *     metadata or reserved addresses). A secret the form leaves out is the
+         *     saved one, only while the address is on the saved server. Nothing is
+         *     saved, and the result never repeats the URL, a credential or what the
+         *     server answered.
          */
         post: operations["testSettings"];
         delete?: never;
@@ -1892,6 +1919,40 @@ export interface paths {
          *     refuses it (`version_skipped`).
          */
         post: operations["skipUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How many searches are logged. */
+        get: operations["usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deletes every logged search. Settings and everything else stay. */
+        post: operations["clearUsage"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2644,6 +2705,37 @@ export interface components {
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
         };
+        /** @description `POST /send`: torrents to add to a saved download client. */
+        ClientSend: {
+            /** @description The saved client's id; without it, the default client. */
+            client?: string;
+            /** @description 1 to 100 info hashes (40 hex characters). */
+            hashes: string[];
+        };
+        /** @description One torrent's result. */
+        ClientSendItem: {
+            /**
+             * @description `not_found`, `hidden` or `adult_hidden` when refused; the
+             *     connection test's codes when failed; null otherwise.
+             */
+            code: string | null;
+            hash: string;
+            /** @description A sentence for people; never the client's address or a credential. */
+            message: string | null;
+            /**
+             * @description What happened to one torrent of a send.
+             * @enum {string}
+             */
+            outcome: "sent" | "duplicate" | "refused" | "failed";
+        };
+        /** @description `POST /send`: the result per torrent, in the order asked. */
+        ClientSendResult: {
+            /** @description The client's id. */
+            client: string;
+            results: components["schemas"]["ClientSendItem"][];
+            /** @description How many went in (sent or already there). */
+            sent: number;
+        };
         /** @description `POST /collections`. */
         CollectionCreate: {
             /** @description 1–200 characters. */
@@ -3263,6 +3355,11 @@ export interface components {
             /** @description Plain UTF-8, at most 4,000 bytes. Show it in a `<pre>`. */
             text: string;
         };
+        /** @description A Discord channel as the form has it. */
+        DiscordDraft: {
+            /** @description The webhook URL; without it, the saved one. */
+            url?: string;
+        };
         DiscoverKpi: {
             /**
              * Format: double
@@ -3356,6 +3453,12 @@ export interface components {
         DownloadClientDraft: {
             client: components["schemas"]["DownloadClientKind"];
             /**
+             * @description The saved client the form edits. Without `password`, its saved
+             *     password is used, as long as `client` and the address's server are
+             *     the saved ones.
+             */
+            id?: string;
+            /**
              * @description The password (qBittorrent, Deluge, Transmission and rTorrent with
              *     authentication) or the RPC secret (Aria2).
              */
@@ -3376,6 +3479,31 @@ export interface components {
          * @enum {string}
          */
         DownloadClientKind: "qbittorrent" | "transmission" | "deluge" | "rtorrent" | "aria2";
+        /** @description An email channel as the form has it. */
+        EmailDraft: {
+            allow_private?: boolean;
+            from: string;
+            host: string;
+            /**
+             * @description Without it (and with `username`), the saved password, as long as
+             *     `host` and `port` are the saved ones.
+             */
+            password?: string;
+            /**
+             * Format: int32
+             * @description 0 is the security mode's usual port.
+             */
+            port?: number;
+            security?: components["schemas"]["EmailSecurity"];
+            to: string[];
+            /** @description Empty to send without logging in. */
+            username?: string;
+        };
+        /**
+         * @description How an email channel's SMTP session is protected.
+         * @enum {string}
+         */
+        EmailSecurity: "tls" | "starttls" | "none";
         ErrorBody: {
             /**
              * @description A stable snake_case identifier to branch on.
@@ -5100,6 +5228,21 @@ export interface components {
             /** @description The tab; null is every type. */
             type: string | null;
         };
+        /**
+         * @description An ntfy channel as the form has it. A secret left out is the saved
+         *     one (the token only while the topic URL's server is the saved one).
+         */
+        NtfyDraft: {
+            allow_private?: boolean;
+            /**
+             * Format: int32
+             * @description 1–5; 0 leaves ntfy's default.
+             */
+            priority?: number;
+            token?: string;
+            /** @description The topic URL; without it, the saved one. */
+            url?: string;
+        };
         /** @description The body of a write that has nothing else to say. */
         OkResponse: {
             /** @description Always `true`. */
@@ -6410,10 +6553,25 @@ export interface components {
             section: string;
         };
         /** @description `POST /settings/test`: what to test, with the values on screen. */
-        SettingsTest: components["schemas"]["DownloadClientDraft"] & {
+        SettingsTest: (components["schemas"]["DownloadClientDraft"] & {
             /** @enum {string} */
             kind: "download_client";
-        };
+        }) | (components["schemas"]["TorznabDraft"] & {
+            /** @enum {string} */
+            kind: "torznab";
+        }) | (components["schemas"]["NtfyDraft"] & {
+            /** @enum {string} */
+            kind: "ntfy";
+        }) | (components["schemas"]["DiscordDraft"] & {
+            /** @enum {string} */
+            kind: "discord";
+        }) | (components["schemas"]["EmailDraft"] & {
+            /** @enum {string} */
+            kind: "email";
+        }) | (components["schemas"]["WebhookDraft"] & {
+            /** @enum {string} */
+            kind: "webhook";
+        });
         /**
          * @description Why a connection test failed.
          * @example {
@@ -7259,6 +7417,16 @@ export interface components {
              */
             max_id: number | null;
         };
+        /** @description A Torznab endpoint as the form has it, unsaved. */
+        TorznabDraft: {
+            /**
+             * @description Without it, the saved key is used if `url` is on the saved
+             *     endpoint's server.
+             */
+            api_key?: string;
+            /** @example http://192.168.1.5:9696/1/api */
+            url: string;
+        };
         TrackerHealth: {
             /** @description `scheme://host:port` only: a URL path or query can carry a passkey. */
             key: string;
@@ -7426,6 +7594,30 @@ export interface components {
          * @enum {string}
          */
         UpdatesUnavailable: "fixture" | "network" | "windows_helper";
+        /** @description `POST /usage/clear`. */
+        UsageClear: {
+            /**
+             * @description Must be true: the dialog that showed the count was confirmed
+             *     (§10.10.7, a destructive action).
+             */
+            confirm?: boolean;
+        };
+        /** @description `POST /usage/clear`: what was deleted. */
+        UsageCleared: {
+            /**
+             * Format: int64
+             * @description Logged searches deleted.
+             */
+            queries: number;
+        };
+        /** @description `GET /usage`: the usage data Lodestar keeps. */
+        UsageStats: {
+            /**
+             * Format: int64
+             * @description Logged searches (only while query logging is on).
+             */
+            queries: number;
+        };
         /**
          * @description `GET /user-items/{hash}`: the marks and the collections it is in.
          * @example {
@@ -7584,6 +7776,12 @@ export interface components {
              * @description Null when there are no marks.
              */
             updated_at: number | null;
+        };
+        /** @description A webhook channel as the form has it. */
+        WebhookDraft: {
+            allow_private?: boolean;
+            /** @description Where the JSON is posted; without it, the saved one. */
+            url?: string;
         };
     };
     responses: {
@@ -10398,6 +10596,67 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    sendToClient: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientSend"];
+            };
+        };
+        responses: {
+            /** @description The send ran; each hash has its result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientSendResult"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `no_client`: no download client is saved, or none with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `invalid_hashes`: none, more than 100, or one isn't an info hash. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `sends_busy` or `send_rate_limited`: try again shortly. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     revokeOtherSessions: {
         parameters: {
             query?: never;
@@ -11354,6 +11613,70 @@ export interface operations {
             };
             /** @description `updates_unavailable`: this process serves no update engine. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    usage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What Clear usage data would delete. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageStats"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    clearUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageClear"];
+            };
+        };
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageCleared"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirmation_required`: `confirm` isn't true. */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };

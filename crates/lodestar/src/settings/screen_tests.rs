@@ -1224,6 +1224,91 @@ fn list_item_secrets_follow_their_item_by_id_and_never_another_server() {
 }
 
 #[test]
+fn saved_secrets_are_given_only_for_their_own_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = registry(dir.path(), &sealed_config(dir.path()));
+    r.patch(
+        "integrations",
+        patch(json!({
+            "clients": [client_item("home", json!({ "password": "pa", "category": "tv" }))],
+            "torznab_url": "https://prowlarr.lan/1/api", "torznab_api_key": "k1"
+        })),
+    )
+    .unwrap();
+    r.patch(
+        "notifications",
+        patch(json!({ "ntfy_url": "https://ntfy.sh/x" })),
+    )
+    .unwrap();
+    let url = json!("http://192.168.1.5:8080/");
+    let kind = json!("qbittorrent");
+    let ask = |section, key, e: &[(&str, Value)]| r.saved_secret(section, key, e);
+    assert_eq!(
+        ask(
+            "integrations",
+            "clients.home.password",
+            &[("url", url.clone()), ("kind", kind.clone())]
+        ),
+        Some("pa".into())
+    );
+    // Another server, another kind, a missing endpoint, an unknown item.
+    for e in [
+        vec![
+            ("url", json!("http://evil.example:8080/")),
+            ("kind", kind.clone()),
+        ],
+        vec![("url", url.clone()), ("kind", json!("deluge"))],
+        vec![("url", url.clone())],
+    ] {
+        assert_eq!(
+            ask("integrations", "clients.home.password", &e),
+            None,
+            "{e:?}"
+        );
+    }
+    assert_eq!(
+        ask(
+            "integrations",
+            "clients.nas.password",
+            &[("url", url.clone()), ("kind", kind.clone())]
+        ),
+        None
+    );
+    assert_eq!(
+        ask(
+            "integrations",
+            "torznab_api_key",
+            &[("torznab_url", json!("https://prowlarr.lan/2/api"))]
+        ),
+        Some("k1".into()),
+        "another path on the same server"
+    );
+    assert_eq!(ask("integrations", "torznab_api_key", &[]), None);
+    assert_eq!(
+        ask(
+            "integrations",
+            "torznab_api_key",
+            &[("torznab_url", json!("https://x.example/api"))]
+        ),
+        None
+    );
+    // A URL that is the secret needs no endpoint; a field that isn't
+    // secret is never given.
+    assert_eq!(
+        ask("notifications", "ntfy_url", &[]),
+        Some("https://ntfy.sh/x".into())
+    );
+    assert_eq!(ask("integrations", "torznab_url", &[]), None);
+    assert_eq!(ask("notifications", "discord_url", &[]), None, "none saved");
+    // The send's client: the default, or by id, with its password.
+    let c = r.download_client(None).unwrap();
+    assert_eq!((c.id.as_str(), c.category.as_str()), ("home", "tv"));
+    assert_eq!(c.password.as_deref(), Some("pa"));
+    assert!(!format!("{c:?}").contains("pa\""));
+    assert!(r.download_client(Some("nas")).is_none());
+}
+
+#[test]
 fn an_empty_secret_resets_and_a_moved_endpoint_drops_its_secret() {
     use super::integrations::Integrations;
     use super::notifications::Notifications;
