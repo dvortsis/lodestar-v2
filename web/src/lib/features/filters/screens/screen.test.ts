@@ -243,6 +243,12 @@ describe('held items and adult', () => {
 });
 
 describe('adding a rule', () => {
+	it('an empty Always allow says so and sends nothing', async () => {
+		setup();
+		await fireEvent.click(await screen.findByTestId('allow-add'));
+		await screen.findByText('Enter a search query.');
+		expect(net.to('/filters/preview')).toHaveLength(0);
+	});
 	it('an empty query sends nothing', async () => {
 		setup();
 		await fireEvent.click(await screen.findByTestId('rule-add'));

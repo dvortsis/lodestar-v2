@@ -63,7 +63,8 @@ export function createModel() {
 		// A screen that went away meanwhile starts nothing (its preview job would never be cancelled).
 		if (destroyed) return;
 		flow = f;
-		pending = p;
+		// A change already applying keeps its own title and Apply label.
+		if (f.state.kind !== 'applying') pending = p;
 		f.start(change);
 	}
 

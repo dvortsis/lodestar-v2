@@ -38,6 +38,7 @@
 	let action = $state<string>('hide');
 	let allow = $state('');
 	let tried = $state(false);
+	let allowTried = $state(false);
 	const queryError = $derived(tried && !query.trim() ? m.filters_invalid_query() : undefined);
 
 	function add() {
@@ -194,6 +195,7 @@
 		class="flex flex-wrap items-end gap-3"
 		onsubmit={(e) => {
 			e.preventDefault();
+			allowTried = true;
 			if (!allow.trim()) return;
 			ask(addAllow(allow.trim()), {
 				title: m.filters_allow_add_title(),
@@ -201,7 +203,10 @@
 			});
 		}}
 	>
-		<Field label={m.filters_rule_query()}>
+		<Field
+			label={m.filters_rule_query()}
+			error={allowTried && !allow.trim() ? m.filters_invalid_query() : undefined}
+		>
 			{#snippet children(a)}
 				<Input {...a} bind:value={allow} name="allow-query" autocomplete="off" />
 			{/snippet}
