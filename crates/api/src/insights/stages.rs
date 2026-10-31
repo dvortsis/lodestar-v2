@@ -27,10 +27,11 @@ use super::{
     read_period, sources, stale_of, type_lists, window, windows,
 };
 use crate::dto::insights::{
-    DiscoverKpi, DiscoverPoint, DiscoverPrevious, DiscoverResponse, DiscoverSource, FetchKpi,
-    FetchPoint, FetchPrevious, FetchResponse, IndexKpi, IndexPoint, IndexPrevious, IndexResponse,
-    LossCount, RemovedCount, ServeKpi, ServePoint, ServePrevious, ServeResponse, StageQuery,
-    StrategyCount, UnderstandKpi, UnderstandPoint, UnderstandPrevious, UnderstandResponse,
+    DiscoverKpi, DiscoverPoint, DiscoverPrevious, DiscoverSource, FetchKpi, FetchPoint,
+    FetchPrevious, FetchResponse, IndexKpi, IndexPoint, IndexPrevious, IndexResponse,
+    InsightsDiscoverResponse, LossCount, RemovedCount, ServeKpi, ServePoint, ServePrevious,
+    ServeResponse, StageQuery, StrategyCount, UnderstandKpi, UnderstandPoint, UnderstandPrevious,
+    UnderstandResponse,
 };
 use crate::extract::Query;
 
@@ -47,7 +48,7 @@ pub(crate) enum Stage {
 /// A built stage page: the JSON response, and what `export.csv` reads.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StagePage {
-    Discover(DiscoverResponse),
+    Discover(InsightsDiscoverResponse),
     Fetch(FetchResponse),
     Understand(UnderstandResponse),
     Index(IndexResponse),
@@ -706,7 +707,7 @@ fn build(
                     })
                 })
                 .transpose()?;
-            StagePage::Discover(DiscoverResponse {
+            StagePage::Discover(InsightsDiscoverResponse {
                 by_ip_family: None,
                 by_source,
                 by_strategy,
@@ -1030,7 +1031,7 @@ macro_rules! stage_route {
 stage_route!(
     discover_page,
     Discover,
-    DiscoverResponse,
+    InsightsDiscoverResponse,
     "getInsightsDiscover",
     "/insights/discover",
     "Discover (§10.9.5): keys reported, rediscovered and dropped by source and strategy, first harvests, and the DHT's snapshot. Event time, except `harvested` (discovery cohort, ≈)."

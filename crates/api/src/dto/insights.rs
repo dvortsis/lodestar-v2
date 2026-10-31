@@ -467,7 +467,7 @@ pub struct StageQuery {
 
 /// One bin of a distribution (parser confidence, junk score).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct HistogramBin {
+pub struct InsightsHistogramBin {
     pub count: u64,
     /// The bin's edges.
     pub hi: f64,
@@ -485,7 +485,7 @@ pub struct QueryRow {
 
 /// `GET /insights/discover` (§10.9.5, `docs/metrics.md` §6.8, §7.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct DiscoverResponse {
+pub struct InsightsDiscoverResponse {
     /// Yield by IPv4 / IPv6. Null until leases carry the address family.
     #[schema(required = true)]
     pub by_ip_family: Option<Vec<SegmentYield>>,
@@ -692,12 +692,12 @@ pub struct UnderstandKpi {
     pub blocked: Option<u64>,
     /// Junk score distribution. Null until scores are rolled up.
     #[schema(required = true)]
-    pub junk_distribution: Option<Vec<HistogramBin>>,
+    pub junk_distribution: Option<Vec<InsightsHistogramBin>>,
     /// Torrents that became searchable in the range. Event time.
     pub newly_searchable: u64,
     /// Parser confidence distribution. Null until rolled up.
     #[schema(required = true)]
-    pub parser_confidence: Option<Vec<HistogramBin>>,
+    pub parser_confidence: Option<Vec<InsightsHistogramBin>>,
     /// Recent "Fix parse" corrections. Null until counted.
     #[schema(required = true)]
     pub recent_corrections: Option<u64>,
