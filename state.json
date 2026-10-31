@@ -1587,7 +1587,7 @@
    "pr": 265,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu"
+   "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu | 07:08Z reviewer MERGE at 46c8736a; runner asked a small push (card label colon, zh wording, events-500 e2e, truncated note); runner checks delta"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2341,7 +2341,8 @@
    "when": "after IMP-5 merges, when a slot frees"
   },
   "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
-  "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)"
+  "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
+  "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
