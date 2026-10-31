@@ -1553,11 +1553,12 @@
    "pr": 263
   },
   "M-settings-engine-2": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01MMjhnCv77szJz5C9itzYPf",
    "branch": "slice/M-settings-engine-2",
-   "notes": "2026-10-31T05:21Z launched (brief briefs/M-settings-engine-2.md); before S-settings-2b"
+   "notes": "2026-10-31T05:21Z launched (brief briefs/M-settings-engine-2.md); before S-settings-2b | 05:59Z PR #264 head 06174069; section 43.1->40.99 KB, messages gate 3.64/4 KB; fresh Opus reviewer session_01MMjhnCeVXFD1FufdMSDLuR",
+   "pr": 264
   },
   "B-search-recovery": {
    "status": "running",
@@ -2306,7 +2307,8 @@
    "source": "IMP-5 (2026-10-31)",
    "what": "REFETCH leases skip funnel recording in crates/pipeline/src/{worker,coordinator,writer}.rs so FILES_PARTIAL imports queued at startup (lib.rs ~l.905) never land in the start hour's funnel; test that a refetch moves no cohort or FUNNEL_EVENTS row",
    "when": "after IMP-5 merges, when a slot frees"
-  }
+  },
+  "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
