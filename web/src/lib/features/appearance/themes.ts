@@ -89,13 +89,16 @@ export function writeCustom(list: ThemeEntry[]) {
 const vars = (keys: string[], t: ThemeEntry) =>
 	Object.fromEntries(keys.map((k, i) => [k, t.values[i]!]));
 
+/** Bumped by every call: a call that finds a newer one after its fetch leaves the page alone. */
+let generation = 0;
+
+/** How many themes have been applied so far; a caller compares it across an await. */
+export const themeGeneration = () => generation;
+
 /**
  * Applies the family the preferences choose for the current mode, and caches both modes for the
  * pre-paint script. Riverstone needs no file (it is in the critical CSS).
  */
-/** Bumped by every call: a call that finds a newer one after its fetch leaves the page alone. */
-let generation = 0;
-
 export async function applyTheme(p: Appearance): Promise<{ missing: string[] }> {
 	const ticket = ++generation;
 	const root = document.documentElement;
