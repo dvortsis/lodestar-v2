@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 37
+  "count": 38
  },
  "tags": {},
  "slices": {
@@ -1659,7 +1659,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b) | carry #276 optional: IMP-4b decisions l.141 drop stale status sentence; parity test add floor-marked subscribed list (record_refresh, hash_of(6)) and drop \"Left untested\" bullet | 13:42Z runner: deferred. Online import needs a server-side trigger (an API taking a source path or PostgreSQL credentials = new file/SSRF surface), which goes to the owner with uploads/wizard (plan A6). The offline CLI covers the pilots (13.9k/s synthetic). Ask the owner in the next summary whether online import is wanted before v0.6."
+   "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b)| (#276 optional moved to X-import-refile-2): IMP-4b decisions l.141 drop stale status sentence; parity test add floor-marked subscribed list (record_refresh, hash_of(6)) and drop \"Left untested\" bullet | 13:42Z runner: deferred. Online import needs a server-side trigger (an API taking a source path or PostgreSQL credentials = new file/SSRF surface), which goes to the owner with uploads/wizard (plan A6). The offline CLI covers the pilots (13.9k/s synthetic). Ask the owner in the next summary whether online import is wanted before v0.6."
   },
   "X-search-files-perf": {
    "status": "merged",
@@ -1680,13 +1680,13 @@
    "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus | 14:10Z PR #279 head 48c0f1b6; fresh Opus reviewer session_01MMjhnAc7b1QvzrjXRB1Q8p | 14:25Z MERGE at 48c0f1b6 (3 optional); waiting on test ubuntu/windows | 14:39Z test(windows) red: dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS 10055 (40 nodes; runner env). Runner re-ran failed jobs once (run 41208855560)"
   },
   "B-import-refile": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01MMjhnBWPb7p7uonDgG12h9",
    "pr": 280,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review | 14:42Z MERGE at 61e73241 (6 optional); waiting on CI"
+   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus | 14:32Z PR #280 head 61e73241 (~960 lines, writer.rs trigger accepted); IMP-1 refinement (swept candidates -> filtered/quarantined, job may flip complete_with_issues -> complete) to flag §2.19; fresh Opus reviewer session_01MMjhn8rYCTjxN5ReUX92Gf + security review | 14:42Z MERGE at 61e73241 (6 optional); waiting on CI | 15:02Z merged 65a0ba9f; sessions archived"
   },
   "X-search-files-2": {
    "status": "running",
@@ -1696,6 +1696,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "14:10Z brief briefs/X-search-files-2.md (gate cold broad file clause at §3 FILE_P95 150 ms; profile 211 ms at 1M; IdPart proptest; recency charge) | 14:09Z launched Opus"
+  },
+  "X-import-refile-2": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2437,6 +2446,10 @@
   {
    "item": "FYI (§2.26) #277 S-settings-2b: Language first view 43.25 -> 44.14 kB (group headings, preload list; nav titles stay eager); Notifications first view 44.67 kB, with the 45 KB limit kept and >=0.3 kB headroom required; client passwords saved/removed in their own request (never staged, so never in the sessionStorage draft).",
    "status": "to-send"
+  },
+  {
+   "item": "FYI (§2.19) #280 B-import-refile: when filter/class rules change, waiting import candidates are re-judged; a held candidate moves to filtered/quarantined on its job (counters stay conserved), and a finished job whose only issue was waiting candidates flips complete_with_issues -> complete.",
+   "status": "to-send"
   }
  ],
  "external_gates": {
@@ -2488,10 +2501,8 @@
   "Settings engine: lift the reveal + hash-focus logic shared by SectionForm and screens2/GroupedForm into form/reveal.svelte.ts (#277 review)",
   "hints.rs compact_order: make the amortised bound unconditional (next_compact = max(ORDER_CAPACITY, 2*len)) or skip duplicate push_back (#279 review 1)",
   "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
-  "sources-importers: unify judge_candidate with the refile sweep; judge a hybrid's truncated v2 hash (#280)",
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
-  "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
-  "X-import-refile-2 (Opus, #280 review optional 1-6): writer.rs retry the candidate sweep after a transient store error (retry_at on flush tick) instead of done=true; insert into HeldSet only if filter version unchanged; store/import.rs ~1399 drop the candidates clamp (or skip counter move at 0); make the no-name log test assert a live sink; decisions note that hash-trigger removals/stored candidates don't flip CWI; add a class-rule (adult_hold) candidate test"
+  "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
