@@ -1764,13 +1764,13 @@
       "reviewer": "session_01MMjhnCzxKvgLJq1RkG55sJ"
     },
     "X-settings-registry-slim": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnB9ykpQogGPLGEmRAX",
       "pr": 293,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB | 19:58Z brief briefs/X-settings-registry-slim.md. | 19:57Z launched Opus. | 20:39Z PR #293 head c72fffca: every Settings first view -1.2..-1.6 KB (>=1.39 KB headroom), Notifications back to 45 KB. Runner: titles stay in registry (25 B each, accepted). Reviewer started; subscribed.",
+      "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB | 19:58Z brief briefs/X-settings-registry-slim.md. | 19:57Z launched Opus. | 20:39Z PR #293 head c72fffca: every Settings first view -1.2..-1.6 KB (>=1.39 KB headroom), Notifications back to 45 KB. Runner: titles stay in registry (25 B each, accepted). Reviewer started; subscribed. | 21:01Z MERGED f5569027; sessions archived.",
       "reviewer": "session_01MMjhnD78QDorf6z7Tn3TSP"
     },
     "B-held-precommit": {
@@ -1820,6 +1820,15 @@
       "attempt": 1,
       "review_rounds": 0,
       "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot)."
+    },
+    "X-build-stable-name": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2605,7 +2614,7 @@
       "at": "2026-10-31T19:51Z"
     },
     {
-      "item": "FYI (\u00a72.19) #293 X-settings-registry-slim (when merged): reverses the runner's Notifications 45.1 KB raise; every Settings first view drops ~1.2-1.6 KB. Titles stay in the shared registry (25 B each; moving them saves nothing).",
+      "item": "FYI (\u00a72.19) #293 X-settings-registry-slim (merged f5569027): reverses the runner's Notifications 45.1 KB raise; every Settings first view drops ~1.2-1.6 KB. Titles stay in the shared registry (25 B each; moving them saves nothing).",
       "status": "to-send",
       "at": "2026-10-31T20:39Z"
     }
@@ -2618,7 +2627,6 @@
     }
   },
   "followups": [
-    "X-build-stable-name (HIGH): kit.version.name defaults to build time, so hashed chunk names change every build and move size gates ~\u00b140 B (Alert 46 KB and Search results 43.3 KB sit within that noise). Set a stable version.name (commit SHA or package version via env), check the update-available/version poll still works, then re-measure. Small web slice (Sonnet ok, Opus review).",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
@@ -2664,7 +2672,8 @@
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
     "Logging catalog periodic reload (optional O2, #289): reload /logs/catalog on tick or visibilitychange so a kind turned on in another tab shows here.",
-    "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice."
+    "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
+    "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
