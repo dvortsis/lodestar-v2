@@ -1,0 +1,62 @@
+/* Cards density (Card.svelte). A plain sheet imported with the lazy chunk: token variables only. */
+.cd-row {
+	display: grid;
+	grid-template-columns: repeat(var(--cd-cols, 1), minmax(0, 1fr));
+	gap: calc(var(--spacing) * 3);
+	box-sizing: border-box;
+	height: 100%;
+	padding-block: calc(var(--spacing) * 1.5);
+	padding-inline: calc(var(--spacing) * 3);
+}
+.cd-tile {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	min-width: 0;
+	overflow: hidden;
+	padding: calc(var(--spacing) * 3);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	cursor: pointer;
+}
+.cd-tile:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}
+.cd-title {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-size: var(--text-body);
+	line-height: var(--text-body--line-height);
+	font-weight: var(--font-weight-medium);
+}
+.cd-badges,
+.cd-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 1) calc(var(--spacing) * 3);
+	font-size: var(--text-caption);
+	line-height: var(--text-caption--line-height);
+}
+.cd-badge {
+	padding-inline: calc(var(--spacing) * 1.5);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-selector);
+}
+.cd-fact {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--spacing);
+	font-variant-numeric: tabular-nums;
+}
+.cd-actions {
+	display: flex;
+	margin-top: auto;
+	gap: calc(var(--spacing) * 2);
+}

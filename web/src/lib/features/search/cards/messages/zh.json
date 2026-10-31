@@ -1,0 +1,5 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_cards_option": "卡片",
+	"search_cards_label": "卡片形式的结果"
+}

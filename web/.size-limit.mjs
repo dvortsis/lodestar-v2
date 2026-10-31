@@ -306,6 +306,7 @@ const tableOnDemand = [/search\/table\/(ResultsTable|ColumnChooser)\.svelte$/];
 const bulkOnDemand = [/search\/bulk\/(BulkBar|RowPick)\.svelte$/, /search\/bulk\/ops\.ts$/];
 const resultsOnDemand = [
 	/features\/detail\//,
+	/features\/search\/(live|cards)\//,
 	/^chunk:magnet$/,
 	/^chunk:Menu$/,
 	...tableOnDemand,
@@ -406,6 +407,28 @@ const builderLazy = ownChunk('src/lib/features/search/assist/Builder.svelte', []
 	...assistLazy
 ]);
 
+// The live banner (S-search-6) loads once the results are ready; Cards loads when the density is
+// Cards. Each is measured beyond the views it loads into.
+const liveLazy = [
+	...new Set(
+		[
+			'src/lib/features/search/live/live.svelte.ts',
+			'src/lib/features/search/live/LiveHost.svelte'
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+	)
+];
+const cardsLazy = [
+	...new Set(
+		[
+			'src/lib/features/search/live/extras.ts',
+			'src/lib/features/search/cards/CardList.svelte',
+			'src/lib/features/search/cards/Card.svelte',
+			'src/lib/features/search/cards/cards.ts',
+			'src/lib/features/search/cards/cards.css'
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+	)
+];
+
 // Never pass by measuring nothing: a renamed or moved file must fail here, not drop the entry.
 if (Object.keys(manifest).length && !resultsLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Search results (lazy): no chunk found for ResultsPanel.svelte in the manifest');
@@ -460,7 +483,8 @@ export default [
 	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.1 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.8 KB'),
+	// Raised from 45.8 KB by the runner under owner-decisions §2.26 (docs/decisions/2026-10-31-owner-delegation.md).
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '45.9 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: settingsFirstView }),
@@ -513,6 +537,8 @@ export default [
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
+	entry('Search live banner (lazy)', liveLazy, '2.42 KB'),
+	entry('Search cards (lazy)', cardsLazy, '8.19 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),

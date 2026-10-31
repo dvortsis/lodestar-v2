@@ -23,7 +23,7 @@ export function sortValue(sort: string): string {
 /** This page with the view parameter `key` set to `value`; the default drops the parameter. */
 export function viewParamHref(url: URL, key: 'density' | 'view', value: string): string {
 	const u = new URL(url);
-	if (value === 'compact' || value === 'table') u.searchParams.set(key, value);
+	if (value === 'compact' || value === 'table' || value === 'cards') u.searchParams.set(key, value);
 	else u.searchParams.delete(key);
 	return u.pathname + u.search + u.hash;
 }

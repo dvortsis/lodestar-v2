@@ -2,6 +2,15 @@
 	import type { components } from '$lib/api/schema';
 	export type SearchHit = components['schemas']['SearchHit'];
 	export type Density = 'comfortable' | 'compact';
+	// What the Cards tile and the live banner use of the row's own helpers: they import them from
+	// here, not from the modules, so the bundler keeps them in this chunk (a second importer would
+	// split each one into its own tiny chunk, which Alerts and Discover would then load too).
+	import { formatBytes, formatCount } from '$lib/format';
+	import { showBidi } from '$lib/util/bidi';
+	import { ADULT_LABELS as ADULT, TYPE_LABELS as TYPE } from '$lib/util/content-labels';
+	// The Svelte parser reads an `export { imported }` in a module script as an assignment to it.
+	// eslint-disable-next-line no-import-assign
+	export { ADULT as ADULT_LABELS, TYPE as TYPE_LABELS, formatBytes, formatCount, showBidi };
 </script>
 
 <script lang="ts">
@@ -16,13 +25,11 @@
 	import History from '~icons/ph/clock-counter-clockwise-bold';
 	import Warning from '~icons/ph/warning-bold';
 	import CategoryBar from '$lib/charts/CategoryBar.svelte';
-	import { formatBytes, formatCount, formatShare } from '$lib/format';
+	import { formatShare } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
-	import { showBidi } from '$lib/util/bidi';
-	import { TYPE_LABELS as TYPE, ADULT_LABELS as ADULT } from '$lib/util/content-labels';
 	import { composition } from './composition';
 
 	interface Props {
