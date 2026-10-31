@@ -27,6 +27,7 @@ describe('the screen registry', () => {
 			'notifications',
 			'insights',
 			'general',
+			'logging',
 			'security'
 		]);
 		expect(

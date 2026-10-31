@@ -106,6 +106,27 @@ test('scrolling up stops following, shows Jump to latest, and Jump returns to th
 	await stream.opened();
 	await list.hover();
 	await page.mouse.wheel(0, -600);
+	// Wheel scrolling continues after the call returns: wait until the list is off the bottom and
+	// its position has settled (two reads ~100 ms apart agree) before taking it.
+	await expect
+		.poll(
+			() =>
+				list.evaluate(
+					(el) =>
+						new Promise<boolean>((done) => {
+							const first = el.scrollTop;
+							setTimeout(
+								() =>
+									done(
+										el.scrollTop === first && el.scrollHeight - el.clientHeight - el.scrollTop > 1
+									),
+								100
+							);
+						})
+				),
+			{ timeout: 10_000 }
+		)
+		.toBe(true);
 	const top = await list.evaluate((el) => el.scrollTop);
 	await stream.send([logLine(201)]);
 	await expect(page.getByRole('button', { name: /1 new lines/ })).toBeVisible({ timeout: 10_000 });

@@ -184,7 +184,8 @@ const bodyMaps = {
 	NotificationsScreen: ['notifications'],
 	InsightsScreen: ['insights'],
 	// Security reads no section map: secure cookies is a status line, not an engine field.
-	SecurityScreen: []
+	SecurityScreen: [],
+	LoggingScreen: ['logging']
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -213,9 +214,15 @@ const connectionMaps = [
 	/features\/settings\/form\/message-maps\/(trackers|integrations|notifications|insights)\.ts$/
 ];
 const connectionMapFiles = onDemandOf('/settings/[section]', connectionMaps);
+// Logging's map (S-logs-2) has its own entry too, so the existing maps' entries keep their limits.
+const loggingMapFiles = onDemandOf('/settings/[section]', [
+	/features\/settings\/form\/message-maps\/logging\.ts$/
+]);
 const settingsMessagesLazy = requireMeasuredJs(
 	'Settings messages (on demand)',
-	onDemandOf('/settings/[section]', settingsMessages).filter((f) => !connectionMapFiles.includes(f))
+	onDemandOf('/settings/[section]', settingsMessages).filter(
+		(f) => !connectionMapFiles.includes(f) && !loggingMapFiles.includes(f)
+	)
 );
 const settingsConnectionMaps = requireMeasuredJs(
 	'Settings connection messages (on demand)',
@@ -269,10 +276,19 @@ const settingsSecurity = [
 	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
 	/features\/settings\/security\/icon\.ts$/
 ];
-const securityLoader = [/features\/settings\/security\/body\.ts$/];
+const securityLoader = [/features\/settings\/(security|logging)\/body\.ts$/];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
 const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
+// Logging (S-logs-2): the Verbosity control, the event list and the component levels (loaded when
+// their fields are on the page), `parts.ts` (the catalog, the banners and the data kinds, which all
+// wait on `GET /logs/catalog`), the privacy requests with their dialogs, and the navigation icon load
+// after the first view; gated on their own below. `/logs` loads the privacy requests on Turn off now.
+const settingsLogging = [
+	/features\/settings\/logging\/(EventList|ComponentLevels|VerbosityWidget)\.svelte$/,
+	/features\/settings\/logging\/(privacy|icon|parts)\.ts$/
+];
+const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
 const settingsFirstView = [
 	...settingsOnDemand,
 	...insightsDigest,
@@ -281,6 +297,7 @@ const settingsFirstView = [
 	...settingsSecurity,
 	...settingsSecurityLater,
 	...securityLoader,
+	...settingsLogging,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
@@ -289,6 +306,16 @@ const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirst
 const settingsShellView = own('/settings/[section]', {
 	onDemand: [...settingsFirstView, ...settingsFormChunk]
 });
+const settingsLoggingMap = requireMeasuredJs(
+	'Settings logging messages (on demand)',
+	loggingMapFiles
+);
+const settingsLoggingLazy = requireMeasuredJs(
+	'Settings logging parts (on demand)',
+	onDemandOf('/settings/[section]', settingsLogging).filter(
+		(f) => !onDemandOf('/settings/[section]', settingsOnDemand).includes(f)
+	)
+);
 const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on demand)', [
 	...new Set(
 		Object.keys(manifest)
@@ -352,6 +379,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsConnections,
 					...settingsSecurity,
 					...settingsSecurityLater,
+					...settingsLogging,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
@@ -658,7 +686,8 @@ export default [
 	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
 	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
 	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
-	entry('Logs route (own JS + CSS)', own('/logs'), '39.6 KB'),
+	// Turn off now's privacy requests (S-logs-2) load on the click: gated with Logging's parts.
+	entry('Logs route (own JS + CSS)', own('/logs', { onDemand: logsLater }), '39.6 KB'),
 	// Owner ruling, 2026-10-30 (S-settings-reconcile): with Settings a production route, Rolldown
 	// re-splits shared chunks (Toggle, format/bytes, Svelte's input bindings) these entries load;
 	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
@@ -689,10 +718,21 @@ export default [
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
+	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
+	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
+	// round (the unreadable-state banner, closing dialogs on leave).
+	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
+	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
+	// Raised by the runner (§2.26): +~90 B from the Logging registry entry in the shared screens chunk
+	// (S-logs-2); structural fix queued (registry titles out of the shared chunk). Notifications only.
 	...settingsHandBuilt.map(({ name, files }) =>
-		entry(`Settings ${name} (first view)`, files, '45 KB')
+		entry(
+			`Settings ${name} (first view)`,
+			files,
+			name === 'NotificationsScreen' ? '45.1 KB' : '45 KB'
+		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
