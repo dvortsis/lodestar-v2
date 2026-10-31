@@ -1650,7 +1650,7 @@
    "pr": 276,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:25Z brief briefs/B-import-server-1.md (IMP-4b open items: indexing->complete on server, shared filter loader); Lane I | 12:19Z launched Opus | 13:09Z PR #276 head 5f012f2b; §2.19 refinements: loader = two calls (sync_sources in binary + pipeline::load_filter), floor term tested as CS-8 signature, floor-marked subscribed list not in parity test; fresh Opus reviewer session_01MMjhn95r9YhbzXnt4ZRgyt + security review"
+   "notes": "12:25Z brief briefs/B-import-server-1.md (IMP-4b open items: indexing->complete on server, shared filter loader); Lane I | 12:19Z launched Opus | 13:09Z PR #276 head 5f012f2b; §2.19 refinements: loader = two calls (sync_sources in binary + pipeline::load_filter), floor term tested as CS-8 signature, floor-marked subscribed list not in parity test; fresh Opus reviewer session_01MMjhn95r9YhbzXnt4ZRgyt + security review | 13:28Z MERGE at 5f012f2b (2 optional); waiting on ci-ok"
   },
   "B-import-server-2": {
    "status": "pending",
@@ -1659,7 +1659,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b)"
+   "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b) | carry #276 optional: IMP-4b decisions l.141 drop stale status sentence; parity test add floor-marked subscribed list (record_refresh, hash_of(6)) and drop \"Left untested\" bullet"
   },
   "X-search-files-perf": {
    "status": "running",
