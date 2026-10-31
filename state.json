@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 32
+  "count": 33
  },
  "tags": {},
  "slices": {
@@ -1304,13 +1304,13 @@
    "notes": "2026-10-30T05:58Z pre-existing: engine with 5 Neutralize terms (web, webrip, hevc, mkv, sample) ~180 µs/torrent on base (owner budget 50 µs, §1.6/§20.8). Likely per-torrent override keyword matching. Fix + make the neutralized bench case held. Candidate v0.5.1 item if CSX-5 neutralize is user-reachable in v0.5.1 (flag to owner). | 2026-10-30T06:32Z launched (Opus) from main | 2026-10-30T07:47Z neutralized 3.4x->1.08-1.11x mixed (callgrind 1.34M->0.51M instr). Runner: (a) land with neutralized case reported not held; (c) follow-up F-filters-xcpu | 2026-10-30T08:07Z #192 d9ef8fa8; budget base->branch neutralized ~180->57us, mixed ~65->53us (this VM); fresh review session_01MMjhnAbyAgKuzLGBs3b3rP | 2026-10-30T08:41Z fresh review MERGE; #192 merged 8d7a24f6 (CI EPYC: neutralized 43.2us vs 132.2 on main; mixed 39.4)"
   },
   "L4-followups": {
-   "status": "pending",
+   "status": "running-as-X-search-files-perf",
    "model": "opus",
    "session": null,
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses. | 2026-10-30T21:50Z I3 split out as F-rollback-journal; I4/P2/P3 (perf) remain"
+   "notes": "2026-10-30T06:09Z from L4 review: I3 rollback restore should apply live journal (cli/rollback.rs ~261-275, pre-existing); I4 file-cache 8 MiB budget vs broad file clauses at scale: run search latency bench with broad file clauses, shrink_to_fit, compact/bitset sets; P2 O(n) eviction; P3 cancel tokens for suggest/compare/filters/percolate file clauses. | 2026-10-30T21:50Z I3 split out as F-rollback-journal; I4/P2/P3 (perf) remain | 12:28Z I4/P2/P3 briefed as X-search-files-perf"
   },
   "F-status": {
    "status": "merged",
@@ -1660,6 +1660,15 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b)"
+  },
+  "X-search-files-perf": {
+   "status": "launching",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2420,8 +2429,7 @@
   "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
   "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)",
   "#274 optional: crates/pipeline/tests/pipeline.rs:517 comment says sighting arrives while refetch lease is out; reword: imported row is in the have-filter, so the sighting is a rediscovery and never reaches the coordinator",
-  "#274 optional: crates/api/src/search.rs:459 recovery cache keyed by fingerprint(ast,visibility,sort) without limit/tz; alternating limits overwrite one slot (correct, redundant recounts); add limit to key",
-  "#274 optional: bench/src/bin/search-bench.rs ~854 label prints 'p95 < 20 ms' but check is <=; print the ≤ sign"
+  "Percolator file-clause path: real CancelToken (X-search-files-perf left it out to avoid overlap with B-import-server-1)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
