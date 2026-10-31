@@ -453,8 +453,14 @@ async fn run_search(
         // An empty first page: what removing each clause would give.
         // The search itself has succeeded: only a client that's gone
         // fails it now. Any other failure of the counts leaves them out.
+        // A cached page keeps its counts beside it, for as long as it's
+        // the page the cache serves.
         let recovery = if served == 0 && total.value == 0 {
-            match recover(&lease, &ast, visibility, &cancel) {
+            let key = self::fingerprint(&ast, visibility, sort);
+            let counted = recoveries().get_or(&key, cached.as_ref(), || {
+                recover(&lease, &ast, visibility, &cancel)
+            });
+            match counted {
                 Ok(r) => r,
                 Err(e @ SearchError::Cancelled) => return Err(failed(e)),
                 Err(_) => None,
@@ -583,6 +589,95 @@ fn recover(
     // Counted filters first; shown in query order.
     clauses.sort_by_key(|c| c.index);
     Ok(Some(SearchRecovery { clauses, skipped }))
+}
+
+/// Recoveries kept, at most: past it, those of retired pages are dropped,
+/// then all.
+const RECOVERY_ENTRIES: usize = 1024;
+
+/// Zero-result recoveries of cached first pages, so a repeated empty
+/// search doesn't count its clauses again (up to [`RECOVERY_BUDGET`]).
+///
+/// Keyed by the cursor [`fingerprint`] of the user's query and visibility,
+/// and kept only while the result cache serves the very same page entry
+/// (`T`, a [`CachedSearch`]): its key holds everything the counts depend
+/// on (the snapshot's generation, visibility scope, `now` and time zone),
+/// and the counts ran on its lease. So it's invalidated as that entry is:
+/// any commit, a ttl or an eviction gives a new entry, and the stale
+/// counts are never read. The weak reference keeps the old entry's
+/// allocation, so a new one can't take its address.
+///
+/// A recovery a deadline cut short (a clause without `total`) isn't
+/// kept: a repeat tries again, as without the cache. One computed for a
+/// search the cache didn't keep (`file:(…)`) isn't kept either.
+///
+/// [`CachedSearch`]: lodestar_search::CachedSearch
+struct RecoveryCache<T> {
+    entries: std::sync::Mutex<std::collections::HashMap<[u8; 8], Recovered<T>>>,
+}
+
+struct Recovered<T> {
+    page: std::sync::Weak<T>,
+    recovery: SearchRecovery,
+}
+
+impl<T> RecoveryCache<T> {
+    fn new() -> RecoveryCache<T> {
+        RecoveryCache {
+            entries: std::sync::Mutex::default(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<[u8; 8], Recovered<T>>> {
+        // Every operation is one map update: a panic leaves it consistent.
+        self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The recovery kept for `key` on `page`, else `count`'s, kept when
+    /// complete. The lock isn't held while counting.
+    fn get_or<E>(
+        &self,
+        key: &[u8; 8],
+        page: Option<&Arc<T>>,
+        count: impl FnOnce() -> Result<Option<SearchRecovery>, E>,
+    ) -> Result<Option<SearchRecovery>, E> {
+        let Some(page) = page else {
+            return count();
+        };
+        let kept = self
+            .lock()
+            .get(key)
+            .filter(|r| std::ptr::eq(r.page.as_ptr(), Arc::as_ptr(page)))
+            .map(|r| r.recovery.clone());
+        if let Some(r) = kept {
+            return Ok(Some(r));
+        }
+        let counted = count()?;
+        if let Some(r) = &counted
+            && r.clauses.iter().all(|c| c.total.is_some())
+        {
+            let mut entries = self.lock();
+            if entries.len() >= RECOVERY_ENTRIES && !entries.contains_key(key) {
+                entries.retain(|_, r| r.page.strong_count() > 0);
+                if entries.len() >= RECOVERY_ENTRIES {
+                    entries.clear();
+                }
+            }
+            entries.insert(
+                *key,
+                Recovered {
+                    page: Arc::downgrade(page),
+                    recovery: r.clone(),
+                },
+            );
+        }
+        Ok(counted)
+    }
+}
+
+fn recoveries() -> &'static RecoveryCache<lodestar_search::CachedSearch> {
+    static CACHE: OnceLock<RecoveryCache<lodestar_search::CachedSearch>> = OnceLock::new();
+    CACHE.get_or_init(RecoveryCache::new)
 }
 
 /// Below this many searchable torrents the search page shows its
@@ -1068,6 +1163,112 @@ mod tests {
         hidden: true,
         adult: false,
     };
+
+    fn recovery(totals: &[Option<usize>]) -> SearchRecovery {
+        SearchRecovery {
+            clauses: totals
+                .iter()
+                .enumerate()
+                .map(|(index, &total)| ClauseRemoval {
+                    index,
+                    clause: format!("w{index}"),
+                    canonical: String::new(),
+                    without: Node::All,
+                    total,
+                    total_approx: false,
+                })
+                .collect(),
+            skipped: 0,
+        }
+    }
+
+    /// A cached empty page's repeat reads its counts; a new page entry
+    /// (what a commit gives: the result cache retires every entry) counts
+    /// again, as does one the deadline cut short.
+    #[test]
+    fn recoveries_are_kept_beside_their_cached_page() {
+        let cache = RecoveryCache::<u32>::new();
+        let counted = std::cell::Cell::new(0);
+        let count = |r: SearchRecovery| {
+            counted.set(counted.get() + 1);
+            Ok::<_, ()>(Some(r))
+        };
+        let (key, other) = ([1; 8], [2; 8]);
+        let page = Arc::new(0);
+        let first = cache.get_or(&key, Some(&page), || count(recovery(&[Some(3), Some(0)])));
+        assert_eq!(first, Ok(Some(recovery(&[Some(3), Some(0)]))));
+        let again = cache.get_or(&key, Some(&page), || count(recovery(&[Some(9), Some(9)])));
+        assert_eq!(again, first, "the repeat reads the kept counts");
+        assert_eq!(counted.get(), 1);
+        // Another query on the same page is its own.
+        cache
+            .get_or(&other, Some(&page), || count(recovery(&[Some(1), Some(1)])))
+            .unwrap();
+        assert_eq!(counted.get(), 2);
+        // A commit: the cache serves a new entry, so the counts are new.
+        let committed = Arc::new(0);
+        let after = cache.get_or(&key, Some(&committed), || {
+            count(recovery(&[Some(4), Some(0)]))
+        });
+        assert_eq!(after, Ok(Some(recovery(&[Some(4), Some(0)]))));
+        assert_eq!(counted.get(), 3);
+        // ...and the old entry's counts are gone with it.
+        cache
+            .get_or(&key, Some(&page), || count(recovery(&[Some(3), Some(0)])))
+            .unwrap();
+        assert_eq!(counted.get(), 4);
+        // Cut short by the deadline: counted again on each repeat.
+        let cut = Arc::new(0);
+        for n in 5..=6 {
+            cache
+                .get_or(&[3; 8], Some(&cut), || count(recovery(&[Some(1), None])))
+                .unwrap();
+            assert_eq!(counted.get(), n);
+        }
+        // A page the result cache didn't keep, and a failed count.
+        for n in 7..=8 {
+            cache
+                .get_or(&key, None, || count(recovery(&[Some(1), Some(1)])))
+                .unwrap();
+            assert_eq!(counted.get(), n);
+        }
+        let fresh = Arc::new(0);
+        assert_eq!(cache.get_or(&[4; 8], Some(&fresh), || Err(())), Err(()));
+        assert!(!cache.lock().contains_key(&[4; 8]));
+    }
+
+    /// Bounded: when full, retired pages' counts go first, then all.
+    #[test]
+    fn recoveries_are_bounded() {
+        let cache = RecoveryCache::<u32>::new();
+        let live = Arc::new(0);
+        let fill = |from: usize, page: &Arc<u32>| {
+            for i in from..from + RECOVERY_ENTRIES / 2 {
+                let key = (i as u64).to_le_bytes();
+                cache
+                    .get_or(&key, Some(page), || Ok::<_, ()>(Some(recovery(&[Some(1)]))))
+                    .unwrap();
+            }
+        };
+        {
+            let retired = Arc::new(0);
+            fill(0, &retired);
+        }
+        fill(RECOVERY_ENTRIES / 2, &live);
+        assert_eq!(cache.lock().len(), RECOVERY_ENTRIES);
+        fill(RECOVERY_ENTRIES, &live);
+        assert_eq!(
+            cache.lock().len(),
+            RECOVERY_ENTRIES,
+            "the retired half went"
+        );
+        fill(2 * RECOVERY_ENTRIES, &live);
+        assert_eq!(
+            cache.lock().len(),
+            RECOVERY_ENTRIES / 2,
+            "all live: cleared"
+        );
+    }
 
     #[test]
     fn a_facet_pass_cannot_strip_adult_visibility() {

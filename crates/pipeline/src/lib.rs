@@ -863,6 +863,12 @@ impl Pipeline {
     }
 }
 
+/// A refetch saved in the fetch queue: strategy code 200 under
+/// `REFETCH_COHORT`, or from a peer finder (queues saved before the cohort).
+fn saved_refetch(q: &QueuedKey, finders: &std::collections::HashSet<SourceId>) -> bool {
+    q.strategy == strategy::REFETCH && (q.cohort == REFETCH_COHORT || finders.contains(&q.source))
+}
+
 /// What [`prepare`] needs of a plugin's manifest.
 struct Registering {
     id: &'static str,
@@ -923,9 +929,17 @@ fn prepare(
     // Refetches are queued afresh from the store below, so a saved one
     // whose import was removed while the server was stopped isn't fetched
     // into a new, crawled-looking row (and one saved before they had their
-    // own cohort doesn't land in the funnel). Matched by strategy, not
-    // cohort, for queues saved before `REFETCH_COHORT`; no plugin uses 200.
-    queue.retain(|q| q.strategy != strategy::REFETCH);
+    // own cohort doesn't land in the funnel). Matched by strategy code and
+    // owner: `REFETCH_COHORT`, or, for queues saved before it, a peer
+    // finder's key (refetches were queued under one). A plugin's own
+    // strategy codes are its own, so a non-finder's keys under 200 stay.
+    let finders: std::collections::HashSet<SourceId> = manifests
+        .iter()
+        .zip(&ids)
+        .filter(|(m, _)| m.peer_finder)
+        .map(|(_, id)| *id)
+        .collect();
+    queue.retain(|q| !saved_refetch(q, &finders));
     // Imports with incomplete file lists get their info dicts fetched, if
     // there's a peer finder to find them peers.
     if let Some(finder) = manifests
@@ -1113,4 +1127,52 @@ pub fn save_hot(store: &mut Store, hot: &HotColumns, dir: &Path) -> Result<(), E
     hot.save(dir, stamp).map_err(Error::Io)?;
     store.set_setting_i64(HOT_STAMP, stamp as i64)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lodestar_metainfo::InfoHash;
+
+    #[test]
+    fn a_saved_refetch_is_matched_by_code_and_owner() {
+        let (finder, feed) = (SourceId::new(1).unwrap(), SourceId::new(2).unwrap());
+        let finders = std::collections::HashSet::from([finder]);
+        let key = |source, cohort, strategy| QueuedKey {
+            info_hash: InfoHash([1; 20]),
+            source,
+            cohort,
+            strategy,
+            priority: 0,
+            attempts: 0,
+            private_source: false,
+        };
+        // This build's refetch, whoever's peers it took.
+        assert!(saved_refetch(
+            &key(finder, REFETCH_COHORT, strategy::REFETCH),
+            &finders
+        ));
+        assert!(saved_refetch(
+            &key(feed, REFETCH_COHORT, strategy::REFETCH),
+            &finders
+        ));
+        // One saved before `REFETCH_COHORT`, under an hour.
+        assert!(saved_refetch(
+            &key(finder, 400_000, strategy::REFETCH),
+            &finders
+        ));
+        // Another plugin's strategy 200, and a finder's own crawl.
+        assert!(!saved_refetch(
+            &key(feed, 400_000, strategy::REFETCH),
+            &finders
+        ));
+        assert!(!saved_refetch(
+            &key(finder, 400_000, strategy::SAMPLE),
+            &finders
+        ));
+        assert!(!saved_refetch(
+            &key(finder, REFETCH_COHORT, strategy::SAMPLE),
+            &finders
+        ));
+    }
 }

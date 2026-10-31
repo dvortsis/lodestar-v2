@@ -54,6 +54,8 @@ struct Fixture {
     auth: Arc<Auth>,
     store: Store,
     show: watch::Sender<bool>,
+    /// The index's writer, for a commit after the start.
+    writer: lodestar_search::Indexer,
     _dir: tempfile::TempDir,
 }
 
@@ -87,9 +89,9 @@ fn fixture() -> Fixture {
         store.set_enrichments(&[(id, e)]).unwrap();
     }
     let index = SearchIndex::in_memory().unwrap();
-    let mut w = index.writer(15 << 20).unwrap();
-    w.catch_up(&mut store, 100).unwrap();
-    w.commit().unwrap();
+    let mut writer = index.writer(15 << 20).unwrap();
+    writer.catch_up(&mut store, 100).unwrap();
+    writer.commit().unwrap();
     let (show, rx) = watch::channel(false);
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
@@ -114,6 +116,7 @@ fn fixture() -> Fixture {
         auth,
         store,
         show,
+        writer,
         _dir: dir,
     }
 }
@@ -244,6 +247,38 @@ async fn an_empty_result_counts_each_clause_removed() {
         .map(|c| c["index"].as_u64().unwrap())
         .collect();
     assert_eq!(shown, [0, 1, 2, 3, 4, 5, 6, 9]);
+}
+
+/// A repeated empty search reads the counts kept beside its cached page,
+/// and a commit, which retires that page, counts again.
+#[tokio::test]
+async fn a_commit_recounts_a_cached_recovery() {
+    let mut f = fixture();
+    let c = session(&f).await;
+    let q = "movie nosuchword 1080p";
+    let before = pairs(&[("movie", 0), ("nosuchword", 1), ("1080p", 0)]);
+    let body = search(&f, &c, q, "").await;
+    assert_eq!(counts(&body), before);
+    assert_eq!(counts(&search(&f, &c, q, "").await), before);
+    // A second 1080p film: removing `nosuchword` now gives two.
+    let raw = raw("Third.Movie.2020.1080p.mkv");
+    let info = Info::parse(&raw).unwrap();
+    f.store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: 1_700_000_010,
+            metadata_at: 1_700_000_100,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        }])
+        .unwrap();
+    f.writer.catch_up(&mut f.store, 100).unwrap();
+    f.writer.commit().unwrap();
+    assert_eq!(
+        counts(&search(&f, &c, q, "").await),
+        pairs(&[("movie", 0), ("nosuchword", 2), ("1080p", 0)])
+    );
 }
 
 #[tokio::test]

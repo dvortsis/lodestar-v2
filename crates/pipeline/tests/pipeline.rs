@@ -514,6 +514,10 @@ async fn refetches_stay_out_of_the_funnel() {
     let pipeline = Pipeline::start(config(), store, vec![feed, finder])
         .await
         .unwrap();
+    // The crawl sights the refetching key too, while its refetch lease is
+    // out (restored at start): it's the import's row, a rediscovery, never
+    // a harvest of its own.
+    feed_tx.send(Found::key(refetch, 0)).await.unwrap();
     feed_tx
         .send(Found::key(crawl, 0).with_peers(vec![peer.addr()]))
         .await
@@ -521,6 +525,11 @@ async fn refetches_stay_out_of_the_funnel() {
     let writer = pipeline.writer_stats();
     until("both written", || {
         writer.stored.load(Ordering::Relaxed) == 1 && writer.existing.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let intake = pipeline.intake_stats();
+    until("the sighting taken as known", || {
+        intake.received.load(Ordering::Relaxed) == 2 && intake.known.load(Ordering::Relaxed) == 1
     })
     .await;
     until("the unserved refetch lost", || {
@@ -538,10 +547,12 @@ async fn refetches_stay_out_of_the_funnel() {
     assert_eq!(gate.excluded(Excluded::AlreadyStored), 1, "the refetch");
     let mut store = pipeline.shutdown().await.unwrap();
 
-    // The record still completes.
+    // The record still completes, once, as the import it was.
+    assert_eq!(store.count().unwrap(), 3, "two imports and the crawl");
     let id = store.find(&refetch).unwrap().unwrap();
     let row = store.torrent(id).unwrap().unwrap();
     assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
+    assert_ne!(row.flags & flags::IMPORTED, 0);
     assert_eq!(store.files(id).unwrap().unwrap().files.len(), 1);
 
     // The crawl's funnel, exactly, in its own hour.
@@ -607,9 +618,10 @@ async fn a_saved_refetch_is_queued_afresh_from_the_store() {
     use lodestar_store::QueuedKey;
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let finder_id = store.register_source("finder", "1", 0).unwrap();
-    let queued = |hash: u8, strategy: u8| QueuedKey {
+    let feed_id = store.register_source("feed", "1", 0).unwrap();
+    let queued = |hash: u8, source, strategy: u8| QueuedKey {
         info_hash: InfoHash([hash; 20]),
-        source: finder_id,
+        source,
         cohort: 400_000,
         strategy,
         priority: 0,
@@ -617,20 +629,31 @@ async fn a_saved_refetch_is_queued_afresh_from_the_store() {
         private_source: false,
     };
     store
-        .save_fetch_queue(&[queued(0xd1, strategy::REFETCH), queued(0xd2, 0)])
+        .save_fetch_queue(&[
+            // A refetch saved before `REFETCH_COHORT`: under an hour, from
+            // the peer finder.
+            queued(0xd1, finder_id, strategy::REFETCH),
+            queued(0xd2, finder_id, 0),
+            // Code 200 is a refetch only from a peer finder: another
+            // plugin's own strategy 200 is its crawl, and is restored.
+            queued(0xd3, feed_id, strategy::REFETCH),
+        ])
         .unwrap();
     let finder = Arc::new(PeerTable {
         manifest: manifest("finder", &[Kind::PeerFinder]),
         peers: HashMap::new(),
     });
-    // Lookups that outlast the assertion, so the crawl's key can't be
-    // lost (and its lease ended) before it's checked.
+    let (feed, _feed_tx) = scripted("feed");
+    // Lookups that outlast the assertion, so the crawl's keys can't be
+    // lost (and their leases ended) before they're checked.
     let mut slow = config();
     slow.pool.lookup_wait = Duration::from_secs(120);
-    let pipeline = Pipeline::start(slow, store, vec![finder]).await.unwrap();
+    let pipeline = Pipeline::start(slow, store, vec![feed, finder])
+        .await
+        .unwrap();
     let monitor = pipeline.monitor();
-    // Only the crawl's key is leased again.
-    assert_eq!(monitor.lease_stats().outstanding.load(Ordering::Relaxed), 1);
+    // Only the crawl's keys are leased again.
+    assert_eq!(monitor.lease_stats().outstanding.load(Ordering::Relaxed), 2);
     pipeline.shutdown().await.unwrap();
 }
 
