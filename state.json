@@ -1743,13 +1743,13 @@
    "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders"
   },
   "S-logs-2": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhn9PaFGExdtPTuRLd14",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "17:08Z brief briefs/S-logs-2.md (Settings → Logging; privacy invariants; carries #284 optional); security review"
+   "notes": "17:08Z brief briefs/S-logs-2.md (Settings → Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
