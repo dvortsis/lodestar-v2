@@ -1803,13 +1803,14 @@
       "notes": "19:51Z brief briefs/X-polish-1031d.md: requeue list cap (#290 O1) + analyze_cr0 Peak working set/private columns (#292 opt). | 19:51Z launched Opus."
     },
     "S-logs-2b": {
-      "status": "pr-fixing",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhn9PaFGExdtPTuRLd14",
       "pr": 294,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head."
+      "notes": "19:57Z continue in 2a session: outputs, files, danger zone, preview (brief S-logs-2 items 5-8). Alert/Search must not grow. | 20:42Z PR #294 head 778431c5. Runner: split output labels into lazy map (no 0.86->1.48 raise); single preview panel accepted (UX \u00a72.26). Reviewer starts on next head. | 20:53Z head 96a637ae (logoutput lazy map; Logging map 0.842/0.86; Notifications ~45.1 noise until #293). Reviewer (session_01MMjhnA5HC3rJjGGgq1dCrL) + security review; subscribed. Order: #293 first, then #294 merges main.",
+      "reviewer": "session_01MMjhnA5HC3rJjGGgq1dCrL"
     },
     "X-form-remount": {
       "status": "building",
