@@ -68,9 +68,18 @@ function said() {
 
 describe('ResultsPanel with a query', () => {
 	it('a words-only zero-result query says to try other words, with no filter lead', async () => {
-		api.post.mockResolvedValue(page([], { total: 0 }));
+		// The server counted a reduced query, so the recovery chunk loads: the path that used to
+		// show the filter lead for a query with no filters.
+		api.post.mockResolvedValue({
+			...page([], { total: 0 }),
+			recovery: {
+				skipped: 0,
+				clauses: [{ clause: 'lantern', total: 3, total_approx: false, without: { op: 'all' } }]
+			}
+		});
 		const { unmount } = render(ResultsPanel, { focusBar: () => {} });
 		await screen.findByTestId('results-none', {}, WAIT);
+		expect(await screen.findByTestId('results-recover', {}, WAIT)).toBeTruthy();
 		expect(screen.getByText('Try fewer or different words.')).toBeTruthy();
 		expect(screen.queryByText('Remove a filter to widen the search:')).toBeNull();
 		unmount();

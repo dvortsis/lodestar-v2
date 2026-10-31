@@ -10,6 +10,8 @@ import type { ResultsQuery } from '../results/results.svelte';
 
 export const INTERVAL_MS = 30_000;
 const DRIFT_MS = 1_000;
+/** Away this long (hidden, or no stream), the server may have freed the registration (30 s grace). */
+const AWAY_MS = 25_000;
 
 export interface LiveDeps {
 	/** The query the rows answer, and its shown total (null: no rows, or not ready). */
@@ -59,9 +61,9 @@ export function createLive(deps: LiveDeps) {
 	/** The probe (fallback only): re-run the query with limit 1 and compare exact totals. */
 	async function check() {
 		if (id) {
-			if (seen > fresh && !deps.paused()) {
-				fresh = seen;
-				note(fresh);
+			if (!deps.paused()) {
+				if (seen > fresh) fresh = seen;
+				note(fresh); // a count that changed inside the throttle window is said on a later tick
 			}
 			return;
 		}
@@ -104,7 +106,10 @@ export function createLive(deps: LiveDeps) {
 	 * no-op unless `force` (Show: the count starts again from 0).
 	 */
 	async function follow(q: ResultsQuery | null, force = false) {
-		const next = q?.ast ? JSON.stringify([q.ast, q.hidden]) : null;
+		// The whole shown key: a sort or `exact` change replaces the rows, so the count starts again.
+		const next = q?.ast
+			? JSON.stringify([q.ast, q.sort, q.hidden, q.exact, q.browse ?? false])
+			: null;
 		if (!force && next === key && (id || polling || reg)) return;
 		const mine = ++reg;
 		key = next;
@@ -182,7 +187,37 @@ export function createLive(deps: LiveDeps) {
 				}).catch(() => {});
 			};
 			addEventListener('pagehide', hide);
+			// A tab that was away may have lost its registration with no `resync` (the server frees
+			// one 30 s after the last connection; a reconnect replays without telling us): register
+			// again on return. Re-registering can only under-count, the safe direction.
+			let hiddenAt: number | null = null;
+			const visible = () => {
+				if (document.hidden) hiddenAt ??= Date.now();
+				else {
+					if (hiddenAt !== null && Date.now() - hiddenAt >= AWAY_MS) again();
+					hiddenAt = null;
+				}
+			};
+			const shown = (e: PageTransitionEvent) => {
+				if (e.persisted) again(); // restored from the back/forward cache; pagehide freed it
+			};
+			document.addEventListener('visibilitychange', visible);
+			addEventListener('pageshow', shown);
+			let downAt: number | null = null;
+			const offStatus = $effect.root(() => {
+				$effect(() => {
+					const status = events.status;
+					const t = Date.now();
+					if (status === 'live') {
+						if (downAt !== null && t - downAt >= AWAY_MS) again();
+						downAt = null;
+					} else downAt ??= t;
+				});
+			});
 			return () => {
+				offStatus();
+				document.removeEventListener('visibilitychange', visible);
+				removeEventListener('pageshow', shown);
 				removeEventListener('pagehide', hide);
 				offLive();
 				offSettings();

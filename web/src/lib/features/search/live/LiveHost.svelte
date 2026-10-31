@@ -63,6 +63,7 @@
 		live.reset();
 		const s = results.status === 'ready' ? queryShown() : null;
 		if (s?.ast && results.showing(s)) void live.follow(s);
+		else if (results.shown === null) void live.follow(null); // nothing shown: release the id
 	});
 	/** Show: the list again from the top; the list moves its own active row and focus there. */
 	async function show() {

@@ -1,5 +1,5 @@
 // The live controller (runes need a `.svelte` test file). Waits are conditions, never sleeps.
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { page } from '../results/fixtures';
 import type { ResultsQuery } from '../results/results.svelte';
 
@@ -19,6 +19,7 @@ vi.mock('$lib/api/client', async (original) => ({
 }));
 vi.mock('$lib/state/events.svelte', () => ({
 	events: {
+		status: 'live',
 		on: (topic: string, h: never, o: { onResync?: () => void } = {}) => {
 			if (topic === 'search_live') {
 				bus.live = h;
@@ -29,6 +30,10 @@ vi.mock('$lib/state/events.svelte', () => ({
 	}
 }));
 const { createLive } = await import('./live.svelte');
+
+// Each `start()` adds window listeners: stop every one, so a test only sees its own.
+const stops: (() => void)[] = [];
+afterEach(() => stops.splice(0).forEach((stop) => stop()));
 
 const q: ResultsQuery = { ast: { op: 'all' }, sort: 'relevance', hidden: false, exact: false };
 const q2: ResultsQuery = {
@@ -49,6 +54,12 @@ const setup = (over: { total?: number; approx?: boolean; paused?: boolean } = {}
 		announce,
 		intervalMs: 30_000
 	});
+	const start = live.start;
+	live.start = () => {
+		const stop = start();
+		stops.push(stop);
+		return stop;
+	};
 	return { live, announce };
 };
 const registers = (id = 'a1') =>
@@ -113,12 +124,13 @@ it('holds the count while paused and shows it on the next tick once unpaused', a
 		let paused = true;
 		post.mockReset();
 		del.mockReset();
+		del.mockResolvedValue(undefined);
 		const live = createLive({
 			shown: () => ({ query: q, total: 10, approx: false }),
 			paused: () => paused,
 			intervalMs: 30_000
 		});
-		live.start();
+		stops.push(live.start());
 		registers('a1');
 		await live.follow(q);
 		bus.live!({ id: 'a1', matched: 2, through: 5 });
@@ -201,6 +213,79 @@ it('the probe says nothing for approximate totals, a smaller total or no change'
 			await s.live.check();
 			expect(s.live.fresh).toBe(0);
 		}
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it('a sort or exact change re-registers, so the count starts at 0', async () => {
+	const { live } = setup();
+	live.start();
+	registers('a1');
+	await live.follow(q);
+	bus.live!({ id: 'a1', matched: 3, through: 5 });
+	expect(live.fresh).toBe(3);
+	registers('b2');
+	await live.follow({ ...q, sort: 'seeders' });
+	expect(liveCalls()).toHaveLength(2);
+	expect(live.fresh).toBe(0);
+	bus.live!({ id: 'b2', matched: 1, through: 6 });
+	expect(live.fresh).toBe(1);
+	await live.follow(null); // nothing shown: released
+	expect(del).toHaveBeenCalledWith('/search/live/{id}', { path: { id: 'b2' }, body: {} });
+});
+
+it('registers again on return from a long hide, not a short one', async () => {
+	vi.useFakeTimers();
+	try {
+		const { live } = setup();
+		live.start();
+		registers('a1');
+		await live.follow(q);
+		const hidden = vi.spyOn(document, 'hidden', 'get');
+		const flip = (isHidden: boolean) => {
+			hidden.mockReturnValue(isHidden);
+			document.dispatchEvent(new Event('visibilitychange'));
+		};
+		flip(true);
+		vi.advanceTimersByTime(5_000);
+		flip(false);
+		expect(liveCalls()).toHaveLength(1);
+		flip(true);
+		vi.advanceTimersByTime(26_000);
+		registers('b2');
+		flip(false);
+		await vi.waitFor(() => expect(liveCalls()).toHaveLength(2), WAIT);
+		hidden.mockRestore();
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it('registers again when restored from the back/forward cache', async () => {
+	const { live } = setup();
+	live.start();
+	registers('a1');
+	await live.follow(q);
+	registers('b2');
+	window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+	expect(liveCalls()).toHaveLength(1);
+	window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+	await vi.waitFor(() => expect(liveCalls()).toHaveLength(2), WAIT);
+});
+
+it('announces a count that changed inside the throttle window on a later tick', async () => {
+	vi.useFakeTimers();
+	try {
+		const { live, announce } = setup();
+		live.start();
+		registers('a1');
+		await live.follow(q);
+		bus.live!({ id: 'a1', matched: 3, through: 5 });
+		bus.live!({ id: 'a1', matched: 4, through: 6 });
+		expect(announce).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(announce).toHaveBeenLastCalledWith(4);
 	} finally {
 		vi.useRealTimers();
 	}
