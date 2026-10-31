@@ -460,16 +460,20 @@ export default [
 	// Beyond Live's mount set (runner, 2026-10-24: 41.5 KB, under the 45 KB per-view cap). VirtualList
 	// and its virtualiser are 12 KB of it, the panel 5.2 KB, the row 3.9 KB, the row actions 1.9 KB;
 	// the rest is what the shell's Chrome would bring too (the key registry, the event client).
-	entry('Search results (lazy)', resultsLazy, '41.5 KB'),
+	// runner, 2026-10-31, S-search-5: +1.5 KB for the view switch, selection store, `x` key and announce;
+	// still under the 45 KB per-view cap (§10.1).
+	entry('Search results (lazy)', resultsLazy, '43.2 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
-	entry('Results toolbar (lazy)', toolbarLazy, '4.4 KB'),
-	entry('Search table mode (on demand)', tableLazy, '99 KB'),
-	entry('Search column chooser (on demand)', chooserLazy, '99 KB'),
-	entry('Search bulk bar (on demand)', bulkLazy, '99 KB'),
-	entry('Search row checkboxes (on demand)', pickLazy, '99 KB'),
+	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
+	// still under the 45 KB per-view cap (§10.1).
+	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
+	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
+	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
+	entry('Search bulk bar (on demand)', bulkLazy, '2.8 KB'),
+	entry('Search row checkboxes (on demand)', pickLazy, '1.3 KB'),
 	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),

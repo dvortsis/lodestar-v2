@@ -1,13 +1,16 @@
 // Selection helpers loaded with the checkboxes (Shift range, select all), kept out of the store
 // the results panel always loads.
-import type { MouseEvent as ME } from 'svelte/elements';
 import { m } from '$lib/paraglide/messages.js';
 import { selection } from './selection.svelte';
 
 let anchor: string | null = null;
 
 /** A row checkbox: Shift extends from the last one toggled, in list order. */
-export function pick(event: ME<HTMLInputElement>, hash: string, rows: readonly string[]) {
+export function pick(
+	event: MouseEvent & { currentTarget: HTMLInputElement },
+	hash: string,
+	rows: readonly string[]
+) {
 	event.stopPropagation(); // not the row's activation
 	const a = anchor === null ? -1 : rows.indexOf(anchor);
 	const b = rows.indexOf(hash);
