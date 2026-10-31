@@ -8456,12 +8456,12 @@
           },
           "total": {
             "type": "integer",
-            "description": "Matches without the clause. Absent when the shared deadline passed\nbefore it was counted (never 0 for that): show nothing for it.",
+            "description": "Matches without the clause. Absent when the shared deadline passed\nbefore it was fully counted (never 0 or a guess for that): show\nnothing for it.",
             "minimum": 0
           },
           "total_approx": {
             "type": "boolean",
-            "description": "`total` is an estimate (sampled, or its exact count was cut\nshort): shown with \"≈\"."
+            "description": "`total` is an estimate, by the same rule as `/search`'s\n`total_approx`: shown with \"≈\"."
           },
           "without": {
             "$ref": "#/components/schemas/AstNode",
@@ -15609,10 +15609,9 @@
             "description": "Fewer than 1,000,000 searchable torrents: the \"still growing\"\nbanner (decision S-search-2a)."
           },
           "growth_hours": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Hours of the last 24 whole UTC hours the index was measured in\n(the `COVERAGE` rollup's index dim), which `growth_per_hour`\naverages over.",
-            "minimum": 0
+            "type": "number",
+            "format": "double",
+            "description": "Hours of the last 24 whole UTC hours the index was measured in\n(`COVERAGE` seconds on its index dim, `docs/metrics.md` §7.7),\nwhich `growth_per_hour` averages over."
           },
           "growth_per_hour": {
             "type": [
@@ -15620,7 +15619,7 @@
               "null"
             ],
             "format": "double",
-            "description": "Torrents that became searchable per hour (the `NEWLY_SEARCHABLE`\nrollup, `docs/metrics.md` §7.7), averaged over `growth_hours`;\nnull when none was measured."
+            "description": "Torrents that became searchable in the last 24 whole UTC hours\n(the `NEWLY_SEARCHABLE` rollup), per hour of `growth_hours`; null\nwhen nothing was measured."
           },
           "rebuild": {
             "oneOf": [
@@ -15655,7 +15654,7 @@
         "example": {
           "cold_start": false,
           "growing": true,
-          "growth_hours": 24,
+          "growth_hours": 24.0,
           "growth_per_hour": 2104.5,
           "rebuild": null,
           "searchable_torrents": 84210,
@@ -15672,7 +15671,7 @@
       },
       "SearchRecovery": {
         "type": "object",
-        "description": "Zero-result recovery: the first [`MAX_CLAUSES`] top-level clauses\nof the query (the `of` of a root `and`), each with the total the\nquery has without it, counted on the same snapshot and with the same\nvisibility as the search (filter-hidden torrents and Adult stay out\nas they did; removing `adult:…` or `hidden:…` never brings them back).\n\n[`MAX_CLAUSES`]: lodestar_search::recovery::MAX_CLAUSES",
+        "description": "Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the\nquery (the `of` of a root `and`), each with the total the\nquery has without it, counted on the same snapshot and with the same\nvisibility as the search (filter-hidden torrents and Adult stay out\nas they did; removing `adult:…` or `hidden:…` never brings them back).\n\n[`MAX_CLAUSES`]: lodestar_search::recovery::MAX_CLAUSES",
         "required": [
           "clauses",
           "skipped"
@@ -15687,7 +15686,7 @@
           },
           "skipped": {
             "type": "integer",
-            "description": "Top-level clauses past the first 8, not counted.",
+            "description": "Top-level clauses past the 8 counted (filters are counted before\nfree text), left out.",
             "minimum": 0
           }
         }

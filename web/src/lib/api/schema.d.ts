@@ -2678,12 +2678,13 @@ export interface components {
             index: number;
             /**
              * @description Matches without the clause. Absent when the shared deadline passed
-             *     before it was counted (never 0 for that): show nothing for it.
+             *     before it was fully counted (never 0 or a guess for that): show
+             *     nothing for it.
              */
             total?: number;
             /**
-             * @description `total` is an estimate (sampled, or its exact count was cut
-             *     short): shown with "≈".
+             * @description `total` is an estimate, by the same rule as `/search`'s
+             *     `total_approx`: shown with "≈".
              */
             total_approx: boolean;
             /** @description The query without the clause: search with it to remove it. */
@@ -6023,17 +6024,17 @@ export interface components {
              */
             growing: boolean;
             /**
-             * Format: int32
+             * Format: double
              * @description Hours of the last 24 whole UTC hours the index was measured in
-             *     (the `COVERAGE` rollup's index dim), which `growth_per_hour`
-             *     averages over.
+             *     (`COVERAGE` seconds on its index dim, `docs/metrics.md` §7.7),
+             *     which `growth_per_hour` averages over.
              */
             growth_hours: number;
             /**
              * Format: double
-             * @description Torrents that became searchable per hour (the `NEWLY_SEARCHABLE`
-             *     rollup, `docs/metrics.md` §7.7), averaged over `growth_hours`;
-             *     null when none was measured.
+             * @description Torrents that became searchable in the last 24 whole UTC hours
+             *     (the `NEWLY_SEARCHABLE` rollup), per hour of `growth_hours`; null
+             *     when nothing was measured.
              */
             growth_per_hour: number | null;
             rebuild: null | components["schemas"]["IndexRebuild"];
@@ -6060,8 +6061,8 @@ export interface components {
          */
         SearchNotice: "adult_hidden";
         /**
-         * @description Zero-result recovery: the first [`MAX_CLAUSES`] top-level clauses
-         *     of the query (the `of` of a root `and`), each with the total the
+         * @description Zero-result recovery: up to [`MAX_CLAUSES`] top-level clauses of the
+         *     query (the `of` of a root `and`), each with the total the
          *     query has without it, counted on the same snapshot and with the same
          *     visibility as the search (filter-hidden torrents and Adult stay out
          *     as they did; removing `adult:…` or `hidden:…` never brings them back).
@@ -6071,7 +6072,10 @@ export interface components {
         SearchRecovery: {
             /** @description In query order. */
             clauses: components["schemas"]["ClauseRemoval"][];
-            /** @description Top-level clauses past the first 8, not counted. */
+            /**
+             * @description Top-level clauses past the 8 counted (filters are counted before
+             *     free text), left out.
+             */
             skipped: number;
         };
         /**
