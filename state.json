@@ -553,7 +553,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k)."
     },
     "S-keys": {
       "status": "merged",
