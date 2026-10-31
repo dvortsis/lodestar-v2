@@ -2219,11 +2219,11 @@
     },
     {
       "item": "FYI (\u00a72.19) #253 IMP-4a (merged): import job removal refuses a paused job until cancelled; removal keeps private candidates and rows another source or the user's own data vouches for (they keep IMPORTED but lose membership); a refused source fails the job with source_unavailable; public candidates folded into a removed job's row are removed with it (documented; counting needs a schema change)",
-      "status": "to-send"
+      "status": "sent 2026-10-31T03:56Z"
     },
     {
       "item": "FYI (\u00a72.19) #254 S-search-5: runner raised two runner-set lazy-chunk limits: Search results (lazy) 41.5 -> 43.2 KB (still under the 45 KB per-view cap) and Results toolbar (lazy) 4.4 -> 4.6 KB; Search first load unchanged. Bulk Send and saved views deferred (need a send-to-client endpoint / server views)",
-      "status": "to-send"
+      "status": "sent 2026-10-31T03:56Z"
     }
   ],
   "external_gates": {
