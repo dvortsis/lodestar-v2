@@ -3,12 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import type { Component } from 'svelte';
 import SettingsSection from './SettingsSection.svelte';
 import Stub from './testing/Stub.svelte';
-import type { Screen } from './screens';
+import type { About, Screen } from './screens';
 
 // A fake registry: one hand-built screen, one generated screen with an extra.
 const registry = vi.hoisted(() => ({
 	load: undefined as unknown as () => Promise<{ default: Component }>,
 	extra: undefined as unknown as () => Promise<{ default: Component }>,
+	about: undefined as unknown as () => Promise<Record<string, About>>,
 	index: undefined as unknown as () => Promise<unknown>
 }));
 vi.mock('./screens', () => ({
@@ -25,13 +26,28 @@ vi.mock('./screens', () => ({
 			id: 'disk',
 			group: 'library',
 			title: () => 'Disk',
-			purpose: () => 'Disk purpose',
+			about: () => registry.about(),
 			sections: ['storage'],
-			notice: () => 'Read-only for now',
 			extra: () => registry.extra()
+		},
+		// Opened by one test each, so `about` loads cold (loaded ones are kept for the module).
+		...['fail', 'late'].map((id) => ({
+			id,
+			group: 'library' as const,
+			title: () => id,
+			about: () => registry.about(),
+			sections: ['storage']
+		})),
+		{
+			id: 'net',
+			group: 'crawling',
+			title: () => 'Net',
+			about: () => registry.about(),
+			sections: ['network']
 		}
 	] satisfies Screen[],
-	screenFields: () => [{ key: 'storage.mmap_mib', section: 'storage' }]
+	screenFields: () => [{ key: 'storage.mmap_mib', section: 'storage' }],
+	aboutOf: async (s: Screen) => (await s.about?.())?.[s.id] ?? {}
 }));
 vi.mock('../form/schema', () => ({ loadSettingsIndex: () => registry.index() }));
 vi.mock('./SectionForm.svelte', async () => ({
@@ -59,6 +75,11 @@ beforeEach(() => {
 	registry.load = () => Promise.resolve(body('Keyboard body'));
 	registry.extra = () => Promise.resolve(body('Export panel', false));
 	registry.index = () => Promise.resolve({});
+	registry.about = () =>
+		Promise.resolve({
+			disk: { purpose: () => 'Disk purpose', notice: () => 'Read-only for now' },
+			net: { purpose: () => 'Net purpose' }
+		});
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -97,6 +118,32 @@ it('shows a generated screen with its purpose, notice, form and extra', async ()
 		'Stub',
 		'Export panel'
 	]);
+});
+
+it('waits for the purpose line with the form, and says so when it cannot load', async () => {
+	const pending = deferred<Record<string, About>>();
+	registry.about = () => pending.promise;
+	render(SettingsSection, { section: 'fail' });
+	await until(() => expect(screen.getByRole('status').textContent).toContain('Loading settings'));
+	expect(screen.queryByTestId('stub')).toBeNull();
+	pending.reject(new Error('chunk'));
+	await screen.findByRole('button', { name: 'Reload' }, { timeout: 10_000 });
+	expect(screen.queryByText('Fail purpose')).toBeNull();
+});
+
+it('never shows a purpose line that arrives after leaving its screen', async () => {
+	const slow = deferred<Record<string, About>>();
+	const ready = registry.about;
+	registry.about = () => slow.promise;
+	const view = render(SettingsSection, { section: 'late' });
+	registry.about = ready;
+	await view.rerender({ section: 'net' });
+	await until(() => expect(screen.getByText('Net purpose')).toBeTruthy());
+	slow.resolve({ late: { purpose: () => 'Late purpose' }, net: { purpose: () => 'Stale' } });
+	await until(() => expect(screen.getByTestId('stub')).toBeTruthy());
+	expect(screen.queryByText('Late purpose')).toBeNull();
+	expect(screen.queryByText('Stale')).toBeNull();
+	expect(screen.getByRole('heading', { level: 1, name: 'Net' })).toBeTruthy();
 });
 
 it('fetches the settings index once, even as the form’s code arrives', async () => {

@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { indexView } from '../form/schema';
 import { spec } from '../form/testing/values';
-import { collect, matchesScreen, screenFields, screens, type Screen } from './screens';
+import { aboutOf, collect, matchesScreen, screenFields, screens, type Screen } from './screens';
 
 const byId = (id: string) => screens.find((screen) => screen.id === id)!;
 const fake = (id: string, group: Screen['group']): Screen => ({
 	id,
 	group,
 	sections: [id],
-	title: () => id,
-	purpose: () => `${id} purpose`
+	title: () => id
 });
 
 describe('the screen registry', () => {
@@ -99,9 +98,40 @@ describe('the implemented Settings destinations', () => {
 		).toBe(true);
 	});
 	it('matches translated section labels without case or accent sensitivity', () => {
-		const screen = { ...screens[0]!, title: () => 'Réseau 网络', purpose: () => 'VPN connections' };
-		expect(matchesScreen(screen, 'RESE vpn')).toBe(true);
+		const screen = { ...screens[0]!, title: () => 'Réseau 网络' };
+		const about = { purpose: () => 'VPN connections' };
+		expect(matchesScreen(screen, 'RESE vpn', about)).toBe(true);
+		expect(matchesScreen(screen, 'RESE vpn')).toBe(false);
 		expect(matchesScreen(screen, '网络')).toBe(true);
-		expect(matchesScreen(screen, 'logging')).toBe(false);
+		expect(matchesScreen(screen, 'logging', about)).toBe(false);
+	});
+});
+
+describe('the registry keeps long strings off the first view (X-settings-registry-slim)', () => {
+	it('carries no purpose or notice on an entry; `about` loads them by screen id', async () => {
+		for (const screen of screens) {
+			expect(Object.keys(screen)).not.toContain('purpose');
+			expect(Object.keys(screen)).not.toContain('notice');
+		}
+		expect((await aboutOf(byId('crawler'))).purpose?.()).toBe(
+			'Adjust discovery, fetch limits and peer transport.'
+		);
+		expect((await aboutOf(byId('network'))).notice?.()).toMatch(/read-only/);
+		expect((await aboutOf(byId('trackers'))).purpose).toBeTypeOf('function');
+		expect((await aboutOf(byId('language'))).purpose).toBeTypeOf('function');
+		// A screen without one, or one its file's module doesn't name, has none.
+		expect(await aboutOf(byId('notifications'))).toEqual({});
+		expect(await aboutOf({ ...byId('crawler'), id: 'elsewhere' })).toEqual({});
+	});
+	it('gives every generated screen a purpose and a lazily loaded icon or the gear', async () => {
+		for (const screen of screens.filter((s) => s.sections)) {
+			expect((await aboutOf(screen)).purpose, screen.id).toBeTypeOf('function');
+			if (screen.iconLoad) expect((await screen.iconLoad()).default, screen.id).toBeTruthy();
+		}
+		expect(byId('general').icon).toBeTruthy();
+	});
+	it('rejects when the about chunk cannot load', async () => {
+		const broken = { ...byId('crawler'), about: () => Promise.reject(new Error('chunk')) };
+		await expect(aboutOf(broken)).rejects.toThrow('chunk');
 	});
 });
