@@ -1549,7 +1549,7 @@
     },
     "CR-1a-H": {
       "status": "review",
-      "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3 | 2026-10-31T00:15Z PR #246 head 4fd2f14d (~1,580 lines); screen: no gain over noise floor (high-latency +5.1% vs spread 12.1%, healthy -1.2%, admission-pressure -3.7%; ~94% of hints expire unused). Reviewer session_01MMjhnA8skJhDBEEuLw1YjV. Owner flags at merge: HINT_CAPACITY 20,000 hashes (new), per-hash hints in the actor, private-key case moot"
+      "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3 | 2026-10-31T00:15Z PR #246 head 4fd2f14d (~1,580 lines); screen: no gain over noise floor (high-latency +5.1% vs spread 12.1%, healthy -1.2%, admission-pressure -3.7%; ~94% of hints expire unused). Reviewer session_01MMjhnA8skJhDBEEuLw1YjV. Owner flags at merge: HINT_CAPACITY 20,000 hashes (new), per-hash hints in the actor, private-key case moot | 2026-10-31T00:27Z review MERGE at 4fd2f14d (null screen credible: harvest outpaces lookups, keys wait >60 s). Optional: order cap in capture, send_failed test, guard skips ordinary routing 60 s (name to owner). Merge on green ci-ok"
     },
     "S-theme-boot": {
       "status": "review",
@@ -2244,7 +2244,8 @@
     "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (\u00a710.18 lists them; deferred in #243, \u00a72.19 owner flag)",
     "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
     "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)",
-    "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)"
+    "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)",
+    "CR-1a-H polish: cap `order` growth in hints::capture between ticks; a send_failed test (#246 review optional)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
