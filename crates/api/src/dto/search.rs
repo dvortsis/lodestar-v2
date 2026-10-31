@@ -175,6 +175,12 @@ pub struct SearchResponse {
     pub notices: Vec<SearchNotice>,
     /// Hits before this page.
     pub offset: usize,
+    /// Present only on a first page with no matches whose query has two
+    /// or more top-level clauses: what removing each would give (§10.4
+    /// "No results").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub recovery: Option<SearchRecovery>,
     /// Few exact matches: plural forms in titles were included too (§8),
     /// ranked after the exact ones.
     pub stemmed: bool,
@@ -184,6 +190,109 @@ pub struct SearchResponse {
     /// `total` is an estimate (above 100,000 matches; shown with "≈");
     /// ask with `exact` for the exact count.
     pub total_approx: bool,
+}
+
+/// Zero-result recovery: the first [`MAX_CLAUSES`] top-level clauses
+/// of the query (the `of` of a root `and`), each with the total the
+/// query has without it, counted on the same snapshot and with the same
+/// visibility as the search (filter-hidden torrents and Adult stay out
+/// as they did; removing `adult:…` or `hidden:…` never brings them back).
+///
+/// [`MAX_CLAUSES`]: lodestar_search::recovery::MAX_CLAUSES
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SearchRecovery {
+    /// In query order.
+    pub clauses: Vec<ClauseRemoval>,
+    /// Top-level clauses past the first 8, not counted.
+    pub skipped: usize,
+}
+
+/// One top-level clause and what the query gives without it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ClauseRemoval {
+    /// The clause's position among the AST's top-level clauses, as the
+    /// active-filter strip numbers them.
+    pub index: usize,
+    /// The clause as query text (`trackers:>=3`).
+    pub clause: String,
+    /// The query without the clause: search with it to remove it.
+    #[serde(serialize_with = "super::sorted")]
+    #[schema(value_type = AstNode)]
+    pub without: Node,
+    /// `without` as canonical query text.
+    pub canonical: String,
+    /// Matches without the clause. Absent when the shared deadline passed
+    /// before it was counted (never 0 for that): show nothing for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub total: Option<usize>,
+    /// `total` is an estimate (sampled, or its exact count was cut
+    /// short): shown with "≈".
+    pub total_approx: bool,
+}
+
+/// `GET /search/state`: the index's size, growth and rebuild, for the
+/// search page's "Cold start" and "Index rebuilding" states (§10.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "cold_start": false,
+    "growing": true,
+    "growth_hours": 24,
+    "growth_per_hour": 2104.5,
+    "rebuild": null,
+    "searchable_torrents": 84210,
+    "unavailable": [],
+    "updated_at": 1792681200
+}))]
+pub struct SearchIndexState {
+    /// Fewer than 1,000 searchable torrents: the full-page "The index is
+    /// still growing" state (§10.19).
+    pub cold_start: bool,
+    /// Fewer than 1,000,000 searchable torrents: the "still growing"
+    /// banner (decision S-search-2a).
+    pub growing: bool,
+    /// Hours of the last 24 whole UTC hours the index was measured in
+    /// (the `COVERAGE` rollup's index dim), which `growth_per_hour`
+    /// averages over.
+    pub growth_hours: u32,
+    /// Torrents that became searchable per hour (the `NEWLY_SEARCHABLE`
+    /// rollup, `docs/metrics.md` §7.7), averaged over `growth_hours`;
+    /// null when none was measured.
+    #[schema(required = true)]
+    pub growth_per_hour: Option<f64>,
+    /// The rebuild under way; null when none is.
+    #[schema(required = true)]
+    pub rebuild: Option<IndexRebuild>,
+    /// Documents in the search index (as `/stats`'s
+    /// `searchable_torrents`).
+    pub searchable_torrents: u64,
+    /// Fields the serving index lacks: clauses on them match nothing
+    /// until a rebuild adds them.
+    pub unavailable: Vec<String>,
+    /// Unix seconds these numbers were read.
+    pub updated_at: i64,
+}
+
+/// A rebuild's progress, as `event: rebuild` sends it, with when it
+/// started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct IndexRebuild {
+    /// Torrents in the new index so far.
+    pub done: u64,
+    /// Why it stopped, once `failed`.
+    #[schema(required = true)]
+    pub error: Option<String>,
+    /// The index serving meanwhile, e.g. `v3-t1`.
+    pub from: String,
+    pub phase: super::events::RebuildPhase,
+    /// Unix seconds.
+    pub started_at: u64,
+    /// The index being built.
+    pub to: String,
+    /// Torrents to build before finishing.
+    pub total: u64,
+    /// Fields that match nothing until the swap.
+    pub unavailable: Vec<String>,
 }
 
 /// A note on what a search left out.

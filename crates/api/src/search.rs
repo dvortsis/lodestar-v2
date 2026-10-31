@@ -12,28 +12,31 @@ use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
 use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
+use lodestar_search::recovery::{self, MAX_CLAUSES, RECOVERY_BUDGET};
 use lodestar_search::{
     CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
-    SearchSpec, Sort, Start, WEIGHTS, parse,
+    RebuildProgress, SearchSpec, Sort, Start, WEIGHTS, parse,
 };
-use lodestar_store::Enriched;
+use lodestar_store::{Enriched, RollupBy, Store};
 use rand::RngExt;
 use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
+use crate::dto::events::RebuildPhase;
 use crate::dto::search::{
-    CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights, NaturalChip,
-    NaturalProposal, ParseQuery, ParseResponse, SearchExplain, SearchHit, SearchNotice,
-    SearchRequest, SearchResponse,
+    ClauseRemoval, CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights,
+    IndexRebuild, NaturalChip, NaturalProposal, ParseQuery, ParseResponse, SearchExplain,
+    SearchHit, SearchIndexState, SearchNotice, SearchRecovery, SearchRequest, SearchResponse,
 };
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
+use crate::insights::codes::metric;
 use crate::{ApiState, INTEREST_TOP, auth, swarm, torrents};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(parse_query, search_get, search_post))]
+#[openapi(paths(parse_query, search_get, search_post, index_state))]
 pub(crate) struct ApiDoc;
 
 /// The widest real UTC offsets, in minutes.
@@ -180,7 +183,8 @@ pub fn routes() -> Router<ApiState> {
     auth::protected(
         Router::new()
             .route("/parse", get(parse_query))
-            .route("/search", get(search_get).post(search_post)),
+            .route("/search", get(search_get).post(search_post))
+            .route("/search/state", get(index_state)),
     )
 }
 
@@ -328,11 +332,7 @@ async fn run_search(
     p: SearchRequest,
 ) -> ApiResult<axum::Json<SearchResponse>> {
     let Some(search) = s.index.clone() else {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "search_disabled",
-            "Search is turned off.",
-        ));
+        return Err(search_disabled());
     };
     let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
@@ -450,6 +450,12 @@ async fn run_search(
             None => lease.page(start, limit, &cancel).map(|p| (p, None)),
         };
         let (page, explained) = paged.map_err(failed)?;
+        // An empty first page: what removing each clause would give.
+        let recovery = if served == 0 && total.value == 0 {
+            recover(&lease, &ast, visibility, &cancel).map_err(failed)?
+        } else {
+            None
+        };
         if let Some(ev) = &events {
             ev.searched(started.elapsed(), Some(total.value));
         }
@@ -509,6 +515,7 @@ async fn run_search(
             next_cursor,
             notices,
             offset: served as usize,
+            recovery,
             stemmed: lease.stemmed(),
             took_ms: started.elapsed().as_secs_f64() * 1000.0,
             total: total.value,
@@ -517,6 +524,167 @@ async fn run_search(
     })
     .await
     .map_err(internal)?
+}
+
+fn search_disabled() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "search_disabled",
+        "Search is turned off.",
+    )
+}
+
+/// Zero-result recovery for `ast` on `lease`'s snapshot: each removable
+/// top-level clause with the total of the query without it, or `None`
+/// when the query has fewer than two clauses.
+///
+/// Each count runs [`base_query`] of the reduced query under the
+/// request's own visibility, so it's exactly what `/search` would show
+/// for it: Adult stays out while hidden whatever is removed (the
+/// visibility clause isn't the user's to remove), and filter-hidden
+/// torrents stay out unless `hidden=true` or the reduced query still asks
+/// about them itself, which the full query then did too. Quarantined and
+/// dropped torrents aren't in the index at all (§20.3).
+fn recover(
+    lease: &Lease,
+    ast: &Node,
+    v: Visibility,
+    cancel: &CancelToken,
+) -> Result<Option<SearchRecovery>, SearchError> {
+    let removals = recovery::removals(ast);
+    if removals.is_empty() {
+        return Ok(None);
+    }
+    let queries: Vec<Node> = removals
+        .iter()
+        .map(|(_, without)| base_query(without, v).query())
+        .collect();
+    let totals = recovery::totals_on(lease, &queries, cancel, RECOVERY_BUDGET)?;
+    let top = recovery::top_level(ast);
+    let clauses = removals
+        .into_iter()
+        .zip(totals)
+        .map(|((index, without), total)| ClauseRemoval {
+            index,
+            clause: top[index].to_query(),
+            canonical: without.to_query(),
+            without,
+            total: total.map(|t| t.value),
+            total_approx: total.is_some_and(|t| t.approx),
+        })
+        .collect();
+    Ok(Some(SearchRecovery {
+        clauses,
+        skipped: top.len().saturating_sub(MAX_CLAUSES),
+    }))
+}
+
+/// Below this many searchable torrents the search page shows its
+/// full-page cold start (§10.19, `searching_crawling`).
+pub const COLD_START_BELOW: u64 = 1_000;
+/// Below this many, the "still growing" banner (decision S-search-2a).
+pub const GROWING_BELOW: u64 = 1_000_000;
+/// Whole UTC hours `growth_per_hour` looks back over.
+const GROWTH_HOURS: i64 = 24;
+
+/// The index's size, growth and rebuild: what the search page's "Cold
+/// start" and "Index rebuilding" states show (§10.4). The thresholds are
+/// the server's, so the UI only reads the flags.
+#[utoipa::path(
+    operation_id = "searchIndexState",
+    get,
+    path = "/search/state",
+    tag = "search",
+    responses((status = 200, body = SearchIndexState))
+)]
+pub(crate) async fn index_state(
+    State(s): State<ApiState>,
+) -> ApiResult<axum::Json<SearchIndexState>> {
+    let Some(search) = s.index.clone() else {
+        return Err(search_disabled());
+    };
+    let reader = s.reader.clone();
+    tokio::task::spawn_blocking(move || {
+        let now = unix_now();
+        let index = search.index();
+        let searchable = index.num_docs();
+        let (growth_per_hour, growth_hours) = {
+            let store = reader.lock().expect("reader lock");
+            growth(&store, now).map_err(internal)?
+        };
+        Ok(axum::Json(state_of(
+            searchable,
+            (growth_per_hour, growth_hours),
+            search.progress(),
+            index.missing_fields(),
+            now,
+        )))
+    })
+    .await
+    .map_err(internal)?
+}
+
+/// The response, from what was read.
+fn state_of(
+    searchable: u64,
+    (growth_per_hour, growth_hours): (Option<f64>, u32),
+    progress: Option<RebuildProgress>,
+    missing: &[String],
+    now: i64,
+) -> SearchIndexState {
+    let rebuild = progress.map(|p| {
+        use lodestar_search::RebuildPhase as P;
+        IndexRebuild {
+            done: p.done,
+            error: p.error,
+            from: p.from.to_string(),
+            phase: match p.phase {
+                P::Building => RebuildPhase::Building,
+                P::Finishing => RebuildPhase::Finishing,
+                P::Swapping => RebuildPhase::Swapping,
+                P::Failed => RebuildPhase::Failed,
+            },
+            started_at: p.started_at,
+            to: p.to.to_string(),
+            total: p.total,
+            unavailable: p.unavailable,
+        }
+    });
+    SearchIndexState {
+        cold_start: searchable < COLD_START_BELOW,
+        growing: searchable < GROWING_BELOW,
+        growth_hours,
+        growth_per_hour,
+        rebuild,
+        searchable_torrents: searchable,
+        unavailable: missing.to_vec(),
+        updated_at: now,
+    }
+}
+
+/// Torrents made searchable per hour over the last [`GROWTH_HOURS`]
+/// whole UTC hours, counting only the hours the index was measured in
+/// (a `COVERAGE` row on its index dim), and how many those were. Nothing
+/// measured is `None`, not 0.
+fn growth(store: &Store, now: i64) -> lodestar_store::Result<(Option<f64>, u32)> {
+    let to = now.div_euclid(3600);
+    let from = to - GROWTH_HOURS;
+    store.read_snapshot(|st| {
+        let covered: std::collections::BTreeSet<i64> = st
+            .rollup_sums(metric::COVERAGE, from, to, RollupBy::HourDim)?
+            .into_iter()
+            .filter(|c| c.dim == metric::COVERAGE_INDEX && c.value > 0)
+            .map(|c| c.hour)
+            .collect();
+        let newly: i64 = st
+            .rollup_sums(metric::NEWLY_SEARCHABLE, from, to, RollupBy::Hour)?
+            .iter()
+            .filter(|c| covered.contains(&c.hour))
+            .map(|c| c.value)
+            .sum();
+        let hours = covered.len() as u32;
+        Ok(((hours > 0).then(|| newly as f64 / f64::from(hours)), hours))
+    })
 }
 
 /// A request's `tz`, minutes east of UTC (0 when absent). `/facets`
@@ -968,5 +1136,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn index_state_flags_and_rebuild() {
+        use lodestar_search::{IndexVersion, RebuildPhase as P};
+        let at = |n| state_of(n, (None, 0), None, &[], 7);
+        assert!(at(999).cold_start && at(999).growing);
+        assert!(!at(1_000).cold_start && at(1_000).growing);
+        assert!(!at(1_000_000).growing);
+        assert_eq!(at(5).rebuild, None);
+        let from = IndexVersion {
+            schema: 3,
+            tokenizer: 1,
+        };
+        let progress = RebuildProgress {
+            phase: P::Building,
+            done: 40,
+            total: 100,
+            replayed: 2,
+            errors: 0,
+            started_at: 1_792_681_000,
+            from,
+            to: IndexVersion::CURRENT,
+            unavailable: vec!["year".into()],
+            error: None,
+        };
+        let missing = ["year".to_string()];
+        let got = state_of(84_210, (Some(2_104.5), 24), Some(progress), &missing, 9);
+        assert_eq!(
+            got.rebuild,
+            Some(IndexRebuild {
+                done: 40,
+                error: None,
+                from: from.to_string(),
+                phase: RebuildPhase::Building,
+                started_at: 1_792_681_000,
+                to: IndexVersion::CURRENT.to_string(),
+                total: 100,
+                unavailable: vec!["year".into()],
+            })
+        );
+        assert_eq!(got.unavailable, missing);
+        assert_eq!((got.growth_per_hour, got.growth_hours), (Some(2_104.5), 24));
+        assert!(!got.cold_start && got.growing);
     }
 }
