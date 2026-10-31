@@ -439,12 +439,53 @@ class FaultInjectionTests(Base):
         self.assertEqual(rc, 1)
         self.assertEqual(self.result()["reason"], "three_consecutive_capacity_violations")
 
-    def test_rss_over_one_gib_ends_the_run(self):
+    def test_docker_working_set_over_one_gib_is_evidence_not_a_stop(self):
         instance = self.docker()
-        write_cgroup(self.cgroup, memory=2 * GIB + 100, inactive=100)
+        write_cgroup(self.cgroup, memory=2 * GIB + 100, inactive=100)  # page cache; anon stays 250
+        c = self.collector(instance)
+        self.assertEqual(c.run(), 0)
+        result = self.result()
+        self.assertEqual(result["reason"], "baseline_window_complete")
+        self.assertEqual(result["working_set_over_1GiB_samples"], c.sample)
+        status = json.loads((self.root / "status.json").read_text())
+        self.assertEqual(status["working_set_over_1GiB_samples"], c.sample)
+        events = (self.root / "events.log").read_text()
+        self.assertEqual(events.count("cgroup working set passed 1 GiB"), 1)
+        run = json.loads((self.root / "run.json").read_text())
+        self.assertEqual(run["settings"]["memory_stop_basis"], "anon")
+        self.assertEqual(self.report()["issues"], {})
+
+    def test_docker_anon_over_one_gib_for_five_samples_ends_the_run(self):
+        instance = self.docker()
+        write_cgroup(self.cgroup, memory=2 * GIB, inactive=100, anon=GIB + 1)
         c = self.collector(instance)
         self.assertEqual(c.run(), 1)
+        self.assertEqual(c.sample, 5)
+        self.assertEqual(self.result()["reason"], "process_memory_over_1GiB_for_five_samples")
+        self.assertEqual(self.report()["stop_reason"], "process_memory_over_1GiB_for_five_samples")
+
+    def test_docker_without_anon_falls_back_to_the_working_set_rule(self):
+        instance = self.docker()
+        base = write_cgroup(self.cgroup, memory=2 * GIB + 100, inactive=100)
+        (base / "memory.stat").write_text("file 123\ninactive_file 100\n")
+        c = self.collector(instance)
+        self.assertEqual(c.run(), 1)
+        self.assertEqual(c.sample, 5)
         self.assertEqual(self.result()["reason"], "rss_over_1GiB_for_five_samples")
+        self.assertEqual((self.root / "events.log").read_text().count("fell back to working set"), 1)
+
+    def test_native_rss_over_one_gib_ends_the_run(self):
+        proc = self.tmp / "proc"
+        write_proc(proc, rss_kb=GIB // 1024 + 1)
+        inst = collect.NativeInstance(777, proc, clock=self.clock.clock, sleep=self.clock.sleep,
+                                      opener=lambda pid: None, signaller=lambda n: None, clk_tck=100)
+        c = self.collector(inst)
+        self.assertEqual(c.run(), 1)
+        self.assertEqual(c.sample, 5)
+        self.assertEqual(self.result()["reason"], "rss_over_1GiB_for_five_samples")
+        self.assertNotIn("working_set_over_1GiB_samples", self.result())
+        run = json.loads((self.root / "run.json").read_text())
+        self.assertEqual(run["settings"]["memory_stop_basis"], "rss")
 
     def test_disk_reserve_and_monitor_failure(self):
         launched = []
