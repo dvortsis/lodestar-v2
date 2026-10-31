@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::integrations::{MAX_TEXT, check_url};
-use super::{Auto, Field, SecretText, Section};
+use super::{Auto, Endpoint, Field, SecretText, Section};
 use crate::config::Config;
 
 /// The most email recipients.
@@ -256,9 +256,17 @@ impl Section for Notifications {
         Field::new("route_updates").group("routing"),
         Field::new("route_health").group("routing"),
     ];
-    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [&'static str])] = &[
-        ("ntfy_token", &["ntfy_url"]),
-        ("email_password", &["email_host", "email_port"]),
+    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [Endpoint])] = &[
+        ("ntfy_token", &[Endpoint::Url("ntfy_url")]),
+        // A downgrade to no encryption asks for the password again too.
+        (
+            "email_password",
+            &[
+                Endpoint::Value("email_host"),
+                Endpoint::Value("email_port"),
+                Endpoint::Value("email_security"),
+            ],
+        ),
     ];
 
     /// No `config.toml` key or variable backs these: they hold credentials.
