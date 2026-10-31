@@ -37,6 +37,9 @@ pub(crate) const HINTED_ATTEMPTS_PER_FAMILY: usize = 1;
 /// the spec's "per pending key", but the actor can't see them, so this
 /// caps the table directly (about 3 MB full).
 pub(crate) const HINT_CAPACITY: usize = 20_000;
+/// Capture-order entries, live or stale, held at any moment: used hints
+/// leave stale entries, which [`Hints::capture`] compacts away past this.
+const ORDER_CAPACITY: usize = 4 * HINT_CAPACITY;
 
 /// The slot a normalized endpoint's family uses.
 fn slot(addr: SocketAddr) -> usize {
@@ -128,6 +131,9 @@ impl Hints {
         }
         slots[s] = Some(Hint { addr, at: now });
         self.order.push_back((now, key, s));
+        if self.order.len() > ORDER_CAPACITY {
+            self.compact_order();
+        }
         Ok(true)
     }
 
@@ -198,18 +204,21 @@ impl Hints {
                 }
             }
         }
-        // Used hints leave stale order entries; keep that bounded too. Live
-        // ones are at most 2 × the cap (two families), so compacting at 4 ×
-        // leaves room before the next compaction.
-        if self.order.len() > 4 * HINT_CAPACITY {
-            let by_key = &self.by_key;
-            self.order.retain(|(at, key, s)| {
-                by_key
-                    .get(key)
-                    .is_some_and(|slots| slots[*s].is_some_and(|h| h.at == *at))
-            });
-        }
         expired
+    }
+
+    /// Drops the order entries of hints already used or replaced. Live
+    /// entries are at most 2 × [`HINT_CAPACITY`] (two families), so after
+    /// a compaction at least 2 × the cap captures pass before the next:
+    /// amortised O(1) per capture. `retain` keeps the time order that
+    /// [`Hints::prune_hints`] relies on.
+    fn compact_order(&mut self) {
+        let by_key = &self.by_key;
+        self.order.retain(|(at, key, s)| {
+            by_key
+                .get(key)
+                .is_some_and(|slots| slots[*s].is_some_and(|h| h.at == *at))
+        });
     }
 
     fn prune_guard(&mut self, now: Instant) {
@@ -351,16 +360,26 @@ mod tests {
         assert_eq!(h.held(), HINT_CAPACITY);
         assert_eq!(h.capture(extra, addr, t0 + HINT_TTL), Ok(true));
         assert_eq!(h.held(), 1);
-        // Taking hints leaves order entries behind; they stay bounded.
-        for round in 0..3u32 {
-            for i in 0..HINT_CAPACITY as u32 {
-                let k = key(round * 100_000 + i + 1_000_000);
-                h.capture(k, addr, t0 + HINT_TTL).unwrap();
-                h.take(&k);
-            }
-            h.prune(t0 + HINT_TTL);
-            assert!(h.order.len() <= 4 * HINT_CAPACITY);
+        // Taking hints leaves order entries behind; they stay bounded at
+        // every capture, with no tick in between.
+        for i in 0..3 * ORDER_CAPACITY as u32 {
+            let k = key(i + 1_000_000);
+            h.capture(k, addr, t0 + HINT_TTL).unwrap();
+            h.take(&k);
+            assert!(h.order.len() <= ORDER_CAPACITY);
         }
+        // Compaction keeps live entries in time order, so they still expire.
+        let late = t0 + 2 * HINT_TTL;
+        h.capture(key(7), addr, late).unwrap();
+        for i in 0..ORDER_CAPACITY as u32 {
+            let k = key(i + 9_000_000);
+            h.capture(k, addr, late).unwrap();
+            h.take(&k);
+        }
+        assert_eq!(h.held(), 2);
+        assert!(h.order.iter().is_sorted_by_key(|(at, ..)| *at));
+        assert_eq!(h.prune(late + HINT_TTL), 2);
+        assert_eq!(h.held(), 0);
     }
 
     #[test]
