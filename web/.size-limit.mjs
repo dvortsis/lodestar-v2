@@ -49,6 +49,7 @@ if (preloaded.length)
 		`The search route's first load preloads JS it doesn't run yet:\n  ${preloaded.join('\n  ')}`
 	);
 
+const stageLazy = [/uplot/i];
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
 // A route's own JS and CSS is its first view (runner decision, §2.19): static imports, plus dynamic
@@ -162,6 +163,12 @@ const settingsEditLazy = requireMeasuredJs(
 //   the 45 KB route cap (§10.1), one entry per body, so a later screen is gated the moment it lands.
 // - "Settings screen extras (on demand)" gates the extras beyond the section's first view.
 const SECTION_FORM = 'src/lib/features/settings/shell/SectionForm.svelte';
+// The shell's section form, which a body such as Language & region shows for its fields: gated
+// as "Settings section", so a body that loads it on demand stops at it.
+const settingsFormChunk = [new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)];
+// Language & region's form: its body loads it at once, so its first view includes it, and its
+// extras entry stops at it.
+const languageForm = [/features\/settings\/screens2\/LanguageForm\.svelte$/];
 const settingsBodies = [/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/];
 const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
 // What a hand-built body loads only on an interaction: Keyboard's shortcut sheet (opened with ?) and
@@ -175,7 +182,7 @@ const settingsFirstView = [
 ];
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsShellView = own('/settings/[section]', {
-	onDemand: [...settingsFirstView, new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)]
+	onDemand: [...settingsFirstView, ...settingsFormChunk]
 });
 // Never leave out code a page loads statically: every body or extra the patterns match must be a
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
@@ -243,13 +250,24 @@ const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
 	editorKey ? ownChunk(editorKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
 );
+const settingsFormFiles = [settingsFormChunk[0], languageForm[0]].flatMap((re) => {
+	const key = Object.keys(manifest).find((k) => re.test(k));
+	return key ? ownChunk(key, [...settingsOnDemand, ...settingsEdit], false) : [];
+});
+// The closure stops at the shell's section form and Language & region's form (`settingsFormFiles`):
+// both are already counted in their screens' first views, so extras are only what loads after them.
 const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
 	...new Set([
 		...extraKeys.flatMap((key) =>
 			ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsSectionView)
 		),
 		...bodyKeys.flatMap((key) =>
-			ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions], true)
+			ownChunk(
+				key,
+				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				true,
+				settingsFormFiles
+			)
 		)
 	])
 ]);
@@ -510,6 +528,18 @@ export default [
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
 		'34.5 KB' // owner ruling, 2026-10-30: see the Alerts entries
+	),
+	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
+	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
+	entry(
+		'Insights stage pages (own JS + CSS)',
+		own('/insights/[stage]', { onDemand: stageLazy }),
+		'39.7 KB'
+	),
+	entry(
+		'Insights stage charts (uPlot, on demand)',
+		onDemandOf('/insights/[stage]', stageLazy),
+		'24.2 KB'
 	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB

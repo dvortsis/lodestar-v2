@@ -146,5 +146,19 @@
 	"settings_group_transport": "Peer transport",
 	"settings_group_database": "Database",
 	"settings_group_search": "Search",
-	"settings_group_index": "Index"
+	"settings_group_index": "Index",
+	"settings_preferences_language_label": "Language",
+	"settings_preferences_language_help": "Automatic follows your browser. Or choose a language.",
+	"settings_preferences_time_zone_label": "Time zone",
+	"settings_preferences_time_zone_help": "Empty follows your browser. Or enter a name such as Europe/Berlin.",
+	"settings_preferences_first_day_of_week_label": "First day of the week",
+	"settings_preferences_first_day_of_week_help": "Where calendars start. Automatic follows the language.",
+	"settings_preferences_first_day_of_week_option_auto": "Automatic",
+	"settings_preferences_first_day_of_week_option_monday": "Monday",
+	"settings_preferences_first_day_of_week_option_saturday": "Saturday",
+	"settings_preferences_first_day_of_week_option_sunday": "Sunday",
+	"settings_group_region": "Region",
+	"settings_screen_language_title": "Language & region",
+	"settings_screen_language_purpose": "Language, time zone and the first day of the week.",
+	"settings_screen_time_zone_unknown": "That time zone isn't known. Pick one from the list, such as Europe/Berlin."
 }

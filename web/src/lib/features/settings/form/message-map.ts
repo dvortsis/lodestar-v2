@@ -22,6 +22,7 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_group_fetching: m.settings_group_fetching,
 	settings_group_index: m.settings_group_index,
 	settings_group_intensity: m.settings_group_intensity,
+	settings_group_region: m.settings_group_region,
 	settings_group_search: m.settings_group_search,
 	settings_group_transport: m.settings_group_transport,
 	settings_group_web_ui: m.settings_group_web_ui,
@@ -33,6 +34,20 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_network_http_bind_label: m.settings_network_http_bind_label,
 	settings_network_secure_cookies_help: m.settings_network_secure_cookies_help,
 	settings_network_secure_cookies_label: m.settings_network_secure_cookies_label,
+	settings_preferences_first_day_of_week_help: m.settings_preferences_first_day_of_week_help,
+	settings_preferences_first_day_of_week_label: m.settings_preferences_first_day_of_week_label,
+	settings_preferences_first_day_of_week_option_auto:
+		m.settings_preferences_first_day_of_week_option_auto,
+	settings_preferences_first_day_of_week_option_monday:
+		m.settings_preferences_first_day_of_week_option_monday,
+	settings_preferences_first_day_of_week_option_saturday:
+		m.settings_preferences_first_day_of_week_option_saturday,
+	settings_preferences_first_day_of_week_option_sunday:
+		m.settings_preferences_first_day_of_week_option_sunday,
+	settings_preferences_language_help: m.settings_preferences_language_help,
+	settings_preferences_language_label: m.settings_preferences_language_label,
+	settings_preferences_time_zone_help: m.settings_preferences_time_zone_help,
+	settings_preferences_time_zone_label: m.settings_preferences_time_zone_label,
 	settings_search_enabled_help: m.settings_search_enabled_help,
 	settings_search_enabled_label: m.settings_search_enabled_label,
 	settings_search_heap_mib_help: m.settings_search_heap_mib_help,
