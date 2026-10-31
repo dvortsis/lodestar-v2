@@ -10,6 +10,41 @@ const range: S['InsightsRange'] = { bucket: 'hour', from: NOW - 12 * HOUR, to: N
 const at = (i: number) => NOW - (12 - i) * HOUR;
 const pts = <T>(f: (i: number) => T) => Array.from({ length: 12 }, (_, i) => f(i));
 
+export function discoverFixture(
+	over: Partial<S['InsightsDiscoverResponse']> = {}
+): S['InsightsDiscoverResponse'] {
+	return {
+		by_ip_family: null,
+		by_source: [{ dropped: 3, key: 'dht', rediscovered: 40, reported: 900 }],
+		by_strategy: [
+			{ key: 'sample', reported: 600 },
+			{ key: 'get_peers', reported: 300 }
+		],
+		kpi: {
+			bep51_sample_yield: null,
+			dht_nodes: 4242,
+			dropped: 3,
+			harvested: 8765,
+			keyspace_coverage: null,
+			rediscovered: 40,
+			reply_ratio: 0.75,
+			reported: 900,
+			seen_filter_load: null
+		},
+		range,
+		stale: null,
+		trend: pts((i) => ({
+			at: at(i),
+			dropped: 0,
+			harvested: i === 5 ? null : 700 + i,
+			rediscovered: 3,
+			reported: i === 5 ? null : 75
+		})),
+		updated_at: NOW,
+		...over
+	};
+}
+
 export function fetchFixture(over: Partial<S['FetchResponse']> = {}): S['FetchResponse'] {
 	return {
 		funnel: [],
@@ -63,8 +98,8 @@ export function understandFixture(
 			junk_distribution: null,
 			newly_searchable: 2468,
 			parser_confidence: [
-				{ backfill: false, count: 5, hi: 50, lo: 0 },
-				{ backfill: false, count: 95, hi: 100, lo: 50 }
+				{ count: 5, hi: 50, lo: 0 },
+				{ count: 95, hi: 100, lo: 50 }
 			],
 			recent_corrections: null,
 			resolution_rate: 0.42,

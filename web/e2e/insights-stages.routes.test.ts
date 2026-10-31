@@ -2,6 +2,7 @@
 // and Compare in its links, says "not available yet" for a missing series, and passes axe.
 import { expectNoA11yViolations } from './a11y';
 import {
+	discoverFixture,
 	fetchFixture,
 	indexFixture,
 	serveFixture,
@@ -10,6 +11,13 @@ import {
 import { expect, test } from './support/test';
 
 const pages = [
+	{
+		stage: 'discover',
+		op: 'getInsightsDiscover',
+		fixture: discoverFixture,
+		kpi: 'reported',
+		value: '900'
+	},
 	{ stage: 'fetch', op: 'getInsightsFetch', fixture: fetchFixture, kpi: 'fetched', value: '4,321' },
 	{
 		stage: 'understand',
@@ -58,6 +66,20 @@ test('a missing series reads "Not available yet", never 0', async ({ page, mock,
 	await go('/insights/fetch');
 	await expect(page.getByTestId('insights-stage-utp_share-na')).toHaveText('Not available yet');
 	await expect(page.getByTestId('insights-stage-utp_share-value')).toHaveText('—');
+});
+
+test('discover: unique harvested is ≈, unmeasured series are not available', async ({
+	page,
+	mock,
+	go
+}) => {
+	mock.on('getInsightsDiscover', discoverFixture());
+	await go('/insights/discover');
+	await expect(page.getByTestId('insights-stage-harvested-value').first()).toHaveText(/^≈\s8,765$/);
+	await expect(page.getByTestId('insights-stage-bep51-na')).toHaveText('Not available yet');
+	await expect(page.getByTestId('insights-table-by-ip-family-na')).toBeVisible();
+	await expect(page.getByTestId('insights-table-by-source')).toContainText('dht');
+	await expect(page.getByRole('link', { name: 'Download CSV' }).first()).toBeVisible();
 });
 
 test('fetch: a loss links to its reason and the chip resets it', async ({ page, mock, go }) => {

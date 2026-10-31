@@ -3,13 +3,22 @@ import {
 	binEdges,
 	formatMetric,
 	fetchBars,
+	discoverBars,
+	discoverTables,
+	mapDiscover,
 	mapFetch,
 	mapIndex,
 	mapServe,
 	mapUnderstand,
 	type Metric
 } from './model';
-import { fetchFixture, indexFixture, serveFixture, understandFixture } from './fixtures';
+import {
+	discoverFixture,
+	fetchFixture,
+	indexFixture,
+	serveFixture,
+	understandFixture
+} from './fixtures';
 
 const find = (list: Metric[], key: string) => list.find((x) => x.key === key)!;
 
@@ -116,15 +125,14 @@ describe('binEdges', () => {
 	it('gives edges for contiguous closed bins only', () => {
 		expect(
 			binEdges([
-				{ backfill: false, count: 1, hi: 50, lo: 0 },
-				{ backfill: false, count: 1, hi: 100, lo: 50 }
+				{ count: 1, hi: 50, lo: 0 },
+				{ count: 1, hi: 100, lo: 50 }
 			])
 		).toEqual([0, 50, 100]);
-		expect(binEdges([{ backfill: false, count: 1, hi: null, lo: 0 }])).toBeUndefined();
 		expect(
 			binEdges([
-				{ backfill: false, count: 1, hi: 10, lo: 0 },
-				{ backfill: false, count: 1, hi: 30, lo: 20 }
+				{ count: 1, hi: 10, lo: 0 },
+				{ count: 1, hi: 30, lo: 20 }
 			])
 		).toBeUndefined();
 		expect(binEdges([])).toBeUndefined();
@@ -141,5 +149,40 @@ describe('fetchBars', () => {
 		expect(fetchBars(fetchFixture({ losses: [] }), (k) => k)[0]?.unavailable).toBe(false);
 		const first = fetchBars(fetchFixture(), (k) => k)[0]?.items[0];
 		expect(first).toMatchObject({ key: 'no_peers', text: '500', sub: '65%' });
+	});
+});
+
+describe('mapDiscover', () => {
+	const model = mapDiscover(discoverFixture());
+	it('marks unique harvested as an estimate, and reported as exact', () => {
+		expect(find(model.kpis, 'harvested').approx).toBe(true);
+		expect(find(model.kpis, 'reported').approx).toBe(false);
+		expect(formatMetric(find(model.kpis, 'harvested'), 8765)).toMatch(/^≈\u00a0/);
+	});
+	it('keeps unmeasured series as null (not available)', () => {
+		expect(find(model.more, 'bep51').value).toBeNull();
+		expect(find(model.more, 'keyspace').value).toBeNull();
+		expect(find(model.more, 'seen_filter').value).toBeNull();
+		expect(find(model.kpis, 'reply_ratio').value).toBe(0.75);
+	});
+	it('draws harvested and reported on separate charts (no dual axis), gaps as null', () => {
+		expect(model.charts.map((c) => c.id)).toEqual(['discover-harvested', 'discover-reported']);
+		expect(model.charts[0]?.series[0]?.values[5]).toBeNull();
+	});
+	it('labels known strategies and keeps unknown (plugin) keys as they are', () => {
+		const bars = discoverBars(
+			discoverFixture({
+				by_strategy: [
+					{ key: 'sample', reported: 1 },
+					{ key: 'x:1', reported: 2 }
+				]
+			})
+		)[0];
+		expect(bars?.items.map((i) => i.label)).toEqual(['BEP 51 sample', 'x:1']);
+	});
+	it('says the IP-family split is not available when null', () => {
+		const t = discoverTables(discoverFixture()).find((x) => x.id === 'by-ip-family');
+		expect(t?.empty).toBeTruthy();
+		expect(t?.rows).toEqual([]);
 	});
 });

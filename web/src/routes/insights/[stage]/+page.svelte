@@ -5,10 +5,11 @@
 	import { m } from '$lib/paraglide/messages.js';
 
 	// The stage page loads as its own chunk, so this route's entry stays small (as /insights does).
-	// Discover is served by a later change; any other name is unknown.
-	const STAGES = ['fetch', 'understand', 'index', 'serve'];
+	// Any other name is unknown.
+	const STAGES = ['discover', 'fetch', 'understand', 'index', 'serve'];
 	const stage = $derived(page.params.stage ?? '');
-	let StagePage = $state.raw<Component<{ stage: 'fetch' | 'understand' | 'index' | 'serve' }>>();
+	let StagePage =
+		$state.raw<Component<{ stage: 'discover' | 'fetch' | 'understand' | 'index' | 'serve' }>>();
 	let failed = $state(false);
 	$effect(() => {
 		if (!STAGES.includes(stage) || StagePage) return;
@@ -24,7 +25,7 @@
 	<UnavailablePage kind="stage" />
 {:else if StagePage}
 	{#key stage}
-		<StagePage stage={stage as 'fetch' | 'understand' | 'index' | 'serve'} />
+		<StagePage stage={stage as 'discover' | 'fetch' | 'understand' | 'index' | 'serve'} />
 	{/key}
 {:else if failed}
 	<div class="flex flex-col gap-4 p-6" role="alert" data-testid="insights-load-error">

@@ -14,15 +14,17 @@ import {
 } from '$lib/format';
 import { m } from '$lib/paraglide/messages.js';
 
-export type StageId = 'fetch' | 'understand' | 'index' | 'serve';
-export const STAGE_IDS: readonly StageId[] = ['fetch', 'understand', 'index', 'serve'];
+export type StageId = 'discover' | 'fetch' | 'understand' | 'index' | 'serve';
+export const STAGE_IDS: readonly StageId[] = ['discover', 'fetch', 'understand', 'index', 'serve'];
 
 export type FetchResponse = components['schemas']['FetchResponse'];
 export type UnderstandResponse = components['schemas']['UnderstandResponse'];
 export type IndexResponse = components['schemas']['IndexResponse'];
 export type ServeResponse = components['schemas']['ServeResponse'];
-export type StageResponse = FetchResponse | UnderstandResponse | IndexResponse | ServeResponse;
-type Bin = components['schemas']['HistogramBin'];
+export type StageResponse =
+	DiscoverResponse | FetchResponse | UnderstandResponse | IndexResponse | ServeResponse;
+type Bin = components['schemas']['InsightsHistogramBin'];
+export type DiscoverResponse = components['schemas']['InsightsDiscoverResponse'];
 
 export type Fmt = 'count' | 'percent' | 'span' | 'latency' | 'bytes' | 'days';
 
@@ -50,6 +52,8 @@ export interface ChartSpec {
 	series: Series[];
 	/** The export panel, when the stage has one. */
 	csv?: string;
+	/** Every value is an estimate (shown with "≈"). */
+	approx?: boolean;
 }
 
 export interface Table {
@@ -152,6 +156,149 @@ function series<P extends { at: number }>(
 		previous: prev && prev.length === trend.length ? prev.map(pick) : undefined,
 		approx
 	};
+}
+
+export function mapDiscover(r: DiscoverResponse): StageModel {
+	const k = r.kpi;
+	const p = r.previous;
+	const out = empty();
+	// Harvest uniqueness comes from the rotating seen filter, so "unique" is always approximate
+	// (§10.9.3).
+	out.kpis = [
+		metric(
+			'harvested',
+			m.insights_stage_discover_harvested(),
+			k.harvested,
+			'count',
+			prevOf(p, (x) => x.harvested),
+			true
+		),
+		metric(
+			'reported',
+			m.insights_stage_discover_reported(),
+			k.reported,
+			'count',
+			prevOf(p, (x) => x.reported)
+		),
+		metric('dht_nodes', m.insights_stage_discover_nodes(), k.dht_nodes, 'count'),
+		metric('reply_ratio', m.insights_stage_discover_reply(), k.reply_ratio, 'percent')
+	];
+	out.more = [
+		metric(
+			'rediscovered',
+			m.insights_stage_discover_rediscovered(),
+			k.rediscovered,
+			'count',
+			prevOf(p, (x) => x.rediscovered)
+		),
+		metric(
+			'dropped',
+			m.insights_stage_discover_dropped(),
+			k.dropped,
+			'count',
+			prevOf(p, (x) => x.dropped)
+		),
+		metric('bep51', m.insights_stage_discover_bep51(), k.bep51_sample_yield, 'percent'),
+		metric('keyspace', m.insights_stage_discover_keyspace(), k.keyspace_coverage, 'percent'),
+		metric('seen_filter', m.insights_stage_discover_seen_filter(), k.seen_filter_load, 'percent')
+	];
+	out.charts = [
+		{
+			id: 'discover-harvested',
+			title: m.insights_stage_discover_chart_harvested(),
+			csv: 'discover.trend',
+			approx: true,
+			series: [
+				series(
+					r.trend,
+					p,
+					'harvested',
+					m.insights_stage_discover_harvested(),
+					(x) => x.harvested,
+					true
+				)
+			]
+		},
+		{
+			id: 'discover-reported',
+			title: m.insights_stage_discover_chart_reported(),
+			series: [
+				series(r.trend, p, 'reported', m.insights_stage_discover_reported(), (x) => x.reported),
+				series(
+					r.trend,
+					p,
+					'rediscovered',
+					m.insights_stage_discover_rediscovered(),
+					(x) => x.rediscovered
+				),
+				series(r.trend, p, 'dropped', m.insights_stage_discover_dropped(), (x) => x.dropped)
+			]
+		}
+	];
+	return out;
+}
+
+const STRATEGIES: Record<string, () => string> = {
+	sample: () => m.insights_stage_discover_strategy_sample(),
+	get_peers: () => m.insights_stage_discover_strategy_get_peers(),
+	announce: () => m.insights_stage_discover_strategy_announce(),
+	lookup: () => m.insights_stage_discover_strategy_lookup(),
+	refetch: () => m.insights_stage_discover_strategy_refetch()
+};
+
+export function discoverBars(r: DiscoverResponse, locale?: string): BarsSpec[] {
+	return [
+		{
+			id: 'by-strategy',
+			title: m.insights_stage_discover_by_strategy(),
+			csv: 'discover.by_strategy',
+			items: r.by_strategy.map((x) => ({
+				key: x.key,
+				label: STRATEGIES[x.key]?.() ?? x.key,
+				value: x.reported,
+				text: formatCount(x.reported, locale)
+			}))
+		}
+	];
+}
+
+export function discoverTables(r: DiscoverResponse, locale?: string): Table[] {
+	return [
+		{
+			id: 'by-source',
+			title: m.insights_stage_discover_by_source(),
+			csv: 'discover.by_source',
+			columns: [
+				{ key: 'key', label: m.insights_stage_discover_col_source() },
+				{ key: 'reported', label: m.insights_stage_discover_reported(), numeric: true },
+				{ key: 'rediscovered', label: m.insights_stage_discover_rediscovered(), numeric: true },
+				{ key: 'dropped', label: m.insights_stage_discover_dropped(), numeric: true }
+			],
+			rows: r.by_source.map((x) => ({
+				key: x.key,
+				reported: formatCount(x.reported, locale),
+				rediscovered: formatCount(x.rediscovered, locale),
+				dropped: formatCount(x.dropped, locale)
+			}))
+		},
+		{
+			id: 'by-ip-family',
+			title: m.insights_stage_discover_by_ip(),
+			columns: [
+				{ key: 'key', label: m.insights_stage_discover_col_family() },
+				{ key: 'harvested', label: m.insights_stage_discover_harvested(), numeric: true },
+				{ key: 'searchable', label: m.insights_stage_index_searchable(), numeric: true },
+				{ key: 'yield', label: m.insights_stage_discover_col_yield(), numeric: true }
+			],
+			rows: (r.by_ip_family ?? []).map((x) => ({
+				key: x.key,
+				harvested: formatCount({ value: x.harvested, approx: true }, locale),
+				searchable: formatCount(x.searchable, locale),
+				yield: formatPercent(x.yield, locale, 1)
+			})),
+			empty: r.by_ip_family === null ? m.insights_stage_na() : undefined
+		}
+	];
 }
 
 export function mapFetch(r: FetchResponse): StageModel {
@@ -429,7 +576,7 @@ export function binEdges(bins: Bin[]): number[] | undefined {
 	if (at === undefined) return undefined;
 	const edges = [at];
 	for (const b of bins) {
-		if (b.lo !== at || b.hi === null) return undefined;
+		if (b.lo !== at) return undefined;
 		at = b.hi;
 		edges.push(at);
 	}
@@ -443,7 +590,7 @@ export function edgeLabels(edges: number[], fmt: 'score' | 'percent', locale?: s
 
 export function binLabel(b: Bin, fmt: 'score' | 'percent', locale?: string): string {
 	const f = (n: number) => (fmt === 'score' ? formatScore(n, locale) : formatShare(n, locale));
-	return b.hi === null ? `${f(b.lo)}+` : `${f(b.lo)}–${f(b.hi)}`;
+	return `${f(b.lo)}–${f(b.hi)}`;
 }
 
 /** Tables from the stage's segment lists (Understand) and losses (Fetch), by label function. */
@@ -536,6 +683,8 @@ export function trackerTable(r: IndexResponse, locale?: string): Table {
 
 export function mapStage(stage: StageId, r: StageResponse): StageModel {
 	switch (stage) {
+		case 'discover':
+			return mapDiscover(r as DiscoverResponse);
 		case 'fetch':
 			return mapFetch(r as FetchResponse);
 		case 'understand':

@@ -8,7 +8,13 @@
 	import DataTableAlternative from '$lib/charts/DataTableAlternative.svelte';
 	import LineChart from '$lib/charts/LineChart.svelte';
 	import Histogram from '$lib/charts/Histogram.svelte';
-	import { formatCompact, formatCount, formatDateFull, formatDate } from '$lib/format';
+	import {
+		formatCompact,
+		formatCount,
+		formatDateFull,
+		formatDate,
+		type MetricValue
+	} from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -23,6 +29,8 @@
 	import '../overview/insights.css';
 	import {
 		binEdges,
+		discoverBars,
+		discoverTables,
 		binLabel,
 		edgeLabels,
 		fetchBars,
@@ -62,13 +70,15 @@
 		const base = { ...apiQuery(q), reason: r };
 		try {
 			const one = (signal: AbortSignal): Promise<StageResponse> =>
-				stage === 'fetch'
-					? api.get('/insights/fetch', { query: base, signal })
-					: stage === 'understand'
-						? api.get('/insights/understand', { query: base, signal })
-						: stage === 'index'
-							? api.get('/insights/index', { query: base, signal })
-							: api.get('/insights/serve', { query: base, signal });
+				stage === 'discover'
+					? api.get('/insights/discover', { query: base, signal })
+					: stage === 'fetch'
+						? api.get('/insights/fetch', { query: base, signal })
+						: stage === 'understand'
+							? api.get('/insights/understand', { query: base, signal })
+							: stage === 'index'
+								? api.get('/insights/index', { query: base, signal })
+								: api.get('/insights/serve', { query: base, signal });
 			data = await slot.run(one);
 			phase = 'ready';
 		} catch (e) {
@@ -134,13 +144,20 @@
 	const model = $derived<StageModel | undefined>(data ? mapStage(stage, data) : undefined);
 	const extraBars = $derived.by<BarsSpec[]>(() => {
 		if (!data) return [];
+		if (stage === 'discover') return discoverBars(data as never, locale);
 		if (stage === 'fetch') return fetchBars(data as never, reasonName, locale);
 		if (stage === 'understand') return understandBars(data as never, groupName, typeName, locale);
 		if (stage === 'index') return [indexBars(data as never, typeName, locale)];
 		return [];
 	});
 	const extraTables = $derived.by<Table[]>(() =>
-		data && stage === 'index' ? [trackerTable(data as never, locale)] : []
+		!data
+			? []
+			: stage === 'index'
+				? [trackerTable(data as never, locale)]
+				: stage === 'discover'
+					? discoverTables(data as never, locale)
+					: []
 	);
 	const rangeText = $derived.by(() => {
 		if (query.range === 'custom' && query.from !== undefined && query.to !== undefined) {
@@ -191,6 +208,10 @@
 		}
 		return undefined;
 	};
+	const approxCount = (v: MetricValue, l?: string) =>
+		formatCount({ value: typeof v === 'object' && v !== null ? v.value : v, approx: true }, l);
+	const fmtPoint = (approx: boolean | undefined, v: number | null | undefined) =>
+		approx ? approxCount(v ?? null, locale) : formatCount(v, locale);
 	const noData = (series: { values: (number | null)[] }[]) =>
 		series.every((s) => s.values.every((v) => v === null));
 
@@ -354,7 +375,7 @@
 						]}
 						rows={data.trend.map((p, i) => ({
 							at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
-							...Object.fromEntries(c.series.map((s) => [s.key, formatCount(s.values[i], locale)]))
+							...Object.fromEntries(c.series.map((s) => [s.key, fmtPoint(c.approx, s.values[i])]))
 						}))}
 						csv={reason ? undefined : c.csv}
 						{query}
@@ -377,7 +398,7 @@
 							])}
 							label={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
 							{unit}
-							format={formatCount}
+							format={c.approx ? approxCount : formatCount}
 							axisFormat={formatCompact}
 							{bucket}
 							timeZone={tz}
@@ -515,6 +536,14 @@
 		{#each [...model.tables, ...extraTables] as t (t.id)}
 			<section class="ins-section" aria-labelledby="ins-t-{t.id}">
 				<h2 id="ins-t-{t.id}" class="ins-heading">{t.title}</h2>
+				{#if t.csv}
+					<a
+						class="ins-link"
+						href={resolve(csv(t.csv) as Route)}
+						download
+						data-testid="insights-table-{t.id}-csv">{m.insights_overview_csv()}</a
+					>
+				{/if}
 				{#if t.empty && !t.rows.length}
 					<p class="ins-sentence" data-testid="insights-table-{t.id}-na">{t.empty}</p>
 				{:else if !t.rows.length}

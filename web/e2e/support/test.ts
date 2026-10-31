@@ -6,6 +6,7 @@
 //   - `kbd`: the keyboard-only guard.
 import { test as base, expect, type Page } from '@playwright/test';
 import {
+	discoverFixture,
 	fetchFixture,
 	indexFixture,
 	serveFixture,
@@ -70,6 +71,7 @@ export const test = base.extend<
 			const mock = new OpenApiMock();
 			await mock.install(page);
 			// Every overview drill-through lands on a stage page; a spec overrides these.
+			mock.on('getInsightsDiscover', discoverFixture());
 			mock.on('getInsightsFetch', fetchFixture());
 			mock.on('getInsightsUnderstand', understandFixture());
 			mock.on('getInsightsIndex', indexFixture());

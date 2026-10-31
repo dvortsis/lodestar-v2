@@ -462,7 +462,7 @@ export default [
 	entry(
 		'Insights stage pages (own JS + CSS)',
 		own('/insights/[stage]', { onDemand: stageLazy }),
-		'38.3 KB'
+		'39.4 KB'
 	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',
