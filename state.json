@@ -1549,8 +1549,9 @@
   },
   "B-settings-sections": {
    "status": "review",
-   "notes": "2026-10-31T04:20Z brief briefs/B-settings-sections.md; Opus session_01MMjhnASCY7h5zbDorA5QfV; parts a/b; security-review | 05:58Z part a PR #263 head 68ab2de5 (1,953 lines); fresh Opus reviewer + security review session_01MMjhnCpK7j5i5pZaWNaDDX; part b starting stacked on slice/B-settings-sections-b",
-   "pr": 263
+   "notes": "2026-10-31T04:20Z brief briefs/B-settings-sections.md; Opus session_01MMjhnASCY7h5zbDorA5QfV; parts a/b; security-review | 05:58Z part a PR #263 head 68ab2de5 (1,953 lines); fresh Opus reviewer + security review session_01MMjhnCpK7j5i5pZaWNaDDX; part b starting stacked on slice/B-settings-sections-b | 06:16Z #263 CHANGES at 68ab2de5: B1 SMTP password kept across IPv6 host change (endpoint() URL-parses email_host); runner asked also email_security in endpoint list, refuse apikey in torznab_url query, \u00a72.19 refinements in PR body, fixed seal-error message",
+   "pr": 263,
+   "review_rounds": 1
   },
   "M-settings-engine-2": {
    "status": "review",
