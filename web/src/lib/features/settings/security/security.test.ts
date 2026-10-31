@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { initLocale } from '$lib/i18n/locale.svelte';
 import { dismissAll } from '../form/dialogs';
+import { dismissPasswordDialogs } from './confirm';
+import { dismissReveals } from './reveal';
 import { screens } from '../shell/screens';
 import SecurityScreen from './SecurityScreen.svelte';
 
@@ -72,6 +74,8 @@ beforeEach(() => {
 afterEach(async () => {
 	// A closed dialog unmounts on a timer; run it now so it can't fire after jsdom is gone.
 	dismissAll();
+	dismissPasswordDialogs();
+	dismissReveals();
 	await Promise.resolve();
 	delete (document as { execCommand?: unknown }).execCommand;
 	vi.restoreAllMocks();
