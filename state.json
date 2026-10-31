@@ -455,7 +455,7 @@
     },
     "S-search-6": {
       "status": "review",
-      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4 | 02:12Z runner chose (a): cards, rebuild banner, Clear all on empty, live banner via torrents event + throttled limit-1 requery (>=30 s, visible only, exact totals only); deferred per-clause recovery, cold start, query-scoped live | 02:59Z size: wait for #254 (raises results-lazy to 43.2 KB), merge main, re-measure; no limit change if it fits | 04:28Z #256 ready head 52368405 (CI green; results-lazy 43.06/43.2); fresh reviewer launched"
+      "notes": "2026-10-31T02:11Z brief briefs/S-search-6.md; Sonnet session_01MMjhnAXodned7einD1NzH4 | 02:12Z runner chose (a): cards, rebuild banner, Clear all on empty, live banner via torrents event + throttled limit-1 requery (>=30 s, visible only, exact totals only); deferred per-clause recovery, cold start, query-scoped live | 02:59Z size: wait for #254 (raises results-lazy to 43.2 KB), merge main, re-measure; no limit change if it fits | 04:28Z #256 ready head 52368405 (CI green; results-lazy 43.06/43.2); fresh reviewer launched | 04:48Z review CHANGES: Show focuses row 0 without resetting active (j jumps to row N+1); riding cards double tab stop, banner announce, throttle slack, rAF cancel; merge main and re-check Alert route vs owner 45.8 KB (reviewer saw 45.81 locally). Reviewer session_01MMjhnAZfkqSMzsHY7YXRW7 kept for delta"
     },
     "S-compare": {
       "status": "merged",
