@@ -7,6 +7,7 @@ export const LOADERS: Record<string, () => Promise<{ MESSAGES: Record<string, ()
 	insights: () => import('./message-maps/insights'),
 	integrations: () => import('./message-maps/integrations'),
 	logging: () => import('./message-maps/logging'),
+	logoutput: () => import('./message-maps/logoutput'),
 	network: () => import('./message-maps/network'),
 	notifications: () => import('./message-maps/notifications'),
 	preferences: () => import('./message-maps/preferences'),

@@ -38,7 +38,34 @@ const PROPS: Record<string, Record<string, unknown>> = {
 		'x-group': 'events',
 		'x-order': 5
 	},
-	data: { type: 'string', enum: ['private', 'hashes', 'full'], 'x-group': 'data', 'x-order': 6 }
+	data: { type: 'string', enum: ['private', 'hashes', 'full'], 'x-group': 'data', 'x-order': 6 },
+	console_format: {
+		type: 'string',
+		enum: ['text', 'json'],
+		'x-widget': 'radio',
+		'x-group': 'console',
+		'x-order': 11
+	},
+	console_detail: {
+		type: 'string',
+		enum: ['private', 'file'],
+		'x-widget': 'radio',
+		'x-danger': 'privacy',
+		'x-preview': true,
+		'x-group': 'console',
+		'x-order': 12
+	},
+	file_enabled: { type: 'boolean', 'x-group': 'file', 'x-order': 14, 'x-preview': true },
+	file_size_mib: {
+		type: 'integer',
+		minimum: 1,
+		maximum: 1024,
+		'x-unit': 'mebibytes',
+		'x-advanced': true,
+		'x-preview': true,
+		'x-group': 'file',
+		'x-order': 17
+	}
 };
 const index = {
 	sections: [
@@ -78,7 +105,10 @@ const values: Values[] = [
 			data: v('private'),
 			data_until: v(0),
 			kinds: v({}),
-			console_detail: v('private')
+			console_detail: v('private'),
+			console_format: v('text'),
+			file_enabled: v(true),
+			file_size_mib: v(16)
 		}
 	}
 ];
@@ -141,6 +171,7 @@ test.describe('keyboard: Settings → Logging', () => {
 	let backend: SettingsBackend;
 	let current: Catalog;
 	let catalogFails = false;
+	let deletes: unknown[] = [];
 	test.beforeEach(async ({ mock, page }) => {
 		// `E2E_CPU_THROTTLE=4` slows the CPU (Chromium) to check these flows on a slow runner.
 		const rate = Number(process.env.E2E_CPU_THROTTLE ?? 0);
@@ -157,10 +188,32 @@ test.describe('keyboard: Settings → Logging', () => {
 				? { status: 500, body: { error: { code: 'internal', message: 'down' } } }
 				: { status: 200, body: current }
 		);
+		deletes = [];
 		on('getLogFiles', () => ({
 			status: 200,
-			body: { files: [], folder: '/data/logs', index_readable: true, reason: null, state: 'on' }
+			body: {
+				files: [
+					{
+						name: 'lodestar.jsonl',
+						size: 4096,
+						details: true,
+						opt_in: false,
+						current: true,
+						compressed: false,
+						from: '2026-10-31T10:00:00Z',
+						to: '2026-10-31T11:00:00Z'
+					}
+				],
+				folder: '/data/logs',
+				index_readable: true,
+				reason: null,
+				state: 'on'
+			}
 		}));
+		on('deleteLogFiles', (r: { postDataJSON(): unknown }) => {
+			deletes.push(r.postDataJSON());
+			return { status: 200, body: { deleted: 1, bytes: 4096, skipped: [] } };
+		});
 	});
 
 	test('renders, and saves Verbosity with an event change', async ({ page, go, kbd }) => {
@@ -312,5 +365,58 @@ test.describe('keyboard: Settings → Logging', () => {
 		await kbd.press('Enter');
 		await expect(page.getByRole('alert')).toContainText("Couldn't turn it off");
 		await expect(banner).toBeVisible();
+	});
+
+	test("outputs: the console's detail asks first; files download redacted; delete asks", async ({
+		page,
+		go,
+		kbd
+	}) => {
+		await go('/settings/logging');
+		const files = page.getByTestId('log-file-lodestar.jsonl');
+		await expect(files).toContainText('Contains torrent details');
+		await expect(page.getByRole('link', { name: 'Download lodestar.jsonl' })).toHaveAttribute(
+			'href',
+			'/api/v1/logs/files/lodestar.jsonl?format=text&redact=true'
+		);
+		await expectNoA11yViolations(page);
+		// Remove torrent details is on by default; unticking it by keyboard changes the links.
+		const redact = page.getByRole('checkbox', { name: 'Remove torrent details' });
+		await kbd.tabTo(redact, 200);
+		await expect(redact).toBeChecked();
+		await kbd.press('Space');
+		await kbd.tabTo(page.getByTestId('log-download-all'), 5);
+		await expect(page.getByTestId('log-download-all')).toHaveAttribute(
+			'href',
+			'/api/v1/logs/archive.zip?format=text&redact=false'
+		);
+		await kbd.press('Shift+Tab');
+		await kbd.press('Space');
+		await expect(redact).toBeChecked();
+
+		await kbd.tabTo(page.getByRole('radio', { name: 'Private', exact: true }).last(), 120);
+		await kbd.press('ArrowRight');
+		await kbd.press('Control+s');
+		const ask = page.getByRole('dialog', { name: 'Show torrent details in the console?' });
+		await expect(ask.getByRole('button', { name: 'Cancel' })).toBeFocused();
+		await kbd.press('Enter');
+		await expect(ask).toBeHidden();
+		expect(backend.patches).toEqual([]);
+		await kbd.press('Control+s');
+		await expect(ask.getByRole('button', { name: 'Cancel' })).toBeFocused();
+		await kbd.press('Tab');
+		await kbd.press('Enter');
+		await expect(page.getByTestId('save-bar')).toContainText('Saved');
+		expect(backend.patches).toEqual([{ logging: { if_revision: 1, console_detail: 'file' } }]);
+
+		await kbd.tabTo(page.getByRole('button', { name: 'Delete files with torrent details…' }), 80);
+		await kbd.press('Enter');
+		const del = page.getByRole('dialog', { name: 'Delete the log files with torrent details?' });
+		await expect(del).toContainText('Log files to delete: 1');
+		await expect(del.getByRole('button', { name: 'Cancel' })).toBeFocused();
+		await kbd.press('Tab');
+		await kbd.press('Enter');
+		await expect(page.getByText(/Log files deleted: 1/)).toBeVisible();
+		expect(deletes).toEqual([{ which: 'details' }]);
 	});
 });

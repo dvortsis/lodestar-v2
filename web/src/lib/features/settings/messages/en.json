@@ -325,5 +325,21 @@
 	"settings_logging_components_label": "Per-component levels",
 	"settings_logging_components_help": "A component's own level, instead of the Verbosity's.",
 	"settings_logging_libraries_label": "Libraries filter",
-	"settings_logging_libraries_help": "A tracing filter for third-party libraries only, such as warn,hyper=info. Lodestar's own lines follow the events above."
+	"settings_logging_libraries_help": "A tracing filter for third-party libraries only, such as warn,hyper=info. Lodestar's own lines follow the events above.",
+	"settings_logoutput_console_format_label": "Console format",
+	"settings_logoutput_console_detail_label": "Console detail",
+	"settings_logoutput_console_detail_help": "Private keeps torrent details out of the console and docker logs.",
+	"settings_logoutput_console_level_label": "Console level",
+	"settings_logoutput_file_enabled_label": "Write log files",
+	"settings_logoutput_file_enabled_help": "Files you can download and delete.",
+	"settings_logoutput_file_folder_label": "Log folder",
+	"settings_logoutput_file_folder_help": "A full path; applies after a restart.",
+	"settings_logoutput_file_level_label": "File level",
+	"settings_logoutput_file_size_mib_label": "File size",
+	"settings_logoutput_file_count_label": "Files kept",
+	"settings_logoutput_file_max_age_days_label": "Maximum age",
+	"settings_logoutput_file_total_mib_label": "Total size cap",
+	"settings_logoutput_event_log_errors_label": "Errors to the Windows Event Log",
+	"settings_logging_console_detail_option_private": "Private",
+	"settings_logging_console_detail_option_file": "Same as the file"
 }

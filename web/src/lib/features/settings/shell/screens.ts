@@ -3,6 +3,18 @@
 // tiny `screen.ts`: `features/settings/<part>/screen.ts` or `features/<feature>/screen.ts`.
 // `/settings/[section]` finds it here. Keep screen.ts small, since every Settings page loads it: a
 // hand-built screen's body and a screen's extras are dynamic imports (`load`, `extra`).
+//
+// What an entry costs on every Settings first view, measured by inserting entries into the built
+// chunk, gzip -9 (X-settings-registry-slim): 25 B for its title in en and zh, and ≈ 40–60 B for
+// the entry with its `iconLoad` and `load` (each new chunk Vite names in the preload lists adds
+// ≈ 10 B; Logging's entry measured 81 B in #289). The navigation shows every title on first paint,
+// so titles stay here: in the shell's chunk they would cost the same on every first view, and a
+// feature couldn't register itself. Keep the rest off:
+// - a purpose line or notice goes in the file's lazy `about` module (`About`), never in the entry;
+// - an icon goes through `iconLoad` (an eager Phosphor icon is ≈ 300–400 B);
+// - a large body is forwarded through a tiny `body.ts` (Security, Logging), so its long preload
+//   list stays out of here.
+
 import type { Component } from 'svelte';
 import { m } from '$lib/paraglide/messages.js';
 import type { FieldSpec } from '../form/types';
@@ -27,13 +39,25 @@ export const SCREEN_ORDER: Record<ScreenGroup, readonly string[]> = {
 	system: ['general', 'updates', 'logging', 'security', 'about']
 };
 
+/** A screen's longer strings, loaded off the first view (`Screen.about`). */
+export interface About {
+	/** The one-sentence purpose under a generated screen's heading, also matched by the filter. */
+	purpose?: () => string;
+	/** A line above a generated screen's form (why it's read-only, say). */
+	notice?: () => string;
+}
+
 export interface Screen {
 	/** The URL segment: `/settings/<id>`. */
 	id: string;
 	group: ScreenGroup;
 	title: () => string;
-	/** The one-sentence purpose under a generated screen's heading, also matched by the filter. */
-	purpose?: () => string;
+	/**
+	 * The `About` of the screens of one registry file, by screen id: one lazy module the file's
+	 * entries share. It loads when a generated screen opens and when the filter is first used, so no
+	 * first view carries these strings.
+	 */
+	about?: () => Promise<Record<string, About>>;
 	/** A `~icons/ph/*` component; the gear when absent. */
 	icon?: Component;
 	/** The same, loaded after the navigation shows (the gear holds its place), for a screen whose icon
@@ -49,8 +73,6 @@ export interface Screen {
 	sections?: readonly string[];
 	/** Every field of a generated screen is read-only (its guarded flow isn't built yet). */
 	readOnly?: boolean;
-	/** A line above a generated screen's form (why it's read-only, say). */
-	notice?: () => string;
 	/** A panel after a generated screen's form, loaded once the form shows. */
 	extra?: () => Promise<{ default: Component }>;
 }
@@ -117,10 +139,18 @@ export function screenFields(screen: Screen, index: SettingsIndexView): FieldSpe
 	}));
 }
 
-/** Navigation matching does not load any setting values or private data. */
-export function matchesScreen(screen: Screen, query: string): boolean {
+/** The screen's `About`, or none when it has none. A chunk that fails to load rejects. */
+export async function aboutOf(screen: Screen): Promise<About> {
+	return (await screen.about?.())?.[screen.id] ?? {};
+}
+
+/**
+ * Navigation matching does not load any setting values or private data. It matches the title, and
+ * the purpose once the screen's `about` has loaded.
+ */
+export function matchesScreen(screen: Screen, query: string, about: About = {}): boolean {
 	const normalize = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
-	const haystack = normalize(`${screen.title()} ${screen.purpose?.() ?? ''}`);
+	const haystack = normalize(`${screen.title()} ${about.purpose?.() ?? ''}`);
 	return normalize(query)
 		.trim()
 		.split(/\s+/)

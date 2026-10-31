@@ -4,6 +4,8 @@ import { m } from '$lib/paraglide/messages.js';
 export const MESSAGES: Record<string, () => string> = {
 	settings_logging_components_help: m.settings_logging_components_help,
 	settings_logging_components_label: m.settings_logging_components_label,
+	settings_logging_console_detail_option_file: m.settings_logging_console_detail_option_file,
+	settings_logging_console_detail_option_private: m.settings_logging_console_detail_option_private,
 	settings_logging_events_help: m.settings_logging_events_help,
 	settings_logging_events_label: m.settings_logging_events_label,
 	settings_logging_libraries_help: m.settings_logging_libraries_help,

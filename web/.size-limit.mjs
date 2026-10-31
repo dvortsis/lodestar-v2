@@ -189,7 +189,8 @@ const bodyMaps = {
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
-const handBuilt = new Set(Object.values(bodyMaps).flat());
+// The outputs' map (S-logs-2b) belongs to Logging's body too: it loads with its outputs part.
+const handBuilt = new Set([...Object.values(bodyMaps).flat(), 'logoutput']);
 const largestMap = mapName(
 	messageKeys
 		.filter((key) => mapName(key) !== 'group' && !handBuilt.has(mapName(key)))
@@ -215,13 +216,20 @@ const connectionMaps = [
 ];
 const connectionMapFiles = onDemandOf('/settings/[section]', connectionMaps);
 // Logging's map (S-logs-2) has its own entry too, so the existing maps' entries keep their limits.
+// The outputs' labels (S-logs-2b): their own map, loaded with the outputs after Logging's first view.
+const loggingOutputMapFiles = onDemandOf('/settings/[section]', [
+	/features\/settings\/form\/message-maps\/logoutput\.ts$/
+]);
 const loggingMapFiles = onDemandOf('/settings/[section]', [
 	/features\/settings\/form\/message-maps\/logging\.ts$/
 ]);
 const settingsMessagesLazy = requireMeasuredJs(
 	'Settings messages (on demand)',
 	onDemandOf('/settings/[section]', settingsMessages).filter(
-		(f) => !connectionMapFiles.includes(f) && !loggingMapFiles.includes(f)
+		(f) =>
+			!connectionMapFiles.includes(f) &&
+			!loggingMapFiles.includes(f) &&
+			!loggingOutputMapFiles.includes(f)
 	)
 );
 const settingsConnectionMaps = requireMeasuredJs(
@@ -288,9 +296,25 @@ const settingsLogging = [
 	/features\/settings\/logging\/(EventList|ComponentLevels|VerbosityWidget)\.svelte$/,
 	/features\/settings\/logging\/(privacy|icon|parts)\.ts$/
 ];
+// Logging part 2 (S-logs-2b): the log files with the Danger zone, the preview, and the console
+// detail's question load after the first view (or on the first save that needs it).
+const settingsLoggingFiles = [
+	/features\/settings\/logging\/(LogFiles|Preview|Outputs|Tail)\.svelte$/,
+	/features\/settings\/logging\/outputs\.ts$/
+];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
+// The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
+// module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
+// and when the filter is first used. The overview and a hand-built screen's first view stop at them;
+// "Settings screen purposes (on demand)" gates them. Named per registry file on purpose, so no
+// other `about.ts` is left out of a first view: a new registry file's `about.ts` joins this list.
+const settingsAbout = [/features\/settings\/screens2?\/about\.ts$/];
+// The generated screens' navigation icons (X-settings-registry-slim), loaded after the navigation
+// shows like the connection screens' (`Screen.iconLoad`); every first view stops at them.
+const settingsIcons = [/features\/settings\/screens\/icons\.ts$/];
 const settingsFirstView = [
 	...settingsOnDemand,
+	...settingsIcons,
 	...insightsDigest,
 	...settingsEdit,
 	...settingsConnections,
@@ -298,21 +322,42 @@ const settingsFirstView = [
 	...settingsSecurityLater,
 	...securityLoader,
 	...settingsLogging,
+	...settingsLoggingFiles,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
 ];
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsShellView = own('/settings/[section]', {
-	onDemand: [...settingsFirstView, ...settingsFormChunk]
+	onDemand: [...settingsFirstView, ...settingsFormChunk, ...settingsAbout]
 });
+const settingsIconsLazy = requireMeasuredJs(
+	'Settings screen icons (on demand)',
+	onDemandOf('/settings/[section]', settingsIcons)
+);
+const settingsAboutLazy = requireMeasuredJs(
+	'Settings screen purposes (on demand)',
+	onDemandOf('/settings/[section]', settingsAbout)
+);
 const settingsLoggingMap = requireMeasuredJs(
 	'Settings logging messages (on demand)',
 	loggingMapFiles
 );
+const settingsLoggingOutputMap = requireMeasuredJs(
+	'Settings logging output messages (on demand)',
+	loggingOutputMapFiles
+);
 const settingsLoggingLazy = requireMeasuredJs(
 	'Settings logging parts (on demand)',
 	onDemandOf('/settings/[section]', settingsLogging).filter(
+		(f) =>
+			!onDemandOf('/settings/[section]', settingsOnDemand).includes(f) &&
+			!onDemandOf('/settings/[section]', settingsLoggingFiles).includes(f)
+	)
+);
+const settingsLoggingFilesLazy = requireMeasuredJs(
+	'Settings logging files and preview (on demand)',
+	onDemandOf('/settings/[section]', settingsLoggingFiles).filter(
 		(f) => !onDemandOf('/settings/[section]', settingsOnDemand).includes(f)
 	)
 );
@@ -329,10 +374,16 @@ const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on dema
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
 const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
 const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
+// The registry's lazy purposes and icons (X-settings-registry-slim) are left out the same way.
+const registryLazyKeys = Object.keys(manifest).filter((key) =>
+	[...settingsAbout, ...settingsIcons].some((re) => re.test(key))
+);
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
-		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+		.filter(
+			(key) => bodyKeys.includes(key) || extraKeys.includes(key) || registryLazyKeys.includes(key)
+		)
 		// Security's later parts load only from its body, so their imports of that body alone are
 		// of code already loaded; any other body they import still trips this.
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
@@ -340,7 +391,7 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 );
 if (staticHits.length)
 	throw new Error(
-		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
+		`Settings: a screen body, extra, purpose or icon module is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
 	);
 // The same for Security's later parts: they load by dynamic import after mount, so nothing may
 // import them statically, or their code would leave the first-view gates unmeasured.
@@ -380,6 +431,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsSecurity,
 					...settingsSecurityLater,
 					...settingsLogging,
+					...settingsLoggingFiles,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
@@ -701,7 +753,7 @@ export default [
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '46 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
-		own('/settings', { onDemand: settingsFirstView }),
+		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
 		'45 KB'
 	),
 	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
@@ -722,17 +774,20 @@ export default [
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
 	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
+	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
+	// 0.70 KB; limit = measured + 10%.
+	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
+	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
+	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
-	// Raised by the runner (§2.26): +~90 B from the Logging registry entry in the shared screens chunk
-	// (S-logs-2); structural fix queued (registry titles out of the shared chunk). Notifications only.
+	// A new registry entry adds ≈ 65–85 B to every one of these and to "Settings section" (its
+	// title ≈ 25 B, the entry with its icon and body loaders ≈ 40–60 B; the note at the top of
+	// shell/screens.ts). Before X-settings-registry-slim each also carried its purpose and an eager
+	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
 	...settingsHandBuilt.map(({ name, files }) =>
-		entry(
-			`Settings ${name} (first view)`,
-			files,
-			name === 'NotificationsScreen' ? '45.1 KB' : '45 KB'
-		)
+		entry(`Settings ${name} (first view)`, files, '45 KB')
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
@@ -741,6 +796,10 @@ export default [
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
+	// The registry's purpose lines and notices, and the generated screens' navigation icons
+	// (X-settings-registry-slim): measured 0.87 KB and 1.5 KB, limits = measured + 10%.
+	entry('Settings screen purposes (on demand)', settingsAboutLazy, '0.96 KB'),
+	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',

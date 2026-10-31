@@ -7,6 +7,7 @@
 import { api } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 import { formatBytes, formatCount } from '$lib/format';
+import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
 import { ask } from '../form/dialogs';
 import type { SettingsForm } from '../form';
@@ -210,14 +211,17 @@ export async function offerDelete(c: Context): Promise<number> {
 		return 0;
 	}
 	if (!files.length) return 0;
-	const count = formatCount(files.length);
+	const count = formatCount(files.length, currentLocale());
 	const answer = await ask(
 		{
 			title: m.settings_logging_delete_title(),
 			body: [
 				m.settings_logging_delete_body({
 					count,
-					size: formatBytes(files.reduce((n, f) => n + f.size, 0))
+					size: formatBytes(
+						files.reduce((n, f) => n + f.size, 0),
+						currentLocale()
+					)
 				})
 			],
 			actions: [

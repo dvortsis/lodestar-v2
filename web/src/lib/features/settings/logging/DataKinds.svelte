@@ -6,6 +6,7 @@
 	// itself: it shows on only once the server has saved it.
 	import { onDestroy, tick } from 'svelte';
 	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
@@ -58,6 +59,13 @@
 		}
 	}
 	const ctx = () => ({ catalog, form, signal: leaving.signal });
+
+	// What follows on the screen (the outputs, the log files) loads on its own, after this.
+	let Tail = $state.raw<typeof import('./Tail.svelte').default>();
+	import('./Tail.svelte').then(
+		(mod) => (Tail = mod.default),
+		() => (error = m.settings_form_chunk_failed())
+	);
 	const choosePreset = (p: string) => run((x) => x.setPreset(ctx(), p), p !== 'private');
 	const setKind = (k: LogKind, on: boolean) => run((x) => x.setKind(ctx(), k, on), on);
 	const setOptIn = (k: OptIn, on: boolean) => run((x) => x.setOptIn(ctx(), k, on), on);
@@ -68,7 +76,7 @@
 		if (!events.length) return m.settings_logging_kind_carried_none();
 		const names = events.slice(0, 3).map(eventLabel).join(', ');
 		return m.settings_logging_kind_carried({
-			count: formatCount(events.length),
+			count: formatCount(events.length, currentLocale()),
 			events: events.length > 3 ? `${names}, …` : names
 		});
 	}
@@ -169,3 +177,5 @@
 		</ul>
 	</section>
 </section>
+
+{#if Tail}<Tail {catalog} {form} />{/if}
