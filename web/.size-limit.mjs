@@ -301,7 +301,7 @@ const viewOf = (...parts) => [
 ];
 const engagedSearch = viewOf([
 	'src/lib/features/search/query/Live.svelte',
-	[/query\/(FilterStrip|SyntaxPopover)\.svelte$/]
+	[/query\/(FilterStrip|SyntaxPopover)\.svelte$/, /features\/search\/assist\//]
 ]);
 const resultsLazy = [
 	...new Set(RESULTS.flatMap((k) => ownChunk(k, resultsOnDemand, false, engagedSearch)))
@@ -370,11 +370,36 @@ const bulkLazy = [
 	)
 ];
 
+// Search assist (S-search-4): autocomplete loads on the bar's first focus or keystroke (with the
+// recent-query store and its stylesheet); the natural-phrasing preview and the Builder (with its
+// selects and inputs) load on their buttons. Each is measured beyond the view it loads into.
+const ASSIST = [
+	'src/lib/features/search/assist/Assist.svelte',
+	'src/lib/features/search/assist/recent.ts',
+	'src/lib/features/search/assist/assist.css'
+];
+const assistLazy = [...new Set(ASSIST.flatMap((k) => ownChunk(k, [], false, engagedSearch)))];
+const naturalLazy = ownChunk('src/lib/features/search/assist/Natural.svelte', [], false, [
+	...engagedSearch,
+	...assistLazy
+]);
+const builderLazy = ownChunk('src/lib/features/search/assist/Builder.svelte', [], false, [
+	...engagedSearch,
+	...assistLazy
+]);
+
 // Never pass by measuring nothing: a renamed or moved file must fail here, not drop the entry.
 if (Object.keys(manifest).length && !resultsLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Search results (lazy): no chunk found for ResultsPanel.svelte in the manifest');
 if (Object.keys(manifest).length && !facetsLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Facet rail (lazy): no chunk found for the facet rail in the manifest');
+for (const [name, files] of [
+	['Search assist', assistLazy],
+	['Natural phrasing', naturalLazy],
+	['Builder', builderLazy]
+])
+	if (Object.keys(manifest).length && !files.some((f) => f.endsWith('.js')))
+		throw new Error(`${name} (on demand): no chunk found in the manifest`);
 if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Results toolbar (lazy): no chunk found for the toolbar in the manifest');
 
@@ -474,6 +499,9 @@ export default [
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.4 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
+	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
+	entry('Natural phrasing (on demand)', naturalLazy, '1.64 KB'),
+	entry('Builder (on demand)', builderLazy, '5.69 KB'),
 	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),

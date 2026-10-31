@@ -14,7 +14,7 @@ pub mod pool;
 pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
 pub use manifest::{Consent, Endpoint, Kind, Manifest, Network, Priority, Risk};
 pub use plugin::{
-    BoxFuture, Closed, Discovery, Emitter, Found, PeerRequest, PluginError, Shutdown, SourceCtx,
-    SourcePlugin,
+    BoxFuture, Closed, Discovery, Emitter, Found, LookupSession, PeerRequest, PluginError,
+    SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
 };
 pub use pool::{FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats};
