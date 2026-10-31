@@ -451,7 +451,7 @@
     },
     "S-search-5": {
       "status": "review",
-      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6) | 02:59Z #254 head 2221d1d6 ready; reviewer session_01MMjhnBdpKEkRUctbRZBxoY"
+      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views | PR #254 opened (head 2221d1d6) | 02:59Z #254 head 2221d1d6 ready; reviewer session_01MMjhnBdpKEkRUctbRZBxoY | 03:23Z review CHANGES: bulk copy fallback flattens lines (input) -> textarea fallback; axe test missing wait; riding: export toast wording, decisions notes. Reviewer kept for delta"
     },
     "S-search-6": {
       "status": "running",
