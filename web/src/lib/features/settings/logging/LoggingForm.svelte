@@ -1,8 +1,9 @@
 <script lang="ts">
-	// Settings → Logging's staged settings on the form engine (§10.10.4): the Verbosity preset,
-	// the event list, per-component levels under Advanced and the Libraries filter under Expert.
-	// They're Safe changes (§10.10.7): staged, saved, Undo. The event list and the component levels
-	// stand in for the JSON fallback and load when their fields are on the page.
+	// Settings → Logging's staged settings on the form engine (§10.10.4): the events (Verbosity, the
+	// event list, per-component levels under Advanced, the Libraries filter under Expert) and the
+	// outputs (console, log file, Windows Event Log on a Windows service). They're Safe changes
+	// (§10.10.7): staged, saved, Undo; the console's detail asks first (Privacy). The widgets, the
+	// preview and the gate's dialog load on demand.
 	import { onDestroy, untrack } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
@@ -34,20 +35,25 @@
 		})
 	);
 	untrack(() => onform?.(form));
+	// The console's detail is a Privacy change: saving "same as the file" asks first.
+	const ungate = form.gate('privacy', async () =>
+		(await import('./outputs')).confirmConsoleDetail(form)
+	);
 	onDestroy(() => {
+		ungate();
 		form.destroy();
 		for (const off of unregister) off();
 	});
 
 	const spec = (n: string) => form.specs.find((s) => s.name === n);
-	const essentials = $derived(form.specs.filter((s) => !s.advanced));
+	const essentials = $derived(form.specs.filter((s) => s.group === 'events' && !s.advanced));
 	const advanced = $derived(spec('components'));
 	const expert = $derived(spec('libraries'));
 
 	let open = $state<Record<string, boolean>>({});
 	function reveal(key: FieldKey) {
-		if (key === advanced?.key) open.advanced = true;
-		if (key === expert?.key) open.expert = true;
+		const s = form.specs.find((x) => x.key === key);
+		if (s?.advanced) open[s.name === 'libraries' ? 'expert' : s.group] = true;
 	}
 
 	const inPlace = messagesLoaded(['logging']);
@@ -66,7 +72,7 @@
 			</div>
 			{#each essentials as s (s.key)}<SettingField {form} key={s.key} />{/each}
 			{#if advanced}
-				<details open={open.advanced} ontoggle={(e) => (open.advanced = e.currentTarget.open)}>
+				<details open={open.events} ontoggle={(e) => (open.events = e.currentTarget.open)}>
 					<summary class="ls-focus cursor-pointer py-3 text-label"
 						>{m.settings_logging_advanced()}</summary
 					>

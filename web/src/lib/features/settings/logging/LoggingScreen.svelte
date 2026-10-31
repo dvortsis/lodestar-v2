@@ -14,8 +14,9 @@
 	import LoggingForm from './LoggingForm.svelte';
 	import type { CatalogHolder, CatalogKey } from './context';
 
-	/** The fields this screen's form shows; the data kinds and opt-ins are sent on their own. */
-	const FORM_FIELDS = ['verbosity', 'events', 'components', 'libraries'];
+	/** The groups this screen's form shows (not the live log's temporary verbosity); the data kinds
+	 * and opt-ins are sent on their own. */
+	const FORM_GROUPS = ['events', 'console', 'file', 'event_log'];
 
 	let parts = $state.raw<typeof import('./parts')>();
 	let catalog = $state.raw<import('./catalog.svelte').LoggingCatalog>();
@@ -53,7 +54,10 @@
 		failed = false;
 		void loadSettingsIndex().then(
 			(index) => {
-				if (live) fields = index.fieldsOf(['logging']).filter((f) => FORM_FIELDS.includes(f.name));
+				if (live)
+					fields = index
+						.fieldsOf(['logging'])
+						.filter((f) => FORM_GROUPS.includes(f.group) && !f.name.startsWith('temporary'));
 			},
 			() => {
 				if (live) failed = true;
@@ -89,4 +93,6 @@
 {:else}
 	<LoggingForm {fields} onform={(f) => (form = f)} />
 {/if}
-{#if parts && catalog}<parts.DataKinds {catalog} {form} />{/if}
+{#if parts && catalog}
+	<parts.DataKinds {catalog} {form} />
+{/if}

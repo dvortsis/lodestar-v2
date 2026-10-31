@@ -58,6 +58,13 @@
 		}
 	}
 	const ctx = () => ({ catalog, form, signal: leaving.signal });
+
+	// What follows on the screen (the outputs, the log files) loads on its own, after this.
+	let Tail = $state.raw<typeof import('./Tail.svelte').default>();
+	import('./Tail.svelte').then(
+		(mod) => (Tail = mod.default),
+		() => (error = m.settings_form_chunk_failed())
+	);
 	const choosePreset = (p: string) => run((x) => x.setPreset(ctx(), p), p !== 'private');
 	const setKind = (k: LogKind, on: boolean) => run((x) => x.setKind(ctx(), k, on), on);
 	const setOptIn = (k: OptIn, on: boolean) => run((x) => x.setOptIn(ctx(), k, on), on);
@@ -169,3 +176,5 @@
 		</ul>
 	</section>
 </section>
+
+{#if Tail}<Tail {catalog} {form} />{/if}

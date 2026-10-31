@@ -288,6 +288,12 @@ const settingsLogging = [
 	/features\/settings\/logging\/(EventList|ComponentLevels|VerbosityWidget)\.svelte$/,
 	/features\/settings\/logging\/(privacy|icon|parts)\.ts$/
 ];
+// Logging part 2 (S-logs-2b): the log files with the Danger zone, the preview, and the console
+// detail's question load after the first view (or on the first save that needs it).
+const settingsLoggingFiles = [
+	/features\/settings\/logging\/(LogFiles|Preview|Outputs|Tail)\.svelte$/,
+	/features\/settings\/logging\/outputs\.ts$/
+];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
 const settingsFirstView = [
 	...settingsOnDemand,
@@ -298,6 +304,7 @@ const settingsFirstView = [
 	...settingsSecurityLater,
 	...securityLoader,
 	...settingsLogging,
+	...settingsLoggingFiles,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
@@ -313,6 +320,14 @@ const settingsLoggingMap = requireMeasuredJs(
 const settingsLoggingLazy = requireMeasuredJs(
 	'Settings logging parts (on demand)',
 	onDemandOf('/settings/[section]', settingsLogging).filter(
+		(f) =>
+			!onDemandOf('/settings/[section]', settingsOnDemand).includes(f) &&
+			!onDemandOf('/settings/[section]', settingsLoggingFiles).includes(f)
+	)
+);
+const settingsLoggingFilesLazy = requireMeasuredJs(
+	'Settings logging files and preview (on demand)',
+	onDemandOf('/settings/[section]', settingsLoggingFiles).filter(
 		(f) => !onDemandOf('/settings/[section]', settingsOnDemand).includes(f)
 	)
 );
@@ -380,6 +395,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsSecurity,
 					...settingsSecurityLater,
 					...settingsLogging,
+					...settingsLoggingFiles,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
@@ -721,8 +737,13 @@ export default [
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
-	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
+	// Raised for S-logs-2b, pending the runner's ruling (§2.26): the map now holds the outputs'
+	// labels, help and options. Measured 1.425 KB; limit = measured + 10%. It sits in Logging's first
+	// view, which stays at 44.62 of 45 KB.
+	entry('Settings logging messages (on demand)', settingsLoggingMap, '1.57 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
+	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 8.44 KB.
+	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '9.3 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	// Raised by the runner (§2.26): +~90 B from the Logging registry entry in the shared screens chunk
