@@ -1626,13 +1626,13 @@
    "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot | 09:49Z launched Sonnet"
   },
   "X-polish-1031": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhn8bbHCiHttiiiZrh6f",
-   "pr": null,
+   "pr": 274,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "08:16Z brief briefs/X-polish-1031.md (folds #266/#267 optional findings + bench zero-result class + recovery caching) | 10:39Z launched Opus"
+   "notes": "08:16Z brief briefs/X-polish-1031.md (folds #266/#267 optional findings + bench zero-result class + recovery caching) | 10:39Z launched Opus | 11:43Z PR #274 head fb81cf7d (items 1-8; recovery bench worst p95 6.97 ms); accepted tests/search_recovery.rs; fresh Opus reviewer"
   },
   "S-search-live-ui": {
    "status": "running",
@@ -2400,7 +2400,8 @@
   "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
   "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
   "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
-  "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)"
+  "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
+  "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
