@@ -22,6 +22,10 @@ describe('the screen registry', () => {
 			'network',
 			'storage',
 			'search',
+			'trackers',
+			'integrations',
+			'notifications',
+			'insights',
 			'general'
 		]);
 		expect(screens.filter((screen) => screen.sections).every((screen) => screen.icon)).toBe(true);

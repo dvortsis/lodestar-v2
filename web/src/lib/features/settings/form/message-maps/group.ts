@@ -2,14 +2,25 @@
 import { m } from '$lib/paraglide/messages.js';
 
 export const MESSAGES: Record<string, () => string> = {
+	settings_group_cadence: m.settings_group_cadence,
 	settings_group_data: m.settings_group_data,
 	settings_group_database: m.settings_group_database,
 	settings_group_dht: m.settings_group_dht,
+	settings_group_digest: m.settings_group_digest,
+	settings_group_discord: m.settings_group_discord,
+	settings_group_download_clients: m.settings_group_download_clients,
+	settings_group_email: m.settings_group_email,
 	settings_group_fetching: m.settings_group_fetching,
 	settings_group_index: m.settings_group_index,
 	settings_group_intensity: m.settings_group_intensity,
+	settings_group_ntfy: m.settings_group_ntfy,
 	settings_group_region: m.settings_group_region,
+	settings_group_routing: m.settings_group_routing,
+	settings_group_scrape: m.settings_group_scrape,
 	settings_group_search: m.settings_group_search,
+	settings_group_torznab: m.settings_group_torznab,
 	settings_group_transport: m.settings_group_transport,
-	settings_group_web_ui: m.settings_group_web_ui
+	settings_group_usage: m.settings_group_usage,
+	settings_group_web_ui: m.settings_group_web_ui,
+	settings_group_webhook: m.settings_group_webhook
 };
