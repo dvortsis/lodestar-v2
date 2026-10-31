@@ -2157,11 +2157,18 @@ fn set_pending_requeues(store: &mut Store, list: &[String]) -> ApiResult<()> {
 }
 
 /// Records a re-queue of `query` as pending, before the rule change it
-/// follows, so a stop anywhere after the change leaves it to redo.
-fn push_pending_requeue(store: &mut Store, query: &str) -> ApiResult<()> {
+/// follows, so a stop anywhere after the change leaves it to redo. A query
+/// already pending isn't added twice, so while there's no search index to
+/// clear them the list holds one entry per query text; [`FiltersApi::requeue`] keeps an
+/// entry a later rule change still needs. `true` when it was added.
+fn push_pending_requeue(store: &mut Store, query: &str) -> ApiResult<bool> {
     let mut list = pending_requeues(store)?;
+    if list.iter().any(|q| q == query) {
+        return Ok(false);
+    }
     list.push(query.to_owned());
-    set_pending_requeues(store, &list)
+    set_pending_requeues(store, &list)?;
+    Ok(true)
 }
 
 /// Clears one pending re-queue of `query` once its marks are in.
@@ -2432,9 +2439,12 @@ impl FiltersApi {
             .find(|r| r.0 == id)
             .map(|r| r.1)
             .ok_or_else(missing)?;
-        push_pending_requeue(&mut store, &q)?;
+        let added = push_pending_requeue(&mut store, &q)?;
         let Some(q) = store.remove_class_rule(id).map_err(internal)? else {
-            drop_pending_requeue(&mut store, &q)?;
+            // Only its own entry: one already there is another change's.
+            if added {
+                drop_pending_requeue(&mut store, &q)?;
+            }
             return Err(missing());
         };
         self.rules_changed(&mut store)?;
@@ -2459,23 +2469,39 @@ impl FiltersApi {
     /// Marks the stored torrents `node` matches for background enrichment,
     /// plus every torrent the index hasn't reached yet, and starts a pass.
     /// The search runs without the store lock, and marks go in chunks.
-    /// `(None, false)` without a search index (only torrents arriving or
-    /// re-enriched later are affected); `true` when the cap cut it short.
+    /// `(None, false)` without a search index: nothing is marked now, and
+    /// the entry stays for the first start with search on; `true` when the
+    /// cap cut it short.
     ///
-    /// `text` is the pending entry it clears once done. Only the server's
-    /// shutdown stops it (`server_stopping`); stopped or failed, the entry
-    /// stays, and [`FiltersApi::resume_requeues`] redoes it at the next
-    /// start. Marking again is harmless: it only queues a torrent for one
-    /// more enrichment.
+    /// `text` is the pending entry it clears once done: only when a search
+    /// index did the marking, and no rule change came after the marking
+    /// began (the entries are deduped, so a later change of the same query
+    /// may share this one). Without an index it stays, and the first start
+    /// with search on does it. Only the server's shutdown stops it
+    /// (`server_stopping`); stopped or failed, the entry stays, and
+    /// [`FiltersApi::resume_requeues`] redoes it at the next start. Marking
+    /// again is harmless: it only queues a torrent for one more enrichment.
     fn requeue(&self, node: &Node, text: &str, now: i64) -> ApiResult<(Option<usize>, bool)> {
+        // Every rule change up to this generation is in force before the
+        // search starts, so these marks cover them all.
+        let generation = self.store().class_gen().map_err(internal)?;
         let out = self.requeue_marks(node, now)?;
-        drop_pending_requeue(&mut self.store(), text)?;
+        if out.0.is_some() {
+            let mut store = self.store();
+            if store.class_gen().map_err(internal)? == generation {
+                drop_pending_requeue(&mut store, text)?;
+            }
+        }
         Ok(out)
     }
 
     /// [`FiltersApi::requeue`] for a stored query text; one that no longer
     /// parses matches nothing, so its entry is just cleared.
     fn requeue_text(&self, text: &str, now: i64) -> ApiResult<(Option<usize>, bool)> {
+        #[cfg(test)]
+        if tests::FAIL_REQUEUE.with(|f| f.borrow().as_deref() == Some(text)) {
+            return Err(internal("injected"));
+        }
         match parse(text) {
             Ok(node) => self.requeue(&node, text, now),
             Err(_) => {
@@ -2526,15 +2552,24 @@ impl FiltersApi {
         Ok((Some(n), truncated))
     }
 
-    /// Redoes the re-queues a stop cut short (run once at startup, in the
-    /// background). Each finished one is cleared; one the shutdown stops
-    /// again stays for the next start. Returns how many finished.
+    /// Redoes the pending re-queues: those a stop cut short, and those
+    /// made while search was off (run at every start, in the background;
+    /// search is turned on by a restart). Each one an index finishes is
+    /// cleared; without an index they all stay. One that fails stays and
+    /// the rest still run: its error is logged where it happens, by type
+    /// only (`api.internal_error`), never with the query. Only the
+    /// shutdown stops the loop, and what's left stays for the next start.
+    /// Returns how many an index finished.
     pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
         let pending = pending_requeues(&self.store())?;
         let mut done = 0;
         for text in &pending {
-            self.requeue_text(text, now)?;
-            done += 1;
+            match self.requeue_text(text, now) {
+                Ok((Some(_), _)) => done += 1,
+                Ok((None, _)) => {}
+                Err(e) if self.shutdown.is_stopped() => return Err(e),
+                Err(_) => {}
+            }
         }
         Ok(done)
     }
@@ -2960,6 +2995,52 @@ fn apply_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lodestar_filter::{Core, CsList, Lists, Switches};
+
+    thread_local! {
+        /// A pending re-queue text that fails every time it's redone.
+        pub(super) static FAIL_REQUEUE: std::cell::RefCell<Option<String>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// One pending re-queue failing every time doesn't hold up the rest:
+    /// it stays, and the others are done and cleared.
+    #[test]
+    fn a_failing_requeue_does_not_block_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
+        for q in ["fails", "lexb", "lexb", "other"] {
+            push_pending_requeue(&mut store, q).unwrap();
+        }
+        assert_eq!(
+            pending_requeues(&store).unwrap(),
+            ["fails", "lexb", "other"]
+        );
+        let api = FiltersApi {
+            store: Arc::new(Mutex::new(store)),
+            engine: Arc::new(Handle::new(Engine::new(Core::new(
+                Lists::shipped().unwrap(),
+                CsList::default(),
+                Switches::default(),
+            )))),
+            held: Default::default(),
+            sealer: None,
+            ips: Default::default(),
+            index: Some(lodestar_search::SearchIndex::in_memory().unwrap().into()),
+            reenrich: Default::default(),
+            jobs: Default::default(),
+            quarantine_secs: 0,
+            shutdown: Default::default(),
+        };
+        FAIL_REQUEUE.with(|f| *f.borrow_mut() = Some("fails".into()));
+        assert_eq!(api.resume_requeues(0).unwrap(), 2);
+        assert_eq!(pending_requeues(&api.store()).unwrap(), ["fails"]);
+        // Only the shutdown stops the loop.
+        api.shutdown.cancel();
+        push_pending_requeue(&mut api.store(), "lexb").unwrap();
+        assert!(api.resume_requeues(0).is_err());
+        assert_eq!(pending_requeues(&api.store()).unwrap(), ["fails", "lexb"]);
+    }
 
     fn done() -> ApiResult<Assessment> {
         Ok(Assessment::default())
