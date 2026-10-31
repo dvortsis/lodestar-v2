@@ -29,26 +29,23 @@ const { default: ResultsPanel } = await import('./ResultsPanel.svelte');
 const { visit } = await import('../query/testing.svelte');
 const { setRebuild } = await import('./testing.svelte');
 
-type Figures = components['schemas']['StatsResponse'];
-const figures = (searchable: number | null): Figures => ({
-	data_bytes: null,
-	disk_free_bytes: null,
-	fetched_per_hour: null,
-	harvested_per_hour: null,
-	index_lag_s: null,
-	paused: false,
-	queue_depth: 0,
-	sampling_blocked: null,
-	searchable_torrents: searchable,
-	stored_torrents: 0,
+type Figures = components['schemas']['SearchIndexState'];
+const figures = (searchable: number | null, over: Partial<Figures> = {}): Figures => ({
+	cold_start: false,
+	growing: false,
+	growth_hours: 24,
+	growth_per_hour: null,
+	rebuild: null,
+	searchable_torrents: searchable ?? 0,
+	unavailable: [],
 	updated_at: 0,
-	uptime_s: 0
+	...over
 });
 const saved = (id: number) => ({ id, name: `Saved ${id}`, q: `q${id}`, sort: null });
 
 function serve(s: Figures, list: unknown[] = []) {
 	get.mockImplementation(async (path: string) => {
-		if (path === '/stats') return s;
+		if (path === '/search/state') return s;
 		if (path === '/saved-searches') return list;
 		throw new Error(`unexpected GET ${path}`);
 	});
@@ -97,6 +94,29 @@ describe('ResultsPanel, the bare page', () => {
 		);
 		setRebuild({ ...event, phase: 'done' });
 		await waitFor(() => expect(screen.queryByTestId('results-rebuilding')).toBeNull());
+	});
+
+	it('shows the growing banner with the rate, and without it when none was measured', async () => {
+		serve(figures(84_210, { growing: true, growth_per_hour: 2104.5 }));
+		const { unmount } = render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() =>
+			expect(screen.getByTestId('results-cold-start').textContent).toContain('+2,105/h')
+		);
+		unmount();
+		serve(figures(84_210, { growing: true, growth_per_hour: null }));
+		render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() =>
+			expect(screen.getByTestId('results-cold-start').textContent).toContain(
+				'84,210 torrents so far'
+			)
+		);
+		expect(screen.getByTestId('results-cold-start').textContent).not.toContain('/h');
+	});
+
+	it('shows the full-page state on a cold start', async () => {
+		serve(figures(120, { cold_start: true, growing: true }));
+		render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() => expect(screen.getByTestId('results-cold-page')).toBeTruthy());
 	});
 
 	it('calls the bar on “Start typing”', async () => {

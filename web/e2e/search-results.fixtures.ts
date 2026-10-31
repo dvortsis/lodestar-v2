@@ -126,6 +126,22 @@ export const figures = (searchable: number) => ({
 	uptime_s: 60
 });
 
+/** `GET /search/state`: a grown index unless `over` says otherwise. */
+export const indexState = (
+	searchable: number,
+	over: Partial<components['schemas']['SearchIndexState']> = {}
+): components['schemas']['SearchIndexState'] => ({
+	cold_start: false,
+	growing: false,
+	growth_hours: 24,
+	growth_per_hour: null,
+	rebuild: null,
+	searchable_torrents: searchable,
+	unavailable: [],
+	updated_at: 1_700_000_000,
+	...over
+});
+
 export type Answer = Response | { status: number; body: unknown };
 
 type Sent = { ast: Ast; limit: number; cursor: string | null };

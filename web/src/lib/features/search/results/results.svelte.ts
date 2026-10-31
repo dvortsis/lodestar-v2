@@ -17,6 +17,7 @@ import type { Ast } from '$lib/state/search.svelte';
 import type { SearchHit } from './ResultRow.svelte';
 
 type Notice = components['schemas']['SearchNotice'];
+type Recovery = components['schemas']['SearchRecovery'];
 
 export const PAGE = 50;
 
@@ -48,6 +49,8 @@ export function createResults() {
 	let total = $state(0);
 	let totalApprox = $state(false);
 	let notices = $state.raw<Notice[]>([]);
+	/** Per-clause counts of an empty first page (zero-result recovery). */
+	let recovery = $state.raw<Recovery | null>(null);
 	let status = $state<Status>('empty');
 	/** A request for a new query is out while the previous rows stay (the hairline). */
 	let refining = $state(false);
@@ -104,6 +107,7 @@ export function createResults() {
 			total = 0;
 			totalApprox = false;
 			notices = [];
+			recovery = null;
 			error = null;
 			refining = false;
 			shownKey = null;
@@ -123,6 +127,7 @@ export function createResults() {
 			total = r.total;
 			totalApprox = r.total_approx;
 			notices = r.notices;
+			recovery = r.recovery ?? null;
 			cursor = r.next_cursor;
 			lease = r.next_cursor;
 			shownKey = key;
@@ -180,6 +185,9 @@ export function createResults() {
 		get notices() {
 			return notices;
 		},
+		get recovery() {
+			return recovery;
+		},
 		get status() {
 			return status;
 		},
@@ -229,6 +237,7 @@ export function createResults() {
 			total = 0;
 			totalApprox = false;
 			notices = [];
+			recovery = null;
 			error = null;
 			cursor = null;
 			lease = null;

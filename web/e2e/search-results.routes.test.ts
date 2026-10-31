@@ -8,7 +8,7 @@ import {
 	body,
 	copied,
 	expect,
-	figures,
+	indexState,
 	grid,
 	hashOf,
 	hits,
@@ -160,7 +160,7 @@ test.describe('states', () => {
 		mock
 	}) => {
 		mock.on('parseQuery', { ast: { op: 'all' }, canonical: '' });
-		mock.on('getStats', figures(2_400_000));
+		mock.on('searchIndexState', indexState(2_400_000));
 		mock.on('listSavedSearches', []);
 		await go('/search');
 		await interact(page);
@@ -293,7 +293,7 @@ test.describe('states', () => {
 
 	test('a cold start says how many are searchable so far', async ({ page, go, mock }) => {
 		server(mock, () => body(hits(1)));
-		mock.on('getStats', figures(4_200));
+		mock.on('searchIndexState', indexState(4_200, { growing: true }));
 		await go('/search?q=lantern');
 		await expect(page.getByTestId('results-cold-start')).toContainText('4,200');
 	});
@@ -329,10 +329,10 @@ test('a cold start answered after the results does not shift them', async ({ pag
 		answered();
 		return body(hits(3));
 	});
-	// /stats answers only once the results have: the worst order for the banner above the rows.
-	mock.on('getStats', (async () => {
+	// /search/state answers only once the results have: the worst order for the banner above the rows.
+	mock.on('searchIndexState', (async () => {
 		await results;
-		return figures(2_208);
+		return indexState(2_208, { growing: true });
 	}) as never);
 	await page.addInitScript(() => {
 		const w = window as unknown as { __cls: number };
@@ -382,7 +382,7 @@ for (const mode of ['light', 'dark'] as const) {
 				let release!: () => void;
 				const gate = new Promise<void>((r) => (release = r));
 				server(mock, () => body([]));
-				mock.on('getStats', figures(4_200));
+				mock.on('searchIndexState', indexState(4_200, { growing: true }));
 				mock.on('searchPost', (async (request: Request) => {
 					const sent = request.postDataJSON() as { ast: Ast; limit: number };
 					const text = JSON.stringify(sent.ast);
