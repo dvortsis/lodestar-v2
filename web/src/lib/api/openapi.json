@@ -2227,7 +2227,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DiscoverResponse"
+                  "$ref": "#/components/schemas/InsightsDiscoverResponse"
                 }
               }
             }
@@ -11943,6 +11943,75 @@
           }
         }
       },
+      "InsightsDiscoverResponse": {
+        "type": "object",
+        "description": "`GET /insights/discover` (§10.9.5, `docs/metrics.md` §6.8, §7.7).",
+        "required": [
+          "by_ip_family",
+          "by_source",
+          "by_strategy",
+          "kpi",
+          "range",
+          "stale",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "by_ip_family": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SegmentYield"
+            },
+            "description": "Yield by IPv4 / IPv6. Null until leases carry the address family."
+          },
+          "by_source": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoverSource"
+            },
+            "description": "Keys reported, rediscovered and dropped, by the source that\nreported them. Event time."
+          },
+          "by_strategy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StrategyCount"
+            },
+            "description": "Keys reported, by harvest strategy: the DHT's (BEP 51 sample,\nget_peers, announce, lookup), refetch, and each other source's own\ncodes. Event time: volume, not yield."
+          },
+          "kpi": {
+            "$ref": "#/components/schemas/DiscoverKpi"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/DiscoverPrevious"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale"
+              }
+            ]
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoverPoint"
+            }
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "InsightsEvent": {
         "type": "object",
         "description": "`event: insights`, every 30 s while anyone subscribes: the default\n`7d` overview's stage strip (`docs/metrics.md` §6.1, §7.5, §7.7). A\nclient showing another range refetches its own on each event.",
@@ -12000,6 +12069,31 @@
               "number",
               "null"
             ],
+            "format": "double"
+          }
+        }
+      },
+      "InsightsHistogramBin": {
+        "type": "object",
+        "description": "One bin of a distribution (parser confidence, junk score).",
+        "required": [
+          "count",
+          "hi",
+          "lo"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hi": {
+            "type": "number",
+            "format": "double",
+            "description": "The bin's edges."
+          },
+          "lo": {
+            "type": "number",
             "format": "double"
           }
         }
@@ -18126,7 +18220,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/HistogramBin"
+              "$ref": "#/components/schemas/InsightsHistogramBin"
             },
             "description": "Junk score distribution. Null until scores are rolled up."
           },
@@ -18142,7 +18236,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/HistogramBin"
+              "$ref": "#/components/schemas/InsightsHistogramBin"
             },
             "description": "Parser confidence distribution. Null until rolled up."
           },
