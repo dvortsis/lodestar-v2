@@ -875,9 +875,11 @@ FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()";
 /// Quiescence: other sessions' write locks on the read tables (a prepared
 /// transaction's `pid` is NULL, hence `IS DISTINCT FROM`), the tables'
 /// cumulative write counters, whether this is a standby, whether the
-/// counters are kept at all, and the cluster's next transaction id. Our
-/// reads assign none, so any committed write moves it at once, where the
-/// counters can lag by seconds.
+/// counters are kept at all, the cluster's whole snapshot (`xmin:xmax:xip`),
+/// and how many casts the source's enum has. Our reads assign no
+/// transaction id, so the snapshot moves when any writer starts or ends,
+/// including an older one committing late, where the counters can lag by
+/// seconds; `xmax` alone misses a commit that finishes out of order.
 const QUIET_SQL: &str = "\
 SELECT (SELECT count(*) FROM pg_catalog.pg_locks l \
         WHERE l.database = $1 AND l.relation = ANY($2) \
@@ -890,7 +892,9 @@ SELECT (SELECT count(*) FROM pg_catalog.pg_locks l \
         FROM pg_catalog.unnest($2::oid[]) o), \
        pg_catalog.pg_is_in_recovery(), \
        pg_catalog.current_setting('track_counts') = 'on', \
-       pg_catalog.pg_snapshot_xmax(pg_catalog.pg_current_snapshot())::text::int8";
+       pg_catalog.pg_current_snapshot()::text, \
+       (SELECT count(*) FROM pg_catalog.pg_cast c \
+        WHERE c.castsource = ANY($3) OR c.casttarget = ANY($3))";
 
 /// The keyset's ends, hashed so a long key is never transferred.
 const ENDS_SQL: &str = "\
@@ -899,11 +903,13 @@ SELECT pg_catalog.sha256((SELECT info_hash FROM public.torrents ORDER BY info_ha
 
 fn torrents_sql(c: &Caps, first: bool) -> String {
     let status = if c.files_status {
-        // No cast in the query, and schema() refuses a source that defines
-        // any cast on the enum: an implicit one could otherwise be chosen
-        // here too, and its function would run as our role.
-        "CASE t.files_status WHEN 'single' THEN 1 WHEN 'multi' THEN 2 \
-         WHEN 'over_threshold' THEN 3 END"
+        // A schema-qualified function call, not `=`: it has one candidate,
+        // the enum binds to `anyenum` and the labels go through enum_in,
+        // so no cast is ever looked up, even one added after the open.
+        // Casts on the enum are refused as well, at open and every batch.
+        "CASE WHEN pg_catalog.enum_eq(t.files_status, 'single') THEN 1 \
+              WHEN pg_catalog.enum_eq(t.files_status, 'multi') THEN 2 \
+              WHEN pg_catalog.enum_eq(t.files_status, 'over_threshold') THEN 3 END"
     } else {
         "CASE t.single_file WHEN true THEN 1 WHEN false THEN 2 END"
     };
@@ -959,6 +965,8 @@ struct Schema {
     sig: [u8; 32],
     /// `torrents`, `torrent_files`, and `torrent_pieces` when it's read.
     rels: Vec<Rel>,
+    /// The `FilesStatus` enum's OID, when the source has one.
+    enums: Vec<u32>,
 }
 
 /// Reads the catalog and decides support by columns and indexes.
@@ -1049,23 +1057,22 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
     // define a cast on. Casts are global: search_path doesn't stop one,
     // and an implicit cast's function would run as the importer's role,
     // even in a read-only transaction. So a source with any cast to or
-    // from it is refused before a row is read.
+    // from it is refused before a row is read, and again in every batch
+    // (`quiet`).
+    let enums: Vec<u32> = cols
+        .iter()
+        .filter(|x| files_status && x.table == b"torrents" && x.name == b"files_status")
+        .map(|x| x.type_oid)
+        .collect();
     if files_status {
-        let enum_oid: Vec<u32> = cols
-            .iter()
-            .filter(|x| x.table == b"torrents" && x.name == b"files_status")
-            .map(|x| x.type_oid)
-            .collect();
         let casts: i64 = client
-            .query_one(CASTS_SQL, &[&enum_oid])
+            .query_one(CASTS_SQL, &[&enums])
             .await
             .map_err(map_err)?
             .try_get(0)
             .map_err(map_err)?;
         if casts > 0 {
-            return Err(Refusal::UnsupportedSchema(vec![
-                "a cast on torrents.files_status (refused)",
-            ]));
+            return Err(cast_refusal());
         }
     }
     let attnum = |t: &str, c: &str| {
@@ -1167,7 +1174,12 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
         caps,
         sig: h.finalize().into(),
         rels,
+        enums,
     })
+}
+
+fn cast_refusal() -> Refusal {
+    Refusal::UnsupportedSchema(vec!["a cast on torrents.files_status (refused)"])
 }
 
 /// Maps a PostgreSQL error to a fixed refusal. The server's text is never
@@ -1204,8 +1216,10 @@ pub struct Source {
     rels: Vec<Rel>,
     /// The read tables' write counters at open, rechecked in every batch.
     writes: i64,
-    /// The next transaction id at open, rechecked in every batch.
-    xmax: i64,
+    /// The cluster's snapshot at open, rechecked in every batch.
+    snapshot: String,
+    /// The `FilesStatus` enum's OID, whose casts every batch rechecks.
+    enums: Vec<u32>,
     torrents_first: Statement,
     torrents_next: Statement,
     files_first: Statement,
@@ -1259,7 +1273,7 @@ impl Source {
         let db_name: Vec<u8> = db.try_get(1).map_err(map_err)?;
         let fingerprint = fingerprint(db_oid, &db_name, &schema.rels);
         let oids: Vec<u32> = schema.rels.iter().map(|r| r.oid).collect();
-        let (writes, xmax) = quiet(&tx, db_oid, &oids, None).await?;
+        let (writes, snapshot) = quiet(&tx, db_oid, &oids, &schema.enums, None).await?;
         let ends = tx.query_one(ENDS_SQL, &[]).await.map_err(map_err)?;
         let (lo, hi): (Option<Vec<u8>>, Option<Vec<u8>>) = (
             ends.try_get(0).map_err(map_err)?,
@@ -1294,7 +1308,8 @@ impl Source {
             fingerprint,
             rels: schema.rels,
             writes,
-            xmax,
+            snapshot,
+            enums: schema.enums,
             statement_timeout,
             cancel: Arc::new(AtomicBool::new(false)),
             max_parents: MAX_PARENTS,
@@ -1360,7 +1375,14 @@ impl Source {
             return Err(Refusal::SourceChanged);
         }
         let oids: Vec<u32> = self.rels.iter().map(|r| r.oid).collect();
-        quiet(&tx, self.db_oid, &oids, Some((self.writes, self.xmax))).await?;
+        quiet(
+            &tx,
+            self.db_oid,
+            &oids,
+            &self.enums,
+            Some((self.writes, self.snapshot.as_str())),
+        )
+        .await?;
 
         let (stmt, key) = match &start {
             None => (&self.torrents_first, Vec::new()),
@@ -1562,28 +1584,37 @@ async fn current_rels(
         .collect()
 }
 
-/// Refuses a source that may be changing; returns the write counters and
-/// the next transaction id. With `expect`, neither may have moved since the
-/// open.
+/// Refuses a source that may be changing, or whose enum gained a cast;
+/// returns the write counters and the snapshot. With `expect`, neither may
+/// have moved since the open.
 async fn quiet(
     client: &impl tokio_postgres::GenericClient,
     db: u32,
     oids: &[u32],
-    expect: Option<(i64, i64)>,
-) -> Result<(i64, i64), Refusal> {
+    enums: &[u32],
+    expect: Option<(i64, &str)>,
+) -> Result<(i64, String), Refusal> {
     let r = client
-        .query_one(QUIET_SQL, &[&db, &oids])
+        .query_one(QUIET_SQL, &[&db, &oids, &enums])
         .await
         .map_err(map_err)?;
     let locks: i64 = r.try_get(0).map_err(map_err)?;
     let writes: i64 = r.try_get(1).map_err(map_err)?;
     let standby: bool = r.try_get(2).map_err(map_err)?;
     let counted: bool = r.try_get(3).map_err(map_err)?;
-    let xmax: i64 = r.try_get(4).map_err(map_err)?;
-    if locks > 0 || standby || !counted || expect.is_some_and(|e| e != (writes, xmax)) {
+    let snapshot: String = r.try_get(4).map_err(map_err)?;
+    let casts: i64 = r.try_get(5).map_err(map_err)?;
+    if casts > 0 {
+        return Err(cast_refusal());
+    }
+    if locks > 0
+        || standby
+        || !counted
+        || expect.is_some_and(|(w, snap)| w != writes || snap != snapshot)
+    {
         return Err(Refusal::NotQuiescent);
     }
-    Ok((writes, xmax))
+    Ok((writes, snapshot))
 }
 
 // ---- The legacy `import-bitmagnet` path, until IMP-4 ----

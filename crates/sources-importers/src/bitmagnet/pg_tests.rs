@@ -438,6 +438,51 @@ async fn unsupported_schemas_are_refused_by_name() {
     }
     fx.drop_db().await;
 
+    // A cast added after the open, by a transaction older than the open's
+    // snapshot: the next batch refuses it, and its function never runs.
+    let fx = Fixture::new(&base, "latecast", Some(Layout::V0_10)).await;
+    many(&fx.db, 3).await;
+    fx.db
+        .batch_execute(
+            "UPDATE torrents SET files_status = 'single'; \
+             CREATE TABLE public.ran (n int); \
+             CREATE FUNCTION public.f(\"FilesStatus\") RETURNS text LANGUAGE sql \
+             AS 'INSERT INTO public.ran VALUES (1) RETURNING ''single''::text'",
+        )
+        .await
+        .unwrap();
+    let mut older = admin(&base, Some(&fx.name)).await;
+    let late = older.transaction().await.unwrap();
+    late.batch_execute("SELECT txid_current()").await.unwrap();
+    let mut src = fx.open().await;
+    late.batch_execute(
+        "CREATE CAST (\"FilesStatus\" AS text) WITH FUNCTION public.f(\"FilesStatus\") \
+         AS IMPLICIT",
+    )
+    .await
+    .unwrap();
+    late.commit().await.unwrap();
+    assert_eq!(src.read_batch(&[], NOW).await.unwrap_err(), cast_refusal());
+    // The query itself can't pick the cast either: with the per-batch
+    // checks out of the way, it still reads the labels and runs nothing.
+    let tx = src.client.transaction().await.unwrap();
+    let rows = tx
+        .query(&src.torrents_first, &[&Vec::<u8>::new(), &10i64])
+        .await
+        .unwrap();
+    assert!(rows.iter().all(|r| r.get::<_, Option<i32>>(5) == Some(1)));
+    drop(tx);
+    let ran: i64 = fx
+        .db
+        .query_one("SELECT count(*) FROM public.ran", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(ran, 0, "the source's cast function ran");
+    drop(src);
+    drop(older);
+    fx.drop_db().await;
+
     // A keyset index with the source's own operator class doesn't count.
     let fx = Fixture::new(&base, "opclass", Some(Layout::NoPieces)).await;
     fx.db
