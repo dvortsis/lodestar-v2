@@ -1783,13 +1783,14 @@
       "reviewer": "session_01MMjhn94YmgkwkPeUXA5HEY"
     },
     "X-soak-docker-memrule": {
-      "status": "building",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhnBtHTd2PZbFMcocXTm",
-      "pr": null,
+      "pr": 292,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time). | 19:05Z launched Opus."
+      "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time). | 19:05Z launched Opus. | 19:13Z PR #292 head 358b1260 (anon basis, new reason, fallback; \u00a72.19 flag). Reviewer + security review; subscribed.",
+      "reviewer": "session_01MMjhn912vzFDE65VeyMNE1"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2559,6 +2560,11 @@
       "item": "FYI (\u00a72.19) #288 M-security-settings-2 merged: API keys/feed tokens (reveal once, Copy falls back on plain-HTTP LAN), trusted-proxy sign-in UI (off recommended, password + explicit warning to turn on, env lock), revoke asks a plain question (B12). Runner calls: keys/proxy load right after first paint.",
       "status": "to-send",
       "at": "2026-10-31T18:23Z"
+    },
+    {
+      "item": "FYI (\u00a72.19) X-soak-docker-memrule (#292, when merged): Linux collector's 1 GiB x5 stop rule judges cgroup anon (process memory) in Docker mode, new reason process_memory_over_1GiB_for_five_samples; working set kept as evidence. Only for runs started after merge (could cover the gluetun leg if you update the collector copy); current rc.2 run unaffected.",
+      "status": "to-send",
+      "at": "2026-10-31T19:13Z"
     }
   ],
   "external_gates": {
