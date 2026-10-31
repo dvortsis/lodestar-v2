@@ -165,6 +165,9 @@ const SECTION_FORM = 'src/lib/features/settings/shell/SectionForm.svelte';
 // The shell's section form, which a body such as Language & region shows for its fields: gated
 // as "Settings section", so a body that loads it on demand stops at it.
 const settingsFormChunk = [new RegExp(`${SECTION_FORM.replaceAll('/', '\\/')}$`)];
+// Language & region's form: its body loads it at once, so its first view includes it, and its
+// extras entry stops at it.
+const languageForm = [/features\/settings\/screens2\/LanguageForm\.svelte$/];
 const settingsBodies = [/features\/[^/]+\/(?:[^/]+\/)?[A-Z]\w*Screen\.svelte$/];
 const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
 // What a hand-built body loads only on an interaction: Keyboard's shortcut sheet (opened with ?) and
@@ -212,13 +215,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 			...settingsShellView,
 			...ownChunk(
 				key,
-				[
-					...settingsOnDemand,
-					...settingsEdit,
-					...settingsBodyInteractions,
-					...appearanceLater,
-					...settingsFormChunk
-				],
+				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions, ...appearanceLater],
 				false,
 				settingsShellView
 			)
@@ -252,10 +249,10 @@ const settingsEditorLazy = requireMeasuredJs(
 	'Appearance theme editor (on demand)',
 	editorKey ? ownChunk(editorKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
 );
-const settingsFormKey = Object.keys(manifest).find((key) => settingsFormChunk[0].test(key));
-const settingsFormFiles = settingsFormKey
-	? ownChunk(settingsFormKey, [...settingsOnDemand, ...settingsEdit], false)
-	: [];
+const settingsFormFiles = [settingsFormChunk[0], languageForm[0]].flatMap((re) => {
+	const key = Object.keys(manifest).find((k) => re.test(k));
+	return key ? ownChunk(key, [...settingsOnDemand, ...settingsEdit], false) : [];
+});
 const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)', [
 	...new Set([
 		...extraKeys.flatMap((key) =>

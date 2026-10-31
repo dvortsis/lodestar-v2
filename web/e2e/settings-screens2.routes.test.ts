@@ -65,17 +65,22 @@ const values: Values[] = [
 	}
 ];
 
-test('Language & region saves a region edit by keyboard', async ({ page, go, mock, kbd }) => {
+test('Language & region saves a language at once, by keyboard, and applies it', async ({
+	page,
+	go,
+	mock,
+	kbd
+}) => {
 	const backend = new SettingsBackend(index, values).attach(mock as unknown as MockLike);
 	await go('/settings/language');
 	await expect(page.getByRole('heading', { level: 1, name: 'Language & region' })).toBeVisible();
 	const language = page.getByLabel('Language', { exact: true });
 	await expect(language).toBeVisible();
 	await expect(page.getByLabel('Theme')).toHaveCount(0);
-	await kbd.tabTo(language);
-	await page.keyboard.type('zh-CN');
-	await kbd.press('Control+s');
-	await expect(page.getByTestId('save-bar')).toContainText('Saved');
-	expect(backend.patches).toEqual([{ preferences: { if_revision: 4, language: 'zh-CN' } }]);
 	await expectNoA11yViolations(page);
+	await kbd.tabTo(language);
+	await language.selectOption('zh');
+	await expect.poll(() => backend.patches.length).toBe(1);
+	expect(backend.patches).toEqual([{ preferences: { if_revision: 4, language: 'zh' } }]);
+	await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
 });

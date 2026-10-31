@@ -1,16 +1,15 @@
 <script lang="ts">
 	// Settings → Preferences → Language & region (§10.10.8): the `region` group of `preferences`,
-	// shown by the shell's section form. The rest of `preferences` belongs to Appearance and
-	// Keyboard. This body stays small: the form and the engine are the shell's on-demand chunk.
+	// shown by LanguageForm. The rest of `preferences` belongs to Appearance and Keyboard. This
+	// body stays small: the form and the engine load with it, as the shell's section form does.
 	import type { Component, ComponentProps } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { loadSettingsIndex } from '../form/schema';
 	import type { FieldSpec } from '../form/types';
-	import { screens } from './screen';
 
-	type Form = Component<ComponentProps<typeof import('../shell/SectionForm.svelte').default>>;
+	type Form = Component<ComponentProps<typeof import('./LanguageForm.svelte').default>>;
 	let fields = $state<FieldSpec[]>();
 	let SectionForm = $state<Form>();
 	let failed = $state(false);
@@ -21,7 +20,8 @@
 		void attempt;
 		let live = true;
 		failed = false;
-		void import('../shell/SectionForm.svelte').then(
+		chunkFailed = false;
+		void import('./LanguageForm.svelte').then(
 			(mod) => {
 				if (live) SectionForm = mod.default;
 			},
@@ -64,5 +64,5 @@
 {:else if !fields.length}
 	<p>{m.settings_shell_server_unavailable()}</p>
 {:else}
-	<SectionForm screen={screens[0]!} {fields} />
+	<SectionForm {fields} />
 {/if}
