@@ -1552,8 +1552,8 @@
       "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3 | 2026-10-31T00:15Z PR #246 head 4fd2f14d (~1,580 lines); screen: no gain over noise floor (high-latency +5.1% vs spread 12.1%, healthy -1.2%, admission-pressure -3.7%; ~94% of hints expire unused). Reviewer session_01MMjhnA8skJhDBEEuLw1YjV. Owner flags at merge: HINT_CAPACITY 20,000 hashes (new), per-hash hints in the actor, private-key case moot"
     },
     "S-theme-boot": {
-      "status": "running",
-      "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk"
+      "status": "review",
+      "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk | 2026-10-31T00:17Z PR #247 head 714c8834; reviewer session_01MMjhn9esFoJm482hAgeB7o; timing stays whenEngaged (runner)"
     },
     "LU-1-neutralize": {
       "status": "running",
@@ -2243,7 +2243,8 @@
     "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
     "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (\u00a710.18 lists them; deferred in #243, \u00a72.19 owner flag)",
     "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
-    "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)"
+    "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)",
+    "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
