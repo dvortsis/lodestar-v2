@@ -1083,6 +1083,8 @@ trait Erased: Send + Sync + std::fmt::Debug {
     /// Whether the field's saved value is sealed.
     fn holds_secret(&self, name: &str) -> bool;
     fn field_meta(&self, name: &str) -> Option<&'static Field>;
+    /// A saved secret (`SettingsApi::saved_secret`).
+    fn saved_secret(&self, key: &str, endpoints: &[(&str, Value)]) -> Option<String>;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -1237,6 +1239,54 @@ impl<T: Section> Erased for Entry<T> {
 
     fn field_meta(&self, name: &str) -> Option<&'static Field> {
         find::<T>(name)
+    }
+
+    fn saved_secret(&self, key: &str, endpoints: &[(&str, Value)]) -> Option<String> {
+        let state = self.lock();
+        let current = self.effective_map(&state.saved);
+        // Every field that says where the secret goes must be given, and
+        // point where the saved one does.
+        let same = |bound: &[Endpoint], saved: &dyn Fn(&str) -> Option<Value>| {
+            bound.iter().all(|b| {
+                let n = b.field();
+                endpoints
+                    .iter()
+                    .any(|(e, v)| *e == n && b.key(Some(v)) == b.key(saved(n).as_ref()))
+            })
+        };
+        if let Some((field, rest)) = key.split_once('.') {
+            // `<field>.<item id>.<key>`: an item's secret goes where its
+            // `url` and `kind` say, as `keep_secrets` holds it.
+            let (id, k) = rest.rsplit_once('.')?;
+            let f = find::<T>(field)?;
+            if !f.secret_keys.contains(&k) {
+                return None;
+            }
+            let item = current
+                .get(field)?
+                .as_array()?
+                .iter()
+                .filter_map(Value::as_object)
+                .find(|i| i.get("id").and_then(Value::as_str) == Some(id))?;
+            if !same(&[Endpoint::Url("url"), Endpoint::Value("kind")], &|n| {
+                item.get(n).cloned()
+            }) {
+                return None;
+            }
+            return item.get(k)?.as_str().map(str::to_string);
+        }
+        let f = find::<T>(key)?;
+        if !f.secret || self.env_set(f) || !state.saved.contains_key(key) {
+            return None;
+        }
+        let bound = T::SECRET_ENDPOINTS
+            .iter()
+            .find(|(s, _)| *s == key)
+            .map_or(&[][..], |(_, e)| *e);
+        if !same(bound, &|n| current.get(n).cloned()) {
+            return None;
+        }
+        current.get(key)?.as_str().map(str::to_string)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1551,10 +1601,9 @@ impl Registry {
                                 {
                                     if let Some(field) = s.field(name) {
                                         log_event!(
-                                            events::SETTINGS_SAVED_IGNORED,
+                                            events::SETTINGS_SEAL_FAILED,
                                             section = section,
-                                            field = field,
-                                            reason = "key_unavailable"
+                                            field = field
                                         );
                                     }
                                     SettingsError::Store(
@@ -1648,6 +1697,15 @@ impl SettingsApi for Registry {
 
     fn import(&self, import: SettingsImport, dry_run: bool) -> Result<Imported, SettingsFailure> {
         portable::import(self, import, dry_run)
+    }
+
+    fn saved_secret(
+        &self,
+        section: &str,
+        key: &str,
+        endpoints: &[(&str, Value)],
+    ) -> Option<String> {
+        self.find(section)?.saved_secret(key, endpoints)
     }
 }
 

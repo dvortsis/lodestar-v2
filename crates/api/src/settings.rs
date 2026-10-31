@@ -14,8 +14,12 @@
 //!   and saves nothing.
 //! - Every save that changes a section publishes `settings` (`{section,
 //!   revision}`, no values) on the `/events` hub.
-//! - `POST /settings/test` runs a download client's connection test on
-//!   unsaved values, through the integrations SSRF guard.
+//! - `POST /settings/test` runs a download client's or a Torznab
+//!   endpoint's connection test, or sends a notification channel's test
+//!   message, on unsaved values, through the integrations SSRF guard
+//!   ([`checks`]).
+//! - `GET /usage` and `POST /usage/clear` count and clear usage data
+//!   ([`usage`]).
 //! - `GET /settings/export` and `POST /settings/import` move saved
 //!   settings between installs as TOML.
 //!
@@ -55,7 +59,18 @@ use crate::extract::{Json as JsonBody, Path, Query, same_origin_json};
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
 #[openapi(
-    paths(index, section, patch, patch_many, preview, test, export, import),
+    paths(
+        index,
+        section,
+        patch,
+        patch_many,
+        preview,
+        test,
+        export,
+        import,
+        usage::usage,
+        usage::clear
+    ),
     components(schemas(SettingsErrorEnvelope))
 )]
 pub(crate) struct ApiDoc;
@@ -89,6 +104,22 @@ pub trait SettingsApi: Send + Sync + fmt::Debug {
     /// saves it as one batch (all or nothing, through
     /// [`SettingsApi::save`]'s checks).
     fn import(&self, import: SettingsImport, dry_run: bool) -> Result<Imported, SettingsFailure>;
+
+    /// A saved secret, for a test on values that leave it out
+    /// (the form never has it: secrets are write-only). `key` is a secret
+    /// field (`torznab_api_key`) or a list item's secret
+    /// (`clients.<id>.password`). It's given only when `endpoints` (each
+    /// field that says where the secret goes, with the value on screen)
+    /// point where the saved values do, so a test can't send it to another
+    /// server; `None` otherwise, or when none is saved.
+    fn saved_secret(
+        &self,
+        _section: &str,
+        _key: &str,
+        _endpoints: &[(&str, serde_json::Value)],
+    ) -> Option<String> {
+        None
+    }
 
     /// One section's patch: [`SettingsApi::save`] with it alone.
     fn patch(&self, section: &str, patch: SettingsPatch) -> Result<SectionValues, SettingsError> {
@@ -297,7 +328,9 @@ pub fn routes() -> Router<ApiState> {
             .route("/settings/test", post(test))
             .route("/settings/export", get(export))
             .route("/settings/import", post(import))
-            .route("/settings/{section}", get(section).patch(patch)),
+            .route("/settings/{section}", get(section).patch(patch))
+            .route("/usage", get(usage::usage))
+            .route("/usage/clear", post(usage::clear)),
     )
 }
 
@@ -545,11 +578,16 @@ pub const MAX_TESTS: usize = 4;
 
 static TESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_TESTS);
 
-/// Tests a download client with the values on screen, before they're
-/// saved: logs in and asks its version. It goes through the integrations
-/// SSRF guard (download clients may be on this machine or the LAN, never
-/// on link-local, metadata or reserved addresses). Nothing is saved, and
-/// the result never repeats the URL or a credential.
+/// Tests an integration with the values on screen, before they're saved:
+/// logs in to a download client and asks its version, asks a Torznab
+/// endpoint for its capabilities, or sends one clearly labelled test
+/// message to a notification channel. It goes through the integrations
+/// SSRF guard (download clients and Torznab may be on this machine or the
+/// LAN; notification channels never on loopback; nothing on link-local,
+/// metadata or reserved addresses). A secret the form leaves out is the
+/// saved one, only while the address is on the saved server. Nothing is
+/// saved, and the result never repeats the URL, a credential or what the
+/// server answered.
 #[utoipa::path(
     operation_id = "testSettings",
     post,
@@ -565,24 +603,16 @@ static TESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_TES
     )
 )]
 pub(crate) async fn test(
+    State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<SettingsTest>,
 ) -> ApiResult<Json<SettingsTestResult>> {
     same_origin_json(&headers)?;
-    let SettingsTest::DownloadClient(draft) = body;
-    let too_long = [
-        Some(&draft.url),
-        draft.username.as_ref(),
-        draft.password.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|v| v.chars().count() > MAX_TEST_FIELD);
-    if too_long {
+    if checks::too_long(&body) {
         return Ok(Json(failed(
             "invalid",
             format!(
-                "The address, user name and password must each be at most {MAX_TEST_FIELD} characters."
+                "Addresses, user names and passwords must each be at most {MAX_TEST_FIELD} characters."
             ),
         )));
     }
@@ -594,21 +624,12 @@ pub(crate) async fn test(
             "Other connection tests are still running; try again in a few seconds.",
         )
     })?;
-    let run = async {
-        let client = lodestar_integrations::clients::connect(client_config(draft))?;
-        client.test().await
-    };
-    let result = match tokio::time::timeout(TEST_TIMEOUT, run).await {
-        Ok(Ok(info)) => SettingsTestResult {
-            api_version: info.api_version,
-            error: None,
-            ok: true,
-            version: Some(info.version),
-        },
-        Ok(Err(e)) => test_failure(&e),
+    let api = s.settings.clone();
+    let run = checks::run(body, api, checks::Net::default());
+    Ok(Json(match tokio::time::timeout(TEST_TIMEOUT, run).await {
+        Ok(r) => r,
         Err(_) => test_failure(&ClientError::Timeout),
-    };
-    Ok(Json(result))
+    }))
 }
 
 /// The integrations crate's configuration for a draft.
@@ -784,6 +805,9 @@ pub(crate) async fn import(
     Ok(Json(imported.report))
 }
 
+mod checks;
+mod usage;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,6 +819,20 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
+    /// A schema of this module (the new usage and test bodies among
+    /// them) that shares its name with another module's would be replaced
+    /// in the merged document without a word (#255's class): each must
+    /// reach `/openapi.json` exactly as this module defines it.
+    #[test]
+    fn this_modules_schemas_keep_their_names_in_the_whole_document() {
+        let own = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        let all = serde_json::to_value(crate::openapi::document()).unwrap();
+        let own = own["components"]["schemas"].as_object().unwrap();
+        assert!(own.contains_key("UsageStats") && own.contains_key("TorznabDraft"));
+        for (name, schema) in own {
+            assert_eq!(&all["components"]["schemas"][name], schema, "{name}");
+        }
+    }
     #[tokio::test]
     async fn refusals_map_to_the_envelope() {
         let (status, v) = body(
@@ -888,6 +926,7 @@ mod tests {
     #[test]
     fn drafts_map_onto_client_configs_and_never_print_secrets() {
         let draft = DownloadClientDraft {
+            id: None,
             client: DownloadClientKind::Transmission,
             password: Some("hunter2".into()),
             url: "http://user:pw@host:9091/".into(),
@@ -905,6 +944,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let none = DownloadClientDraft {
+            id: None,
             client: DownloadClientKind::Rtorrent,
             password: None,
             url: "http://host/RPC2".into(),
@@ -915,6 +955,7 @@ mod tests {
             ClientConfig::RTorrent { auth: None, .. }
         ));
         let aria = DownloadClientDraft {
+            id: None,
             client: DownloadClientKind::Aria2,
             password: Some("s".into()),
             url: "http://host:6800/jsonrpc".into(),

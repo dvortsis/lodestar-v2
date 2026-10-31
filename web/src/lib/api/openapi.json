@@ -5116,7 +5116,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Tests a download client with the values on screen, before they're\nsaved: logs in and asks its version. It goes through the integrations\nSSRF guard (download clients may be on this machine or the LAN, never\non link-local, metadata or reserved addresses). Nothing is saved, and\nthe result never repeats the URL or a credential.",
+        "summary": "Tests an integration with the values on screen, before they're saved:\nlogs in to a download client and asks its version, asks a Torznab\nendpoint for its capabilities, or sends one clearly labelled test\nmessage to a notification channel. It goes through the integrations\nSSRF guard (download clients and Torznab may be on this machine or the\nLAN; notification channels never on loopback; nothing on link-local,\nmetadata or reserved addresses). A secret the form leaves out is the\nsaved one, only while the address is on the saved server. Nothing is\nsaved, and the result never repeats the URL, a credential or what the\nserver answered.",
         "operationId": "testSettings",
         "requestBody": {
           "content": {
@@ -6152,6 +6152,94 @@
           },
           "503": {
             "description": "`updates_unavailable`: this process serves no update engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/usage": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "How many searches are logged.",
+        "operationId": "usage",
+        "responses": {
+          "200": {
+            "description": "What Clear usage data would delete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageStats"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/usage/clear": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Deletes every logged search. Settings and everything else stay.",
+        "operationId": "clearUsage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageClear"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageCleared"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`confirmation_required`: `confirm` isn't true.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9710,6 +9798,18 @@
           "text": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027\n"
         }
       },
+      "DiscordDraft": {
+        "type": "object",
+        "description": "A Discord channel as the form has it.",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The webhook URL; without it, the saved one.",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false
+      },
       "DiscoverKpi": {
         "type": "object",
         "required": [
@@ -9928,6 +10028,10 @@
           "client": {
             "$ref": "#/components/schemas/DownloadClientKind"
           },
+          "id": {
+            "type": "string",
+            "description": "The saved client the form edits. Without `password`, its saved\npassword is used, as long as `client` and the address's server are\nthe saved ones."
+          },
           "password": {
             "type": "string",
             "description": "The password (qBittorrent, Deluge, Transmission and rTorrent with\nauthentication) or the RPC secret (Aria2).",
@@ -9954,6 +10058,60 @@
           "deluge",
           "rtorrent",
           "aria2"
+        ]
+      },
+      "EmailDraft": {
+        "type": "object",
+        "description": "An email channel as the form has it.",
+        "required": [
+          "from",
+          "host",
+          "to"
+        ],
+        "properties": {
+          "allow_private": {
+            "type": "boolean"
+          },
+          "from": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "description": "Without it (and with `username`), the saved password, as long as\n`host`, `port` and `security` are the saved ones.",
+            "writeOnly": true
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0 is the security mode's usual port.",
+            "minimum": 0
+          },
+          "security": {
+            "$ref": "#/components/schemas/EmailSecurity"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "username": {
+            "type": "string",
+            "description": "Empty to send without logging in."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EmailSecurity": {
+        "type": "string",
+        "description": "How an email channel's SMTP session is protected.",
+        "enum": [
+          "tls",
+          "starttls",
+          "none"
         ]
       },
       "ErrorBody": {
@@ -13900,6 +14058,31 @@
           }
         }
       },
+      "NtfyDraft": {
+        "type": "object",
+        "description": "An ntfy channel as the form has it. A secret left out is the saved\none (the token only while the topic URL's server is the saved one).",
+        "properties": {
+          "allow_private": {
+            "type": "boolean"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–5; 0 leaves ntfy's default.",
+            "minimum": 0
+          },
+          "token": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "url": {
+            "type": "string",
+            "description": "The topic URL; without it, the saved one.",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OkResponse": {
         "type": "object",
         "description": "The body of a write that has nothing else to say.",
@@ -16749,6 +16932,121 @@
               }
             ],
             "description": "Log in to a download client and ask its version."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TorznabDraft",
+                "description": "Ask a Torznab endpoint for its capabilities."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "torznab"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Ask a Torznab endpoint for its capabilities."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NtfyDraft",
+                "description": "Send one test message to ntfy."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ntfy"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Send one test message to ntfy."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DiscordDraft",
+                "description": "Send one test message to Discord."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "discord"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Send one test message to Discord."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EmailDraft",
+                "description": "Send one test email."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "email"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Send one test email."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookDraft",
+                "description": "Post one test payload to the webhook."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "webhook"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Post one test payload to the webhook."
           }
         ],
         "description": "`POST /settings/test`: what to test, with the values on screen."
@@ -18462,6 +18760,25 @@
           "max_id": 48211
         }
       },
+      "TorznabDraft": {
+        "type": "object",
+        "description": "A Torznab endpoint as the form has it, unsaved.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "description": "Without it, the saved key is used if `url` is on the saved\nendpoint's server.",
+            "writeOnly": true
+          },
+          "url": {
+            "type": "string",
+            "example": "http://192.168.1.5:9696/1/api"
+          }
+        },
+        "additionalProperties": false
+      },
       "TrackerHealth": {
         "type": "object",
         "required": [
@@ -18895,6 +19212,47 @@
         ],
         "example": "windows_helper"
       },
+      "UsageClear": {
+        "type": "object",
+        "description": "`POST /usage/clear`.",
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Must be true: the dialog that showed the count was confirmed\n(§10.10.7, a destructive action)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UsageCleared": {
+        "type": "object",
+        "description": "`POST /usage/clear`: what was deleted.",
+        "required": [
+          "queries"
+        ],
+        "properties": {
+          "queries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Logged searches deleted.",
+            "minimum": 0
+          }
+        }
+      },
+      "UsageStats": {
+        "type": "object",
+        "description": "`GET /usage`: the usage data Lodestar keeps.",
+        "required": [
+          "queries"
+        ],
+        "properties": {
+          "queries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Logged searches (only while query logging is on).",
+            "minimum": 0
+          }
+        }
+      },
       "UserItemDetail": {
         "type": "object",
         "description": "`GET /user-items/{hash}`: the marks and the collections it is in.",
@@ -19195,6 +19553,21 @@
           "note": null,
           "updated_at": 1700000200
         }
+      },
+      "WebhookDraft": {
+        "type": "object",
+        "description": "A webhook channel as the form has it.",
+        "properties": {
+          "allow_private": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string",
+            "description": "Where the JSON is posted; without it, the saved one.",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false
       }
     },
     "responses": {
