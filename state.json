@@ -1602,10 +1602,10 @@
    "status": "running",
    "model": "sonnet",
    "session": "session_01MMjhnCz41jUgEexEZLJBjA",
-   "pr": null,
+   "pr": 271,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "08:12Z brief briefs/S-search-recover-ui.md (bind #266 recovery + /search/state) | 08:11Z launched Sonnet"
+   "notes": "08:12Z brief briefs/S-search-recover-ui.md (bind #266 recovery + /search/state) | 08:11Z launched Sonnet | 09:37Z found draft PR #271 (b2192a36): Search results (lazy) 45.09 > 43.2 KB because new lazy chunks counted; runner approved .size-limit.mjs edit (resultsOnDemand + on-demand entries at measured+10%); ready + message when done"
   },
   "B-search-live": {
    "status": "review",
