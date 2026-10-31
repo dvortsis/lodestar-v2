@@ -16,7 +16,7 @@ use super::{Auto, Field, Section};
 use crate::config::Config;
 
 /// The most trackers the list holds.
-pub const MAX_TRACKERS: usize = 100;
+pub const MAX_TRACKERS: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -80,7 +80,7 @@ impl Section for Trackers {
         Field::new("interval_secs")
             .file("scrape.interval_secs")
             .restart()
-            .range(0, 3600)
+            .range(0, 86400)
             .auto(Auto::Int(0))
             .unit("seconds")
             .group("cadence")
@@ -88,7 +88,7 @@ impl Section for Trackers {
         Field::new("http_interval_secs")
             .file("scrape.http_interval_secs")
             .restart()
-            .range(0, 3600)
+            .range(0, 86400)
             .auto(Auto::Int(0))
             .unit("seconds")
             .group("cadence")

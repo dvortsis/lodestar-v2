@@ -315,6 +315,11 @@ impl SecretText {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// The integrations crate's [`Secret`], for the one place that sends it.
+    pub fn secret(&self) -> Secret {
+        Secret::new(self.0.clone())
+    }
 }
 
 /// What a client sees of a field's value: nothing of a secret, and each
@@ -354,9 +359,29 @@ fn secrets_set(field: &Field, value: &Value) -> Vec<String> {
     out
 }
 
+/// Where an endpoint value points, for telling whether a kept secret
+/// would follow it elsewhere: a URL's scheme, host and port; any other
+/// value as it is (an SMTP host name, a port).
+fn endpoint(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    if let Some(s) = v.as_str()
+        && let Ok(u) = reqwest::Url::parse(s)
+    {
+        return Some(format!(
+            "{}://{}:{}",
+            u.scheme(),
+            u.host_str().unwrap_or_default().to_ascii_lowercase(),
+            u.port_or_known_default().unwrap_or_default()
+        ));
+    }
+    Some(v.to_string())
+}
+
 /// A patched list's items with the secrets they don't re-send: an item
 /// whose `id` matches one in `old` keeps that item's secret when the
-/// patch leaves the key out or sends `null`; `""` removes it.
+/// patch leaves the key out or sends `null`, as long as its `kind` and its
+/// `url`'s origin are unchanged (a secret never follows an item to another
+/// server unless it's sent again); `""` removes it.
 fn keep_secrets(field: &Field, old: Option<&Value>, new: &mut Value) {
     if field.secret_keys.is_empty() {
         return;
@@ -374,7 +399,13 @@ fn keep_secrets(field: &Field, old: Option<&Value>, new: &mut Value) {
         });
         for k in field.secret_keys {
             match item.get(*k) {
-                None | Some(Value::Null) => match prev.and_then(|p| p.get(*k)) {
+                None | Some(Value::Null) => match prev
+                    .filter(|p| {
+                        p.get("kind") == item.get("kind")
+                            && endpoint(p.get("url")) == endpoint(item.get("url"))
+                    })
+                    .and_then(|p| p.get(*k))
+                {
                     Some(v) => {
                         item.insert(k.to_string(), v.clone());
                     }
@@ -399,6 +430,12 @@ const SEALED: &str = "sealed:";
 /// moved onto another field.
 fn seal_context(section: &str, field: &str) -> String {
     format!("{KEY_PREFIX}{section}.{field}")
+}
+
+/// The record name a list item's sealed secret is bound to, so it can't
+/// be moved onto another item or key.
+fn item_context(section: &str, field: &str, id: &str, key: &str) -> String {
+    format!("{KEY_PREFIX}{section}.{field}.{id}.{key}")
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -442,25 +479,106 @@ impl Sealer {
         Ok(s)
     }
 
-    /// `value` (JSON text) sealed for `context`, as saved JSON text.
-    fn seal(&self, context: &str, value: &Value) -> Result<String, String> {
+    /// `text` sealed for `context`, as `sealed:<hex>`.
+    fn seal_text(&self, context: &str, text: &str) -> Result<String, String> {
         let sealed = self
             .store()?
-            .seal(context, &Secret::new(value.to_string()))
+            .seal(context, &Secret::new(text))
             .map_err(|e| e.to_string())?;
-        Ok(Value::String(format!("{SEALED}{}", hex(sealed.as_bytes()))).to_string())
+        Ok(format!("{SEALED}{}", hex(sealed.as_bytes())))
     }
 
-    /// Saved JSON text back to the value; `None` if it isn't sealed for
-    /// `context` with a key the store has.
-    fn open(&self, context: &str, text: &str) -> Option<Value> {
-        let Ok(Value::String(s)) = serde_json::from_str::<Value>(text) else {
-            return None;
+    /// `sealed:<hex>` opened for `context`. The error is the reason a
+    /// start-up log line gives: the key file couldn't be read
+    /// (`key_unavailable`), or the value doesn't open with it
+    /// (`not_sealed`).
+    fn open_text(&self, context: &str, s: &str) -> Result<Secret, &'static str> {
+        let sealed = s
+            .strip_prefix(SEALED)
+            .and_then(unhex)
+            .and_then(|b| SealedSecret::from_bytes(b).ok())
+            .ok_or("not_sealed")?;
+        let store = self.store().map_err(|_| "key_unavailable")?;
+        store.open(context, &sealed).map_err(|_| "not_sealed")
+    }
+
+    /// A secret-holding field's value as saved JSON text: a secret field
+    /// sealed whole, as a JSON string; a list with each item's secret keys
+    /// sealed in place, the rest as plain JSON (so losing the key loses
+    /// only the secrets).
+    fn to_saved(&self, section: &str, field: &Field, v: &Value) -> Result<String, String> {
+        if field.secret {
+            let sealed = self.seal_text(&seal_context(section, field.name), &v.to_string())?;
+            return Ok(Value::String(sealed).to_string());
+        }
+        let mut v = v.clone();
+        if let Value::Array(items) = &mut v {
+            for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                for k in field.secret_keys {
+                    if let Some(Value::String(s)) = item.get(*k) {
+                        let ctx = item_context(section, field.name, &id, k);
+                        let sealed = self.seal_text(&ctx, s)?;
+                        item.insert(k.to_string(), Value::String(sealed));
+                    }
+                }
+            }
+        }
+        Ok(v.to_string())
+    }
+
+    /// Saved JSON text back to the value, and the reason to log when some
+    /// or all of it didn't open. A secret field that doesn't open is
+    /// `None`; a list item whose secret doesn't open loses only that key.
+    fn read_saved(
+        &self,
+        section: &str,
+        field: &Field,
+        text: &str,
+    ) -> (Option<Value>, Option<&'static str>) {
+        let Ok(mut v) = serde_json::from_str::<Value>(text) else {
+            return (None, Some("not_json"));
         };
-        let bytes = unhex(s.strip_prefix(SEALED)?)?;
-        let sealed = SealedSecret::from_bytes(bytes).ok()?;
-        let secret = self.store().ok()?.open(context, &sealed).ok()?;
-        serde_json::from_str(secret.expose()).ok()
+        if field.secret {
+            let Value::String(s) = &v else {
+                return (None, Some("not_sealed"));
+            };
+            return match self.open_text(&seal_context(section, field.name), s) {
+                Ok(plain) => match serde_json::from_str(plain.expose()) {
+                    Ok(v) => (Some(v), None),
+                    Err(_) => (None, Some("not_sealed")),
+                },
+                Err(why) => (None, Some(why)),
+            };
+        }
+        let mut lost = None;
+        if let Value::Array(items) = &mut v {
+            for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                for k in field.secret_keys {
+                    let Some(stored) = item.remove(*k) else {
+                        continue;
+                    };
+                    let ctx = item_context(section, field.name, &id, k);
+                    match stored.as_str().map(|s| self.open_text(&ctx, s)) {
+                        Some(Ok(plain)) => {
+                            item.insert(k.to_string(), Value::String(plain.expose().to_string()));
+                        }
+                        Some(Err(why)) => lost = Some(why),
+                        None => lost = Some("not_sealed"),
+                    }
+                }
+            }
+        }
+        (Some(v), lost)
     }
 }
 
@@ -517,6 +635,10 @@ pub trait Section:
     fn check(&self, _field: &str) -> Result<(), String> {
         Ok(())
     }
+    /// Each secret field with the fields that say where it's sent (the
+    /// Torznab key and its URL). A patch that moves one of them elsewhere
+    /// without sending the secret again resets the secret.
+    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [&'static str])] = &[];
     /// Keys a patch may carry beside the fields: confirmations that
     /// [`Section::confirm`] checks and that are never saved.
     const CONFIRMATIONS: &'static [&'static str] = &[];
@@ -654,14 +776,16 @@ impl<T: Section> Entry<T> {
                 continue;
             }
             let value = if field.holds_secret() {
-                // A key file lost or replaced, or a value never sealed:
-                // skipped like any other invalid value.
-                match sealer.open(&seal_context(T::SECTION, field.name), &text) {
+                // A key file lost or replaced, or a value never sealed: a
+                // secret is skipped like any other invalid value; a list
+                // keeps its items without the secrets that didn't open.
+                let (value, lost) = sealer.read_saved(T::SECTION, field, &text);
+                if let Some(why) = lost {
+                    ignored(why);
+                }
+                match value {
                     Some(v) => v,
-                    None => {
-                        ignored("not_sealed");
-                        continue;
-                    }
+                    None => continue,
                 }
             } else {
                 match serde_json::from_str::<Value>(&text) {
@@ -789,8 +913,9 @@ impl<T: Section> Entry<T> {
                 });
             }
             fields.push(field);
-            // `null` resets the field to the file's value or the default.
-            if value.is_null() {
+            // `null` resets the field to the file's value or the default;
+            // so does an empty secret, which would otherwise show as set.
+            if value.is_null() || (field.secret && value.as_str() == Some("")) {
                 next.remove(name);
                 continue;
             }
@@ -806,6 +931,22 @@ impl<T: Section> Entry<T> {
                 message,
             })?;
             next.insert(name.clone(), value.clone());
+        }
+        // A saved secret never follows its endpoint to another server
+        // unless the patch sends it again: it's reset instead.
+        let current = self.effective_map(saved);
+        let moved = self.effective_map(&next);
+        for (secret, endpoints) in T::SECRET_ENDPOINTS {
+            let Some(f) = find::<T>(secret) else { continue };
+            if patch.contains_key(*secret) || !next.contains_key(*secret) {
+                continue;
+            }
+            if endpoints.iter().any(|e| {
+                patch.contains_key(*e) && endpoint(current.get(*e)) != endpoint(moved.get(*e))
+            }) {
+                next.remove(*secret);
+                fields.push(f);
+            }
         }
         let merged = self.effective_map(&next);
         let section: T = from_object(&merged).map_err(|e| {
@@ -909,6 +1050,7 @@ trait Erased: Send + Sync + std::fmt::Debug {
     fn field(&self, name: &str) -> Option<&'static str>;
     /// Whether the field's saved value is sealed.
     fn holds_secret(&self, name: &str) -> bool;
+    fn field_meta(&self, name: &str) -> Option<&'static Field>;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -1059,6 +1201,10 @@ impl<T: Section> Erased for Entry<T> {
 
     fn holds_secret(&self, name: &str) -> bool {
         find::<T>(name).is_some_and(Field::holds_secret)
+    }
+
+    fn field_meta(&self, name: &str) -> Option<&'static Field> {
+        find::<T>(name)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1364,17 +1510,13 @@ impl Registry {
             for (name, value) in &planned.fields {
                 match value {
                     Some(v) if s.holds_secret(name) => {
-                        let text =
-                            self.sealer
-                                .seal(&seal_context(section, name), v)
-                                .map_err(|e| {
-                                    SettingsFailure::new(
-                                        section,
-                                        SettingsError::Store(format!(
-                                            "Couldn't seal a secret: {e}."
-                                        )),
-                                    )
-                                })?;
+                        let field = s.field_meta(name).expect("a planned field");
+                        let text = self.sealer.to_saved(section, field, v).map_err(|e| {
+                            SettingsFailure::new(
+                                section,
+                                SettingsError::Store(format!("Couldn't seal a secret: {e}.")),
+                            )
+                        })?;
                         set.push((key(section, name), text));
                     }
                     Some(v) => set.push((key(section, name), v.to_string())),

@@ -134,6 +134,88 @@ fn check_routes(routes: &[Channel]) -> Result<(), String> {
     Ok(())
 }
 
+/// The sender's own refusal, as a sentence. Its reasons never carry the
+/// address or a credential.
+fn sentence(e: lodestar_integrations::DeliveryError) -> String {
+    let text = e.to_string();
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+        None => "Not a usable setting.".into(),
+    }
+}
+
+impl Notifications {
+    /// Builds each set-up channel's sender as delivery will, so a value
+    /// the sender refuses (a URL that isn't Discord's, an ntfy URL with no
+    /// topic, a login sent unencrypted to a public host) fails at save,
+    /// not at the first alert. No request is made.
+    fn check_sender(&self, channel: Channel) -> Result<(), String> {
+        use lodestar_integrations::notify::{discord, email, ntfy, webhook};
+        match channel {
+            Channel::Ntfy if !self.ntfy_url.is_empty() => {
+                let mut c = ntfy::NtfyConfig::new(self.ntfy_url.secret());
+                c.allow_private = self.ntfy_allow_private;
+                c.priority = (self.ntfy_priority != 0).then_some(self.ntfy_priority);
+                if !self.ntfy_token.is_empty() {
+                    c.auth = ntfy::NtfyAuth::Bearer(self.ntfy_token.secret());
+                }
+                ntfy::Ntfy::new(&c).map(drop).map_err(sentence)
+            }
+            Channel::Discord if !self.discord_url.is_empty() => {
+                discord::Discord::new(&discord::DiscordConfig {
+                    webhook_url: self.discord_url.secret(),
+                })
+                .map(drop)
+                .map_err(sentence)
+            }
+            Channel::Email if !self.email_host.is_empty() => {
+                let security = match self.email_security {
+                    SmtpSecurity::Tls => email::SmtpSecurity::Tls,
+                    SmtpSecurity::Starttls => email::SmtpSecurity::StartTls,
+                    SmtpSecurity::None => email::SmtpSecurity::None,
+                };
+                let mut c = email::EmailConfig::new(
+                    self.email_host.clone(),
+                    security,
+                    self.email_from.clone(),
+                    self.email_to.clone(),
+                );
+                if self.email_port != 0 {
+                    c.port = self.email_port;
+                }
+                c.allow_private = self.email_allow_private;
+                if !self.email_username.is_empty() {
+                    // Reset when the server changed (`SECRET_ENDPOINTS`).
+                    if self.email_password.is_empty() {
+                        return Err("Enter the password again: a saved one isn't sent to \
+                                    another server, and a login needs one."
+                            .into());
+                    }
+                    c.credentials = Some(email::SmtpCredentials {
+                        username: self.email_username.clone().into(),
+                        password: self.email_password.secret(),
+                    });
+                }
+                // Without a sender or recipients the channel is off.
+                if self.email_from.is_empty() || self.email_to.is_empty() {
+                    return Ok(());
+                }
+                email::Email::new(&c).map(drop).map_err(sentence)
+            }
+            Channel::Webhook if !self.webhook_url.is_empty() => {
+                webhook::Webhook::new(&webhook::WebhookConfig {
+                    url: self.webhook_url.secret(),
+                    allow_private: self.webhook_allow_private,
+                })
+                .map(drop)
+                .map_err(sentence)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 fn check_secret_url(s: &SecretText) -> Result<(), String> {
     if s.is_empty() {
         Ok(())
@@ -174,6 +256,10 @@ impl Section for Notifications {
         Field::new("route_updates").group("routing"),
         Field::new("route_health").group("routing"),
     ];
+    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [&'static str])] = &[
+        ("ntfy_token", &["ntfy_url"]),
+        ("email_password", &["email_host", "email_port"]),
+    ];
 
     /// No `config.toml` key or variable backs these: they hold credentials.
     fn from_config(_: &Config) -> Self {
@@ -183,6 +269,20 @@ impl Section for Notifications {
     fn apply(&self, _: &str, _: &mut Config) {}
 
     fn check(&self, field: &str) -> Result<(), String> {
+        self.check_field(field)?;
+        let channel = match field.split('_').next() {
+            Some("ntfy") => Channel::Ntfy,
+            Some("discord") => Channel::Discord,
+            Some("email") => Channel::Email,
+            Some("webhook") => Channel::Webhook,
+            _ => return Ok(()),
+        };
+        self.check_sender(channel)
+    }
+}
+
+impl Notifications {
+    fn check_field(&self, field: &str) -> Result<(), String> {
         match field {
             "ntfy_url" => check_secret_url(&self.ntfy_url),
             "discord_url" => check_secret_url(&self.discord_url),
@@ -193,7 +293,7 @@ impl Section for Notifications {
                     "email_password" => &self.email_password.0,
                     _ => &self.email_username,
                 };
-                if v.len() > MAX_TEXT || v.chars().any(char::is_control) {
+                if v.chars().count() > MAX_TEXT || v.chars().any(char::is_control) {
                     Err(format!(
                         "Must be at most {MAX_TEXT} characters, with no control characters."
                     ))
@@ -237,6 +337,7 @@ mod tests {
         assert!(n.check("email_to").is_ok());
         n.email_from = "Me <me@x.y>".into();
         assert!(n.check("email_from").is_err());
+        n.email_from.clear();
         n.route_alerts = vec![Channel::Ntfy, Channel::Ntfy];
         assert!(n.check("route_alerts").is_err());
         n.email_host = "smtp.example.com".into();

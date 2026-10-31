@@ -139,12 +139,8 @@ fn check_client(c: &DownloadClient) -> Result<(), String> {
     check_text("The user name", &c.username).map_err(at)?;
     check_text("The category", &c.category).map_err(at)?;
     check_text("The save path", &c.save_path).map_err(at)?;
-    if let Some(p) = &c.password
-        && p.0.len() > MAX_TEXT
-    {
-        return Err(at(format!(
-            "The password must be at most {MAX_TEXT} characters."
-        )));
+    if let Some(p) = &c.password {
+        check_text("The password", &p.0).map_err(at)?;
     }
     Ok(())
 }
@@ -160,6 +156,8 @@ impl Section for Integrations {
         Field::new("torznab_url").group("torznab"),
         Field::new("torznab_api_key").group("torznab").secret(),
     ];
+    const SECRET_ENDPOINTS: &'static [(&'static str, &'static [&'static str])] =
+        &[("torznab_api_key", &["torznab_url"])];
 
     /// No `config.toml` key or variable backs these (see the module docs).
     fn from_config(_: &Config) -> Self {
@@ -197,9 +195,7 @@ impl Section for Integrations {
             }
             "torznab_url" if self.torznab_url.is_empty() => Ok(()),
             "torznab_url" => check_url(&self.torznab_url),
-            "torznab_api_key" if self.torznab_api_key.0.len() > MAX_TEXT => {
-                Err(format!("Must be at most {MAX_TEXT} characters."))
-            }
+            "torznab_api_key" => check_text("The API key", &self.torznab_api_key.0),
             _ => Ok(()),
         }
     }
