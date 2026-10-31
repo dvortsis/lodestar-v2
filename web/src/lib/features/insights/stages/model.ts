@@ -458,6 +458,17 @@ export function mapIndex(r: IndexResponse): StageModel {
 			'count',
 			prevOf(p, (x) => x.new_searchable)
 		),
+		...(k.new_searchable_imported > 0
+			? [
+					metric(
+						'new_imported',
+						m.insights_import_imported(),
+						k.new_searchable_imported,
+						'count',
+						prevOf(p, (x) => x.new_searchable_imported)
+					)
+				]
+			: []),
 		metric('lag', m.insights_stage_index_lag(), k.index_lag_s, 'span'),
 		metric('projection', m.insights_stage_index_projection(), k.projection_days, 'days')
 	];

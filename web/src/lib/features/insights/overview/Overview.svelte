@@ -229,7 +229,7 @@
 				{m.insights_overview_status_title()}
 			</h2>
 			<p class="ins-sub">{m.insights_overview_status_time()}</p>
-			<KpiRow kpi={overview.kpi} />
+			<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
 		</section>
 
 		<section

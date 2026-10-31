@@ -14,9 +14,11 @@
 	} from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import { hasFinishedImport, plusImported } from './imports';
 	import type { Overview } from './model';
 
-	let { kpi }: { kpi: Overview['kpi'] } = $props();
+	let { kpi, annotations = [] }: { kpi: Overview['kpi']; annotations?: Overview['annotations'] } =
+		$props();
 
 	const locale = $derived(currentLocale());
 	const vsPrevious = $derived(m.insights_overview_vs_previous());
@@ -38,6 +40,7 @@
 	const reason = $derived(
 		kpi.health.reason ? (reasons[kpi.health.reason]?.() ?? kpi.health.reason) : undefined
 	);
+	const plus = $derived(plusImported(kpi.new_searchable_imported, locale));
 	const delta = (value: number | null) =>
 		value === null ? undefined : { value, kind: 'compact' as const, text: vsPrevious };
 </script>
@@ -51,6 +54,16 @@
 			delta={delta(kpi.searchable_delta)}
 			testid="insights-kpi-searchable"
 		/>
+		{#if hasFinishedImport(annotations) && kpi.searchable_delta !== null}
+			<span class="ins-kpi-note" data-testid="insights-kpi-delta-import"
+				>{m.insights_import_delta_note()}</span
+			>
+		{/if}
+		<span class="ins-kpi-note"
+			>{m.insights_import_crawled()}
+			<span data-testid="insights-kpi-crawled">{formatCount(kpi.searchable_crawled, locale)}</span
+			></span
+		>
 		<span class="ins-kpi-note"
 			>{m.insights_overview_kpi_imported()}
 			<span data-testid="insights-kpi-imported">{formatCount(kpi.imported, locale)}</span
@@ -70,6 +83,7 @@
 			delta={delta(kpi.new_searchable_delta)}
 			testid="insights-kpi-new"
 		/>
+		{#if plus}<span class="ins-kpi-note" data-testid="insights-kpi-new-imported">{plus}</span>{/if}
 	</div>
 
 	<div class="ins-card">
