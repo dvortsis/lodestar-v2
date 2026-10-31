@@ -1662,13 +1662,13 @@
    "notes": "after B-import-server-1: import through the running server's writer, origin=import in gate, online pass line 1,000/s (IMP-4b) | carry #276 optional: IMP-4b decisions l.141 drop stale status sentence; parity test add floor-marked subscribed list (record_refresh, hash_of(6)) and drop \"Left untested\" bullet | 13:42Z runner: deferred. Online import needs a server-side trigger (an API taking a source path or PostgreSQL credentials = new file/SSRF surface), which goes to the owner with uploads/wizard (plan A6). The offline CLI covers the pilots (13.9k/s synthetic). Ask the owner in the next summary whether online import is wanted before v0.6."
   },
   "X-search-files-perf": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MMjhnAfGbQDVWK7mHPhRoz",
-   "pr": null,
+   "pr": 278,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus"
+   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA"
   },
   "X-polish-1031b": {
    "status": "running",
@@ -2462,7 +2462,8 @@
   "web vitest flake: query/QueryBar.test.ts 'the Syntax popover > opens on its button, and Try sets and submits' failed 1 of 3 cold local runs in #275 author's and reviewer's sessions (passes alone; waits already 10 s). Not seen in CI yet; get the error text before a fix slice (#275 review)",
   "live.svelte.ts (#275 optional a): a tab hidden >=35 s fires both the visibility and the status path -> two again() calls (one extra POST+DELETE, no leak); debounce a second again() within 1-2 s",
   "live.svelte.ts (#275 optional b): the status $effect calls again(), which reads deps.shown(), so the effect tracks search state; wrap again() in untrack",
-  "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under §2.26 if so)"
+  "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under §2.26 if so)",
+  "Filters API: shutdown token for the classification-rule re-queue (X-search-files-perf kept it uncancellable for content safety)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
