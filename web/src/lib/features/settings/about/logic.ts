@@ -126,3 +126,13 @@ export function problemUrl(base: string | null, body: string): string | null {
 	const url = `${base}/issues/new?body=${encodeURIComponent(body)}`;
 	return url.length <= URL_LIMIT ? url : null;
 }
+
+/** A server-supplied link, only when it is a plain `https:` URL (no credentials); else null. */
+export function httpsUrl(value: string | null | undefined): string | null {
+	try {
+		const url = new URL(value ?? '');
+		return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+	} catch {
+		return null;
+	}
+}

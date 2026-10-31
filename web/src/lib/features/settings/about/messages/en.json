@@ -59,7 +59,7 @@
 	"settings_about_updates_latest": "You're up to date. Last checked",
 	"settings_about_updates_never": "Not checked yet.",
 	"settings_about_updates_available": "Lodestar {version} is available.",
-	"settings_about_updates_error": "The last check failed ({code}).",
+	"settings_about_updates_error": "The last check failed ({code}). Press Check now to try again.",
 	"settings_about_updates_load_error": "Couldn't read the update state.",
 	"settings_about_check_now": "Check now",
 	"settings_about_checking": "Checking",
@@ -77,7 +77,7 @@
 	"settings_about_problem": "Report a problem",
 	"settings_about_problem_lead": "This is exactly what will be put into a new GitHub issue. It has no secrets and no torrent names. Nothing is sent unless you submit the issue on GitHub.",
 	"settings_about_problem_open": "Open GitHub issue",
-	"settings_about_problem_long": "This text is too long for a link. Copy it, open the issue and paste it there.",
+	"settings_about_problem_long": "This text is too long for a link, so it is copied to the clipboard when you open the issue. Paste it there.",
 	"settings_about_privacy": "No telemetry, ever",
 	"settings_about_privacy_lead": "Lodestar sends nothing about you anywhere. These are the things it connects to, and each can be changed in its settings.",
 	"settings_about_conn_dht": "DHT and peers",
@@ -107,5 +107,7 @@
 	"settings_about_credits": "Credits",
 	"settings_about_credit_fonts": "Fonts: Atkinson Hyperlegible Next and Mono, © Braille Institute, SIL Open Font License.",
 	"settings_about_credit_icons": "Icons: Phosphor (MIT).",
-	"settings_about_credit_brand": "Brand artwork: see brand/LICENSE.md."
+	"settings_about_credit_brand": "Brand artwork: see brand/LICENSE.md.",
+	"settings_about_check_failed": "Couldn't check for updates. Try again in a minute.",
+	"settings_about_diagnostics_error": "Couldn't load the diagnostics."
 }

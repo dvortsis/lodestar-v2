@@ -291,9 +291,10 @@ const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal
 // About (S-about): the diagnostics block with Report a problem and the licence list load when their
 // buttons are pressed, and its navigation icon and purpose line (for the filter) on demand; gated on
 // their own below. The parts only load from About's body.
+const settingsAboutModules = [/features\/settings\/about\/(icon|about)\.ts$/];
 const settingsAboutParts = [
 	/features\/settings\/about\/(Diagnostics|Licences)\.svelte$/,
-	/features\/settings\/about\/(icon|about)\.ts$/
+	...settingsAboutModules
 ];
 // Logging (S-logs-2): the Verbosity control, the event list and the component levels (loaded when
 // their fields are on the page), `parts.ts` (the catalog, the banners and the data kinds, which all
@@ -478,12 +479,27 @@ const aboutFirstView = settingsHandBuilt.find(({ name }) => name === 'AboutScree
 const settingsAboutPartsLazy = requireMeasuredJs('Settings about parts (on demand)', [
 	...new Set(
 		Object.keys(manifest)
-			.filter((key) => settingsAboutParts.some((re) => re.test(key)))
+			.filter(
+				(key) =>
+					settingsAboutParts.some((re) => re.test(key)) &&
+					!settingsAboutModules.some((re) => re.test(key))
+			)
 			.flatMap((key) =>
 				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
 					...settingsShellView,
 					...aboutFirstView
 				])
+			)
+	)
+]);
+// The icon and the purpose line load from every Settings page, not from About's body, so what they
+// share with About's body is measured here too (beyond the shell only).
+const settingsAboutModulesLazy = requireMeasuredJs('Settings about icon and purpose (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsAboutModules.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
 			)
 	)
 ]);
@@ -797,7 +813,8 @@ export default [
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// About's diagnostics block and licence list (S-about): LIMIT_ABOUT_PARTS
-	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.72 KB'),
+	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.44 KB'),
+	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).

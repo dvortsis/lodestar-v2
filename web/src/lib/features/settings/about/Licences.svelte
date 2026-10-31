@@ -2,6 +2,8 @@
 	// The open-source components list (§10.10.13): the build's content-hashed licenses.json, fetched
 	// when the section is opened.
 	import { licensesUrl } from 'virtual:licenses';
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Input from '$lib/ui/fields/Input.svelte';
 
@@ -53,10 +55,10 @@
 {:else}
 	<Input type="search" aria-label={m.settings_about_licence_search()} bind:value={query} />
 	<p role="status" class="text-small text-muted-text">
-		{m.settings_about_licence_count({ count: shown.length })}
+		{m.settings_about_licence_count({ count: formatCount(shown.length, currentLocale()) })}
 	</p>
 	<ul>
-		{#each shown.slice(0, 100) as r (r.name + r.version)}
+		{#each shown.slice(0, 100) as r, i (i)}
 			<li class="font-mono text-small">{r.name} {r.version} · {r.license}</li>
 		{/each}
 	</ul>

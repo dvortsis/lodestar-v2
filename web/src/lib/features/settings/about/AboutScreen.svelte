@@ -17,7 +17,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
-	import { isStale, links, shortCommit, versionText, type System } from './logic';
+	import { httpsUrl, isStale, links, shortCommit, versionText, type System } from './logic';
 
 	type Updates = components['schemas']['UpdatesStatus'];
 
@@ -28,10 +28,11 @@
 	let updates = $state.raw<Updates>();
 	let updatesFailed = $state(false);
 	let checking = $state(false);
+	let checkFailed = $state(false);
 	let copied = $state<'copied' | 'manual'>();
 	let Diagnostics = $state.raw<Component<{ info: System; uiBuild: string }>>();
 	let Licences = $state.raw<Component>();
-	let partFailed = $state(false);
+	let partFailed = $state<'diagnostics' | 'licences'>();
 
 	$effect(() => {
 		void attempt;
@@ -106,29 +107,30 @@
 	}
 	async function check() {
 		checking = true;
+		checkFailed = false;
 		try {
 			updates = await api.post('/updates/check');
 			updatesFailed = false;
 		} catch (e) {
-			if (!isAbort(e)) updatesFailed = true;
+			if (!isAbort(e)) checkFailed = true;
 		} finally {
 			checking = false;
 		}
 	}
 	async function openDiagnostics() {
-		partFailed = false;
+		partFailed = undefined;
 		try {
 			Diagnostics = (await import('./Diagnostics.svelte')).default;
 		} catch {
-			partFailed = true;
+			partFailed = 'diagnostics';
 		}
 	}
 	async function openLicences() {
-		partFailed = false;
+		partFailed = undefined;
 		try {
 			Licences = (await import('./Licences.svelte')).default;
 		} catch {
-			partFailed = true;
+			partFailed = 'licences';
 		}
 	}
 	const newest = $derived(updates?.releases[0]);
@@ -272,10 +274,12 @@
 				info.host.memory_bytes === null ? null : fmtBytes(info.host.memory_bytes)
 			)}
 			{@render row(m.settings_about_time_zone(), info.host.time_zone)}
-			<dt class="text-muted-text">{m.settings_about_started()}</dt>
-			<dd>
-				<RelativeTime seconds={info.started_at} timeZone={info.host.time_zone ?? undefined} />
-			</dd>
+			<div class="flex flex-wrap gap-2">
+				<dt class="text-muted-text">{m.settings_about_started()}</dt>
+				<dd>
+					<RelativeTime seconds={info.started_at} timeZone={info.host.time_zone ?? undefined} />
+				</dd>
+			</div>
 			{@render row(m.settings_about_data_dir(), info.data.dir)}
 			{@render row(
 				m.settings_about_data_db(),
@@ -313,10 +317,15 @@
 		{:else}
 			<p role="status">
 				{#if updates.status.error}
-					{m.settings_about_updates_error({ code: updates.status.error })}
+					<span data-testid="about-check-error"
+						>{m.settings_about_updates_error({ code: updates.status.error })}</span
+					>
 				{:else if newest}
 					{m.settings_about_updates_available({ version: newest.version })}
-					{#if newest.notes_url}{@render ext(newest.notes_url, m.settings_about_notes())}{/if}
+					{#if httpsUrl(newest.notes_url)}{@render ext(
+							httpsUrl(newest.notes_url)!,
+							m.settings_about_notes()
+						)}{/if}
 				{:else if updates.status.checked_at}
 					{m.settings_about_updates_latest()}
 					<RelativeTime seconds={updates.status.checked_at} />
@@ -325,6 +334,7 @@
 				{/if}
 			</p>
 		{/if}
+		{#if checkFailed}<p role="alert" class="text-error">{m.settings_about_check_failed()}</p>{/if}
 		<div class="flex flex-wrap items-center gap-3">
 			{#if updates && !updates.unavailable}
 				<Button loading={checking} onclick={check}
@@ -363,7 +373,9 @@
 					<a class="underline" href={resolve('/settings/[section]', { section: c.settings })}
 						>{connLabels[c.kind]()}</a
 					>: {stateLabel(c.state)}{#if c.count !== null}
-						· {m.settings_about_conn_count({ count: c.count })}{/if}{#if c.last_checked_at !== null}
+						· {m.settings_about_conn_count({
+							count: formatCount(c.count, locale)
+						})}{/if}{#if c.last_checked_at !== null}
 						· {m.settings_about_conn_checked()}<RelativeTime seconds={c.last_checked_at} />{/if}
 				</li>
 			{/each}
@@ -398,5 +410,9 @@
 	</section>
 {/if}
 {#if partFailed}
-	<p role="alert" class="text-small text-error">{m.settings_about_licence_error()}</p>
+	<p role="alert" class="text-small text-error">
+		{partFailed === 'licences'
+			? m.settings_about_licence_error()
+			: m.settings_about_diagnostics_error()}
+	</p>
 {/if}

@@ -38,14 +38,18 @@
 </div>
 {#if reporting && base}
 	<p class="text-muted-text">{m.settings_about_problem_lead()}</p>
-	{#if !url}<p>{m.settings_about_problem_long()}</p>{/if}
+	{#if !url}<p>
+			{copied === 'copied' ? m.settings_about_problem_long() : m.settings_about_copy_manual()}
+		</p>{/if}
 	<!-- eslint-disable svelte/no-navigation-without-resolve -- an external https link to the build's repository (logic.repoBase) -->
 	<a
 		class="self-start underline"
 		href={url ?? `${base}/issues/new`}
 		target="_blank"
 		rel="noopener noreferrer"
-		onclick={() => (url ? undefined : void copyText(text))}
+		onclick={async () => {
+			if (!url) copied = await copyText(text);
+		}}
 		>{m.settings_about_problem_open()}<span class="sr-only"> {m.settings_about_new_tab()}</span></a
 	>
 	<!-- eslint-enable svelte/no-navigation-without-resolve -->

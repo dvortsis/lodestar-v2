@@ -59,7 +59,7 @@
 	"settings_about_updates_latest": "已是最新版本。上次检查：",
 	"settings_about_updates_never": "尚未检查。",
 	"settings_about_updates_available": "Lodestar {version} 可用。",
-	"settings_about_updates_error": "上次检查失败（{code}）。",
+	"settings_about_updates_error": "上次检查失败（{code}）。请按“立即检查”重试。",
 	"settings_about_updates_load_error": "无法读取更新状态。",
 	"settings_about_check_now": "立即检查",
 	"settings_about_checking": "正在检查",
@@ -77,7 +77,7 @@
 	"settings_about_problem": "报告问题",
 	"settings_about_problem_lead": "以下内容将原样填入新的 GitHub 议题，不含机密或种子名称。只有你在 GitHub 上提交议题后才会发送。",
 	"settings_about_problem_open": "打开 GitHub 议题",
-	"settings_about_problem_long": "此文本太长，无法放入链接。请复制后打开议题并粘贴。",
+	"settings_about_problem_long": "此文本太长，无法放入链接，因此打开议题时会复制到剪贴板。请在那里粘贴。",
 	"settings_about_privacy": "绝无遥测",
 	"settings_about_privacy_lead": "Lodestar 不会向任何地方发送关于你的信息。以下是它连接的对象，每一项都可在其设置中更改。",
 	"settings_about_conn_dht": "DHT 与对等节点",
@@ -107,5 +107,7 @@
 	"settings_about_credits": "致谢",
 	"settings_about_credit_fonts": "字体：Atkinson Hyperlegible Next 与 Mono，© Braille Institute，SIL 开放字体许可。",
 	"settings_about_credit_icons": "图标：Phosphor（MIT）。",
-	"settings_about_credit_brand": "品牌图稿：见 brand/LICENSE.md。"
+	"settings_about_credit_brand": "品牌图稿：见 brand/LICENSE.md。",
+	"settings_about_check_failed": "无法检查更新。请一分钟后重试。",
+	"settings_about_diagnostics_error": "无法加载诊断信息。"
 }
