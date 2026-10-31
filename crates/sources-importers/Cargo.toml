@@ -9,6 +9,10 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The driver (IMP-4) runs every record through the same filter and
+# enrichment as ingest.
+lodestar-classify.workspace = true
+lodestar-filter.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-store.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }

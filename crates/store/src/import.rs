@@ -965,6 +965,133 @@ impl Store {
     pub fn import_quality(&self, id: i64) -> Result<Option<Quality>> {
         quality(&self.conn, id)
     }
+
+    /// Up to `limit` torrents a job touched, by id after `after`: each
+    /// with whether the job inserted it (`true`) or only added
+    /// provenance.
+    pub fn import_job_members(
+        &self,
+        job: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<(i64, bool)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT torrent_id, created FROM import_membership
+             WHERE job = ?1 AND torrent_id > ?2 ORDER BY job, torrent_id LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![job, after, limit as i64], |r| {
+            Ok((r.get(0)?, r.get::<_, i64>(1)? != 0))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Takes back up to `limit` of a job's records, in one transaction
+    /// (IMP-4, master plan F17: rolling back a pilot). Call it again until
+    /// [`Removed::done`].
+    ///
+    /// - A torrent the job inserted is deleted, and logged so the indexer
+    ///   drops it, unless another job touched it too or a network fetch
+    ///   has verified it since: then only this job's provenance goes.
+    /// - A torrent the job merged into loses this job's provenance only.
+    ///   Its source bit and a privacy the import made stricter stay:
+    ///   other jobs of the adapter may share the bit, and a restriction is
+    ///   never loosened.
+    /// - The job's waiting candidates are deleted.
+    /// - Filter hits, tombstones and quarantine the job wrote stay: they
+    ///   are safety records, not imported data.
+    ///
+    /// The job's counters stay as its history. A job still reading its
+    /// source is refused: cancel or pause it first.
+    pub fn remove_import_job_records(&mut self, job: i64, limit: usize) -> Result<Removed> {
+        let tx = begin_write(&mut self.conn)?;
+        let j = load(&tx, job)?;
+        if j.control == Control::Running && j.phase.code() <= Phase::Committing.code() {
+            return Err(Error::Invalid(
+                "the import job is running: pause or cancel it first",
+            ));
+        }
+        let members: Vec<(i64, bool)> = {
+            let mut stmt = tx.prepare_cached(
+                "SELECT torrent_id, created FROM import_membership
+                 WHERE job = ?1 ORDER BY job, torrent_id LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![job, limit as i64], |r| {
+                Ok((r.get(0)?, r.get::<_, i64>(1)? != 0))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let mut out = Removed::default();
+        {
+            let mut shared = tx.prepare_cached(
+                "SELECT 1 FROM import_membership WHERE torrent_id = ?1 AND job != ?2",
+            )?;
+            let mut forget = tx.prepare_cached(
+                "DELETE FROM import_membership WHERE torrent_id = ?1 AND job = ?2",
+            )?;
+            // Cached: the delete carries Insights' trigger.
+            let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+            let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+            for &(id, created) in &members {
+                if !created {
+                    forget.execute(params![id, job])?;
+                    out.provenance += 1;
+                } else if shared.exists(params![id, job])? {
+                    forget.execute(params![id, job])?;
+                    out.kept_shared += 1;
+                } else if quality(&tx, id)?
+                    .is_some_and(|q| q.verification == Verification::Verified)
+                {
+                    forget.execute(params![id, job])?;
+                    out.kept_verified += 1;
+                } else {
+                    // Membership and quality cascade with the row.
+                    delete.execute([id])?;
+                    log.execute([id])?;
+                    out.torrents += 1;
+                }
+            }
+        }
+        let room = limit.saturating_sub(members.len());
+        out.candidates = tx
+            .prepare_cached(
+                "DELETE FROM import_candidates WHERE id IN
+                     (SELECT id FROM import_candidates WHERE job = ?1 LIMIT ?2)",
+            )?
+            .execute(params![job, room as i64])? as u64;
+        out.done = members.len() < limit && (out.candidates as usize) < room;
+        tx.commit()?;
+        Ok(out)
+    }
+}
+
+/// What one [`Store::remove_import_job_records`] call did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Removed {
+    /// Torrents the job inserted, deleted.
+    pub torrents: u64,
+    /// Torrents the job inserted that another job touched too: kept.
+    pub kept_shared: u64,
+    /// Torrents the job inserted that a network fetch verified since:
+    /// kept.
+    pub kept_verified: u64,
+    /// Stored torrents the job only merged into: provenance removed.
+    pub provenance: u64,
+    /// Waiting candidates deleted.
+    pub candidates: u64,
+    /// Nothing of the job's is left to remove.
+    pub done: bool,
+}
+
+impl Removed {
+    /// Adds another call's counts; `done` is the latest call's.
+    pub fn add(&mut self, other: Removed) {
+        self.torrents += other.torrents;
+        self.kept_shared += other.kept_shared;
+        self.kept_verified += other.kept_verified;
+        self.provenance += other.provenance;
+        self.candidates += other.candidates;
+        self.done = other.done;
+    }
 }
 
 /// See [`Quality`] for the rule.
