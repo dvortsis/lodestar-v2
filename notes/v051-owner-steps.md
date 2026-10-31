@@ -60,3 +60,8 @@ Push the evidence the same way as `soak/cr0-final`: aggregates and hourly data o
 - **Unraid 24 h soak: running.** It started 21:07Z from a fresh copy of the cold Oct-22 backup, and the V3→V12 upgrade went through. The baseline runs 2026-10-31 03:37Z to 2026-11-01 03:37Z; then comes the gluetun leg (at least 2 h). Then send `analyze_cr0.py`'s aggregate outputs.
 - **Windows portable: PASS.**
 - **Windows MSI service: running** since 21:22Z, with the Defender exclusion active. Keep it running to about 04:30Z on 10-31, past the 03:22Z suppression end, then record the stored count and rate.
+
+## 2026-10-31 04:32Z: rc.2 gate results (owner)
+- Windows MSI service run: PASS. 7 h 10 m uptime, 69.7 min after suppression ended, Defender exclusion on, clean stop (2.89 s) and restart from snapshot, 17.0 stored/min after suppression, private memory 423.6 MiB, 353 handles.
+- Windows portable zip: PASS.
+- Unraid 24 h soak: baseline running from 2026-10-31T03:37:39Z to 2026-11-01T03:37:39Z, then the gluetun leg (at least 2 h). At sample 443: 10,131 torrents, 493 MiB private, 0 restarts.

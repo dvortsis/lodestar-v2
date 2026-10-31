@@ -2424,9 +2424,40 @@
     },
     "v0.5.1-rc.2_gates": {
       "artifacts": "PASS (owner 21:3xZ): SHA256SUMS minisig verified with packaging/keys/lodestar-release.pub; all 4 archives match; image manifest sha256:8abcaf528e37baea076ede3fb2fc090723fc3968b48625b90a3d1af83c297455 (image id sha256:00257522919ee74a91010767dc990b2762d3cd3185a58ceb46173c09bca8117c) matches run 41110604990",
-      "unraid_soak": "RUNNING: rc.1 run v051-rc1-main stopped cleanly and preserved; fresh copy of the cold Oct-22 backup restored; V3->V12 in-place upgrade OK (pre-v3 snapshot made); container started 2026-10-30T21:07:10Z balanced; collect.py (sha256 7bb3b183..., at 6be95525) into v051-rc2-main, leg main, 30 min warmup, 24 h baseline, no rehearsal. Suppression ends ~03:07Z; baseline 2026-10-31T03:37Z -> 2026-11-01T03:37Z; then a >= 2 h gluetun leg.",
-      "windows_portable": "PASS: --fixture refused (exit 2), /healthz 200, UI 200, /metrics has R-gauges, Ctrl+C clean exit 0",
-      "windows_msi_service": "RUNNING since 2026-10-30T21:22:05Z: DEFENDER_EXCLUSION=1 active (C:\\ProgramData\\Lodestar\\), NT SERVICE\\Lodestar, delayed autostart, below-normal; stop 2.89 s clean and start OK. Suppression ends 03:22Z; runner asked to run to about 04:30Z for a non-zero stored rate after the suppression.",
+      "unraid_soak": {
+        "status": "baseline",
+        "leg": "v051-rc2-main",
+        "suppression_ended": "2026-10-31T03:07:37Z",
+        "baseline_started": "2026-10-31T03:37:39Z",
+        "expected_end": "2026-11-01T03:37:39Z",
+        "sample_443": {
+          "at": "2026-10-31T04:30:41Z",
+          "torrents": 10131,
+          "private_mib": 493.2,
+          "working_set_mib": 627.5,
+          "restart_count": 0
+        },
+        "next": "gluetun leg >=2 h measured after baseline end"
+      },
+      "windows_portable": {
+        "result": "PASS",
+        "sha256": "bf32947908d10995d9faa58d28e237409e3df9f4d848b8cc7f17d739f6d959d3"
+      },
+      "windows_msi_service": {
+        "result": "PASS",
+        "at": "2026-10-31T04:31:48Z",
+        "sha256": "99c2fbcb92401297f477e1f15e625dd5366278e78a2453eda14dd3afffca0dd8",
+        "defender_exclusion": true,
+        "uptime": "7h09m43s",
+        "post_suppression_min": 69.7,
+        "stop_clean_s": 2.89,
+        "restart": "clean, from=snapshot, below-normal",
+        "stored_per_min_post_suppression": 17.0,
+        "torrents": 1182,
+        "working_set_mib": 293.9,
+        "private_mib": 423.6,
+        "handles": 353
+      },
       "memory_gate_fit": "owner ruling on #189 (h12-24 private fit) still open; the Linux soak analysis reports it"
     }
   }
