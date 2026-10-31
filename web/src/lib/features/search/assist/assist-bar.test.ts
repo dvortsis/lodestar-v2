@@ -170,6 +170,18 @@ describe('natural phrasing', () => {
 		expect(editor.textContent).toBe('4k movies');
 	});
 
+	it('closes when the text changes, so Apply never overwrites newer typing', async () => {
+		const { editor } = await setup();
+		await type(editor, '4k movies');
+		await fireEvent.click(screen.getByRole('button', { name: 'Natural phrasing' }));
+		await screen.findByRole('region', { name: 'Natural phrasing preview' }, LAZY);
+		await type(editor, '4k movies now');
+		await waitFor(() =>
+			expect(screen.queryByRole('region', { name: 'Natural phrasing preview' })).toBeNull()
+		);
+		expect(editor.textContent).toBe('4k movies now');
+	});
+
 	it('says so when nothing became a filter', async () => {
 		const { editor } = await setup();
 		await type(editor, 'just words');

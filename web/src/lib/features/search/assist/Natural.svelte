@@ -2,7 +2,7 @@
 	// "Natural phrasing" (§10.4): the server reads the bar's text as plain words ("4k movies from
 	// 2020 over 10gb") and proposes the clauses it means. They are shown as chips, and nothing
 	// changes until the user applies them.
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { api, ApiError, isAbort } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
 	import { m } from '$lib/paraglide/messages.js';
@@ -24,6 +24,13 @@
 	let status = $state<'loading' | 'ready' | 'none' | 'error'>('loading');
 	let reason = $state('');
 	let actions = $state<HTMLElement>();
+
+	// The proposal is for the text it was asked about: typing on closes it, so Apply can't replace
+	// newer text with an older text's canonical form.
+	const asked = untrack(() => text);
+	$effect(() => {
+		if (text !== asked) untrack(dismiss);
+	});
 
 	onMount(() => {
 		const ctl = new AbortController();

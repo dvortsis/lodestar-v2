@@ -55,6 +55,7 @@
 		(got, forQuery) => {
 			items = got;
 			itemsFor = forQuery;
+			active = -1; // the list under the highlight changed: it must not land on another option
 		},
 		() => hidden?.() ?? false
 	);
@@ -100,6 +101,7 @@
 	function close() {
 		open = false;
 		active = -1;
+		typed = false;
 		suggester.cancel();
 	}
 
@@ -114,6 +116,9 @@
 
 	function onkeydown(e: KeyboardEvent) {
 		if (e.isComposing || e.keyCode === 229) return;
+		// Enter searches unless the user moved to an option: the suggestions are done, even ones still
+		// on their way (a late answer must not reopen the list under a Tab that means "leave").
+		if (e.key === 'Enter' && !(shown && active >= 0)) return close();
 		if (!shown) {
 			if (e.key === 'ArrowDown' && !e.altKey) {
 				e.preventDefault();
@@ -146,7 +151,7 @@
 		) {
 			take();
 			pick(options[Math.max(active, 0)]!);
-		} else if (e.key === 'Enter' && active >= 0) {
+		} else if (e.key === 'Enter') {
 			take();
 			pick(options[active]!);
 		}

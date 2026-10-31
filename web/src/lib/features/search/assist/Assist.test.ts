@@ -219,6 +219,32 @@ describe('Assist combobox', () => {
 		expect(accepted).toEqual([]);
 	});
 
+	it('Enter that searches closes the list, so the next Tab leaves the bar', async () => {
+		mount();
+		await type('res');
+		await screen.findAllByRole('option');
+		await key('Enter'); // no option chosen: left for the search
+		expect(screen.queryByRole('listbox')).toBeNull();
+		const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true, bubbles: true });
+		el.dispatchEvent(tab);
+		expect(tab.defaultPrevented).toBe(false);
+		expect(accepted).toEqual([]);
+	});
+
+	it('Enter before the answer lands: the late answer does not open the list', async () => {
+		let release: ((r: Response) => void) | undefined;
+		respond = () => new Promise((resolve) => (release = resolve));
+		mount();
+		await type('res'); // asked, not answered
+		await key('Enter');
+		release?.(json({ items: ITEMS }));
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
+		expect(screen.queryByRole('listbox')).toBeNull();
+		const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true, bubbles: true });
+		el.dispatchEvent(tab);
+		expect(tab.defaultPrevented).toBe(false);
+	});
+
 	it('shows no list when the request fails', async () => {
 		respond = async () => new Response('{}', { status: 500 });
 		mount();
