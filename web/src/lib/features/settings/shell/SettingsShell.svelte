@@ -4,7 +4,7 @@
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { withDensity, type Route } from '$lib/shell/nav';
-	import IconGear from '~icons/ph/gear';
+	import NavIcon from './NavIcon.svelte';
 	import { groups, matchesScreen, screens } from './screens';
 	let { children }: { children: Snippet } = $props();
 	let query = $state('');
@@ -31,13 +31,12 @@
 					<div class="flex flex-col gap-2">
 						<h2 class="text-label text-muted-text">{group.label()}</h2>
 						{#each members as screen (screen.id)}
-							{@const Icon = screen.icon ?? IconGear}
 							<a
 								class="settings-link ls-focus flex items-center gap-2 rounded-field px-3 py-2"
 								href={href(`/settings/${screen.id}`)}
 								aria-current={page.params.section === screen.id ? 'page' : undefined}
 							>
-								<Icon class="size-5 shrink-0" aria-hidden="true" />{screen.title()}
+								<NavIcon {screen} />{screen.title()}
 							</a>
 						{/each}
 					</div>

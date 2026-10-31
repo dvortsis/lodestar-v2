@@ -28,7 +28,9 @@ describe('the screen registry', () => {
 			'insights',
 			'general'
 		]);
-		expect(screens.filter((screen) => screen.sections).every((screen) => screen.icon)).toBe(true);
+		expect(
+			screens.filter((screen) => screen.sections).every((screen) => screen.icon || screen.iconLoad)
+		).toBe(true);
 		// Appearance (S-appearance) and Keyboard (S-keys) are hand-built: the route loads their body,
 		// which renders its own heading.
 		expect(byId('appearance').load).toBeTypeOf('function');

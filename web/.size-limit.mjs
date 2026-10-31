@@ -1,7 +1,8 @@
 // §10.1 budgets, gzipped. Size only: the preset-app timing step is disabled (`running: false`).
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
@@ -149,25 +150,56 @@ const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
 // on the page or on an interaction, so a first view stops at them. Gated on their own below.
 const settingsConnections = [
 	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget)\.svelte$/,
-	/features\/settings\/screens2\/privacy\.ts$/
+	/features\/settings\/screens2\/privacy\.ts$/,
+	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
+	/~icons\/ph\/(plugs-connected|bell|chart-line|wifi-high)\.svelte$/
 ];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
 // section's map before its fields render, so a first view stops at them. Gated on their own.
 const settingsMessages = [/features\/settings\/form\/message-maps\/\w+\.ts$/];
 // A section's first view does include the maps its form awaits before any field renders: the
-// group headings' and the section's own. The first-view gates count the group map and the
-// largest section map (the worst case) and leave the rest out, so the numbers are honest and a
-// later screen's map is gated the moment it lands. "Settings messages (on demand)" measures all.
+// group headings' and the section's own. A generated screen could be any generated section, so its
+// gate counts the group map and the largest of those sections' maps (the worst case, by gzip). A
+// hand-built screen names the sections its body shows (`bodyMaps`), so it counts its own and the
+// group map. Every other map is left out; a later screen's map is gated the moment it lands.
+// "Settings messages (on demand)" and the connection maps' entry measure them all.
 const messageKeys = Object.keys(manifest).filter((key) =>
 	settingsMessages.some((re) => re.test(key))
 );
-const rawSize = (key) => statSync(`.svelte-kit/output/client/${manifest[key].file}`).size;
-const largestMap = messageKeys
-	.filter((key) => !key.endsWith('/group.ts'))
-	.sort((a, b) => rawSize(b) - rawSize(a))[0];
-const settingsMessagesLeftOut = messageKeys
-	.filter((key) => !key.endsWith('/group.ts') && key !== largestMap)
-	.map((key) => new RegExp(`${key.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`));
+const mapName = (key) =>
+	key
+		.split('/')
+		.at(-1)
+		.replace(/\.(ts|svelte)$/, '');
+const gzSize = (key) =>
+	gzipSync(readFileSync(`.svelte-kit/output/client/${manifest[key].file}`)).length;
+const GENERATED_SECTIONS = [
+	'crawler',
+	'transport',
+	'network',
+	'storage',
+	'search',
+	'general',
+	'trackers'
+];
+const largestMap = mapName(
+	messageKeys
+		.filter((key) => GENERATED_SECTIONS.includes(mapName(key)))
+		.sort((a, b) => gzSize(b) - gzSize(a))[0]
+);
+const bodyMaps = {
+	AppearanceScreen: ['preferences'],
+	KeyboardScreen: ['preferences'],
+	LanguageScreen: ['preferences'],
+	IntegrationsScreen: ['integrations'],
+	NotificationsScreen: ['notifications'],
+	InsightsScreen: ['insights']
+};
+const mapsLeftOut = (keep) =>
+	messageKeys
+		.filter((key) => mapName(key) !== 'group' && !keep.includes(mapName(key)))
+		.map((key) => new RegExp(`${key.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`));
+const settingsMessagesLeftOut = mapsLeftOut([largestMap]);
 const settingsLazy = requireMeasuredJs(
 	'Settings controls (on demand)',
 	onDemandOf('/settings/[section]', settingsOnDemand).filter(
@@ -266,7 +298,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsOnDemand,
 					...settingsEdit,
 					...settingsConnections,
-					...settingsMessagesLeftOut,
+					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
 					...appearanceLater
 				],
