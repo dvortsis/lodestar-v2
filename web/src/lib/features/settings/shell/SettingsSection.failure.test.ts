@@ -8,7 +8,8 @@ vi.mock('./screens', () => ({
 	screens: [
 		{ id: 'disk', group: 'library', title: () => 'Disk', sections: ['storage'] }
 	] satisfies Screen[],
-	screenFields: () => [{ key: 'storage.mmap_mib', section: 'storage' }]
+	screenFields: () => [{ key: 'storage.mmap_mib', section: 'storage' }],
+	aboutOf: () => Promise.resolve({})
 }));
 vi.mock('../form/schema', () => ({ loadSettingsIndex: () => Promise.resolve({}) }));
 vi.mock('./SectionForm.svelte', () => {

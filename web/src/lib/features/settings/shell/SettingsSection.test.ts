@@ -3,12 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import type { Component } from 'svelte';
 import SettingsSection from './SettingsSection.svelte';
 import Stub from './testing/Stub.svelte';
-import type { Screen } from './screens';
+import type { About, Screen } from './screens';
 
 // A fake registry: one hand-built screen, one generated screen with an extra.
 const registry = vi.hoisted(() => ({
 	load: undefined as unknown as () => Promise<{ default: Component }>,
 	extra: undefined as unknown as () => Promise<{ default: Component }>,
+	about: undefined as unknown as () => Promise<Record<string, About>>,
 	index: undefined as unknown as () => Promise<unknown>
 }));
 vi.mock('./screens', () => ({
@@ -25,13 +26,13 @@ vi.mock('./screens', () => ({
 			id: 'disk',
 			group: 'library',
 			title: () => 'Disk',
-			purpose: () => 'Disk purpose',
+			about: () => registry.about(),
 			sections: ['storage'],
-			notice: () => 'Read-only for now',
 			extra: () => registry.extra()
 		}
 	] satisfies Screen[],
-	screenFields: () => [{ key: 'storage.mmap_mib', section: 'storage' }]
+	screenFields: () => [{ key: 'storage.mmap_mib', section: 'storage' }],
+	aboutOf: async (s: Screen) => (await s.about?.())?.[s.id] ?? {}
 }));
 vi.mock('../form/schema', () => ({ loadSettingsIndex: () => registry.index() }));
 vi.mock('./SectionForm.svelte', async () => ({
@@ -59,6 +60,10 @@ beforeEach(() => {
 	registry.load = () => Promise.resolve(body('Keyboard body'));
 	registry.extra = () => Promise.resolve(body('Export panel', false));
 	registry.index = () => Promise.resolve({});
+	registry.about = () =>
+		Promise.resolve({
+			disk: { purpose: () => 'Disk purpose', notice: () => 'Read-only for now' }
+		});
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -97,6 +102,17 @@ it('shows a generated screen with its purpose, notice, form and extra', async ()
 		'Stub',
 		'Export panel'
 	]);
+});
+
+it('waits for the purpose line with the form, and says so when it cannot load', async () => {
+	const pending = deferred<Record<string, About>>();
+	registry.about = () => pending.promise;
+	render(SettingsSection, { section: 'disk' });
+	await until(() => expect(screen.getByRole('status').textContent).toContain('Loading settings'));
+	expect(screen.queryByTestId('stub')).toBeNull();
+	pending.reject(new Error('chunk'));
+	await screen.findByRole('button', { name: 'Reload' }, { timeout: 10_000 });
+	expect(screen.queryByText('Disk purpose')).toBeNull();
 });
 
 it('fetches the settings index once, even as the form’s code arrives', async () => {

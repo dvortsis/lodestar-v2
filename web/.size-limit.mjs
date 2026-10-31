@@ -289,8 +289,17 @@ const settingsLogging = [
 	/features\/settings\/logging\/(privacy|icon|parts)\.ts$/
 ];
 const logsLater = [/features\/settings\/logging\/(privacy|catalog\.svelte)\.ts$/];
+// The registry's purpose lines and notices (`Screen.about`, X-settings-registry-slim): one small
+// module per registry file, loaded when a generated screen opens (so "Settings section" counts them)
+// and when the filter is first used. The overview and a hand-built screen's first view stop at them;
+// "Settings screen purposes (on demand)" gates them.
+const settingsAbout = [/features\/(?:settings\/)?[^/]+\/about\.ts$/];
+// The generated screens' navigation icons (X-settings-registry-slim), loaded after the navigation
+// shows like the connection screens' (`Screen.iconLoad`); every first view stops at them.
+const settingsIcons = [/features\/settings\/screens\/icons\.ts$/];
 const settingsFirstView = [
 	...settingsOnDemand,
+	...settingsIcons,
 	...insightsDigest,
 	...settingsEdit,
 	...settingsConnections,
@@ -304,8 +313,16 @@ const settingsFirstView = [
 ];
 const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirstView });
 const settingsShellView = own('/settings/[section]', {
-	onDemand: [...settingsFirstView, ...settingsFormChunk]
+	onDemand: [...settingsFirstView, ...settingsFormChunk, ...settingsAbout]
 });
+const settingsIconsLazy = requireMeasuredJs(
+	'Settings screen icons (on demand)',
+	onDemandOf('/settings/[section]', settingsIcons)
+);
+const settingsAboutLazy = requireMeasuredJs(
+	'Settings screen purposes (on demand)',
+	onDemandOf('/settings/[section]', settingsAbout)
+);
 const settingsLoggingMap = requireMeasuredJs(
 	'Settings logging messages (on demand)',
 	loggingMapFiles
@@ -701,7 +718,7 @@ export default [
 	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '46 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
-		own('/settings', { onDemand: settingsFirstView }),
+		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
 		'45 KB'
 	),
 	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
@@ -725,14 +742,12 @@ export default [
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
-	// Raised by the runner (§2.26): +~90 B from the Logging registry entry in the shared screens chunk
-	// (S-logs-2); structural fix queued (registry titles out of the shared chunk). Notifications only.
+	// A new registry entry adds ≈ 65–85 B to every one of these and to "Settings section" (its
+	// title ≈ 25 B, the entry with its icon and body loaders ≈ 40–60 B; the note at the top of
+	// shell/screens.ts). Before X-settings-registry-slim each also carried its purpose and an eager
+	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
 	...settingsHandBuilt.map(({ name, files }) =>
-		entry(
-			`Settings ${name} (first view)`,
-			files,
-			name === 'NotificationsScreen' ? '45.1 KB' : '45 KB'
-		)
+		entry(`Settings ${name} (first view)`, files, '45 KB')
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
@@ -741,6 +756,10 @@ export default [
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
+	// The registry's purpose lines and notices, and the generated screens' navigation icons
+	// (X-settings-registry-slim): measured 0.87 KB and 1.5 KB, limits = measured + 10%.
+	entry('Settings screen purposes (on demand)', settingsAboutLazy, '0.96 KB'),
+	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',
