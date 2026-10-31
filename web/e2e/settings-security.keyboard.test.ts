@@ -100,7 +100,7 @@ test.describe('keyboard: Settings → Security', () => {
 		await page.keyboard.type('a-new-passphrase');
 		await kbd.press('Enter');
 		await expect(page.getByTestId('security-password-result')).toContainText(
-			'Every other session was signed out'
+			'Every other browser signed in with the password was signed out'
 		);
 		expect(sent).toEqual([
 			{ op: 'changePassword', body: { old: PASSWORD, new: 'a-new-passphrase' } }
@@ -133,7 +133,7 @@ test.describe('keyboard: Settings → Security', () => {
 		await kbd.press('Enter');
 		await expect(dialog).toBeHidden();
 		await expect(page.getByTestId('security-sessions-result')).toHaveText(
-			'Every other session was signed out.'
+			'Every other browser signed in with the password was signed out.'
 		);
 		expect(sent.map((s) => s.body)).toEqual([
 			{ password: 'wrong-password' },

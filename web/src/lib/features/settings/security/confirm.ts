@@ -20,7 +20,11 @@ export const DEFAULT_WAIT_S = 12;
 /** A `Retry-After` beyond this is shown as this (M-auth's cap). */
 const MAX_WAIT_S = 15 * 60;
 
-/** What a refused try shows. `lockedFor` (seconds) is set for the lock-out (429). */
+/**
+ * What a refused try shows. For the lock-out (429), `lockedFor` is the wait in seconds and
+ * `message` is the server's sentence, shown only if the countdown banner can't load: the banner
+ * says what M-auth's sign-in says, since the bucket counts every try, right or wrong.
+ */
 export interface Refusal {
 	message: string;
 	lockedFor?: number;

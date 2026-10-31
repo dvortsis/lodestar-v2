@@ -28,10 +28,24 @@
 	let busy = $state(false);
 	let error = $state('');
 	/** The latest lock-out (429); a new object restarts the countdown. */
-	let lockout = $state<{ seconds: number }>();
+	let lockout = $state<{ seconds: number; message: string }>();
 	let locked = $state(false);
-	/** The lock-out banner, loaded with the first 429. */
-	let Lockout = $state<typeof import('./Lockout.svelte').default>();
+	let unlock: ReturnType<typeof setTimeout> | undefined;
+	/** The lock-out banner, loaded with the first 429; `false` when it couldn't load. */
+	let Lockout = $state<typeof import('./Lockout.svelte').default | false>();
+
+	function lock(seconds: number, message: string) {
+		lockout = { seconds, message };
+		locked = true;
+		clearTimeout(unlock);
+		unlock = setTimeout(() => (locked = false), seconds * 1000);
+		if (!Lockout)
+			import('./Lockout.svelte').then(
+				(l) => (Lockout = l.default),
+				() => (Lockout = false)
+			);
+	}
+	$effect(() => () => clearTimeout(unlock));
 	let closed = false;
 
 	function close(result: { value: unknown } | null) {
@@ -61,12 +75,9 @@
 		if ('value' in outcome) return close(outcome);
 		const r = outcome.refused;
 		if (r.signedOut) return close(null);
-		error = r.message;
-		if (r.lockedFor !== undefined) {
-			lockout = { seconds: r.lockedFor };
-			locked = true;
-			void import('./Lockout.svelte').then((l) => (Lockout = l.default));
-		}
+		// A lock-out isn't the password's fault: the banner says it, not the field.
+		if (r.lockedFor !== undefined) lock(r.lockedFor, r.message);
+		else error = r.message;
 		field()?.focus();
 	}
 </script>
@@ -108,8 +119,10 @@
 		</Field>
 		{#if lockout && Lockout}
 			{#key lockout}
-				<Lockout seconds={lockout.seconds} onchange={(l) => (locked = l)} />
+				<Lockout seconds={lockout.seconds} />
 			{/key}
+		{:else if lockout && Lockout === false}
+			<p role="alert">{lockout.message}</p>
 		{/if}
 	</form>
 	{#snippet footer()}
@@ -121,7 +134,7 @@
 			form={formId}
 			variant="primary"
 			loading={busy}
-			aria-disabled={locked || undefined}
+			aria-disabled={busy || locked || undefined}
 			data-testid="password-dialog-confirm">{action}</Button
 		>
 	{/snippet}

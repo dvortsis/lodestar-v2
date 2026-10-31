@@ -4,7 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconOn from '~icons/ph/shield-check';
-	import IconOff from '~icons/ph/shield-warning';
+	import IconOff from '~icons/ph/shield';
 
 	let state = $state<{ on: boolean; env: string | null } | 'failed'>();
 

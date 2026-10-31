@@ -6,13 +6,16 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { confirmWithPassword } from './confirm';
+	import Result from './Result.svelte';
 
 	let busy = $state(false);
 	let done = $state('');
+	let failed = $state(false);
 
 	async function revoke() {
 		busy = true;
 		done = '';
+		failed = false;
 		try {
 			const ok = await confirmWithPassword({
 				title: m.settings_security_sessions_dialog_title(),
@@ -21,6 +24,10 @@
 				send: (password) => api.post('/sessions/revoke-others', { body: { password } })
 			});
 			if (ok) done = m.settings_security_sessions_done();
+		} catch {
+			// The dialog's code couldn't load: nothing was sent.
+			done = m.settings_security_failed();
+			failed = true;
 		} finally {
 			busy = false;
 		}
@@ -37,8 +44,6 @@
 		<Button loading={busy} onclick={revoke} data-testid="security-revoke-others"
 			>{m.settings_security_sessions_revoke()}</Button
 		>
-		<p role="status" class="text-small text-success" data-testid="security-sessions-result">
-			{done}
-		</p>
+		<Result text={done} {failed} testid="security-sessions-result" />
 	</div>
 </section>

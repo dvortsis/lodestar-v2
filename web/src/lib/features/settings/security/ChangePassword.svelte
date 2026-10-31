@@ -19,6 +19,7 @@
 	} from '$lib/features/auth/password';
 	import { ask } from '../form/dialogs';
 	import { refusal } from './confirm';
+	import Result from './Result.svelte';
 
 	let current = $state('');
 	let next = $state('');
@@ -27,10 +28,25 @@
 	let errors = $state<{ old?: string; new?: string; confirm?: string }>({});
 	let done = $state('');
 	let failed = $state('');
-	let lockout = $state<{ seconds: number }>();
+	/** The latest lock-out (429); a new object restarts the countdown. */
+	let lockout = $state<{ seconds: number; message: string }>();
 	let locked = $state(false);
-	/** The lock-out banner, loaded with the first 429. */
-	let Lockout = $state<typeof import('./Lockout.svelte').default>();
+	let unlock: ReturnType<typeof setTimeout> | undefined;
+	/** The lock-out banner, loaded with the first 429; `false` when it couldn't load. */
+	let Lockout = $state<typeof import('./Lockout.svelte').default | false>();
+
+	function lock(seconds: number, message: string) {
+		lockout = { seconds, message };
+		locked = true;
+		clearTimeout(unlock);
+		unlock = setTimeout(() => (locked = false), seconds * 1000);
+		if (!Lockout)
+			import('./Lockout.svelte').then(
+				(l) => (Lockout = l.default),
+				() => (Lockout = false)
+			);
+	}
+	$effect(() => () => clearTimeout(unlock));
 	let formEl = $state<HTMLFormElement>();
 
 	const strength = $derived(next ? checkPassword(next) : null);
@@ -82,26 +98,25 @@
 		try {
 			await api.post('/password', { body });
 			done = m.settings_security_password_done();
+			lockout = undefined;
 		} catch (err) {
 			const r = refusal(err, m.settings_security_failed());
 			if (r.signedOut) return;
 			const field = err instanceof ApiError ? err.field : undefined;
-			if (field === 'old' || field === 'new') errors = { [field]: r.message };
+			// A lock-out isn't any field's fault: the banner says it.
+			if (r.lockedFor !== undefined) lock(r.lockedFor, r.message);
+			else if (field === 'old' || field === 'new') errors = { [field]: r.message };
 			else failed = r.message;
-			if (r.lockedFor !== undefined) {
-				lockout = { seconds: r.lockedFor };
-				locked = true;
-				void import('./Lockout.svelte').then((l) => (Lockout = l.default));
-			}
 			focus(field === 'new' ? 'new-password' : 'current-password');
 		} finally {
 			busy = false;
 		}
 	}
 
-	// Leaving with something typed asks first, as the engine's leave guard decides (§10.10.5,
-	// `form/leave.ts`, restated here: importing it would split it out of the engine's chunk);
-	// closing or reloading the tab lets the browser ask; a hash change on this page isn't leaving.
+	// Leaving with something typed asks first (§10.10.5). The rules are the engine's
+	// `leaveDecision` (form/leave.ts), restated here because importing it would split it out of the
+	// engine's chunk and cost every Settings page: closing or reloading the tab lets the browser
+	// ask, and a hash change on this page isn't leaving. Keep the two in step.
 	let bypass = false;
 	beforeNavigate((nav) => {
 		if (!typed || bypass) return;
@@ -193,23 +208,23 @@
 	</Field>
 	{#if lockout && Lockout}
 		{#key lockout}
-			<Lockout seconds={lockout.seconds} onchange={(l) => (locked = l)} />
+			<Lockout seconds={lockout.seconds} />
 		{/key}
+	{:else if lockout && Lockout === false}
+		<p role="alert">{lockout.message}</p>
 	{/if}
 	<div class="flex flex-wrap items-center gap-3">
 		<Button
 			type="submit"
 			variant="primary"
 			loading={busy}
-			aria-disabled={locked || undefined}
+			aria-disabled={busy || locked || undefined}
 			data-testid="security-password-submit">{m.settings_security_password_submit()}</Button
 		>
-		<p
-			role="status"
-			class="text-small {failed ? 'text-error' : 'text-success'}"
-			data-testid="security-password-result"
-		>
-			{failed ? `${m.settings_security_password_failed()} ${failed}` : done}
-		</p>
+		<Result
+			text={failed ? `${m.settings_security_password_failed()} ${failed}` : done}
+			failed={!!failed}
+			testid="security-password-result"
+		/>
 	</div>
 </form>
