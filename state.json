@@ -451,7 +451,7 @@
     },
     "S-search-5": {
       "status": "running",
-      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ"
+      "notes": "2026-10-31T01:52Z brief briefs/S-search-5.md; Sonnet session_01MMjhn9FaHvDRZtFs9JoRmQ | 02:23Z runner approved raising runner-set lazy limits: Search results (lazy) 41.5->43.2 KB (still < 45 KB owner per-view cap), Results toolbar (lazy) 4.4->4.6 KB; \u00a72.19 FYI at merge. Deferred: bulk Send (no send-to-client HTTP endpoint), saved views"
     },
     "S-search-6": {
       "status": "running",
@@ -2251,7 +2251,8 @@
     "CR-1a-H polish: cap `order` growth in hints::capture between ticks; a send_failed test (#246 review optional)",
     "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
     "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
-    "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)"
+    "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
+    "API: a send-to-client HTTP endpoint (single + bulk, Partial/duplicate semantics per \u00a7architecture ~2567) for Search bulk Send and row Send (S-search-5 deferral)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
