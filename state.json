@@ -1668,7 +1668,7 @@
    "pr": 278,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA"
+   "notes": "12:28Z brief briefs/X-search-files-perf.md (L4 I4/P2/P3 + #274 optional 2,3); percolator token deferred (overlap with B-import-server-1) | 12:20Z launched Opus | 13:43Z PR #278 head 29201097; 8 MiB kept (list/bitset sets: 1M broad clause 0.12 MiB, warm p95 9.04 ms, cold 211 ms ungated); deviation: classification re-queue in filters.rs stays uncancellable (content safety); fresh Opus reviewer session_01MMjhnAXHsd16u5pm5ARcsA | 14:05Z MERGE at 29201097 (3 optional); waiting on ci-ok (windows). Runner §2.26: merge as is; follow-up X-search-files-2 gates cold file-clause class at §3 FILE_P95 150 ms at CI size + investigates cold broad clause at 1M (211 ms > §3 150 ms row) + IdPart proptest + recency-index charge"
   },
   "X-polish-1031b": {
    "status": "running",
@@ -2419,6 +2419,10 @@
   {
    "item": "FYI (§2.19) #276 B-import-server-1: imported jobs complete when the index catches up; the shared filter loader is two calls (config sync in the binary + pipeline::load_filter); floor term tested as a floor signature; floor-marked subscribed list not yet in the parity test (follow-up).",
    "status": "to-send"
+  },
+  {
+   "item": "FYI (§2.26) #278 X-search-files-perf: file-ID cache keeps 8 MiB; sets stored as list or bitset (broad clause at 1M: 0.12 MiB, was ~5 MiB); warm p95 9 ms at 1M. Known gap: a cold broad file clause (e.g. every .mkv) at 1M takes 211 ms p95 vs §3's 150 ms file-level row; follow-up slice gates and investigates it. The classification re-queue stays uncancellable on purpose (content safety).",
+   "status": "to-send"
   }
  ],
  "external_gates": {
@@ -2465,7 +2469,8 @@
   "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under §2.26 if so)",
   "Filters API: shutdown token for the classification-rule re-queue (X-search-files-perf kept it uncancellable for content safety)",
   "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
-  "Logging slice: the §10.10.7 banner while query_logging is on (#277 review; left to §10.10.12)"
+  "Logging slice: the §10.10.7 banner while query_logging is on (#277 review; left to §10.10.12)",
+  "X-search-files-2 (Opus): gate the cold broad file-clause bench class at §3 'file-level query joined to torrents < 150 ms' (FILE_P95) at CI size; investigate the cold broad-clause path at 1M (211 ms p95, #278) against that row; IdPart proptest (contains/for_each/last/union vs sorted list); recency-index charge x3 or comment (#278 review 1-3)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
