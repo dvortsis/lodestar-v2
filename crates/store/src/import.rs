@@ -1763,7 +1763,18 @@ mod tests {
     #[test]
     fn a_removal_is_one_annotation_per_job() {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-        let (a, b) = (reading(&mut store), reading(&mut store));
+        let a = reading(&mut store);
+        let b = store
+            .create_import_job(&NewImportJob {
+                adapter: "magnetico",
+                adapter_ver: 1,
+                dataset: b"ds2",
+                schema_sig: b"sig",
+                options: b"",
+                credential: None,
+                at: T,
+            })
+            .unwrap();
         annotate_removal(&store.conn, &a, 2).unwrap();
         // Resumed a day later.
         store
