@@ -230,5 +230,14 @@
 	"settings_screen_client_password_remove_named": "移除 {name} 的密码",
 	"settings_screen_client_password_pending": "尚未保存。请使用“保存密码”。",
 	"settings_screen_client_password_changed": "请先保存你的更改，再保存密码。",
-	"settings_screen_client_password_unknown": "无法检查"
+	"settings_screen_client_password_unknown": "无法检查",
+	"settings_logging_verbosity_label": "详细程度",
+	"settings_logging_verbosity_help": "开启此级别及以上的所有事件。多数人适合“正常”。",
+	"settings_logging_verbosity_keywords": "日志 级别 详细程度 调试 跟踪 信息",
+	"settings_logging_events_label": "单个事件",
+	"settings_logging_events_help": "开启或关闭单个事件。更改后预设变为“自定义”。",
+	"settings_logging_components_label": "各组件级别",
+	"settings_logging_components_help": "组件自己的级别，而不是详细程度的级别。",
+	"settings_logging_libraries_label": "第三方库过滤器",
+	"settings_logging_libraries_help": "仅用于第三方库的 tracing 过滤器，例如 warn,hyper=info。Lodestar 自身的日志行遵循上面的事件。"
 }
