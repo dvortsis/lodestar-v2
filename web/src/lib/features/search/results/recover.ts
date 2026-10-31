@@ -7,23 +7,12 @@ import type { components } from '$lib/api/schema';
 export type IndexState = components['schemas']['SearchIndexState'];
 type Rebuild = Omit<components['schemas']['IndexRebuild'], 'started_at'>;
 
-export type Banner =
-	| { kind: 'rebuild'; rebuild: Rebuild }
-	| { kind: 'growing'; count: number; perHour: number | null }
-	| null;
+export type Banner = { kind: 'rebuild'; rebuild: Rebuild } | { kind: 'growing' } | null;
 
 /** A rebuild in progress (done and failed are over) beats the growing banner. */
 export function bannerFor(state: IndexState | null, live: Rebuild | null | undefined): Banner {
-	if (!state) return null;
-	const rebuild = live ?? state.rebuild;
+	const rebuild = live ?? state?.rebuild;
 	if (rebuild && rebuild.phase !== 'done' && rebuild.phase !== 'failed')
 		return { kind: 'rebuild', rebuild };
-	if (state.growing)
-		return {
-			kind: 'growing',
-			count: state.searchable_torrents,
-			perHour:
-				state.growth_per_hour != null && state.growth_per_hour >= 1 ? state.growth_per_hour : null
-		};
-	return null;
+	return state?.growing ? { kind: 'growing' } : null;
 }

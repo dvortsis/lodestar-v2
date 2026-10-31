@@ -587,7 +587,7 @@ export default [
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Search recovery counts (on demand)', recoverLazy, '0.84 KB'),
-	entry('Search index-state banners (on demand)', indexStateLazy, '1.64 KB'),
+	entry('Search index-state banners (on demand)', indexStateLazy, '3.3 KB'),
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).

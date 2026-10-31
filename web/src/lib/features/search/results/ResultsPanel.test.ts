@@ -81,7 +81,9 @@ describe('ResultsPanel, the bare page', () => {
 		get.mockRejectedValue(new Error('down'));
 		render(ResultsPanel, { focusBar: () => {} });
 		await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-		expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe('Search torrents');
+		await waitFor(() =>
+			expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe('Search torrents')
+		);
 	});
 
 	it('shows a rebuild in progress, and hides it once done', async () => {
@@ -119,7 +121,7 @@ describe('ResultsPanel, the bare page', () => {
 		serve(figures(null));
 		const focusBar = vi.fn();
 		render(ResultsPanel, { focusBar });
-		screen.getByRole('button', { name: 'Start typing' }).click();
+		(await screen.findByRole('button', { name: 'Start typing' })).click();
 		expect(focusBar).toHaveBeenCalled();
 	});
 });

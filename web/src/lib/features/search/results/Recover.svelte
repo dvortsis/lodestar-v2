@@ -27,9 +27,9 @@
 		{#each items as item, i (i)}
 			<li>
 				<Button dense onclick={() => void apply(item)}
-					>{(item.approx ? m.search_recover_gives_about : m.search_recover_gives)({
+					>{m.search_recover_gives({
 						clause: item.clause,
-						count: formatCount(item.total, locale)
+						count: formatCount({ value: item.total, approx: item.approx }, locale)
 					})}</Button
 				>
 			</li>

@@ -8,6 +8,7 @@ import {
 	hits,
 	indexState,
 	resultsCalls,
+	row,
 	server,
 	toAst
 } from './search-results.fixtures';
@@ -76,7 +77,7 @@ test('an estimated count shows with ≈', async ({ page, go, mock }) => {
 	mock.on('searchIndexState', indexState(5_000_000));
 	await go('/search?q=lantern+ext%3Amkv');
 	await expect(page.getByTestId('results-recover').getByRole('button')).toHaveText(
-		'Removing ext:mkv gives ≈2,000,000'
+		'Removing ext:mkv gives ≈ 2,000,000'
 	);
 });
 
@@ -138,4 +139,52 @@ test('the rebuilding banner shows progress and the fields that match nothing', a
 	await expect(page.getByTestId('results-unavailable')).toContainText('codec');
 	await expect(page.getByTestId('results-cold-start')).toHaveCount(0);
 	await expectNoA11yViolations(page);
+});
+
+test('a words-only query still gets its counts', async ({ page, go, mock }) => {
+	const words = {
+		skipped: 0,
+		clauses: [
+			{
+				canonical: 'lantern',
+				clause: 'xyzzy',
+				index: 1,
+				total: 40,
+				total_approx: false,
+				without: toAst('lantern')
+			}
+		]
+	};
+	server(mock, (sent) =>
+		JSON.stringify(sent.ast).includes('xyzzy') ? body([], { recovery: words }) : body(hits(2))
+	);
+	mock.on('searchIndexState', indexState(5_000_000));
+	await go('/search?q=lantern+xyzzy');
+	await expect(page.getByTestId('results-recover').getByRole('button')).toHaveText(
+		'Removing xyzzy gives 40'
+	);
+	await expect(page.getByTestId('results-none-clauses')).toHaveCount(0);
+});
+
+test('a counts chunk that fails to load leaves No results usable', async ({ page, go, mock }) => {
+	// Chunk names are hashed: refuse every script requested once the empty answer is out, which is
+	// when the counts chunk is asked for (nothing else loads for an empty answer on a grown index).
+	let answered = false;
+	server(mock, (sent) => {
+		if (!JSON.stringify(sent.ast).includes('"ext"')) return body(hits(2));
+		answered = true;
+		return body([], { recovery });
+	});
+	mock.on('searchIndexState', indexState(5_000_000));
+	await page.route(/\.js(\?.*)?$/, (route) => (answered ? route.abort() : route.continue()));
+	await go('/search?q=lantern+ext%3Amkv');
+	await expect(page.getByTestId('results-none-clauses')).toBeVisible();
+	await expect(page.getByTestId('results-recover')).toHaveCount(0);
+});
+
+test('the rows show even when /search/state fails', async ({ page, go, mock }) => {
+	server(mock, () => body(hits(2)));
+	mock.error('searchIndexState', 500, 'internal', 'down');
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
 });

@@ -115,14 +115,17 @@
 	// stream with another topic set): read its snapshot.
 	const banner = $derived(bannerFor(figures, shellStatus.rebuild));
 	const fullCold = $derived(figures?.cold_start && results.status === 'empty');
-	const suggested = $derived(
-		results.status === 'ready' && results.recovery?.clauses.some((c) => c.total)
-	);
+	const suggested = $derived(results.recovery?.clauses.some((c) => c.total));
+	// A failed chunk leaves No results as it was: the filters and Clear all, without the counts.
+	let recoverFailed = $state(false);
 	let Recover = $state<typeof import('./Recover.svelte').default>();
 	let Index = $state<typeof import('./IndexState.svelte').default>();
 	$effect(() => {
-		if (suggested && !Recover)
-			void import('./Recover.svelte').then((mod) => (Recover = mod.default));
+		if (suggested && !Recover && !recoverFailed)
+			void import('./Recover.svelte').then(
+				(mod) => (Recover = mod.default),
+				() => (recoverFailed = true)
+			);
 		if ((banner || fullCold) && !Index) void ensureIndex();
 	});
 	/** The banner chunk; a failed load leaves the page without the banner, never without rows. */
@@ -132,8 +135,7 @@
 			() => {}
 		);
 	const waiting = $derived(
-		(!!search.q && results.status === 'empty' && search.ast?.op !== 'all') ||
-			(results.status !== 'empty' && !figuresKnown)
+		(!!search.q && results.status === 'empty' && search.ast?.op !== 'all') || !figuresKnown
 	);
 
 	async function loadState() {
@@ -390,13 +392,18 @@
 
 	<p class="sr-only" aria-live="polite" data-testid="results-announce">{said}</p>
 
-	{#if Index && figures}<Index {banner} state={figures} full={fullCold} />{/if}
+	{#if Index && (banner || fullCold)}<Index
+			{banner}
+			state={figures}
+			full={fullCold}
+			{focusBar}
+		/>{/if}
 
 	{#if ext.Live}<ext.Live bind:said list={nav} />{/if}
 
 	{#if waiting}
 		<!-- the parse is out: see `waiting` -->
-	{:else if fullCold && Index && results.status === 'empty'}
+	{:else if fullCold && Index}
 		<!-- the cold-start page above stands in for the empty state -->
 	{:else if results.status === 'empty'}
 		<div class="rp-empty" data-testid="results-empty">
@@ -474,21 +481,27 @@
 		{/if}
 		{#if results.hits.length === 0}
 			<!-- the counts' chunk is on its way: the block waits for it, so the buttons never move -->
-			<div class="rp-none" data-testid="results-none" hidden={suggested && !Recover}>
+			<div
+				class="rp-none"
+				data-testid="results-none"
+				hidden={suggested && !Recover && !recoverFailed}
+			>
 				<p class="rp-empty-title">{m.search_results_none()}</p>
-				{#if clauses.length}
+				{#if clauses.length || (suggested && Recover)}
 					<p>{m.search_results_none_lead()}</p>
-					{#if Recover && suggested}<Recover recovery={results.recovery} />{/if}
-					<ul class="rp-examples" data-testid="results-none-clauses">
-						{#each clauses as clause, i (i)}
-							<li>
-								<Button dense onclick={() => void removeClause(clause)}
-									>{m.search_results_none_remove({ label: clause.label.text })}</Button
-								>
-							</li>
-						{/each}
-					</ul>
-					<Button onclick={() => void clearFilters()}>{m.search_results_none_clear()}</Button>
+					{#if Recover}<Recover recovery={results.recovery} />{/if}
+					{#if clauses.length}
+						<ul class="rp-examples" data-testid="results-none-clauses">
+							{#each clauses as clause, i (i)}
+								<li>
+									<Button dense onclick={() => void removeClause(clause)}
+										>{m.search_results_none_remove({ label: clause.label.text })}</Button
+									>
+								</li>
+							{/each}
+						</ul>
+						<Button onclick={() => void clearFilters()}>{m.search_results_none_clear()}</Button>
+					{/if}
 				{:else if !results.notices.includes('adult_hidden')}
 					<p>{m.search_results_none_words()}</p>
 				{/if}

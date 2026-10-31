@@ -66,21 +66,16 @@ const rebuild = (phase: 'building' | 'done' | 'failed') => ({
 });
 
 describe('bannerFor', () => {
-	it('is none before the state arrives or for a grown index', () => {
+	it('is none before the state arrives or for a grown index, but a live rebuild shows without it', () => {
 		expect(bannerFor(null, null)).toBeNull();
+		expect(bannerFor(null, rebuild('building'))?.kind).toBe('rebuild');
 		expect(bannerFor(state(), null)).toBeNull();
 	});
 
-	it('growing carries the rate, and omits a null or zero one', () => {
+	it('growing is just the flag; the rate is the banner’s to format', () => {
 		expect(bannerFor(state({ growing: true, growth_per_hour: 2104.5 }), null)).toEqual({
-			kind: 'growing',
-			count: 5000,
-			perHour: 2104.5
+			kind: 'growing'
 		});
-		for (const rate of [null, 0])
-			expect(bannerFor(state({ growing: true, growth_per_hour: rate }), null)).toMatchObject({
-				perHour: null
-			});
 	});
 
 	it('a rebuild in progress wins over growing, and a finished one is gone', () => {
