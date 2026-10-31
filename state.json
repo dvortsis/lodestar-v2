@@ -1844,13 +1844,15 @@
       "reviewer": "session_01MMjhnAJNz4LPBqsm4Npykf"
     },
     "X-security-confirm-teardown": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhnCmLXMy8i8SiLSD6uh",
       "pr": 301,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "22:39Z security.test teardown flake recurred on #298 via security/confirm.ts:82 pending unmount timer (#296 fixed only form/dialogs). Sonnet fix slice launched; also hunts same setTimeout-unmount pattern elsewhere. | 22:58Z PR #301 head 80bc661b: confirm.ts + reveal.ts track closing timers; dismiss flushes. Runner reviewed diff (small, correct); merge on green."
+      "notes": "22:39Z security.test teardown flake recurred on #298 via security/confirm.ts:82 pending unmount timer (#296 fixed only form/dialogs). Sonnet fix slice launched; also hunts same setTimeout-unmount pattern elsewhere. | 22:58Z PR #301 head 80bc661b: confirm.ts + reveal.ts track closing timers; dismiss flushes. Runner reviewed diff (small, correct); merge on green.",
+      "merge": "a5e6b97c",
+      "note": " 23:13Z merged #301 (a5e6b97c); session archived."
     },
     "X-alert-search-headroom": {
       "status": "running",
