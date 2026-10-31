@@ -5,7 +5,6 @@
 	// on success (`POST /password`), and the result says so. All three fields are cleared once
 	// the request goes, whatever comes back. While anything is typed, leaving asks first; the
 	// passwords never reach the engine's draft, so nothing survives a reload.
-	import { beforeNavigate, goto } from '$app/navigation';
 	import { ApiError, api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -17,8 +16,8 @@
 		MAX_PASSWORD_BYTES,
 		MIN_PASSWORD_CHARS
 	} from '$lib/features/auth/password';
-	import { ask } from '../form/dialogs';
 	import { refusal } from './confirm';
+	import { guardLeave } from './guard';
 	import Result from './Result.svelte';
 
 	let current = $state('');
@@ -113,45 +112,11 @@
 		}
 	}
 
-	// Leaving with something typed asks first (§10.10.5). The rules are the engine's
-	// `leaveDecision` (form/leave.ts), restated here because importing it would split it out of the
-	// engine's chunk and cost every Settings page: closing or reloading the tab lets the browser
-	// ask, and a hash change on this page isn't leaving. Keep the two in step.
-	let bypass = false;
-	beforeNavigate((nav) => {
-		if (!typed || bypass) return;
-		const from = nav.from?.url;
-		const to = nav.to?.url;
-		if (
-			nav.type !== 'leave' &&
-			from &&
-			to &&
-			from.origin === to.origin &&
-			from.pathname === to.pathname
-		)
-			return;
-		nav.cancel();
-		if (nav.type === 'leave' || !to) return;
-		void ask({
-			title: m.settings_security_leave_title(),
-			body: [m.settings_security_leave_body()],
-			actions: [
-				{ id: 'stay', label: m.settings_security_leave_stay() },
-				{ id: 'leave', label: m.settings_security_leave_discard(), variant: 'danger' }
-			],
-			initial: 'stay'
-		}).then(async (answer) => {
-			if (answer !== 'leave') return;
-			clear();
-			if (to.origin !== location.origin) return location.assign(to.href);
-			bypass = true;
-			try {
-				// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
-				await goto(to.href);
-			} finally {
-				bypass = false;
-			}
-		});
+	// Leaving with something typed asks first (§10.10.5), through the screen's one guard.
+	guardLeave({
+		dirty: () => typed,
+		clear,
+		section: () => m.settings_security_password_heading()
 	});
 </script>
 

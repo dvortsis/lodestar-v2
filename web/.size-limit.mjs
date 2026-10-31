@@ -277,6 +277,9 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [/features\/settings\/(security|logging)\/body\.ts$/];
+// Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
+// reveal dialog load after the first view; gated on their own below.
+const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
 // Logging (S-logs-2): the Verbosity control, the event list and the component levels (loaded when
 // their fields are on the page), `parts.ts` (the catalog, the banners and the data kinds, which all
 // wait on `GET /logs/catalog`), the privacy requests with their dialogs, and the navigation icon load
@@ -292,6 +295,7 @@ const settingsFirstView = [
 	...settingsEdit,
 	...settingsConnections,
 	...settingsSecurity,
+	...settingsSecurityLater,
 	...securityLoader,
 	...settingsLogging,
 	...settingsMessagesLeftOut,
@@ -325,14 +329,30 @@ const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on dema
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
 const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
 const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
+const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
 const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? [])
 		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+		// Security's later parts load only from its body, so their imports of that body alone are
+		// of code already loaded; any other body they import still trips this.
+		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
 if (staticHits.length)
 	throw new Error(
 		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
+	);
+// The same for Security's later parts: they load by dynamic import after mount, so nothing may
+// import them statically, or their code would leave the first-view gates unmeasured.
+const laterKeys = Object.keys(manifest).filter((key) =>
+	settingsSecurityLater.some((re) => re.test(key))
+);
+const laterStatic = Object.entries(manifest).flatMap(([from, chunk]) =>
+	(chunk.imports ?? []).filter((key) => laterKeys.includes(key)).map((key) => `${from} -> ${key}`)
+);
+if (laterStatic.length)
+	throw new Error(
+		`Settings: a Security part loaded on request is imported statically:\n  ${laterStatic.join('\n  ')}`
 	);
 // Appearance's theme picker (opened with "Browse themes", with themes.json) and its custom theme
 // editor (opened from the picker, with the build's theme compiler) load on interaction, so a first
@@ -358,6 +378,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsEdit,
 					...settingsConnections,
 					...settingsSecurity,
+					...settingsSecurityLater,
 					...settingsLogging,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
@@ -370,6 +391,24 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 		])
 	])
 }));
+// What Security's later parts add to its first view (the body is loaded when they load).
+const securityFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'SecurityScreen')?.files ?? [];
+const settingsSecurityLaterLazy = requireMeasuredJs(
+	'Settings security keys and proxy (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsSecurityLater.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsSecurity], false, [
+						...settingsShellView,
+						...securityFirstView
+					])
+				)
+		)
+	]
+);
 const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
@@ -677,6 +716,8 @@ export default [
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
+	// Security's key manager, proxy section and reveal dialog: measured + 10%.
+	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB; limits = measured + 10%.
 	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
