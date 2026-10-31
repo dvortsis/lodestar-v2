@@ -23,7 +23,13 @@ export function setSession(status: SessionStatus): void {
 	session.status = status;
 	if (!initialConfirmation) clearDetailCaches(status === 'signed_in');
 	// Signing in: the account's language, zone and week replace the cached hint (lib/i18n/boot.ts).
-	if (status === 'signed_in' && !initialConfirmation)
+	// A normal load's first confirmation is skipped (it would add a request to the first load), but
+	// one on the login or setup page counts: a failed GET /auth there leaves the status unknown
+	// until the user signs in.
+	if (
+		status === 'signed_in' &&
+		(!initialConfirmation || /^\/(login|setup)\b/.test(location.pathname))
+	)
 		void import('$lib/i18n/boot').then((m) => m.refetchRegion());
 }
 
