@@ -12,10 +12,17 @@ repository.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-store.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits"] }
+# TLS for a non-loopback Bitmagnet PostgreSQL (IMP-3): rustls on ring with
+# the platform verifier, as the integrations crate uses them. All four are
+# already in the lock file.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "=0.7.1"
 sha2 = "0.11.0"
 tokio = { version = "1.54.0", features = ["rt", "macros", "time"] }
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
+tokio-rustls = { version = "=0.26.6", default-features = false }
 tracing = "0.1.44"
+zeroize = "=1.9.1"
 
 [lints]
 workspace = true
@@ -23,4 +30,4 @@ workspace = true
 [dev-dependencies]
 proptest = "1.11.0"
 tempfile = "3.27.0"
-tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }

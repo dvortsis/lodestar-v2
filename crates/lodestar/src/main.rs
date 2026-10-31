@@ -67,7 +67,7 @@ fn main() -> ExitCode {
             fixture: Some(_), ..
         } => None,
         Command::Serve { fixture: None, .. }
-        | Command::ImportBitmagnet { .. }
+        | Command::ImportBitmagnet(_)
         | Command::Backup(_)
         | Command::Rollback(_)
         | Command::Vacuum
@@ -112,7 +112,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::ImportBitmagnet { url, limit } => {
+        Command::ImportBitmagnet(args) => {
             let config = match load(config_path) {
                 Ok(c) => c,
                 Err(e) => {
@@ -136,7 +136,7 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match runtime.block_on(import_bitmagnet(config, &url, limit)) {
+            match runtime.block_on(import_bitmagnet(config, args)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => command_failed("import-bitmagnet", &*e),
             }
@@ -288,8 +288,27 @@ async fn serve_as(config: Config, child: Supervised) -> Result<Option<u8>, BoxEr
 /// `lodestar import-bitmagnet`: everything from a bitmagnet database into
 /// the store; the server indexes it and re-fetches incomplete file lists
 /// on its next start.
-async fn import_bitmagnet(config: Config, url: &str, limit: Option<u64>) -> Result<(), BoxError> {
+async fn import_bitmagnet(config: Config, args: cli::ImportBitmagnetArgs) -> Result<(), BoxError> {
     use lodestar_sources_importers::bitmagnet;
+    let mut settings = bitmagnet::Settings::new(&args.host, &args.dbname, &args.user);
+    settings.port = args.port;
+    settings.tls = if args.allow_plaintext_loopback {
+        bitmagnet::Tls::PlaintextLoopback
+    } else {
+        bitmagnet::Tls::Verify {
+            ca_file: args.ca_file,
+        }
+    };
+    settings.password = match &args.password_file {
+        Some(path) => {
+            if let Some(warning) = bitmagnet::password_file_warning(path) {
+                eprintln!("lodestar import-bitmagnet: {warning}");
+            }
+            Some(bitmagnet::Password::from_file(path)?)
+        }
+        None => bitmagnet::Password::from_env(),
+    };
+    let limit = args.limit;
     std::fs::create_dir_all(&config.data_dir)?;
     let mut store = Store::open(config.db_path(), config.store_config())?;
     let source =
@@ -300,7 +319,7 @@ async fn import_bitmagnet(config: Config, url: &str, limit: Option<u64>) -> Resu
         ..bitmagnet::Options::default()
     };
     let started = std::time::Instant::now();
-    let report = bitmagnet::import(url, &mut store, source, &opts, |r| {
+    let report = bitmagnet::import(&settings, &mut store, source, &opts, |r| {
         if r.read % 100_000 < opts.batch as u64 {
             lodestar_log::log_event!(
                 logging::events::APP_IMPORT_PROGRESS,
