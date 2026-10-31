@@ -37,7 +37,10 @@
 			failed = false;
 			redact = true;
 		} catch (e) {
-			if (!isAbort(e)) failed = true;
+			if (isAbort(e)) return;
+			// A stale list would put the wrong count and size in the next delete dialog.
+			listing = undefined;
+			failed = true;
 		}
 	}
 	void load();
@@ -237,11 +240,14 @@
 		<Button
 			variant="danger"
 			loading={busy}
-			disabled={!detailFiles.length}
+			disabled={failed || !detailFiles.length}
 			onclick={() => remove('details')}>{m.settings_logging_delete_details()}</Button
 		>
-		<Button variant="danger" loading={busy} disabled={!files.length} onclick={() => remove('all')}
-			>{m.settings_logging_delete_all()}</Button
+		<Button
+			variant="danger"
+			loading={busy}
+			disabled={failed || !files.length}
+			onclick={() => remove('all')}>{m.settings_logging_delete_all()}</Button
 		>
 	</div>
 	<p bind:this={resultEl} tabindex="-1" role="status" class="text-small">{result}</p>

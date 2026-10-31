@@ -222,6 +222,30 @@ describe('log files', () => {
 		);
 		expect(calls.filter((c) => c.path === '/logs/files' && c.method === 'GET')).toHaveLength(2);
 	});
+
+	it('disables deleting when the list read after a delete fails, so no dialog shows a stale count', async () => {
+		render(LogFiles, { catalog: new LoggingCatalog() });
+		await screen.findByTestId('log-file-lodestar.jsonl');
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete all log files…' }));
+		const confirm = await screen.findByRole(
+			'button',
+			{ name: /Delete log files \(2,/ },
+			{ timeout: 10_000 }
+		);
+		listReply = { status: 500, body: { error: { code: 'internal', message: 'x' } } };
+		await fireEvent.click(confirm);
+		await until(() =>
+			expect(screen.getByText(/Log files deleted: 1 \(2\.00\sKiB\)\./)).toBeTruthy()
+		);
+		await until(() =>
+			expect(screen.getByRole('alert').textContent).toContain("couldn't be listed")
+		);
+		const del = (name: string) =>
+			(screen.getByRole('button', { name }) as HTMLButtonElement).disabled;
+		expect(del('Delete all log files…')).toBe(true);
+		expect(del('Delete files with torrent details…')).toBe(true);
+		expect(screen.queryByTestId('log-file-lodestar.jsonl')).toBeNull();
+	});
 });
 
 const fakeForm = (detail: { value: unknown; dirty: boolean }) =>
