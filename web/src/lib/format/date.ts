@@ -1,3 +1,4 @@
+import { displayTimeZone } from '$lib/i18n/region.svelte';
 import { dateFormat, DEFAULT_LOCALE, formatSeconds } from './shared';
 import type { DateOptions } from './datetime';
 
@@ -7,5 +8,8 @@ export function formatDate(
 	locale = DEFAULT_LOCALE,
 	opts: DateOptions = {}
 ): string {
-	return formatSeconds(seconds, dateFormat(locale, 'date', opts.timeZone, { dateStyle: 'medium' }));
+	return formatSeconds(
+		seconds,
+		dateFormat(locale, 'date', opts.timeZone ?? displayTimeZone(), { dateStyle: 'medium' })
+	);
 }

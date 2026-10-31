@@ -1,7 +1,7 @@
-import { initLocale } from '$lib/i18n/locale.svelte';
+import { bootRegion } from '$lib/i18n/boot';
 
 export const ssr = false;
 export const prerender = false;
 
-// Settings aren't wired yet; null falls back to navigator.language, then en.
-initLocale(null);
+// The cached language, time zone and first day apply now; the saved values follow (not awaited).
+void bootRegion();
