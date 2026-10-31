@@ -20,6 +20,7 @@ test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock
 	await kbd.press('Enter');
 	await expect(page).toHaveURL(/\/welcome/);
 	await expect(page.getByRole('heading', { level: 1, name: 'Finish setting up' })).toBeFocused();
+	await expect(page.getByRole('button', { name: 'Retest' })).toBeVisible();
 	await kbd.press('Tab');
 	await expect(page.getByRole('button', { name: 'Retest' })).toBeFocused();
 	expect(mock.calls('setup')[0]!.postDataJSON()).toEqual({

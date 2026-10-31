@@ -37,7 +37,7 @@ describe('wizard shell', () => {
 	it('shows steps 1 and 2 as done and the rest as steps, one marked current', async () => {
 		start('network');
 		await heading('Network check');
-		const list = screen.getByRole('list', { name: undefined, hidden: false });
+		const list = screen.getByTestId('wizard-progress');
 		expect(list).toBeTruthy();
 		expect(screen.getByText('Setup token')).toBeTruthy();
 		expect(screen.getByTestId('wizard-step-network').getAttribute('aria-current')).toBe('step');
@@ -135,7 +135,7 @@ describe('wizard shell', () => {
 describe('network check step', () => {
 	it('shows a reachable port with its address', async () => {
 		start('network');
-		await screen.findByText('Reachable');
+		await screen.findAllByText('Reachable');
 		expect(screen.getByTestId('wizard-net-address').textContent).toContain('203.0.113.9:6881');
 		expect(screen.queryByText('If it stays unreachable')).toBeNull();
 	});
@@ -144,7 +144,7 @@ describe('network check step', () => {
 		start('network');
 		server.setNetwork(network({ reachable: false, reason: 'no_unsolicited_queries' }));
 		await fireEvent.click(await screen.findByRole('button', { name: 'Retest' }));
-		await screen.findByText('Not reachable yet');
+		await screen.findAllByText('Not reachable yet');
 		expect(screen.getByText('If it stays unreachable')).toBeTruthy();
 		expect(screen.getByText(/forward the DHT port/)).toBeTruthy();
 		expect(screen.getByText(/Behind a VPN/)).toBeTruthy();
@@ -152,7 +152,7 @@ describe('network check step', () => {
 
 	it('says plainly when Retest is rate limited', async () => {
 		start('network');
-		await screen.findByText('Reachable');
+		await screen.findAllByText('Reachable');
 		server.setNetwork(() =>
 			server.json(429, { error: { code: 'rate_limited', message: 'x' } }, { 'Retry-After': '20' })
 		);
@@ -164,18 +164,33 @@ describe('network check step', () => {
 		);
 	});
 
-	it('stops reading when the step is left', async () => {
+	it('aborts the read in flight when the step is left', async () => {
 		server = wizardServer();
 		server.setNetwork(network({ reachable: null, reason: 'measuring' }));
-		vi.stubGlobal('fetch', server.fetch);
+		const inner = server.fetch;
+		const signals: AbortSignal[] = [];
+		vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
+			if (url.endsWith('/network/check') && init.signal) signals.push(init.signal);
+			return inner(url, init);
+		});
 		writeProgress({ step: 'network', skipped: [], done: [] });
 		render(WizardPage);
 		await screen.findByText('Measuring');
 		await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 		await heading('How it works');
-		const reads = server.netCalls.length;
-		await new Promise((r) => setTimeout(r, 0));
-		expect(server.netCalls.length).toBe(reads);
+		expect(signals.length).toBeGreaterThan(0);
+		await waitFor(() => expect(signals.every((s) => s.aborted)).toBe(true));
+	});
+
+	it('treats a turned-off DHT as final: no progress, no port-forward help', async () => {
+		server = wizardServer();
+		server.setNetwork(network({ reachable: null, reason: 'dht_off', measured_s: 0 }));
+		vi.stubGlobal('fetch', server.fetch);
+		writeProgress({ step: 'network', skipped: [], done: [] });
+		render(WizardPage);
+		await screen.findByText('The DHT is off');
+		expect(screen.queryByTestId('wizard-net-progress')).toBeNull();
+		expect(screen.queryByText('If it stays unreachable')).toBeNull();
 	});
 });
 
@@ -225,6 +240,45 @@ describe('updates step', () => {
 		await waitFor(() => expect((notify as HTMLInputElement).checked).toBe(true));
 		expect(notify.matches(':disabled')).toBe(true);
 		expect(screen.getByTestId('wizard-updates-locked').textContent).toContain('LODESTAR_UPDATES');
+	});
+});
+
+describe('restart and load failures', () => {
+	it('says on Done that a saved storage field needs a restart', async () => {
+		start('storage');
+		await fireEvent.click(await screen.findByRole('switch'));
+		server.next('PATCH /settings', (body) => {
+			const sv = server.sections.get('storage')!;
+			sv.revision++;
+			sv.fields.archive_raw!.value = (
+				body as { storage: { archive_raw: boolean } }
+			).storage.archive_raw;
+			return {
+				status: 200,
+				body: {
+					sections: {
+						storage: { ...structuredClone(sv), restart_required: ['archive_raw'] }
+					}
+				}
+			};
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await heading('Updates');
+		await fireEvent.click(screen.getByRole('button', { name: 'Skip this step' }));
+		expect((await screen.findByTestId('wizard-restart')).textContent).toContain('Restart');
+	});
+
+	it('does not move on, or mark done, when the settings could not be read', async () => {
+		server = wizardServer();
+		server.next('GET /settings/crawler', server.err(500, 'internal'));
+		vi.stubGlobal('fetch', server.fetch);
+		writeProgress({ step: 'intensity', skipped: [], done: [] });
+		render(WizardPage);
+		await heading('Crawl intensity');
+		await screen.findByRole('button', { name: 'Retry' });
+		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		expect(screen.getByRole('heading', { level: 2, name: 'Crawl intensity' })).toBeTruthy();
+		expect(JSON.parse(sessionStorage.getItem('lodestar.wizard')!).done).toEqual([]);
 	});
 });
 

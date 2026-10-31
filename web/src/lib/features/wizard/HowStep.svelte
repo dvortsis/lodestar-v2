@@ -10,10 +10,16 @@
 		{ title: () => m.wizard_how_search(), text: () => m.wizard_how_search_text() }
 	];
 	const X = [10, 130, 250, 370];
+	const labels = [
+		() => m.wizard_how_svg_dht(),
+		() => m.wizard_how_svg_metadata(),
+		() => m.wizard_how_svg_index(),
+		() => m.wizard_how_svg_search()
+	];
 </script>
 
 <svg
-	viewBox="0 0 480 64"
+	viewBox="0 0 480 72"
 	class="w-full max-w-lg text-base-content"
 	aria-hidden="true"
 	focusable="false"
@@ -23,17 +29,18 @@
 			{x}
 			y="8"
 			width="100"
-			height="48"
+			height="56"
 			rx="8"
 			class="fill-none stroke-current"
 			stroke-width="2"
 		/>
-		<text x={x + 50} y="37" text-anchor="middle" class="fill-current text-label font-semibold"
-			>{i + 1}</text
+		<text x={x + 50} y="26" text-anchor="middle" class="fill-current text-caption">{i + 1}</text>
+		<text x={x + 50} y="46" text-anchor="middle" class="fill-current text-label font-semibold"
+			>{labels[i]!()}</text
 		>
 		{#if i < 3}
 			<path
-				d="M{x + 104} 32 h12 m-5 -5 l5 5 l-5 5"
+				d="M{x + 104} 36 h12 m-5 -5 l5 5 l-5 5"
 				class="fill-none stroke-current"
 				stroke-width="2"
 				stroke-linecap="round"

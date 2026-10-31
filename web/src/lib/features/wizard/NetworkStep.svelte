@@ -13,6 +13,17 @@
 	onDestroy(() => net.destroy());
 
 	const check = $derived(net.check);
+	const off = $derived(check?.reason === 'dht_off');
+	// One small polite region: it changes only when the verdict does, not on each progress tick.
+	const verdict = $derived(
+		!check || off
+			? ''
+			: check.reachable === true
+				? m.wizard_net_reachable()
+				: check.reachable === false
+					? m.wizard_net_unreachable()
+					: ''
+	);
 	const reasons = {
 		dht_off: () => m.wizard_net_reason_dht_off(),
 		bootstrapping: () => m.wizard_net_reason_bootstrapping(),
@@ -24,14 +35,17 @@
 </script>
 
 <p class="text-body">{m.wizard_net_lead()}</p>
+<div class="sr-only" role="status" aria-live="polite">{verdict}</div>
 
-<div role="status" class="flex flex-col gap-3" data-testid="wizard-net">
+<div class="flex flex-col gap-3" data-testid="wizard-net">
 	{#if net.failed && !check}
 		<Banner kind="error">{m.wizard_net_error()}</Banner>
 	{:else if !check}
 		<p class="text-muted-text" aria-busy="true">{m.wizard_net_loading()}</p>
 	{:else}
-		{#if check.reachable === true}
+		{#if off}
+			<Banner kind="info" title={m.wizard_net_off()}>{reasons[check.reason]()}</Banner>
+		{:else if check.reachable === true}
 			<Banner kind="success" title={m.wizard_net_reachable()}>{reasons[check.reason]()}</Banner>
 		{:else if check.reachable === false}
 			<Banner kind="warning" title={m.wizard_net_unreachable()}>{reasons[check.reason]()}</Banner>
@@ -72,7 +86,7 @@
 	</div>
 </div>
 
-{#if check?.reachable !== true}
+{#if check && check.reachable !== true && !off}
 	<section class="flex flex-col gap-2">
 		<h3 class="text-body-lg font-semibold">{m.wizard_net_help_title()}</h3>
 		<ul class="list-disc ps-5 text-body">

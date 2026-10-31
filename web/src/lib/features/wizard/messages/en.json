@@ -63,12 +63,18 @@
 	"wizard_updates_notify": "Check and notify",
 	"wizard_updates_notify_help": "Looks for new versions and tells you. You decide when to install.",
 	"wizard_updates_auto": "Install automatically",
-	"wizard_updates_auto_help": "Looks for new versions and installs them.",
+	"wizard_updates_auto_help": "Installs fix releases automatically (Fixes only, recommended). Change the level in Settings → Updates.",
 	"wizard_updates_image": "Container image updates",
 	"wizard_updates_image_help": "Your container or Unraid handles updates; Lodestar only tells you.",
 	"wizard_updates_github": "Checking for updates contacts GitHub. Off is the default, and nothing else is chosen for you.",
 	"wizard_updates_locked": "This is set by the environment variable {env}. Change it there.",
 	"wizard_updates_locked_plain": "This is set outside the app and can't be changed here.",
 	"wizard_done_lead": "You can start searching now.",
-	"wizard_done_skipped": "Skipped. Set these in Settings whenever you like:"
+	"wizard_done_skipped": "Skipped. Set these in Settings whenever you like:",
+	"wizard_net_off": "The DHT is off",
+	"wizard_done_restart": "Restart Lodestar to apply the storage changes you saved.",
+	"wizard_how_svg_dht": "DHT",
+	"wizard_how_svg_metadata": "Metadata",
+	"wizard_how_svg_index": "Index",
+	"wizard_how_svg_search": "Search"
 }

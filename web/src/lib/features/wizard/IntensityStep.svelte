@@ -4,6 +4,7 @@
 
 	let step: FieldsStep;
 	export const save = () => step.save();
+	export const needsRestart = () => step.needsRestart();
 </script>
 
 <FieldsStep

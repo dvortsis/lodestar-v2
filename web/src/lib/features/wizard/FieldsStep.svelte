@@ -7,7 +7,6 @@
 	import type { FieldKey } from '../settings/form';
 	import SettingField from '../settings/form/SettingField.svelte';
 	import SettingsForm from '../settings/form/SettingsForm.svelte';
-	import { m } from '$lib/paraglide/messages.js';
 
 	interface Props {
 		/** The draft scope: `wizard.intensity`. */
@@ -21,8 +20,14 @@
 	onDestroy(() => form.destroy());
 
 	/** True when the shell may move on: saved, or nothing to save. A refusal stays on the step. */
+	let restart = false;
+	/** Whether a saved field applies only after a restart (the shell tells Done). */
+	export const needsRestart = () => restart;
 	export async function save(): Promise<boolean> {
+		// Nothing was shown, so nothing is done: stay and let the engine's Retry load it.
+		if (form.status === 'loading' || form.status === 'load-error') return false;
 		const result = await form.save();
+		if (result.ok && result.restart.length) restart = true;
 		return result.ok || result.reason === 'nothing';
 	}
 </script>
@@ -33,4 +38,3 @@
 		<SettingField {form} key={spec.key} />
 	{/each}
 </SettingsForm>
-{#if form.status === 'saving'}<p class="sr-only" role="status">{m.wizard_saving()}</p>{/if}

@@ -18,6 +18,9 @@
 </script>
 
 <p class="text-body">{m.wizard_done_lead()}</p>
+{#if progress.restart}
+	<p class="text-body" data-testid="wizard-restart">{m.wizard_done_restart()}</p>
+{/if}
 
 {#if skipped.length}
 	<section class="flex flex-col gap-2" data-testid="wizard-skipped">

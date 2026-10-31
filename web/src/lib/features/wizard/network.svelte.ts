@@ -38,7 +38,7 @@ export function createNetworkCheck(options: NetworkOptions = {}) {
 		timer = undefined;
 		if (gone) return;
 		// Only an unknown answer is worth reading again.
-		if (check && check.reachable !== null) return;
+		if (check && (check.reachable !== null || check.reason === 'dht_off')) return;
 		if (Date.now() - startedAt >= deadline) {
 			stopped = true;
 			return;

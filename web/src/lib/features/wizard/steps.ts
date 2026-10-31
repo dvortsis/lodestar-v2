@@ -35,10 +35,12 @@ export interface Progress {
 	step: StepId;
 	skipped: StepId[];
 	done: StepId[];
+	/** A saved field applies only after a restart; Done says so. */
+	restart?: boolean;
 }
 
 const KEY = 'lodestar.wizard';
-const fresh = (): Progress => ({ step: STEPS[0]!.id, skipped: [], done: [] });
+const fresh = (): Progress => ({ step: STEPS[0]!.id, skipped: [], done: [], restart: false });
 
 const isId = (v: unknown): v is StepId => STEPS.some((s) => s.id === v);
 const ids = (v: unknown): StepId[] => (Array.isArray(v) ? v.filter(isId) : []);
@@ -49,7 +51,9 @@ export function readProgress(): Progress {
 		const raw: unknown = JSON.parse(sessionStorage.getItem(KEY) ?? 'null');
 		if (!raw || typeof raw !== 'object') return fresh();
 		const r = raw as Record<string, unknown>;
-		return isId(r.step) ? { step: r.step, skipped: ids(r.skipped), done: ids(r.done) } : fresh();
+		return isId(r.step)
+			? { step: r.step, skipped: ids(r.skipped), done: ids(r.done), restart: r.restart === true }
+			: fresh();
 	} catch {
 		return fresh();
 	}
@@ -67,10 +71,11 @@ const without = (list: StepId[], id: StepId) => list.filter((x) => x !== id);
 const with_ = (list: StepId[], id: StepId) => (list.includes(id) ? list : [...list, id]);
 
 /** Moves to the step after `p.step`, marking this one done (saved or just read) or skipped. */
-export function advance(p: Progress, how: 'done' | 'skipped'): Progress {
+export function advance(p: Progress, how: 'done' | 'skipped', restart = false): Progress {
 	const next = STEPS[Math.min(stepIndex(p.step) + 1, STEPS.length - 1)]!.id;
 	return {
 		step: next,
+		restart: p.restart === true || restart,
 		done: how === 'done' ? with_(p.done, p.step) : without(p.done, p.step),
 		skipped: how === 'skipped' ? with_(p.skipped, p.step) : without(p.skipped, p.step)
 	};

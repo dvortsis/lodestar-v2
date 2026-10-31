@@ -29,7 +29,7 @@
 		{ value: 'off', label: m.wizard_updates_off(), help: m.wizard_updates_off_help() },
 		{ value: 'notify', label: m.wizard_updates_notify(), help: m.wizard_updates_notify_help() },
 		{ value: 'auto', label: m.wizard_updates_auto(), help: m.wizard_updates_auto_help() },
-		...(value === 'image'
+		...(value === 'image' || f.saved === 'image'
 			? [{ value: 'image', label: m.wizard_updates_image(), help: m.wizard_updates_image_help() }]
 			: [])
 	]);
@@ -40,7 +40,7 @@
 <SettingsForm {form} saveBar={false} leaveGuard={false} shortcut={false}>
 	<fieldset
 		class="flex flex-col gap-3"
-		aria-describedby="wizard-updates-github"
+		aria-describedby="wizard-updates-github{error ? ' wizard-updates-error' : ''}"
 		data-field={KEY}
 		disabled={f.locked}
 	>
@@ -52,9 +52,12 @@
 					label={option.label}
 					value={option.value}
 					group={value}
+					aria-describedby="wizard-updates-{option.value}"
 					onchange={() => form.set(KEY, option.value)}
 				/>
-				<span class="ps-7 text-body text-muted-text">{option.help}</span>
+				<span id="wizard-updates-{option.value}" class="ps-7 text-body text-muted-text"
+					>{option.help}</span
+				>
 			</div>
 		{/each}
 	</fieldset>
@@ -74,5 +77,5 @@
 			>
 		</Banner>
 	{/if}
-	{#if error}<p class="text-error" role="alert">{error}</p>{/if}
+	{#if error}<p id="wizard-updates-error" class="text-error" role="alert">{error}</p>{/if}
 </SettingsForm>

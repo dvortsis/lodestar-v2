@@ -63,12 +63,18 @@
 	"wizard_updates_notify": "检查并通知",
 	"wizard_updates_notify_help": "检查新版本并通知你。由你决定何时安装。",
 	"wizard_updates_auto": "自动安装",
-	"wizard_updates_auto_help": "检查新版本并自动安装。",
+	"wizard_updates_auto_help": "自动安装修复版本（仅限修复，推荐）。可在“设置”→“更新”中更改级别。",
 	"wizard_updates_image": "容器镜像更新",
 	"wizard_updates_image_help": "由你的容器或 Unraid 负责更新；Lodestar 只会通知你。",
 	"wizard_updates_github": "检查更新会访问 GitHub。默认关闭，除此之外不会替你做任何选择。",
 	"wizard_updates_locked": "此项由环境变量 {env} 设置，请在那里更改。",
 	"wizard_updates_locked_plain": "此项在应用之外设置，无法在此更改。",
 	"wizard_done_lead": "现在可以开始搜索了。",
-	"wizard_done_skipped": "已跳过。你可以随时在“设置”中调整："
+	"wizard_done_skipped": "已跳过。你可以随时在“设置”中调整：",
+	"wizard_net_off": "DHT 已关闭",
+	"wizard_done_restart": "请重启 Lodestar，以应用你保存的存储更改。",
+	"wizard_how_svg_dht": "DHT",
+	"wizard_how_svg_metadata": "元数据",
+	"wizard_how_svg_index": "索引",
+	"wizard_how_svg_search": "搜索"
 }

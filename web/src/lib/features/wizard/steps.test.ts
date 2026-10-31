@@ -6,7 +6,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('wizard progress', () => {
 	it('starts at the network check', () => {
-		expect(readProgress()).toEqual({ step: 'network', skipped: [], done: [] });
+		expect(readProgress()).toEqual({ step: 'network', skipped: [], done: [], restart: false });
 	});
 
 	it('advances through every step in order and stops at Done', () => {
@@ -34,7 +34,8 @@ describe('wizard progress', () => {
 		expect(readProgress()).toEqual({
 			step: 'storage',
 			skipped: ['intensity'],
-			done: ['network', 'how']
+			done: ['network', 'how'],
+			restart: false
 		});
 	});
 
@@ -44,7 +45,7 @@ describe('wizard progress', () => {
 			expect(readProgress().step).toBe('network');
 		}
 		sessionStorage.setItem('lodestar.wizard', '{"step":"how","skipped":["x","updates",3]}');
-		expect(readProgress()).toEqual({ step: 'how', skipped: ['updates'], done: [] });
+		expect(readProgress()).toEqual({ step: 'how', skipped: ['updates'], done: [], restart: false });
 	});
 
 	it('works with storage blocked', () => {
@@ -56,6 +57,11 @@ describe('wizard progress', () => {
 		});
 		expect(readProgress().step).toBe('network');
 		expect(() => writeProgress(readProgress())).not.toThrow();
+	});
+
+	it('remembers that a saved field needs a restart', () => {
+		const p = advance(advance(readProgress(), 'done', true), 'done');
+		expect(p.restart).toBe(true);
 	});
 
 	it('leaves part 2 out: Skip exists only on the optional steps', () => {

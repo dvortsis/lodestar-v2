@@ -25,6 +25,7 @@
 
 	interface Body {
 		save?: () => Promise<boolean>;
+		needsRestart?: () => boolean;
 	}
 	type Loaded = Component<{ progress: Progress }, Body>;
 
@@ -89,7 +90,7 @@
 		try {
 			// Steps that save say whether they did; the others just move on.
 			const ok = body?.save ? await body.save() : true;
-			if (ok) go(advance(progress, 'done'));
+			if (ok) go(advance(progress, 'done', body?.needsRestart?.() ?? false));
 		} finally {
 			working = false;
 		}
@@ -128,7 +129,7 @@
 	</header>
 
 	<nav aria-label={m.wizard_progress()}>
-		<ol class="flex flex-wrap gap-x-4 gap-y-2 text-label">
+		<ol class="flex flex-wrap gap-x-4 gap-y-2 text-label" data-testid="wizard-progress">
 			{#each [m.auth_setup_step_token(), m.auth_setup_step_password()] as past (past)}
 				<li class="flex items-center gap-1 text-muted-text">
 					<IconCheck aria-hidden="true" class="text-success" />
@@ -187,7 +188,8 @@
 				{primary}
 			</Button>
 			{#if info.optional}
-				<Button variant="quiet" onclick={skip} disabled={working}>{m.wizard_skip()}</Button>
+				<Button variant="quiet" onclick={skip} disabled={working || !Step}>{m.wizard_skip()}</Button
+				>
 			{/if}
 		</div>
 	{/if}
