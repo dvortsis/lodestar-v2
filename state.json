@@ -877,7 +877,7 @@
     },
     "S-settings-2": {
       "status": "review",
-      "notes": "2026-10-31T03:47Z brief briefs/S-settings-2.md; Sonnet session_01MMjhnBtMgHN6ooQJhwduav; /security-review (secrets) | 03:48Z blocked: server lacks integrations/notifications/trackers/insights settings sections, /settings/test kinds beyond download_client, clear-usage-data. Runner: ship Language & region now; S-settings-2b after backend | 04:21Z PR #259 head 28fcde8d (Language & region); settings first view 41.49->43.05 KB (cap 45); reviewer session_01MMjhn9kzbwB6kjpx4obcML | 04:38Z review MERGE; author pushes marker + small fixes (TZ $derived, Intl zone check, drop non-server keys from map, size comment); runner delta-checks; baselines via marker"
+      "notes": "2026-10-31T03:47Z brief briefs/S-settings-2.md; Sonnet session_01MMjhnBtMgHN6ooQJhwduav; /security-review (secrets) | 03:48Z blocked: server lacks integrations/notifications/trackers/insights settings sections, /settings/test kinds beyond download_client, clear-usage-data. Runner: ship Language & region now; S-settings-2b after backend | 04:21Z PR #259 head 28fcde8d (Language & region); settings first view 41.49->43.05 KB (cap 45); reviewer session_01MMjhn9kzbwB6kjpx4obcML | 04:38Z review MERGE; author pushes marker + small fixes (TZ $derived, Intl zone check, drop non-server keys from map, size comment); runner delta-checks; baselines via marker | 04:45Z 976f250b runner delta-checked (Intl zone check before form.set, external-change resync, settings_screen_* skipped by map generator) -> MERGE after baselines regenerate and marker is removed"
     },
     "M-security-settings": {
       "status": "pending",
@@ -2268,7 +2268,8 @@
     "Pipeline: one shared filter loader so the import CLI and the server cannot drift (#257); server-side import slice: online import through the writer, jobs indexing->complete",
     "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
     "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
-    "Locale boot: routes/+layout.ts calls initLocale(null), so a saved language does not apply at start-up; time_zone and first_day_of_week are not read anywhere yet (#259)"
+    "Locale boot: routes/+layout.ts calls initLocale(null), so a saved language does not apply at start-up; time_zone and first_day_of_week are not read anywhere yet (#259)",
+    "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
