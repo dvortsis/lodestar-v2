@@ -501,13 +501,13 @@
    "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile | 03:26Z PR #258 head edf8bdeb (4 stages; Discover after #255); reviewer session_01MMjhnAtfzdQU6Nq1uw7Qja | 03:38Z CI: insights.keyboard drill-through hits getInsightsUnderstand with no mock; author adds shared mock fixtures, held for review round | 03:42Z #255 merged (8868a76b; InsightsDiscoverResponse + InsightsHistogramBin); author adds Discover, one push with mock fix + review findings | 03:44Z review CHANGES: Alert route 45.82/45.8 KB (owner limit, chunk re-split) -> fix chunking; snapshot series labelled as rates (§10.9.3); riding zh locale in rows(), compare values in table. Reviewer kept for delta | 04:17Z delta MERGE at 1e71c743 (Alert 45.71/45.8; insights e2e 50/50 x3); merge on ci-ok+Web+E2E | 04:20Z merged #258 (743148ba); author archived"
   },
   "S-insights-3": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01MMjhnBsMAACweboxfehyxz",
-   "pr": null,
+   "pr": 281,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "14:30Z brief briefs/S-insights-3.md (print layout + digest preview at data-slot) | 14:28Z launched Sonnet"
+   "notes": "14:30Z brief briefs/S-insights-3.md (print layout + digest preview at data-slot) | 14:28Z launched Sonnet | 14:53Z PR #281 head 03951827 (preview 1.71/1.9 KB, print 1.47/1.62 KB, InsightsScreen first view 44.43); Overview.svelte mount accepted; fresh Opus reviewer session_01MMjhnCiSuPbJajcNpB8RkZ"
   },
   "S-settings-1": {
    "status": "paused",
