@@ -3,7 +3,7 @@
  "updated_at": "2026-10-31T12:25Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 39
+  "count": 40
  },
  "tags": {},
  "slices": {
@@ -501,13 +501,13 @@
    "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile | 03:26Z PR #258 head edf8bdeb (4 stages; Discover after #255); reviewer session_01MMjhnAtfzdQU6Nq1uw7Qja | 03:38Z CI: insights.keyboard drill-through hits getInsightsUnderstand with no mock; author adds shared mock fixtures, held for review round | 03:42Z #255 merged (8868a76b; InsightsDiscoverResponse + InsightsHistogramBin); author adds Discover, one push with mock fix + review findings | 03:44Z review CHANGES: Alert route 45.82/45.8 KB (owner limit, chunk re-split) -> fix chunking; snapshot series labelled as rates (§10.9.3); riding zh locale in rows(), compare values in table. Reviewer kept for delta | 04:17Z delta MERGE at 1e71c743 (Alert 45.71/45.8; insights e2e 50/50 x3); merge on ci-ok+Web+E2E | 04:20Z merged #258 (743148ba); author archived"
   },
   "S-insights-3": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhnBsMAACweboxfehyxz",
    "pr": 281,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "14:30Z brief briefs/S-insights-3.md (print layout + digest preview at data-slot) | 14:28Z launched Sonnet | 14:53Z PR #281 head 03951827 (preview 1.71/1.9 KB, print 1.47/1.62 KB, InsightsScreen first view 44.43); Overview.svelte mount accepted; fresh Opus reviewer session_01MMjhnCiSuPbJajcNpB8RkZ | 15:09Z CHANGES at 03951827: B1 one-page print depends on viewport (uPlot canvas width; 2 pages at 800/1024 px); B2 print hides .ins-sub, losing §10.9.3 time bases + gap note; opt legend, afterprint note; relayed | 15:26Z round-2 CHANGES at 7728f74d: funnel labels hidden (.ins-link), funnel bars vanish without background graphics (print-color-adjust); relayed | 15:36Z round-3 MERGE at 21490b97; waiting on playwright core + smoke"
+   "notes": "14:30Z brief briefs/S-insights-3.md (print layout + digest preview at data-slot) | 14:28Z launched Sonnet | 14:53Z PR #281 head 03951827 (preview 1.71/1.9 KB, print 1.47/1.62 KB, InsightsScreen first view 44.43); Overview.svelte mount accepted; fresh Opus reviewer session_01MMjhnCiSuPbJajcNpB8RkZ | 15:09Z CHANGES at 03951827: B1 one-page print depends on viewport (uPlot canvas width; 2 pages at 800/1024 px); B2 print hides .ins-sub, losing §10.9.3 time bases + gap note; opt legend, afterprint note; relayed | 15:26Z round-2 CHANGES at 7728f74d: funnel labels hidden (.ins-link), funnel bars vanish without background graphics (print-color-adjust); relayed | 15:36Z round-3 MERGE at 21490b97; waiting on playwright core + smoke | 15:44Z merged f8099938; sessions archived"
   },
   "S-settings-1": {
    "status": "paused",
@@ -914,7 +914,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "from #86"
+   "notes": "from #86 | 15:46Z split: S-logs-1 (/logs live page) now; S-logs-2 (Settings → Logging) after S-logs-1 + M-security-settings merge"
   },
   "S-about": {
    "status": "pending",
@@ -1705,6 +1705,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it"
+  },
+  "S-logs-1": {
+   "status": "launching",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "15:46Z brief briefs/S-logs-1.md"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
