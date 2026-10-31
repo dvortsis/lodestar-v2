@@ -270,12 +270,16 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [/features\/settings\/security\/body\.ts$/];
+// Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
+// reveal dialog load after the first view; gated on their own below.
+const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
 const settingsFirstView = [
 	...settingsOnDemand,
 	...insightsDigest,
 	...settingsEdit,
 	...settingsConnections,
 	...settingsSecurity,
+	...settingsSecurityLater,
 	...securityLoader,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
@@ -298,11 +302,14 @@ const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on dema
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
 const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
 const extraKeys = Object.keys(manifest).filter((key) => settingsExtras.some((re) => re.test(key)));
-const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
-	(chunk.imports ?? [])
-		.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
-		.map((key) => `${from} -> ${key}`)
-);
+// Security's later parts load only from its body, so their imports of it are of code already loaded.
+const staticHits = Object.entries(manifest)
+	.filter(([from]) => !settingsSecurityLater.some((re) => re.test(from)))
+	.flatMap(([from, chunk]) =>
+		(chunk.imports ?? [])
+			.filter((key) => bodyKeys.includes(key) || extraKeys.includes(key))
+			.map((key) => `${from} -> ${key}`)
+	);
 if (staticHits.length)
 	throw new Error(
 		`Settings: a screen body or extra is imported statically, so it isn't on demand:\n  ${staticHits.join('\n  ')}`
@@ -331,6 +338,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsEdit,
 					...settingsConnections,
 					...settingsSecurity,
+					...settingsSecurityLater,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
@@ -342,6 +350,24 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 		])
 	])
 }));
+// What Security's later parts add to its first view (the body is loaded when they load).
+const securityFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'SecurityScreen')?.files ?? [];
+const settingsSecurityLaterLazy = requireMeasuredJs(
+	'Settings security keys and proxy (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsSecurityLater.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsSecurity], false, [
+						...settingsShellView,
+						...securityFirstView
+					])
+				)
+		)
+	]
+);
 const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
@@ -643,6 +669,8 @@ export default [
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
+	// Security's key manager, proxy section and reveal dialog: measured + 10%.
+	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '32.4 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>

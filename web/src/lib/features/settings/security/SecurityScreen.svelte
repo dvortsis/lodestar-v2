@@ -1,10 +1,13 @@
 <script lang="ts">
-	// Settings → Security (§10.10.8): change password, sessions and secure cookies. Every risky
-	// change asks for the password in one shared dialog (PasswordDialog.svelte, loaded on use).
+	// Settings → Security (§10.10.8): change password, sessions, API keys and feed tokens, trusted
+	// proxy sign-in and secure cookies. Every risky change asks for the password in one shared
+	// dialog (PasswordDialog.svelte, loaded on use). The key manager and the proxy section load on
+	// their own after the first view (`.size-limit.mjs` gates them apart from it).
 	import { onDestroy } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import ChangePassword from './ChangePassword.svelte';
 	import Cookies from './Cookies.svelte';
+	import Later from './Later.svelte';
 	import Sessions from './Sessions.svelte';
 	import { dismissPasswordDialogs } from './confirm';
 
@@ -17,5 +20,7 @@
 <div class="flex flex-col gap-8">
 	<ChangePassword />
 	<Sessions />
+	<Later load={() => import('./Keys.svelte')} />
+	<Later load={() => import('./Proxy.svelte')} />
 	<Cookies />
 </div>
