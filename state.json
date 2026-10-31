@@ -1546,7 +1546,7 @@
     },
     "CR-1a-S": {
       "status": "review",
-      "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split | 2026-10-31T01:31Z part 1 PR #251 head c6cf450e; reviewer session_01MMjhnCySJJX45uWwBBEfbv; part 2 built locally on slice/CR-1a-S-2, pushed after #251 merges. Owner flags in decisions file | 01:38Z part 2 ready locally (5f274fae). Screen: healthy 76.0->81.8 (+7.5%, spread 10.9%, 8/8 seeds better), high-latency +7.7% (spread 15.1%), admission-pressure +2.9% (spread 19.7%); conversion unchanged; time to first fetch 4.6-16x faster. Not a clear win by CR-ADM bar; healthy 8/8 is a sign-test signal -> live A/B candidate | 01:44Z #251 review MERGE (O1 stream_deadline test, O2 flush alloc, O3 first_batch -> part 2); merge on green ci-ok. Owner flag: STREAM_BATCH 8, STREAM_QUEUE 2, 1 pending, STREAM_SEEN 32; screen result | 01:59Z merged #251 part 1 (51132cdd); part 2 PR next | 02:12Z part 2 PR #252 head d95c58ae (~500); runner reviewer agent"
+      "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split | 2026-10-31T01:31Z part 1 PR #251 head c6cf450e; reviewer session_01MMjhnCySJJX45uWwBBEfbv; part 2 built locally on slice/CR-1a-S-2, pushed after #251 merges. Owner flags in decisions file | 01:38Z part 2 ready locally (5f274fae). Screen: healthy 76.0->81.8 (+7.5%, spread 10.9%, 8/8 seeds better), high-latency +7.7% (spread 15.1%), admission-pressure +2.9% (spread 19.7%); conversion unchanged; time to first fetch 4.6-16x faster. Not a clear win by CR-ADM bar; healthy 8/8 is a sign-test signal -> live A/B candidate | 01:44Z #251 review MERGE (O1 stream_deadline test, O2 flush alloc, O3 first_batch -> part 2); merge on green ci-ok. Owner flag: STREAM_BATCH 8, STREAM_QUEUE 2, 1 pending, STREAM_SEEN 32; screen result | 01:59Z merged #251 part 1 (51132cdd); part 2 PR next | 02:12Z part 2 PR #252 head d95c58ae (~500); runner reviewer agent | 02:25Z #252 review MERGE (glue and O1 mutation-tested); merge on green ci-ok"
     },
     "IMP-4": {
       "status": "review",
@@ -2252,7 +2252,8 @@
     "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
     "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
     "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
-    "API: a send-to-client HTTP endpoint (single + bulk, Partial/duplicate semantics per \u00a7architecture ~2567) for Search bulk Send and row Send (S-search-5 deferral)"
+    "API: a send-to-client HTTP endpoint (single + bulk, Partial/duplicate semantics per \u00a7architecture ~2567) for Search bulk Send and row Send (S-search-5 deferral)",
+    "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
