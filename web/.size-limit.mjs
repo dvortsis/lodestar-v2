@@ -683,8 +683,14 @@ export default [
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
+	// Raised by the runner (§2.26): +~90 B from the Logging registry entry in the shared screens chunk
+	// (S-logs-2); structural fix queued (registry titles out of the shared chunk). Notifications only.
 	...settingsHandBuilt.map(({ name, files }) =>
-		entry(`Settings ${name} (first view)`, files, '45 KB')
+		entry(
+			`Settings ${name} (first view)`,
+			files,
+			name === 'NotificationsScreen' ? '45.1 KB' : '45 KB'
+		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
 	entry('Appearance theme picker (on demand)', settingsPickerLazy, '5.5 KB'),
