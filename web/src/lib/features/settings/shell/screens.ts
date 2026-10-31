@@ -36,6 +36,9 @@ export interface Screen {
 	purpose?: () => string;
 	/** A `~icons/ph/*` component; the gear when absent. */
 	icon?: Component;
+	/** The same, loaded after the navigation shows (the gear holds its place), for a screen whose icon
+	 * would otherwise weigh on every Settings page. */
+	iconLoad?: () => Promise<{ default: Component }>;
 	/**
 	 * A hand-built screen, loaded when it opens. It renders everything below the shell, its own
 	 * `<h1>` included. Name its file `*Screen.svelte`: `.size-limit.mjs` keeps it off a section's

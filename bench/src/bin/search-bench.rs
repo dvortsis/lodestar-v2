@@ -604,7 +604,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
             total_hits / class.queries.len(),
             match class.target {
                 Some(t) => format!(
-                    "p95 < {} ms {}",
+                    "p95 ≤ {} ms {}",
                     t.as_millis(),
                     if pass { "PASS" } else { "FAIL" }
                 ),
@@ -617,6 +617,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     }
     ok &= api_path(a, &index, &reader, now)?;
     ok &= recovery_path(a, &index, now)?;
+    ok &= file_sets_path(a, &index, &reader, now)?;
     ok &= facets_path(a, &index, now)?;
     ok &= suggest_path(a, &index, &reader, now)?;
     ok &= nrt(a, &index, &db)?;
@@ -765,7 +766,7 @@ fn api_path(
             estimated,
             match class.target {
                 Some(t) => format!(
-                    "p95 < {} ms {}",
+                    "p95 ≤ {} ms {}",
                     t.as_millis(),
                     if pass { "PASS" } else { "FAIL" }
                 ),
@@ -848,7 +849,7 @@ fn recovery_path(
         let pass = p95 <= RECOVERY_P95;
         ok &= pass;
         println!(
-            "  {:<24} {:>8} {:>8} {:>8} {:>8} {:>8}  p95 < {} ms {}",
+            "  {:<24} {:>8} {:>8} {:>8} {:>8} {:>8}  p95 ≤ {} ms {}",
             class.name,
             ms(pct(&searches, 0.95)),
             ms(pct(&times, 0.5)),
@@ -857,6 +858,132 @@ fn recovery_path(
             cut,
             RECOVERY_P95.as_millis(),
             if pass { "PASS" } else { "FAIL" }
+        );
+    }
+    Ok(ok)
+}
+
+/// Broad `file:(…)` clauses, which match a large share of the corpus
+/// (X-search-files-perf): the torrents each matches and the bytes its
+/// id sets need against the file-set cache's budget, then the search
+/// with a cold cache (emptied before each query) and a warm one (all the
+/// clauses in turn, so they compete for the budget), with the warm
+/// loop's cache hit rate. Warm is gated at [`KEYWORD_P95`].
+fn file_sets_path(
+    a: &Args,
+    index: &SearchIndex,
+    reader: &Store,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if a.only
+        .as_deref()
+        .is_some_and(|o| !"broad file clauses".contains(o))
+    {
+        return Ok(true);
+    }
+    let broad = [
+        "file:mkv",
+        "file:(ext:mkv)",
+        "file:(ext:srt)",
+        "file:(ext:flac,mp3)",
+        "file:(ext:jpg)",
+        "file:(size:>100MB)",
+        "file:(ext:mkv,mp4,avi -path:sample)",
+    ];
+    let (words, _) = vocabulary(a.seed ^ 0x5eed, 20_000);
+    let common = &words[..words.len().min(100)];
+    let mut rng = ChaCha8Rng::seed_from_u64(a.seed ^ 0xf11e5);
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    let search = |q: &str| -> Result<Duration, Box<dyn std::error::Error>> {
+        let started = Instant::now();
+        let ast = parse(q)?;
+        let (results, _) = index.search_with_fallback(&ast, now, Sort::Relevance, 50, 0)?;
+        for h in &results.hits {
+            reader.torrent(h.id as i64)?;
+        }
+        Ok(started.elapsed())
+    };
+    println!("\n  broad file clauses: the file-set cache at scale");
+    println!(
+        "  {:<36} {:>10} {:>10} {:>10}",
+        "clause", "torrents", "ids×8 MiB", "cached MiB"
+    );
+    for q in broad {
+        index.clear_cache();
+        let ast = parse(q)?;
+        let matched = index.search(&index.query(&ast, now), 1)?.total;
+        let cached = index.cache_usage().file_set_bytes;
+        let mib = |b: f64| format!("{:.2}", b / f64::from(1 << 20));
+        println!(
+            "  {:<36} {:>10} {:>10} {:>10}",
+            q,
+            matched,
+            mib(matched as f64 * 8.0),
+            mib(cached as f64)
+        );
+    }
+    let mut cold = Vec::with_capacity(a.queries);
+    let mut warm = Vec::with_capacity(a.queries);
+    let queries: Vec<String> = (0..a.queries)
+        .map(|i| {
+            let clause = broad[i % broad.len()];
+            // Half alone (a browse), half under a common word.
+            if i % 2 == 0 {
+                clause.to_string()
+            } else {
+                format!("{} {clause}", common.choose(&mut rng).expect("vocabulary"))
+            }
+        })
+        .collect();
+    for q in &queries {
+        index.clear_cache();
+        cold.push(search(q)?);
+    }
+    index.clear_cache();
+    for q in queries.iter().take(broad.len() * 2) {
+        search(q)?;
+    }
+    let (hits0, misses0) = index.file_cache_hits();
+    for q in &queries {
+        warm.push(search(q)?);
+    }
+    let (hits, misses) = index.file_cache_hits();
+    let (hits, misses) = (hits - hits0, misses - misses0);
+    let usage = index.cache_usage();
+    println!(
+        "  warm cache: {:.1}% of segment lookups hit; {} sets, {:.2} MiB held",
+        100.0 * hits as f64 / (hits + misses).max(1) as f64,
+        usage.file_set_entries,
+        usage.file_set_bytes as f64 / f64::from(1 << 20)
+    );
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>8}  target",
+        "class", "p50", "p95", "p99", "max"
+    );
+    let mut ok = true;
+    for (name, times, target) in [
+        ("broad file (cold)", &mut cold, None),
+        ("broad file (warm)", &mut warm, Some(KEYWORD_P95)),
+    ] {
+        times.sort();
+        let p95 = pct(times, 0.95);
+        let pass = target.is_none_or(|t| p95 <= t);
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>8}  {}",
+            name,
+            ms(pct(times, 0.5)),
+            ms(p95),
+            ms(pct(times, 0.99)),
+            ms(*times.last().expect("queries")),
+            match target {
+                Some(t) => format!(
+                    "p95 ≤ {} ms {}",
+                    t.as_millis(),
+                    if pass { "PASS" } else { "FAIL" }
+                ),
+                None => "(not gated)".to_string(),
+            }
         );
     }
     Ok(ok)
@@ -925,7 +1052,7 @@ fn facets_path(
         let pass = p95 <= FACETS_P95;
         ok &= pass;
         println!(
-            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 < {} ms {}",
+            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 ≤ {} ms {}",
             name,
             ms(pct(&times, 0.5)),
             ms(p95),
@@ -1159,7 +1286,7 @@ fn suggest_path(
         let pass = p95 <= SUGGEST_P95;
         ok &= pass;
         println!(
-            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 < {} ms {}",
+            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 ≤ {} ms {}",
             name,
             ms(pct(&times, 0.5)),
             ms(p95),

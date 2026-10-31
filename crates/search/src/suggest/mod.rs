@@ -265,14 +265,16 @@ fn count_up_to(
 }
 
 impl Cx<'_> {
-    /// `node` as the base query runs it, compiled.
-    fn compiled(&self, node: Node) -> Compiled {
-        self.index.query(&(self.req.restrict)(node), self.req.now)
+    /// `node` as the base query runs it, compiled. Its `file:(…)`
+    /// clauses run on the file index under the request's token.
+    fn compiled(&self, node: Node) -> Result<Compiled> {
+        self.index
+            .query_cancelled(&(self.req.restrict)(node), self.req.now, 0, self.cancel)
     }
 
     /// Torrents the request may see that `node` matches.
     fn visible(&self, node: Node) -> Result<u64> {
-        let c = self.compiled(node);
+        let c = self.compiled(node)?;
         Ok(count::exact(&self.searcher, &c, self.cancel)? as u64)
     }
 
@@ -283,7 +285,7 @@ impl Cx<'_> {
 
     /// Torrents the request may see that `node` matches, up to `n`.
     fn count_up_to(&self, node: Node, n: usize) -> Result<usize> {
-        let c = self.compiled(node);
+        let c = self.compiled(node)?;
         count_up_to(&self.searcher, &c, n, self.cancel)
     }
 
@@ -707,7 +709,7 @@ fn did_you_mean(
     let Ok(ast) = query::parse(q) else {
         return Ok(out);
     };
-    if ast == Node::All || count_up_to(&cx.searcher, &cx.compiled(ast), FEW, cx.cancel)? >= FEW {
+    if ast == Node::All || count_up_to(&cx.searcher, &cx.compiled(ast)?, FEW, cx.cancel)? >= FEW {
         return Ok(out);
     }
     let text = cx.index.fields().text;
@@ -808,4 +810,43 @@ fn correction(cx: &Cx<'_>, field: Field, word: &str, d: u8) -> Result<Option<Str
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{FILE_QUERY, append_files, index_with, tripwire};
+
+    /// A suggest count's `file:(…)` clause scans the file index under the
+    /// request's token (X-search-files-perf): cancelled partway, the
+    /// request fails with `Cancelled` and no set is cached.
+    #[test]
+    fn a_file_scan_cancelled_partway_stops_suggest_and_caches_nothing() {
+        let (index, _) = index_with(10, 1);
+        let per = u64::from(crate::cancel::CHECK_EVERY);
+        append_files(&index, 1..11, per);
+        let cancel = CancelToken::new();
+        let (trip, visits) = tripwire(100, &cancel);
+        FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+        let restrict = |n: Node| n;
+        let req = Request {
+            q: "file:(size:>0) knigth",
+            pos: None,
+            limit: 8,
+            shown: Shown {
+                adult: true,
+                hidden: true,
+            },
+            restrict: &restrict,
+            now: 0,
+        };
+        assert!(matches!(
+            suggest(&index, &req, &cancel),
+            Err(Error::Cancelled)
+        ));
+        let seen = visits.load(std::sync::atomic::Ordering::Relaxed);
+        assert!((100..=per as usize).contains(&seen), "{seen} files visited");
+        assert_eq!(index.cache_usage().file_set_entries, 0);
+        FILE_QUERY.with(|q| q.borrow_mut().take());
+    }
 }

@@ -89,6 +89,8 @@
 	function setAutomatic(on: boolean) {
 		manual = !on;
 		arrived = false; // the user's own change is never an outside one
+		// The text box unmounts with Automatic on, and a removed element sends no focusout.
+		if (on) editing = false;
 		if (on) form.set(key, spec.auto);
 		else {
 			const n = Preview.part?.automaticNumber(f);

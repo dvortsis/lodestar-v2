@@ -1,7 +1,8 @@
 // §10.1 budgets, gzipped. Size only: the preset-app timing step is disabled (`running: false`).
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
@@ -144,23 +145,55 @@ const settingsOnDemand = [
 // pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
 // its own, so "Settings controls (on demand)" keeps measuring only the controls.
 const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
+// The connection screens' parts (S-settings-2b): the controls that stand in for the JSON fallback,
+// the per-group test, the Clear usage data panel and the Privacy dialog load once their fields are
+// on the page or on an interaction, so a first view stops at them. Gated on their own below.
+const settingsConnections = [
+	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget|Advanced|LoadFailed)\.svelte$/,
+	/features\/settings\/screens2\/privacy\.ts$/,
+	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
+	/features\/settings\/screens2\/icons\.ts$/
+];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
 // section's map before its fields render, so a first view stops at them. Gated on their own.
 const settingsMessages = [/features\/settings\/form\/message-maps\/\w+\.ts$/];
 // A section's first view does include the maps its form awaits before any field renders: the
-// group headings' and the section's own. The first-view gates count the group map and the
-// largest section map (the worst case) and leave the rest out, so the numbers are honest and a
-// later screen's map is gated the moment it lands. "Settings messages (on demand)" measures all.
+// group headings' and the section's own. A generated screen could be any generated section, so its
+// gate counts the group map and the largest of those sections' maps (the worst case, by gzip). A
+// hand-built screen names the sections its body shows (`bodyMaps`), so it counts its own and the
+// group map. Every other map is left out; a later screen's map is gated the moment it lands.
+// "Settings messages (on demand)" and the connection maps' entry measure them all.
 const messageKeys = Object.keys(manifest).filter((key) =>
 	settingsMessages.some((re) => re.test(key))
 );
-const rawSize = (key) => statSync(`.svelte-kit/output/client/${manifest[key].file}`).size;
-const largestMap = messageKeys
-	.filter((key) => !key.endsWith('/group.ts'))
-	.sort((a, b) => rawSize(b) - rawSize(a))[0];
-const settingsMessagesLeftOut = messageKeys
-	.filter((key) => !key.endsWith('/group.ts') && key !== largestMap)
-	.map((key) => new RegExp(`${key.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`));
+const mapName = (key) =>
+	key
+		.split('/')
+		.at(-1)
+		.replace(/\.(ts|svelte)$/, '');
+const gzSize = (key) =>
+	gzipSync(readFileSync(`.svelte-kit/output/client/${manifest[key].file}`)).length;
+const bodyMaps = {
+	AppearanceScreen: ['preferences'],
+	KeyboardScreen: ['preferences'],
+	LanguageScreen: ['preferences'],
+	IntegrationsScreen: ['integrations'],
+	NotificationsScreen: ['notifications'],
+	InsightsScreen: ['insights']
+};
+// A generated screen can show any section no hand-built body names, so a new section's map joins the
+// worst case the moment it lands.
+const handBuilt = new Set(Object.values(bodyMaps).flat());
+const largestMap = mapName(
+	messageKeys
+		.filter((key) => mapName(key) !== 'group' && !handBuilt.has(mapName(key)))
+		.sort((a, b) => gzSize(b) - gzSize(a))[0]
+);
+const mapsLeftOut = (keep) =>
+	messageKeys
+		.filter((key) => mapName(key) !== 'group' && !keep.includes(mapName(key)))
+		.map((key) => new RegExp(`${key.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`));
+const settingsMessagesLeftOut = mapsLeftOut([largestMap]);
 const settingsLazy = requireMeasuredJs(
 	'Settings controls (on demand)',
 	onDemandOf('/settings/[section]', settingsOnDemand).filter(
@@ -169,9 +202,23 @@ const settingsLazy = requireMeasuredJs(
 			!onDemandOf('/settings/[section]', settingsMessages).includes(f)
 	)
 );
+// The four connection sections' maps (S-settings-2b) have an entry of their own, so the existing
+// maps' entry keeps its limit; the group map stays in the existing one.
+const connectionMaps = [
+	/features\/settings\/form\/message-maps\/(trackers|integrations|notifications|insights)\.ts$/
+];
+const connectionMapFiles = onDemandOf('/settings/[section]', connectionMaps);
 const settingsMessagesLazy = requireMeasuredJs(
 	'Settings messages (on demand)',
-	onDemandOf('/settings/[section]', settingsMessages)
+	onDemandOf('/settings/[section]', settingsMessages).filter((f) => !connectionMapFiles.includes(f))
+);
+const settingsConnectionMaps = requireMeasuredJs(
+	'Settings connection messages (on demand)',
+	connectionMapFiles
+);
+const settingsConnectionsLazy = requireMeasuredJs(
+	'Settings connection screens (on demand)',
+	onDemandOf('/settings/[section]', settingsConnections)
 );
 const settingsEditLazy = requireMeasuredJs(
 	'Settings edit chunk (on demand)',
@@ -200,6 +247,7 @@ const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|t
 const settingsFirstView = [
 	...settingsOnDemand,
 	...settingsEdit,
+	...settingsConnections,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
@@ -243,7 +291,8 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 				[
 					...settingsOnDemand,
 					...settingsEdit,
-					...settingsMessagesLeftOut,
+					...settingsConnections,
+					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
 					...appearanceLater
 				],
@@ -548,6 +597,8 @@ export default [
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
 	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
+	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
+	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>
