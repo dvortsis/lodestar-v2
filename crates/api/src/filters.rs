@@ -1250,18 +1250,27 @@ impl FiltersApi {
 
     fn release(&self, store: &mut Store, hash: [u8; 20]) -> ApiResult<bool> {
         let had = store.release(&hash).map_err(internal)?;
-        self.held.remove(&hash);
+        self.unhold(store, &[hash])?;
         Ok(had)
+    }
+
+    /// Tells intake to fetch again those of `hashes` the store no longer
+    /// holds, asked under `HeldSet`'s lock: a writer batch that held one
+    /// again since the release committed keeps it refused
+    /// (`2026-10-31-B-held-exact.md`).
+    /// An error after the release committed returns 500 and leaves the
+    /// rest refused until the next start: over-strict, never loose.
+    fn unhold(&self, store: &Store, hashes: &[[u8; 20]]) -> ApiResult<()> {
+        self.held
+            .remove_released(hashes, |hs| store.held_among(hs))
+            .map_err(internal)
     }
 
     /// [`release`](Self::release) for many hashes: one transaction and one
     /// WAL scrub in the store, not one per hash.
     fn release_many(&self, store: &mut Store, hashes: &[[u8; 20]]) -> ApiResult<()> {
         store.release_many(hashes).map_err(internal)?;
-        for h in hashes {
-            self.held.remove(h);
-        }
-        Ok(())
+        self.unhold(store, hashes)
     }
 
     /// Releases everything `rules` hold, quarantine and tombstones: they
@@ -1270,13 +1279,13 @@ impl FiltersApi {
     /// Returns how many hashes were released.
     fn release_rules(&self, store: &mut Store, rules: &[String]) -> ApiResult<usize> {
         self.reload(store)?;
-        store
-            .release_rules(rules, |hashes| {
-                for h in hashes {
-                    self.held.remove(h);
-                }
-            })
-            .map_err(internal)
+        // Intake keeps refusing them until every chunk is in: over-strict
+        // for the length of the release, never loose.
+        let mut freed = Vec::new();
+        // A chunk that failed leaves the ones before it released.
+        let n = store.release_rules(rules, |hashes| freed.extend_from_slice(hashes));
+        self.unhold(store, &freed)?;
+        n.map_err(internal)
     }
 
     /// Applies `change`, whose `assessment` the caller has already
