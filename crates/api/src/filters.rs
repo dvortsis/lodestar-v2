@@ -93,6 +93,11 @@ pub struct FiltersApi {
     /// How long a quarantine lasts (§20.3), for a torrent a correction
     /// relabels adult and filtering then holds back.
     pub quarantine_secs: i64,
+    /// The server's shutdown, the only thing that stops a re-queue: a
+    /// deadline never does, or a new rule's existing matches would stay
+    /// unmarked. A re-queue cut short stays pending and runs again at the
+    /// next start ([`FiltersApi::resume_requeues`]).
+    pub shutdown: lodestar_search::CancelToken,
 }
 
 /// The replay window (§20.10).
@@ -2132,6 +2137,58 @@ const MAX_CORRECTIONS: usize = 10_000;
 const CORRECTIONS_CHUNK: usize = 500;
 /// Stored torrents one classification rule change re-queues at most.
 const MAX_REQUEUE: usize = 1_000_000;
+/// The `settings` key holding the queries of re-queues not yet finished:
+/// a JSON list, one entry per rule change, written before the change and
+/// removed once its marks are in.
+const REQUEUE_PENDING: &str = "classify.requeue_pending";
+
+fn pending_requeues(store: &Store) -> ApiResult<Vec<String>> {
+    let text = store.setting_text(REQUEUE_PENDING).map_err(internal)?;
+    // Unreadable (never written so): nothing can be recovered from it,
+    // and it mustn't block rule changes, so it's started afresh.
+    Ok(text
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default())
+}
+
+fn set_pending_requeues(store: &mut Store, list: &[String]) -> ApiResult<()> {
+    if list.is_empty() {
+        return store
+            .update_settings_text(&[], &[REQUEUE_PENDING])
+            .map_err(internal);
+    }
+    let text = serde_json::to_string(list).map_err(internal)?;
+    store
+        .set_settings_text(&[(REQUEUE_PENDING, &text)])
+        .map_err(internal)
+}
+
+/// Records a re-queue of `query` as pending, before the rule change it
+/// follows, so a stop anywhere after the change leaves it to redo.
+fn push_pending_requeue(store: &mut Store, query: &str) -> ApiResult<()> {
+    let mut list = pending_requeues(store)?;
+    list.push(query.to_owned());
+    set_pending_requeues(store, &list)
+}
+
+/// Clears one pending re-queue of `query` once its marks are in.
+fn drop_pending_requeue(store: &mut Store, query: &str) -> ApiResult<()> {
+    let mut list = pending_requeues(store)?;
+    if let Some(i) = list.iter().position(|q| q == query) {
+        list.remove(i);
+        set_pending_requeues(store, &list)?;
+    }
+    Ok(())
+}
+
+/// A re-queue stopped by the server's shutdown.
+fn stopping() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "server_stopping",
+        "Lodestar is stopping. The change is saved, and its torrents are queued again at the next start.",
+    )
+}
 
 /// A classification rule's query: it decides the type, so it can't test
 /// the type itself (the index already holds corrected types).
@@ -2339,6 +2396,7 @@ impl FiltersApi {
     /// matches for classifying again.
     pub fn add_class_rule(&self, body: &ClassRuleBody, now: i64) -> ApiResult<ClassRuleAdded> {
         let node = class_query(&body.query)?;
+        let text = node.to_query();
         let id = {
             let mut store = self.store();
             if store.class_rules().map_err(internal)?.len() >= MAX_CLASS_RULES {
@@ -2351,13 +2409,12 @@ impl FiltersApi {
                     ),
                 ));
             }
-            let id = store
-                .add_class_rule(&node.to_query(), body.adult)
-                .map_err(internal)?;
+            push_pending_requeue(&mut store, &text)?;
+            let id = store.add_class_rule(&text, body.adult).map_err(internal)?;
             self.rules_changed(&mut store)?;
             id
         };
-        let (queued, truncated) = self.requeue(&node, now)?;
+        let (queued, truncated) = self.requeue(&node, &text, now)?;
         Ok(ClassRuleAdded {
             id,
             queued,
@@ -2369,21 +2426,27 @@ impl FiltersApi {
     /// classified again without it.
     pub fn remove_class_rule(&self, id: i64, now: i64) -> ApiResult<ClassRuleRemoved> {
         let mut store = self.store();
-        let q = store
-            .remove_class_rule(id)
-            .map_err(internal)?
-            .ok_or_else(|| {
-                not_found(
-                    "class_rule_not_found",
-                    "There's no such classification rule.",
-                )
-            })?;
+        let missing = || {
+            not_found(
+                "class_rule_not_found",
+                "There's no such classification rule.",
+            )
+        };
+        // Pending before the removal, as for an added rule.
+        let rules = store.class_rules().map_err(internal)?;
+        let q = rules
+            .into_iter()
+            .find(|r| r.0 == id)
+            .map(|r| r.1)
+            .ok_or_else(missing)?;
+        push_pending_requeue(&mut store, &q)?;
+        let Some(q) = store.remove_class_rule(id).map_err(internal)? else {
+            drop_pending_requeue(&mut store, &q)?;
+            return Err(missing());
+        };
         self.rules_changed(&mut store)?;
         drop(store);
-        let (queued, truncated) = match parse(&q) {
-            Ok(node) => self.requeue(&node, now)?,
-            Err(_) => (None, false),
-        };
+        let (queued, truncated) = self.requeue_text(&q, now)?;
         Ok(ClassRuleRemoved { queued, truncated })
     }
 
@@ -2405,21 +2468,61 @@ impl FiltersApi {
     /// The search runs without the store lock, and marks go in chunks.
     /// `(None, false)` without a search index (only torrents arriving or
     /// re-enriched later are affected); `true` when the cap cut it short.
-    fn requeue(&self, node: &Node, now: i64) -> ApiResult<(Option<usize>, bool)> {
+    ///
+    /// `text` is the pending entry it clears once done. Only the server's
+    /// shutdown stops it (`server_stopping`); stopped or failed, the entry
+    /// stays, and [`FiltersApi::resume_requeues`] redoes it at the next
+    /// start. Marking again is harmless: it only queues a torrent for one
+    /// more enrichment.
+    fn requeue(&self, node: &Node, text: &str, now: i64) -> ApiResult<(Option<usize>, bool)> {
+        let out = self.requeue_marks(node, now)?;
+        drop_pending_requeue(&mut self.store(), text)?;
+        Ok(out)
+    }
+
+    /// [`FiltersApi::requeue`] for a stored query text; one that no longer
+    /// parses matches nothing, so its entry is just cleared.
+    fn requeue_text(&self, text: &str, now: i64) -> ApiResult<(Option<usize>, bool)> {
+        match parse(text) {
+            Ok(node) => self.requeue(&node, text, now),
+            Err(_) => {
+                drop_pending_requeue(&mut self.store(), text)?;
+                Ok((None, false))
+            }
+        }
+    }
+
+    fn requeue_marks(&self, node: &Node, now: i64) -> ApiResult<(Option<usize>, bool)> {
         let Some(index) = self.index.as_ref().map(|h| h.index()) else {
             return Ok((None, false));
         };
+        let stop = &self.shutdown;
+        let check = || {
+            if stop.is_stopped() {
+                Err(stopping())
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
         // The watermark before the search: what's past it isn't searchable
         // yet, so it's all marked.
         let watermark = index.watermark().map_err(internal)?;
         index.refresh().map_err(internal)?;
-        let compiled = index.query(node, now);
+        let compiled = index
+            .query_cancelled(node, now, 0, stop)
+            .map_err(|e| match e {
+                lodestar_search::Error::Cancelled | lodestar_search::Error::OutOfTime => stopping(),
+                e => internal(e),
+            })?;
+        check()?;
         let (ids, truncated) = index
             .matching_ids(&compiled, MAX_REQUEUE)
             .map_err(internal)?;
         let ids: Vec<i64> = ids.into_iter().map(|id| id as i64).collect();
         let mut n = 0;
         for chunk in ids.chunks(lodestar_store::MARK_CHUNK) {
+            check()?;
             n += self.store().mark_unenriched(chunk).map_err(internal)?;
         }
         n += self
@@ -2428,6 +2531,19 @@ impl FiltersApi {
             .map_err(internal)?;
         self.reenrich.store(true, Ordering::Release);
         Ok((Some(n), truncated))
+    }
+
+    /// Redoes the re-queues a stop cut short (run once at startup, in the
+    /// background). Each finished one is cleared; one the shutdown stops
+    /// again stays for the next start. Returns how many finished.
+    pub fn resume_requeues(&self, now: i64) -> ApiResult<usize> {
+        let pending = pending_requeues(&self.store())?;
+        let mut done = 0;
+        for text in &pending {
+            self.requeue_text(text, now)?;
+            done += 1;
+        }
+        Ok(done)
     }
 
     /// Tries a draft rule and the current rules on examples (the editor's

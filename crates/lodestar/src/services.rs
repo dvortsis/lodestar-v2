@@ -307,6 +307,7 @@ impl Services {
             reenrich,
             jobs: Default::default(),
             quarantine_secs,
+            shutdown: Default::default(),
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
         let subscriptions_stopped = crate::fixture::unless_offline(subscriptions_stopped);
@@ -538,6 +539,16 @@ impl Services {
         // shutdown so open downloads end rather than hold it.
         let jobs = Arc::new(lodestar_api::jobs::Jobs::default());
         let logs = crate::logging::source();
+        // Classification re-queues a stop cut short run again now, in the
+        // background; the shutdown stops them, and they stay pending.
+        let requeues = api.filters.clone();
+        let requeue_stop = requeues.as_ref().map(|f| f.shutdown.clone());
+        if let Some(f) = requeues {
+            // A failure is logged where it happens; it stays pending.
+            tokio::task::spawn_blocking(move || {
+                let _ = f.resume_requeues(crate::unix_now());
+            });
+        }
         let app = http::router(http, api)
             .layer(Extension(events.clone()))
             .layer(Extension(logs.clone()))
@@ -553,6 +564,9 @@ impl Services {
         let (stopping_tx, stopping) = watch::channel(false);
         let signal = async move {
             signal.await;
+            if let Some(t) = &requeue_stop {
+                t.cancel();
+            }
             hub.close();
             jobs.close();
             logs.close();

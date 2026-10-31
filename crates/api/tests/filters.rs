@@ -53,6 +53,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
         quarantine_secs: 30 * 86_400,
+        shutdown: Default::default(),
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -955,6 +956,77 @@ async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixt
     let (status, _, body) = call(&f.app, remove(rule)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], json!("class_rule_not_found"));
+}
+
+/// A shutdown during a rule's re-queue leaves it pending: the next start
+/// redoes it, so the rule's existing matches end up marked.
+#[tokio::test]
+async fn a_requeue_cut_short_by_shutdown_is_redone_at_the_next_start() {
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    let (a, _) = store_torrent(&f, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
+    store_torrent(&f, "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30);
+    {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        let index = f.api.index.as_ref().unwrap().index();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+    }
+    let marked = |api: &FiltersApi| {
+        api.store
+            .lock()
+            .unwrap()
+            .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+            .unwrap()
+    };
+    assert!(marked(&f.api).is_empty());
+
+    // The server is stopping: the rule is stored, its re-queue isn't run.
+    f.api.shutdown.cancel();
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/rules",
+            Some(&c),
+            json!({ "query": "lexb", "adult": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], json!("server_stopping"));
+    assert_eq!(f.api.engine.current().class_rules.len(), 1, "rule kept");
+    assert!(marked(&f.api).is_empty(), "nothing marked yet");
+    // Stopped again at once on resume: it stays pending.
+    assert!(f.api.resume_requeues(0).is_err());
+
+    // The next start: a fresh store handle on the same file and a new
+    // shutdown token.
+    let db = f._dir.path().join("t.db");
+    let restarted = FiltersApi {
+        store: Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        engine: f.api.engine.clone(),
+        held: f.api.held.clone(),
+        sealer: f.api.sealer.clone(),
+        ips: f.api.ips.clone(),
+        index: f.api.index.clone(),
+        reenrich: Arc::new(AtomicBool::new(false)),
+        jobs: Default::default(),
+        quarantine_secs: f.api.quarantine_secs,
+        shutdown: Default::default(),
+    };
+    assert_eq!(restarted.resume_requeues(0).unwrap(), 1);
+    assert_eq!(marked(&restarted), vec![a], "the rule's match is marked");
+    assert!(
+        restarted
+            .reenrich
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    // Done, so cleared: another start redoes nothing.
+    assert_eq!(restarted.resume_requeues(0).unwrap(), 0);
 }
 
 /// Enriches every stored torrent, as the pipeline's background pass does.
