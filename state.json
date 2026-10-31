@@ -2367,7 +2367,7 @@
   },
   {
    "item": "FYI (§2.19) #257 IMP-4b (merged): `lodestar import` CLI refuses to run while the server is up (online import is a later slice); per-reason counts printed, not persisted; --allow-share is a flag, not config; throughput ~13,900 torrents/s on a synthetic 100k source, slice pass lines 2,000/s offline and 1,000/s online (author numbers; owner may change). The 10k/100k pilots on your data can start once you want (master plan D5); back up first.",
-   "status": "to-send"
+   "status": "sent 2026-10-31T13:07Z (daily summary)"
   },
   {
    "id": "OC-alerts-limit",
@@ -2377,23 +2377,31 @@
   },
   {
    "item": "FYI (§2.19/§2.26) #262 IMP-5 (merged): Insights 'New searchable' and its trend are now crawled only (imports shown separately as '+ N imported'); this reverses docs/metrics.md's 'imports included' for kpi.new_searchable, as the brief asked. Rollup overhead p95 +3.0% (budget 5%).",
-   "status": "to-send"
+   "status": "sent 2026-10-31T13:07Z (daily summary)"
   },
   {
    "item": "FYI (§2.26) #264 M-settings-engine-2 (merged): a user's own edit back to the automatic value can still turn Automatic on (old behaviour); Automatic no longer re-arms mid-edit, it waits for the field to lose focus. Settings section first view 42.3 KB of the 45 KB owner budget, no limit raised.",
-   "status": "to-send"
+   "status": "sent 2026-10-31T13:07Z (daily summary)"
   },
   {
    "item": "FYI (§2.26) #256 (merged): Alert route size limit 45.8 -> 45.9 KB (CI measured 45.83 KB), docs/decisions/2026-10-31-owner-delegation.md.",
-   "status": "to-send"
+   "status": "sent 2026-10-31T13:07Z (daily summary)"
   },
   {
    "item": "FYI (§2.19) #267 B-refetch-funnel: a start-time refetch of a partial import that stores a new row now counts under metadata_new_verified_total{origin=\"recovery\"} (the reserved label from the master plan's F14 split), never origin=network.",
-   "status": "to-send"
+   "status": "sent 2026-10-31T13:07Z (daily summary)"
   },
   {
    "item": "FYI (§2.19) #271 S-search-recover-ui: the full-page cold-start state (< 1,000 torrents) is text-only for now; the searching_crawling illustration (§10.19 brand assets) was left out to hold the Search size budget and will return as its own on-demand chunk in a follow-up.",
    "status": "withdrawn (art restored in #271)"
+  },
+  {
+   "item": "FYI (§2.26) #270 first-interaction i18n boot load; #275 /t/[hash] 22.4->22.5 KB (gzip noise)",
+   "status": "sent 2026-10-31T13:07Z (daily summary)"
+  },
+  {
+   "item": "FYI (§2.26) S-settings-2b: Language first view +0.89 kB to 44.13/45 accepted; Notifications first view must fit 45 KB",
+   "status": "sent 2026-10-31T13:07Z (daily summary, as in-progress note)"
   }
  ],
  "external_gates": {
@@ -2632,5 +2640,6 @@
  },
  "owner_standing": {
   "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
- }
+ },
+ "last_daily_summary": "2026-10-31T13:07Z"
 }
