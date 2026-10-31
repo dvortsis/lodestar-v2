@@ -62,6 +62,30 @@ export function formatTime(ts: string, utc: boolean): string {
 		: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
+const LEVELS = new Set(['error', 'warn', 'info', 'debug', 'trace']);
+const synthetic = new WeakMap<object, string>();
+let syntheticN = 0;
+
+/** A stable key: the line's id, else one made once per line object (an index shifts on trim). */
+export function lineKey(line: LogLine): string {
+	if (line.id) return line.id;
+	let k = synthetic.get(line);
+	if (!k) synthetic.set(line, (k = `~${++syntheticN}`));
+	return k;
+}
+
+/** On ingest: an unknown level reads as info, and a missing field list as empty. */
+export function normalize(line: LogLine): LogLine {
+	if (LEVELS.has(line.level) && Array.isArray(line.fields)) return line;
+	const out = {
+		...line,
+		level: LEVELS.has(line.level) ? line.level : 'info',
+		fields: Array.isArray(line.fields) ? line.fields : []
+	} as LogLine;
+	if (!line.id) synthetic.set(out, lineKey(line));
+	return out;
+}
+
 /** The `<epoch>-<seq>` sequence part, or null. */
 export function seqOf(id: string | null | undefined): number | null {
 	const m = /^[0-9a-f]+-(\d+)$/.exec(id ?? '');
@@ -85,12 +109,14 @@ export function purge(lines: LogLine[], kinds: string[], through: string): LogLi
 	for (const [i, l] of lines.entries()) {
 		if (i > cut) out.push(l);
 		else if (l.opt_in && off.has(l.opt_in)) continue;
-		else if (l.fields.some((f) => off.has(f.kind)))
-			out.push({
+		else if (l.fields.some((f) => off.has(f.kind))) {
+			const copy = {
 				...l,
 				fields: l.fields.map((f) => (off.has(f.kind) ? { ...f, value: '[hidden]' } : f))
-			});
-		else out.push(l);
+			};
+			if (!l.id) synthetic.set(copy, lineKey(l));
+			out.push(copy);
+		} else out.push(l);
 	}
 	return out;
 }

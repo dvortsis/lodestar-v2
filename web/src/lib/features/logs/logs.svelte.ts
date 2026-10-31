@@ -11,7 +11,7 @@
 import { SvelteURLSearchParams } from 'svelte/reactivity';
 import { ApiError, api, errorFromResponse, handleUnauthorized, isAbort } from '$lib/api/client';
 import { SseParser } from '$lib/state/sse';
-import { purge, type LogLevel, type LogLine } from './text';
+import { normalize, purge, type LogLevel, type LogLine } from './text';
 
 export const MAX_LINES = 10_000;
 export const PAGE = 500;
@@ -49,7 +49,9 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 	const isHidden = deps.hidden ?? (() => typeof document !== 'undefined' && document.hidden);
 
 	let lines = $state.raw<LogLine[]>([]);
-	let held = $state.raw<LogLine[]>([]);
+	// Lines that arrive while paused: a plain buffer (pushing is O(1)), capped like the list.
+	let heldBuf: LogLine[] = [];
+	let heldCount = $state(0);
 	let status = $state<StreamStatus>('connecting');
 	let loaded = $state(false);
 	let loadError = $state<ApiError | undefined>();
@@ -60,6 +62,7 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 	let skipped = $state(0);
 	let hasEarlier = $state(false);
 	let loadingEarlier = $state(false);
+	let earlierCtl: AbortController | undefined;
 	let earlierError = $state(false);
 	let filters = $state<Filters>(NO_FILTERS);
 	let generation = $state(0);
@@ -80,7 +83,13 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 	function append(batch: LogLine[]) {
 		if (!batch.length) return;
 		if (paused) {
-			held = held.concat(batch);
+			for (const l of batch) heldBuf.push(l);
+			if (heldBuf.length > MAX_LINES) {
+				const extra = heldBuf.length - MAX_LINES;
+				heldBuf.splice(0, extra);
+				trimmed += extra;
+			}
+			heldCount = heldBuf.length;
 			return;
 		}
 		const next = lines.concat(batch);
@@ -111,7 +120,8 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 	function applyPurge(kinds: string[], through: string) {
 		flush();
 		lines = purge(lines, kinds, through);
-		held = purge(held, kinds, through);
+		heldBuf = purge(heldBuf, kinds, through);
+		heldCount = heldBuf.length;
 	}
 
 	function close() {
@@ -127,7 +137,13 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 		close();
 		const c = (ctl = new AbortController());
 		queue = [];
-		lines = held = [];
+		earlierCtl?.abort();
+		earlierCtl = undefined;
+		loadingEarlier = false;
+		earlierError = false;
+		lines = [];
+		heldBuf = [];
+		heldCount = 0;
 		unseen = trimmed = skipped = 0;
 		lastId = undefined;
 		cursor = null;
@@ -142,7 +158,7 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 				signal: c.signal
 			});
 			if (mine !== run) return;
-			const chrono = page.lines.toReversed();
+			const chrono = page.lines.toReversed().map(normalize);
 			lines = chrono;
 			cursor = page.next_cursor;
 			hasEarlier = page.more && page.next_cursor !== null;
@@ -275,10 +291,10 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 		}
 		if (!payload || typeof payload !== 'object') return;
 		if (event === 'line') {
-			const line = payload as LogLine;
-			if (typeof line.ts !== 'string' || !Array.isArray(line.fields)) return;
-			if (id && !line.id) line.id = id;
-			enqueue(line);
+			const raw = payload as LogLine;
+			if (typeof raw.ts !== 'string') return;
+			if (id && !raw.id) raw.id = id;
+			enqueue(normalize(raw));
 		} else if (event === 'purge') {
 			const p = payload as { kinds?: string[]; through?: string };
 			if (Array.isArray(p.kinds) && typeof p.through === 'string') applyPurge(p.kinds, p.through);
@@ -303,7 +319,8 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 		} else if (suspended) {
 			suspended = false;
 			failures = 0;
-			void connect(run); // catches up from the last id
+			// Still loading history when it was hidden: start over; else catch up from the last id.
+			void (loaded ? connect(run) : open());
 		}
 	}
 
@@ -339,7 +356,7 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 			return unseen;
 		},
 		get held() {
-			return held.length;
+			return heldCount;
 		},
 		get trimmed() {
 			return trimmed;
@@ -378,6 +395,8 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 			running = false;
 			run++;
 			close();
+			earlierCtl?.abort();
+			earlierCtl = undefined;
 			clearTimeout(hiddenTimer);
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('online', onNet);
@@ -393,9 +412,10 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 		setPaused(on: boolean) {
 			if (on === paused) return;
 			paused = on;
-			if (!on && held.length) {
-				const batch = held;
-				held = [];
+			if (!on && heldBuf.length) {
+				const batch = heldBuf;
+				heldBuf = [];
+				heldCount = 0;
 				append(batch);
 			}
 		},
@@ -408,6 +428,8 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 			const mine = run;
 			loadingEarlier = true;
 			earlierError = false;
+			earlierCtl?.abort();
+			const ec = (earlierCtl = new AbortController());
 			const room = MAX_LINES - lines.length;
 			if (room <= 0) {
 				hasEarlier = false;
@@ -416,10 +438,11 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 			}
 			try {
 				const page = await api.get('/logs', {
-					query: { ...query(filters), cursor, limit: Math.min(PAGE, room) }
+					query: { ...query(filters), cursor, limit: Math.min(PAGE, room) },
+					signal: ec.signal
 				});
 				if (mine !== run) return;
-				lines = page.lines.toReversed().concat(lines);
+				lines = page.lines.toReversed().map(normalize).concat(lines);
 				cursor = page.next_cursor;
 				hasEarlier = page.more && page.next_cursor !== null && lines.length < MAX_LINES;
 			} catch (e) {
@@ -429,6 +452,8 @@ export function createLogView(deps: Partial<LogViewDeps> = {}) {
 			}
 		},
 		retry() {
+			clearTimeout(retryTimer);
+			retryTimer = undefined;
 			failures = 0;
 			void (loaded && !loadError ? connect(run) : open());
 		}

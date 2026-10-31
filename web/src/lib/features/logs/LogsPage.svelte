@@ -22,6 +22,7 @@
 	import {
 		FIELD_MAX,
 		formatTime,
+		lineKey,
 		lineText,
 		safe,
 		type LogComponent,
@@ -119,11 +120,6 @@
 		else if (el.scrollTop < lastTop) view.setFollowing(false);
 		lastTop = el.scrollTop;
 	}
-	$effect(() => {
-		const el = scroller();
-		el?.addEventListener('scroll', onScroll, { passive: true });
-		return () => el?.removeEventListener('scroll', onScroll);
-	});
 	function toBottom() {
 		const el = scroller();
 		if (el) {
@@ -174,7 +170,7 @@
 	function toggle(id: string) {
 		if (!expanded.delete(id)) expanded.add(id);
 	}
-	const keyOf = (l: LogLine, i: number) => l.id ?? `${l.ts}#${i}`;
+	const keyOf = (l: LogLine) => lineKey(l);
 	function clearFilters() {
 		level = 'trace';
 		components = [];
@@ -323,7 +319,11 @@
 		<p class="text-small text-muted-text">{m.logs_skipped({ count: view.skipped })}</p>
 	{/if}
 
-	<div class="relative min-h-0 flex-1 rounded-box border border-field-border" bind:this={wrapper}>
+	<div
+		class="relative min-h-0 flex-1 rounded-box border border-field-border"
+		bind:this={wrapper}
+		onscrollcapture={onScroll}
+	>
 		{#if !view.loaded}
 			<div class="p-4" aria-busy="true"><Skeleton lines={6} /></div>
 		{:else if !view.lines.length}
@@ -346,19 +346,21 @@
 						measureRows
 						estimateSize={28}
 						bind:activeIndex
-						onActivate={(_, l) => toggle(keyOf(l, 0))}
+						onActivate={(_, l) => toggle(keyOf(l))}
 						class="font-mono text-small"
 					>
-						{#snippet row(l, i)}
+						{#snippet row(l)}
 							{@const Icon = ICONS[l.level]}
-							{@const open = expanded.has(keyOf(l, i))}
+							{@const open = expanded.has(keyOf(l))}
 							<div class="px-2 py-1 {TONE[l.level]}">
 								<div class="flex gap-2 {wrap || open ? '' : 'truncate'}">
 									<span class="shrink-0 text-muted-text">{formatTime(l.ts, utc)}</span>
 									<span class="logs-level inline-flex shrink-0 items-center gap-1">
 										<Icon aria-hidden="true" />{levelName(l.level)}
 									</span>
-									<span class="logs-component shrink-0 text-muted-text">{l.component}</span>
+									<span class="logs-component shrink-0 text-muted-text"
+										>{safe(l.component, 32)}</span
+									>
 									<span
 										class="min-w-0 {wrap || open ? 'break-words whitespace-pre-wrap' : 'truncate'}"
 									>
@@ -396,9 +398,10 @@
 			</div>
 		{/if}
 	</div>
-	<div class="flex flex-wrap gap-x-4 text-small text-muted-text" role="status">
+	<!-- The live region says only "Paused"; the changing count sits outside it. -->
+	<div class="flex flex-wrap gap-x-4 text-small text-muted-text">
+		<span role="status">{view.paused ? m.logs_paused_short() : ''}{notice}</span>
 		{#if view.paused}<span>{m.logs_paused({ count: view.held })}</span>{/if}
-		{#if notice}<span>{notice}</span>{/if}
 	</div>
 </section>
 

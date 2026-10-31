@@ -60,5 +60,6 @@
 	"logs_preset_warnings": "警告",
 	"logs_preset_normal": "正常",
 	"logs_preset_detailed": "详细",
-	"logs_preset_everything": "全部"
+	"logs_preset_everything": "全部",
+	"logs_paused_short": "已暂停"
 }

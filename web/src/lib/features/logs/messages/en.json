@@ -60,5 +60,6 @@
 	"logs_preset_warnings": "Warnings",
 	"logs_preset_normal": "Normal",
 	"logs_preset_detailed": "Detailed",
-	"logs_preset_everything": "Everything"
+	"logs_preset_everything": "Everything",
+	"logs_paused_short": "Paused"
 }

@@ -268,3 +268,52 @@ describe('purge and paging', () => {
 		v.stop();
 	});
 });
+
+describe('review fixes', () => {
+	it('caps lines held while paused and counts what it dropped', async () => {
+		const opened = streams();
+		get.mockResolvedValue({ lines: [], more: false, next_cursor: null, unreadable: 0 });
+		const v = make();
+		v.start();
+		await settle();
+		v.setPaused(true);
+		opened[0]!.push(Array.from({ length: MAX_LINES + 10 }, (_, i) => frame(line(i + 1))).join(''));
+		await settle();
+		frames();
+		expect(v.held).toBe(MAX_LINES);
+		expect(v.trimmed).toBe(10);
+		v.setPaused(false);
+		expect(v.lines).toHaveLength(MAX_LINES);
+		expect(v.lines[0]!.id).toBe('aa-11');
+		v.stop();
+	});
+
+	it('a new open clears a stuck Load earlier', async () => {
+		streams();
+		const v = make();
+		v.start();
+		await settle();
+		get.mockImplementationOnce(() => new Promise(() => {}));
+		void v.loadEarlier();
+		expect(v.loadingEarlier).toBe(true);
+		v.setFilters({ level: 'warn', components: [], text: '' });
+		await settle();
+		expect(v.loadingEarlier).toBe(false);
+		v.stop();
+	});
+
+	it('reads an unknown level as info', async () => {
+		get.mockResolvedValue({
+			lines: [line(1, { level: 'loud' as never })],
+			more: false,
+			next_cursor: null,
+			unreadable: 0
+		});
+		streams();
+		const v = make();
+		v.start();
+		await settle();
+		expect(v.lines[0]!.level).toBe('info');
+		v.stop();
+	});
+});

@@ -91,3 +91,25 @@ test('Enter expands a row to show its fields', async ({ page, go, kbd, mock }) =
 	await kbd.press('Enter');
 	await expect(page.getByText('abc<b>x</b>')).toHaveCount(0);
 });
+
+test('scrolling up stops following, shows Jump to latest, and Jump returns to the bottom', async ({
+	page,
+	go,
+	mock
+}) => {
+	const stream = await liveLogs(page);
+	mock.on('getLogHistory', history(Array.from({ length: 200 }, (_, i) => logLine(i + 1))));
+	mock.on('getLogCatalog', { status: 403, body: { error: { code: 'forbidden', message: 'no' } } });
+	await go('/logs');
+	const list = page.getByRole('listbox', { name: 'Log lines' });
+	await expect(page.getByText('message 200')).toBeVisible();
+	await stream.opened();
+	await list.hover();
+	await page.mouse.wheel(0, -600);
+	const top = await list.evaluate((el) => el.scrollTop);
+	await stream.send([logLine(201)]);
+	await expect(page.getByRole('button', { name: /1 new lines/ })).toBeVisible({ timeout: 10_000 });
+	expect(await list.evaluate((el) => el.scrollTop)).toBe(top);
+	await page.getByRole('button', { name: /Jump to latest/ }).click();
+	await expect(page.getByText('message 201')).toBeVisible({ timeout: 10_000 });
+});
