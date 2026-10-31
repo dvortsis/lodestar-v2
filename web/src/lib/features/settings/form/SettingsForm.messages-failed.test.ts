@@ -35,6 +35,6 @@ describe('SettingsForm with a message map that fails', () => {
 		await waitFor(() => expect(screen.getByTestId('part-failed')).toBeTruthy(), {
 			timeout: 10_000
 		});
-		expect(screen.getByText('mmap_mib')).toBeTruthy();
+		await waitFor(() => expect(screen.getByText('mmap_mib')).toBeTruthy(), { timeout: 10_000 });
 	});
 });

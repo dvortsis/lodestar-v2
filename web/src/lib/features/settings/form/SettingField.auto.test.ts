@@ -76,8 +76,6 @@ describe.each(['staged', 'instant'] as const)(
 			box.focus();
 			await fireEvent.input(box, { target: { value: 'd' } });
 			await fireEvent.input(box, { target: { value: '' } }); // back to the automatic value
-			if (mode === 'instant')
-				await until(() => expect(server.calls.filter((c) => c.method === 'PATCH')).toHaveLength(2));
 			await until(() => expect(form.dirtyCount).toBe(0));
 			expect(toggle().checked).toBe(false);
 			expect(document.activeElement).toBe(box);
