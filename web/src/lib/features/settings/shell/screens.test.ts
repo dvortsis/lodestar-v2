@@ -26,7 +26,8 @@ describe('the screen registry', () => {
 			'integrations',
 			'notifications',
 			'insights',
-			'general'
+			'general',
+			'security'
 		]);
 		expect(
 			screens.filter((screen) => screen.sections).every((screen) => screen.icon || screen.iconLoad)
