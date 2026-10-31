@@ -1704,7 +1704,7 @@
    "pr": 282,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it"
+   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed"
   },
   "S-logs-1": {
    "status": "running",
@@ -2222,7 +2222,8 @@
   "2026-10-30T12:30Z-B3": "Part B3 done: paused old-lineage slices saved as patches under runner-state ports/ (B-update-5 conflicts with F-updater; needs Opus resume after v0.5.1). Pre-swap sessions archived: X-sleeps, B-log1b, M-settings-form, S-discover, B-update. S-settings-1 session (session_01WxWNVVXvmeyCn6M12V9h9h) archive was denied by the permission classifier; left idle for the owner.",
   "heartbeat_2026-10-30T13:07Z": "Heartbeat: IMP-1 running (applying self-review fixes), CR-SIM pushing review fixes, CR-0d #208 CI on a1bac3db; release/v0.5.1 8b67f269: Release+E2E green, CI running. No permission prompts. Heartbeat prompt refreshed (landing plan done).",
   "2026-10-30T19:17Z": "Before merging any PR that touches web/, read its check runs: 'check + test + build + size' and 'playwright (core…)' must be success, not just ci-ok (the ruleset requires only ci-ok; #217 merged early).",
-  "2026-10-31T14:10Z": "cargo test --workspace with debuginfo fills a session disk (~30 GB target/debug); tell slices/reviewers to set CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0"
+  "2026-10-31T14:10Z": "cargo test --workspace with debuginfo fills a session disk (~30 GB target/debug); tell slices/reviewers to set CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0",
+  "2026-10-31T15:51Z": "Lesson: a reviewer's 'optional' suggestion to narrow a safety mechanism (#280 opt 2) went into a brief and was a content-safety loosening caught in #282. Briefs that relax a hold/refusal path must say 'check this doesn't loosen safety' and get a security review."
  },
  "ext": {
   "m4-swarm-fields": "satisfied 035ca7f",
@@ -2512,8 +2513,8 @@
   "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
   "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
-  "store/src/filter.rs: per-hash hold query so the writer can re-check a hash after a rule change without the HeldSet window (#282)",
-  "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)"
+  "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
+  "store/src/filter.rs: per-hash hold query (or HeldSet removal generation) so the writer re-holds only hashes the store still holds, covering the sweep arm and backfill's arm (writer.rs:573); until then both insert unconditionally (over-strict, safe) (#282)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
