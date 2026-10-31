@@ -22,8 +22,14 @@ S-search-6's live banner polls `/search` with `limit: 1` every 30 s and compares
    - no baseline changes expected.
 7. **Decisions file:** `docs/decisions/<date>-S-search-live-ui.md`.
 
+## Also (carried from #271's review; these are the same files)
+1. `ResultsPanel.svelte`, in the `{#if clauses.length || (suggested && Recover)}` branch: show the lead "Remove a filter to widen the search:" (`search_results_none_lead`) only when `clauses.length`. A words-only zero-result query shows `search_results_none_words` with the counts. Test it.
+2. Restore a vitest: an IndexState render with `growth_per_hour` null, 0 and 0.5 shows no "/h" (the old `perHour` unit test went away in #271).
+3. `docs/decisions/2026-10-31-S-search-recover-ui.md:9`: say "on the bare search only".
+4. #271's reviewer saw one unexplained ResultsPanel vitest failure in 10 local runs, around the new `findByRole`/`waitFor` and the 1 s `figuresKnown` cap. Run the search vitest suite 10× before opening the PR. If it flakes, root-cause it and fix it; never skip it.
+
 ## Own
-`web/src/lib/features/search/live/**`, minimal edits in `search/results/**` to wire it, the search mock's live-feed fixtures, `web/e2e/search-live.*`, the live banner's size entry, and the decisions file. **Don't edit** `lib/state/**`, `lib/shell/**`, `lib/ui/**` or `lib/api/**`. If the events store lacks a way to subscribe to `search_live`, stop and tell the runner.
+`web/src/lib/features/search/live/**`, minimal edits in `search/results/**` to wire it, the search mock's live-feed fixtures, `features/search/results/IndexState.svelte` and its test (item 2), the S-search-recover-ui decisions file line (item 3), `web/e2e/search-live.*`, the live banner's size entry, and the decisions file. **Don't edit** `lib/state/**`, `lib/shell/**`, `lib/ui/**` or `lib/api/**`. If the events store lacks a way to subscribe to `search_live`, stop and tell the runner.
 
 ## Size
 ≲ 500 changed lines.
