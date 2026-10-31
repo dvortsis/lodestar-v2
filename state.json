@@ -1731,7 +1731,7 @@
    "pr": 286,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus | 17:04Z PR #286 head 16c9a72d (services.rs startup hook + settings key classify.requeue_pending accepted); fresh Opus reviewer + security review"
+   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus | 17:04Z PR #286 head 16c9a72d (services.rs startup hook + settings key classify.requeue_pending accepted); fresh Opus reviewer + security review | 17:20Z MERGE at 16c9a72d (3 optional); waiting on CI"
   },
   "B-held-exact": {
    "status": "running",
@@ -2557,7 +2557,8 @@
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers"
+  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers",
+  "X-requeue-2 (Opus, content safety, #286 review): filters.rs requeue clears classify.requeue_pending when there's no search index (search disabled) -> a later re-enable leaves matches unmarked (pre-existing gap for adds too). Keep the entry unless an index was present, dedupe identical texts, and re-queue rules added while search was off on re-enable; resume_requeues should log+keep a failing entry and continue (stop only on shutdown); add a sibling-stop test in search files.rs (injected failing segment)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
