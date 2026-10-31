@@ -228,5 +228,5 @@
 	"settings_screen_usage_done": "已删除 {count} 条搜索。",
 	"settings_screen_client_password_save_named": "保存 {name} 的密码",
 	"settings_screen_client_password_remove_named": "移除 {name} 的密码",
-	"settings_screen_client_password_pending": "尚未保存。请点击“保存密码”：“保存更改”不包含它。"
+	"settings_screen_client_password_pending": "尚未保存。请使用“保存密码”。"
 }

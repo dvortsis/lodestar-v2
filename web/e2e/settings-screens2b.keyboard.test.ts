@@ -175,7 +175,7 @@ test.describe('keyboard: connection settings screens', () => {
 		await expect(discord.getByTestId('test-result')).toHaveText('Test message sent.');
 		expect(tests).toEqual([{ kind: 'discord', url: 'https://discord.com/api/webhooks/1/x' }]);
 		expect(backend.patches).toHaveLength(0);
-		// A route saves by keyboard, and the typed address isn't part of it.
+		// A route saves by keyboard; the address typed above is a staged secret, so Save sends it too.
 		await kbd.tabTo(
 			page.getByRole('group', { name: 'Alerts go to' }).getByRole('checkbox', { name: 'Discord' }),
 			40
@@ -184,7 +184,13 @@ test.describe('keyboard: connection settings screens', () => {
 		await kbd.press('Control+s');
 		await expect(page.getByTestId('save-bar')).toContainText('Saved');
 		expect(backend.patches).toEqual([
-			{ notifications: { if_revision: 1, route_alerts: ['discord'] } }
+			{
+				notifications: {
+					if_revision: 1,
+					discord_url: 'https://discord.com/api/webhooks/1/x',
+					route_alerts: ['discord']
+				}
+			}
 		]);
 	});
 
