@@ -1555,8 +1555,8 @@
       "notes": "2026-10-31T00:07Z brief briefs/LU-1-neutralize.md; Opus session_01MMjhn8dY7oy8283PNtZqEK | 2026-10-31T01:10Z PR #249 head 408f5ff1 (~250 lines); review CHANGES: flaky property (www in VOCAB vs SP-1 site_advert) -> compute SP-1 on the unmasked torrent; riding: LU-1 property coverage, semantics test asserts. Owner flag at merge: joined-word lure stays evidence (fails safe) | 2026-10-31T01:20Z delta MERGE at 9598e40d (flake gone 12/12; SP-1/SP-2 unmasked is production-faithful); merge on green ci-ok"
     },
     "CR-1a-S": {
-      "status": "running",
-      "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split"
+      "status": "review",
+      "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split | 2026-10-31T01:31Z part 1 PR #251 head c6cf450e; reviewer session_01MMjhnCySJJX45uWwBBEfbv; part 2 built locally on slice/CR-1a-S-2, pushed after #251 merges. Owner flags in decisions file"
     },
     "IMP-4": {
       "status": "running",
