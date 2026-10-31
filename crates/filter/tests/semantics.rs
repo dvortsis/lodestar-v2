@@ -796,6 +796,63 @@ fn a_neutralized_word_is_no_pack_evidence() {
     );
 }
 
+// LU-1-neutralize: LU-1's lure notes honour Neutralize terms too.
+#[test]
+fn a_neutralized_lure_word_is_no_lu1_evidence() {
+    use lodestar_filter::PackRule;
+    let lu1 = Some(RuleRef::Pack(PackRule::Lu1));
+    let name = "Movie 2019 1080p";
+    let archive = FileInfo::new(vec!["Movie.2019.1080p.rar".into()], 4 << 30);
+    let note = |n: &str| FileInfo::new(vec![n.into()], 90);
+    let files = [archive.clone(), note("password.txt")];
+    assert_eq!(pack_decision(name, &files, &[]), lu1);
+    let decided = pack_decision(name, &files, &[neutralize("password")]);
+    assert!(decided.is_some() && decided != lu1, "{decided:?}");
+    // The junk score and its reasons are the classifier's: judging with
+    // the entry leaves them as they were.
+    let class = classify(name, &files);
+    let before = class.junk.clone();
+    assert!(
+        before
+            .reasons
+            .contains(&lodestar_classify::JunkReason::LureFile)
+    );
+    let mut e = engine();
+    e.packs = lodestar_filter::PackSwitches::all();
+    e.overrides.push(neutralize("password"));
+    let facts = Facts {
+        class: &class,
+        size: 0,
+        piece_len: 0,
+        flags: 0,
+        discovered_at: 0,
+        now: 0,
+    };
+    let it = Item {
+        files: &files,
+        content_type: class.content_type,
+        ..item(&[H], name)
+    };
+    let _ = e.judge(&it, Some(&facts), 0);
+    assert_eq!(class.junk, before);
+    // Another lure note still counts.
+    let two = [
+        archive.clone(),
+        note("password.txt"),
+        note("Click here.url"),
+    ];
+    assert_eq!(pack_decision(name, &two, &[neutralize("password")]), lu1);
+    // An entry in shadow mode neutralizes nothing.
+    let shadow = Override {
+        shadow_until: Some(10),
+        ..neutralize("password")
+    };
+    assert_eq!(pack_decision(name, &files, &[shadow]), lu1);
+    // A lure inside a joined word isn't the bare word.
+    let joined = [archive, note("MyPassword.txt")];
+    assert_eq!(pack_decision(name, &joined, &[neutralize("password")]), lu1);
+}
+
 /// The floor holds against a Neutralize entry for every word of the
 /// torrent while packs are on.
 #[test]

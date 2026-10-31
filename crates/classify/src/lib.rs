@@ -31,7 +31,7 @@ pub use composition::{COMP_VERSION, CategoryStat, Composition, DecodeError};
 pub use content::ContentType;
 pub use effective::{Effective, ResolvedVia};
 pub use ext::Category;
-pub use junk::{Junk, JunkReason};
+pub use junk::{Junk, JunkReason, lure_hits};
 pub use record::{ENRICHMENT_VERSION, Record, RecordError};
 pub use structure::Structure;
 
