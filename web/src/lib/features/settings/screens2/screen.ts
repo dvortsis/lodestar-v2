@@ -20,7 +20,7 @@ export const screens: Screen[] = [
 		group: 'library',
 		title: () => m.settings_screen_trackers_title(),
 		purpose: () => m.settings_screen_trackers_purpose(),
-		iconLoad: () => import('~icons/ph/wifi-high'),
+		iconLoad: () => import('./icons').then((m) => ({ default: m.trackers })),
 		sections: ['trackers']
 	},
 	// A hand-built screen's purpose is its body's heading line (lazy), so it isn't carried here.
@@ -28,21 +28,21 @@ export const screens: Screen[] = [
 		id: 'integrations',
 		group: 'connections',
 		title: () => m.settings_screen_integrations_title(),
-		iconLoad: () => import('~icons/ph/plugs-connected'),
+		iconLoad: () => import('./icons').then((m) => ({ default: m.integrations })),
 		load: () => import('./IntegrationsScreen.svelte')
 	},
 	{
 		id: 'notifications',
 		group: 'connections',
 		title: () => m.settings_screen_notifications_title(),
-		iconLoad: () => import('~icons/ph/bell'),
+		iconLoad: () => import('./icons').then((m) => ({ default: m.notifications })),
 		load: () => import('./NotificationsScreen.svelte')
 	},
 	{
 		id: 'insights',
 		group: 'connections',
 		title: () => m.settings_screen_insights_title(),
-		iconLoad: () => import('~icons/ph/chart-line'),
+		iconLoad: () => import('./icons').then((m) => ({ default: m.insights })),
 		load: () => import('./InsightsScreen.svelte')
 	}
 ];

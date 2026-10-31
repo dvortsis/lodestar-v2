@@ -152,7 +152,7 @@ const settingsConnections = [
 	/features\/settings\/screens2\/(GroupTest|ClearUsage|ClientsWidget|ClientSelectWidget|ChannelsWidget)\.svelte$/,
 	/features\/settings\/screens2\/privacy\.ts$/,
 	// The four navigation icons, loaded after the navigation shows (`Screen.iconLoad`).
-	/~icons\/ph\/(plugs-connected|bell|chart-line|wifi-high)\.svelte$/
+	/features\/settings\/screens2\/icons\.ts$/
 ];
 // The server labels, one generated map per section (M-settings-engine-2): a form loads its
 // section's map before its fields render, so a first view stops at them. Gated on their own.
