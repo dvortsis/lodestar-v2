@@ -1680,13 +1680,13 @@
    "notes": "12:50Z brief briefs/X-polish-1031b.md (CR-1a-H/S polish, utoipa dup-name guard, rollback docs line) | 12:49Z launched Opus"
   },
   "B-import-refile": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnBWPb7p7uonDgG12h9",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review"
+   "notes": "13:42Z brief briefs/B-import-refile.md (IMP-1 review I4: re-judge import candidates on §20.9 rule change); security review | 13:41Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
