@@ -122,6 +122,7 @@ export function indexFixture(over: Partial<S['IndexResponse']> = {}): S['IndexRe
 			index_lag_s: 4,
 			merges: null,
 			new_searchable: 1357,
+			new_searchable_imported: 0,
 			projection_days: null,
 			rebuild: 'building',
 			removed: 11,
@@ -135,7 +136,13 @@ export function indexFixture(over: Partial<S['IndexResponse']> = {}): S['IndexRe
 		removed_by_type: [{ key: 'movie', removed: 8 }],
 		stale: { reason: 'paused', since: NOW - 600 },
 		trackers: null,
-		trend: pts((i) => ({ at: at(i), new_searchable: 10 + i, removed: 1, searchable: 1000 + i })),
+		trend: pts((i) => ({
+			at: at(i),
+			new_searchable: 10 + i,
+			new_searchable_imported: 0,
+			removed: 1,
+			searchable: 1000 + i
+		})),
 		updated_at: NOW,
 		...over
 	};
