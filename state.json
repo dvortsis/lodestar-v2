@@ -1590,13 +1590,13 @@
    "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu | 07:08Z reviewer MERGE at 46c8736a; runner asked a small push (card label colon, zh wording, events-500 e2e, truncated note); runner checks delta | 07:16Z polish push d95b905c; runner checked delta (labels, zh, events-500 e2e, truncated note): clean; merge on green | 07:25Z #265 merged b5fd5d70; author+reviewer archived"
   },
   "S-locale-boot": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01MMjhnBf1FigREZgKsycUGD",
    "pr": 270,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size | 08:03Z Lighthouse total-byte-weight /search 102,891 > 102,400 on ed23185 (PR-caused); author told to move boot work off the initial path (target <= ~150 B growth); reviewer informed | 08:17Z also Playwright core fail on ed23185: detail.routes:121 file-tree worker count 0; relayed to author | 08:14Z reviewer CHANGES at ed23185: B1 401 re-arm fetch storm on /login (fix via session onSessionOk refetch, drop WAKE); runner requires size cut >=450 B (Lighthouse), hint-path e2e, docs, browserZone cache; plus detail.routes fix | 08:57Z push c1c38d5: lighthouse 98,555 B local, Search JS 43.02 kB; fetch deferred to first interaction; globalThis zone hook; delta sent to reviewer with checks on 401 storm, detail.routes, UX of deferral | 09:14Z reviewer at c1c38d5: B1 still open (fixed in 420b0750 per author); detail.routes root cause = i18n imports in lib/format broke tree worker (fixed); deferral OK; globalThis hook sound. Runner asked final small push: format-import guard test, 30 s wake, declare global, timeZone check | 09:25Z reviewer MERGE at 420b0750 (401 probe 12->1 requests); final small push requested (guard test, 30 s wake, declare global, timeZone check, unknown->signed_in refetch); runner checks that delta | 09:28Z final push 883e865 (guard test, 30 s wake, declare global); runner checked delta: clean; item 5 -> follow-up; merge on green incl. lighthouse | 09:37Z item-5 push f43be4f (crossed with no-push note): refetch on sign-in + unknown->signed_in on /login|/setup; runner checked delta clean; merge f43be4f on green"
+   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size | 08:03Z Lighthouse total-byte-weight /search 102,891 > 102,400 on ed23185 (PR-caused); author told to move boot work off the initial path (target <= ~150 B growth); reviewer informed | 08:17Z also Playwright core fail on ed23185: detail.routes:121 file-tree worker count 0; relayed to author | 08:14Z reviewer CHANGES at ed23185: B1 401 re-arm fetch storm on /login (fix via session onSessionOk refetch, drop WAKE); runner requires size cut >=450 B (Lighthouse), hint-path e2e, docs, browserZone cache; plus detail.routes fix | 08:57Z push c1c38d5: lighthouse 98,555 B local, Search JS 43.02 kB; fetch deferred to first interaction; globalThis zone hook; delta sent to reviewer with checks on 401 storm, detail.routes, UX of deferral | 09:14Z reviewer at c1c38d5: B1 still open (fixed in 420b0750 per author); detail.routes root cause = i18n imports in lib/format broke tree worker (fixed); deferral OK; globalThis hook sound. Runner asked final small push: format-import guard test, 30 s wake, declare global, timeZone check | 09:25Z reviewer MERGE at 420b0750 (401 probe 12->1 requests); final small push requested (guard test, 30 s wake, declare global, timeZone check, unknown->signed_in refetch); runner checks that delta | 09:28Z final push 883e865 (guard test, 30 s wake, declare global); runner checked delta: clean; item 5 -> follow-up; merge on green incl. lighthouse | 09:37Z item-5 push f43be4f (crossed with no-push note): refetch on sign-in + unknown->signed_in on /login|/setup; runner checked delta clean; merge f43be4f on green | 09:48Z #270 merged d07ae3a9; author+reviewer archived"
   },
   "S-search-recover-ui": {
    "status": "running",
@@ -1617,13 +1617,13 @@
    "notes": "08:12Z brief briefs/B-search-live.md (part 4 design from #266 decisions); security-review | 08:11Z launched Opus | 09:35Z PR #272 head 157dfb9c (1,666 lines excl generated, ~520 tests); accepted 30 s grace, per-connection throttle, 2 out-of-Own lines; fresh Opus reviewer + security"
   },
   "S-settings-2b": {
-   "status": "queued",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01MMjhn9BZwSNV2F4rfEFpJ3",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot"
+   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot | 09:49Z launched Sonnet"
   },
   "X-polish-1031": {
    "status": "queued",
