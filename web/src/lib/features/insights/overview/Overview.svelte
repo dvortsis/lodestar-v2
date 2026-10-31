@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The Insights overview (§10.9): one story, top to bottom. This file only composes: the data and
 	// the crawler controls live in `state.svelte.ts`, the URL contract in `query.ts`.
-	import { untrack } from 'svelte';
+	import { untrack, type Component } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { formatDate } from '$lib/format';
@@ -27,6 +27,14 @@
 	import './insights.css';
 
 	const insights = createInsights();
+	// The print layout loads after mount, so its markup and CSS are not in the route's first load.
+	let Print = $state.raw<Component<{ rangeText: string; compare: boolean; tz: string }>>();
+	$effect(() => {
+		void import('../print/PrintReport.svelte').then(
+			(mod) => (Print = mod.default),
+			() => {}
+		);
+	});
 	let contextHeight = $state(0);
 	const locale = $derived(currentLocale());
 	const params = $derived(page.url.searchParams);
@@ -157,6 +165,9 @@
 <Hatch />
 <div class="ins-page" data-testid="insights-page" style:--ins-context-height="{contextHeight}px">
 	<h1 class="sr-only">{m.insights_overview_title()}</h1>
+	{#if Print && overview}
+		<Print {rangeText} compare={query.compare} tz={overview.range.tz} />
+	{/if}
 
 	<ContextBar
 		bind:height={contextHeight}
