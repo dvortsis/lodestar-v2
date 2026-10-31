@@ -250,7 +250,9 @@ split are **planned**.
     (a loopback address, or a socket folder such as
     `--host /var/run/postgresql`), add `--allow-plaintext-loopback`.
   - **A database that's still being written is refused.** Stop bitmagnet, or
-    import a restored copy.
+    import a restored copy. The check watches the whole PostgreSQL server, so
+    run `VACUUM ANALYZE` on the restored copy before importing, as the restore
+    guide does, and don't import from a server other apps write to.
 
   Start Lodestar again afterwards; it indexes the imported torrents and
   re-fetches incomplete file lists.

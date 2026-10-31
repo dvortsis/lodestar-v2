@@ -145,7 +145,7 @@ impl fmt::Display for Refusal {
             ),
             Refusal::UnsupportedSchema(missing) => write!(
                 f,
-                "not a supported Bitmagnet database, missing {}",
+                "not a supported Bitmagnet database ({})",
                 missing.join(", ")
             ),
             Refusal::StatementTimeout => f.write_str("a read took too long"),
@@ -838,7 +838,8 @@ const COLUMNS_SQL: &str = "\
 SELECT convert_to(c.relname::text, 'SQL_ASCII'), convert_to(a.attname::text, 'SQL_ASCII'), \
        convert_to(t.typname::text, 'SQL_ASCII'), a.attnum, a.attnotnull, c.relkind::text = 'r', \
        c.oid, pg_catalog.pg_relation_filenode(c.oid), \
-       t.typnamespace = 'pg_catalog'::pg_catalog.regnamespace, t.typtype::text = 'e' \
+       t.typnamespace = 'pg_catalog'::pg_catalog.regnamespace, t.typtype::text = 'e', \
+       a.atttypid \
 FROM pg_catalog.pg_class c \
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
 JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
@@ -846,7 +847,9 @@ JOIN pg_catalog.pg_type t ON t.oid = a.atttypid \
 WHERE n.nspname = 'public' AND c.relname IN ('torrents', 'torrent_files', 'torrent_pieces') \
 ORDER BY c.relname, a.attnum LIMIT 2000";
 
-/// Valid, non-partial btree indexes on plain columns of the read tables.
+/// Valid, non-partial btree indexes on plain columns of the read tables,
+/// with built-in operator classes only: a source's own class could order
+/// `bytea` differently and make the keyset skip rows.
 const INDEXES_SQL: &str = "\
 SELECT i.indrelid, i.indkey::int2[], i.indisunique \
 FROM pg_catalog.pg_index i \
@@ -854,7 +857,15 @@ JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid \
 JOIN pg_catalog.pg_am am ON am.oid = ic.relam \
 WHERE i.indrelid = ANY($1) AND am.amname = 'btree' AND i.indisvalid AND i.indisready \
   AND i.indpred IS NULL AND i.indexprs IS NULL \
+  AND NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(i.indclass::pg_catalog.oid[]) u(oc) \
+                  JOIN pg_catalog.pg_opclass o ON o.oid = u.oc \
+                  WHERE o.opcnamespace <> 'pg_catalog'::pg_catalog.regnamespace) \
 ORDER BY i.indexrelid LIMIT 1000";
+
+/// Casts to or from the source's own enum.
+const CASTS_SQL: &str = "\
+SELECT count(*) FROM pg_catalog.pg_cast c \
+WHERE c.castsource = ANY($1) OR c.casttarget = ANY($1)";
 
 /// The database's own identity: its OID and name.
 const DATABASE_SQL: &str = "\
@@ -888,9 +899,9 @@ SELECT pg_catalog.sha256((SELECT info_hash FROM public.torrents ORDER BY info_ha
 
 fn torrents_sql(c: &Caps, first: bool) -> String {
     let status = if c.files_status {
-        // No cast: a user-defined cast from the enum would run source code.
-        // Comparing with a label uses the enum's input function and
-        // pg_catalog's operators only.
+        // No cast in the query, and schema() refuses a source that defines
+        // any cast on the enum: an implicit one could otherwise be chosen
+        // here too, and its function would run as our role.
         "CASE t.files_status WHEN 'single' THEN 1 WHEN 'multi' THEN 2 \
          WHEN 'over_threshold' THEN 3 END"
     } else {
@@ -963,6 +974,7 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
         notnull: bool,
         plain: bool,
         rel: Rel,
+        type_oid: u32,
     }
     let rows = client.query(COLUMNS_SQL, &[]).await.map_err(map_err)?;
     let mut cols = Vec::with_capacity(rows.len());
@@ -988,6 +1000,7 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
                 oid: r.try_get(6).map_err(map_err)?,
                 filenode: r.try_get(7).map_err(map_err)?,
             },
+            type_oid: r.try_get(10).map_err(map_err)?,
         });
     }
     let find = |t: &str, c: &str, ty: &str| {
@@ -1031,6 +1044,29 @@ async fn schema(client: &impl tokio_postgres::GenericClient) -> Result<Schema, R
     }
     if !missing.is_empty() {
         return Err(Refusal::UnsupportedSchema(missing));
+    }
+    // FilesStatus is the one type the source owns, so the only one it can
+    // define a cast on. Casts are global: search_path doesn't stop one,
+    // and an implicit cast's function would run as the importer's role,
+    // even in a read-only transaction. So a source with any cast to or
+    // from it is refused before a row is read.
+    if files_status {
+        let enum_oid: Vec<u32> = cols
+            .iter()
+            .filter(|x| x.table == b"torrents" && x.name == b"files_status")
+            .map(|x| x.type_oid)
+            .collect();
+        let casts: i64 = client
+            .query_one(CASTS_SQL, &[&enum_oid])
+            .await
+            .map_err(map_err)?
+            .try_get(0)
+            .map_err(map_err)?;
+        if casts > 0 {
+            return Err(Refusal::UnsupportedSchema(vec![
+                "a cast on torrents.files_status (refused)",
+            ]));
+        }
     }
     let attnum = |t: &str, c: &str| {
         cols.iter()

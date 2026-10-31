@@ -412,6 +412,50 @@ async fn unsupported_schemas_are_refused_by_name() {
     );
     fx.drop_db().await;
 
+    // A cast on the source's own enum is refused before a row is read: an
+    // implicit one's function would run as our role.
+    let fx = Fixture::new(&base, "casts", Some(Layout::V0_10)).await;
+    for (target, value) in [("text", "'x'"), ("bool", "true")] {
+        fx.db
+            .batch_execute(&format!(
+                "CREATE FUNCTION public.f(\"FilesStatus\") RETURNS {target} \
+                 LANGUAGE sql AS 'SELECT {}'; \
+                 CREATE CAST (\"FilesStatus\" AS {target}) WITH FUNCTION \
+                 public.f(\"FilesStatus\") AS IMPLICIT",
+                value.replace('\'', "''")
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            Source::open(&fx.settings()).await.unwrap_err(),
+            Refusal::UnsupportedSchema(vec!["a cast on torrents.files_status (refused)"]),
+            "{target}"
+        );
+        fx.db
+            .batch_execute("DROP FUNCTION public.f(\"FilesStatus\") CASCADE")
+            .await
+            .unwrap();
+    }
+    fx.drop_db().await;
+
+    // A keyset index with the source's own operator class doesn't count.
+    let fx = Fixture::new(&base, "opclass", Some(Layout::NoPieces)).await;
+    fx.db
+        .batch_execute(
+            "CREATE OPERATOR CLASS public.my_bytea_ops FOR TYPE bytea USING btree AS \
+               OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, \
+               FUNCTION 1 byteacmp(bytea, bytea); \
+             ALTER TABLE torrents DROP CONSTRAINT torrents_pkey CASCADE; \
+             CREATE UNIQUE INDEX ON torrents (info_hash public.my_bytea_ops)",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        Source::open(&fx.settings()).await.unwrap_err(),
+        Refusal::UnsupportedSchema(vec!["unique_index: torrents.info_hash"])
+    );
+    fx.drop_db().await;
+
     // A type of the source's own that's named like a built-in doesn't pass.
     let fx = Fixture::new(&base, "domain", Some(Layout::NoPieces)).await;
     fx.db
