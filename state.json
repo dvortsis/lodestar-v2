@@ -1615,6 +1615,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "08:12Z brief briefs/B-search-live.md (part 4 design from #266 decisions); security-review | 08:11Z launched Opus"
+  },
+  "S-settings-2b": {
+   "status": "queued",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
