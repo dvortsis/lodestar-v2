@@ -96,21 +96,17 @@ describe('ResultsPanel, the bare page', () => {
 		await waitFor(() => expect(screen.queryByTestId('results-rebuilding')).toBeNull());
 	});
 
-	it('shows the growing banner with the rate, and without it when none was measured', async () => {
-		serve(figures(84_210, { growing: true, growth_per_hour: 2104.5 }));
-		const { unmount } = render(ResultsPanel, { focusBar: () => {} });
-		await waitFor(() =>
-			expect(screen.getByTestId('results-cold-start').textContent).toContain('+2,105/h')
-		);
-		unmount();
-		serve(figures(84_210, { growing: true, growth_per_hour: null }));
+	it('reads /search/state once per visit, and again when a rebuild changes phase', async () => {
+		serve(figures(10));
+		const reads = () => get.mock.calls.filter(([path]) => path === '/search/state').length;
 		render(ResultsPanel, { focusBar: () => {} });
-		await waitFor(() =>
-			expect(screen.getByTestId('results-cold-start').textContent).toContain(
-				'84,210 torrents so far'
-			)
-		);
-		expect(screen.getByTestId('results-cold-start').textContent).not.toContain('/h');
+		await waitFor(() => expect(reads()).toBe(1));
+		const event = { done: 1, total: 4, error: null, from: 'a', to: 'b', unavailable: [] };
+		setRebuild({ ...event, phase: 'building' });
+		await waitFor(() => expect(reads()).toBe(2));
+		setRebuild({ ...event, phase: 'building', done: 2 }); // progress is not a new phase
+		setRebuild({ ...event, phase: 'done' });
+		await waitFor(() => expect(reads()).toBe(3));
 	});
 
 	it('shows the full-page state on a cold start', async () => {

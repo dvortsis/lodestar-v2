@@ -1,16 +1,18 @@
 <script lang="ts">
 	// The index-state banners and the cold-start page (§10.4 States), loaded when `/search/state`
 	// answers. `full` is the full-page "still growing" state (< 1,000 torrents, no rows to show).
-	import { formatCount } from '$lib/format';
+	import { formatCount, formatRate } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import { results } from './results.svelte';
+	// The bare page shows no "still growing" line: its figures sit in the empty state (§10.4).
 	import type { Banner as Kind, IndexState } from './recover';
 
 	interface Props {
 		banner: Kind;
 		state: IndexState;
-		full: boolean;
+		full?: boolean;
 	}
 	let { banner, state, full }: Props = $props();
 	const locale = $derived(currentLocale());
@@ -39,18 +41,18 @@
 			{banner?.kind === 'growing' && banner.perHour !== null
 				? m.search_state_growing_rate({
 						count: formatCount(state.searchable_torrents, locale),
-						rate: formatCount(Math.round(banner.perHour), locale)
+						rate: formatRate(banner.perHour, locale)
 					})
 				: m.search_state_growing({ count: formatCount(state.searchable_torrents, locale) })}
 		</p>
 	</div>
-{:else if banner?.kind === 'growing'}
+{:else if banner?.kind === 'growing' && results.status !== 'empty'}
 	<Banner kind="info" class="rp-banner">
 		<span data-testid="results-cold-start"
 			>{banner.perHour !== null
 				? m.search_state_growing_rate({
 						count: formatCount(banner.count, locale),
-						rate: formatCount(Math.round(banner.perHour), locale)
+						rate: formatRate(banner.perHour, locale)
 					})
 				: m.search_state_growing({ count: formatCount(banner.count, locale) })}</span
 		>

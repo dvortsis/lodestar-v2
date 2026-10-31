@@ -8,11 +8,11 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { api, type ApiError } from '$lib/api/client';
+	import type { components } from '$lib/api/schema';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { shellStatus } from '$lib/shell/status.svelte';
-	import type { components } from '$lib/api/schema';
 	import { search } from '$lib/state/search.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -31,7 +31,6 @@
 	import { ensureSearchPath } from '../query/path';
 	import { appearanceHref, searchHref } from './links';
 	import { bannerFor, type IndexState } from './recover';
-	import type { Suggestion } from './suggestions';
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
 	import { selection } from '../bulk/selection.svelte';
@@ -115,29 +114,33 @@
 	// The shell's stream already subscribes to `rebuild` (a second subscriber could reconnect the
 	// stream with another topic set): read its snapshot.
 	const banner = $derived(bannerFor(figures, shellStatus.rebuild));
-	const fullCold = $derived(
-		!!figures?.cold_start &&
-			(results.status === 'empty' || (results.status === 'ready' && !results.hits.length))
+	const fullCold = $derived(figures?.cold_start && results.status === 'empty');
+	const suggested = $derived(
+		results.status === 'ready' && results.recovery?.clauses.some((c) => c.total)
 	);
-	const suggested = $derived(results.status === 'ready' && !!results.recovery?.clauses.length);
 	let Recover = $state<typeof import('./Recover.svelte').default>();
 	let Index = $state<typeof import('./IndexState.svelte').default>();
 	$effect(() => {
 		if (suggested && !Recover)
 			void import('./Recover.svelte').then((mod) => (Recover = mod.default));
-		if ((banner || fullCold) && !Index)
-			void import('./IndexState.svelte').then((mod) => (Index = mod.default));
+		if ((banner || fullCold) && !Index) void ensureIndex();
 	});
+	/** The banner chunk; a failed load leaves the page without the banner, never without rows. */
+	const ensureIndex = () =>
+		import('./IndexState.svelte').then(
+			(mod) => (Index = mod.default),
+			() => {}
+		);
 	const waiting = $derived(
 		(!!search.q && results.status === 'empty' && search.ast?.op !== 'all') ||
-			(results.status !== 'empty' && !figuresKnown) ||
-			// the banner's chunk is on its way: the rows wait for it, so it never pushes them down
-			((!!banner || fullCold) && !Index)
+			(results.status !== 'empty' && !figuresKnown)
 	);
 
 	async function loadState() {
 		try {
 			figures = await api.get('/search/state');
+			// The rows wait for this (at most FIGURES_WAIT_MS), so the banner never pushes them down.
+			if (bannerFor(figures, shellStatus.rebuild) || figures.cold_start) await ensureIndex();
 		} catch {
 			// the page works without it
 		} finally {
@@ -145,18 +148,14 @@
 		}
 	}
 	// The shell's stream carries `rebuild`: a new phase changes the index, so read its state again.
-	let seenPhase: string | undefined;
+	// The phase at mount is not a change: onMount already fetches once per visit.
+	let seenPhase = shellStatus.rebuild?.phase;
 	$effect(() => {
 		const phase = shellStatus.rebuild?.phase;
 		if (phase === seenPhase) return;
-		const first = seenPhase === undefined;
-		seenPhase = phase ?? '';
-		if (!first || phase) void untrack(loadState);
+		seenPhase = phase;
+		void untrack(loadState);
 	});
-	async function applySuggestion(item: Suggestion) {
-		ensureSearchPath();
-		await search.setAst(item.without);
-	}
 
 	/** Search's row actions: one lazy chunk, fetched with the first results. */
 	let Actions = $state<typeof import('./RowActions.svelte').default>();
@@ -474,14 +473,12 @@
 			</Banner>
 		{/if}
 		{#if results.hits.length === 0}
-			<div class="rp-none" data-testid="results-none">
+			<!-- the counts' chunk is on its way: the block waits for it, so the buttons never move -->
+			<div class="rp-none" data-testid="results-none" hidden={suggested && !Recover}>
 				<p class="rp-empty-title">{m.search_results_none()}</p>
 				{#if clauses.length}
 					<p>{m.search_results_none_lead()}</p>
-					{#if Recover && suggested}<Recover
-							recovery={results.recovery}
-							apply={(i) => void applySuggestion(i)}
-						/>{/if}
+					{#if Recover && suggested}<Recover recovery={results.recovery} />{/if}
 					<ul class="rp-examples" data-testid="results-none-clauses">
 						{#each clauses as clause, i (i)}
 							<li>

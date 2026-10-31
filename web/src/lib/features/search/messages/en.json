@@ -190,6 +190,6 @@
 	"search_state_rebuilding": "The index is being rebuilt: {done} of {total} torrents. Search uses the current index until it's done.",
 	"search_state_unavailable": "Until then these fields match nothing: {fields}.",
 	"search_state_cold_title": "The index is still growing",
-	"search_state_growing": "The index is still growing: {count} torrents so far. Older content appears over time.",
-	"search_state_growing_rate": "The index is still growing: {count} torrents, +{rate}/h. Older content appears over time."
+	"search_state_growing": "The index is still growing — {count} torrents. Older content appears over time.",
+	"search_state_growing_rate": "The index is still growing — {count} torrents, +{rate}. Older content appears over time."
 }

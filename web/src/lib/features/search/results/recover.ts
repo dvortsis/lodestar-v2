@@ -1,6 +1,7 @@
 // Zero-result recovery and index-state banners (B-search-recovery): pure mappings from the server's
 // `recovery` and `/search/state` to what the panel shows. The server decides every number, flag and
 // reduced query; nothing here re-parses or re-counts.
+// (The counted-clause mapping is in suggestions.ts so only the Recover chunk carries it.)
 import type { components } from '$lib/api/schema';
 
 export type IndexState = components['schemas']['SearchIndexState'];
@@ -22,7 +23,7 @@ export function bannerFor(state: IndexState | null, live: Rebuild | null | undef
 			kind: 'growing',
 			count: state.searchable_torrents,
 			perHour:
-				state.growth_per_hour != null && state.growth_per_hour > 0 ? state.growth_per_hour : null
+				state.growth_per_hour != null && state.growth_per_hour >= 1 ? state.growth_per_hour : null
 		};
 	return null;
 }

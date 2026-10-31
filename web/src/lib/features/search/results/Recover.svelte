@@ -5,27 +5,34 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import { search } from '$lib/state/search.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import { ensureSearchPath } from '../query/path';
 	import { suggestions, type Suggestion } from './suggestions';
 
 	interface Props {
 		recovery: components['schemas']['SearchRecovery'] | null;
-		apply: (item: Suggestion) => void;
 	}
-	let { recovery, apply }: Props = $props();
+	let { recovery }: Props = $props();
 	const items = $derived(suggestions(recovery));
+	async function apply(item: Suggestion) {
+		ensureSearchPath();
+		await search.setAst(item.without);
+	}
 	const locale = $derived(currentLocale());
 </script>
 
-<ul class="rp-examples" data-testid="results-recover">
-	{#each items as item, i (i)}
-		<li>
-			<Button dense onclick={() => apply(item)}
-				>{(item.approx ? m.search_recover_gives_about : m.search_recover_gives)({
-					clause: item.clause,
-					count: formatCount(item.total, locale)
-				})}</Button
-			>
-		</li>
-	{/each}
-</ul>
+{#if items.length}
+	<ul class="rp-examples" data-testid="results-recover">
+		{#each items as item, i (i)}
+			<li>
+				<Button dense onclick={() => void apply(item)}
+					>{(item.approx ? m.search_recover_gives_about : m.search_recover_gives)({
+						clause: item.clause,
+						count: formatCount(item.total, locale)
+					})}</Button
+				>
+			</li>
+		{/each}
+	</ul>
+{/if}

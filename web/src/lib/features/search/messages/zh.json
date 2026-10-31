@@ -148,10 +148,10 @@
 	"search_bulk_manual_label": "浏览器阻止了复制。请选中这些磁力链接并手动复制。",
 	"search_bulk_manual_close": "关闭",
 	"search_recover_gives": "移除 {clause} 后有 {count} 个结果",
-	"search_recover_gives_about": "移除 {clause} 后约有 {count} 个结果",
+	"search_recover_gives_about": "移除 {clause} 后有 ≈{count} 个结果",
 	"search_state_rebuilding": "正在重建索引：已完成 {done}/{total} 个种子。完成前搜索使用当前索引。",
 	"search_state_unavailable": "在此之前，这些字段不会匹配任何内容：{fields}。",
 	"search_state_cold_title": "索引仍在增长",
-	"search_state_growing": "索引仍在增长：目前有 {count} 个种子。较早的内容会陆续出现。",
-	"search_state_growing_rate": "索引仍在增长：{count} 个种子，每小时 +{rate}。较早的内容会陆续出现。"
+	"search_state_growing": "索引仍在增长 — 目前有 {count} 个种子。较早的内容会陆续出现。",
+	"search_state_growing_rate": "索引仍在增长 — {count} 个种子，+{rate}。较早的内容会陆续出现。"
 }

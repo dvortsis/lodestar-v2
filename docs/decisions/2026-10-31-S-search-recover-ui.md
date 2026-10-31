@@ -8,5 +8,8 @@ UI for `recovery` on `/search` and `GET /search/state` (`2026-10-31-B-search-rec
   - `growing` gives the "still growing" banner; `growth_per_hour` null or 0 omits the rate (never "+0/h").
   - `cold_start` gives the full-page state on the bare search and on a zero-result answer.
 - **Refinement for the runner to flag (owner-decisions §2.19): the full-page cold-start state is text-only.** §10.19 pairs it with the `searching_crawling` scene, but importing `StateScene` into the results chunk grew "Search results (lazy)" by about 1.5 KB gzipped past its 43.2 KB limit, which is not to be raised. The art can come back with an on-demand size entry for it.
-- **No layout shift:** the banner chunk is lazy, so the rows wait for it (as they already waited for the figures, at most one second) rather than being pushed down.
+- **No layout shift:** the banner chunk is lazy and loads inside the `/search/state` fetch the rows already wait for (at most one second; a failed chunk load just leaves the banner out). A rebuild that starts mid-visit shows its banner without unmounting the rows. The "Removing X" block stays hidden until its chunk lands, so the buttons below never move.
+- **Rate:** `formatRate` (`+2.1K/h`); a rate under 1/h is omitted rather than shown as "+0/h".
+- **Cold start with a zero-result query** shows the "still growing" banner above the normal No results block (recovery stays visible); the full-page state is for the bare search only.
+- **Follow-up, not built:** the top-level `unavailable` of `/search/state` (fields missing with no rebuild running) is not shown; only the rebuild banner lists fields. A banner for it is a small follow-up.
 - Message keys live in `search/messages` (`search_recover_*`, `search_state_*`); the two old `search_results_*` banner keys went.
