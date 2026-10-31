@@ -5,6 +5,12 @@
 //   - `mock`: the OpenAPI mock, installed for every test (auto) so unmocked API calls fail loudly;
 //   - `kbd`: the keyboard-only guard.
 import { test as base, expect, type Page } from '@playwright/test';
+import {
+	fetchFixture,
+	indexFixture,
+	serveFixture,
+	understandFixture
+} from '../../src/lib/features/insights/stages/fixtures';
 import { OpenApiMock } from '../mock/openapi-mock';
 import { KeyboardOnly } from './keyboard';
 import type { Density } from './matrix';
@@ -63,6 +69,11 @@ export const test = base.extend<
 		async ({ page }, use) => {
 			const mock = new OpenApiMock();
 			await mock.install(page);
+			// Every overview drill-through lands on a stage page; a spec overrides these.
+			mock.on('getInsightsFetch', fetchFixture());
+			mock.on('getInsightsUnderstand', understandFixture());
+			mock.on('getInsightsIndex', indexFixture());
+			mock.on('getInsightsServe', serveFixture());
 			await use(mock);
 			mock.assertNoFailures();
 		},
