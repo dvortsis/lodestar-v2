@@ -1773,13 +1773,14 @@
       "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB"
     },
     "B-held-precommit": {
-      "status": "building",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhnAEudSyvPq9dbHQEmb",
-      "pr": null,
+      "pr": 291,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit). | 18:23Z launched Opus."
+      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit). | 18:23Z launched Opus. | 18:56Z PR #291 head b3312f5b (~585 lines; enrich.rs _marking hooks; pending marks separate from held set - differs from brief shape, reviewer to prove). Filter budget bench reportedly red on main locally (51.8/50us) - check CI. Reviewer + security review; subscribed.",
+      "reviewer": "session_01MMjhn94YmgkwkPeUXA5HEY"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
