@@ -1704,7 +1704,7 @@
    "pr": 282,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed"
+   "notes": "15:04Z brief briefs/X-import-refile-2.md (#280 opt 1-6, #276 opt 1-2, importer judge unify); security review | 15:03Z launched Opus | 15:36Z PR #282 head 5173f865 (filter/reclassify.rs accepted); author-flagged item 2 window (held hash may be fetched once after non-release rule change); fresh Opus reviewer session_01MMjhnBWZVyxhQBEt9Z9bMd + security review asked to rule on it | 15:51Z CHANGES: item 2 (version-guarded HeldSet insert) loosens content safety (name/class-rule holds refetched+indexed after non-release change); runner: revert to unconditional insert; opt 3,4 folded; relayed | 16:08Z re-check MERGE at de5fa5b8 (revert confirmed, all held.insert sites unconditional); waiting on test ubuntu/windows + smoke"
   },
   "S-logs-1": {
    "status": "running",
