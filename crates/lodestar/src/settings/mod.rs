@@ -1367,6 +1367,8 @@ pub struct Registry {
     store: Arc<Mutex<Store>>,
     sections: Vec<Box<dyn Erased>>,
     write: Mutex<()>,
+    /// `POST /send`'s limits, one set per install.
+    send_limits: lodestar_api::settings::SendLimits,
     /// Seals and opens secret fields' saved values.
     sealer: Sealer,
 }
@@ -1433,6 +1435,7 @@ impl Registry {
             store,
             sections: Vec::new(),
             write: Mutex::new(()),
+            send_limits: lodestar_api::settings::SendLimits::new(),
             sealer: Sealer::default(),
         }
     }
@@ -1706,6 +1709,10 @@ impl SettingsApi for Registry {
         endpoints: &[(&str, Value)],
     ) -> Option<String> {
         self.find(section)?.saved_secret(key, endpoints)
+    }
+
+    fn send_limits(&self) -> &lodestar_api::settings::SendLimits {
+        &self.send_limits
     }
 
     fn download_client(&self, id: Option<&str>) -> Option<SavedClient> {

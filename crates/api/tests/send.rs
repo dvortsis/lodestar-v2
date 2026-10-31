@@ -4,7 +4,9 @@
 //! usage data behind its confirmation.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
@@ -12,8 +14,8 @@ use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::routing::{get, post};
 use lodestar_api::settings::{
-    DownloadClientKind, Imported, Saved, SavedClient, SectionValues, SettingsApi, SettingsBatch,
-    SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
+    DownloadClientKind, Imported, Saved, SavedClient, SectionValues, SendLimits, SettingsApi,
+    SettingsBatch, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
 };
 use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
@@ -23,7 +25,7 @@ use lodestar_store::{
     NewTorrent, QueryLogEntry, QueryLogging, SourceId, Store, StoreConfig, flags,
 };
 use serde_json::{Value, json};
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tower::ServiceExt;
 
 /// In id order: visible, hidden by a filter rule, Adult, visible, found
@@ -82,9 +84,10 @@ fn raw(i: usize) -> Vec<u8> {
     to_vec(&dict(e))
 }
 
-/// The saved client the registry would give.
+/// The saved client the registry would give, and this router's own send
+/// limits, so tests running at once don't share them.
 #[derive(Debug)]
-struct OneClient(Option<SavedClient>);
+struct OneClient(Option<SavedClient>, SendLimits);
 
 impl SettingsApi for OneClient {
     fn index(&self) -> SettingsIndex {
@@ -107,6 +110,9 @@ impl SettingsApi for OneClient {
     }
     fn download_client(&self, id: Option<&str>) -> Option<SavedClient> {
         self.0.clone().filter(|c| id.is_none_or(|id| id == c.id))
+    }
+    fn send_limits(&self) -> &SendLimits {
+        &self.1
     }
 }
 
@@ -216,7 +222,7 @@ fn fixture(client: Option<SavedClient>) -> Fixture {
             index: None,
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
-            settings: Some(Arc::new(OneClient(client))),
+            settings: Some(Arc::new(OneClient(client, SendLimits::new()))),
             ops: None,
             user_data: Some(Arc::new(Mutex::new(store))),
             adult: AdultVisibility::follow(move || *rx.borrow()),
@@ -250,6 +256,10 @@ fn saved(addr: SocketAddr) -> SavedClient {
 }
 
 async fn call(f: &Fixture, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    answer(f.app.clone(), request(f, method, uri, body)).await
+}
+
+fn request(f: &Fixture, method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
     let mut req = Request::builder()
         .method(method)
         .uri(uri)
@@ -262,7 +272,11 @@ async fn call(f: &Fixture, method: &str, uri: &str, body: Option<Value>) -> (Sta
         .unwrap();
     req.extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
-    let resp = f.app.clone().oneshot(req).await.unwrap();
+    req
+}
+
+async fn answer(app: Router, req: Request<Body>) -> (StatusCode, Value) {
+    let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
@@ -526,4 +540,97 @@ async fn a_send_the_client_already_has_counts_as_done() {
     let dup = ("duplicate".to_string(), "-".to_string());
     assert_eq!(outcomes(&v), [dup.clone(), dup]);
     assert_eq!(v["sent"], json!(2));
+}
+
+#[tokio::test]
+async fn sends_past_the_rate_limit_are_refused() {
+    // Unknown hashes: nothing reaches a client either way.
+    let f = fixture(Some(saved("192.0.2.1:9".parse().unwrap())));
+    let body = || Some(json!({ "hashes": ["f".repeat(40)] }));
+    for _ in 0..lodestar_api::settings::MAX_SENDS {
+        let (status, v) = call(&f, "POST", "/api/v1/send", body()).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["results"][0]["code"], json!("not_found"));
+    }
+    let (status, v) = call(&f, "POST", "/api/v1/send", body()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"]["code"], json!("send_rate_limited"));
+}
+
+/// A Transmission whose adds wait at `gate` until the test releases them,
+/// counting each in `seen`.
+async fn held_transmission(seen: Arc<AtomicUsize>, gate: Arc<Semaphore>) -> SocketAddr {
+    let app = Router::new().fallback(post(move |headers: HeaderMap, body: String| {
+        let (seen, gate) = (seen.clone(), gate.clone());
+        async move {
+            let mut h = HeaderMap::new();
+            if headers.get("x-transmission-session-id").is_none() {
+                h.insert("x-transmission-session-id", "s1".parse().unwrap());
+                return (StatusCode::CONFLICT, h, String::new());
+            }
+            let call: Value = serde_json::from_str(&body).unwrap();
+            if call["method"] == json!("torrent-add") {
+                seen.fetch_add(1, Ordering::SeqCst);
+                gate.acquire().await.unwrap().forget();
+            }
+            let answer = json!({ "result": "success", "arguments": {
+                "torrent-added": { "hashString": "a".repeat(40), "id": 1, "name": "x" } } });
+            (StatusCode::OK, h, answer.to_string())
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+#[tokio::test]
+async fn a_third_send_while_two_run_is_refused_and_sends_nothing() {
+    let seen = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new(Semaphore::new(0));
+    let addr = held_transmission(seen.clone(), gate.clone()).await;
+    let f = fixture(Some(transmission_client(addr)));
+    let send = |i: usize| {
+        let req = request(
+            &f,
+            "POST",
+            "/api/v1/send",
+            Some(json!({ "hashes": [f.hashes[i]] })),
+        );
+        tokio::spawn(answer(f.app.clone(), req))
+    };
+    let running = [send(0), send(3)];
+    // Both adds are at the client, held there.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while seen.load(Ordering::SeqCst) < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in saw {} adds",
+            seen.load(Ordering::SeqCst)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (status, v) = call(
+        &f,
+        "POST",
+        "/api/v1/send",
+        Some(json!({ "hashes": [f.hashes[6]] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"]["code"], json!("sends_busy"));
+    gate.add_permits(2);
+    for r in running {
+        let (status, v) = r.await.unwrap();
+        assert_eq!(
+            (status, v["sent"].clone()),
+            (StatusCode::OK, json!(1)),
+            "{v}"
+        );
+    }
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        2,
+        "the refused send added nothing"
+    );
 }

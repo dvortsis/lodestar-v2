@@ -38,7 +38,10 @@ use axum::http::{HeaderMap, StatusCode};
 use lodestar_integrations::{AddOptions, ClientError, Magnet};
 use lodestar_store::flags;
 
-use super::{DownloadClientDraft, SavedClient, blocking, client_config, settings, test_failure};
+use super::{
+    DownloadClientDraft, DownloadClientKind, SavedClient, blocking, client_config, settings,
+    test_failure,
+};
 use crate::ApiState;
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::settings::{ClientSend, ClientSendItem, ClientSendOutcome, ClientSendResult};
@@ -57,8 +60,36 @@ pub const MAX_NAME: usize = 1024;
 /// The longest a send may take, every request to the client included.
 const SEND_TIMEOUT: Duration = Duration::from_secs(120);
 
-static RUNNING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-static RATE: Mutex<Option<Window>> = Mutex::new(None);
+/// Sends at once, past which a send is refused with `sends_busy`.
+const AT_ONCE: usize = 2;
+
+/// The limits on sends to one install's download clients: [`AT_ONCE`] at
+/// a time and [`MAX_SENDS`] a minute. The registry owns one
+/// ([`super::SettingsApi::send_limits`]), so each server, and each test's router,
+/// has its own.
+#[derive(Debug)]
+pub struct SendLimits {
+    running: tokio::sync::Semaphore,
+    rate: Mutex<Option<Window>>,
+}
+
+impl SendLimits {
+    pub const fn new() -> SendLimits {
+        SendLimits {
+            running: tokio::sync::Semaphore::const_new(AT_ONCE),
+            rate: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for SendLimits {
+    fn default() -> Self {
+        SendLimits::new()
+    }
+}
+
+/// The limits of a [`SettingsApi`] that keeps none of its own.
+pub(crate) static SHARED_LIMITS: SendLimits = SendLimits::new();
 
 /// A fixed window: at most `max` sends from `start` for [`WINDOW`].
 #[derive(Debug, Clone, Copy)]
@@ -113,6 +144,7 @@ pub(crate) async fn send(
     same_origin_json(&headers)?;
     let hashes = parse_hashes(&body.hashes)?;
     let api = settings(&s)?;
+    let api_limits = api.clone();
     let id = body.client.clone();
     let client = blocking(move || api.download_client(id.as_deref()))
         .await?
@@ -123,14 +155,15 @@ pub(crate) async fn send(
                 "No download client with that id is saved; add one in Settings → Integrations.",
             )
         })?;
-    let _permit = RUNNING.try_acquire().map_err(|_| {
+    let limits = api_limits.send_limits();
+    let _permit = limits.running.try_acquire().map_err(|_| {
         busy(
             "sends_busy",
             "Other sends are still running; try again in a few seconds.",
         )
     })?;
     if !allow(
-        &mut RATE.lock().expect("rate lock"),
+        &mut limits.rate.lock().expect("rate lock"),
         Instant::now(),
         MAX_SENDS,
     ) {
@@ -206,15 +239,27 @@ fn visible(
     if row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE) != 0 {
         return Ok(Err("private"));
     }
-    let v2_only = row.flags & flags::V2 != 0 && row.flags & flags::HYBRID == 0;
+    let Some(xt) = topic(row.flags, &row.info_hash.0, row.info_hash_v2.map(|h| h.0)) else {
+        return Ok(Err("invalid"));
+    };
     Ok(Ok(Sendable {
         id,
-        xt: match (v2_only, row.info_hash_v2) {
-            (true, Some(v2)) => format!("btmh:1220{}", crate::torrents::hex(&v2.0)),
-            _ => format!("btih:{}", crate::torrents::hex(&row.info_hash.0)),
-        },
+        xt,
         name: row.name,
     }))
+}
+
+/// A magnet's exact topic for a stored torrent: `btih:<v1 hash>`, or
+/// `btmh:1220<v2 hash>` for a v2-only torrent (its stored hash is the
+/// truncated v2 hash, which no client can use as a v1 hash). `None` for a
+/// v2-only torrent with no v2 hash stored: no link would resolve.
+fn topic(flags: i64, v1: &[u8; 20], v2: Option<[u8; 32]>) -> Option<String> {
+    let v2_only = flags & flags::V2 != 0 && flags & flags::HYBRID == 0;
+    match (v2_only, v2) {
+        (true, Some(v2)) => Some(format!("btmh:1220{}", crate::torrents::hex(&v2))),
+        (true, None) => None,
+        (false, _) => Some(format!("btih:{}", crate::torrents::hex(v1))),
+    }
 }
 
 /// A torrent that may be sent, as stored.
@@ -272,9 +317,14 @@ fn refusal(code: &str) -> String {
 
 /// Why a send failed, in a send's words: the connection test's codes, but
 /// a refusal is the torrent's, and a timeout can't say how far it got.
-fn send_failure(e: &ClientError) -> (String, String) {
+fn send_failure(e: &ClientError, kind: DownloadClientKind) -> (String, String) {
     let f = test_failure(e).error.expect("a failure");
     match e {
+        // qBittorrent answers a duplicate and an invalid link alike.
+        ClientError::Rejected(_) if kind == DownloadClientKind::Qbittorrent => (
+            f.code,
+            "The client refused the torrent; it may already be in qBittorrent.".into(),
+        ),
         ClientError::Timeout => (
             "timeout_unknown".into(),
             "The client didn't answer in time, so some torrents may have gone in. Check the client before sending again.".into(),
@@ -290,6 +340,7 @@ async fn deliver(
     checked: Vec<(String, Result<Sendable, &'static str>)>,
 ) -> ClientSendResult {
     let id = client.id.clone();
+    let kind = client.kind;
     let opts = AddOptions {
         save_path: (!client.save_path.is_empty()).then(|| client.save_path.clone()),
         category: (!client.category.is_empty()).then(|| client.category.clone()),
@@ -326,7 +377,7 @@ async fn deliver(
                 .unwrap_or(Err(ClientError::Timeout)),
         )
     };
-    let (results, sent) = results(checked, outcome);
+    let (results, sent) = results(checked, outcome, kind);
     ClientSendResult {
         client: id,
         results,
@@ -341,6 +392,7 @@ async fn deliver(
 fn results<T>(
     checked: Vec<(String, Result<T, &'static str>)>,
     outcome: Option<Result<lodestar_integrations::AddOutcome, ClientError>>,
+    kind: DownloadClientKind,
 ) -> (Vec<ClientSendItem>, usize) {
     let sendable = checked.iter().filter(|(_, v)| v.is_ok()).count();
     let (went_in, duplicate, cause) = match outcome {
@@ -354,7 +406,7 @@ fn results<T>(
         }
         Some(Err(e)) => (0, false, Some(e)),
     };
-    let failure = cause.map(|e| send_failure(&e));
+    let failure = cause.map(|e| send_failure(&e, kind));
     let mut out = Vec::with_capacity(checked.len());
     let mut n = 0;
     for (hash, v) in checked {
@@ -404,10 +456,12 @@ mod tests {
         assert!(allow(&mut slot, t0 + WINDOW, 3), "a new window");
     }
 
+    const TR: DownloadClientKind = DownloadClientKind::Transmission;
+
     fn checked() -> Vec<(String, Result<String, &'static str>)> {
         vec![
             ("a".into(), Ok("A".into())),
-            ("h".into(), Err("hidden")),
+            ("h".into(), Err("not_found")),
             ("b".into(), Ok("B".into())),
             ("c".into(), Ok("C".into())),
         ]
@@ -423,14 +477,14 @@ mod tests {
             sent: 1,
             cause: Box::new(ClientError::Unreachable),
         };
-        let (r, sent) = results(checked(), Some(Err(partial)));
+        let (r, sent) = results(checked(), Some(Err(partial)), TR);
         assert_eq!(sent, 1);
         use ClientSendOutcome::*;
         assert_eq!(
             outcomes(&r),
             [
                 (Sent, None),
-                (Refused, Some("hidden")),
+                (Refused, Some("not_found")),
                 (Failed, Some("unreachable")),
                 (Failed, Some("unreachable"))
             ]
@@ -439,10 +493,31 @@ mod tests {
 
     #[test]
     fn a_send_that_runs_out_of_time_says_some_may_have_gone_in() {
-        let (r, sent) = results(checked(), Some(Err(ClientError::Timeout)));
+        let (r, sent) = results(checked(), Some(Err(ClientError::Timeout)), TR);
         assert_eq!(sent, 0);
         assert_eq!(r[0].code.as_deref(), Some("timeout_unknown"));
         assert!(r[0].message.as_ref().unwrap().contains("Check the client"));
+    }
+
+    #[test]
+    fn a_topic_is_v1_v2_or_none() {
+        let (v1, v2) = ([0xaa; 20], [0xbb; 32]);
+        assert_eq!(
+            topic(0, &v1, None),
+            Some(format!("btih:{}", "aa".repeat(20)))
+        );
+        let hybrid = flags::V2 | flags::HYBRID;
+        assert_eq!(
+            topic(hybrid, &v1, Some(v2)),
+            Some(format!("btih:{}", "aa".repeat(20)))
+        );
+        assert_eq!(
+            topic(flags::V2, &v1, Some(v2)),
+            Some(format!("btmh:1220{}", "bb".repeat(32)))
+        );
+        // v2-only with no v2 hash stored: refused as `invalid`, never a
+        // `btih` link made of the truncated hash.
+        assert_eq!(topic(flags::V2, &v1, None), None);
     }
 
     #[test]
@@ -467,22 +542,38 @@ mod tests {
     #[test]
     fn duplicates_count_as_sent_and_failures_say_why() {
         use ClientSendOutcome::*;
-        let dup = ClientError::Rejected("the torrent is already in the client".into());
-        let (r, sent) = results(checked(), Some(Err(dup)));
+        let (r, sent) = results(checked(), Some(Err(ClientError::AlreadyThere)), TR);
         assert_eq!(sent, 3);
         assert_eq!(outcomes(&r)[0], (Duplicate, None));
+        // A refusal that only reads like one is a refusal.
+        let lookalike = ClientError::Rejected("the torrent is already in the client".into());
+        let (r, sent) = results(checked(), Some(Err(lookalike.clone())), TR);
+        assert_eq!((sent, outcomes(&r)[0]), (0, (Failed, Some("rejected"))));
+        // qBittorrent can't tell a duplicate from a bad link: it says so.
+        let (r, _) = results(
+            checked(),
+            Some(Err(lookalike)),
+            DownloadClientKind::Qbittorrent,
+        );
+        assert!(
+            r[0].message
+                .as_ref()
+                .unwrap()
+                .contains("may already be in qBittorrent")
+        );
         let (r, sent) = results(
             checked(),
             Some(Err(ClientError::Auth(
                 lodestar_integrations::AuthFailure::BadCredentials,
             ))),
+            TR,
         );
         assert_eq!(sent, 0);
         assert_eq!(outcomes(&r)[2], (Failed, Some("bad_credentials")));
         assert!(r[2].message.as_ref().unwrap().ends_with('.'));
         // A hidden one is never in the send.
-        let (r, _) = results::<()>(vec![("h".into(), Err("adult_hidden"))], None);
-        assert_eq!(outcomes(&r), [(Refused, Some("adult_hidden"))]);
+        let (r, _) = results::<()>(vec![("h".into(), Err("not_found"))], None, TR);
+        assert_eq!(outcomes(&r), [(Refused, Some("not_found"))]);
     }
 
     #[test]

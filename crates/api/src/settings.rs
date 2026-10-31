@@ -152,6 +152,12 @@ pub trait SettingsApi: Send + Sync + fmt::Debug {
         None
     }
 
+    /// The limits on `POST /send`. The registry keeps its own; without
+    /// one, every caller shares one.
+    fn send_limits(&self) -> &SendLimits {
+        &send::SHARED_LIMITS
+    }
+
     /// One section's patch: [`SettingsApi::save`] with it alone.
     fn patch(&self, section: &str, patch: SettingsPatch) -> Result<SectionValues, SettingsError> {
         let batch = SettingsBatch(BTreeMap::from([(section.to_string(), patch)]));
@@ -716,7 +722,7 @@ fn test_failure(e: &ClientError) -> SettingsTestResult {
         ClientError::Auth(AuthFailure::SessionRefused) => "session_refused",
         ClientError::Auth(AuthFailure::AddressRefused) => "address_refused",
         ClientError::Unreachable => "unreachable",
-        ClientError::Rejected(_) => "rejected",
+        ClientError::Rejected(_) | ClientError::AlreadyThere => "rejected",
         ClientError::Unsupported(_) => "unsupported",
         ClientError::Timeout => "timeout",
         ClientError::Blocked(_) => "blocked",
@@ -841,7 +847,7 @@ mod checks;
 mod send;
 mod usage;
 
-pub use send::{MAX_HASHES, MAX_SENDS};
+pub use send::{MAX_HASHES, MAX_SENDS, SendLimits};
 
 #[cfg(test)]
 mod tests {

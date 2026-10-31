@@ -216,6 +216,9 @@ pub enum ClientError {
     InvalidRequest(&'static str),
     /// The client answered with something this adapter doesn't understand.
     Protocol(&'static str),
+    /// Every torrent of the add was in the client already: it's where the
+    /// user wants it, which a send counts as done (§9).
+    AlreadyThere,
     /// A bulk send failed part-way: the client took the first `sent`
     /// torrents (counted as for [`AddOutcome::sent`]), then `cause`
     /// stopped the rest. Retrying all of them would send those again.
@@ -264,6 +267,7 @@ impl fmt::Display for ClientError {
             ),
             ClientError::Unreachable => f.write_str("couldn't reach the client"),
             ClientError::Rejected(why) => write!(f, "the client refused: {why}"),
+            ClientError::AlreadyThere => f.write_str("the torrent is already in the client"),
             ClientError::Unsupported(feature) => {
                 write!(f, "this client doesn't support {}", feature.describe())
             }
@@ -670,18 +674,16 @@ pub(crate) fn partial(sent: usize, cause: ClientError) -> ClientError {
     }
 }
 
-/// The reason [`already_there`] gives.
-const ALREADY_THERE: &str = "the torrent is already in the client";
-
 /// The answer to an add that found every torrent already in the client.
 pub(crate) fn already_there() -> ClientError {
-    ClientError::Rejected(ALREADY_THERE.into())
+    ClientError::AlreadyThere
 }
 
 /// Whether `e` is [`already_there`]'s answer: every torrent of the add was
-/// in the client already, which a send counts as done (§9).
+/// in the client already, which a send counts as done (§9). Typed, so no
+/// client's own refusal text can be mistaken for it.
 pub fn is_already_there(e: &ClientError) -> bool {
-    matches!(e, ClientError::Rejected(why) if why == ALREADY_THERE)
+    matches!(e, ClientError::AlreadyThere)
 }
 
 /// The error for an HTTP status an adapter has no meaning for.
@@ -696,8 +698,9 @@ mod tests {
     #[test]
     fn an_all_duplicate_add_is_recognised_by_its_kind_not_its_wording() {
         assert!(is_already_there(&already_there()));
+        // A client's own refusal reads the same, but isn't it.
         assert!(!is_already_there(&ClientError::Rejected(
-            "HTTP 409: already".into()
+            "the torrent is already in the client".into()
         )));
     }
 
