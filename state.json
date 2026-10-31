@@ -1980,11 +1980,9 @@
  "last_heartbeat": "2026-10-31T06:40Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
- "runner_prs_open": {
-  "80": "token classes: owner imported baselines b2b46df; CI running; merge on green",
-  "81": "secure-delete R4 fixes c9cf868 (PASSIVE+100ms TRUNCATE, purge always scrubs, release_many test); needs fresh review",
-  "90": "CI speed + docs/decisions; review fixes 77a2f6a; needs re-review"
- },
+ "runner_prs_open": [
+  "#268 runner/glossary-imported 4f03f2df: Crawled/Imported glossary rows; in-process fresh review running"
+ ],
  "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier.",
  "notes": [
   "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547.",
@@ -2356,8 +2354,7 @@
   "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
   "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
   "B-search-live (Opus): part 4 of B-search-recovery, query-scoped live counts via the B9 percolator and SSE, per docs/decisions/2026-10-31-B-search-recovery.md design",
-  "bench: a gated zero-result class in bench/search for the recovery pass (author measured p95 <= 6.0 ms, max 10.1 ms on 200k with an uncommitted patch) (#266)",
-  "docs/ui-glossary.md: add an 'Imported' entry (crawled vs imported wording used by Insights, the digest and the import CLI) (#267)"
+  "bench: a gated zero-result class in bench/search for the recovery pass (author measured p95 <= 6.0 ms, max 10.1 ms on 200k with an uncommitted patch) (#266)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
