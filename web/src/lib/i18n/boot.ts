@@ -1,0 +1,35 @@
+// Start-up for the region settings. The cached hint is applied by the layout before the first
+// paint; this module (loaded after first render) replaces it with the account's saved values. A failed, 401, slow or malformed answer keeps the hint and never
+// blocks or throws (§10.12), and an answer older than a value applied meanwhile is dropped. Not
+// awaited by the layout. A plain `fetch` keeps the API client out of the first load (§10.1).
+import { applyRegion, narrowRegion, regionSeq, writeRegionHint } from './region.svelte';
+
+function fetchSaved(): Promise<void> {
+	const started = regionSeq();
+	return fetch('/api/v1/settings/preferences', { headers: { accept: 'application/json' } })
+		.then((r) => {
+			return r.ok ? r.json() : null;
+		})
+		.then((res: { fields?: Record<string, { value?: unknown }> } | null) => {
+			const f = res?.fields;
+			if (!f || regionSeq() !== started) return;
+			const saved = narrowRegion({
+				language: f.language?.value,
+				time_zone: f.time_zone?.value,
+				first_day_of_week: f.first_day_of_week?.value
+			});
+			applyRegion(saved);
+			writeRegionHint(saved);
+		})
+		.catch(() => {
+			// Offline or a server error keeps the hint.
+		});
+}
+
+let booted: Promise<void> | undefined;
+/** Both wake events call this; only the first fetches. */
+export const bootRegion = (): Promise<void> => (booted ??= fetchSaved());
+export const resetBoot = () => (booted = undefined);
+
+/** After sign-in: the account's values replace the hint (the interaction boot got a 401 on /login). */
+export const refetchRegion = (): void => void fetchSaved();

@@ -1,9 +1,9 @@
 <script lang="ts">
 	// The Language & region form: the engine in instant mode (Preferences apply at once, with
-	// Undo, §10.10.1). A saved language is applied to the UI here; applying it at boot, and the
-	// time zone and first day of the week where they're read, are follow-ups (decisions file).
+	// Undo, §10.10.1). Saved language, time zone and first day apply here at once; the layout
+	// applies them at start-up (lib/i18n/boot.ts).
 	import { onDestroy, untrack } from 'svelte';
-	import { initLocale } from '$lib/i18n/locale.svelte';
+	import { followSaved, narrowRegion } from '$lib/i18n/region.svelte';
 	import { createSettingsForm, type FieldSpec } from '../form';
 	import SettingField from '../form/SettingField.svelte';
 	import SettingsForm from '../form/SettingsForm.svelte';
@@ -24,9 +24,15 @@
 		for (const off of unregister) off();
 	});
 	$effect(() => {
-		const saved = form.field('preferences.language').saved;
+		const saved = (name: string) => form.field(`preferences.${name}`).saved;
 		if (form.status !== 'loading' && form.status !== 'load-error')
-			initLocale(typeof saved === 'string' ? saved : null);
+			followSaved(
+				narrowRegion({
+					language: saved('language'),
+					time_zone: saved('time_zone'),
+					first_day_of_week: saved('first_day_of_week')
+				})
+			);
 	});
 </script>
 

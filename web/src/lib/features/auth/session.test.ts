@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const region = vi.hoisted(() => ({ refetchRegion: vi.fn() }));
+vi.mock('$lib/i18n/boot', () => region);
+
 const nav = vi.hoisted(() => ({
 	toSetup: vi.fn(),
 	toLogin: vi.fn(),
@@ -27,6 +30,28 @@ beforeEach(() => {
 afterEach(() => {
 	uninstall();
 	vi.unstubAllGlobals();
+});
+
+describe('region refetch on sign-in', () => {
+	it('refetches when the status becomes signed in after being signed out', async () => {
+		setSession('signed_out');
+		region.refetchRegion.mockClear();
+		setSession('signed_in');
+		await vi.waitFor(() => expect(region.refetchRegion).toHaveBeenCalledTimes(1));
+	});
+	it('refetches from unknown on the login page (a failed GET /auth), not on a normal load', async () => {
+		setSession('unknown');
+		region.refetchRegion.mockClear();
+		history.replaceState(null, '', '/search');
+		setSession('signed_in');
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(region.refetchRegion).not.toHaveBeenCalled();
+		setSession('unknown');
+		history.replaceState(null, '', '/login?next=%2Fsearch');
+		setSession('signed_in');
+		await vi.waitFor(() => expect(region.refetchRegion).toHaveBeenCalledTimes(1));
+	});
 });
 
 describe('installAuthHandlers', () => {

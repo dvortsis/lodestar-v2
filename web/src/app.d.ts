@@ -7,4 +7,10 @@ declare global {
 	}
 }
 
+declare global {
+	// Set by lib/i18n/locale.svelte.ts: the display time zone, for lib/format (which can't import it).
+	// eslint-disable-next-line no-var
+	var lodestarZone: (() => string) | undefined;
+}
+
 export {};

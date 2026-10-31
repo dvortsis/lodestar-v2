@@ -57,7 +57,7 @@ export function numberFormat(
 	return f;
 }
 
-/** One `Intl.DateTimeFormat` per locale, time zone and `key`. */
+/** One `Intl.DateTimeFormat` per locale, time zone and `key`. No zone means the display time zone setting. */
 export function dateFormat(
 	locale: string,
 	key: string,
@@ -65,7 +65,9 @@ export function dateFormat(
 	options: Intl.DateTimeFormatOptions
 ): Intl.DateTimeFormat {
 	// '' or a zone this browser doesn't know (a setting saved elsewhere) must not break rendering.
-	const zone = timeZone || undefined;
+	// The display zone setting registers itself on load (i18n/locale.svelte.ts); importing it here
+	// would move this module between chunks and cost routes size (decisions file).
+	const zone = (timeZone ?? globalThis.lodestarZone?.()) || undefined;
 	const id = `${locale}|${zone ?? ''}|${key}`;
 	let f = dateFormats.get(id);
 	if (!f) {
