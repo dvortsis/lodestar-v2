@@ -2110,7 +2110,7 @@
       "id": "OC4",
       "action": "Decide whether to delete ~150 old-lineage branches after the backup",
       "unblocks": "scrub completeness",
-      "status": "decided 2026-10-31: delete (owner). Script notes/branch-cleanup.md; owner runs it (proxy refuses deletes)"
+      "status": "done 2026-10-31T05:30Z: owner deleted 155 branches; runner verified none left (99 heads, incl. new branches since)"
     },
     {
       "id": "OC5",
@@ -2163,7 +2163,7 @@
       "item": "Delete branch measure/windows-nrt (one commit adding a push-only measurement workflow; proxy refuses deletes)",
       "unblocks": "hygiene",
       "ref": "run 41024502148",
-      "status": "in notes/branch-cleanup.md (owner runs)"
+      "status": "done 2026-10-31T05:30Z: owner deleted 155 branches; runner verified none left (99 heads, incl. new branches since)"
     },
     {
       "at": "2026-10-30T10:34Z",
