@@ -1558,13 +1558,13 @@
    "notes": "2026-10-31T05:21Z launched (brief briefs/M-settings-engine-2.md); before S-settings-2b"
   },
   "B-search-recovery": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnBAr5sYz7fjwdtTNVb",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-31T05:40Z brief briefs/B-search-recovery.md (S-search-6 deferrals); security-review"
+   "notes": "2026-10-31T05:40Z brief briefs/B-search-recovery.md (S-search-6 deferrals); security-review | 05:40Z launched Opus session_01MMjhnBAr5sYz7fjwdtTNVb"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
