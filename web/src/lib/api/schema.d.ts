@@ -1388,9 +1388,14 @@ export interface paths {
          *     with the same visibility: torrents a filter rule hid unless `hidden`,
          *     and no Adult while "Show adult content" is off. Changing that setting
          *     releases every live query: register again. A session holds at most 4
-         *     (a fifth replaces the oldest); one is released when the session's last
-         *     `/events` connection closes, after 10 minutes without one, or with
-         *     `DELETE /search/live/{id}`. Register again after `/events` reconnects.
+         *     (a fifth replaces the oldest); one is released 30 s after the
+         *     session's last `/events` connection closes (a reconnect keeps it),
+         *     after 10 minutes if no connection opens, on a `content` settings save,
+         *     or with `DELETE /search/live/{id}`. Register again after a `settings`
+         *     event for `content`, or when a `search_live` id you hold is no longer
+         *     known (a 404 on `DELETE`). Swarm clauses (`seeders:`…) match nothing
+         *     at index time, so a query with one counts only what it can see then.
+         *     Where the percolator doesn't run (fixture mode), nothing is counted.
          */
         post: operations["registerSearchLive"];
         delete?: never;
@@ -10779,6 +10784,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_json`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Too many live queries are registered (`too_many_live_queries`). */
             429: {
                 headers: {
@@ -10812,7 +10835,12 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -10831,8 +10859,26 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `live_query_not_found`: none by that id for this session (it may have been released already). */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_json`: send `Content-Type: application/json`. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

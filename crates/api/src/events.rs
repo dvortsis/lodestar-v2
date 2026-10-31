@@ -560,6 +560,11 @@ impl EventHub {
     /// `revision`. The settings routes call it after each save that
     /// changed a section; it carries no values.
     pub fn settings_saved(&self, section: &str, revision: u64) -> Option<String> {
+        // "Show adult content" lives here: what's visible may have
+        // changed, so every live query goes (clients register again).
+        if section == "content" {
+            self.live.clear();
+        }
         self.publish(&Event::Settings(SettingsEvent {
             revision,
             section: section.to_string(),
@@ -704,7 +709,8 @@ impl EventHub {
             beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             // Live counts: a change marks them due; they go out no sooner
             // than `next_live`, so counts in between are combined.
-            let mut live_due = false;
+            // Due at once: a count may have grown before this connection.
+            let mut live_due = live_rx.is_some();
             let mut next_live = tokio::time::Instant::now();
             let mut sent = HashMap::new();
             loop {
@@ -1597,8 +1603,10 @@ mod tests {
                     .expect("the stream ended")
                     .unwrap();
                 let text = String::from_utf8(frame.to_vec()).unwrap();
-                if let Some(rest) = text.strip_prefix("event: search_live\ndata: ") {
-                    assert!(!text.starts_with("id:"), "never replayable");
+                if text.contains("event: search_live\n") {
+                    let rest = text
+                        .strip_prefix("event: search_live\ndata: ")
+                        .expect("no `id:`: never replayable");
                     return serde_json::from_str(rest.trim_end()).unwrap();
                 }
             }
@@ -1619,6 +1627,7 @@ mod tests {
         let h = hub(EventsConfig {
             live: LiveConfig {
                 every,
+                grace: Duration::from_millis(100),
                 ..LiveConfig::default()
             },
             ..EventsConfig::default()
@@ -1659,11 +1668,30 @@ mod tests {
         live.record(&[(key2, 0, 5, 7)]);
         let got = next_live(&mut b).await;
         assert_eq!((got.id, got.matched), (id2, 7));
-        // Session 1's last connection closes: its query goes with it.
-        drop(a);
-        assert_eq!(live.len(), 1);
-        drop(b);
+        // A content save drops them all.
+        h.settings_saved("crawler", 1);
+        assert_eq!(live.len(), 2);
+        h.settings_saved("content", 2);
         assert!(live.is_empty());
+        // A registration made before a connection opens is delivered on
+        // it, without waiting for the count to grow again.
+        let id3 = live.register(3, &node, false, 0, 0).unwrap().id;
+        let key3 = live.due()[0].key;
+        live.record(&[(key3, 0, 5, 2)]);
+        let late = h.acquire(3).unwrap();
+        let mut c = h
+            .stream(late, Topic::SearchLive.bit(), None, || true)
+            .into_data_stream();
+        let got = next_live(&mut c).await;
+        assert_eq!((got.id, got.matched), (id3, 2));
+        // Its last connection closes: released after the grace.
+        drop(c);
+        let start = std::time::Instant::now();
+        while !live.is_empty() {
+            assert!(start.elapsed() < Duration::from_secs(10), "never released");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop((a, b));
         h.close();
     }
 

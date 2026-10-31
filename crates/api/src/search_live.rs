@@ -20,10 +20,15 @@
 //! - **Delivery** is per session, never broadcast: each `/events`
 //!   connection of the session that made a registration gets its count at
 //!   most once per [`LiveConfig::every`], counts in between combined.
+//! - **The same tier as the page:** the stem fallback (§8) is decided at
+//!   registration as a search's lease decides it, so a query the page
+//!   showed stemmed results for counts stem matches too.
 //! - **Bounds:** [`LiveConfig::per_session`] per session (one more
-//!   replaces the oldest), [`LiveConfig::total`] in all, and a
-//!   registration is released when its session's last `/events`
-//!   connection closes, or after [`LiveConfig::idle`] without one.
+//!   replaces the oldest), [`LiveConfig::total`] in all. A registration
+//!   is released [`LiveConfig::grace`] after its session's last `/events`
+//!   connection closes (so a reconnect keeps it, count and all), after
+//!   [`LiveConfig::idle`] when no connection ever opened, or when a
+//!   `content` settings save may have changed what's visible.
 //! - **No `since` or `through` ids while Adult is hidden**, as with
 //!   `torrents`' `max_id`: ids are sequential, so the gap between two
 //!   would tell how many hidden torrents arrived.
@@ -36,18 +41,19 @@ use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use lodestar_search::{
-    CancelToken, Due, Node, PercolateLimits, Result as SearchResult, SearchIndex, percolate,
+    CancelToken, Due, Lease, Node, PercolateLimits, Result as SearchResult, SearchIndex, Sort,
+    percolate,
 };
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::ApiState;
 use crate::dto::auth::OkResponse;
 use crate::dto::events::{SearchLiveEvent, SearchLiveRegistration, SearchLiveRequest};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::{EventHub, session_of};
 use crate::extract::{Json, Path, Peer, same_origin_json};
 use crate::search::{AdultVisibility, Visibility, base_query, request_ast, tz_param};
+use crate::{ApiState, unix_now};
 
 /// How many live queries, for how long, and how often they're delivered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,9 +62,13 @@ pub struct LiveConfig {
     pub per_session: usize,
     /// Registrations in all; past it, a 429.
     pub total: usize,
-    /// A registration whose session has no `/events` connection is
-    /// released after this long.
+    /// A registration made while its session has no `/events`
+    /// connection is released after this long, unless one opens.
     pub idle: Duration,
+    /// A registration is released this long after its session's last
+    /// `/events` connection closes, unless one opens again: long enough
+    /// for `EventSource`'s reconnect (5 s), short for a closed tab.
+    pub grace: Duration,
     /// At most one `search_live` event per connection per registration
     /// this often (§10.13's throttle cadence).
     pub every: Duration,
@@ -71,6 +81,7 @@ impl Default for LiveConfig {
             // Four for each of the hub's 64 streams.
             total: 256,
             idle: Duration::from_secs(600),
+            grace: Duration::from_secs(30),
             every: Duration::from_secs(5),
         }
     }
@@ -116,14 +127,25 @@ struct Reg {
     session: u64,
     query: Arc<Node>,
     utc_offset: i32,
+    /// Runs on the stem tier, as the page's search did.
+    stems: bool,
     /// Whether Adult was shown when it was made.
     adult: bool,
     /// The highest id already counted.
     watermark: i64,
     matched: u64,
-    /// When its session last had no `/events` connection; `None` while
-    /// it has one.
-    idle_since: Option<Instant>,
+    /// When it's released, while its session has no `/events`
+    /// connection; `None` while it has one.
+    expires: Option<Instant>,
+}
+
+/// A query as a registration would store it: [`LiveQueries::prepare`].
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    /// The query with its visibility clauses.
+    pub query: Node,
+    /// Whether Adult was shown when it was prepared.
+    pub adult: bool,
 }
 
 /// One live query due to run, as [`LiveQueries::due`] hands it out.
@@ -133,6 +155,7 @@ pub struct LiveDue {
     pub watermark: i64,
     pub query: Arc<Node>,
     pub utc_offset: i32,
+    pub stems: bool,
 }
 
 /// Why a registration was refused.
@@ -165,16 +188,21 @@ impl LiveQueries {
 
     /// The registry under its lock, with what's no longer valid dropped:
     /// registrations made under another Adult setting than `shown`, and
-    /// those idle past [`LiveConfig::idle`]. Visibility is read by the
-    /// caller, outside the lock (it may take the settings' own).
+    /// those past their expiry. Visibility is read by the caller, outside
+    /// the lock (it may take the settings' own).
     fn screened(&self, shown: bool) -> MutexGuard<'_, LiveState> {
         let mut st = self.lock();
         let now = Instant::now();
-        let idle = self.config.idle;
-        st.regs.retain(|r| {
-            r.adult == shown && r.idle_since.is_none_or(|t| now.duration_since(t) < idle)
-        });
+        st.regs
+            .retain(|r| r.adult == shown && r.expires.is_none_or(|t| now < t));
         st
+    }
+
+    /// Drops every registration: a `content` settings save may have
+    /// changed what's visible (the client registers again). Eager, so an
+    /// on-off-on change nobody saw in between still drops them.
+    pub fn clear(&self) {
+        self.lock().regs.clear();
     }
 
     /// Registrations held now.
@@ -186,9 +214,18 @@ impl LiveQueries {
         self.len() == 0
     }
 
-    /// Registers `ast` for `session`, counting matches after `since`
-    /// under the visibility of this moment: the registration and the
-    /// Adult setting it was made under.
+    /// `ast` as `/search` would run it now: with the visibility clauses
+    /// of this moment, and the Adult setting they were made under.
+    pub fn prepare(&self, ast: &Node, hidden: bool) -> Prepared {
+        let adult = self.adult.shown();
+        Prepared {
+            query: base_query(ast, Visibility { hidden, adult }).query(),
+            adult,
+        }
+    }
+
+    /// [`LiveQueries::prepare`] and [`LiveQueries::insert`] on the exact
+    /// tier.
     pub fn register(
         &self,
         session: u64,
@@ -197,9 +234,23 @@ impl LiveQueries {
         utc_offset: i32,
         since: i64,
     ) -> Result<SearchLiveRegistration, LiveRefused> {
-        let adult = self.adult.shown();
-        let query = base_query(ast, Visibility { hidden, adult }).query();
-        let mut st = self.screened(adult);
+        let p = self.prepare(ast, hidden);
+        self.insert(session, p, utc_offset, false, since)
+    }
+
+    /// Registers `p` for `session`, counting matches after `since`. One
+    /// prepared under a visibility that has changed since is dropped at
+    /// the next read, before it can count.
+    pub fn insert(
+        &self,
+        session: u64,
+        p: Prepared,
+        utc_offset: i32,
+        stems: bool,
+        since: i64,
+    ) -> Result<SearchLiveRegistration, LiveRefused> {
+        let Prepared { query, adult } = p;
+        let mut st = self.screened(self.adult.shown());
         let mine: Vec<usize> = (0..st.regs.len())
             .filter(|&i| st.regs[i].session == session)
             .collect();
@@ -209,9 +260,9 @@ impl LiveQueries {
         } else if st.regs.len() >= self.config.total {
             return Err(LiveRefused::Full);
         }
-        let idle_since = match st.sessions.get(&session) {
+        let expires = match st.sessions.get(&session) {
             Some(s) if s.streams > 0 => None,
-            _ => Some(Instant::now()),
+            _ => Some(Instant::now() + self.config.idle),
         };
         st.next_key += 1;
         let key = st.next_key;
@@ -222,10 +273,11 @@ impl LiveQueries {
             session,
             query: Arc::new(query),
             utc_offset,
+            stems,
             adult,
             watermark: since,
             matched: 0,
-            idle_since,
+            expires,
         });
         Ok(SearchLiveRegistration {
             id,
@@ -242,8 +294,8 @@ impl LiveQueries {
         st.regs.len() < before
     }
 
-    /// An `/events` connection of `session` opened: its registrations are
-    /// no longer idle.
+    /// An `/events` connection of `session` opened: its registrations no
+    /// longer expire.
     pub(crate) fn opened(&self, session: u64) {
         let mut st = self.lock();
         st.sessions
@@ -254,12 +306,13 @@ impl LiveQueries {
             })
             .streams += 1;
         for r in st.regs.iter_mut().filter(|r| r.session == session) {
-            r.idle_since = None;
+            r.expires = None;
         }
     }
 
     /// An `/events` connection of `session` closed: with its last one,
-    /// its registrations are released.
+    /// its registrations are released after [`LiveConfig::grace`] unless
+    /// one opens again.
     pub(crate) fn closed(&self, session: u64) {
         let mut st = self.lock();
         let Some(s) = st.sessions.get_mut(&session) else {
@@ -268,7 +321,10 @@ impl LiveQueries {
         s.streams = s.streams.saturating_sub(1);
         if s.streams == 0 {
             st.sessions.remove(&session);
-            st.regs.retain(|r| r.session != session);
+            let at = Instant::now() + self.config.grace;
+            for r in st.regs.iter_mut().filter(|r| r.session == session) {
+                r.expires = Some(at);
+            }
         }
     }
 
@@ -292,6 +348,7 @@ impl LiveQueries {
                 watermark: r.watermark,
                 query: r.query.clone(),
                 utc_offset: r.utc_offset,
+                stems: r.stems,
             })
             .collect();
         due.sort_by_key(|d| (d.watermark, d.key));
@@ -367,7 +424,10 @@ pub struct LiveRun {
 /// Runs `live`'s registrations against `index` up to `through`, as
 /// count-only entries of [`percolate`], and adds their counts. The
 /// percolator calls it after a run's saved searches, with the same token,
-/// so they share one budget and live queries only get what's left.
+/// so they share one budget and live queries only get what's left. After
+/// saved searches ran (`after_saved`), even the first can be stopped
+/// inside its scan, so a nearly spent budget isn't overrun; otherwise the
+/// first always completes, so a run that starts one finishes one.
 pub fn percolate_live(
     index: &SearchIndex,
     live: &LiveQueries,
@@ -375,6 +435,7 @@ pub fn percolate_live(
     limits: PercolateLimits,
     now: i64,
     cancel: &CancelToken,
+    after_saved: bool,
 ) -> SearchResult<LiveRun> {
     let due = live.due();
     if due.is_empty() {
@@ -388,6 +449,8 @@ pub fn percolate_live(
             query: &d.query,
             utc_offset: d.utc_offset,
             count_only: true,
+            stems: d.stems,
+            stoppable: after_saved,
         })
         .collect();
     let p = percolate(index, &entries, through, limits, now, cancel)?;
@@ -395,7 +458,7 @@ pub fn percolate_live(
     let ran: Vec<(i64, i64, i64, u64)> = p
         .matched
         .iter()
-        .map(|m| (m.id, from[&m.id], m.through, m.count))
+        .filter_map(|m| Some((m.id, *from.get(&m.id)?, m.through, m.count)))
         .collect();
     live.record(&ran);
     Ok(LiveRun {
@@ -437,9 +500,14 @@ fn not_found() -> ApiError {
 /// with the same visibility: torrents a filter rule hid unless `hidden`,
 /// and no Adult while "Show adult content" is off. Changing that setting
 /// releases every live query: register again. A session holds at most 4
-/// (a fifth replaces the oldest); one is released when the session's last
-/// `/events` connection closes, after 10 minutes without one, or with
-/// `DELETE /search/live/{id}`. Register again after `/events` reconnects.
+/// (a fifth replaces the oldest); one is released 30 s after the
+/// session's last `/events` connection closes (a reconnect keeps it),
+/// after 10 minutes if no connection opens, on a `content` settings save,
+/// or with `DELETE /search/live/{id}`. Register again after a `settings`
+/// event for `content`, or when a `search_live` id you hold is no longer
+/// known (a 404 on `DELETE`). Swarm clauses (`seeders:`…) match nothing
+/// at index time, so a query with one counts only what it can see then.
+/// Where the percolator doesn't run (fixture mode), nothing is counted.
 #[utoipa::path(
     operation_id = "registerSearchLive",
     post,
@@ -450,6 +518,8 @@ fn not_found() -> ApiError {
         (status = 200, body = SearchLiveRegistration),
         (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `bad_tz`."),
         (status = 401, body = crate::dto::error::ErrorEnvelope, description = "No session (`login_required`)."),
+        (status = 403, body = crate::dto::error::ErrorEnvelope, description = "`cross_origin`."),
+        (status = 415, body = crate::dto::error::ErrorEnvelope, description = "`not_json`: send `Content-Type: application/json`."),
         (
             status = 429,
             body = crate::dto::error::ErrorEnvelope,
@@ -480,14 +550,28 @@ pub(crate) async fn register(
         ));
     };
     let session = session_of(&s.auth, &headers, peer);
-    let since = tokio::task::spawn_blocking(move || searchable(&search.index()))
-        .await
-        .map_err(internal)?
-        .map_err(internal)?;
-    match hub
-        .live()
-        .register(session, &ast, body.hidden.unwrap_or(false), tz * 60, since)
-    {
+    let prepared = hub.live().prepare(&ast, body.hidden.unwrap_or(false));
+    let query = prepared.query.clone();
+    // The tier the page's search took (§8's stem fallback, decided by the
+    // count as a lease decides it), and where counting starts. A client
+    // that goes away cancels it.
+    let cancel = CancelToken::new();
+    let _guard = cancel.cancel_on_drop();
+    let (stems, since) = tokio::task::spawn_blocking(move || {
+        let lease = Lease::new_at(
+            search.index(),
+            &query,
+            unix_now(),
+            tz * 60,
+            Sort::Relevance,
+            &cancel,
+        )?;
+        Ok::<_, lodestar_search::Error>((lease.stemmed(), searchable(lease.index())?))
+    })
+    .await
+    .map_err(internal)?
+    .map_err(internal)?;
+    match hub.live().insert(session, prepared, tz * 60, stems, since) {
         Ok(reg) => Ok(axum::Json(reg).into_response()),
         Err(LiveRefused::Full) => {
             let mut res = ApiError::new(
@@ -510,8 +594,11 @@ pub(crate) async fn register(
     path = "/search/live/{id}",
     tag = "search",
     params(("id" = String, Path, description = "The registration's id.")),
+    request_body(content = Object, description = "Any JSON, such as `{}`."),
     responses(
         (status = 200, body = OkResponse),
+        (status = 403, body = crate::dto::error::ErrorEnvelope, description = "`cross_origin`."),
+        (status = 415, body = crate::dto::error::ErrorEnvelope, description = "`not_json`: send `Content-Type: application/json`."),
         (status = 401, body = crate::dto::error::ErrorEnvelope, description = "No session (`login_required`)."),
         (status = 404, body = crate::dto::error::ErrorEnvelope, description = "`live_query_not_found`: none by that id for this session (it may have been released already)."),
         (status = 503, body = crate::dto::error::ErrorEnvelope, description = "Live updates aren't served (`events_unavailable`)."),
@@ -685,23 +772,62 @@ mod tests {
         assert!(sent.is_empty());
     }
 
+    /// Waits, at most 10 s, until `l` holds `n`; a short sleep paces the
+    /// polling.
+    fn wait_for_len(l: &LiveQueries, n: usize) {
+        let start = std::time::Instant::now();
+        while l.len() != n {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "held {}",
+                l.len()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The last connection closing releases a session's queries after the
+    /// grace; a reconnect within it keeps them, counts and all.
     #[test]
     fn the_last_connection_closing_releases_a_sessions_queries() {
-        let (_, l) = live(LiveConfig::default());
+        let (_, l) = live(LiveConfig {
+            grace: Duration::from_millis(200),
+            ..LiveConfig::default()
+        });
         l.opened(1);
         l.opened(1);
         l.opened(2);
-        l.register(1, &q("a"), false, 0, 0).unwrap();
+        let a = l.register(1, &q("a"), false, 0, 0).unwrap().id;
         l.register(2, &q("b"), false, 0, 0).unwrap();
         l.closed(1);
-        assert_eq!(l.len(), 2, "one connection of session 1 is still open");
-        l.closed(1);
-        assert_eq!(l.len(), 1);
-        assert!(l.watch(1).is_none());
         l.closed(2);
-        assert!(l.is_empty());
+        assert!(
+            l.lock()
+                .regs
+                .iter()
+                .all(|r| (r.session == 1) == r.expires.is_none())
+        );
+        assert!(l.watch(2).is_none());
+        // Session 1 reconnects: its count carries on.
+        let key = l.lock().regs.iter().find(|r| r.id == a).unwrap().key;
+        l.record(&[(key, 0, 9, 2)]);
+        l.closed(1);
+        l.opened(1);
+        assert_eq!(matched(&l, &a), 2);
+        // Session 2 never did: released after the grace.
+        wait_for_len(&l, 1);
+        assert_eq!(ids(&l, 1), [a]);
         // A close it never saw changes nothing.
         l.closed(9);
+    }
+
+    #[test]
+    fn a_content_save_drops_every_registration() {
+        let (_, l) = live(LiveConfig::default());
+        l.register(1, &q("a"), false, 0, 0).unwrap();
+        l.register(2, &q("b"), true, 0, 0).unwrap();
+        l.clear();
+        assert!(l.is_empty());
     }
 
     /// Without a connection, a registration lasts `idle`; with one, it
@@ -715,16 +841,12 @@ mod tests {
         l.opened(2);
         let kept = l.register(2, &q("b"), false, 0, 0).unwrap().id;
         l.register(1, &q("a"), false, 0, 0).unwrap();
-        let start = std::time::Instant::now();
-        while l.len() != 1 || !ids(&l, 1).is_empty() {
-            assert!(start.elapsed() < Duration::from_secs(10), "never expired");
-            std::thread::yield_now();
-        }
+        wait_for_len(&l, 1);
         assert_eq!(ids(&l, 2), [kept]);
         // A connection opening stops the clock.
         l.register(3, &q("c"), false, 0, 0).unwrap();
         l.opened(3);
-        assert!(l.lock().regs.iter().all(|r| r.idle_since.is_none()));
+        assert!(l.lock().regs.iter().all(|r| r.expires.is_none()));
     }
 
     // The visibility tests: a corpus of torrents a filter rule hid, and
@@ -816,7 +938,8 @@ mod tests {
         w.commit().unwrap();
         let through = searchable(&index).unwrap();
         assert_eq!(through, 5);
-        let run = percolate_live(&index, &l, through, LIMITS, 0, &CancelToken::new()).unwrap();
+        let run =
+            percolate_live(&index, &l, through, LIMITS, 0, &CancelToken::new(), false).unwrap();
         assert_eq!((run.ran, run.matched, run.more), (5, 3, false));
         assert_eq!(matched(&l, &movie), 2, "the hidden one isn't counted");
         assert_eq!(matched(&l, &secret), 0, "hidden only: 0");
@@ -824,7 +947,8 @@ mod tests {
         assert_eq!(matched(&l, &scene), 0, "Adult only: 0");
         assert_eq!(matched(&l, &adult_asked), 0, "type:adult while hidden: 0");
         // Nothing new: nothing runs again.
-        let again = percolate_live(&index, &l, through, LIMITS, 0, &CancelToken::new()).unwrap();
+        let again =
+            percolate_live(&index, &l, through, LIMITS, 0, &CancelToken::new(), false).unwrap();
         assert_eq!(again.matched, 0);
         assert_eq!(matched(&l, &movie), 2);
         // Showing Adult drops every registration; one made now counts
@@ -832,8 +956,28 @@ mod tests {
         shown.store(true, Ordering::SeqCst);
         assert!(l.is_empty());
         let scene = l.register(1, &q("scene"), false, 0, 3).unwrap().id;
-        percolate_live(&index, &l, through, LIMITS, 0, &CancelToken::new()).unwrap();
+        percolate_live(&index, &l, through, LIMITS, 0, &CancelToken::new(), false).unwrap();
         assert_eq!(matched(&l, &scene), 2);
+    }
+
+    /// A query the page's search served from the stem tier counts stem
+    /// matches too; one it served exact doesn't.
+    #[test]
+    fn the_stem_tier_counts_as_the_page_did() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = corpus(dir.path());
+        let index = SearchIndex::in_memory().unwrap();
+        let (_, l) = live(LiveConfig::default());
+        let reg = |stems| {
+            let p = l.prepare(&q("movies"), false);
+            l.insert(1, p, 0, stems, 0).unwrap().id
+        };
+        let (exact, stemmed) = (reg(false), reg(true));
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        percolate_live(&index, &l, 5, LIMITS, 0, &CancelToken::new(), false).unwrap();
+        assert_eq!((matched(&l, &exact), matched(&l, &stemmed)), (0, 2));
     }
 
     #[test]
@@ -847,9 +991,9 @@ mod tests {
         let (_, l) = live(LiveConfig::default());
         let movie = l.register(1, &q("movie"), false, 0, 0).unwrap().id;
         let spent = CancelToken::new().with_budget(Duration::ZERO);
-        let run = percolate_live(&index, &l, 5, LIMITS, 0, &spent).unwrap();
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &spent, false).unwrap();
         assert_eq!((run.ran, run.more), (0, true));
-        let run = percolate_live(&index, &l, 5, LIMITS, 0, &CancelToken::new()).unwrap();
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &CancelToken::new(), false).unwrap();
         assert_eq!((run.ran, run.more), (1, false));
         assert_eq!(matched(&l, &movie), 2);
     }
@@ -865,13 +1009,16 @@ mod tests {
 
     fn http() -> Http {
         let dir = tempfile::tempdir().unwrap();
-        let store = corpus(dir.path());
-        drop(store);
+        let mut store = corpus(dir.path());
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        drop((w, store));
         let db = dir.path().join("t.db");
         let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
         let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
         let hub = EventHub::start(EventsConfig::default(), EventSources::default());
-        let index = SearchIndex::in_memory().unwrap();
         let app = router(ApiState {
             auth: auth.clone(),
             index: Some(index.into()),
@@ -950,7 +1097,13 @@ mod tests {
         assert_eq!(body["since"], Value::Null, "Adult hidden: no id");
         let id = body["id"].as_str().unwrap().to_string();
         assert_eq!(h.hub.live().len(), 1);
-        assert_eq!(h.hub.live().due()[0].utc_offset, 3600);
+        let due = h.hub.live().due();
+        assert_eq!((due[0].utc_offset, due[0].stems), (3600, false));
+        // "movies" finds nothing exact but "Movie" by its stem: the page
+        // showed stemmed results, so the registration counts them.
+        let (status, _) = call(&h, "POST", "/search/live", &a, json!({"q": "movies"})).await;
+        assert_eq!(status, 200);
+        assert!(h.hub.live().due().iter().any(|d| d.stems));
         // Validated as `/search` validates.
         for (bad, code) in [
             (json!({"q": "("}), "query_syntax"),
@@ -977,7 +1130,7 @@ mod tests {
         );
         let (status, body) = call(&h, "DELETE", &uri, &a, Value::Null).await;
         assert_eq!((status, body), (200, json!({"ok": true})));
-        assert!(h.hub.live().is_empty());
+        assert_eq!(h.hub.live().len(), 1);
         let (status, _) = call(&h, "DELETE", &uri, &a, Value::Null).await;
         assert_eq!(status, 404);
         h.hub.close();

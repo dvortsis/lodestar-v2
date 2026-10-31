@@ -28,8 +28,9 @@
 //!
 //! **Live queries** (`POST /search/live`, B-search-live) run here too, as
 //! [`Due::count_only`] entries: they keep no ids, only
-//! [`Matched::count`], and carry their own visibility clauses and time
-//! zone ([`Due::utc_offset`]).
+//! [`Matched::count`], and carry their own visibility clauses, time zone
+//! ([`Due::utc_offset`]) and tier ([`Due::stems`]). A [`Due::stoppable`]
+//! one can be stopped inside its scan even when it's a run's first.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -68,6 +69,12 @@ pub struct Due<'a> {
     pub utc_offset: i32,
     /// Keep no ids, only [`Matched::count`] (a live query's count).
     pub count_only: bool,
+    /// Compile with the stem tier, as a search that fell back to it
+    /// (§8). Saved searches run exact.
+    pub stems: bool,
+    /// The token may stop it inside its scan even as the call's first:
+    /// for entries that run on what another call left of a budget.
+    pub stoppable: bool,
 }
 
 /// One search's result: every torrent id in `(watermark, through]` it
@@ -143,7 +150,7 @@ pub fn percolate(
             out.stopped = true;
             break;
         }
-        let compiled = index.query_at(d.query, now, d.utc_offset);
+        let compiled = index.compile(d.query, now, d.utc_offset, d.stems);
         let range: Box<dyn Query> = Box::new(RangeQuery::new(
             Bound::Excluded(term(d.watermark)),
             Bound::Included(term(end)),
@@ -158,8 +165,9 @@ pub fn percolate(
             hot: compiled.hot.as_ref(),
             inner: TopIds {
                 keep: if d.count_only { 0 } else { limits.keep },
-                // The first search of a run always completes.
-                cancel: (!out.matched.is_empty()).then(|| cancel.clone()),
+                // The first search of a run always completes, unless
+                // it's stoppable.
+                cancel: (d.stoppable || !out.matched.is_empty()).then(|| cancel.clone()),
                 stopped: stopped.clone(),
             },
         };
@@ -378,6 +386,8 @@ mod tests {
             query: &node,
             utc_offset: 0,
             count_only: false,
+            stems: false,
+            stoppable: false,
         }];
         percolate(index, &due, through, limits, 0, &CancelToken::new()).unwrap()
     }
@@ -441,6 +451,8 @@ mod tests {
                 query: &node,
                 utc_offset: 0,
                 count_only: true,
+                stems: false,
+                stoppable: false,
             },
             Due {
                 id: 2,
@@ -448,6 +460,8 @@ mod tests {
                 query: &node,
                 utc_offset: 3600,
                 count_only: false,
+                stems: false,
+                stoppable: false,
             },
         ];
         let limits = PercolateLimits {
@@ -547,6 +561,8 @@ mod tests {
                 query: &node,
                 utc_offset: 0,
                 count_only: false,
+                stems: false,
+                stoppable: false,
             })
             .collect();
         let token = CancelToken::new();

@@ -166,6 +166,8 @@ pub fn run_once(
             query: node,
             utc_offset: 0,
             count_only: false,
+            stems: false,
+            stoppable: false,
         })
         .collect();
     let cancel = CancelToken::new().with_budget(config.budget);
@@ -224,6 +226,7 @@ pub fn run_once(
             limits,
             now,
             &cancel,
+            run.searches > 0,
         )
     {
         run.live = live.ran;
@@ -1003,7 +1006,7 @@ mod tests {
             max_range: quick().max_range,
         };
         let token = CancelToken::new().with_budget(quick().budget);
-        let lr = percolate_live(&s.index, live, 4000, limits, NOW, &token).unwrap();
+        let lr = percolate_live(&s.index, live, 4000, limits, NOW, &token, false).unwrap();
         let live_took = started.elapsed();
         assert_eq!((lr.ran, lr.more), (256, false));
         // 128 x 1000 evens and 128 x 2000 of everything.
