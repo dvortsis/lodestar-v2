@@ -2256,7 +2256,8 @@
     "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
     "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
     "API: a send-to-client HTTP endpoint (single + bulk, Partial/duplicate semantics per \u00a7architecture ~2567) for Search bulk Send and row Send (S-search-5 deferral)",
-    "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")"
+    "CR-1a-S doc polish (#252 review optional): O3 first_batch clear in back_off is dead code (drop it or fix the decisions sentence); note the two arms of \"first fetch ms\" measure different things; align metrics.rs help (\"first streamed batch\") with docs/metrics.md (\"first kept batch\")",
+    "API: add a test that fails on duplicate utoipa component names (two ToSchema types with the same name silently overwrite each other; #255 fixed DiscoverResponse and HistogramBin). Latent: Channel (api/dto/system.rs vs lodestar/settings/updates.rs), Mode (settings/preferences.rs vs updates.rs) if they ever enter the spec"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
