@@ -1744,13 +1744,13 @@
       "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders | 17:30Z PR #287 head 8301f652 (~530 lines; both-sides reconcile, HeldSet::remove deleted); fresh Opus reviewer + security review; will need main after #286 (filters.rs) | 17:42Z MERGE at 8301f652 (4 optional); author to merge main (#286 filters.rs) + fold opt 1-3 in one push; same reviewer re-checks | 17:57Z re-check MERGE at a02cb0b1 (chunking in HeldSet fails closed). Merge on green. | 18:23Z MERGED 2e6c1be7; sessions archived."
     },
     "S-logs-2": {
-      "status": "pr-review",
+      "status": "pr-fixing",
       "model": "opus",
       "session": "session_01MMjhn9PaFGExdtPTuRLd14",
       "pr": 289,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it. | 18:12Z PR #289 (2a) head 4ea96c7d, ~2.4k lines (split, accepted). Logging 43.77/45; Notifications 45.01/45.1; others +0.1 KB (registry cost). Reviewer started w/ security review; subscribed. 2b next. | 18:39Z first reviewer never started (short SHA -> ref_not_found, PENDING 26 min); relaunched on branch. Author holds local main merge bb9b5b02 (.size-limit only; Notifications 45.06/45.1).",
+      "review_rounds": 1,
+      "notes": "17:08Z brief briefs/S-logs-2.md (Settings \u2192 Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner \u00a72.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued | 18:01Z also fixes #284 flake: logs.keyboard.test.ts:95 wheel-scroll race (read scrollTop mid-scroll; failed #288 c3b8c27a). Fix = wait for stable scrollTop; PR must name it. | 18:12Z PR #289 (2a) head 4ea96c7d, ~2.4k lines (split, accepted). Logging 43.77/45; Notifications 45.01/45.1; others +0.1 KB (registry cost). Reviewer started w/ security review; subscribed. 2b next. | 18:39Z first reviewer never started (short SHA -> ref_not_found, PENDING 26 min); relaunched on branch. Author holds local main merge bb9b5b02 (.size-limit only; Notifications 45.06/45.1). | 19:10Z review CHANGES at 4ea96c7d: B1 keyboard test (details ontoggle async), B2 sizes re-split (Notif 45.12>45.1, Alert 46.02>46, Search 43.33>43.3; all Settings +0.13-0.21) - fix cause, no raises, B3 LogsPage stale banner on failed reload, B4 Banners empty on catalog error; fold O1,O3. Head now 916cc8c0 (main merge + remount fix).",
       "reviewer": "session_01MMjhnCWs8MDDqxc4zdDXXn"
     },
     "X-requeue-2": {
@@ -1779,7 +1779,7 @@
       "pr": 291,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit). | 18:23Z launched Opus. | 18:56Z PR #291 head b3312f5b (~585 lines; enrich.rs _marking hooks; pending marks separate from held set - differs from brief shape, reviewer to prove). Filter budget bench reportedly red on main locally (51.8/50us) - check CI. Reviewer + security review; subscribed. | 19:05Z told: merges after #290 -> bring main with review fixes.",
+      "notes": "18:20Z brief briefs/B-held-precommit.md (pending guard; 4 paths; carries #287 nits). Launch when #287 merges (next free slot). X-settings-registry-slim waits for S-logs-2 to merge (shared registry/Notifications limit). | 18:23Z launched Opus. | 18:56Z PR #291 head b3312f5b (~585 lines; enrich.rs _marking hooks; pending marks separate from held set - differs from brief shape, reviewer to prove). Filter budget bench reportedly red on main locally (51.8/50us) - check CI. Reviewer + security review; subscribed. | 19:05Z told: merges after #290 -> bring main with review fixes. | 19:10Z MERGE at b3312f5b (design sound). Author merging main (#290) + optional P-before-C test in correct; runner checks delta, merges on green.",
       "reviewer": "session_01MMjhn94YmgkwkPeUXA5HEY"
     },
     "X-soak-docker-memrule": {
@@ -2613,7 +2613,8 @@
     "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
-    "X-requeue cap (optional O1, #290): classify.requeue_pending is bounded per distinct text, not overall, while search is off; admin add/remove of many queries grows it. Fix = cap that collapses to a full re-mark (mark all unenriched). Low; admin-only."
+    "X-requeue cap (optional O1, #290): classify.requeue_pending is bounded per distinct text, not overall, while search is off; admin add/remove of many queries grows it. Fix = cap that collapses to a full re-mark (mark all unenriched). Low; admin-only.",
+    "Logging catalog periodic reload (optional O2, #289): reload /logs/catalog on tick or visibilitychange so a kind turned on in another tab shows here."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
