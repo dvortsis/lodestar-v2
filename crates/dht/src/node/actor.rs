@@ -1404,7 +1404,13 @@ impl Actor {
                     .filter(|p| endpoint_allowed(cfg, *p) && unique.insert(*p))
                     .take(64)
                     .collect();
-                streamed.clone_from(&peers);
+                // Only a streaming request's peers are copied.
+                if owner
+                    .and_then(|o| self.peer_requests.get(&o))
+                    .is_some_and(|r| matches!(r.reply, Some(Reply::Stream(_))))
+                {
+                    streamed.clone_from(&peers);
+                }
                 match pending.id {
                     Some(id) => {
                         if lookup.scrape {

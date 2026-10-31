@@ -1194,6 +1194,7 @@ impl Pool {
     fn poll_stream(&mut self, key: InfoHash, mut request: Request) {
         use tokio::sync::oneshot::error::TryRecvError;
         let Some(e) = self.entries.get(&key) else {
+            debug_assert!(false, "a request outlived its entry");
             return;
         };
         let untouched = e.state == State::Lookup && e.generation == request.generation;
@@ -1277,6 +1278,9 @@ impl Pool {
         }
         request.replies = waiting;
         let finished = request.replies.is_empty();
+        // Several finders may report the same endpoint in one poll.
+        let mut unique = HashSet::new();
+        peers.retain(|p| unique.insert(lodestar_network_policy::normalize(*p)));
         if !peers.is_empty() {
             request.batched = true;
         }
@@ -1297,11 +1301,13 @@ impl Pool {
             return;
         }
         self.requests.insert(key, request);
+        let before = self.entries[&key].peers.len();
+        let capped = self.add_peers(key, &peers);
+        // The first-batch clock starts only on peers the entry kept.
         let e = &self.entries[&key];
-        if !peers.is_empty() && !e.fetch_started && !self.first_batch.contains_key(&key) {
+        if e.peers.len() > before && !e.fetch_started && !self.first_batch.contains_key(&key) {
             self.first_batch.insert(key, Instant::now());
         }
-        let capped = self.add_peers(key, &peers);
         self.stats
             .stream_peers_capped
             .fetch_add(capped as u64, Ordering::Relaxed);

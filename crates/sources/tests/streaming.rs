@@ -291,6 +291,8 @@ async fn entry_cap_rejections_are_counted_apart_from_backpressure() {
 #[tokio::test(start_paused = true)]
 async fn success_racing_a_terminal_and_a_batch_closes_ownership_once() {
     // Every order of: the fetch verifying, a second batch, the terminal.
+    // The pool reads sessions on its 25 ms poll, so events within a poll
+    // reach it in one turn, in whatever order its `select!` takes them.
     let delays = [0u64, 500, 1000];
     for fetch in delays {
         for batch in delays {
@@ -323,7 +325,9 @@ async fn success_racing_a_terminal_and_a_batch_closes_ownership_once() {
                 assert_eq!(got.key, key(1));
                 until("ownership closed", || h.lookups() == 0).await;
                 assert!(h.out.try_recv().is_err(), "exactly one result");
-                assert!(h.terminals(Terminal::Complete) <= 1);
+                let ends: u64 = Terminal::ALL.iter().map(|&t| h.terminals(t)).sum();
+                assert!(ends <= 1, "at most one terminal read");
+                assert_eq!(h.started(), [peer(1)], "no fetch after success");
                 assert!(h.stop().await.is_empty());
             }
         }
@@ -512,4 +516,75 @@ async fn coordinated_admission_keeps_one_permit_per_streaming_request() {
     drop(next);
     until("released", || h.lookups() == 0).await;
     h.stop().await;
+}
+
+/// Coordinated admission with streaming on: one permit, so each case's
+/// retry can only follow the permit's return.
+fn coordinated() -> PoolConfig {
+    PoolConfig {
+        coordinated_admission: true,
+        finder_capacity: 1,
+        lookup_wait: Duration::from_secs(5),
+        ..config()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_refusal_costs_no_attempt_or_back_off_and_holds_the_finder() {
+    let mut h = Harness::start(coordinated(), 1);
+    h.discover(1).await;
+    let r = h.next(0).await;
+    let refused = Instant::now();
+    drop(r.admit);
+    r.session.unwrap().send(None).unwrap();
+    drop(r.permit);
+    // Asked again after the 1 s hold, not the 600 s back-off.
+    let again = h.next(0).await;
+    let waited = Instant::now().duration_since(refused);
+    assert!(waited >= Duration::from_secs(1) && waited < Duration::from_secs(3));
+    assert_eq!(again.key, key(1));
+    let s = h.stats();
+    assert_eq!(s.admission_refusals[0].load(Ordering::Relaxed), 1);
+    assert!(s.admission_holds.load(Ordering::Relaxed) >= 1);
+    drop(again);
+    until("released", || h.lookups() == 0).await;
+    let q = h.stop().await;
+    assert_eq!(q[0].attempts, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn both_admissions_closed_is_unacknowledged_with_no_back_off() {
+    let mut h = Harness::start(coordinated(), 1);
+    h.discover(1).await;
+    drop(h.next(0).await);
+    let again = h.next(0).await;
+    assert_eq!(again.key, key(1));
+    assert_eq!(
+        h.stats().admission_refusals[1].load(Ordering::Relaxed),
+        1,
+        "unacknowledged, not refused"
+    );
+    drop(again);
+    until("released", || h.lookups() == 0).await;
+    let q = h.stop().await;
+    assert_eq!(q[0].attempts, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_silent_streaming_request_is_unacknowledged_at_the_deadline() {
+    let mut h = Harness::start(coordinated(), 1);
+    h.discover(1).await;
+    let r = h.next(0).await;
+    // Unanswered past `lookup_wait`: the pool gives up on it.
+    until("timed out", || h.lookups() == 0).await;
+    assert_eq!(h.stats().admission_refusals[1].load(Ordering::Relaxed), 1);
+    assert!(r.session.as_ref().unwrap().is_closed(), "the pool let go");
+    // The key goes again once the finder gives the permit back.
+    drop(r);
+    let again = h.next(0).await;
+    assert_eq!(again.key, key(1));
+    drop(again);
+    until("released", || h.lookups() == 0).await;
+    let q = h.stop().await;
+    assert_eq!(q[0].attempts, 0);
 }

@@ -285,7 +285,7 @@ async fn streaming_admission_returns_each_permit_once_at_every_boundary() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_handoff_failure_closes_the_session_admission_before_the_permit() {
+async fn a_handoff_failure_closes_the_session_admission_and_returns_the_permit() {
     let (tx, cmds) = mpsc::channel(1);
     let stats = Arc::new(Stats::default());
     let handle = crate::node::NodeHandle {
