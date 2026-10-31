@@ -2774,7 +2774,8 @@
     "private_mib": 423.6,
     "handles": 353
    },
-   "memory_gate_fit": "owner ruling on #189 (h12-24 private fit) still open; the Linux soak analysis reports it"
+   "memory_gate_fit": "owner ruling on #189 (h12-24 private fit) still open; the Linux soak analysis reports it",
+   "checksums": "2026-10-31 owner recorded SHA256SUMS for rc.2 (6be95525) in notes/v051-owner-steps.md; minisign verifies against packaging/keys/lodestar-release.pub; all 4 artifacts match (MSI named lodestar-0.5.1-x86_64.msi, no rc suffix, as MSI versions require)"
   }
  },
  "owner_standing": {
