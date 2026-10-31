@@ -1596,7 +1596,7 @@
    "pr": 270,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size"
+   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet | 07:59Z PR #270 head ed23185; Search first-load JS 42.8->43.4 kB (+600 B vs brief \"few hundred\"); fresh Opus reviewer asked to scrutinise size | 08:03Z Lighthouse total-byte-weight /search 102,891 > 102,400 on ed23185 (PR-caused); author told to move boot work off the initial path (target <= ~150 B growth); reviewer informed"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
