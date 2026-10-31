@@ -9,6 +9,7 @@
 		formatDateTime,
 		type MetricValue
 	} from '$lib/format';
+	import { displayTimeZone } from '$lib/i18n/region.svelte';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import {
 		buildData,
@@ -67,14 +68,16 @@
 	let create: (() => void) | undefined;
 
 	const locale = $derived(currentLocale());
+	// The display zone is read here so a change to the setting rebuilds the labels.
+	const zone = $derived(timeZone ?? displayTimeZone());
 	const fmt = $derived<LineFormat>({
 		axis: (v) => axisFormat(v as MetricValue, locale),
 		y: (v) => format(v as MetricValue, locale),
 		tick: (s) =>
 			bucket === 'hour'
-				? formatDateTime(s, locale, { timeZone })
-				: formatDate(s, locale, { timeZone }),
-		full: (s) => formatDateFull(s, locale, { timeZone, bucket })
+				? formatDateTime(s, locale, { timeZone: zone })
+				: formatDate(s, locale, { timeZone: zone }),
+		full: (s) => formatDateFull(s, locale, { timeZone: zone, bucket })
 	});
 	// Anything that changes how the chart is built (not just what it plots) forces a rebuild.
 	const shape = $derived(

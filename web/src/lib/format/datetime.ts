@@ -2,7 +2,7 @@ import { displayTimeZone } from '$lib/i18n/region.svelte';
 import { dateFormat, DEFAULT_LOCALE, formatSeconds } from './shared';
 
 export interface DateOptions {
-	/** IANA time zone, the user's setting. Defaults to the browser's. */
+	/** IANA time zone. Defaults to the display time zone setting (`displayTimeZone()`), else the browser's. */
 	timeZone?: string;
 }
 

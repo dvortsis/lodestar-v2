@@ -4,6 +4,7 @@ import { currentLocale, applyLocale } from './locale.svelte';
 import {
 	REGION_CACHE,
 	applyRegion,
+	followSaved,
 	displayTimeZone,
 	narrowRegion,
 	readRegionHint
@@ -98,5 +99,35 @@ describe('boot', () => {
 		const { bootRegion } = await import('./boot');
 		await bootRegion();
 		expect(currentLocale()).toBe('en');
+	});
+	it('drops an answer older than a value applied meanwhile', async () => {
+		let resolve: (v: unknown) => void = () => {};
+		get.mockReturnValue(new Promise((r) => (resolve = r)));
+		const { bootRegion } = await import('./boot');
+		const done = bootRegion();
+		followSaved({ ...auto, language: 'zh', timeZone: 'Asia/Tokyo' });
+		resolve(ok({ fields: { language: { value: 'en' }, time_zone: { value: '' } } }));
+		await done;
+		expect(currentLocale()).toBe('zh');
+		expect(displayTimeZone()).toBe('Asia/Tokyo');
+	});
+	it('a 401, a 500 or a malformed body keeps the hint', async () => {
+		localStorage.setItem(REGION_CACHE, JSON.stringify({ ...auto, language: 'zh' }));
+		const { bootRegion } = await import('./boot');
+		for (const answer of [
+			{ ok: false, status: 401, json: async () => ({}) },
+			{ ok: false, status: 500, json: async () => ({}) },
+			{
+				ok: true,
+				status: 200,
+				json: async () => {
+					throw new Error('bad json');
+				}
+			}
+		]) {
+			get.mockResolvedValue(answer);
+			await expect(bootRegion()).resolves.toBeUndefined();
+			expect(currentLocale()).toBe('zh');
+		}
 	});
 });

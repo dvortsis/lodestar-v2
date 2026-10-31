@@ -17,6 +17,9 @@ const FIRST_DAYS: readonly string[] = ['auto', 'monday', 'saturday', 'sunday'];
 
 let zone = $state('');
 let first = $state<FirstDay>('auto');
+/** Bumped by every applied value, so an older answer can't overwrite a newer one. */
+let seq = 0;
+export const regionSeq = () => seq;
 
 const text = (v: unknown) => (typeof v === 'string' ? v : '');
 
@@ -32,17 +35,19 @@ export function narrowRegion(raw: Record<string, unknown> | null | undefined): R
 
 /** The saved time zone and first day (language goes through `initLocale`). */
 export function setRegion(r: Pick<Region, 'timeZone' | 'firstDay'>): void {
-	zone = r.timeZone;
+	zone = knownZone(r.timeZone) ? r.timeZone : '';
 	first = r.firstDay;
 }
 
 /** Applies all three settings. Call at start-up and whenever the Language & region screen saves. */
 export function applyRegion(r: Region): void {
+	seq++;
 	setRegion(r);
 	initLocale(r.language || null);
 }
 
 const knownZone = (name: string) => {
+	if (!name) return false;
 	try {
 		new Intl.DateTimeFormat(undefined, { timeZone: name });
 		return true;
@@ -51,10 +56,11 @@ const knownZone = (name: string) => {
 	}
 };
 
+const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 /** The IANA zone dates are shown in: the saved one, else the browser's. Reactive in runes. */
 export function displayTimeZone(): string {
-	if (zone && knownZone(zone)) return zone;
-	return Intl.DateTimeFormat().resolvedOptions().timeZone;
+	return zone || browserZone;
 }
 
 /** The first-day setting as saved (`auto` follows the language; see `week.ts`). */
@@ -68,7 +74,7 @@ export function readRegionHint(): Region {
 	}
 }
 
-function writeRegionHint(r: Region): void {
+export function writeRegionHint(r: Region): void {
 	try {
 		localStorage.setItem(REGION_CACHE, JSON.stringify(r));
 	} catch {
