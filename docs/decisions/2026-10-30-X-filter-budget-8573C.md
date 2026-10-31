@@ -5,16 +5,15 @@ The filter budget gate now scales a listed CPU model by the job's own calibratio
 - **The failure.** On #210 (IMP-1, store-only), job 124095631213 ran on an 8573C and read the neutralized case at 53.3 µs. The raw time was 48.0 µs ÷ the 8573C's fixed factor of 0.900, which was provisional and came from one job.
 - **The data.** I read the logs of 64 `filter budget` jobs from 2026-10-28 to 10-30. For each job, R is its raw mixed-set µs ÷ its `calibration:` µs.
 
-  | CPU                                                     | Jobs | Calibration µs           | R                                     | R ÷ the 7763's R at the same code ("skew") |
-  | ------------------------------------------------------- | ---- | ------------------------ | ------------------------------------- | ------------------------------------------ |
-  | EPYC 7763 (reference)                                   | 29   | 9.83–11.34, median 11.09 | 4.09 before #196 (24), 3.93 after (5) | 1                                          |
-  | Xeon Platinum 8573C                                     | 9    | 8.08–8.69 and 9.46–9.86  | 4.40–4.71                             | 1.126 (1.112–1.181)                        |
-  | EPYC 9V45                                               | 13   | 6.71–7.34                | 3.41–3.86                             | 0.894 (0.861–0.945)                        |
-  | EPYC 9V74 (newly listed)                                | 10   | 9.15–11.90               | 3.58–3.81                             | 0.913 (0.905–0.934)                        |
-  | Xeon Platinum 8370C (newly listed, provisional: 3 jobs) | 3    | 10.36–10.75              | 4.06–4.54                             | 1.034 (1.022–1.110)                        |
+  | CPU | Jobs | Calibration µs | R | R ÷ the 7763's R at the same code ("skew") |
+  |---|---|---|---|---|
+  | EPYC 7763 (reference) | 29 | 9.83–11.34, median 11.09 | 4.09 before #196 (24), 3.93 after (5) | 1 |
+  | Xeon Platinum 8573C | 9 | 8.08–8.69 and 9.46–9.86 | 4.40–4.71 | 1.126 (1.112–1.181) |
+  | EPYC 9V45 | 13 | 6.71–7.34 | 3.41–3.86 | 0.894 (0.861–0.945) |
+  | EPYC 9V74 (newly listed) | 10 | 9.15–11.90 | 3.58–3.81 | 0.913 (0.905–0.934) |
+  | Xeon Platinum 8370C (newly listed, provisional: 3 jobs) | 3 | 10.36–10.75 | 4.06–4.54 | 1.034 (1.022–1.110) |
 
   "Before" and "after #196" mean code without and with `1b4e8b7a`, which cut the mixed set's instructions by 4.6%. The skew is the same in both eras: 8573C 1.126 and 1.150, 9V45 0.895 and 0.889.
-
 - **Why one factor per model couldn't work.** The 8573C's hosts fall in two bands. Their calibrations are 8.08–8.69 µs and 9.46–9.86 µs, and the engine follows them: raw mixed was 37.3–40.9 µs on the fast band and 43.2–44.5 µs on the slow one. R stays tight across both bands (4.40–4.71). The fixed 0.900 was taken from a fast-band job (41015045891), so it read every slow-band host about 13% high. Job 124095631213 is a slow-band host (calibration 9.86 µs). Re-deriving a fixed factor from all 9 jobs (median 0.91) would still read that job at 52.7 µs.
 - **The method** (`tests/props.rs`, `budget`):
   - **Reference model (`REFERENCE`, EPYC 7763):** its raw times decide, as before.
@@ -36,7 +35,6 @@ The filter budget gate now scales a listed CPU model by the job's own calibratio
   - 7763: 43.1–43.4 / 43.2–43.8 µs, raw and unchanged.
 
   On the mixed set every listed model now reads within about 6% of the 7763's raw time at the same code, and so does the neutralized case, apart from job 124095631213's host interference (below). Before, the 8573C read 44–48 µs.
-
 - **Not an engine regression.** Neutralized ÷ mixed since #196 is 1.00–1.01 on the 7763 (5 jobs), 1.01–1.05 on the 9V45, 1.01–1.03 on the 9V74 and 1.03 on the 8370C. On the 8573C it was 0.99 in job 123999363098 and 1.11 in job 124095631213. In 124095631213 the neutralized passes rose steadily from 45.6 to 53.3 µs while the mixed passes just before them were flat (43.2–43.9 µs), and the calibration was steady before and after. That pattern is a busy host during one case, not the engine. Callgrind with the 8573C's cache sizes (48 KiB 12-way L1D, 2 MiB 16-way L2) agrees:
   - instructions per judgment: equal (436k neutralized against 437k mixed);
   - L1D misses: +7.5%;
@@ -44,7 +42,6 @@ The filter budget gate now scales a listed CPU model by the job's own calibratio
   - branch mispredicts: +4–7%.
 
   So job 124095631213's neutralized time was host interference: there is no cache cliff and no engine slice to open. **If neutralized ÷ mixed above 1.08 recurs on any model, open an engine investigation** (runner, 2026-10-30). Every job's log gives both cases' raw times.
-
 - **Considered and not taken:**
   - **(b) A per-case factor for the neutralized case:** the data doesn't support it. The neutralized case scales like the mixed set on every model.
   - **(c) Report-only on a provisional model:** with 9 jobs the 8573C isn't provisional, and report-only would only defer the slow-band failure.

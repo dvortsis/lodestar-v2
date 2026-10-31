@@ -5,15 +5,14 @@ Owner-delegated decision (2026-10-23; deciding factors UX and performance): migr
 - **When:** on the writer's hourly purge tick (`PURGE_EVERY`), right after `purge_filter`, with the same `now` and `hits_before` (`Store::purge_snapshots`). Only a file-backed writable `Store` runs it; in-memory and read-only stores do nothing.
 - **What is purged, per schema version the snapshot holds** (read from its `schema_migrations`, not its name):
 
-  | Snapshot schema         | Torrents the live store deleted                                           | Quarantine expiry, sealed names, filter hits | Query log                             | API keys, saved searches, collections                       |
-  | ----------------------- | ------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------- | ----------------------------------------------------------- |
-  | v1–v3                   | deleted (children cascade)                                                | no such tables                               | no such table                         | no such tables                                              |
-  | v4–v9                   | deleted (children cascade)                                                | purged as live                               | no such table                         | no such tables                                              |
-  | v10                     | deleted (children cascade, alerts, marks and collection entries included) | purged as live                               | rows the live store pruned or cleared | rows deleted live go (by id); keys revoked live are revoked |
-  | none, or newer than v10 | skipped, warning logged                                                   | skipped                                      | skipped                               | skipped                                                     |
+  | Snapshot schema | Torrents the live store deleted | Quarantine expiry, sealed names, filter hits | Query log | API keys, saved searches, collections |
+  |---|---|---|---|---|
+  | v1–v3 | deleted (children cascade) | no such tables | no such table | no such tables |
+  | v4–v9 | deleted (children cascade) | purged as live | no such table | no such tables |
+  | v10 | deleted (children cascade, alerts, marks and collection entries included) | purged as live | rows the live store pruned or cleared | rows deleted live go (by id); keys revoked live are revoked |
+  | none, or newer than v10 | skipped, warning logged | skipped | skipped | skipped |
 
   A file that isn't a readable database is skipped with a warning too. Either way it's left byte for byte and still expires at 90 days. `Plan::KNOWN_THROUGH` has a test that fails when a migration is added, so the next migration has to say what its schema means here.
-
 - **Quarantine, as live:** rows past `expires_at` go, an expired adult hold becomes a tombstone (never replacing a floor rule's), and filter hits older than `hits_before` go. The SQL mirrors `purge_filter`; an equivalence test runs both on the same rows and compares the tables. **Also, a sealed name the live store no longer holds is cleared** (`sealed = NULL`): a hold released or confirmed since the snapshot was taken. The row itself stays, so a restored snapshot still refuses the hash until its own expiry.
 - **Deleted torrents, by hash:** every live deletion (`delete_torrents` for abuse reports and confirmations, and the adult relabel's refile) leaves the hash in `cs_hashes`, `tombstones` or `quarantine`. A snapshot torrent stored under a held hash is deleted. A snapshot can end up stricter than live (a hash held by an imported CS-1 list whose torrent the live store still has), never laxer.
   - **Confirmed and reported CS-1 entries (origin 0 and 1) are looked up in every pass, whenever they were recorded.** `add_cs_hashes` keeps an imported entry's old `added_at` when you report it, so a time window would miss a torrent reported after the snapshot whose hash an older list import already had. They come from your own actions, so they're few.
