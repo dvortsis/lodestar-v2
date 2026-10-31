@@ -446,13 +446,8 @@
       "merged_sha": "a1b2938"
     },
     "S-search-4": {
-      "status": "pending",
-      "model": "sonnet",
-      "session": null,
-      "pr": null,
-      "attempt": 0,
-      "review_rounds": 0,
-      "notes": ""
+      "status": "running",
+      "notes": "2026-10-31T00:39Z brief briefs/S-search-4.md; Sonnet session_01MMjhn8wd3xyQNRdYx5bpx9"
     },
     "S-search-5": {
       "status": "pending",
@@ -1552,8 +1547,8 @@
       "notes": "2026-10-30T23:25Z brief briefs/CR-1a-H.md; Opus session | session_01MMjhnCJ1yHGdeEU4hX3vG3 | 2026-10-31T00:15Z PR #246 head 4fd2f14d (~1,580 lines); screen: no gain over noise floor (high-latency +5.1% vs spread 12.1%, healthy -1.2%, admission-pressure -3.7%; ~94% of hints expire unused). Reviewer session_01MMjhnA8skJhDBEEuLw1YjV. Owner flags at merge: HINT_CAPACITY 20,000 hashes (new), per-hash hints in the actor, private-key case moot | 2026-10-31T00:27Z review MERGE at 4fd2f14d (null screen credible: harvest outpaces lookups, keys wait >60 s). Optional: order cap in capture, send_failed test, guard skips ordinary routing 60 s (name to owner). Merge on green ci-ok | 2026-10-31T00:35Z merged #246 (49fbc4ec); sessions archived"
     },
     "S-theme-boot": {
-      "status": "review",
-      "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk | 2026-10-31T00:17Z PR #247 head 714c8834; reviewer session_01MMjhn9esFoJm482hAgeB7o; timing stays whenEngaged (runner) | 2026-10-31T00:29Z review CHANGES (committed root node_modules vitest cache); fixed b2be0948, runner delta-checked (only .gitignore + removals) -> MERGE; merge on ci-ok+Web+E2E green. Reviewer archived"
+      "status": "merged",
+      "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk | 2026-10-31T00:17Z PR #247 head 714c8834; reviewer session_01MMjhn9esFoJm482hAgeB7o; timing stays whenEngaged (runner) | 2026-10-31T00:29Z review CHANGES (committed root node_modules vitest cache); fixed b2be0948, runner delta-checked (only .gitignore + removals) -> MERGE; merge on ci-ok+Web+E2E green. Reviewer archived | 2026-10-31T00:38Z merged #247 (c6c443d2); author archived"
     },
     "LU-1-neutralize": {
       "status": "running",
