@@ -1783,13 +1783,13 @@
       "reviewer": "session_01MMjhn94YmgkwkPeUXA5HEY"
     },
     "X-soak-docker-memrule": {
-      "status": "pending",
+      "status": "building",
       "model": "opus",
-      "session": null,
+      "session": "session_01MMjhnBtHTd2PZbFMcocXTm",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time)."
+      "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time). | 19:05Z launched Opus."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
