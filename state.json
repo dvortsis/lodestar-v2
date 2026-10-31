@@ -1749,7 +1749,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "17:08Z brief briefs/S-logs-2.md (Settings → Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus"
+   "notes": "17:08Z brief briefs/S-logs-2.md (Settings → Logging; privacy invariants; carries #284 optional); security review | 17:06Z launched Opus | 17:35Z size: Notifications first view 44.994 on main, +Logging registry entry -> 45.045 (cap 45). Runner §2.26: raise only Notifications first view 45 -> 45.1 KB, commented; structural fix queued"
   },
   "X-requeue-2": {
    "status": "running",
@@ -1759,6 +1759,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "17:36Z brief briefs/X-requeue-2.md (#286 review opt 1-3; content safety); security review | 17:34Z launched Opus"
+  },
+  "X-settings-registry-slim": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "Before S-about/S-updates/S-wizard add Settings entries: move per-screen titles/purposes (en+zh literals) out of the shared screens chunk (resolve via message keys/group map or lazy per-locale), reclaim the ~80-190 B per entry every Settings first view pays; then lower the Notifications first-view limit back to 45 KB"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2518,6 +2527,10 @@
   {
    "item": "FYI (§2.19, content safety) #287 B-held-exact: fixes a pre-existing race where releasing a hold at the same moment an import re-held the same hash could leave a held torrent fetchable until restart. Memory now always matches the store's holds; a hash a release frees may stay refused for the few seconds the release runs (over-strict, safe).",
    "status": "to-send"
+  },
+  {
+   "item": "FYI (§2.26) S-logs-2: the Settings Notifications first-view limit goes 45 -> 45.1 KB (+~90 B) because each new Settings screen's nav entry adds ~80 B to every Settings page. A structural fix (titles out of the shared chunk) is queued next and should bring it back under 45 KB.",
+   "status": "to-send"
   }
  ],
  "external_gates": {
@@ -2571,7 +2584,7 @@
   "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
   "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
   "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-  "Settings first views creep ~80 B per new registry entry (Notifications 44.79/45 after #285). Before S-logs-2 / S-about / S-updates add entries: lazy-load registry titles/purposes per screen or decide a §2.26 budget change with numbers"
+  "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
