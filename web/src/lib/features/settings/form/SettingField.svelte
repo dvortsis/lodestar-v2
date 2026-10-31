@@ -62,17 +62,33 @@
 					// A locked chip list has no input to label.
 					(choice.builtin === 'chips' && !f.locked)))
 	);
-	// Discard, Undo or Use theirs bringing the sentinel back turns Automatic on again.
+	// Discard, Undo, Use theirs or a server update bringing the sentinel back turns Automatic on
+	// again. Only a change of value does: turning Automatic off keeps the value (an empty text, a
+	// typed 0) and must stay off, and so must the save that follows it.
+	let seen = untrack(() => f.value);
+	let arrived = false; // the value just changed to the automatic one; wait for it to settle
+	// A text being edited keeps its box: typing it back to the automatic value mustn't hide it
+	// (and its focus) mid-edit, so Automatic turns on again once focus leaves.
+	let editing = $state(false);
+	const isEntry = (t: EventTarget | null) =>
+		t instanceof Element && t.matches('input:not([type="checkbox"]), textarea, select');
 	$effect(() => {
 		const v = f.value;
 		const clean = !f.dirty;
+		const still = editing;
 		untrack(() => {
-			if (manual && clean && v === spec.auto) manual = false;
+			if (v !== seen) arrived = v === spec.auto;
+			seen = v;
+			if (arrived && clean && !still) {
+				manual = false;
+				arrived = false;
+			}
 		});
 	});
 
 	function setAutomatic(on: boolean) {
 		manual = !on;
+		arrived = false; // the user's own change is never an outside one
 		if (on) form.set(key, spec.auto);
 		else {
 			const n = Preview.part?.automaticNumber(f);
@@ -130,7 +146,13 @@
 	$effect(() => Edit.want(f.conflict || f.pendingReset || f.savedRecently || f.undoUntil));
 </script>
 
-<div id={fieldAnchor(key)} class="ls-field flex flex-col gap-2" data-field={key}>
+<div
+	id={fieldAnchor(key)}
+	class="ls-field flex flex-col gap-2"
+	data-field={key}
+	onfocusin={(e) => (editing = isEntry(e.target))}
+	onfocusout={() => (editing = false)}
+>
 	<Field {help} error={f.error}>
 		{#snippet children(cp)}
 			<div class="flex items-center justify-between gap-2">

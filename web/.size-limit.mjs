@@ -1,7 +1,7 @@
 // §10.1 budgets, gzipped. Size only: the preset-app timing step is disabled (`running: false`).
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
@@ -144,11 +144,34 @@ const settingsOnDemand = [
 // pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
 // its own, so "Settings controls (on demand)" keeps measuring only the controls.
 const settingsEdit = [/features\/settings\/form\/edit\.ts$/];
+// The server labels, one generated map per section (M-settings-engine-2): a form loads its
+// section's map before its fields render, so a first view stops at them. Gated on their own.
+const settingsMessages = [/features\/settings\/form\/message-maps\/\w+\.ts$/];
+// A section's first view does include the maps its form awaits before any field renders: the
+// group headings' and the section's own. The first-view gates count the group map and the
+// largest section map (the worst case) and leave the rest out, so the numbers are honest and a
+// later screen's map is gated the moment it lands. "Settings messages (on demand)" measures all.
+const messageKeys = Object.keys(manifest).filter((key) =>
+	settingsMessages.some((re) => re.test(key))
+);
+const rawSize = (key) => statSync(`.svelte-kit/output/client/${manifest[key].file}`).size;
+const largestMap = messageKeys
+	.filter((key) => !key.endsWith('/group.ts'))
+	.sort((a, b) => rawSize(b) - rawSize(a))[0];
+const settingsMessagesLeftOut = messageKeys
+	.filter((key) => !key.endsWith('/group.ts') && key !== largestMap)
+	.map((key) => new RegExp(`${key.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`));
 const settingsLazy = requireMeasuredJs(
 	'Settings controls (on demand)',
 	onDemandOf('/settings/[section]', settingsOnDemand).filter(
-		(f) => !onDemandOf('/settings/[section]', settingsEdit).includes(f)
+		(f) =>
+			!onDemandOf('/settings/[section]', settingsEdit).includes(f) &&
+			!onDemandOf('/settings/[section]', settingsMessages).includes(f)
 	)
+);
+const settingsMessagesLazy = requireMeasuredJs(
+	'Settings messages (on demand)',
+	onDemandOf('/settings/[section]', settingsMessages)
 );
 const settingsEditLazy = requireMeasuredJs(
 	'Settings edit chunk (on demand)',
@@ -177,6 +200,7 @@ const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|t
 const settingsFirstView = [
 	...settingsOnDemand,
 	...settingsEdit,
+	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
 ];
@@ -216,7 +240,13 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 			...settingsShellView,
 			...ownChunk(
 				key,
-				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions, ...appearanceLater],
+				[
+					...settingsOnDemand,
+					...settingsEdit,
+					...settingsMessagesLeftOut,
+					...settingsBodyInteractions,
+					...appearanceLater
+				],
 				false,
 				settingsShellView
 			)
@@ -227,7 +257,7 @@ const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
 			appearanceBody,
-			[...settingsOnDemand, ...settingsEdit, ...appearanceLater],
+			[...settingsOnDemand, ...settingsEdit, ...settingsMessagesLeftOut, ...appearanceLater],
 			false,
 			settingsShellView
 		)
@@ -264,7 +294,7 @@ const settingsExtrasLazy = requireMeasuredJs('Settings screen extras (on demand)
 		...bodyKeys.flatMap((key) =>
 			ownChunk(
 				key,
-				[...settingsOnDemand, ...settingsEdit, ...settingsBodyInteractions],
+				[...settingsOnDemand, ...settingsEdit, ...settingsMessages, ...settingsBodyInteractions],
 				true,
 				settingsFormFiles
 			)
@@ -495,6 +525,7 @@ export default [
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>
