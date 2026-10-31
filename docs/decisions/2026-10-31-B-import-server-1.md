@@ -10,7 +10,7 @@ Lane I, from IMP-4b's open list (`2026-10-31-IMP-4b.md`). No schema change, no A
 - **Each caller keeps its behaviour:** rules that don't parse are skipped by both; the server logs each one, the CLI prints how many.
 - **A parity test** (`cli::import::tests::the_cli_and_the_server_build_the_same_filter`) runs the server's path through the real `Pipeline::start_with` and the CLI's `filter`, on one store and config, and compares the verdicts for a hash in a config blocklist file, a CS-1 entry, a CS-8 floor signature, a name a drop rule matches, and a torrent nothing matches.
   - **Each path gets its own data folder, seeded alike,** so the CLI can't pass by reading what the server's sync wrote into a shared store.
-  - **Left untested:** a floor-marked subscribed list (it needs a fetched list). And a step someone adds directly in `services.rs`, outside `sync_sources`, wouldn't be caught: the server's start can't run in a unit test without the whole service set. New sources go into `sync_sources` or `load_filter`.
+  - **Not caught:** a step someone adds directly in `services.rs`, outside `sync_sources`: the server's start can't run in a unit test without the whole service set. New sources go into `sync_sources` or `load_filter`.
   - The brief's "floor term" is taken as the CS-8 signature: the floor (CS-1a, CS-1b, CS-8a) is hashes and signatures, and a shipped term list entry would put a real term in a test.
 
 ## Jobs leave `indexing`

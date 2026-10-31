@@ -182,7 +182,9 @@ const bodyMaps = {
 	LanguageScreen: ['preferences'],
 	IntegrationsScreen: ['integrations'],
 	NotificationsScreen: ['notifications'],
-	InsightsScreen: ['insights']
+	InsightsScreen: ['insights'],
+	// Security reads no section map: secure cookies is a status line, not an engine field.
+	SecurityScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -259,11 +261,22 @@ const settingsExtras = [/features\/settings\/shell\/SettingsExport\.svelte$/];
 // What a hand-built body loads only on an interaction: Keyboard's shortcut sheet (opened with ?) and
 // its single-key toggle command (S-keys' boot.ts). Gated with the extras.
 const settingsBodyInteractions = [/features\/shortcuts\/(ShortcutSheet\.svelte|toggle\.ts)$/];
+// Security (M-security-settings): the password confirmation and its lock-out banner load on the
+// first risky action, and the navigation icon after the navigation shows, so a first view stops at
+// them; gated on their own below. `body.ts` only forwards to the body when Security opens: other
+// screens never load it, and Security's first view is measured from the body itself.
+const settingsSecurity = [
+	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
+	/features\/settings\/security\/icon\.ts$/
+];
+const securityLoader = [/features\/settings\/security\/body\.ts$/];
 const settingsFirstView = [
 	...settingsOnDemand,
 	...insightsDigest,
 	...settingsEdit,
 	...settingsConnections,
+	...settingsSecurity,
+	...securityLoader,
 	...settingsMessagesLeftOut,
 	...settingsBodies,
 	...settingsExtras
@@ -272,6 +285,15 @@ const settingsSectionView = own('/settings/[section]', { onDemand: settingsFirst
 const settingsShellView = own('/settings/[section]', {
 	onDemand: [...settingsFirstView, ...settingsFormChunk]
 });
+const settingsSecurityLazy = requireMeasuredJs('Settings security parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsSecurity.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
+			)
+	)
+]);
 // Never leave out code a page loads statically: every body or extra the patterns match must be a
 // dynamic import only (`load`, `extra`), or its regex would hide first-view code from the gates.
 const bodyKeys = Object.keys(manifest).filter((key) => settingsBodies.some((re) => re.test(key)));
@@ -308,6 +330,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsOnDemand,
 					...settingsEdit,
 					...settingsConnections,
+					...settingsSecurity,
 					...insightsDigest,
 					...mapsLeftOut(bodyMaps[mapName(key)] ?? [largestMap]),
 					...settingsBodyInteractions,
@@ -623,6 +646,8 @@ export default [
 	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
+	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
+	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>
