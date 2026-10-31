@@ -1424,4 +1424,115 @@ mod scan_tests {
         assert_eq!(again, set);
         assert_eq!(cache.hits(), (4, 4));
     }
+
+    /// One segment's scan fails while its siblings are mid-scan: the
+    /// siblings stop at their next check rather than run to their end,
+    /// the failing segment's own error is the one returned, and nothing
+    /// is cached.
+    #[test]
+    fn a_failing_segment_stops_its_siblings() {
+        use std::time::{Duration, Instant};
+        let mut builder = Schema::builder();
+        let torrent = builder.add_u64_field("torrent", FAST);
+        let mut index = tantivy::Index::create_in_ram(builder.build());
+        index.set_multithread_executor(3).unwrap();
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for seg in 0..3u64 {
+            let mut doc = TantivyDocument::new();
+            doc.add_u64(torrent, seg);
+            writer.add_document(doc).unwrap();
+            writer.commit().unwrap();
+        }
+        let searcher = index.reader().unwrap().searcher();
+        assert_eq!(searcher.segment_readers().len(), 3);
+        let probe = Probe {
+            fail: searcher.segment_readers()[1].segment_id(),
+            started: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ran_out: Arc::new(AtomicBool::new(false)),
+            deadline: Instant::now() + Duration::from_secs(20),
+        };
+        let cache = FileSetCache::default();
+        let token = crate::CancelToken::new();
+        let result = torrent_ids(&searcher, &probe, "probe", &cache, &token);
+        match result {
+            Err(crate::index::Error::Tantivy(e)) => {
+                assert!(e.to_string().contains("injected"), "{e}")
+            }
+            other => panic!("expected the injected error, got {other:?}"),
+        }
+        assert_eq!(probe.started.load(Ordering::Acquire), 2);
+        assert!(
+            !probe.ran_out.load(Ordering::Acquire),
+            "a sibling ran to its end"
+        );
+        assert!(!token.is_stopped());
+        assert_eq!(cache.state.lock().unwrap().retained_bytes(), 0);
+        assert_eq!(cache.usage().0, 0);
+    }
+
+    /// Fails segment `fail` once both siblings are scanning; the siblings
+    /// match their one document over and over until `deadline`.
+    #[derive(Debug, Clone)]
+    struct Probe {
+        fail: SegmentId,
+        started: Arc<std::sync::atomic::AtomicUsize>,
+        ran_out: Arc<AtomicBool>,
+        deadline: std::time::Instant,
+    }
+
+    impl Query for Probe {
+        fn weight(&self, _: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
+            Ok(Box::new(self.clone()))
+        }
+    }
+
+    impl Weight for Probe {
+        fn scorer(&self, seg: &SegmentReader, _: Score) -> tantivy::Result<Box<dyn Scorer>> {
+            if seg.segment_id() == self.fail {
+                while self.started.load(Ordering::Acquire) < 2 {
+                    assert!(
+                        std::time::Instant::now() < self.deadline,
+                        "siblings never started"
+                    );
+                    std::thread::yield_now();
+                }
+                return Err(tantivy::TantivyError::InternalError("injected".into()));
+            }
+            self.started.fetch_add(1, Ordering::AcqRel);
+            Ok(Box::new(Endless(self.clone(), 0)))
+        }
+
+        fn explain(&self, _: &SegmentReader, _: DocId) -> tantivy::Result<Explanation> {
+            Ok(Explanation::new("probe", 1.0))
+        }
+    }
+
+    struct Endless(Probe, DocId);
+
+    impl DocSet for Endless {
+        fn advance(&mut self) -> DocId {
+            if std::time::Instant::now() >= self.0.deadline {
+                self.0.ran_out.store(true, Ordering::Release);
+                self.1 = tantivy::TERMINATED;
+            }
+            self.1
+        }
+
+        fn doc(&self) -> DocId {
+            self.1
+        }
+
+        fn size_hint(&self) -> u32 {
+            0
+        }
+    }
+
+    impl Scorer for Endless {
+        fn score(&mut self) -> Score {
+            1.0
+        }
+    }
 }

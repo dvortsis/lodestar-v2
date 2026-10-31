@@ -1000,24 +1000,17 @@ async fn a_requeue_cut_short_by_shutdown_is_redone_at_the_next_start() {
     assert!(marked(&f.api).is_empty(), "nothing marked yet");
     // Stopped again at once on resume: it stays pending.
     assert!(f.api.resume_requeues(0).is_err());
+    assert_eq!(pending(&f.api), ["lexb"]);
 
-    // The next start: a fresh store handle on the same file and a new
-    // shutdown token.
-    let db = f._dir.path().join("t.db");
-    let restarted = FiltersApi {
-        store: Arc::new(Mutex::new(
-            Store::open(&db, StoreConfig::default()).unwrap(),
-        )),
-        engine: f.api.engine.clone(),
-        held: f.api.held.clone(),
-        sealer: f.api.sealer.clone(),
-        ips: f.api.ips.clone(),
-        index: f.api.index.clone(),
-        reenrich: Arc::new(AtomicBool::new(false)),
-        jobs: Default::default(),
-        quarantine_secs: f.api.quarantine_secs,
-        shutdown: Default::default(),
-    };
+    // A start with search off can't do it: it stays for one with search on.
+    let off = restart(&f, None);
+    assert_eq!(off.resume_requeues(0).unwrap(), 0);
+    assert_eq!(pending(&off), ["lexb"]);
+    drop(off);
+
+    // The next start with search on: a fresh store handle on the same file
+    // and a new shutdown token.
+    let restarted = restart(&f, f.api.index.clone());
     assert_eq!(restarted.resume_requeues(0).unwrap(), 1);
     assert_eq!(marked(&restarted), vec![a], "the rule's match is marked");
     assert!(
@@ -1027,6 +1020,90 @@ async fn a_requeue_cut_short_by_shutdown_is_redone_at_the_next_start() {
     );
     // Done, so cleared: another start redoes nothing.
     assert_eq!(restarted.resume_requeues(0).unwrap(), 0);
+    assert!(pending(&restarted).is_empty());
+}
+
+/// A rule added while search is off stays pending, once however often it
+/// changes, and the first start with search on marks its existing matches.
+#[tokio::test]
+async fn a_rule_added_with_search_off_is_requeued_once_search_is_on() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let (a, _) = store_torrent(&f, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
+    store_torrent(&f, "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30);
+    enrich_all(&mut f.api.store.lock().unwrap());
+    let rules = |body: Value| post("/api/v1/classify/rules", Some(&c), body);
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "lexb", "adult": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], Value::Null, "no index to search");
+    let rule = body["id"].as_i64().unwrap();
+    // Removed and added again: still one entry.
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/rules/remove",
+            Some(&c),
+            json!({ "id": rule }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "lexb", "adult": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(pending(&f.api), ["lexb"]);
+    // Starts with search off keep it.
+    assert_eq!(f.api.resume_requeues(0).unwrap(), 0);
+    assert_eq!(pending(&f.api), ["lexb"]);
+
+    // Search turned on (a restart): a new, caught-up index.
+    let index = SearchIndex::in_memory().unwrap();
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+    }
+    let on = restart(&f, Some(index.into()));
+    assert_eq!(on.resume_requeues(0).unwrap(), 1);
+    let marked = on
+        .store
+        .lock()
+        .unwrap()
+        .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+        .unwrap();
+    assert_eq!(marked, vec![a], "the rule's existing match is marked");
+    assert!(pending(&on).is_empty());
+}
+
+/// The pending re-queues, as stored.
+fn pending(api: &FiltersApi) -> Vec<String> {
+    api.store
+        .lock()
+        .unwrap()
+        .setting_text("classify.requeue_pending")
+        .unwrap()
+        .map(|t| serde_json::from_str(&t).unwrap())
+        .unwrap_or_default()
+}
+
+/// The next start: a fresh store handle on the same file, a new shutdown
+/// token, and `index` (`None` with search off).
+fn restart(f: &Fixture, index: Option<lodestar_search::SearchHandle>) -> FiltersApi {
+    let db = f._dir.path().join("t.db");
+    FiltersApi {
+        store: Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        engine: f.api.engine.clone(),
+        held: f.api.held.clone(),
+        sealer: f.api.sealer.clone(),
+        ips: f.api.ips.clone(),
+        index,
+        reenrich: Arc::new(AtomicBool::new(false)),
+        jobs: Default::default(),
+        quarantine_secs: f.api.quarantine_secs,
+        shutdown: Default::default(),
+    }
 }
 
 /// Enriches every stored torrent, as the pipeline's background pass does.
