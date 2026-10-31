@@ -738,12 +738,12 @@ export default [
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
 	// Raised for S-logs-2b, pending the runner's ruling (§2.26): the map now holds the outputs'
-	// labels, help and options. Measured 1.425 KB; limit = measured + 10%. It sits in Logging's first
-	// view, which stays at 44.62 of 45 KB.
-	entry('Settings logging messages (on demand)', settingsLoggingMap, '1.57 KB'),
+	// labels, help and options. Measured 1.35 KB; limit = measured + 10%. It sits in Logging's first
+	// view, which stays at 44.57 of 45 KB.
+	entry('Settings logging messages (on demand)', settingsLoggingMap, '1.48 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
-	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 8.44 KB.
-	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '9.3 KB'),
+	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
+	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	// Raised by the runner (§2.26): +~90 B from the Logging registry entry in the shared screens chunk

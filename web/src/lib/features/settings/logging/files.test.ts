@@ -39,6 +39,7 @@ const FILES = [
 ];
 let calls: { method: string; path: string; search: string; body: unknown }[];
 let deleteReply: unknown;
+let listReply: { status: number; body: unknown };
 let previewReply: unknown;
 
 beforeEach(() => {
@@ -46,6 +47,10 @@ beforeEach(() => {
 	calls = [];
 	deleteReply = { deleted: 1, bytes: 2048, skipped: [] };
 	previewReply = { sections: { logging: { revision: 1, fields: {} } } };
+	listReply = {
+		status: 200,
+		body: { files: FILES, folder: '/data/logs', index_readable: true, reason: null, state: 'on' }
+	};
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -61,15 +66,18 @@ beforeEach(() => {
 			const reply = (b: unknown) =>
 				new Response(JSON.stringify(b), { headers: { 'Content-Type': 'application/json' } });
 			if (path === '/logs/files' && method === 'GET')
-				return reply({
-					files: FILES,
-					folder: '/data/logs',
-					index_readable: true,
-					reason: null,
-					state: 'on'
+				return new Response(JSON.stringify(listReply.body), {
+					status: listReply.status,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			if (path === '/logs/files' && method === 'DELETE' && deleteReply === 'fail')
+				return new Response(JSON.stringify({ error: { code: 'internal', message: 'disk' } }), {
+					status: 500,
+					headers: { 'Content-Type': 'application/json' }
 				});
 			if (path === '/logs/files' && method === 'DELETE') return reply(deleteReply);
-			if (path === '/settings/preview') return reply(previewReply);
+			if (path === '/settings/preview')
+				return previewReply === 'fail' ? new Response('{}', { status: 500 }) : reply(previewReply);
 			return new Response('{}', { status: 404 });
 		})
 	);
@@ -83,6 +91,55 @@ const hrefOf = (name: string) =>
 	screen.getByRole('link', { name: `Download ${name}` }).getAttribute('href');
 
 describe('log files', () => {
+	it('without torrent details: no Remove box, and the zip has no redact; no Docker hint', async () => {
+		listReply.body = {
+			files: [FILES[1]],
+			folder: '/data/logs',
+			index_readable: true,
+			reason: null,
+			state: 'on'
+		};
+		const catalog = new LoggingCatalog();
+		catalog.deployment = 'tarball';
+		render(LogFiles, { catalog });
+		await screen.findByTestId('log-file-lodestar-1.jsonl.gz');
+		expect(screen.queryByRole('checkbox', { name: 'Remove torrent details' })).toBeNull();
+		expect(screen.getByTestId('log-download-all').getAttribute('href')).toBe(
+			'/api/v1/logs/archive.zip?format=text'
+		);
+		expect(screen.queryByTestId('log-files-docker')).toBeNull();
+		expect(screen.getByTestId('log-file-time-lodestar-1.jsonl.gz').textContent).toBe('— – —');
+	});
+
+	it('says why nothing is listed, and when the details index is unreadable', async () => {
+		listReply.body = {
+			files: [],
+			folder: null,
+			index_readable: false,
+			reason: 'not_private',
+			state: 'unavailable'
+		};
+		render(LogFiles, { catalog: new LoggingCatalog() });
+		expect((await screen.findByTestId('log-files-state')).textContent).toContain(
+			'other users of this machine'
+		);
+		expect(screen.getByTestId('log-files-index')).toBeTruthy();
+		expect(screen.getByText('No log files yet.')).toBeTruthy();
+	});
+
+	it('says so when the list fails', async () => {
+		listReply = { status: 500, body: { error: { code: 'internal', message: 'x' } } };
+		render(LogFiles, { catalog: new LoggingCatalog() });
+		expect((await screen.findByRole('alert')).textContent).toContain("couldn't be listed");
+	});
+
+	it('copies the folder, or selects it to copy by hand', async () => {
+		// jsdom isn't a secure context, so the clipboard falls back to selecting the path.
+		render(LogFiles, { catalog: new LoggingCatalog() });
+		await fireEvent.click(await screen.findByRole('button', { name: 'Copy the folder path' }));
+		await until(() => expect(getSelection()?.toString()).toBe('/data/logs'));
+	});
+
 	it('lists the files, badges those with details, and downloads them redacted by default', async () => {
 		const catalog = new LoggingCatalog();
 		catalog.deployment = 'docker';
@@ -105,7 +162,7 @@ describe('log files', () => {
 		);
 		expect(screen.getByTestId('log-folder').textContent).toBe('/data/logs');
 		expect(screen.getByText(/docker logs/)).toBeTruthy();
-		// Unticking Remove torrent details is the user's own choice, per download.
+		// Unticking Remove torrent details is the user's own choice, for the downloads made now.
 		await fireEvent.click(screen.getByRole('checkbox', { name: 'Remove torrent details' }));
 		await fireEvent.click(screen.getByRole('radio', { name: 'JSON lines' }));
 		await until(() =>
@@ -126,7 +183,7 @@ describe('log files', () => {
 			{ name: 'Delete the log files with torrent details?' },
 			{ timeout: 10_000 }
 		);
-		expect(dialog.textContent).toMatch(/This deletes 1 log files \(2\.00\sKiB\)/);
+		expect(dialog.textContent).toMatch(/Log files to delete: 1 \(2\.00\sKiB\)/);
 		expect(document.activeElement?.textContent?.trim()).toBe('Cancel');
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -139,31 +196,55 @@ describe('log files', () => {
 		};
 		await fireEvent.click(screen.getByRole('button', { name: 'Delete all log files…' }));
 		await fireEvent.click(
-			await screen.findByRole('button', { name: /Delete 2 files \(3\.00\sKiB\)/ }, { timeout: 10_000 })
+			await screen.findByRole(
+				'button',
+				{ name: /Delete log files \(2, 3\.00\sKiB\)/ },
+				{ timeout: 10_000 }
+			)
 		);
 		await until(() =>
 			expect(calls.find((c) => c.method === 'DELETE')?.body).toEqual({ which: 'all' })
 		);
 		await until(() => expect(screen.getByRole('alert').textContent).toContain('lodestar.jsonl'));
-		expect(screen.getByText(/Deleted 1 files \(1\.00\sKiB\)\./)).toBeTruthy();
+		expect(screen.getByText(/Log files deleted: 1 \(1\.00\sKiB\)\./)).toBeTruthy();
+	});
+
+	it('says so when a delete fails, and the list is read again', async () => {
+		render(LogFiles, { catalog: new LoggingCatalog() });
+		await screen.findByTestId('log-file-lodestar.jsonl');
+		deleteReply = 'fail';
+		await fireEvent.click(screen.getByRole('button', { name: 'Delete all log files…' }));
+		await fireEvent.click(
+			await screen.findByRole('button', { name: /Delete log files \(2,/ }, { timeout: 10_000 })
+		);
+		await until(() =>
+			expect(screen.getByRole('alert').textContent).toContain("Couldn't delete the files")
+		);
+		expect(calls.filter((c) => c.path === '/logs/files' && c.method === 'GET')).toHaveLength(2);
 	});
 });
 
 const fakeForm = (detail: { value: unknown; dirty: boolean }) =>
 	({
 		specs: [
-			{ key: 'logging.verbosity', name: 'verbosity', preview: true },
-			{ key: 'logging.file_size_mib', name: 'file_size_mib', preview: true }
+			{ key: 'logging.verbosity', name: 'verbosity', preview: true, group: 'events' },
+			{ key: 'logging.file_size_mib', name: 'file_size_mib', preview: true, group: 'file' }
 		],
 		field: (key: string) =>
 			key === 'logging.console_detail'
 				? detail
 				: key === 'logging.file_size_mib'
-					? { value: 32, dirty: true }
-					: { value: 'normal', dirty: false }
+					? { value: 32, dirty: true, locked: false }
+					: { value: 'normal', dirty: false, locked: false }
 	}) as unknown as SettingsForm;
 
 describe('outputs', () => {
+	it("the preview says when it isn't available", async () => {
+		previewReply = 'fail';
+		render(Preview, { form: fakeForm({ value: 'private', dirty: false }) });
+		await screen.findByText(/preview isn't available/, undefined, { timeout: 10_000 });
+	});
+
 	it('asks before the console gets torrent details; Cancel refuses the save', async () => {
 		expect(await confirmConsoleDetail(fakeForm({ value: 'private', dirty: true }))).toBe(true);
 		expect(await confirmConsoleDetail(fakeForm({ value: 'file', dirty: false }))).toBe(true);
@@ -209,7 +290,7 @@ describe('outputs', () => {
 		expect(screen.getByTestId('log-volume-console').textContent).toMatch(/1\.50\sMiB/);
 		expect(screen.getByTestId('log-examples').textContent).toContain('ref:7f3a2c9e');
 		expect(calls.find((c) => c.path === '/settings/preview')?.body).toEqual({
-			logging: { verbosity: 'normal', file_size_mib: 32 }
+			logging: { file_size_mib: 32 }
 		});
 	});
 });

@@ -6,6 +6,7 @@
 	// itself: it shows on only once the server has saved it.
 	import { onDestroy, tick } from 'svelte';
 	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
@@ -75,7 +76,7 @@
 		if (!events.length) return m.settings_logging_kind_carried_none();
 		const names = events.slice(0, 3).map(eventLabel).join(', ');
 		return m.settings_logging_kind_carried({
-			count: formatCount(events.length),
+			count: formatCount(events.length, currentLocale()),
 			events: events.length > 3 ? `${names}, …` : names
 		});
 	}

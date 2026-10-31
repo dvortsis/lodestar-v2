@@ -19,6 +19,7 @@
 	import IconDebug from '~icons/ph/bug';
 	import IconTrace from '~icons/ph/dots-three-circle';
 	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Checkbox from '$lib/ui/fields/Checkbox.svelte';
@@ -126,8 +127,8 @@
 				}}
 				>{m.settings_logging_events_group({
 					component: componentLabel(component),
-					on: formatCount(g.on),
-					total: formatCount(g.all.length)
+					on: formatCount(g.on, currentLocale()),
+					total: formatCount(g.all.length, currentLocale())
 				})}</summary
 			>
 			<ul class="flex flex-col gap-4 pb-4">
@@ -146,7 +147,9 @@
 								<Icon class="size-4" aria-hidden="true" />{levelLabel(e.level)}
 							</span>
 							<span class="text-small text-muted-text" data-testid="log-rate-{e.id}"
-								>{m.settings_logging_events_rate({ count: formatCount(e.rate_per_hour) })}</span
+								>{m.settings_logging_events_rate({
+									count: formatCount(e.rate_per_hour, currentLocale())
+								})}</span
 							>
 							{#each e.kinds as k (k)}<Badge>{kindShort(k)}</Badge>{/each}
 							{#if e.id in overrides}<Badge variant="accent"

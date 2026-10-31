@@ -380,6 +380,19 @@ test.describe('keyboard: Settings → Logging', () => {
 			'/api/v1/logs/files/lodestar.jsonl?format=text&redact=true'
 		);
 		await expectNoA11yViolations(page);
+		// Remove torrent details is on by default; unticking it by keyboard changes the links.
+		const redact = page.getByRole('checkbox', { name: 'Remove torrent details' });
+		await kbd.tabTo(redact, 200);
+		await expect(redact).toBeChecked();
+		await kbd.press('Space');
+		await kbd.tabTo(page.getByTestId('log-download-all'), 5);
+		await expect(page.getByTestId('log-download-all')).toHaveAttribute(
+			'href',
+			'/api/v1/logs/archive.zip?format=text&redact=false'
+		);
+		await kbd.press('Shift+Tab');
+		await kbd.press('Space');
+		await expect(redact).toBeChecked();
 
 		await kbd.tabTo(page.getByRole('radio', { name: 'Private', exact: true }).last(), 120);
 		await kbd.press('ArrowRight');
@@ -399,11 +412,11 @@ test.describe('keyboard: Settings → Logging', () => {
 		await kbd.tabTo(page.getByRole('button', { name: 'Delete files with torrent details…' }), 80);
 		await kbd.press('Enter');
 		const del = page.getByRole('dialog', { name: 'Delete the log files with torrent details?' });
-		await expect(del).toContainText('This deletes 1 log files');
+		await expect(del).toContainText('Log files to delete: 1');
 		await expect(del.getByRole('button', { name: 'Cancel' })).toBeFocused();
 		await kbd.press('Tab');
 		await kbd.press('Enter');
-		await expect(page.getByText(/Deleted 1 files/)).toBeVisible();
+		await expect(page.getByText(/Log files deleted: 1/)).toBeVisible();
 		expect(deletes).toEqual([{ which: 'details' }]);
 	});
 });

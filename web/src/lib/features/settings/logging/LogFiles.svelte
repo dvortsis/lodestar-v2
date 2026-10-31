@@ -4,10 +4,12 @@
 	// "Remove torrent details" on by default; the folder with Copy; on Docker, where the console log
 	// is. Then the Danger zone: Delete log files (all, or only those with torrent details), each
 	// behind a dialog with the count and size, focus on Cancel.
+	import { tick } from 'svelte';
 	import IconWarn from '~icons/ph/warning';
 	import { api, isAbort } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
 	import { formatBytes, formatCount, formatDateTime } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
@@ -23,35 +25,59 @@
 
 	let { catalog }: { catalog: LoggingCatalog } = $props();
 
-	let list = $state.raw<Files>();
+	let listing = $state.raw<Files>();
 	let failed = $state(false);
+	let format = $state<'text' | 'jsonl'>('text');
+	// On by default (§12.1), and on again whenever the list is read: unticking it is for the
+	// downloads the user makes now. It matters only for files that have torrent details.
+	let redact = $state(true);
 	async function load() {
 		try {
-			list = await api.get('/logs/files');
+			listing = await api.get('/logs/files');
 			failed = false;
+			redact = true;
 		} catch (e) {
 			if (!isAbort(e)) failed = true;
 		}
 	}
 	void load();
 
-	let format = $state<'text' | 'jsonl'>('text');
-	// On by default (§12.1); it matters only for files that have torrent details.
-	let redact = $state(true);
-	const files = $derived(list?.files ?? []);
-	const anyDetails = $derived(files.some((f) => f.details || f.opt_in));
-	const query = (hasDetails: boolean) =>
-		`?format=${format}${hasDetails ? `&redact=${redact}` : ''}`;
+	const locale = $derived(currentLocale());
+	const files = $derived(listing?.files ?? []);
+	const hasDetails = (f: File) => f.details || f.opt_in;
+	const anyDetails = $derived(files.some(hasDetails));
+	const query = (details: boolean) => `?format=${format}${details ? `&redact=${redact}` : ''}`;
 	const fileHref = (f: File) =>
-		`/api/v1/logs/files/${encodeURIComponent(f.name)}${query(f.details || f.opt_in)}`;
+		`/api/v1/logs/files/${encodeURIComponent(f.name)}${query(hasDetails(f))}`;
 	const archiveHref = $derived(`/api/v1/logs/archive.zip${query(anyDetails)}`);
-	const when = (s: string | null) => (s ? formatDateTime(Date.parse(s) / 1000) : '—');
+	const when = (s: string | null) => formatDateTime(s ? Date.parse(s) / 1000 : null, locale);
+	const bytes = (n: number) => formatBytes(n, locale);
+	const count = (n: number) => formatCount(n, locale);
+	// Why nothing is listed or written, in words the user can act on.
+	const STATE: Record<string, () => string> = {
+		off: m.settings_logging_files_off,
+		stopped: m.settings_logging_files_stopped,
+		not_opened: m.settings_logging_files_not_opened,
+		not_a_folder: m.settings_logging_files_not_a_folder,
+		not_private: m.settings_logging_files_not_private,
+		unreadable: m.settings_logging_files_unavailable
+	};
+	const stateText = $derived(
+		!listing || listing.state === 'on'
+			? ''
+			: (
+					STATE[
+						listing.state === 'unavailable' ? (listing.reason ?? 'unreadable') : listing.state
+					] ?? m.settings_logging_files_unavailable
+				)()
+	);
 
-	let copied = $state<'copied' | 'manual' | null>(null);
+	let copied = $state('');
 	let folderEl = $state<HTMLElement>();
 	async function copyFolder() {
-		copied = await copyText(list?.folder ?? '');
-		if (copied === 'manual' && folderEl) getSelection()?.selectAllChildren(folderEl);
+		const done = await copyText(listing?.folder ?? '');
+		copied = done === 'copied' ? m.settings_form_copied() : m.settings_form_copy_failed();
+		if (done === 'manual' && folderEl) getSelection()?.selectAllChildren(folderEl);
 	}
 
 	const leaving = new AbortController();
@@ -59,23 +85,28 @@
 	let busy = $state(false);
 	let result = $state('');
 	let error = $state('');
+	let resultEl = $state<HTMLElement>();
+	const detailFiles = $derived(files.filter(hasDetails));
 	async function remove(which: 'all' | 'details') {
-		const doomed = files.filter((f) => which === 'all' || f.details || f.opt_in);
+		const doomed = which === 'all' ? files : detailFiles;
 		if (!doomed.length || busy) return;
-		const count = formatCount(doomed.length);
-		const size = formatBytes(doomed.reduce((n, f) => n + f.size, 0));
+		const n = count(doomed.length);
+		const size = bytes(doomed.reduce((s, f) => s + f.size, 0));
 		const answer = await ask(
 			{
 				title:
 					which === 'all'
 						? m.settings_logging_delete_all_title()
 						: m.settings_logging_delete_details_title(),
-				body: [m.settings_logging_delete_what({ count, size }), m.settings_logging_delete_undo()],
+				body: [
+					m.settings_logging_delete_what({ count: n, size }),
+					m.settings_logging_delete_undo()
+				],
 				actions: [
 					{ id: 'cancel', label: m.settings_form_cancel() },
 					{
 						id: 'delete',
-						label: m.settings_logging_delete_button({ count, size }),
+						label: m.settings_logging_delete_button({ count: n, size }),
 						variant: 'danger'
 					}
 				],
@@ -88,13 +119,10 @@
 		result = error = '';
 		try {
 			const done = await api.delete('/logs/files', { body: { which } });
-			result = m.settings_logging_deleted({
-				count: formatCount(done.deleted),
-				size: formatBytes(done.bytes)
-			});
+			result = m.settings_logging_deleted({ count: count(done.deleted), size: bytes(done.bytes) });
 			if (done.skipped.length)
 				error = m.settings_logging_delete_skipped({
-					count: formatCount(done.skipped.length),
+					count: count(done.skipped.length),
 					names: done.skipped.map((s) => s.name).join(', ')
 				});
 		} catch (e) {
@@ -103,9 +131,11 @@
 			busy = false;
 			await load();
 			void catalog.load();
+			// The button may have nothing left to delete: keep focus on the page, at the result.
+			await tick();
+			if (!document.activeElement || document.activeElement === document.body) resultEl?.focus();
 		}
 	}
-	const detailFiles = $derived(files.filter((f) => f.details || f.opt_in).length);
 </script>
 
 <section class="flex flex-col gap-4" aria-labelledby="logging-files">
@@ -115,31 +145,35 @@
 	</div>
 	{#if failed}
 		<p role="alert" class="text-small text-error">{m.settings_logging_files_failed()}</p>
-	{:else if !list}
+	{:else if !listing}
 		<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 	{:else}
-		{#if list.folder}
+		{#if listing.folder}
 			<div class="flex flex-wrap items-center gap-2">
 				<span class="text-label">{m.settings_logging_files_folder()}</span>
-				<span bind:this={folderEl} data-testid="log-folder"><Mono wrap>{list.folder}</Mono></span>
-				<Button variant="secondary" dense onclick={copyFolder}>{m.settings_form_copy()}</Button>
-				{#if copied}<span role="status" class="text-small text-muted-text"
-						>{copied === 'copied' ? m.settings_form_copied() : m.settings_form_copy_failed()}</span
-					>{/if}
+				<span bind:this={folderEl} data-testid="log-folder"><Mono wrap>{listing.folder}</Mono></span
+				>
+				<Button
+					variant="secondary"
+					dense
+					aria-label={m.settings_logging_files_copy_folder()}
+					onclick={copyFolder}>{m.settings_form_copy()}</Button
+				>
+				<span role="status" class="text-small text-muted-text">{copied}</span>
 			</div>
 		{/if}
 		{#if catalog.deployment === 'docker' || catalog.deployment === 'unraid'}
-			<p class="text-small text-muted-text">{m.settings_logging_files_docker()}</p>
-		{/if}
-		{#if list.state !== 'on'}
-			<p class="text-small text-muted-text" data-testid="log-files-state">
-				{list.state === 'unavailable'
-					? m.settings_logging_files_unavailable()
-					: m.settings_logging_files_off()}
+			<p class="text-small text-muted-text" data-testid="log-files-docker">
+				{m.settings_logging_files_docker()}
 			</p>
 		{/if}
-		{#if !list.index_readable}
-			<p class="text-small text-muted-text">{m.settings_logging_files_index()}</p>
+		{#if stateText}
+			<p class="text-small text-muted-text" data-testid="log-files-state">{stateText}</p>
+		{/if}
+		{#if !listing.index_readable}
+			<p class="text-small text-muted-text" data-testid="log-files-index">
+				{m.settings_logging_files_index()}
+			</p>
 		{/if}
 		{#if files.length}
 			<div class="flex flex-wrap items-center gap-4">
@@ -155,6 +189,7 @@
 				{#if anyDetails}
 					<Checkbox label={m.settings_logging_files_redact()} bind:checked={redact} />
 				{/if}
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an API download, not a page -->
 				<a class="underline" href={archiveHref} download data-testid="log-download-all"
 					>{m.settings_logging_files_all()}</a
 				>
@@ -166,13 +201,13 @@
 						data-testid="log-file-{f.name}"
 					>
 						<Mono>{f.name}</Mono>
-						<span class="text-small" data-testid="log-file-size-{f.name}"
-							>{formatBytes(f.size)}</span
+						<span class="text-small" data-testid="log-file-size-{f.name}">{bytes(f.size)}</span>
+						<span class="text-small text-muted-text" data-testid="log-file-time-{f.name}"
+							>{when(f.from)} – {when(f.to)}</span
 						>
-						<span class="text-small text-muted-text">{when(f.from)} – {when(f.to)}</span>
-						{#if f.details || f.opt_in}<Badge variant="warning"
-								>{m.settings_logging_files_details()}</Badge
+						{#if hasDetails(f)}<Badge variant="warning">{m.settings_logging_files_details()}</Badge
 							>{/if}
+						<!-- eslint-disable svelte/no-navigation-without-resolve -- an API download, not a page -->
 						<a
 							class="ms-auto underline"
 							href={fileHref(f)}
@@ -180,6 +215,7 @@
 							aria-label={m.settings_logging_files_download_one({ name: f.name })}
 							>{m.settings_logging_files_download()}</a
 						>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					</li>
 				{/each}
 			</ul>
@@ -198,13 +234,16 @@
 	</h2>
 	<p class="text-muted-text">{m.settings_logging_danger_lead()}</p>
 	<div class="flex flex-wrap gap-3">
-		<Button variant="danger" disabled={busy || !detailFiles} onclick={() => remove('details')}
-			>{m.settings_logging_delete_details()}</Button
+		<Button
+			variant="danger"
+			loading={busy}
+			disabled={!detailFiles.length}
+			onclick={() => remove('details')}>{m.settings_logging_delete_details()}</Button
 		>
-		<Button variant="danger" disabled={busy || !files.length} onclick={() => remove('all')}
+		<Button variant="danger" loading={busy} disabled={!files.length} onclick={() => remove('all')}
 			>{m.settings_logging_delete_all()}</Button
 		>
 	</div>
-	{#if result}<p role="status" class="text-small">{result}</p>{/if}
+	<p bind:this={resultEl} tabindex="-1" role="status" class="text-small">{result}</p>
 	{#if error}<p role="alert" class="text-small text-error">{error}</p>{/if}
 </section>

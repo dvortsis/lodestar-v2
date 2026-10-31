@@ -5,7 +5,8 @@
 	// `POST /settings/preview`, before anything is saved.
 	import { api, isAbort, latest } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
-	import { formatBytes, formatCount } from '$lib/format';
+	import { formatBytes, formatSpan } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import type { SettingsForm } from '../form';
@@ -20,15 +21,25 @@
 		examples: Example[];
 	}
 	const MIB = 1024 * 1024;
+	const DAY = 86_400;
+	const locale = $derived(currentLocale());
+	const size = (mib: number) => formatBytes({ value: mib * MIB, approx: true }, locale);
 	const DEBOUNCE_MS = 400;
 
-	// The staged values the preview depends on (Verbosity always, so the section has one field).
+	// The staged settings of the events and outputs, plus one field the server will preview: the
+	// estimates cover the whole staged section whichever field is asked about. A field set by the
+	// environment (`LODESTAR_LOG` sets Verbosity) can't be sent, so the first one that isn't is.
+	const GROUPS = ['events', 'console', 'file'];
 	const body = $derived.by(() => {
-		const staged: Record<string, unknown> = {
-			verbosity: form.field('logging.verbosity').value
-		};
-		for (const s of form.specs)
-			if (s.preview && form.field(s.key).dirty) staged[s.name] = form.field(s.key).value;
+		const staged: Record<string, unknown> = {};
+		for (const s of form.specs) {
+			const f = form.field(s.key);
+			if (GROUPS.includes(s.group) && f.dirty && !f.locked) staged[s.name] = f.value;
+		}
+		if (!Object.keys(staged).length) {
+			const s = form.specs.find((x) => x.preview && !form.field(x.key).locked);
+			if (s) staged[s.name] = form.field(s.key).value;
+		}
 		return JSON.stringify({ logging: staged });
 	});
 
@@ -47,7 +58,9 @@
 				)
 				.then(
 					(p) => {
-						const est = p.sections.logging?.fields.verbosity?.estimates ?? [];
+						const est =
+							Object.values(p.sections.logging?.fields ?? {}).find((f) => f.estimates.length)
+								?.estimates ?? [];
 						const of = (n: string) => est.find((e) => e.name === n)?.value;
 						const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
 						shown = {
@@ -68,21 +81,22 @@
 	$effect(() => () => slot.cancel());
 </script>
 
-<section class="flex flex-col gap-3" aria-labelledby="logging-preview" aria-live="polite">
+<section class="flex flex-col gap-3" aria-labelledby="logging-preview">
 	<h3 id="logging-preview" class="text-body font-semibold">{m.settings_logging_preview()}</h3>
 	{#if failed}
 		<p class="text-small text-muted-text">{m.settings_logging_preview_failed()}</p>
 	{:else if !shown}
 		<p aria-busy="true" class="text-small text-muted-text">{m.settings_form_loading()}</p>
 	{:else}
-		<ul class="flex flex-col gap-1 text-small">
+		<!-- Only the volumes are announced; the example lines are for reading. -->
+		<ul class="flex flex-col gap-1 text-small" aria-live="polite">
 			{#if shown.console !== undefined}<li data-testid="log-volume-console">
-					{m.settings_logging_volume_console({ size: formatBytes(shown.console * MIB) })}
+					{m.settings_logging_volume_console({ size: size(shown.console) })}
 				</li>{/if}
 			{#if shown.file !== undefined}<li data-testid="log-volume-file">
-					{m.settings_logging_volume_file({ size: formatBytes(shown.file * MIB) })}
-					{#if shown.days !== null}{m.settings_logging_volume_days({
-							days: formatCount(shown.days ?? null)
+					{m.settings_logging_volume_file({ size: size(shown.file) })}
+					{#if typeof shown.days === 'number'}{m.settings_logging_volume_days({
+							span: formatSpan({ value: shown.days * DAY, approx: true }, locale)
 						})}{/if}
 				</li>{/if}
 		</ul>
@@ -90,8 +104,12 @@
 			<p class="text-small text-muted-text">{m.settings_logging_preview_examples()}</p>
 			<ul class="flex flex-col gap-2" data-testid="log-examples">
 				{#each shown.examples as x, i (i)}
-					<li class="text-caption">
-						<Mono wrap>{x.file ?? x.console}</Mono>
+					<li class="flex flex-col gap-0.5 text-caption">
+						{#if x.file}<span class="text-muted-text">{m.settings_logging_preview_file()}</span
+							><Mono wrap>{x.file}</Mono>{/if}
+						{#if x.console}<span class="text-muted-text"
+								>{m.settings_logging_preview_console()}</span
+							><Mono wrap>{x.console}</Mono>{/if}
 					</li>
 				{/each}
 			</ul>

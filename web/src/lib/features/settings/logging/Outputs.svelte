@@ -4,6 +4,7 @@
 	// Log on a Windows service. The fields are the screen's form's; this part only lays them out, and
 	// loads after the events, below which it sits.
 	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { FieldSpec, SettingsForm } from '../form';
 	import SettingField from '../form/SettingField.svelte';
@@ -17,7 +18,8 @@
 	}: {
 		form: SettingsForm;
 		deployment?: DeploymentKind;
-		/** Disclosures to open (a link to one of their fields). */
+		/** Disclosures to open. An Advanced field with an error also opens its own, so the error
+		 * summary's link to it lands on a shown field. */
 		open?: Record<string, boolean>;
 	} = $props();
 
@@ -49,13 +51,20 @@
 			{#if g.lead}<p class="text-muted-text">{g.lead()}</p>{/if}
 		</div>
 		{@render fields(specs.filter((s) => !s.advanced))}
-		{#if advanced.length}
+		{#if advanced.length && advanced.length === specs.length}
+			<!-- A group of Advanced fields only (the Event Log): nothing to hide them behind. -->
+			{@render fields(advanced)}
+		{:else if advanced.length}
 			<details
-				open={toggled[g.id] ?? open[g.id] ?? false}
+				open={toggled[g.id] ||
+					open[g.id] ||
+					advanced.some((s) => form.field(s.key).error !== undefined)}
 				ontoggle={(e) => (toggled[g.id] = e.currentTarget.open)}
 			>
 				<summary class="ls-focus cursor-pointer py-3 text-label"
-					>{m.settings_shell_advanced({ count: formatCount(advanced.length) })}</summary
+					>{m.settings_shell_advanced({
+						count: formatCount(advanced.length, currentLocale())
+					})}</summary
 				>
 				<div class="flex flex-col gap-6 pt-4">{@render fields(advanced)}</div>
 			</details>
