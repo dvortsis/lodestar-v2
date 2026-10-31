@@ -603,8 +603,8 @@ export default [
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
 	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
-	entry('Settings connection messages (on demand)', settingsConnectionMaps, '99 KB'),
-	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '99 KB'),
+	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
+	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '12.9 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	...settingsHandBuilt.map(({ name, files }) =>
