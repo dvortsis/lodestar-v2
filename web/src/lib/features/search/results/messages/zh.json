@@ -26,8 +26,6 @@
 	"search_results_adult_hidden": "成人内容已隐藏",
 	"search_results_adult_hidden_body": "在“外观”中打开“显示成人内容”即可查看成人种子。",
 	"search_results_adult_settings": "外观设置",
-	"search_results_rebuilding": "正在重建索引：已完成 {done}/{total} 个种子。完成前搜索使用当前索引。",
-	"search_results_cold_start": "索引仍在增长：目前有 {count} 个种子。较早的内容会陆续出现。",
 	"search_results_empty_title": "搜索 {count} 个种子",
 	"search_results_empty_title_unknown": "搜索种子",
 	"search_results_empty_lead": "输入关键词，或试试这些：",

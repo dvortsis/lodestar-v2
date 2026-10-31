@@ -29,26 +29,23 @@ const { default: ResultsPanel } = await import('./ResultsPanel.svelte');
 const { visit } = await import('../query/testing.svelte');
 const { setRebuild } = await import('./testing.svelte');
 
-type Figures = components['schemas']['StatsResponse'];
-const figures = (searchable: number | null): Figures => ({
-	data_bytes: null,
-	disk_free_bytes: null,
-	fetched_per_hour: null,
-	harvested_per_hour: null,
-	index_lag_s: null,
-	paused: false,
-	queue_depth: 0,
-	sampling_blocked: null,
-	searchable_torrents: searchable,
-	stored_torrents: 0,
+type Figures = components['schemas']['SearchIndexState'];
+const figures = (searchable: number | null, over: Partial<Figures> = {}): Figures => ({
+	cold_start: false,
+	growing: false,
+	growth_hours: 24,
+	growth_per_hour: null,
+	rebuild: null,
+	searchable_torrents: searchable ?? 0,
+	unavailable: [],
 	updated_at: 0,
-	uptime_s: 0
+	...over
 });
 const saved = (id: number) => ({ id, name: `Saved ${id}`, q: `q${id}`, sort: null });
 
 function serve(s: Figures, list: unknown[] = []) {
 	get.mockImplementation(async (path: string) => {
-		if (path === '/stats') return s;
+		if (path === '/search/state') return s;
 		if (path === '/saved-searches') return list;
 		throw new Error(`unexpected GET ${path}`);
 	});
@@ -84,7 +81,9 @@ describe('ResultsPanel, the bare page', () => {
 		get.mockRejectedValue(new Error('down'));
 		render(ResultsPanel, { focusBar: () => {} });
 		await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-		expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe('Search torrents');
+		await waitFor(() =>
+			expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe('Search torrents')
+		);
 	});
 
 	it('shows a rebuild in progress, and hides it once done', async () => {
@@ -99,11 +98,30 @@ describe('ResultsPanel, the bare page', () => {
 		await waitFor(() => expect(screen.queryByTestId('results-rebuilding')).toBeNull());
 	});
 
+	it('reads /search/state once per visit, and again when a rebuild changes phase', async () => {
+		serve(figures(10));
+		const reads = () => get.mock.calls.filter(([path]) => path === '/search/state').length;
+		render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() => expect(reads()).toBe(1));
+		const event = { done: 1, total: 4, error: null, from: 'a', to: 'b', unavailable: [] };
+		setRebuild({ ...event, phase: 'building' });
+		await waitFor(() => expect(reads()).toBe(2));
+		setRebuild({ ...event, phase: 'building', done: 2 }); // progress is not a new phase
+		setRebuild({ ...event, phase: 'done' });
+		await waitFor(() => expect(reads()).toBe(3));
+	});
+
+	it('shows the full-page state on a cold start', async () => {
+		serve(figures(120, { cold_start: true, growing: true }));
+		render(ResultsPanel, { focusBar: () => {} });
+		await waitFor(() => expect(screen.getByTestId('results-cold-page')).toBeTruthy());
+	});
+
 	it('calls the bar on “Start typing”', async () => {
 		serve(figures(null));
 		const focusBar = vi.fn();
 		render(ResultsPanel, { focusBar });
-		screen.getByRole('button', { name: 'Start typing' }).click();
+		(await screen.findByRole('button', { name: 'Start typing' })).click();
 		expect(focusBar).toHaveBeenCalled();
 	});
 });

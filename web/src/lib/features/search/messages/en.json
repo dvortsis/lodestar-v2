@@ -184,5 +184,13 @@
 	"search_assist_builder_apply": "Apply",
 	"search_assist_builder_stale": "The query changed while this was being checked. Try again.",
 	"search_bulk_manual_label": "Your browser blocked copying. Select these magnet links and copy them.",
-	"search_bulk_manual_close": "Close"
+	"search_bulk_manual_close": "Close",
+	"search_recover_gives": "Removing {clause} gives {count}",
+	"search_state_rebuilding": "The index is being rebuilt: {done} of {total} torrents. Search uses the current index until it's done.",
+	"search_state_unavailable": "Until then these fields match nothing: {fields}.",
+	"search_state_cold_title": "The index is still growing",
+	"search_state_growing": "The index is still growing — {count} torrents. Older content appears over time.",
+	"search_state_growing_rate": "The index is still growing — {count} torrents, +{rate}. Older content appears over time.",
+	"search_state_cold_body": "{count} torrents so far. Older content appears over time.",
+	"search_state_cold_body_rate": "{count} torrents so far, +{rate}. Older content appears over time."
 }

@@ -334,13 +334,17 @@ const RESULTS = [
 // Table mode, its column chooser and the bulk bar load on demand (S-search-5): their own entries.
 const tableOnDemand = [/search\/table\/(ResultsTable|ColumnChooser)\.svelte$/];
 const bulkOnDemand = [/search\/bulk\/(BulkBar|RowPick)\.svelte$/, /search\/bulk\/ops\.ts$/];
+const recoverOnDemand = [/search\/results\/Recover\.svelte$/];
+const indexStateOnDemand = [/search\/results\/IndexState\.svelte$/];
 const resultsOnDemand = [
 	/features\/detail\//,
 	/features\/search\/(live|cards)\//,
 	/^chunk:magnet$/,
 	/^chunk:Menu$/,
 	...tableOnDemand,
-	...bulkOnDemand
+	...bulkOnDemand,
+	...recoverOnDemand,
+	...indexStateOnDemand
 ];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
@@ -361,6 +365,24 @@ const resultsLazy = [
 const FACETS = [
 	'src/lib/features/search/facets/FacetsHost.svelte',
 	'src/lib/features/search/facets/FacetRail.svelte'
+];
+// S-search-recover-ui: "Removing X gives N" and the index-state banners load when /search/state or an
+// empty answer needs them, beyond the engaged view and the results panel.
+const recoverLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/results/Recover.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
+];
+const indexStateLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/results/IndexState.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
 ];
 const facetsOnDemand = [/ui\/overlays\/Sheet\.svelte$/];
 const facetsLazy = [
@@ -564,6 +586,8 @@ export default [
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
+	entry('Search recovery counts (on demand)', recoverLazy, '0.84 KB'),
+	entry('Search index-state banners (on demand)', indexStateLazy, '3.3 KB'),
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
