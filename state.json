@@ -1635,13 +1635,13 @@
    "notes": "08:16Z brief briefs/X-polish-1031.md (folds #266/#267 optional findings + bench zero-result class + recovery caching) | 10:39Z launched Opus"
   },
   "S-search-live-ui": {
-   "status": "launching",
+   "status": "queued",
    "model": "sonnet",
    "session": null,
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live)"
+   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
