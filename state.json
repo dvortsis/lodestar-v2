@@ -1623,7 +1623,7 @@
    "pr": 277,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot | 09:49Z launched Sonnet | 10:04Z blocked on size gates (msg lost: used SendMessage transport); 12:40Z runner decided (§2.26): baseline main, new entry for 4 section maps at measured+10%, lazy-split first views <=45 kB, scoped registry exception to lazy-load purpose/icons, <=1% residual -> runner | 12:59Z sizes nearly green (CSS fixed: daisyUI .card from class text). Runner §2.26: Language first view +0.89 kB to 44.13 accepted (group headings + preload list; nav titles stay eager); /t/[hash] covered by #275 22.5 KB after main merge; Notifications first view 45.04 -> must find 40 B (lazy routing / split map), else runner decides per-screen; X-polish-1031b approved one-line pool.rs dead-code removal | 13:26Z PR #277 head 000304c (all size entries pass; Notifications first view 45.00, 2 B under cap; new entries connection messages 4.3 KB, connection screens 12.9 KB); baseline regen marker on; fresh Opus reviewer session_01MMjhnACVXeRbVFSZ9Mdm4a + security review; runner checks baseline delta"
+   "notes": " | 08:14Z brief briefs/S-settings-2b.md ready; launch when #269 (part b) merges | 09:12Z unblocked (part b merged); launch at next free slot | 09:49Z launched Sonnet | 10:04Z blocked on size gates (msg lost: used SendMessage transport); 12:40Z runner decided (§2.26): baseline main, new entry for 4 section maps at measured+10%, lazy-split first views <=45 kB, scoped registry exception to lazy-load purpose/icons, <=1% residual -> runner | 12:59Z sizes nearly green (CSS fixed: daisyUI .card from class text). Runner §2.26: Language first view +0.89 kB to 44.13 accepted (group headings + preload list; nav titles stay eager); /t/[hash] covered by #275 22.5 KB after main merge; Notifications first view 45.04 -> must find 40 B (lazy routing / split map), else runner decides per-screen; X-polish-1031b approved one-line pool.rs dead-code removal | 13:26Z PR #277 head 000304c (all size entries pass; Notifications first view 45.00, 2 B under cap; new entries connection messages 4.3 KB, connection screens 12.9 KB); baseline regen marker on; fresh Opus reviewer session_01MMjhnACVXeRbVFSZ9Mdm4a + security review; runner checks baseline delta | 13:46Z CHANGES at 000304c: B1 Notifications first view 45.01 kB in CI (runner §2.26 target <=44.7 kB); B2 Save password against old URL; opt 3 newId reuse, 4 Up/Down focus, 6 unknown secrets state folded; relayed"
   },
   "X-polish-1031": {
    "status": "merged",
@@ -2463,7 +2463,9 @@
   "live.svelte.ts (#275 optional a): a tab hidden >=35 s fires both the visibility and the status path -> two again() calls (one extra POST+DELETE, no leak); debounce a second again() within 1-2 s",
   "live.svelte.ts (#275 optional b): the status $effect calls again(), which reads deps.shown(), so the effect tracks search state; wrap again() in untrack",
   "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under §2.26 if so)",
-  "Filters API: shutdown token for the classification-rule re-queue (X-search-files-perf kept it uncancellable for content safety)"
+  "Filters API: shutdown token for the classification-rule re-queue (X-search-files-perf kept it uncancellable for content safety)",
+  "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
+  "Logging slice: the §10.10.7 banner while query_logging is on (#277 review; left to §10.10.12)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
