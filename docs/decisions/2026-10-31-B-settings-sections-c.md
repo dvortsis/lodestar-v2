@@ -1,21 +1,33 @@
 # B-settings-sections decisions (part c: send to client)
 
 - **`POST /send` is its own PR** (the runner's split of B-settings-sections), after part b (#269), so its content-safety rules (§20.9, §18.7, BEP 27) get a focused review.
-- **`POST /send`** takes 1–100 hashes and an optional client `id` (otherwise the default client). It uses the client's saved category, save path and paused setting, and answers one result per hash, in order: `sent`, `duplicate`, `refused` (`not_found`, `hidden`, `adult_hidden`, `private`, `same_torrent`) or `failed` (with the test's codes).
-  - **Only what you can see is sent:**
-    - a torrent a filter rule hides (`flags::HIDDEN`) is refused;
-    - so is an Adult torrent while "Show adult content" is off, with the same check as the detail view;
-    - quarantined and tombstoned torrents aren't stored, so they're `not_found`;
-    - a private torrent (BEP 27 `flags::PRIVATE`, or found only through a private source, `flags::PRIVATE_SOURCE`, §18.7) is refused as `private`: a magnet with no trackers would make the client look the hash up on the public DHT, leaking it;
-    - the magnet is built from the stored torrent's v1 hash, never the request's, and two hashes naming one torrent (a v1 hash and its truncated v2 hash) send it once (`same_torrent`).
-
-    Your own Hide mark (`user_items`) doesn't block a send: it's your choice, not a filter.
-  - **Duplicates and partial sends** follow the adapters (§9):
-    - when the client finds every torrent already there, they all count as `duplicate`, which is sent (and counted in `sent`). This is recognised by `clients::is_already_there`, not by the error's wording;
-    - `ClientError::Partial { sent }` marks the first `sent` sendable torrents as sent and the rest as failed, so nothing is resent.
-  - **Rate-limited:** two sends at a time (`429 sends_busy`) and 30 a minute across the server (`429 send_rate_limited`). Nothing is sent past either limit.
-  - Magnets carry the hash and the name only. Appending the best trackers (§9's toggle) is left to the slice that builds that toggle.
+- **`POST /send`** takes 1–100 hashes and an optional client `id` (otherwise the default client). It uses the client's saved category, save path and paused setting. It answers one result per hash, in the order asked:
+  - `sent` or `duplicate`;
+  - `refused`, with `not_found`, `private`, `same_torrent` or `invalid`;
+  - `failed`, with the connection test's codes or `timeout_unknown`.
+- **Only what you can see is sent:**
+  - **A withheld torrent looks exactly like an unknown one** (`not_found`, with the same message). This covers a torrent a filter rule hides and an Adult one while "Show adult content" is off. It's `discover::withheld`, the rule detail, Compare and export use, so a send can't be used to learn which hashes the server holds or has classified Adult.
+  - **Quarantined and tombstoned torrents** aren't stored, so they're `not_found` too.
+  - **A private torrent is refused as `private`.** That's BEP 27 `flags::PRIVATE`, or `flags::PRIVATE_SOURCE` for one found only through a private source (§18.7). A magnet with no trackers would make the client look the hash up on the public DHT, leaking it. The code doesn't reveal anything hidden: private torrents are shown to you locally.
+  - **Your own Hide mark** (`user_items`) doesn't block a send: it's your choice, not a filter.
+- **The magnet is built from the stored torrent, never the request:**
+  - `xt=urn:btih:<v1 hash>`, or `xt=urn:btmh:1220<v2 hash>` for a v2-only torrent, whose stored hash is the truncated v2 hash a client can't use as a v1 hash;
+  - the name, cut to 1,024 bytes on a character boundary, so the link always fits `Magnet::MAX_LEN` (a legacy-charset name can triple in UTF-8, then triple again when percent-encoded);
+  - a magnet that still doesn't parse is `invalid`, in its place, so the results stay aligned with what the client was sent.
+- **A hash naming a torrent already in the send is `same_torrent`.** That covers a repeat, and a hybrid torrent's v1 hash with its truncated v2 hash. Each torrent goes once.
+- **Duplicates and partial sends** follow the adapters (§9):
+  - **Every torrent already in the client:** each is `duplicate`, counted in `sent` because it's already where you want it. This is recognised by `clients::is_already_there`, not by the error's wording.
+  - **Some already there:** the adapter can't say which, so all are `sent`.
+  - **qBittorrent** answers a duplicate and an invalid link alike (`Fails.`), so a lone torrent already in qBittorrent is `failed`/`rejected`. Telling them apart needs a `torrents/info` look-up first, which is left as a follow-up.
+  - **Failed part-way:** `ClientError::Partial { sent }` marks the first `sent` sendable torrents as sent and the rest as failed, so nothing is resent.
+  - **Out of time:** a send that runs out of its 120 s can't say how far it got. Every torrent is `failed` with `timeout_unknown`, and the message says to check the client before sending again, rather than inviting a retry that would add torrents twice.
+- **Rate-limited:** two sends at a time (`429 sends_busy`) and 30 a minute (`429 send_rate_limited`). Nothing is sent past either limit.
+  - The limits are process-wide, shared by every account, because they protect the download client, of which there's one per install.
+  - The limiter is a static, so `send_rate.rs` runs in its own test binary. Moving it into `ApiState` would touch the shared state every route builds, and is left to a slice that owns `lib.rs`. `sends_busy` has no test: it needs a stand-in client that blocks until released.
+- **Magnets carry the hash and the name only.** Appending the best trackers (§9's toggle) is left to the slice that builds that toggle.
 - **Not wired yet, as a follow-up:** sends aren't counted in the Serve stage's `sends` metric (`docs/metrics.md` §6.7).
+- **`clients::is_already_there`** is new in `crates/integrations`, outside the brief's "Own" list (accepted by the runner): the typed check for an all-duplicate add.
 
 ## What S-search-5 binds to
-- **Send:** `POST /send` `{hashes, client?}`. Show each result's `message`; `sent` is the count to announce (duplicates included, since they're already in the client).
+- **Send:** `POST /send` `{hashes, client?}`. Show each result's `message`. `sent` is the count to announce, duplicates included.
+- **A `timeout_unknown` failure** should prompt a look at the client, not a Retry button.

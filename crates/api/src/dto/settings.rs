@@ -473,8 +473,11 @@ pub enum ClientSendOutcome {
 /// One torrent's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ClientSendItem {
-    /// `not_found`, `hidden`, `adult_hidden`, `private` or `same_torrent` when refused; the
-    /// connection test's codes when failed; null otherwise.
+    /// When refused: `not_found` (unknown, or withheld from you, which
+    /// look the same: hidden by a filter, or Adult while it's hidden),
+    /// `private`, `same_torrent` or `invalid`. When failed: the connection
+    /// test's codes, or `timeout_unknown` (some may have gone in). Null
+    /// otherwise.
     #[schema(required = true)]
     pub code: Option<String>,
     pub hash: String,

@@ -27,28 +27,59 @@ use tokio::sync::watch;
 use tower::ServiceExt;
 
 /// In id order: visible, hidden by a filter rule, Adult, visible, found
-/// only through a private source.
-const NAMES: [&str; 5] = [
+/// only through a private source, BEP 27 private, hybrid v1+v2, v2 only.
+const NAMES: [&str; 8] = [
     "Big.Movie.2019.1080p.mkv",
     "Hidden.By.Rule.2019.mkv",
     "Studio.Scene.XXX.1080p.mp4",
     "Other.Movie.2018.720p.mkv",
     "Private.Tracker.Only.2018.mkv",
+    "Bep27.Private.2018.mkv",
+    "Hybrid.Release.2020.mkv",
+    "V2.Only.Release.2021.mkv",
 ];
 
-fn raw(name: &str) -> Vec<u8> {
+fn dict(entries: Vec<(&str, OwnedValue)>) -> OwnedValue {
+    OwnedValue::Dict(
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v))
+            .collect(),
+    )
+}
+
+/// Torrent `i`'s info dictionary (see [`NAMES`]).
+fn raw(i: usize) -> Vec<u8> {
+    let name = NAMES[i];
     let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
-    to_vec(&OwnedValue::Dict(
-        [
-            ("length", OwnedValue::Int(1 << 30)),
-            ("name", b(name)),
-            ("piece length", OwnedValue::Int(1 << 16)),
-            ("pieces", OwnedValue::Bytes(vec![0; 20])),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.as_bytes().to_vec(), v))
-        .collect(),
-    ))
+    let int = OwnedValue::Int;
+    // One 10-byte file, as v2 describes it.
+    let tree = || {
+        dict(vec![(
+            name,
+            dict(vec![(
+                "",
+                dict(vec![
+                    ("length", int(10)),
+                    ("pieces root", OwnedValue::Bytes(vec![1; 32])),
+                ]),
+            )]),
+        )])
+    };
+    let mut e = vec![("name", b(name)), ("piece length", int(1 << 14))];
+    if i != 7 {
+        let len = if i == 6 { 10 } else { 1 << 30 };
+        e.push(("length", int(len)));
+        e.push(("pieces", OwnedValue::Bytes(vec![0; 20])));
+    }
+    if i == 5 {
+        e.push(("private", int(1)));
+    }
+    if i >= 6 {
+        e.push(("file tree", tree()));
+        e.push(("meta version", int(2)));
+    }
+    to_vec(&dict(e))
 }
 
 /// The saved client the registry would give.
@@ -113,15 +144,23 @@ struct Fixture {
     app: Router,
     cookie: String,
     hashes: Vec<String>,
+    /// The hybrid torrent's truncated v2 hash, and the v2-only torrent's
+    /// full v2 hash.
+    hybrid_v2: String,
+    v2_full: String,
     show: watch::Sender<bool>,
     _dir: tempfile::TempDir,
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn fixture(client: Option<SavedClient>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
-    let raws: Vec<Vec<u8>> = NAMES.iter().map(|n| raw(n)).collect();
+    let raws: Vec<Vec<u8>> = (0..NAMES.len()).map(raw).collect();
     let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
     let batch: Vec<NewTorrent<'_>> = infos
         .iter()
@@ -160,16 +199,9 @@ fn fixture(client: Option<SavedClient>) -> Fixture {
     store
         .log_queries(QueryLogging::On, &[entry("ubuntu"), entry("debian")])
         .unwrap();
-    let hashes = infos
-        .iter()
-        .map(|i| {
-            i.primary_hash()
-                .0
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect()
-        })
-        .collect();
+    let hashes = infos.iter().map(|i| hex(&i.primary_hash().0)).collect();
+    let hybrid_v2 = hex(&infos[6].v2.unwrap().truncated().0);
+    let v2_full = hex(&infos[7].v2.unwrap().0);
     let (show, rx) = watch::channel(false);
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
@@ -197,6 +229,8 @@ fn fixture(client: Option<SavedClient>) -> Fixture {
         app,
         cookie: set.split(';').next().unwrap().to_string(),
         hashes,
+        hybrid_v2,
+        v2_full,
         show,
         _dir: dir,
     }
@@ -242,7 +276,13 @@ async fn only_visible_torrents_are_sent_each_with_its_result() {
     let addr = qbittorrent(added.clone()).await;
     let f = fixture(Some(saved(addr)));
     let unknown = "f".repeat(40);
-    let all: Vec<String> = f.hashes.iter().cloned().chain([unknown.clone()]).collect();
+    // Every torrent, an unknown hash, the hybrid's v2 alias and a repeat.
+    let all: Vec<String> = f
+        .hashes
+        .iter()
+        .cloned()
+        .chain([unknown.clone(), f.hybrid_v2.clone(), f.hashes[0].clone()])
+        .collect();
     let (status, v) = call(&f, "POST", "/api/v1/send", Some(json!({ "hashes": all }))).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let outcomes: Vec<(&str, &str)> = v["results"]
@@ -260,22 +300,41 @@ async fn only_visible_torrents_are_sent_each_with_its_result() {
         outcomes,
         [
             ("sent", "-"),
-            ("refused", "hidden"),
-            ("refused", "adult_hidden"),
+            // Withheld looks exactly like unknown.
+            ("refused", "not_found"),
+            ("refused", "not_found"),
             ("sent", "-"),
             ("refused", "private"),
+            ("refused", "private"),
+            ("sent", "-"),
+            ("sent", "-"),
             ("refused", "not_found"),
+            ("refused", "same_torrent"),
+            ("refused", "same_torrent"),
         ]
     );
+    let messages: Vec<&str> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["code"] == json!("not_found"))
+        .map(|r| r["message"].as_str().unwrap())
+        .collect();
+    assert!(messages.windows(2).all(|w| w[0] == w[1]), "{messages:?}");
     assert_eq!(
         (v["client"].clone(), v["sent"].clone()),
-        (json!("home"), json!(2))
+        (json!("home"), json!(4))
     );
-    // One request, with only the two visible torrents in it.
+    // One request, with only the visible torrents in it, each once: the
+    // v2-only one by its full v2 hash.
     let sent = added.lock().unwrap().clone();
     assert_eq!(sent.len(), 1);
-    assert!(sent[0].contains(&f.hashes[0]) && sent[0].contains(&f.hashes[3]));
-    for i in [1, 2, 4] {
+    for i in [0, 3, 6] {
+        assert_eq!(sent[0].matches(&f.hashes[i]).count(), 1, "torrent {i}");
+    }
+    assert!(sent[0].contains(&format!("urn:btmh:1220{}", f.v2_full)));
+    assert!(!sent[0].contains(&format!("btih:{}", f.hashes[7])));
+    for i in [1, 2, 4, 5] {
         assert!(!sent[0].contains(&f.hashes[i]), "torrent {i} was sent");
     }
     assert!(
@@ -357,4 +416,114 @@ async fn clearing_usage_data_needs_its_confirmation() {
     assert_eq!((status, v), (StatusCode::OK, json!({ "queries": 2 })));
     let (_, v) = call(&f, "GET", "/api/v1/usage", None).await;
     assert_eq!(v["queries"], json!(0));
+}
+
+/// How the stand-in Transmission answers each `torrent-add`, in turn.
+#[derive(Clone, Copy)]
+enum Add {
+    New,
+    Duplicate,
+    Refuse,
+}
+
+/// A Transmission daemon: a 409 with the session id first, then each
+/// `torrent-add` answered as `script` says.
+async fn transmission(script: Vec<Add>) -> SocketAddr {
+    let next = Arc::new(Mutex::new(script.into_iter()));
+    let app = Router::new().fallback(post(move |headers: HeaderMap, body: String| {
+        let next = next.clone();
+        async move {
+            let mut h = HeaderMap::new();
+            if headers.get("x-transmission-session-id").is_none() {
+                h.insert("x-transmission-session-id", "s1".parse().unwrap());
+                return (StatusCode::CONFLICT, h, String::new());
+            }
+            let call: Value = serde_json::from_str(&body).unwrap();
+            let answer = match call["method"].as_str() {
+                Some("torrent-add") => match next.lock().unwrap().next().unwrap_or(Add::Refuse) {
+                    Add::New => json!({ "result": "success", "arguments": {
+                        "torrent-added": { "hashString": "a".repeat(40), "id": 1, "name": "x" } } }),
+                    Add::Duplicate => json!({ "result": "success", "arguments": {
+                        "torrent-duplicate": { "hashString": "a".repeat(40), "id": 1, "name": "x" } } }),
+                    Add::Refuse => json!({ "result": "invalid or corrupt torrent file" }),
+                },
+                _ => json!({ "result": "success", "arguments": { "rpc-version": 17, "version": "4.0.0" } }),
+            };
+            (StatusCode::OK, h, answer.to_string())
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+fn transmission_client(addr: SocketAddr) -> SavedClient {
+    SavedClient {
+        kind: DownloadClientKind::Transmission,
+        username: String::new(),
+        password: None,
+        category: String::new(),
+        ..saved(addr)
+    }
+}
+
+/// Outcomes and codes of a send's results.
+fn outcomes(v: &Value) -> Vec<(String, String)> {
+    v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["outcome"].as_str().unwrap().to_string(),
+                r["code"].as_str().unwrap_or("-").to_string(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_send_that_fails_part_way_reports_what_went_in() {
+    let addr = transmission(vec![Add::New, Add::Refuse]).await;
+    let f = fixture(Some(transmission_client(addr)));
+    // Visible, hidden, visible, visible: the client takes the first add
+    // and refuses the second, so the third is never tried.
+    let hashes = [&f.hashes[0], &f.hashes[1], &f.hashes[3], &f.hashes[6]];
+    let (status, v) = call(
+        &f,
+        "POST",
+        "/api/v1/send",
+        Some(json!({ "hashes": hashes })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let want: Vec<(String, String)> = [
+        ("sent", "-"),
+        ("refused", "not_found"),
+        ("failed", "rejected"),
+        ("failed", "rejected"),
+    ]
+    .iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    assert_eq!(outcomes(&v), want);
+    assert_eq!(v["sent"], json!(1));
+}
+
+#[tokio::test]
+async fn a_send_the_client_already_has_counts_as_done() {
+    let addr = transmission(vec![Add::Duplicate, Add::Duplicate]).await;
+    let f = fixture(Some(transmission_client(addr)));
+    let hashes = [&f.hashes[0], &f.hashes[3]];
+    let (_, v) = call(
+        &f,
+        "POST",
+        "/api/v1/send",
+        Some(json!({ "hashes": hashes })),
+    )
+    .await;
+    let dup = ("duplicate".to_string(), "-".to_string());
+    assert_eq!(outcomes(&v), [dup.clone(), dup]);
+    assert_eq!(v["sent"], json!(2));
 }

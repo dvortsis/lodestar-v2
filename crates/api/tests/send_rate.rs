@@ -40,7 +40,8 @@ impl SettingsApi for OneClient {
         unimplemented!()
     }
     fn download_client(&self, _: Option<&str>) -> Option<SavedClient> {
-        // Never reached: every hash below is unknown, so nothing is sent.
+        // Asked for before the rate check; every hash below is unknown, so
+        // nothing would be sent either way.
         Some(SavedClient {
             id: "home".into(),
             kind: DownloadClientKind::Qbittorrent,

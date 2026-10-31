@@ -1,21 +1,29 @@
 //! `POST /send` (§9, §10.10.8): torrents to a saved download client, one
 //! or many, with a result for each.
 //!
-//! - **Only what you can see is sent.** A hash this install doesn't have
-//!   is `not_found`; one a filter rule hides is `hidden`; an Adult
-//!   torrent while "Show adult content" is off is `adult_hidden`, so a
-//!   pasted hash doesn't get round the preference (§20.9). A quarantined
-//!   or tombstoned torrent isn't stored, so it's `not_found`.
+//! - **Only what you can see is sent.** A hash this install doesn't have,
+//!   one a filter rule hides, and an Adult one while "Show adult content"
+//!   is off are all `not_found`, alike: a withheld torrent's presence
+//!   isn't revealed, as in detail, Compare and export (§20.9). A
+//!   quarantined or tombstoned torrent isn't stored at all.
 //! - **Never a private torrent** (BEP 27, or found only through a private
 //!   source, §18.7): `private`. A magnet with no trackers would make the
 //!   client look the hash up on the public DHT, leaking it.
 //! - **The magnet is built from the stored torrent,** never from the
-//!   request: a v1 hash and the same torrent's truncated v2 hash send it
-//!   once.
-//! - **Duplicates and partial sends** follow the adapters (§9): a torrent
-//!   already in the client counts as sent in a bulk send, and a lone one
-//!   is `duplicate`; a bulk send that fails part-way reports the first
-//!   `sent` as sent and the rest as failed, so nothing is retried twice.
+//!   request: `btih` with its v1 hash, or `btmh` for a v2-only torrent,
+//!   and its name cut to [`MAX_NAME`] bytes so the link always fits. A
+//!   hash naming a torrent already in the send (a repeat, or a v1 hash and
+//!   the same torrent's truncated v2 hash) is `same_torrent`.
+//! - **Duplicates and partial sends** follow the adapters (§9): when the
+//!   client already has every torrent of the send, each is `duplicate`
+//!   (counted in `sent`: they're where you want them); when it has only
+//!   some, the adapter can't say which, so all are `sent`. A bulk send
+//!   that fails part-way reports the first `sent` as sent and the rest as
+//!   failed, so nothing is retried twice. qBittorrent answers a duplicate
+//!   and an invalid link alike, so a lone duplicate there is `failed`.
+//! - **A send that runs out of time** ([`SEND_TIMEOUT`]) can't say how far
+//!   it got: every torrent is `failed` with `timeout_unknown`, telling you
+//!   to check the client before sending again.
 //! - **Rate-limited:** two sends at a time and [`MAX_SENDS`] a minute;
 //!   past either, `429` and nothing is sent.
 //! - Results never repeat the client's address, a credential or its raw
@@ -43,6 +51,9 @@ pub const MAX_HASHES: usize = 100;
 /// Sends allowed in [`WINDOW`].
 pub const MAX_SENDS: u32 = 30;
 const WINDOW: Duration = Duration::from_secs(60);
+/// The most bytes of a torrent's name a magnet's `dn` carries. Encoded,
+/// that's at most three times as long, well inside [`Magnet::MAX_LEN`].
+pub const MAX_NAME: usize = 1024;
 /// The longest a send may take, every request to the client included.
 const SEND_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -154,24 +165,23 @@ pub(crate) async fn send(
     Ok(Json(deliver(client, checked).await))
 }
 
-/// The request's hashes, lowercased, once each, in order.
+/// The request's hashes, lowercased, in order (a repeat is
+/// `same_torrent` later).
 fn parse_hashes(raw: &[String]) -> ApiResult<Vec<String>> {
     let bad =
         |m: &'static str| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_hashes", m);
     if raw.is_empty() || raw.len() > MAX_HASHES {
         return Err(bad("Send 1 to 100 info hashes."));
     }
-    let mut out: Vec<String> = Vec::new();
-    for h in raw {
-        let h = h.to_ascii_lowercase();
-        if h.len() != 40 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(bad("Each hash must be 40 hexadecimal characters."));
-        }
-        if !out.contains(&h) {
-            out.push(h);
-        }
-    }
-    Ok(out)
+    raw.iter()
+        .map(|h| {
+            let h = h.to_ascii_lowercase();
+            if h.len() != 40 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(bad("Each hash must be 40 hexadecimal characters."));
+            }
+            Ok(h)
+        })
+        .collect()
 }
 
 /// Whether a hash may be sent: `Ok(name)` when it may, or the refusal's
@@ -188,23 +198,21 @@ fn visible(
     let Some(row) = store.torrent(id).map_err(internal)? else {
         return Ok(Err("not_found"));
     };
-    if row.flags & flags::HIDDEN != 0 {
-        return Ok(Err("hidden"));
+    // Withheld looks exactly like unknown.
+    let e = store.enrichment(id).map_err(internal)?;
+    if crate::discover::withheld(&row, e.as_ref(), false, adult_shown) {
+        return Ok(Err("not_found"));
     }
     if row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE) != 0 {
         return Ok(Err("private"));
     }
-    if !adult_shown
-        && store
-            .enrichment(id)
-            .map_err(internal)?
-            .is_some_and(|e| crate::search::is_adult(&e))
-    {
-        return Ok(Err("adult_hidden"));
-    }
+    let v2_only = row.flags & flags::V2 != 0 && row.flags & flags::HYBRID == 0;
     Ok(Ok(Sendable {
         id,
-        hash: crate::torrents::hex(&row.info_hash.0),
+        xt: match (v2_only, row.info_hash_v2) {
+            (true, Some(v2)) => format!("btmh:1220{}", crate::torrents::hex(&v2.0)),
+            _ => format!("btih:{}", crate::torrents::hex(&row.info_hash.0)),
+        },
         name: row.name,
     }))
 }
@@ -213,9 +221,27 @@ fn visible(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Sendable {
     id: i64,
-    /// The stored v1 hash, lowercase hex.
-    hash: String,
+    /// The magnet's exact topic: `btih:<v1 hex>`, or `btmh:1220<v2 hex>`
+    /// for a v2-only torrent.
+    xt: String,
     name: String,
+}
+
+impl Sendable {
+    /// Its magnet: the stored topic and the name, cut to [`MAX_NAME`]
+    /// bytes on a character boundary.
+    fn magnet(&self) -> Option<Magnet> {
+        let mut end = self.name.len().min(MAX_NAME);
+        while !self.name.is_char_boundary(end) {
+            end -= 1;
+        }
+        let uri = format!(
+            "magnet:?xt=urn:{}&dn={}",
+            self.xt,
+            percent_encode(&self.name[..end])
+        );
+        Magnet::parse(&uri).ok()
+    }
 }
 
 fn item(
@@ -234,17 +260,28 @@ fn item(
 
 fn refusal(code: &str) -> String {
     match code {
-        "hidden" => "A filter rule hides this torrent, so it isn't sent.",
         "private" => {
             "This torrent is private: it's sent only by its own tracker, never as a magnet link."
         }
         "same_torrent" => "Another hash in this send names the same torrent.",
-        "adult_hidden" => {
-            "This torrent is Adult, which is hidden: turn on Show adult content to send it."
-        }
+        "invalid" => "Lodestar couldn't make a magnet link for this torrent.",
         _ => "There's no torrent with that hash here.",
     }
     .to_string()
+}
+
+/// Why a send failed, in a send's words: the connection test's codes, but
+/// a refusal is the torrent's, and a timeout can't say how far it got.
+fn send_failure(e: &ClientError) -> (String, String) {
+    let f = test_failure(e).error.expect("a failure");
+    match e {
+        ClientError::Timeout => (
+            "timeout_unknown".into(),
+            "The client didn't answer in time, so some torrents may have gone in. Check the client before sending again.".into(),
+        ),
+        ClientError::Rejected(_) => (f.code, "The client refused the torrent.".into()),
+        _ => (f.code, f.message),
+    }
 }
 
 /// Sends the visible torrents and puts every hash's result in order.
@@ -259,20 +296,16 @@ async fn deliver(
         paused: client.paused,
         selected_files: None,
     };
-    let mut magnets = Vec::new();
-    for (_, v) in &checked {
-        if let Ok(t) = v {
-            let uri = format!(
-                "magnet:?xt=urn:btih:{}&dn={}",
-                t.hash,
-                percent_encode(&t.name)
-            );
-            // Built from a stored hash: it always parses.
-            if let Ok(m) = Magnet::parse(&uri) {
-                magnets.push(m);
-            }
-        }
-    }
+    // Each sendable torrent's magnet, or `invalid` in its place, so the
+    // results stay aligned with what the client was sent.
+    let checked: Vec<(String, Result<Magnet, &'static str>)> = checked
+        .into_iter()
+        .map(|(h, v)| (h, v.and_then(|t| t.magnet().ok_or("invalid"))))
+        .collect();
+    let magnets: Vec<Magnet> = checked
+        .iter()
+        .filter_map(|(_, v)| v.as_ref().ok().cloned())
+        .collect();
     let outcome = if magnets.is_empty() {
         None
     } else {
@@ -321,7 +354,7 @@ fn results<T>(
         }
         Some(Err(e)) => (0, false, Some(e)),
     };
-    let failure = cause.map(|e| test_failure(&e).error.expect("a failure"));
+    let failure = cause.map(|e| send_failure(&e));
     let mut out = Vec::with_capacity(checked.len());
     let mut n = 0;
     for (hash, v) in checked {
@@ -345,8 +378,8 @@ fn results<T>(
                     item(
                         hash,
                         ClientSendOutcome::Failed,
-                        failure.as_ref().map(|f| f.code.as_str()),
-                        failure.as_ref().map(|f| f.message.clone()),
+                        failure.as_ref().map(|f| f.0.as_str()),
+                        failure.as_ref().map(|f| f.1.clone()),
                     )
                 }
             }
@@ -388,7 +421,7 @@ mod tests {
     fn a_partial_send_counts_the_first_ones_and_fails_the_rest() {
         let partial = ClientError::Partial {
             sent: 1,
-            cause: Box::new(ClientError::Timeout),
+            cause: Box::new(ClientError::Unreachable),
         };
         let (r, sent) = results(checked(), Some(Err(partial)));
         assert_eq!(sent, 1);
@@ -398,10 +431,37 @@ mod tests {
             [
                 (Sent, None),
                 (Refused, Some("hidden")),
-                (Failed, Some("timeout")),
-                (Failed, Some("timeout"))
+                (Failed, Some("unreachable")),
+                (Failed, Some("unreachable"))
             ]
         );
+    }
+
+    #[test]
+    fn a_send_that_runs_out_of_time_says_some_may_have_gone_in() {
+        let (r, sent) = results(checked(), Some(Err(ClientError::Timeout)));
+        assert_eq!(sent, 0);
+        assert_eq!(r[0].code.as_deref(), Some("timeout_unknown"));
+        assert!(r[0].message.as_ref().unwrap().contains("Check the client"));
+    }
+
+    #[test]
+    fn magnets_fit_whatever_the_name_and_name_v2_only_torrents_by_btmh() {
+        // A long name of characters that encode to three bytes each, then
+        // three again when percent-encoded: cut, never dropped.
+        let t = Sendable {
+            id: 1,
+            xt: format!("btih:{}", "a".repeat(40)),
+            name: "é".repeat(4096),
+        };
+        let m = t.magnet().expect("it fits");
+        assert!(m.as_str().len() <= Magnet::MAX_LEN);
+        let v2 = Sendable {
+            id: 2,
+            xt: format!("btmh:1220{}", "b".repeat(64)),
+            name: "x".into(),
+        };
+        assert!(v2.magnet().unwrap().as_str().contains("urn:btmh:1220"));
     }
 
     #[test]
@@ -426,10 +486,10 @@ mod tests {
     }
 
     #[test]
-    fn hashes_are_checked_and_deduplicated() {
+    fn hashes_are_checked_and_kept_in_order() {
         let a = "A".repeat(40);
         let out = parse_hashes(&[a.clone(), a.to_lowercase()]).unwrap();
-        assert_eq!(out, vec!["a".repeat(40)]);
+        assert_eq!(out, vec!["a".repeat(40); 2], "a repeat gets its own result");
         assert!(parse_hashes(&[]).is_err());
         assert!(parse_hashes(&["xyz".into()]).is_err());
         assert!(parse_hashes(&vec!["a".repeat(40); MAX_HASHES + 1]).is_err());
