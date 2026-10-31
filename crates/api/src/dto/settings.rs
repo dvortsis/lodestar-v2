@@ -444,6 +444,57 @@ pub enum SettingsTest {
     Webhook(WebhookDraft),
 }
 
+/// `POST /send`: torrents to add to a saved download client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClientSend {
+    /// The saved client's id; without it, the default client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub client: Option<String>,
+    /// 1 to 100 info hashes (40 hex characters).
+    pub hashes: Vec<String>,
+}
+
+/// What happened to one torrent of a send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientSendOutcome {
+    /// The client took it.
+    Sent,
+    /// It was in the client already, which is where you want it.
+    Duplicate,
+    /// Not sent: unknown here, or hidden from you (`code` says which).
+    Refused,
+    /// The client didn't take it (`code` and `message` say why).
+    Failed,
+}
+
+/// One torrent's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientSendItem {
+    /// `not_found`, `hidden`, `adult_hidden`, `private` or `same_torrent` when refused; the
+    /// connection test's codes when failed; null otherwise.
+    #[schema(required = true)]
+    pub code: Option<String>,
+    pub hash: String,
+    /// A sentence for people; never the client's address or a credential.
+    #[schema(required = true)]
+    pub message: Option<String>,
+    #[schema(inline)]
+    pub outcome: ClientSendOutcome,
+}
+
+/// `POST /send`: the result per torrent, in the order asked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientSendResult {
+    /// The client's id.
+    pub client: String,
+    pub results: Vec<ClientSendItem>,
+    /// How many went in (sent or already there).
+    pub sent: usize,
+}
+
 /// `GET /usage`: the usage data Lodestar keeps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UsageStats {

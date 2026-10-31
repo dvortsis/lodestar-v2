@@ -70,6 +70,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/settings"),
     ("POST", "/settings/preview"),
     ("POST", "/settings/test"),
+    ("POST", "/send"),
     ("GET", "/usage"),
     ("POST", "/usage/clear"),
     ("GET", "/settings/export"),
