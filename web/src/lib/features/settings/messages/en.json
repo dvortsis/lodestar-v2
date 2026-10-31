@@ -316,5 +316,14 @@
 	"settings_screen_client_password_remove_named": "Remove password of {name}",
 	"settings_screen_client_password_pending": "Not saved yet. Use Save password.",
 	"settings_screen_client_password_changed": "Save your changes first, then save the password.",
-	"settings_screen_client_password_unknown": "Couldn’t check"
+	"settings_screen_client_password_unknown": "Couldn’t check",
+	"settings_logging_verbosity_label": "Verbosity",
+	"settings_logging_verbosity_help": "Turns on every event at or above this level. Normal suits most people.",
+	"settings_logging_verbosity_keywords": "log level verbosity debug trace info",
+	"settings_logging_events_label": "Each event",
+	"settings_logging_events_help": "Turn single events on or off. A change makes the preset Custom.",
+	"settings_logging_components_label": "Per-component levels",
+	"settings_logging_components_help": "A component's own level, instead of the Verbosity's.",
+	"settings_logging_libraries_label": "Libraries filter",
+	"settings_logging_libraries_help": "A tracing filter for third-party libraries only, such as warn,hyper=info. Lodestar's own lines follow the events above."
 }

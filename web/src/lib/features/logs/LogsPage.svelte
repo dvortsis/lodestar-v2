@@ -193,6 +193,27 @@
 		}
 	}
 
+	// Turn off now (§10.10.12): the same request as Settings → Logging's, loaded on the click. It
+	// turns off everything this banner covers, then reads the server's state again.
+	let turningOff = $state(false);
+	let turnOffError = $state('');
+	async function turnOff() {
+		turningOff = true;
+		turnOffError = '';
+		try {
+			const [{ LoggingCatalog }, { turnOffAll }] = await Promise.all([
+				import('$lib/features/settings/logging/catalog.svelte'),
+				import('$lib/features/settings/logging/privacy')
+			]);
+			await turnOffAll({ catalog: new LoggingCatalog() });
+		} catch (e) {
+			turnOffError = m.settings_logging_failed_off({ message: (e as Error).message });
+		} finally {
+			turningOff = false;
+			logging = await getLoggingState();
+		}
+	}
+
 	const loggingHref = $derived(resolve('/settings/[section]', { section: 'logging' }));
 	const banner = $derived(logging ? remaining(logging, now) : null);
 	const detailed = $derived(level === 'debug' || level === 'trace');
@@ -225,6 +246,12 @@
 		<Banner kind="warning" title={m.logs_identifying_title()}>
 			{m.logs_identifying({ time: banner })}
 			<a class="underline" href={loggingHref}>{m.logs_identifying_manage()}</a>
+			{#if turnOffError}<p role="alert" class="text-small text-error">{turnOffError}</p>{/if}
+			{#snippet action()}
+				<Button variant="secondary" disabled={turningOff} onclick={turnOff}
+					>{m.settings_logging_turn_off()}</Button
+				>
+			{/snippet}
 		</Banner>
 	{/if}
 
@@ -400,7 +427,9 @@
 	</div>
 	<!-- The live region says only "Paused"; the changing count sits outside it. -->
 	<div class="flex flex-wrap gap-x-4 text-small text-muted-text">
-		<span role="status">{view.paused ? m.logs_paused_short() : ''}{notice}</span>
+		<span role="status"
+			>{[view.paused ? m.logs_paused_short() : '', notice].filter(Boolean).join(' · ')}</span
+		>
 		{#if view.paused}<span>{m.logs_paused({ count: view.held })}</span>{/if}
 	</div>
 </section>
