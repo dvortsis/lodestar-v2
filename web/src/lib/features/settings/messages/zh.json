@@ -255,5 +255,7 @@
 	"settings_logoutput_file_total_mib_label": "总大小上限",
 	"settings_logoutput_event_log_errors_label": "将错误写入 Windows 事件日志",
 	"settings_logging_console_detail_option_private": "私密",
-	"settings_logging_console_detail_option_file": "与文件相同"
+	"settings_logging_console_detail_option_file": "与文件相同",
+	"settings_logging_console_format_option_text": "纯文本（text）",
+	"settings_logging_console_format_option_json": "JSON 行（json）"
 }

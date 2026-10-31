@@ -21,11 +21,18 @@
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import type { WidgetProps } from '../form/widgets';
 	import type { CatalogHolder, CatalogKey } from './context';
-	import { componentLabel, eventHelp, eventLabel, kindShort } from './event-labels';
+	import {
+		componentLabel,
+		eventHelp,
+		eventLabel,
+		kindShort,
+		loadEventNames
+	} from './event-labels.svelte';
 	import { levelLabel } from './labels';
 	import { eventOn, toggleEvent, type LogEvent } from './rules';
 
 	let { form, key, controlProps }: WidgetProps = $props();
+	void loadEventNames();
 	const holder = getContext<CatalogHolder>('logging-catalog' satisfies CatalogKey);
 	const catalog = $derived(holder.catalog);
 	const ICONS = {

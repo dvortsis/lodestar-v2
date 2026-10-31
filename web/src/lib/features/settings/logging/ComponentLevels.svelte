@@ -4,7 +4,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Select from '$lib/ui/fields/Select.svelte';
 	import type { WidgetProps } from '../form/widgets';
-	import { COMPONENT_IDS, componentLabel } from './event-labels';
+	import { COMPONENT_IDS, componentLabel } from './event-labels.svelte';
 	import { levelLabel } from './labels';
 	import { LEVELS } from './rules';
 

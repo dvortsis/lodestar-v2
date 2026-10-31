@@ -8,7 +8,7 @@ import type { Catalog } from './rules';
 
 export type DeploymentKind = components['schemas']['Deployment']['kind'];
 
-/** How often the time left is redrawn, and the catalog reloaded once a deadline passes. */
+/** How often the time left is redrawn and the catalog reloaded. */
 export const TICK_MS = 30_000;
 
 export class LoggingCatalog {
@@ -21,11 +21,13 @@ export class LoggingCatalog {
 	deployment = $state<DeploymentKind>();
 	#offset = 0;
 	#seq = 0;
+	#busy = 0;
 	#timer: ReturnType<typeof setInterval> | undefined;
 
 	/** Loads the catalog; a reply older than a newer request is dropped. */
 	async load(): Promise<Catalog | undefined> {
 		const mine = ++this.#seq;
+		this.#busy++;
 		try {
 			const c = await api.get('/logs/catalog');
 			if (mine !== this.#seq) return this.catalog;
@@ -37,7 +39,15 @@ export class LoggingCatalog {
 		} catch (e) {
 			if (mine === this.#seq && !isAbort(e)) this.error = e as Error;
 			return undefined;
+		} finally {
+			this.#busy--;
 		}
+	}
+
+	/** Reloads unless a load is already under way, so reloads never stack. A failed one keeps the
+	 * last catalog (`load` sets only `error`). */
+	refresh() {
+		if (!this.#busy) void this.load();
 	}
 
 	/** The server's clock now. */
@@ -45,14 +55,10 @@ export class LoggingCatalog {
 		return Date.now() / 1000 + this.#offset;
 	}
 
-	/**
-	 * Redraws the time left, and reloads once a deadline the catalog listed has passed, or while the
-	 * last reload failed (what shows may no longer be the server's state).
-	 */
+	/** Redraws the time left, and reloads the catalog, so a kind turned on elsewhere shows up. */
 	tick() {
 		this.now = this.serverNow();
-		const c = this.catalog;
-		if (this.error || c?.kinds.some((k) => k.until > 0 && k.until <= this.now)) void this.load();
+		this.refresh();
 	}
 
 	start(): () => void {
@@ -62,6 +68,14 @@ export class LoggingCatalog {
 			() => {}
 		);
 		this.#timer = setInterval(() => this.tick(), TICK_MS);
-		return () => clearInterval(this.#timer);
+		// Back in this tab: what another tab or the server changed shows at once.
+		const visible = () => {
+			if (document.visibilityState === 'visible') this.refresh();
+		};
+		document.addEventListener('visibilitychange', visible);
+		return () => {
+			clearInterval(this.#timer);
+			document.removeEventListener('visibilitychange', visible);
+		};
 	}
 }
