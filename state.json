@@ -498,7 +498,7 @@
     },
     "S-insights-2": {
       "status": "review",
-      "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile | 03:26Z PR #258 head edf8bdeb (4 stages; Discover after #255); reviewer session_01MMjhnAtfzdQU6Nq1uw7Qja | 03:38Z CI: insights.keyboard drill-through hits getInsightsUnderstand with no mock; author adds shared mock fixtures, held for review round"
+      "notes": "2026-10-31T02:40Z brief briefs/S-insights-2.md; Sonnet session_01MMjhn9r5D2JtnrGbbk5mQc | 02:45Z blocked on Discover: dto DiscoverResponse name collision in OpenAPI; runner PR #255 renames to InsightsDiscoverResponse; S-insights-2 builds other 4 stages meanwhile | 03:26Z PR #258 head edf8bdeb (4 stages; Discover after #255); reviewer session_01MMjhnAtfzdQU6Nq1uw7Qja | 03:38Z CI: insights.keyboard drill-through hits getInsightsUnderstand with no mock; author adds shared mock fixtures, held for review round | 03:42Z #255 merged (8868a76b; InsightsDiscoverResponse + InsightsHistogramBin); author adds Discover, one push with mock fix + review findings"
     },
     "S-insights-3": {
       "status": "pending",
