@@ -189,7 +189,7 @@ async fn bulk_adds_one_at_a_time_and_skips_duplicates() {
             .add_magnet(&magnet(), &AddOptions::default())
             .await
             .unwrap_err(),
-        ClientError::Rejected("the torrent is already in the client".into())
+        ClientError::AlreadyThere
     );
     server.finish();
 }
@@ -275,7 +275,7 @@ async fn a_duplicate_torrent_file_fails_as_it_starts() {
             .add_torrent_file(&torrent(), &AddOptions::default())
             .await
             .unwrap_err(),
-        ClientError::Rejected("the torrent is already in the client".into())
+        ClientError::AlreadyThere
     );
     let reqs = server.finish();
     assert_eq!(call(&reqs[0]).1[3], json!({}));

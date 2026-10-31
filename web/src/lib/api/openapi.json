@@ -4969,6 +4969,85 @@
         ]
       }
     },
+    "/send": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Sends torrents to a saved download client (the default one unless\n`client` names another), with its saved category, save path and\npaused setting. Each hash gets a result; hidden ones are refused, never\nsent.",
+        "operationId": "sendToClient",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientSend"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The send ran; each hash has its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientSendResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cross_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`no_client`: no download client is saved, or none with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_hashes`: none, more than 100, or one isn't an info hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sends_busy` or `send_rate_limited`: try again shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/sessions/revoke-others": {
       "post": {
         "tags": [
@@ -8777,6 +8856,92 @@
           "without": {
             "$ref": "#/components/schemas/AstNode",
             "description": "The query without the clause: search with it to remove it."
+          }
+        }
+      },
+      "ClientSend": {
+        "type": "object",
+        "description": "`POST /send`: torrents to add to a saved download client.",
+        "required": [
+          "hashes"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The saved client's id; without it, the default client."
+          },
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1 to 100 info hashes (40 hex characters)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClientSendItem": {
+        "type": "object",
+        "description": "One torrent's result.",
+        "required": [
+          "code",
+          "hash",
+          "message",
+          "outcome"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When refused: `not_found` (unknown, or withheld from you, which\nlook the same: hidden by a filter, or Adult while it's hidden),\n`private`, `same_torrent` or `invalid`. When failed: the connection\ntest's codes, or `timeout_unknown` (some may have gone in). Null\notherwise."
+          },
+          "hash": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A sentence for people; never the client's address or a credential."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "What happened to one torrent of a send.",
+            "enum": [
+              "sent",
+              "duplicate",
+              "refused",
+              "failed"
+            ]
+          }
+        }
+      },
+      "ClientSendResult": {
+        "type": "object",
+        "description": "`POST /send`: the result per torrent, in the order asked.",
+        "required": [
+          "client",
+          "results",
+          "sent"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The client's id."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientSendItem"
+            }
+          },
+          "sent": {
+            "type": "integer",
+            "description": "How many went in (sent or already there).",
+            "minimum": 0
           }
         }
       },
