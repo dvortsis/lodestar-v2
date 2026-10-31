@@ -39,7 +39,10 @@ export class LoggingCatalog {
 			this.now = c.now;
 			return c;
 		} catch (e) {
-			if (mine === this.#seq && !isAbort(e)) this.error = e as Error;
+			// A superseded request or an unmount aborts silently; a timeout is a failed read, so the
+			// banners say they can't read the state instead of showing a stale one as current.
+			const timedOut = signal?.reason instanceof Error && signal.reason.name === 'TimeoutError';
+			if (mine === this.#seq && (!isAbort(e) || timedOut)) this.error = e as Error;
 			return undefined;
 		} finally {
 			this.#busy--;

@@ -20,7 +20,7 @@ beforeEach(() => {
 	release = undefined;
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async (url: string) => {
+		vi.fn(async (url: string, init: RequestInit = {}) => {
 			const path = new URL(url, 'http://x').pathname.replace('/api/v1', '');
 			const reply = (status: number, b: unknown) =>
 				new Response(JSON.stringify(b), {
@@ -29,7 +29,11 @@ beforeEach(() => {
 				});
 			if (path === '/system') return reply(200, { deployment: { kind: 'docker' } });
 			loads++;
-			if (hold) await new Promise<void>((r) => (release = r));
+			if (hold)
+				await new Promise<void>((resolve, reject) => {
+					release = resolve;
+					init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+				});
 			return fail
 				? reply(500, { error: { code: 'internal', message: 'down' } })
 				: reply(200, catalogAt(1_000 + loads));
@@ -98,6 +102,33 @@ describe('LoggingCatalog refresh', () => {
 		spy.mockRestore();
 		hold = false;
 		release?.();
+	});
+
+	it('counts a timed-out reload as a failed read and keeps the last state', async () => {
+		const c = new LoggingCatalog();
+		await c.load();
+		const before = c.catalog;
+		hold = true;
+		await c.load(AbortSignal.timeout(50));
+		expect(c.error).toBeDefined();
+		expect(c.catalog).toBe(before);
+		hold = false;
+		await c.load();
+		expect(c.error).toBeUndefined();
+	});
+
+	it('stays silent when a newer load supersedes an aborted one', async () => {
+		const c = new LoggingCatalog();
+		await c.load();
+		hold = true;
+		const ctl = new AbortController();
+		const slow = c.load(ctl.signal);
+		await until(() => expect(loads).toBe(2));
+		hold = false;
+		const fresh = c.load();
+		ctl.abort();
+		await Promise.all([slow, fresh]);
+		expect(c.error).toBeUndefined();
 	});
 
 	it('keeps the last state when a reload fails', async () => {
