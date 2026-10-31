@@ -1823,13 +1823,13 @@
       "reviewer": "session_01MMjhn9dGmekFXHRR8v4YnR"
     },
     "X-build-stable-name": {
-      "status": "building",
+      "status": "pr-fixing",
       "model": "sonnet",
       "session": "session_01MMjhnB5apyKG6jubZNaGRA",
-      "pr": null,
+      "pr": 296,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job."
+      "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2618,6 +2618,11 @@
       "item": "FYI (\u00a72.19) #293 X-settings-registry-slim (merged f5569027): reverses the runner's Notifications 45.1 KB raise; every Settings first view drops ~1.2-1.6 KB. Titles stay in the shared registry (25 B each; moving them saves nothing).",
       "status": "to-send",
       "at": "2026-10-31T20:39Z"
+    },
+    {
+      "item": "FYI (\u00a72.19) X-build-stable-name (#296, pending): web builds now deterministic (version = package version + commit SHA); runner raised 'Results toolbar (lazy)' 4.6 -> 4.65 KB because the SHA in the version literal changes gzip by a few bytes per commit.",
+      "status": "to-send",
+      "at": "2026-10-31T21:14Z"
     }
   ],
   "external_gates": {
