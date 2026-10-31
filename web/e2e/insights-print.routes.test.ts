@@ -37,6 +37,16 @@ test('print media: the chrome is gone and the footer shows the URL and time', as
 	for (const id of ['status', 'exceptions', 'movement']) {
 		await expect(page.locator(`#insights-${id} .ins-sub`)).toBeVisible();
 	}
+	await expect(page.getByTestId('insights-funnel-harvested')).toBeVisible();
+	await expect(page.getByTestId('insights-funnel-harvested')).toContainText('Harvested');
+	await expect(page.getByTestId('insights-funnel-harvested').locator('a')).toHaveCSS(
+		'text-decoration-line',
+		'none'
+	);
+	await expect(page.locator('#insights-funnel .ins-card').first()).toHaveCSS(
+		'print-color-adjust',
+		'exact'
+	);
 	await expect(page.getByRole('button').filter({ visible: true })).toHaveCount(0);
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'riverstone-light');
 	await page.emulateMedia({ media: 'screen' });
