@@ -313,4 +313,6 @@ fn the_shared_judgement_checks_a_hybrids_v2_hash() {
             .len(),
         1
     );
+    // Its `Debug` gives no name.
+    assert!(!format!("{:?}", candidate(None)).contains("Plain"));
 }

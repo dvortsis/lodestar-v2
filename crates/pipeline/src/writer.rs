@@ -663,8 +663,11 @@ impl Writer {
     }
 
     /// Tells intake to refuse the hashes of candidates a sweep batch under
-    /// `version` held back. Rules that changed since may not hold them: the
-    /// restarted sweep (or a store reload) settles them instead.
+    /// `version` held back, unless the rules changed since: a release may
+    /// already have taken them out of the set, and putting them back would
+    /// refuse a hash the store no longer holds. A hash the store does still
+    /// hold may then be fetched once more; the writer's verdict holds it
+    /// again, and the next start reloads the set from the store.
     fn hold_refiled(&self, version: u64, hashes: Vec<[u8; 20]>) {
         if self.filter.current().version == version {
             for h in hashes {
