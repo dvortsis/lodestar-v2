@@ -130,20 +130,22 @@ pub(crate) struct Writer {
 
 /// A test hook run with the hashes a batch just marked pending.
 #[cfg(test)]
-pub(crate) type MarkedHook = fn(&HeldSet, &Handle, &[[u8; 20]]);
+pub(crate) type MarkedHook = fn(&Store, &HeldSet, &Handle, &[[u8; 20]]);
 
 /// After a batch that marked `pending` committed or rolled back: tells
 /// intake to refuse those the store holds and clears the marks, asked
 /// under `HeldSet`'s lock, so a release since isn't undone and a hold is
 /// never missed (`2026-10-31-B-held-exact.md`,
 /// `2026-10-31-B-held-precommit.md`). On a store error every hash goes in.
-fn hold_committed(store: &Store, pending: Option<Pending<'_>>) {
+fn hold_committed(store: &Store, pending: Option<Pending<'_>>, ingest: bool) {
     let Some(pending) = pending else { return };
     if let Err(e) = pending.settle(|hs| store.held_among(hs)) {
-        lodestar_log::log_event!(
-            crate::log_events::ENRICHMENT_FAILED,
-            error = crate::log_events::store_error(&e)
-        );
+        let error = crate::log_events::store_error(&e);
+        if ingest {
+            lodestar_log::log_event!(crate::log_events::STORE_WRITE_FAILED, error = error);
+        } else {
+            lodestar_log::log_event!(crate::log_events::ENRICHMENT_FAILED, error = error);
+        }
     }
 }
 
@@ -442,7 +444,7 @@ impl Writer {
             let pending = (!holding.is_empty()).then(|| held.pend(&holding));
             #[cfg(test)]
             if let (Some(f), Some(_)) = (marked, &pending) {
-                f(&held, &filter, &holding);
+                f(&store, &held, &filter, &holding);
             }
             let result = transaction(
                 &mut store,
@@ -462,7 +464,7 @@ impl Writer {
                 f(&mut store, &held, &filter);
             }
             // Committed or rolled back: the store says which hold.
-            hold_committed(&store, pending);
+            hold_committed(&store, pending, true);
             (store, committing, touches, swarm, result)
         })
         .await
@@ -619,11 +621,11 @@ impl Writer {
                 quarantine_secs,
             };
             let pending = std::cell::RefCell::new(None);
-            let mark = |hs: &[[u8; 20]]| {
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
                 *pending.borrow_mut() = Some(held.pend(hs));
                 #[cfg(test)]
                 if let Some(f) = marked {
-                    f(&held, &filter, hs);
+                    f(_st, &held, &filter, hs);
                 }
             };
             let result = crate::enrich::enrich_stored_marking(
@@ -639,7 +641,7 @@ impl Writer {
                 f(&mut store, &held, &filter);
             }
             // Committed, rejected or failed: the store says which hold.
-            hold_committed(&store, pending);
+            hold_committed(&store, pending, false);
             (store, result)
         })
         .await
@@ -702,11 +704,11 @@ impl Writer {
                 quarantine_secs,
             };
             let pending = std::cell::RefCell::new(None);
-            let mark = |hs: &[[u8; 20]]| {
+            let mark = |_st: &Store, hs: &[[u8; 20]]| {
                 *pending.borrow_mut() = Some(held.pend(hs));
                 #[cfg(test)]
                 if let Some(f) = marked {
-                    f(&held, &filter, hs);
+                    f(_st, &held, &filter, hs);
                 }
             };
             let result = crate::enrich::refile_candidates_marking(
@@ -724,7 +726,7 @@ impl Writer {
                 f(&mut store, &held, &filter);
             }
             // Committed, rejected or failed: the store says which hold.
-            hold_committed(&store, pending);
+            hold_committed(&store, pending, false);
             (store, result)
         })
         .await
@@ -1660,9 +1662,14 @@ mod tests {
     async fn a_new_hold_is_refused_from_before_its_commit() {
         use std::sync::atomic::AtomicUsize;
         static HOOKS: AtomicUsize = AtomicUsize::new(0);
-        fn marked(held: &HeldSet, _: &Handle, hs: &[[u8; 20]]) {
+        fn marked(store: &Store, held: &HeldSet, _: &Handle, hs: &[[u8; 20]]) {
             HOOKS.fetch_add(1, Ordering::Relaxed);
             assert!(!hs.is_empty() && held.pending_len() > 0);
+            // Before C: the store doesn't hold them yet.
+            assert!(
+                store.held_among(hs).unwrap().iter().all(|h| !h),
+                "marked before C"
+            );
             // M before C: the store doesn't hold them yet.
             held.remove_released::<()>(hs, |c| Ok(vec![false; c.len()]))
                 .unwrap();
@@ -1724,19 +1731,65 @@ mod tests {
         }
     }
 
-    /// A batch the store refuses (the rules moved between its mark and its
-    /// commit) leaves no mark and no hold behind: the store holds nothing.
+    /// A batch the store refuses or fails leaves no mark and no hold
+    /// behind, in all three writer arms: the store holds nothing. The sweep
+    /// sees the rules move between its mark and its commit, backfill the
+    /// classification generation, and the ingest commit a failed write.
     #[tokio::test]
     async fn a_rolled_back_batch_leaves_nothing_refused() {
-        fn change_rules(_: &HeldSet, filter: &Handle, _: &[[u8; 20]]) {
+        fn change_rules(_: &Store, _: &HeldSet, filter: &Handle, _: &[[u8; 20]]) {
             filter.update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+        }
+        fn bump_class_gen(store: &Store, _: &HeldSet, _: &Handle, _: &[[u8; 20]]) {
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ('class_rules_gen', 99)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    [],
+                )
+                .unwrap();
         }
         let (mut w, _) = arms_writer();
         w.marked = Some(change_rules);
         w.refile_candidates().await;
-        assert!(!w.held.contains(&[1; 20]), "rolled back, so fetchable");
+        assert!(
+            !w.held.contains(&[1; 20]),
+            "sweep rolled back, so fetchable"
+        );
         assert_eq!(w.held.pending_len(), 0);
         agrees_with_store(&w);
+
+        let (mut w, stored) = arms_writer();
+        w.marked = Some(bump_class_gen);
+        w.backfill().await;
+        assert!(!w.held.contains(&stored), "backfill refused, so fetchable");
+        assert_eq!(w.held.pending_len(), 0);
+        agrees_with_store(&w);
+
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+        w.filter
+            .update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+        w.store
+            .as_ref()
+            .unwrap()
+            .connection()
+            .execute_batch("PRAGMA query_only = ON")
+            .unwrap();
+        let r = leased(&coordinator, results());
+        let h = r.key.0;
+        let (retry, _rx) = mpsc::channel(4);
+        w.commit(vec![r], vec![], vec![], vec![], &retry).await;
+        assert_eq!(
+            w.stats.errors.load(Ordering::Relaxed),
+            1,
+            "the write failed"
+        );
+        assert!(!w.held.contains(&h), "ingest failed, so fetchable");
+        assert_eq!(w.held.pending_len(), 0);
     }
 
     /// Without anything in between, both arms hold, and the set equals

@@ -44,10 +44,6 @@ pub struct Pending<'a> {
 }
 
 impl Pending<'_> {
-    pub fn hashes(&self) -> &[[u8; 20]] {
-        &self.hashes
-    }
-
     /// After the commit (or its rollback): inserts those of the marked
     /// hashes the store holds, and clears the marks, a chunk at a time
     /// under the write lock, as [`HeldSet::insert_held`]. When the store

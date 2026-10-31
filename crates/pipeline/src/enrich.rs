@@ -83,7 +83,7 @@ pub fn enrich_stored_with(
     limit: usize,
     ctx: &Backfill<'_>,
 ) -> Result<Option<Backfilled>, lodestar_store::Error> {
-    enrich_stored_marking(store, after, limit, ctx, &|_| {})
+    enrich_stored_marking(store, after, limit, ctx, &|_, _| {})
 }
 
 /// [`enrich_stored_with`], calling `mark` with the swarm hashes the batch
@@ -94,7 +94,7 @@ pub fn enrich_stored_marking(
     after: i64,
     limit: usize,
     ctx: &Backfill<'_>,
-    mark: &dyn Fn(&[[u8; 20]]),
+    mark: &dyn Fn(&Store, &[[u8; 20]]),
 ) -> Result<Option<Backfilled>, lodestar_store::Error> {
     // The generation first, then the rules: rules read after a change
     // are never older than the generation they're written under.
@@ -129,7 +129,7 @@ pub fn enrich_stored_marking(
         .flat_map(|r| r.hashes.iter().copied())
         .collect();
     if !held.is_empty() {
-        mark(&held);
+        mark(store, &held);
     }
     let Some(enriched) = store.set_enrichments_at(generation, &batch, &refiled)? else {
         return Ok(Some(Backfilled {
@@ -179,7 +179,7 @@ pub fn refile_candidates(
     limit: usize,
     ctx: &Backfill<'_>,
 ) -> Result<Option<CandidatesRefiled>, lodestar_store::Error> {
-    refile_candidates_marking(store, handle, version, after, limit, ctx, &|_| {})
+    refile_candidates_marking(store, handle, version, after, limit, ctx, &|_, _| {})
 }
 
 /// [`refile_candidates`], calling `mark` with the swarm hashes the batch
@@ -191,7 +191,7 @@ pub fn refile_candidates_marking(
     after: i64,
     limit: usize,
     ctx: &Backfill<'_>,
-    mark: &dyn Fn(&[[u8; 20]]),
+    mark: &dyn Fn(&Store, &[[u8; 20]]),
 ) -> Result<Option<CandidatesRefiled>, lodestar_store::Error> {
     let rejected = || {
         Ok(Some(CandidatesRefiled {
@@ -236,7 +236,7 @@ pub fn refile_candidates_marking(
         Some(Vec::new())
     } else {
         let marked: Vec<[u8; 20]> = held.iter().flat_map(|h| h.hashes.iter().copied()).collect();
-        mark(&marked);
+        mark(store, &marked);
         store.refile_import_candidates(&refiled, now, || handle.current().version == version)?
     };
     let Some(ids) = written else {

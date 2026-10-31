@@ -2298,24 +2298,22 @@ impl FiltersApi {
             .collect();
         // Marked before the commit, so intake refuses them from before the
         // store holds them; settled against the store after it, whether it
-        // held them or not. An early return leaves them held: over-strict
-        // until a release or the next start (`2026-10-31-B-held-precommit.md`).
+        // held them, refused or failed (`2026-10-31-B-held-precommit.md`).
+        // A failed settle holds them all: over-strict, never loose.
         let holding: Vec<[u8; 20]> = refilings
             .iter()
             .filter(|f| f.held.is_some())
             .flat_map(|f| f.hashes.iter().copied())
             .collect();
         let pending = self.held.pend(&holding);
-        let written = store
-            .set_enrichments_at(generation, &[(id, r.enriched)], &refiled)
-            .map_err(internal)?;
-        pending
-            .settle(|hs| store.held_among(hs))
-            .map_err(internal)?;
+        let written = store.set_enrichments_at(generation, &[(id, r.enriched)], &refiled);
+        let settled = pending.settle(|hs| store.held_among(hs));
+        let written = written.map_err(internal)?;
         if written.is_none() {
             store.mark_unenriched(&[id]).map_err(internal)?;
             self.reenrich.store(true, Ordering::Release);
         }
+        settled.map_err(internal)?;
         let held_by = refilings
             .into_iter()
             .find(|f| written.is_some() && f.held.is_some())
