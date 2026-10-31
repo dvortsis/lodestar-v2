@@ -1390,8 +1390,8 @@
       "notes": "2026-10-30T07:40Z launched from land/L5; pushes fix/L5-e2e; runner merges into land/L5 | 2026-10-30T08:06Z 43b18ae1 merged into land/L5. Settings top-bar: static boot header in smoke shots since 21bd01bc (deferred Chrome) - expected; gap: no key-screen baseline shows right-hand controls (functional coverage in shell.routes.test.ts)"
     },
     "IMP-3": {
-      "status": "review",
-      "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values | 2026-10-30T23:30Z brief briefs/IMP-3.md; Opus session | session_01MMjhnAbQvQcWYHV3NmXLW6 | 2026-10-31T00:21Z PR #248 head 1e4a62cc (~3.6k, one PR by runner decision); reviewer session_01MMjhnBARHyqHn6ax5vCKyf | 2026-10-31T00:35Z review CHANGES: B1 implicit cast on FilesStatus enum runs source code as importer role (refuse via pg_cast check + test); riding: indclass pg_catalog check, stale decisions line 128, VACUUM ANALYZE line. Reviewer kept for delta | 2026-10-31T00:48Z fixed 89e51061 (enum_eq, per-batch cast recheck, full-snapshot quiescence, indclass); delta MERGE (exploits re-run on PG16); merge on green ci-ok"
+      "status": "merged",
+      "notes": " | 2026-10-30T07:41Z input from IMP-0: bitmagnet.rs reads name/path into String; fails on non-UTF-8 values | 2026-10-30T23:30Z brief briefs/IMP-3.md; Opus session | session_01MMjhnAbQvQcWYHV3NmXLW6 | 2026-10-31T00:21Z PR #248 head 1e4a62cc (~3.6k, one PR by runner decision); reviewer session_01MMjhnBARHyqHn6ax5vCKyf | 2026-10-31T00:35Z review CHANGES: B1 implicit cast on FilesStatus enum runs source code as importer role (refuse via pg_cast check + test); riding: indclass pg_catalog check, stale decisions line 128, VACUUM ANALYZE line. Reviewer kept for delta | 2026-10-31T00:48Z fixed 89e51061 (enum_eq, per-batch cast recheck, full-snapshot quiescence, indclass); delta MERGE (exploits re-run on PG16); merge on green ci-ok | 2026-10-31T01:14Z merged #248 (96ca3b3c); sessions archived"
     },
     "F-filters-xcpu": {
       "status": "merged",
@@ -1557,6 +1557,10 @@
     "CR-1a-S": {
       "status": "running",
       "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split"
+    },
+    "IMP-4": {
+      "status": "running",
+      "notes": "2026-10-31T01:15Z brief briefs/IMP-4.md; Opus session_01MMjhnBDAVMU76chqoEU4Hh; planned 4a/4b split"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2236,8 +2240,6 @@
   "followups": [
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
-    "IMP-3: importer credential delivery (reader_pw 70:70 600 vs Lodestar PUID 65532/99); bitmagnet.rs String reads of name/path must become bytea",
-    "IMP-3: also revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
     "CR-SIM: per-node persistent latency/loss classes and churn as scenario knobs",
     "IMP-2/IMP-06: import candidates aren't re-judged by \u00a720.9 refile on rule changes; refile by name or drop on rule change (IMP-1 review I4)",
