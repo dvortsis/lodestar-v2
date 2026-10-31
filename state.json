@@ -1551,7 +1551,7 @@
     },
     "CR-1a-S": {
       "status": "review",
-      "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split | 2026-10-31T01:31Z part 1 PR #251 head c6cf450e; reviewer session_01MMjhnCySJJX45uWwBBEfbv; part 2 built locally on slice/CR-1a-S-2, pushed after #251 merges. Owner flags in decisions file | 01:38Z part 2 ready locally (5f274fae). Screen: healthy 76.0->81.8 (+7.5%, spread 10.9%, 8/8 seeds better), high-latency +7.7% (spread 15.1%), admission-pressure +2.9% (spread 19.7%); conversion unchanged; time to first fetch 4.6-16x faster. Not a clear win by CR-ADM bar; healthy 8/8 is a sign-test signal -> live A/B candidate | 01:44Z #251 review MERGE (O1 stream_deadline test, O2 flush alloc, O3 first_batch -> part 2); merge on green ci-ok. Owner flag: STREAM_BATCH 8, STREAM_QUEUE 2, 1 pending, STREAM_SEEN 32; screen result"
+      "notes": "2026-10-31T00:36Z brief briefs/CR-1a-S.md; Opus session_01MMjhnBjwRAeaZzV6YigBDk; planned 2-part split | 2026-10-31T01:31Z part 1 PR #251 head c6cf450e; reviewer session_01MMjhnCySJJX45uWwBBEfbv; part 2 built locally on slice/CR-1a-S-2, pushed after #251 merges. Owner flags in decisions file | 01:38Z part 2 ready locally (5f274fae). Screen: healthy 76.0->81.8 (+7.5%, spread 10.9%, 8/8 seeds better), high-latency +7.7% (spread 15.1%), admission-pressure +2.9% (spread 19.7%); conversion unchanged; time to first fetch 4.6-16x faster. Not a clear win by CR-ADM bar; healthy 8/8 is a sign-test signal -> live A/B candidate | 01:44Z #251 review MERGE (O1 stream_deadline test, O2 flush alloc, O3 first_batch -> part 2); merge on green ci-ok. Owner flag: STREAM_BATCH 8, STREAM_QUEUE 2, 1 pending, STREAM_SEEN 32; screen result | 01:59Z merged #251 part 1 (51132cdd); part 2 PR next"
     },
     "IMP-4": {
       "status": "running",
@@ -2226,6 +2226,10 @@
     },
     {
       "item": "FYI (\u00a72.19, content safety) #249 LU-1-neutralize (merged): the LU-1 pack rule now honours CSX-5 Neutralize terms like the other keyword pack rules (\u00a720.5.5). Refinement: a lure word inside a joined word (MyPassword) stays LU-1 evidence when only `password` is neutralized; neutralizing the whole word removes it (fails safe). The junk score itself is unchanged by Neutralize.",
+      "status": "to-send"
+    },
+    {
+      "item": "FYI (\u00a72.19) #251 CR-1a-S part 1 (merged, dht.streaming_peers off by default): candidate defaults STREAM_BATCH 8, STREAM_QUEUE 2, one pending batch, STREAM_SEEN 32 (the spec's proposed bounds). Screen (part 2): healthy +7.5% with 8/8 seeds better, high-latency +7.7% and admission-pressure +2.9% within noise; time to first fetch 4.6-16x faster; conversion unchanged. A live A/B candidate.",
       "status": "to-send"
     }
   ],
