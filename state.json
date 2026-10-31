@@ -1813,13 +1813,13 @@
       "reviewer": "session_01MMjhnA5HC3rJjGGgq1dCrL"
     },
     "X-form-remount": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhnA1v32xTxqD5BgaaKR",
       "pr": 295,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot). | 21:03Z PR #295 head 2603d447. Author: engine never sets loading on resync (premise wrong); body kept mounted anyway. Reviewer told to find real remount cause and prove spec fails on main. Subscribed. | 21:22Z review: no blockers, but nothing remounted (mount counter); #289 cause was details/ontoggle race fixed by 043f495; engine change guards unreachable path, +0.07 KB every Settings first view. Runner \u00a72.26: drop engine change, keep spec as regression guard (+assert open), fix EventList comment/opened + decisions after #294 merges; merge main; one push. | 21:31Z told to proceed with rework (#294 merged). | 21:47Z reworked head 95559ef4: engine untouched (form/** = main), spec + open assertion, EventList opened back to component state (open groups reset on leaving the page; accepted), decisions file. Runner checked diff; reviewer archived. Merge on green. | 21:59Z E2E core fail = detail.routes drawer edge (outside diff); one re-run queued.",
+      "notes": "20:15Z brief briefs/X-form-remount.md (from #289 review; a11y focus). | 20:12Z launched Sonnet (4th slot). | 21:03Z PR #295 head 2603d447. Author: engine never sets loading on resync (premise wrong); body kept mounted anyway. Reviewer told to find real remount cause and prove spec fails on main. Subscribed. | 21:22Z review: no blockers, but nothing remounted (mount counter); #289 cause was details/ontoggle race fixed by 043f495; engine change guards unreachable path, +0.07 KB every Settings first view. Runner \u00a72.26: drop engine change, keep spec as regression guard (+assert open), fix EventList comment/opened + decisions after #294 merges; merge main; one push. | 21:31Z told to proceed with rework (#294 merged). | 21:47Z reworked head 95559ef4: engine untouched (form/** = main), spec + open assertion, EventList opened back to component state (open groups reset on leaving the page; accepted), decisions file. Runner checked diff; reviewer archived. Merge on green. | 21:59Z E2E core fail = detail.routes drawer edge (outside diff); one re-run queued. | 22:11Z MERGED 059a9614; sessions archived.",
       "reviewer": "session_01MMjhn9dGmekFXHRR8v4YnR"
     },
     "X-build-stable-name": {
@@ -1830,6 +1830,15 @@
       "attempt": 1,
       "review_rounds": 1,
       "notes": "21:02Z brief briefs/X-build-stable-name.md (Alert/Search/Results toolbar gates in build noise). | 21:02Z launched Sonnet. | 21:06Z +item: security.test.ts teardown unhandled rejections (\"document is not defined\" via bits-ui portal/dialogs.ts:32) failing web job. | 21:13Z PR #296 head 37d4bdbc: version = pkg+7-char SHA; spread 47 entries/51 B -> 0. Runner: Results toolbar 4.6->4.65 KB (\u00a72.26, SHA gzip variance); add security.test teardown fix; reviewer on next head. | 21:21Z head 70494f28 (toolbar 4.65 KB + security.test dismissAll teardown fix; flake not reproduced locally, CI is the test). Reviewer launched; subscribed. | 21:33Z review CHANGES: Dockerfile web stage builds without GITHUB_SHA -> every image UI version 0.0.0 (breaks stale-deploy recovery, ui_build_id). Fix: ARG REVISION + GITHUB_SHA=$REVISION. CI green otherwise (security flake gone on this run). | 21:41Z head 8021b3b6: Dockerfile ARG REVISION= + GITHUB_SHA=\"$REVISION\" (runner checked diff; no docker daemon to build). Reviewer archived. Merge on green. | 21:59Z MERGED; sessions archived. (PR body stale on workflows/toolbar; decisions file is correct.)"
+    },
+    "S-logs-3": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "22:12Z brief briefs/S-logs-3.md (event labels, console format labels w/ map 0.86->0.95 KB runner-approved, catalog refresh)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2684,11 +2693,8 @@
     "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
     "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
-    "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
-    "Logging catalog periodic reload (optional O2, #289): reload /logs/catalog on tick or visibilitychange so a kind turned on in another tab shows here.",
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
     "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
-    "Logging event labels + console format labels (from #289/#294): ~200 events x label/help en+zh, plus console format option labels ('Plain text (text)'/'JSON lines (json)'); the Logging label map needs ~0.95 KB for the format labels alone (runner OK to raise under \u00a72.26 within this slice, or move to a lazy map). Logging first view has ~2.2 KB headroom post-#293.",
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs."
   ],
   "main_health": [
