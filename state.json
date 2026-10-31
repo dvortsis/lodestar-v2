@@ -547,13 +547,13 @@
       "catch_ups": 1
     },
     "S-filters": {
-      "status": "building",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhn8oardod2iyMtn27tK",
-      "pr": null,
+      "pr": 300,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet."
+      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet. | 22:58Z PR #300 (2a) head f1781c2d: Filters 32.96 KB; no about/iconLoad (Alert/Search headroom); no queue expiry yet. Opus reviewer + security review; subscribed."
     },
     "S-keys": {
       "status": "merged",
@@ -1842,13 +1842,13 @@
       "reviewer": "session_01MMjhnAJNz4LPBqsm4Npykf"
     },
     "X-security-confirm-teardown": {
-      "status": "building",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhnCmLXMy8i8SiLSD6uh",
-      "pr": null,
+      "pr": 301,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "22:39Z security.test teardown flake recurred on #298 via security/confirm.ts:82 pending unmount timer (#296 fixed only form/dialogs). Sonnet fix slice launched; also hunts same setTimeout-unmount pattern elsewhere."
+      "notes": "22:39Z security.test teardown flake recurred on #298 via security/confirm.ts:82 pending unmount timer (#296 fixed only form/dialogs). Sonnet fix slice launched; also hunts same setTimeout-unmount pattern elsewhere. | 22:58Z PR #301 head 80bc661b: confirm.ts + reveal.ts track closing timers; dismiss flushes. Runner reviewed diff (small, correct); merge on green."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2665,6 +2665,7 @@
     }
   },
   "followups": [
+    "X-alert-search-headroom (HIGH): Alert route (~45.98/46 KB) and Search results (~43.28/43.3 KB) sit within bytes of limits; every shared-chunk change (registry about/iconLoad, shared format code) pushes them over, forcing features to drop UX (S-filters: no purpose line, no queue expiry). Find real bytes to cut or re-split so they don't share Settings/format chunks; target >=0.5 KB headroom each. Opus perf slice.",
     "App-wide stale-tab check (from S-about): compare UI build id vs server on every page load (app shell), offer reload; About-only check can't fire after upgrade because its chunk is gone. Shell slice (Sonnet ok, Opus review). Coordinate with #296's version name.",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
