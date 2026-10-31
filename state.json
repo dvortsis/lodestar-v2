@@ -2269,7 +2269,14 @@
     "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
     "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
     "Locale boot: routes/+layout.ts calls initLocale(null), so a saved language does not apply at start-up; time_zone and first_day_of_week are not read anywhere yet (#259)",
-    "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)"
+    "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)",
+    {
+      "id": "B-refetch-funnel",
+      "model": "opus",
+      "source": "IMP-5 (2026-10-31)",
+      "what": "REFETCH leases skip funnel recording in crates/pipeline/src/{worker,coordinator,writer}.rs so FILES_PARTIAL imports queued at startup (lib.rs ~l.905) never land in the start hour's funnel; test that a refetch moves no cohort or FUNNEL_EVENTS row",
+      "when": "after IMP-5 merges, when a slot frees"
+    }
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
