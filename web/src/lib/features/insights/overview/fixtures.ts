@@ -148,3 +148,25 @@ export const COMPARE_KPI = {
 	searchable_delta: 56_789,
 	yield_delta: -0.032
 } as const;
+
+/** An import in the range: started, finished (3 new, 1 already known), and later removed. */
+export const IMPORT_ANNOTATIONS: Overview['annotations'] = [
+	{
+		at: NOW - 40 * HOUR,
+		kind: 'import_started',
+		text: 'job=7 source=bitmagnet',
+		import: { job: 7, source: 'bitmagnet', new: null, merged: null, removed: null }
+	},
+	{
+		at: NOW - 38 * HOUR,
+		kind: 'import_finished',
+		text: 'job=7 source=bitmagnet new=250000 merged=1234',
+		import: { job: 7, source: 'bitmagnet', new: 250_000, merged: 1234, removed: null }
+	},
+	{
+		at: NOW - 6 * HOUR,
+		kind: 'import_removed',
+		text: 'job=7 source=bitmagnet removed=4321',
+		import: { job: 7, source: 'bitmagnet', new: null, merged: null, removed: 4321 }
+	}
+];

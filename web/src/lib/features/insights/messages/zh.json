@@ -162,5 +162,13 @@
 	"insights_stage_time_snapshot": "每个周期末的快照，{tz}",
 	"insights_stage_snapshot": "快照",
 	"insights_stage_unit_torrents": "个种子",
-	"insights_stage_chart_summary_snapshot": "{title}：{range}内每个周期末的快照。"
+	"insights_stage_chart_summary_snapshot": "{title}：{range}内每个周期末的快照。",
+	"insights_import_crawled": "抓取：",
+	"insights_import_imported": "导入",
+	"insights_import_plus": "另有 {count} 个导入",
+	"insights_import_delta_note": "包含一次导入",
+	"insights_import_started": "导入已开始",
+	"insights_import_finished": "导入完成：{new} 个新增，{merged} 个已知",
+	"insights_import_removed": "导入已移除：删除 {removed} 个",
+	"insights_import_markers": "导入"
 }

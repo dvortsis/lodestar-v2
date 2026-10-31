@@ -10,7 +10,9 @@ import {
 } from '$lib/format';
 import Exceptions from './Exceptions.svelte';
 import Funnel from './Funnel.svelte';
-import { COMPARE_KPI, overviewFixture } from './fixtures';
+import { COMPARE_KPI, IMPORT_ANNOTATIONS, overviewFixture } from './fixtures';
+import ImportMarkers from './ImportMarkers.svelte';
+import { importText } from './imports';
 import KpiRow from './KpiRow.svelte';
 import Segments from './Segments.svelte';
 import ServePanel from './ServePanel.svelte';
@@ -213,5 +215,46 @@ describe('Exceptions', () => {
 		});
 		expect(text('insights-exception-new_thing')).toContain('Needs attention: new_thing');
 		expect(screen.queryByTestId('insights-exception-new_thing-fix')).toBeNull();
+	});
+});
+
+describe('imports (IMP-5)', () => {
+	it('splits the total into crawled and imported', () => {
+		render(KpiRow, { kpi: o.kpi });
+		expect(text('insights-kpi-crawled')).toBe(formatCount(o.kpi.searchable_crawled));
+		expect(text('insights-kpi-imported')).toBe(formatCount(o.kpi.imported));
+	});
+	it('shows "+ N imported" under New searchable only above zero, apart from the headline', () => {
+		render(KpiRow, { kpi: { ...o.kpi, new_searchable_imported: 250_000 } });
+		expect(text('insights-kpi-new-imported')).toBe('+ 250,000 imported');
+		expect(text('insights-kpi-new-value')).toBe(formatCompact(o.kpi.new_searchable));
+	});
+	it('shows no imported line for zero', () => {
+		render(KpiRow, { kpi: o.kpi });
+		expect(screen.queryByTestId('insights-kpi-new-imported')).toBeNull();
+	});
+	it("notes an import in the total's change only with a finished marker and a delta", () => {
+		const kpi = { ...o.kpi, searchable_delta: 5 };
+		const { unmount } = render(KpiRow, { kpi, annotations: IMPORT_ANNOTATIONS });
+		expect(text('insights-kpi-delta-import')).toBe('Includes an import');
+		unmount();
+		render(KpiRow, { kpi, annotations: [IMPORT_ANNOTATIONS[0]!] });
+		expect(screen.queryByTestId('insights-kpi-delta-import')).toBeNull();
+	});
+	it('words each marker with its counts', () => {
+		expect(importText(IMPORT_ANNOTATIONS[0]!, 'en')).toBe('Import started');
+		expect(importText(IMPORT_ANNOTATIONS[1]!, 'en')).toBe(
+			'Import finished: 250,000 new, 1,234 already known'
+		);
+		expect(importText(IMPORT_ANNOTATIONS[2]!, 'en')).toBe('Import removed: 4,321 deleted');
+	});
+	it('lists keyboard-reachable markers, and nothing without an import', () => {
+		const { unmount } = render(ImportMarkers, { annotations: IMPORT_ANNOTATIONS, tz: 'UTC' });
+		const li = screen.getByTestId('insights-import-marker-import_removed');
+		expect(li.getAttribute('tabindex')).toBe('0');
+		expect(li.getAttribute('aria-label')).toContain('Import removed: 4,321 deleted');
+		unmount();
+		render(ImportMarkers, { annotations: o.annotations, tz: 'UTC' });
+		expect(screen.queryByTestId('insights-import-markers')).toBeNull();
 	});
 });

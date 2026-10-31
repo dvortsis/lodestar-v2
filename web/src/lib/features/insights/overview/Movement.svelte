@@ -10,6 +10,7 @@
 	import { resolve } from '$app/paths';
 	import type { Route } from './href';
 	import { csvHref } from './links';
+	import { importText, isImport } from './imports';
 	import type { Overview } from './model';
 	import type { InsightsQuery } from './query';
 
@@ -80,8 +81,10 @@
 		resumed: () => m.insights_overview_note_resumed(),
 		intensity: (t) => m.insights_overview_note_intensity({ level: t })
 	};
-	const note = (kind: string, text: string) =>
-		kindText[kind]?.(text) ?? m.insights_overview_note_unknown({ kind });
+	const note = (a: Overview['annotations'][number]) =>
+		importText(a, locale) ??
+		kindText[a.kind]?.(a.text) ??
+		m.insights_overview_note_unknown({ kind: a.kind });
 </script>
 
 <div class="ins-col" data-testid="insights-movement-charts">
@@ -128,8 +131,13 @@
 		</div>
 		<ol class="ins-list">
 			{#each overview.annotations as a, i (a.at + a.kind + i)}
-				<li class="ins-item-row" data-testid="insights-annotation-{a.kind}">
-					<span>{note(a.kind, a.text)}</span>
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+				<li
+					class="ins-item-row"
+					tabindex={isImport(a) ? 0 : undefined}
+					data-testid="insights-annotation-{a.kind}"
+				>
+					<span>{note(a)}</span>
 					<span class="ins-muted ins-num">{formatDateFull(a.at, locale, { timeZone: tz })}</span>
 				</li>
 			{/each}
