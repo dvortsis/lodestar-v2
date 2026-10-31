@@ -806,35 +806,11 @@ fn a_neutralized_lure_word_is_no_lu1_evidence() {
     let note = |n: &str| FileInfo::new(vec![n.into()], 90);
     let files = [archive.clone(), note("password.txt")];
     assert_eq!(pack_decision(name, &files, &[]), lu1);
-    let decided = pack_decision(name, &files, &[neutralize("password")]);
-    assert!(decided.is_some() && decided != lu1, "{decided:?}");
-    // The junk score and its reasons are the classifier's: judging with
-    // the entry leaves them as they were.
-    let class = classify(name, &files);
-    let before = class.junk.clone();
-    assert!(
-        before
-            .reasons
-            .contains(&lodestar_classify::JunkReason::LureFile)
+    // FK-5 still demotes the archive standing in for the media.
+    assert_eq!(
+        pack_decision(name, &files, &[neutralize("password")]),
+        Some(RuleRef::Pack(PackRule::Fk5))
     );
-    let mut e = engine();
-    e.packs = lodestar_filter::PackSwitches::all();
-    e.overrides.push(neutralize("password"));
-    let facts = Facts {
-        class: &class,
-        size: 0,
-        piece_len: 0,
-        flags: 0,
-        discovered_at: 0,
-        now: 0,
-    };
-    let it = Item {
-        files: &files,
-        content_type: class.content_type,
-        ..item(&[H], name)
-    };
-    let _ = e.judge(&it, Some(&facts), 0);
-    assert_eq!(class.junk, before);
     // Another lure note still counts.
     let two = [
         archive.clone(),

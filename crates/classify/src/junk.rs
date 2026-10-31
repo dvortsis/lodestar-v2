@@ -282,6 +282,35 @@ mod tests {
         assert!(lure_hits(&pad).next().is_none());
     }
 
+    /// The lure reason and its weight, pinned: the filter's LU-1 reads
+    /// [`lure_hits`], and the score must stay what it was.
+    #[test]
+    fn lure_file_scores_as_before() {
+        let junk = |notes: &[(&str, u64, bool)]| {
+            let mut files = vec![FileInfo::new(vec!["Movie.2019.1080p.rar".into()], 4 << 30)];
+            for (n, size, padding) in notes {
+                let mut f = FileInfo::new(vec![(*n).into()], *size);
+                f.padding = *padding;
+                files.push(f);
+            }
+            crate::classify("Movie 2019 1080p", &files).junk
+        };
+        let lure = Junk {
+            score: 70,
+            reasons: vec![JunkReason::LureFile, JunkReason::ArchiveForMedia],
+        };
+        let plain = Junk {
+            score: 30,
+            reasons: vec![JunkReason::ArchiveForMedia],
+        };
+        assert_eq!(junk(&[("password.txt", 90, false)]), lure);
+        assert_eq!(junk(&[("MyPassword.txt", 90, false)]), lure);
+        assert_eq!(junk(&[("Click here.txt", LURE_MAX_SIZE - 1, false)]), lure);
+        assert_eq!(junk(&[("password.txt", LURE_MAX_SIZE, false)]), plain);
+        assert_eq!(junk(&[("password.txt", 90, true)]), plain);
+        assert_eq!(junk(&[("readme.txt", 90, false)]), plain);
+    }
+
     #[test]
     fn names_are_unique() {
         use JunkReason::*;

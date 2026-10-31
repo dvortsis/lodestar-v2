@@ -10,9 +10,9 @@
 //!
 //! A CSX-5 *Neutralize term* stops a word counting as evidence in the
 //! rules that read keyword lists (MW-3, LU-2, LU-4, SC-1) and in LU-1's
-//! lure notes (§20.5.5), as it does in the core and your rules. The words of a name or file the
-//! rules count are read with the neutralized ones blanked, positions
-//! kept ([`Ctx::evidence`]). The guards that keep a rule from matching
+//! lure notes (§20.5.5), as it does in the core and your rules. The
+//! words of a name or file the rules count are read with the neutralized
+//! ones blanked, positions kept ([`Ctx::evidence`], [`Ctx::live_lure`]). The guards that keep a rule from matching
 //! (FK-2's `trailer`/`sample`, SC-1's `trainer`/`mod`/`offline`) read the
 //! torrent as it is, as `unless` does, so neutralizing never widens a
 //! rule.
@@ -346,7 +346,10 @@ impl<'a> Ctx<'a> {
     }
 
     /// The byte spans of a text's neutralized words, each a whole run of
-    /// letters and digits as [`words`] reads them.
+    /// letters and digits as [`words`] reads them. Unlike
+    /// [`Ctx::evidence`], any word is checked, since a lure can sit inside
+    /// a word like `password1`; it's blanked only when that whole word is
+    /// neutralized.
     fn neutral_spans(&self, text: &str) -> Vec<(usize, usize)> {
         let mut spans = Vec::new();
         let mut start = None;
@@ -972,6 +975,33 @@ mod tests {
             &["Free", "Robux", "offline"],
         ];
 
+        /// Words of lure notes, and words beside them.
+        const LURE_VOCAB: &[&str] = &[
+            "password",
+            "PASSWD",
+            "click",
+            "here",
+            "visit",
+            "www",
+            "how",
+            "to",
+            "open",
+            "MyPassword",
+            "movie",
+        ];
+
+        /// Whether to add an archive for the media and lure notes, the
+        /// notes, and lure words to neutralize.
+        #[allow(clippy::type_complexity)]
+        fn lure_case() -> impl Strategy<Value = (bool, Vec<Vec<&'static str>>, Vec<&'static str>)> {
+            let words = || prop::collection::vec(prop::sample::select(LURE_VOCAB), 1..4);
+            (
+                any::<bool>(),
+                prop::collection::vec(words(), 1..3),
+                prop::sample::subsequence(LURE_VOCAB.to_vec(), 2..6),
+            )
+        }
+
         fn text(n: std::ops::Range<usize>) -> impl Strategy<Value = Vec<&'static str>> {
             prop::collection::vec(prop::sample::select(VOCAB), n)
         }
@@ -1010,8 +1040,21 @@ mod tests {
                     1..5,
                 ),
                 neutral in prop::sample::subsequence(VOCAB.to_vec(), 0..5),
+                lure in lure_case(),
             ) {
-                let name: Vec<&str> = lead.iter().copied().chain(rest).collect();
+                // LU-1 needs an HD name, an archive standing in for the
+                // media and a small lure note, which random files rarely
+                // give together: half the cases carry them.
+                let (afm, notes, lure_neutral) = lure;
+                let mut name: Vec<&str> = lead.iter().copied().chain(rest).collect();
+                let mut files = files;
+                let mut neutral = neutral;
+                if afm {
+                    name.splice(0..0, ["movie", "1080p"]);
+                    files.insert(0, (vec!["movie", "1080p"], "rar", 4 << 30));
+                    files.extend(notes.into_iter().map(|w| (w, "txt", 90)));
+                    neutral.extend(lure_neutral);
+                }
                 let keys = super::keys(&neutral);
                 let path = |(w, e, s): &(Vec<&str>, &str, u64), m: &[String]| {
                     (format!("{}.{e}", joined(w, " ", m)), *s)
