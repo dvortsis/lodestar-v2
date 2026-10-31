@@ -1783,13 +1783,13 @@
       "reviewer": "session_01MMjhn94YmgkwkPeUXA5HEY"
     },
     "X-soak-docker-memrule": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBtHTd2PZbFMcocXTm",
       "pr": 292,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time). | 19:05Z launched Opus. | 19:13Z PR #292 head 358b1260 (anon basis, new reason, fallback; \u00a72.19 flag). Reviewer + security review; subscribed.",
+      "notes": "19:06Z brief briefs/X-soak-docker-memrule.md; for runs after merge (gluetun leg if merged in time). | 19:05Z launched Opus. | 19:13Z PR #292 head 358b1260 (anon basis, new reason, fallback; \u00a72.19 flag). Reviewer + security review; subscribed. | 19:16Z MERGED 673692a4; sessions archived; owner told (gluetun leg collector choice asked).",
       "reviewer": "session_01MMjhn912vzFDE65VeyMNE1"
     }
   },
@@ -2563,8 +2563,9 @@
     },
     {
       "item": "FYI (\u00a72.19) X-soak-docker-memrule (#292, when merged): Linux collector's 1 GiB x5 stop rule judges cgroup anon (process memory) in Docker mode, new reason process_memory_over_1GiB_for_five_samples; working set kept as evidence. Only for runs started after merge (could cover the gluetun leg if you update the collector copy); current rc.2 run unaffected.",
-      "status": "to-send",
-      "at": "2026-10-31T19:13Z"
+      "status": "sent",
+      "at": "2026-10-31T19:13Z",
+      "sent_at": "2026-10-31T19:16Z"
     }
   ],
   "external_gates": {
@@ -2621,7 +2622,8 @@
     "Logging event labels: ~200 catalog events need logs.event.<id>.label/help messages (~800 en+zh); S-logs-2 leaves a lookup hook in settings/logging/event-labels.ts and shows the stable id until then (Sonnet/Haiku job)",
     "X-requeue cap (optional O1, #290): classify.requeue_pending is bounded per distinct text, not overall, while search is off; admin add/remove of many queries grows it. Fix = cap that collapses to a full re-mark (mark all unenriched). Low; admin-only.",
     "Logging catalog periodic reload (optional O2, #289): reload /logs/catalog on tick or visibilitychange so a kind turned on in another tab shows here.",
-    "Form engine remount (from #289 review): SettingsForm unmounting children while form.status=loading resets list search text / Show changed only and drops focus to <body> after each toggle (a11y). Fix in form/** (keep children mounted during resync or preserve state + focus)."
+    "Form engine remount (from #289 review): SettingsForm unmounting children while form.status=loading resets list search text / Show changed only and drops focus to <body> after each toggle (a11y). Fix in form/** (keep children mounted during resync or preserve state + focus).",
+    "analyze_cr0 report: 'Peak RSS (MiB)' column shows working_set_bytes (cgroup incl. page cache in Docker mode); rename to 'Peak working set (MiB)' and/or add 'Peak private (MiB)'. Optional from #292 review; tiny."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
