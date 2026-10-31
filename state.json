@@ -1590,13 +1590,13 @@
    "notes": "06:35Z brief briefs/S-insights-imports.md (IMP-5 UI follow-up) | 06:58Z PR #265 head 46c8736 (first load +11 B, stage +915 B); fresh Opus reviewer session_01MMjhnCownxQaUJFk8ajmtu | 07:08Z reviewer MERGE at 46c8736a; runner asked a small push (card label colon, zh wording, events-500 e2e, truncated note); runner checks delta | 07:16Z polish push d95b905c; runner checked delta (labels, zh, events-500 e2e, truncated note): clean; merge on green | 07:25Z #265 merged b5fd5d70; author+reviewer archived"
   },
   "S-locale-boot": {
-   "status": "launching",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01MMjhnBf1FigREZgKsycUGD",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up)"
+   "notes": "07:26Z brief briefs/S-locale-boot.md (from #259 follow-up) | 07:26Z launched Sonnet"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
