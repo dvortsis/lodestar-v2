@@ -2149,8 +2149,8 @@ fn set_pending_requeues(store: &mut Store, list: &[String]) -> ApiResult<()> {
 
 /// Records a re-queue of `query` as pending, before the rule change it
 /// follows, so a stop anywhere after the change leaves it to redo. A query
-/// already pending isn't added twice, so the list stays bounded while
-/// there's no search index to clear it; [`FiltersApi::requeue`] keeps an
+/// already pending isn't added twice, so while there's no search index to
+/// clear them the list holds one entry per query text; [`FiltersApi::requeue`] keeps an
 /// entry a later rule change still needs. `true` when it was added.
 fn push_pending_requeue(store: &mut Store, query: &str) -> ApiResult<bool> {
     let mut list = pending_requeues(store)?;
@@ -2460,8 +2460,9 @@ impl FiltersApi {
     /// Marks the stored torrents `node` matches for background enrichment,
     /// plus every torrent the index hasn't reached yet, and starts a pass.
     /// The search runs without the store lock, and marks go in chunks.
-    /// `(None, false)` without a search index (only torrents arriving or
-    /// re-enriched later are affected); `true` when the cap cut it short.
+    /// `(None, false)` without a search index: nothing is marked now, and
+    /// the entry stays for the first start with search on; `true` when the
+    /// cap cut it short.
     ///
     /// `text` is the pending entry it clears once done: only when a search
     /// index did the marking, and no rule change came after the marking
@@ -2998,7 +2999,7 @@ mod tests {
     #[test]
     fn a_failing_requeue_does_not_block_the_others() {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(&dir.path().join("t.db"), Default::default()).unwrap();
+        let mut store = Store::open(dir.path().join("t.db"), Default::default()).unwrap();
         for q in ["fails", "lexb", "lexb", "other"] {
             push_pending_requeue(&mut store, q).unwrap();
         }
