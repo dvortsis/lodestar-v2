@@ -1725,13 +1725,13 @@
    "notes": "API keys + feed tokens, auth mode, trusted-proxy header on the Security screen; reuse #285's password dialog; after #285 merges"
   },
   "X-polish-1031c": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MMjhnB2YGwEWRPavZaLyC4",
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review"
+   "notes": "16:28Z brief briefs/X-polish-1031c.md (#283 opt 1-4, re-queue shutdown token (no deadline; must not loosen), hints compact bound); security review | 16:27Z launched Opus"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
