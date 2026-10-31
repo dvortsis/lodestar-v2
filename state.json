@@ -1740,7 +1740,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus"
+   "notes": "16:35Z brief briefs/B-held-exact.md (exact re-hold after sweep/backfill; must not loosen); security review | 16:33Z launched Opus | 16:37Z author found pre-existing hole (release store delete -> writer re-hold+insert -> release held.remove leaves a store-held hash fetchable). Runner approved option (a) + reconcile on both sides under HeldSet lock; filters.rs release bodies + filter/src/held.rs added to Own; named tests both orders"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
