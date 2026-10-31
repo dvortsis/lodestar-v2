@@ -1,0 +1,77 @@
+/* Styles for the theme picker's preview cards. Plain CSS with @apply, so none of it adds a utility
+   to the global sheet (the 20 KB budget); it ships with the picker's chunk. Tokens only: a preview
+   sets a theme's own custom properties on itself, and everything inside reads them. */
+@reference "../../../app.css";
+
+.ap-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: calc(var(--spacing) * 4);
+	@variant large {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+.ap-tile {
+	@apply flex cursor-pointer flex-col gap-2 rounded-box border border-field-border bg-base-200 p-4 text-base-content;
+}
+.ap-tile:has(input:checked) {
+	@apply border-primary;
+	outline: 2px solid var(--color-primary);
+}
+.ap-tile:has(input:focus-visible) {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}
+.ap-name {
+	@apply flex flex-wrap items-center justify-between gap-2 text-body font-semibold;
+}
+.ap-row {
+	@apply flex items-center justify-between gap-2 rounded-field bg-base-100 p-2 text-small;
+}
+.ap-chip {
+	@apply rounded-selector bg-selected px-1.5 text-caption;
+}
+.ap-btn {
+	@apply rounded-field bg-primary px-2 text-caption text-primary-content;
+}
+.ap-bar {
+	@apply flex h-2 gap-0.5;
+}
+.ap-bar > span {
+	@apply flex-1;
+}
+.ap-bar > span:nth-child(1) {
+	background: var(--data-1);
+}
+.ap-bar > span:nth-child(2) {
+	background: var(--data-2);
+}
+.ap-bar > span:nth-child(3) {
+	background: var(--data-3);
+}
+.ap-bar > span:nth-child(4) {
+	background: var(--data-4);
+}
+.ap-bar > span:nth-child(5) {
+	background: var(--data-5);
+}
+.ap-bar > span:nth-child(6) {
+	background: var(--data-6);
+}
+
+.ap-filter {
+	@apply flex max-w-xs flex-col gap-1;
+}
+.ap-label {
+	@apply text-small text-muted-text;
+}
+.ap-pick {
+	@apply flex items-center gap-2;
+}
+.ap-btn {
+	@apply self-start;
+}
+
+.ap-actions {
+	@apply flex flex-wrap gap-2;
+}

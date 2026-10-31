@@ -1,0 +1,29 @@
+/* The Appearance screen's own classes, so its utilities stay out of the global sheet (the 20 KB
+   budget). Tokens and ramp spacing only. */
+@reference "../../../app.css";
+
+.as-root {
+	@apply flex flex-col gap-6;
+}
+.as-section {
+	@apply flex flex-col gap-2;
+}
+.as-actions {
+	@apply flex gap-2;
+}
+.as-h1 {
+	@apply text-display font-semibold;
+}
+.as-h2 {
+	@apply text-title font-semibold;
+}
+.as-text {
+	@apply text-body text-muted-text;
+}
+.as-body {
+	@apply text-body;
+}
+.as-status {
+	@apply text-body text-muted-text;
+	min-height: calc(var(--spacing) * 6);
+}

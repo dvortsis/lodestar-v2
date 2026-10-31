@@ -1,0 +1,63 @@
+/* The custom theme editor's classes, in its own on-demand chunk so none of its utilities reach the
+   global sheet (the 20 KB budget). Tokens and ramp spacing only. */
+@reference "../../../app.css";
+
+.ed-root {
+	@apply flex flex-col gap-4 rounded-box border border-base-300 bg-base-100 p-4;
+}
+.ed-title {
+	@apply text-title font-semibold;
+}
+.ed-subtitle {
+	@apply text-body-lg font-semibold;
+}
+.ed-field {
+	@apply flex max-w-xs flex-col gap-1;
+}
+.ed-label,
+.ed-caption {
+	@apply text-small text-muted-text;
+}
+.ed-caption {
+	@apply pb-1 text-left;
+}
+.ed-text {
+	@apply text-body text-muted-text;
+}
+.ed-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: calc(var(--spacing) * 2);
+	@variant large {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+.ed-colour {
+	@apply flex items-center gap-2;
+}
+.ed-name {
+	@apply w-24 shrink-0 text-small;
+}
+.ed-swatch {
+	@apply shrink-0 cursor-pointer rounded-field border border-field-border bg-base-100;
+	width: calc(var(--spacing) * 10);
+	height: calc(var(--spacing) * 10);
+	padding: 2px;
+}
+.ed-swatch:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}
+.ed-table {
+	@apply w-full text-small;
+}
+.ed-table th,
+.ed-table td {
+	@apply py-1 pr-2 text-left align-middle font-normal;
+}
+.ed-table thead th {
+	@apply text-muted-text;
+}
+.ed-actions {
+	@apply flex flex-wrap gap-2;
+}
