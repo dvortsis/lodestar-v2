@@ -811,3 +811,42 @@ fn correction(cx: &Cx<'_>, field: Field, word: &str, d: u8) -> Result<Option<Str
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{FILE_QUERY, append_files, index_with, tripwire};
+
+    /// A suggest count's `file:(…)` clause scans the file index under the
+    /// request's token (X-search-files-perf): cancelled partway, the
+    /// request fails with `Cancelled` and no set is cached.
+    #[test]
+    fn a_file_scan_cancelled_partway_stops_suggest_and_caches_nothing() {
+        let (index, _) = index_with(10, 1);
+        let per = u64::from(crate::cancel::CHECK_EVERY);
+        append_files(&index, 1..11, per);
+        let cancel = CancelToken::new();
+        let (trip, visits) = tripwire(100, &cancel);
+        FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+        let restrict = |n: Node| n;
+        let req = Request {
+            q: "file:(size:>0) knigth",
+            pos: None,
+            limit: 8,
+            shown: Shown {
+                adult: true,
+                hidden: true,
+            },
+            restrict: &restrict,
+            now: 0,
+        };
+        assert!(matches!(
+            suggest(&index, &req, &cancel),
+            Err(Error::Cancelled)
+        ));
+        let seen = visits.load(std::sync::atomic::Ordering::Relaxed);
+        assert!((100..=per as usize).contains(&seen), "{seen} files visited");
+        assert_eq!(index.cache_usage().file_set_entries, 0);
+        FILE_QUERY.with(|q| q.borrow_mut().take());
+    }
+}

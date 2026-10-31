@@ -2116,9 +2116,6 @@ const MAX_CORRECTIONS: usize = 10_000;
 const CORRECTIONS_CHUNK: usize = 500;
 /// Stored torrents one classification rule change re-queues at most.
 const MAX_REQUEUE: usize = 1_000_000;
-/// How long a rule change's `file:(…)` clauses may scan the file index
-/// before the re-queue stops short (reported as `truncated`).
-const REQUEUE_FILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A classification rule's query: it decides the type, so it can't test
 /// the type itself (the index already holds corrected types).
@@ -2400,19 +2397,10 @@ impl FiltersApi {
         // yet, so it's all marked.
         let watermark = index.watermark().map_err(internal)?;
         index.refresh().map_err(internal)?;
-        // A broad `file:(…)` clause can scan much of the file index: it
-        // runs under a deadline, and past it only the torrents beyond the
-        // watermark are marked, reported as cut short.
-        let cancel = lodestar_search::CancelToken::new().with_budget(REQUEUE_FILE_BUDGET);
-        let (ids, truncated) = match index.query_cancelled(node, now, 0, &cancel) {
-            Ok(compiled) => index
-                .matching_ids(&compiled, MAX_REQUEUE)
-                .map_err(internal)?,
-            Err(lodestar_search::Error::Cancelled | lodestar_search::Error::OutOfTime) => {
-                (Vec::new(), true)
-            }
-            Err(e) => return Err(internal(e)),
-        };
+        let compiled = index.query(node, now);
+        let (ids, truncated) = index
+            .matching_ids(&compiled, MAX_REQUEUE)
+            .map_err(internal)?;
         let ids: Vec<i64> = ids.into_iter().map(|id| id as i64).collect();
         let mut n = 0;
         for chunk in ids.chunks(lodestar_store::MARK_CHUNK) {

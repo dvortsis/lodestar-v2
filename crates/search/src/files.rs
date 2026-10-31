@@ -980,8 +980,8 @@ mod cache_regressions {
 
     #[test]
     fn hits_refresh_recency_and_replacement_does_not_double_charge() {
-        let cache = // Two 1 KiB vectors and table overhead fit; three vectors do not.
-        FileSetCache::with_budget(3072);
+        // Two 1 KiB vectors and table overhead fit; three vectors do not.
+        let cache = FileSetCache::with_budget(3072);
         let a = key(1);
         let b = key(2);
         let c = key(3);

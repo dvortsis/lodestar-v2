@@ -471,11 +471,10 @@ fn a_cancelled_request_stops() {
     assert!(suggest::suggest(&f.index, &req, &cancel).is_err());
 }
 
-/// Suggest compiles its counts' `file:(…)` clauses under the request's
-/// token (X-search-files-perf): a stopped token scans no file and caches
-/// no set, and a live one caches them for the next request.
+/// `query_cancelled` compiles `file:(…)` clauses under a token: a
+/// stopped one scans no file and caches no set, a live one caches them.
 #[test]
-fn file_clauses_compile_under_the_request_token() {
+fn file_clauses_compile_under_a_token() {
     let f = fixture();
     let node = parse("file:(ext:mkv) | file:knight").unwrap();
     let cancel = CancelToken::new();
@@ -494,16 +493,6 @@ fn file_clauses_compile_under_the_request_token() {
         .query_cancelled(&node, NOW, 0, &CancelToken::new())
         .unwrap();
     assert!(f.index.cache_usage().file_set_entries > 0);
-    let r = restrict(PLAIN);
-    let req = Request {
-        q: "file:(ext:mkv) dar",
-        pos: None,
-        limit: 8,
-        shown: PLAIN,
-        restrict: &r,
-        now: NOW,
-    };
-    assert!(suggest::suggest(&f.index, &req, &cancel).is_err());
 }
 
 /// A phrase excluded with `-` that matches nothing, or whose first match

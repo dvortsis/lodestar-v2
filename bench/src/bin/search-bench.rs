@@ -906,7 +906,7 @@ fn file_sets_path(
     println!("\n  broad file clauses: the file-set cache at scale");
     println!(
         "  {:<36} {:>10} {:>10} {:>10}",
-        "clause", "torrents", "ids MiB", "cached MiB"
+        "clause", "torrents", "ids×8 MiB", "cached MiB"
     );
     for q in broad {
         index.clear_cache();
