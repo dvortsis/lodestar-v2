@@ -116,6 +116,23 @@ pub(crate) struct Writer {
     pub health: Option<HealthHandle>,
     /// The import-candidate refile sweep.
     pub candidates: CandidateSweep,
+    /// Runs between a sweep or backfill batch's commit and its hold
+    /// check, so tests can land a release or a rule change exactly there.
+    #[cfg(test)]
+    pub(crate) between: Option<fn(&mut Store, &HeldSet, &Handle)>,
+}
+
+/// After a batch that held `hashes` committed: tells intake to refuse
+/// those the store still holds, asked under `HeldSet`'s lock, so a
+/// release since isn't undone and a hold is never missed
+/// (`2026-10-31-B-held-exact.md`). On a store error every hash goes in.
+fn hold_committed(store: &Store, held: &HeldSet, hashes: &[[u8; 20]]) {
+    if let Err(e) = held.insert_held(hashes, |hs| store.held_among(hs)) {
+        lodestar_log::log_event!(
+            crate::log_events::ENRICHMENT_FAILED,
+            error = crate::log_events::store_error(&e)
+        );
+    }
 }
 
 /// The sweep that judges waiting import candidates again whenever the
@@ -298,8 +315,19 @@ impl Writer {
         self.last_purge = now;
         let hits_before = now - self.cfg.hits_secs;
         let mut store = self.store.take().expect("store");
+        let held = self.held.clone();
         let (store, result) = tokio::task::spawn_blocking(move || {
             let r = store.purge_filter(now, hits_before);
+            // Only what nothing holds again since: a batch on another
+            // connection may have held an expired hash anew.
+            if let Ok((expired, _)) = &r
+                && let Err(e) = held.remove_released(expired, |hs| store.held_among(hs))
+            {
+                lodestar_log::log_event!(
+                    crate::log_events::FILTER_PURGE_FAILED,
+                    error = crate::log_events::store_error(&e)
+                );
+            }
             let snaps = store.purge_snapshots(now, hits_before);
             for s in &snaps.expired {
                 let days = lodestar_store::snapshots::RETAIN_DAYS;
@@ -323,11 +351,7 @@ impl Writer {
         .expect("purge task");
         self.store = Some(store);
         match result {
-            Ok((expired, _)) => {
-                for h in expired {
-                    self.held.remove(&h);
-                }
-            }
+            Ok(_) => {}
             Err(e) => lodestar_log::log_event!(
                 crate::log_events::FILTER_PURGE_FAILED,
                 error = crate::log_events::store_error(&e)
@@ -549,6 +573,9 @@ impl Writer {
         let filter = self.filter.clone();
         let sealer = self.sealer.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        #[cfg(test)]
+        let between = self.between;
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
             let ctx = crate::enrich::Backfill {
@@ -557,6 +584,15 @@ impl Writer {
                 quarantine_secs,
             };
             let result = crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, &ctx);
+            if let Ok(Some(b)) = &result
+                && !b.rejected
+            {
+                #[cfg(test)]
+                if let Some(f) = between {
+                    f(&mut store, &held, &filter);
+                }
+                hold_committed(&store, &held, &b.held);
+            }
             (store, result)
         })
         .await
@@ -570,9 +606,6 @@ impl Writer {
                 self.stats
                     .enriched
                     .fetch_add(b.enriched as u64, Ordering::Relaxed);
-                for h in b.held {
-                    self.held.insert(h);
-                }
             }
             Ok(None) => self.backfill_done = true,
             Err(e) => {
@@ -611,6 +644,9 @@ impl Writer {
         let after = self.candidates.after;
         let sealer = self.sealer.clone();
         let quarantine_secs = self.cfg.quarantine_secs;
+        let held = self.held.clone();
+        #[cfg(test)]
+        let between = self.between;
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
             let ctx = crate::enrich::Backfill {
@@ -626,6 +662,15 @@ impl Writer {
                 REFILE_BATCH,
                 &ctx,
             );
+            if let Ok(Some(b)) = &result
+                && !b.rejected
+            {
+                #[cfg(test)]
+                if let Some(f) = between {
+                    f(&mut store, &held, &filter);
+                }
+                hold_committed(&store, &held, &b.hashes);
+            }
             (store, result)
         })
         .await
@@ -642,7 +687,6 @@ impl Writer {
             Ok(Some(b)) => {
                 self.candidates.after = b.last;
                 self.candidates.failures = 0;
-                self.hold_refiled(b.hashes);
             }
             Ok(None) => {
                 self.candidates.done = true;
@@ -659,16 +703,6 @@ impl Writer {
                     error = crate::log_events::store_error(&e)
                 );
             }
-        }
-    }
-
-    /// Tells intake to refuse the hashes of candidates a sweep batch held
-    /// back, always: the store holds them now. Over-strict when the rules
-    /// changed since: a hash released in that window stays refused until
-    /// the next start reloads the set (`2026-10-31-X-import-refile-2.md`).
-    fn hold_refiled(&self, hashes: Vec<[u8; 20]>) {
-        for h in hashes {
-            self.held.insert(h);
         }
     }
 
@@ -1017,6 +1051,7 @@ mod tests {
             hot: None,
             health: None,
             candidates: Default::default(),
+            between: None,
         }
     }
 
@@ -1324,6 +1359,194 @@ mod tests {
 
     /// The refile sweep's backoff doubles after each error in a row, up to
     /// its cap.
+    /// A writer whose store has one waiting import candidate the core
+    /// holds ([1; 20]) and one stored torrent an Is adult rule makes CS-5a
+    /// hold, for the two arms of `hold_committed`.
+    fn arms_writer() -> (Writer, [u8; 20]) {
+        use lodestar_store::NewTorrent;
+        use lodestar_store::import::{
+            Decision as Pass, ImportBatch, ImportCandidate, ImportRecord, NewImportJob, Phase,
+            Privacy,
+        };
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("magnetico", "1", 1).unwrap();
+        let job = store
+            .create_import_job(&NewImportJob {
+                adapter: "magnetico",
+                adapter_ver: 1,
+                dataset: b"ds",
+                schema_sig: b"sig",
+                options: b"",
+                credential: None,
+                at: 1,
+            })
+            .unwrap();
+        let job = store
+            .set_import_phase(job.id, job.revision, Phase::Reading, 1)
+            .unwrap();
+        store
+            .commit_import_batch(&ImportBatch {
+                job: job.id,
+                seq: 1,
+                position: b"",
+                source: src,
+                source_bytes: 0,
+                at: 1,
+                class_gen: None,
+                records: &[ImportRecord::Candidate(ImportCandidate {
+                    hash: InfoHash([1; 20]),
+                    hash_v2: None,
+                    name: Some(b"Rolea Lexa clip"),
+                    size: None,
+                    privacy: Privacy::Unknown,
+                    source_at: None,
+                    decision: Pass {
+                        hits: &[],
+                        marks: 0,
+                    },
+                })],
+            })
+            .unwrap();
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"name".to_vec(),
+                    OwnedValue::Bytes(format!("{NAME}.mp4").into_bytes()),
+                ),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = Info::parse(&raw).unwrap();
+        let id = store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: src,
+            }])
+            .unwrap()[0]
+            .id();
+        store.mark_unenriched(&[id]).unwrap();
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let mut w = writer(store, coordinator, Arc::new(GateStats::new(0)));
+        w.filter
+            .update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+        w.backfill_done = false;
+        (w, info.primary_hash().0)
+    }
+
+    /// Runs both arms once each: the sweep, then backfill.
+    async fn run_arms(w: &mut Writer) {
+        w.refile_candidates().await;
+        w.backfill().await;
+    }
+
+    /// Each arm alone on a fresh writer, `between` landing after its
+    /// commit; returns the writer and the hash that arm held.
+    async fn each_arm(between: fn(&mut Store, &HeldSet, &Handle)) -> Vec<(Writer, [u8; 20])> {
+        let mut out = Vec::new();
+        for sweep in [true, false] {
+            let (mut w, stored) = arms_writer();
+            w.between = Some(between);
+            if sweep {
+                w.refile_candidates().await;
+                out.push((w, [1; 20]));
+            } else {
+                w.backfill().await;
+                out.push((w, stored));
+            }
+        }
+        out
+    }
+
+    /// What intake refuses is what the store holds, as a restart would
+    /// load it.
+    fn agrees_with_store(w: &Writer) {
+        let store = w.store.as_ref().unwrap();
+        let held: std::collections::HashSet<_> = store
+            .filter_state()
+            .unwrap()
+            .held
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(w.held.snapshot(), held);
+    }
+
+    /// A release landing between a batch's commit and its hold check
+    /// isn't undone, in both arms: the hash stays fetchable.
+    #[tokio::test]
+    async fn a_release_after_the_commit_stays_released() {
+        fn release_all(store: &mut Store, held: &HeldSet, _: &Handle) {
+            let hashes: Vec<_> = store
+                .filter_state()
+                .unwrap()
+                .held
+                .into_iter()
+                .map(|(h, _)| h)
+                .collect();
+            assert!(!hashes.is_empty(), "the batch committed a hold");
+            store.release_many(&hashes).unwrap();
+            held.remove_released(&hashes, |hs| store.held_among(hs))
+                .unwrap();
+        }
+        for (w, h) in each_arm(release_all).await {
+            assert!(!w.held.contains(&h), "released");
+            agrees_with_store(&w);
+        }
+    }
+
+    /// A rule change that releases nothing (an edited class rule, a
+    /// narrowed rule) landing there leaves both arms' holds held: the
+    /// store still holds them, whatever the rules say now.
+    #[tokio::test]
+    async fn a_rule_change_after_the_commit_keeps_the_hold() {
+        fn change_rules(_: &mut Store, _: &HeldSet, filter: &Handle) {
+            filter.update_engine(|e| {
+                e.load_class_rules(&[(1, "studioy".into(), true)]);
+                let notes = e.load_rules(&lodestar_store::RuleSet {
+                    rules: vec![lodestar_store::RuleRow {
+                        id: 1,
+                        query: "rolea lexa nothing".into(),
+                        action: Action::Drop.code(),
+                        enabled: true,
+                        shadow_until: None,
+                        unless_query: Some("clip".into()),
+                    }],
+                    ..Default::default()
+                });
+                assert!(notes.is_empty(), "{notes:?}");
+            });
+        }
+        for (w, h) in each_arm(change_rules).await {
+            assert!(w.held.contains(&h), "still held");
+            agrees_with_store(&w);
+        }
+    }
+
+    /// Without anything in between, both arms hold, and the set equals
+    /// what a restart loads from the store; a purge that expires the
+    /// quarantine drops it from both.
+    #[tokio::test]
+    async fn the_held_set_follows_the_store_through_a_purge() {
+        let (mut w, stored) = arms_writer();
+        // Quarantine that has expired by the purge below.
+        w.cfg.quarantine_secs = -1;
+        run_arms(&mut w).await;
+        assert!(w.held.contains(&[1; 20]) && w.held.contains(&stored));
+        agrees_with_store(&w);
+        w.purge().await;
+        agrees_with_store(&w);
+        assert!(w.held.len() < 2, "the purge released a quarantine");
+    }
+
     #[test]
     fn the_refile_backoff_doubles_to_a_cap() {
         let mut c = CandidateSweep::default();

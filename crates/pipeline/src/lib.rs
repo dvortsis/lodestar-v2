@@ -772,6 +772,8 @@ impl Pipeline {
             hot: config.hot.clone(),
             health: health.clone(),
             candidates: Default::default(),
+            #[cfg(test)]
+            between: None,
         };
         drop(pool_tx);
         let writer = tokio::spawn(writer.run(writer::WriterIo {

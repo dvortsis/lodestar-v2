@@ -512,6 +512,20 @@ impl Store {
         Ok(had)
     }
 
+    /// Per hash, whether a tombstone or quarantine row holds it now: what
+    /// the writer and the releases ask under `HeldSet`'s lock, so intake's
+    /// set follows the store exactly (`2026-10-31-B-held-exact.md`).
+    pub fn held_among(&self, hashes: &[[u8; 20]]) -> Result<Vec<bool>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM tombstones WHERE hash = ?1)
+                 OR EXISTS (SELECT 1 FROM quarantine WHERE hash = ?1)",
+        )?;
+        hashes
+            .iter()
+            .map(|h| Ok(stmt.query_row([&h[..]], |r| r.get::<_, bool>(0))?))
+            .collect()
+    }
+
     /// How many hashes each rule holds: `(rule, quarantined, tombstoned)`.
     pub fn held_counts(&self) -> Result<Vec<(String, usize, usize)>> {
         let mut by_rule: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
