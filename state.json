@@ -1641,7 +1641,7 @@
    "pr": 275,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file"
+   "notes": "10:58Z brief briefs/S-search-live-ui.md (banner to /search/live) | held: overlaps #271 (search/results, search/live); launch after #271 merges | 11:27Z launched Sonnet (brief incl. #271 optional items) | 12:04Z PR #275 head 07d6c069 (live chunk 2.21->2.74 KB, limit 3.02; first load unchanged); polling fallback per brief; mock 204 accepted; fresh Opus reviewer | 12:09Z CI size fail: /t/[hash] 22.41 > 22.4 kB (+6 B), likely chunk split; author told root-cause, no limit raise | 12:15Z /t/[hash] +41 B is gzip noise from re-hashed chunk names (files identical); runner decided raise 22.4->22.5 kB under §2.26 (measured+10% entry, not owner-set), recorded in PR decisions file | 12:20Z CHANGES at 07d6c069 (B1 registration key vs shown key + follow(null); B2 re-register on return from hidden/bfcache/stream outage; B3 words-only test misses Recover path; opt 4-6 folded); relayed to author"
   },
   "B-import-server-1": {
    "status": "running",
@@ -2429,7 +2429,8 @@
   "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
   "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)",
   "#274 optional: crates/pipeline/tests/pipeline.rs:517 comment says sighting arrives while refetch lease is out; reword: imported row is in the have-filter, so the sighting is a rediscovery and never reaches the coordinator",
-  "Percolator file-clause path: real CancelToken (X-search-files-perf left it out to avoid overlap with B-import-server-1)"
+  "Percolator file-clause path: real CancelToken (X-search-files-perf left it out to avoid overlap with B-import-server-1)",
+  "web vitest flake: query/QueryBar.test.ts 'the Syntax popover > opens on its button, and Try sets and submits' failed 1 of 3 cold local runs in #275 author's and reviewer's sessions (passes alone; waits already 10 s). Not seen in CI yet; get the error text before a fix slice (#275 review)"
  ],
  "main_health": [
   "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
