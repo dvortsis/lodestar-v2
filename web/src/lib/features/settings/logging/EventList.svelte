@@ -1,6 +1,7 @@
 <script lang="ts" module>
-	// Groups the user opened stay open when a search is cleared, and when the form re-renders the
-	// list (a resync shows the form's loading state for a moment, which remounts it).
+	// Groups the user opened or closed keep that state when a search is cleared, and when the form
+	// re-renders the list (a resync shows the form's loading state for a moment, which remounts it).
+	// A group nobody has touched is open while searching.
 	const opened = $state<Record<string, boolean>>({});
 </script>
 
@@ -112,14 +113,17 @@
 		<p class="text-muted-text">{m.settings_logging_events_none()}</p>
 	{/if}
 	{#each groups as [component, g] (component)}
-		<details
-			open={filtering || opened[component] === true}
-			ontoggle={(ev) => {
-				if (!filtering) opened[component] = ev.currentTarget.open;
-			}}
-			class="border-t border-base-300"
-		>
-			<summary class="ls-focus cursor-pointer py-3 text-label" data-testid="log-group-{component}"
+		{@const open = opened[component] ?? filtering}
+		<details {open} class="border-t border-base-300">
+			<summary
+				class="ls-focus cursor-pointer py-3 text-label"
+				data-testid="log-group-{component}"
+				onclick={(ev) => {
+					// The state drives `open`, not the native toggle (its event comes later, so a render
+					// in between could close the group again).
+					ev.preventDefault();
+					opened[component] = !open;
+				}}
 				>{m.settings_logging_events_group({
 					component: componentLabel(component),
 					on: formatCount(g.on),

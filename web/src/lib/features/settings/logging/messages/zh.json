@@ -104,5 +104,6 @@
 	"settings_logging_failed_off": "无法关闭：{message}",
 	"settings_logging_unavailable": "无法读取日志的当前状态。",
 	"settings_logging_unread": "更改已发送，但无法读取 Lodestar 当前的日志状态。请重新加载页面查看。",
-	"settings_logging_events_temporary": "实时日志的临时级别正在生效，因此当前记录的事件比此列表显示的更多。"
+	"settings_logging_events_temporary": "实时日志的临时级别正在生效，因此当前记录的事件比此列表显示的更多。",
+	"settings_logging_state_unknown": "无法读取日志当前记录的内容"
 }

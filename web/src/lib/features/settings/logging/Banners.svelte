@@ -2,6 +2,7 @@
 	// The privacy banners (§10.10.12): one while any identifying kind is on, and one for each opt-in,
 	// each with the time left and Turn off now. They show what `GET /logs/catalog` says, which is
 	// reloaded after every change and once a deadline passes, so they follow the server's state.
+	import { onDestroy } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -34,6 +35,9 @@
 			: []
 	);
 
+	const leaving = new AbortController();
+	onDestroy(() => leaving.abort());
+
 	let busy = $state(false);
 	let error = $state('');
 	async function turnOff(id: string) {
@@ -41,7 +45,7 @@
 		error = '';
 		try {
 			const p = await import('./privacy');
-			const ctx = { catalog, form };
+			const ctx = { catalog, form, signal: leaving.signal };
 			if (id === 'identifying') await p.turnOffIdentifying(ctx);
 			else await p.setOptIn(ctx, id as 'peer_activity' | 'filter_changes', false);
 		} catch (e) {
@@ -55,6 +59,17 @@
 	}
 </script>
 
+{#if !catalog.catalog && catalog.error}
+	<!-- Without the server's state, the screen can't say whether torrent details are being logged. -->
+	<Banner kind="warning" title={m.settings_logging_state_unknown()}>
+		<span data-testid="logging-banner-unknown">{m.settings_logging_unavailable()}</span>
+		{#snippet action()}
+			<Button variant="secondary" onclick={() => void catalog.load()}
+				>{m.settings_form_retry()}</Button
+			>
+		{/snippet}
+	</Banner>
+{/if}
 {#each banners as b (b.id)}
 	<Banner kind="warning" title={b.title}>
 		<span data-testid="logging-banner-{b.id}">{b.left}</span>

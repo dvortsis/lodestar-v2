@@ -104,5 +104,6 @@
 	"settings_logging_failed_off": "Couldn't turn it off: {message}",
 	"settings_logging_unavailable": "Logging's current state couldn't be read.",
 	"settings_logging_unread": "The change was sent, but Lodestar's current logging state couldn't be read. Reload the page to see it.",
-	"settings_logging_events_temporary": "A temporary level from the live log is on, so more events are recorded right now than this list shows."
+	"settings_logging_events_temporary": "A temporary level from the live log is on, so more events are recorded right now than this list shows.",
+	"settings_logging_state_unknown": "Can't read what logging records now"
 }

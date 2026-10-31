@@ -719,7 +719,8 @@ export default [
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
-	// Measured 0.78 KB and 15.48 KB; limits = measured + 10%.
+	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
+	// round (the unreadable-state banner, closing dialogs on leave).
 	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.86 KB'),
 	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the

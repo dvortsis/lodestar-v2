@@ -30,6 +30,8 @@ export interface Context {
 	catalog: LoggingCatalog;
 	/** The screen's form, which merges the new revision; absent on `/logs`. */
 	form?: SettingsForm;
+	/** Aborted when the screen goes: an open question closes unanswered (nothing turns on). */
+	signal?: AbortSignal;
 }
 
 type Saved = DataValues & { consoleSameAsFile: boolean; revision: number };
@@ -86,23 +88,27 @@ async function send(c: Context, revision: number, patch: Record<string, unknown>
 async function askDuration(
 	title: string,
 	body: string[],
-	untilOff: boolean
+	untilOff: boolean,
+	signal?: AbortSignal
 ): Promise<Duration | null> {
-	const answer = await ask({
-		title,
-		body,
-		actions: [
-			{ id: 'cancel', label: m.settings_form_cancel() },
-			...(untilOff ? [{ id: 'off', label: m.settings_logging_for_until_off() }] : []),
-			{ id: 'day', label: m.settings_logging_for_day() },
-			{ id: 'hour', label: m.settings_logging_for_hour(), variant: 'primary' as const }
-		],
-		initial: 'cancel'
-	});
+	const answer = await ask(
+		{
+			title,
+			body,
+			actions: [
+				{ id: 'cancel', label: m.settings_form_cancel() },
+				...(untilOff ? [{ id: 'off', label: m.settings_logging_for_until_off() }] : []),
+				{ id: 'day', label: m.settings_logging_for_day() },
+				{ id: 'hour', label: m.settings_logging_for_hour(), variant: 'primary' as const }
+			],
+			initial: 'cancel'
+		},
+		signal
+	);
 	return answer === 'hour' || answer === 'day' || (untilOff && answer === 'off') ? answer : null;
 }
 
-async function askKinds(names: string): Promise<Duration | null> {
+async function askKinds(names: string, signal?: AbortSignal): Promise<Duration | null> {
 	// Read for the wording only: the change itself is built after the answer.
 	const { consoleSameAsFile } = await saved();
 	return askDuration(
@@ -112,7 +118,8 @@ async function askKinds(names: string): Promise<Duration | null> {
 			consoleSameAsFile ? m.settings_logging_dialog_console() : m.settings_logging_dialog_where(),
 			m.settings_logging_dialog_ends()
 		],
-		true
+		true,
+		signal
 	);
 }
 
@@ -120,7 +127,7 @@ async function askKinds(names: string): Promise<Duration | null> {
 export async function setKind(c: Context, kind: LogKind, on: boolean): Promise<boolean> {
 	let d: Duration | null = null;
 	if (on && kind.identifying) {
-		d = await askKinds(kindLabel(kind.kind));
+		d = await askKinds(kindLabel(kind.kind), c.signal);
 		if (!d) return false;
 	}
 	const v = await saved();
@@ -137,7 +144,7 @@ export async function setPreset(c: Context, preset: string): Promise<boolean> {
 			.filter((k) => k.identifying && !k.opt_in && (preset === 'full' || k.kind === 'hash'))
 			.map((k) => kindLabel(k.kind))
 			.join(', ');
-		d = await askKinds(names);
+		d = await askKinds(names, c.signal);
 		if (!d) return false;
 	}
 	const v = await saved();
@@ -157,7 +164,8 @@ export async function setOptIn(c: Context, kind: OptIn, on: boolean): Promise<bo
 				peer ? m.settings_logging_optin_peer_warning() : m.settings_logging_optin_filters_warning(),
 				m.settings_logging_optin_where()
 			],
-			false
+			false,
+			c.signal
 		);
 		if (!d) return false;
 		until = deadline(d, c.catalog.serverNow());
@@ -203,20 +211,23 @@ export async function offerDelete(c: Context): Promise<number> {
 	}
 	if (!files.length) return 0;
 	const count = formatCount(files.length);
-	const answer = await ask({
-		title: m.settings_logging_delete_title(),
-		body: [
-			m.settings_logging_delete_body({
-				count,
-				size: formatBytes(files.reduce((n, f) => n + f.size, 0))
-			})
-		],
-		actions: [
-			{ id: 'keep', label: m.settings_logging_delete_keep() },
-			{ id: 'delete', label: m.settings_logging_delete_confirm({ count }), variant: 'danger' }
-		],
-		initial: 'keep'
-	});
+	const answer = await ask(
+		{
+			title: m.settings_logging_delete_title(),
+			body: [
+				m.settings_logging_delete_body({
+					count,
+					size: formatBytes(files.reduce((n, f) => n + f.size, 0))
+				})
+			],
+			actions: [
+				{ id: 'keep', label: m.settings_logging_delete_keep() },
+				{ id: 'delete', label: m.settings_logging_delete_confirm({ count }), variant: 'danger' }
+			],
+			initial: 'keep'
+		},
+		c.signal
+	);
 	if (answer !== 'delete') return 0;
 	const done = await api.delete('/logs/files', { body: { which: 'details' } });
 	void c.catalog.load();

@@ -365,4 +365,32 @@ describe('banners', () => {
 		]);
 		expect(catalog.catalog?.kinds.find((k) => k.kind === 'name')?.until).toBe(0);
 	});
+
+	it("says when the state can't be read, and Retry reads it again", async () => {
+		catalogFails = true;
+		await mount(Banners);
+		expect(screen.getByTestId('logging-banner-unknown')).toBeTruthy();
+		catalogFails = false;
+		server.catalog = catalogWith({ name: NOW + 600 }, 'custom');
+		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		await until(() => expect(screen.queryByTestId('logging-banner-unknown')).toBeNull());
+		expect(screen.getByTestId('logging-banner-identifying')).toBeTruthy();
+	});
+});
+
+describe('leaving the screen', () => {
+	it('closes an open duration dialog unanswered, so nothing is sent', async () => {
+		const catalog = new LoggingCatalog();
+		await catalog.load();
+		const { unmount } = render(DataKinds, { catalog });
+		await fireEvent.click(names());
+		await screen.findByRole(
+			'dialog',
+			{ name: 'Write torrent details to the log?' },
+			{ timeout: 10_000 }
+		);
+		unmount();
+		await until(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(patches()).toEqual([]);
+	});
 });

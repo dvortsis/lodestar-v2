@@ -210,7 +210,7 @@
 			turnOffError = m.settings_logging_failed_off({ message: (e as Error).message });
 		} finally {
 			turningOff = false;
-			logging = await getLoggingState();
+			logging = (await getLoggingState()) ?? logging;
 		}
 	}
 

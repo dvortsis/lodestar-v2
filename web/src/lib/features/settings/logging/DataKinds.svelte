@@ -4,6 +4,7 @@
 	// what the server has on (`GET /logs/catalog`) and changes only through `privacy.ts`, which asks
 	// first for anything identifying and sends the change at once. A click never flips a switch by
 	// itself: it shows on only once the server has saved it.
+	import { onDestroy, tick } from 'svelte';
 	import { formatCount } from '$lib/format';
 	import { m } from '$lib/paraglide/messages.js';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
@@ -26,8 +27,12 @@
 		full: m.settings_logging_preset_full,
 		custom: m.settings_logging_preset_custom
 	};
-	// The control shows what the server has; a cancelled or failed choice puts it back.
-	let shown = $derived(c?.presets.data ?? 'private');
+	// The control shows only what the server has: it's redrawn after every choice, so a cancelled,
+	// failed or pending one never shows as chosen once the dialog is gone.
+	let presetDraw = $state(0);
+	let presetGroup = $state<HTMLElement>();
+	const leaving = new AbortController();
+	onDestroy(() => leaving.abort());
 
 	let busy = $state(false);
 	let error = $state('');
@@ -44,10 +49,15 @@
 				: m.settings_logging_failed_off({ message });
 		} finally {
 			busy = false;
-			shown = catalog.catalog?.presets.data ?? 'private';
+			const redraw = presetGroup?.contains(document.activeElement) ?? false;
+			presetDraw++;
+			if (redraw) {
+				await tick();
+				presetGroup?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+			}
 		}
 	}
-	const ctx = () => ({ catalog, form });
+	const ctx = () => ({ catalog, form, signal: leaving.signal });
 	const choosePreset = (p: string) => run((x) => x.setPreset(ctx(), p), p !== 'private');
 	const setKind = (k: LogKind, on: boolean) => run((x) => x.setKind(ctx(), k, on), on);
 	const setOptIn = (k: OptIn, on: boolean) => run((x) => x.setOptIn(ctx(), k, on), on);
@@ -78,17 +88,20 @@
 			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 		{/if}
 	{:else}
-		<SegmentedControl
-			label={m.settings_logging_preset()}
-			options={PRESETS.map((p) => ({
-				value: p,
-				label: PRESET_LABELS[p]!(),
-				disabled: p === 'custom'
-			}))}
-			bind:value={shown}
-			onchange={choosePreset}
-			class="self-start"
-		/>
+		<div bind:this={presetGroup} class="self-start">
+			{#key presetDraw}
+				<SegmentedControl
+					label={m.settings_logging_preset()}
+					options={PRESETS.map((p) => ({
+						value: p,
+						label: PRESET_LABELS[p]!(),
+						disabled: p === 'custom'
+					}))}
+					value={c.presets.data}
+					onchange={choosePreset}
+				/>
+			{/key}
+		</div>
 		<ul class="flex flex-col gap-4">
 			{#each kinds as k (k.kind)}
 				{@const on = isOn(k)}

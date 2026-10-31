@@ -140,11 +140,23 @@ const catalog = (nameUntil = 0): Catalog => ({
 test.describe('keyboard: Settings → Logging', () => {
 	let backend: SettingsBackend;
 	let current: Catalog;
-	test.beforeEach(async ({ mock }) => {
+	let catalogFails = false;
+	test.beforeEach(async ({ mock, page }) => {
+		// `E2E_CPU_THROTTLE=4` slows the CPU (Chromium) to check these flows on a slow runner.
+		const rate = Number(process.env.E2E_CPU_THROTTLE ?? 0);
+		if (rate > 1) {
+			const cdp = await page.context().newCDPSession(page);
+			await cdp.send('Emulation.setCPUThrottlingRate', { rate });
+		}
 		backend = new SettingsBackend(index, values).attach(mock as unknown as MockLike);
 		current = catalog();
+		catalogFails = false;
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
-		on('getLogCatalog', () => ({ status: 200, body: current }));
+		on('getLogCatalog', () =>
+			catalogFails
+				? { status: 500, body: { error: { code: 'internal', message: 'down' } } }
+				: { status: 200, body: current }
+		);
 		on('getLogFiles', () => ({
 			status: 200,
 			body: { files: [], folder: '/data/logs', index_readable: true, reason: null, state: 'on' }
@@ -223,6 +235,7 @@ test.describe('keyboard: Settings → Logging', () => {
 		await kbd.tabTo(page.getByTestId('log-group-pipeline'), 60);
 		await kbd.press('Enter');
 		const stored = page.getByRole('switch', { name: 'pipeline.stored' });
+		await expect(stored).toBeVisible();
 		await kbd.tabTo(stored, 20);
 		await kbd.press('Space');
 		await expect(stored).not.toBeChecked();
@@ -276,5 +289,28 @@ test.describe('keyboard: Settings → Logging', () => {
 				}
 			}
 		]);
+	});
+
+	test("/logs: when Turn off now fails and the state can't be read, the banner stays", async ({
+		page,
+		go,
+		kbd,
+		mock
+	}) => {
+		await liveLogs(page);
+		mock.on('getLogHistory', { lines: [], more: false, next_cursor: null, unreadable: 0 });
+		current = catalog(NOW + 1800);
+		await go('/logs');
+		const banner = page.getByText('Log lines may identify torrents or people');
+		await expect(banner).toBeVisible();
+		backend.nextPatch.push({
+			status: 500,
+			body: { error: { code: 'internal', message: 'disk full' } }
+		});
+		catalogFails = true;
+		await kbd.tabTo(page.getByRole('button', { name: 'Turn off now' }), 40);
+		await kbd.press('Enter');
+		await expect(page.getByRole('alert')).toContainText("Couldn't turn it off");
+		await expect(banner).toBeVisible();
 	});
 });
