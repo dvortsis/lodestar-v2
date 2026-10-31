@@ -460,9 +460,8 @@ async fn run_search(
             // The result cache doesn't keep a `file:(…)` page, so neither
             // do its counts.
             let kept = cached.as_ref().filter(|_| !shown.has_file_clause());
-            let counted = recoveries().get_or(&key, kept, || {
-                recover(&lease, &ast, visibility, &cancel)
-            });
+            let counted =
+                recoveries().get_or(&key, kept, || recover(&lease, &ast, visibility, &cancel));
             match counted {
                 Ok(r) => r,
                 Err(e @ SearchError::Cancelled) => return Err(failed(e)),
