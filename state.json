@@ -1554,6 +1554,10 @@
     "S-theme-boot": {
       "status": "running",
       "notes": "2026-10-31T00:03Z brief briefs/S-theme-boot.md; Sonnet session_01MMjhn9ceJkKa23wT72zfDk"
+    },
+    "LU-1-neutralize": {
+      "status": "running",
+      "notes": "2026-10-31T00:07Z brief briefs/LU-1-neutralize.md; Opus session_01MMjhn8dY7oy8283PNtZqEK"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2237,7 +2241,6 @@
     "web e2e: the smoke mock serves no settings index, so the 60 Settings baselines never render a field; add an index and section fixture (#217 review)",
     "web e2e: bp1920/bp2560 welcome baselines still show the old full-width ring (inside the 0.001 tolerance); regenerate with --update-snapshots=all in the next baseline run (#221 review)",
     "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
-    "F-filters-packs LU-1: the lure-file junk reason (lodestar-classify keyword matches) still ignores Neutralize; fails safe, but \u00a720.5.5 says every pack rule (#240 decisions)",
     "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (\u00a710.18 lists them; deferred in #243, \u00a72.19 owner flag)",
     "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
     "Docs v0.5.1: the rollback page says to check Filters after a rollback (#245)"
