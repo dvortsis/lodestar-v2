@@ -107,6 +107,7 @@
 	"insights_overview_exc_since": "Since",
 	"insights_overview_exc_index_lag": "The search index is {lag} behind new torrents.",
 	"insights_overview_exc_cohort_stalled": "{count} keys are waiting, but nothing has been stored for a while.",
+	"insights_overview_exc_filter_rows_unreadable": "Saved filter rows that can't be read: {count} ({rows}). Filtering holds back more until you fix or remove them in Settings → Filters & Safety.",
 	"insights_overview_exc_unknown": "Needs attention: {kind}",
 	"insights_overview_exc_fix": "See details",
 	"insights_overview_exc_fix_stage": "Open the {stage} page",

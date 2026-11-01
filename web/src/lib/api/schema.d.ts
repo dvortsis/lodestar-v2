@@ -4738,18 +4738,25 @@ export interface components {
         InsightsException: {
             fix: components["schemas"]["Fix"];
             /**
-             * @description `index_lag` (the index more than 30 s behind) or `cohort_stalled`
+             * @description `index_lag` (the index more than 30 s behind), `cohort_stalled`
              *     (hashes in progress, the crawler running, and nothing stored for
-             *     2 full hours).
+             *     2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`
+             *     (stored filter rows that no longer read; filtering fails closed
+             *     for them until they're fixed in Filters & Safety).
              */
             kind: string;
+            /**
+             * @description The rows an exception is about, as the Filters & Safety screens
+             *     name them (`U-3`, `C-2`, …); empty for the other kinds.
+             */
+            rows?: string[];
             severity: components["schemas"]["Severity"];
             /**
              * Format: int64
              * @description Unix seconds.
              */
             since: number;
-            /** @description `s` or `torrents`. */
+            /** @description `s`, `torrents`, `ratio` or `rows`. */
             unit: string | null;
             /** Format: double */
             value: number | null;

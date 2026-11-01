@@ -13031,7 +13031,14 @@
           },
           "kind": {
             "type": "string",
-            "description": "`index_lag` (the index more than 30 s behind) or `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours)."
+            "description": "`index_lag` (the index more than 30 s behind), `cohort_stalled`\n(hashes in progress, the crawler running, and nothing stored for\n2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`\n(stored filter rows that no longer read; filtering fails closed\nfor them until they're fixed in Filters & Safety)."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rows an exception is about, as the Filters & Safety screens\nname them (`U-3`, `C-2`, …); empty for the other kinds."
           },
           "severity": {
             "$ref": "#/components/schemas/Severity"
@@ -13046,7 +13053,7 @@
               "string",
               "null"
             ],
-            "description": "`s` or `torrents`."
+            "description": "`s`, `torrents`, `ratio` or `rows`."
           },
           "value": {
             "type": [
