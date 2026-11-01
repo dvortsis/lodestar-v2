@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import AuthPage from './AuthPage.svelte';
+	import WizardPage from '../wizard/WizardPage.svelte';
 	import { checkAuth } from './gate';
 	import { currentSession } from './session.svelte';
 	import { toLoginFrom, toSetup } from './nav';
@@ -55,14 +54,9 @@
 
 <div bind:this={container} class="welcome">
 	{#if signedIn}
-		<AuthPage title={m.auth_welcome_title()} lead={m.auth_welcome_lead()}>
-			<div class="flex flex-col gap-3">
-				<a class="btn btn-primary" href={resolve('/search')}>{m.auth_welcome_search()}</a>
-				<a class="btn btn-ghost" href={resolve('/settings')}>{m.auth_welcome_settings()}</a>
-			</div>
-		</AuthPage>
+		<WizardPage />
 	{:else}
-		<div class="mx-auto flex max-w-sm flex-col gap-4 px-4 py-8">
+		<div class="mx-auto flex max-w-xl flex-col gap-4 px-4 py-8">
 			<h1 class="w-fit max-w-full text-display font-semibold text-base-content">
 				{m.auth_checking()}
 			</h1>

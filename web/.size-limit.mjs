@@ -794,6 +794,27 @@ for (const [name, files] of [
 if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Results toolbar (lazy): no chunk found for the toolbar in the manifest');
 
+// The first-run wizard (S-wizard): its steps load when they open (`WizardPage` LOADERS).
+const wizardSteps = [/features\/wizard\/\w+Step\.svelte$/];
+const wizardFirst = own('/welcome', { onDemand: wizardSteps });
+// A step is measured from its own module, beyond the first view, and stops at the engine's lazy
+// parts (controls, previews, the edit chunk, the section maps), which "Settings controls (on
+// demand)", "Settings edit chunk (on demand)" and "Settings messages (on demand)" gate already.
+const wizardLazy = requireMeasuredJs('Wizard steps (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => wizardSteps.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(
+					key,
+					[...settingsOnDemand, ...settingsEdit, ...settingsMessages],
+					false,
+					wizardFirst
+				)
+			)
+	)
+]);
+
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
 // Both pages' keys (the list's New alert, the alert page's j/k) and the key registry load after
@@ -1025,7 +1046,13 @@ export default [
 		'Insights stage charts (uPlot, on demand)',
 		onDemandOf('/insights/[stage]', stageLazy),
 		'24.2 KB'
-	)
+	),
+	// The first-run wizard (S-wizard): /welcome's first view is the auth check, the shell and the
+	// progress list. Each step is a dynamic import made when it opens, so the first view stops at
+	// them and "Wizard steps (on demand)" gates what they bring, the Settings engine's parts among
+	// them. Limits: measured + 10%.
+	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
+	entry('Wizard steps (on demand)', wizardLazy, '36.9 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
 ];

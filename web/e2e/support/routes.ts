@@ -146,7 +146,7 @@ export const ROUTES: RouteCase[] = [
 	{
 		name: 'welcome',
 		path: '/welcome',
-		heading: 'Setup complete',
+		heading: 'Finish setting up',
 		key: true,
 		// Signed in with setup done, or the page redirects to sign-in (or setup) instead.
 		mock: (m) => m.on('getAuthStatus', { logged_in: true, setup_required: false })

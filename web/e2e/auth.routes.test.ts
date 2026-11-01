@@ -81,7 +81,7 @@ test('first-run setup: token from a pasted log line, password, then /welcome', a
 	await page.getByLabel('Confirm password').fill('correct horse battery');
 	await page.getByRole('button', { name: 'Create password and sign in' }).click();
 	await expect(page).toHaveURL(/\/welcome(\?|$)/);
-	await expect(page.getByRole('heading', { name: 'Setup complete' })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1, name: 'Finish setting up' })).toBeVisible();
 	const [call] = mock.calls('setup');
 	expect(call!.postDataJSON()).toEqual({ token: TOKEN, password: 'correct horse battery' });
 	expect(call!.headers()['content-type']).toBe('application/json');

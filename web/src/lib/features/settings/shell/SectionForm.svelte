@@ -7,19 +7,20 @@
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import IconRestart from '~icons/ph/arrows-clockwise';
-	import { loadControls } from '../form/controls.svelte';
-	import { focusSettingField } from '../form/focus';
-	import { loadMessages, messagesLoaded } from '../form/messages';
-	import { widgetFor } from '../form/widgets';
 	import {
+		SettingField,
+		SettingsForm,
 		createSettingsForm,
+		focusSettingField,
 		groupFields,
+		loadControls,
+		loadMessages,
+		messagesLoaded,
 		settingText,
+		widgetFor,
 		type FieldKey,
 		type FieldSpec
-	} from '../form';
-	import SettingsForm from '../form/SettingsForm.svelte';
-	import SettingField from '../form/SettingField.svelte';
+	} from '../form/embed';
 	import type { Screen } from './screens';
 	let { screen, fields }: { screen: Screen; fields: FieldSpec[] } = $props();
 	// The parent keys this component by screen: no draft, request or save survives navigation.
