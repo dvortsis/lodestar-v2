@@ -2417,7 +2417,9 @@
     "app_environment_import": "Importing $app/environment (or any new export of the shared SvelteKit runtime chunk) renames that chunk's minified exports and grows every route that imports it (#299: Alerts +32 B). Read __SVELTEKIT_APP_VERSION__ directly instead. Large Settings bodies must load through a tiny body.ts forwarder so their preload list stays out of the registry chunk.",
     "rolldown-groups": "2026-11-01 (#304): Rolldown manual chunk groups are unusable for app code: includeDependenciesRecursively drags first-load modules into the group, and turning it off needs preserveEntrySignatures allow-extension, which SvelteKit forces to strict (kit/src/exports/vite/index.js:1111). Use import restructuring (single forwarder roots) instead.",
     "unraid-leg1": "2026-10-31T23:15Z leg 1 stopped: rss_over_1GiB (working set incl. file cache); 19.64 h baseline; private 887 MiB exit; slope 1.85 MiB/h CI [0.92,2.77] over partial h12-19.6; 22,593 torrents (669/h). Not gate evidence.",
-    "plan-1101": "02:15Z owner asked for build plan during soak re-run. Order: B-update-5 (Opus), analyzer corpus view, S-e2e, detail/t cuts -> S-filters-2c, H-zh. Hold E-v06-workers/companions until soak verdict; E-M6 rest after B-update-5. ~12 sessions/$60-90 next 31 h; offered 2-slot overnight cap."
+    "plan-1101": "02:15Z owner asked for build plan during soak re-run. Order: B-update-5 (Opus), analyzer corpus view, S-e2e, detail/t cuts -> S-filters-2c, H-zh. Hold E-v06-workers/companions until soak verdict; E-M6 rest after B-update-5. ~12 sessions/$60-90 next 31 h; offered 2-slot overnight cap.",
+    "unraid-r2": "Re-run r2 started 2026-11-01T02:09:28Z; baseline ends 2026-11-02T08:39:28Z; then owner approves gluetun; then analyze_cr0.",
+    "owner-plan-ok": "02:15Z owner chose 1: proceed with 4 slots and the build order; E-v06-workers/companions and E-M6 held."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
@@ -2721,8 +2723,8 @@
     },
     {
       "id": "unraid-rerun",
-      "status": "approved",
-      "text": "02:03Z Unraid leg 1 tripped the old working-set rule at 19.6 h (private 887 MiB; slope 1.85 MiB/h CI [0.92,2.77] partial; bar upper CI <= 2.0). Proposed: no tuning, re-run leg 1 on rc.2 with fresh data dir + main collector (anon basis), full 24 h, then gluetun >=2 h continuation, then analyze_cr0. Awaiting owner go. | 02:07Z owner GO (items 1-6). Antigravity: collect.py @673692a4 (identical to current main), new run dir + fresh data dir, rc.2. Gluetun leg needs separate owner approval after baseline. Expect report: dir name, collector sha256, memory_stop_basis.",
+      "status": "running",
+      "text": "02:03Z Unraid leg 1 tripped the old working-set rule at 19.6 h (private 887 MiB; slope 1.85 MiB/h CI [0.92,2.77] partial; bar upper CI <= 2.0). Proposed: no tuning, re-run leg 1 on rc.2 with fresh data dir + main collector (anon basis), full 24 h, then gluetun >=2 h continuation, then analyze_cr0. Awaiting owner go. | 02:07Z owner GO (items 1-6). Antigravity: collect.py @673692a4 (identical to current main), new run dir + fresh data dir, rc.2. Gluetun leg needs separate owner approval after baseline. Expect report: dir name, collector sha256, memory_stop_basis. | 02:15Z re-run UP: dir v051-rc2-main-r2, data lodestar-r2 (fresh), collector sha a49f3b43… (runner verified = 673692a4 collect.py), memory_stop_basis anon, rc.2 image. Started 02:09:28Z; baseline 11-01 08:39:28Z -> 11-02 08:39:28Z; hour 12 = 11-01 20:39:28Z. Antigravity job reporting-only.",
       "unblocks": "v0.5.1 Linux soak gate"
     },
     {
