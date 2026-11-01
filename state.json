@@ -569,13 +569,13 @@
       "merged_sha": "5a4ec5a"
     },
     "S-e2e": {
-      "status": "launching",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhnD3uSMAJgRTtvWaN35",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture)."
+      "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture). | 02:45Z launched Sonnet."
     },
     "H-zh": {
       "status": "pending",
