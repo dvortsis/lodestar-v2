@@ -25,7 +25,16 @@
 		label: string;
 		removeLabel?: string;
 	}
-	let { row, fields, draft = false, captions = true, oncommit, onremove, label, removeLabel }: Props = $props();
+	let {
+		row,
+		fields,
+		draft = false,
+		captions = true,
+		oncommit,
+		onremove,
+		label,
+		removeLabel
+	}: Props = $props();
 
 	let field = $state(untrack(() => row.field));
 	let op = $state<string>(untrack(() => row.op));

@@ -39,7 +39,8 @@
 	const edges = $derived.by(() => {
 		const raw = edgesOf(hist.bins);
 		const text = raw.map(edgeText);
-		if (raw.length > 1 && raw[raw.length - 1] === null) text[text.length - 1] = `${text[text.length - 2]} +`;
+		if (raw.length > 1 && raw[raw.length - 1] === null)
+			text[text.length - 1] = `${text[text.length - 2]} +`;
 		return text;
 	});
 	const counts = $derived(hist.bins.map((b) => ({ value: b.count, approx: hist.approx })));
