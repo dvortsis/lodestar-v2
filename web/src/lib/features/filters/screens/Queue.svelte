@@ -74,7 +74,7 @@
 </script>
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-queue-h" data-testid="filters-queue">
-	<h2 id="filters-queue-h" class="text-label font-semibold">{m.filters_queue_heading()}</h2>
+	<h2 id="filters-queue-h" class="text-small font-semibold">{m.filters_queue_heading()}</h2>
 	<p class="text-muted-text">{m.filters_queue_help()}</p>
 	{#if failed}
 		<Banner kind="error">
@@ -137,7 +137,7 @@
 	{/if}
 	<!-- Per-rule counts include the adult-only rules, so they show only with 18+ on. -->
 	{#if queue && model.adult && queue.decisions_30d.length}
-		<h3 class="text-label font-semibold">{m.filters_decisions_heading()}</h3>
+		<h3 class="text-small font-semibold">{m.filters_decisions_heading()}</h3>
 		<ul class="flex flex-col gap-1" data-testid="filters-decisions">
 			{#each queue.decisions_30d as d (d.rule + d.action + d.shadow)}
 				<li class="flex flex-wrap items-center gap-2">

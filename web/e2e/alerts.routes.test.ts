@@ -627,3 +627,13 @@ for (const [name, themeId, colorMode] of [
 		});
 	});
 }
+
+test.describe('under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+	test('an alert name is a 44 px target', async ({ page, go, mock }) => {
+		listMocks(mock);
+		await go('/alerts');
+		const box = (await page.getByTestId('alerts-name-1').boundingBox())!;
+		expect(box.height).toBeGreaterThanOrEqual(44);
+	});
+});

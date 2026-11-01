@@ -83,7 +83,7 @@
 	data-client={client.id}
 >
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<h3 class="text-label font-semibold">{name}</h3>
+		<h3 class="text-small font-semibold">{name}</h3>
 		{#if !locked}
 			<div class="flex flex-wrap gap-1">
 				<Button

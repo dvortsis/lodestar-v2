@@ -74,7 +74,7 @@
 		form.blur(key);
 	}}
 />
-{#if invalid && announced}<p id={errorId} class="text-label text-error" role="alert">
+{#if invalid && announced}<p id={errorId} class="text-small text-error" role="alert">
 		{m.settings_screen_time_zone_unknown()}
 	</p>{/if}
 <datalist id={listId}>

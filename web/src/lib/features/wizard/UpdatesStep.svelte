@@ -45,7 +45,7 @@
 		data-field={KEY}
 		disabled={f.locked}
 	>
-		<legend class="mb-1 text-label font-semibold">{m.wizard_updates_legend()}</legend>
+		<legend class="mb-1 text-small font-semibold">{m.wizard_updates_legend()}</legend>
 		{#each options as option (option.value)}
 			<div class="flex flex-col">
 				<Radio

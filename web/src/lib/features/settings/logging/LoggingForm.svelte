@@ -73,7 +73,7 @@
 			{#each essentials as s (s.key)}<SettingField {form} key={s.key} />{/each}
 			{#if advanced}
 				<details open={open.events} ontoggle={(e) => (open.events = e.currentTarget.open)}>
-					<summary class="ls-focus cursor-pointer py-3 text-label"
+					<summary class="ls-focus cursor-pointer py-3 text-small"
 						>{m.settings_logging_advanced()}</summary
 					>
 					<div class="pt-4"><SettingField {form} key={advanced.key} /></div>
@@ -81,7 +81,7 @@
 			{/if}
 			{#if expert}
 				<details open={open.expert} ontoggle={(e) => (open.expert = e.currentTarget.open)}>
-					<summary class="ls-focus cursor-pointer py-3 text-label"
+					<summary class="ls-focus cursor-pointer py-3 text-small"
 						>{m.settings_logging_expert()}</summary
 					>
 					<div class="pt-4"><SettingField {form} key={expert.key} /></div>

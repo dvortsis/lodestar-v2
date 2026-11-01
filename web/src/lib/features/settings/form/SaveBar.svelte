@@ -83,11 +83,3 @@
 		{/if}
 	</div>
 </div>
-
-<style>
-	@media (pointer: coarse) {
-		.ls-bar {
-			min-height: var(--target-min);
-		}
-	}
-</style>

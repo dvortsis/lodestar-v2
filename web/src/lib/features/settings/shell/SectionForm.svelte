@@ -117,7 +117,7 @@
 					ontoggle={(event) => toggle(group.group, event.currentTarget.open)}
 				>
 					<summary
-						class="ls-focus cursor-pointer py-3 text-label"
+						class="ls-focus cursor-pointer py-3 text-small"
 						data-testid="settings-advanced-count"
 						>{m.settings_shell_advanced({ count: formatCount(group.advanced.length) })}</summary
 					>

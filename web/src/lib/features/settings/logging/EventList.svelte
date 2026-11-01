@@ -120,7 +120,7 @@
 		{@const open = opened[component] ?? filtering}
 		<details {open} class="border-t border-base-300">
 			<summary
-				class="ls-focus cursor-pointer py-3 text-label"
+				class="ls-focus cursor-pointer py-3 text-small"
 				data-testid="log-group-{component}"
 				onclick={(ev) => {
 					// The state drives `open`, not the native toggle (its event comes later, so a render

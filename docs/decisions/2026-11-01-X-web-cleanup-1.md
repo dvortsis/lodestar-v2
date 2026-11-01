@@ -1,0 +1,6 @@
+# X-web-cleanup-1: `text-label` and the coarse-pointer copies
+
+- **Token:** `text-label` is not in the §8 type scale (it rendered unstyled, like `text-h2` in B4). All 27 files now use `text-small` (13/18 px), the step SettingField labels use (`text-small font-medium`); headings keep their `font-semibold`. `label` joins the text-size ban in `web/scripts/bans.mjs`, with a case in `bans.test.ts`.
+- **Touch targets:** the per-feature `pointer: coarse` copies in AlertsListPage, FileDiff, DiscoverPage, `row.css`, SaveBar and SettingsShell are gone. The global rule in `app.css` covers buttons, tabs, summaries and `nav a`; links outside nav (`al-name`, `dsc-see-all`, `dsc-inline-link`) take `.target`. A scoped `min-height` beats the zero-specificity global rule, so `.dsc-tab`'s 40 px now applies under `pointer: fine` only. New e2e checks assert 44 px in alerts, discover and settings.
+- **Spacing:** `editor.css` `.ed-name` (`w-24`) is now `min-w-14 flex-1`; `shortcuts.css` `.sc-key` `min-w-16` is now `min-w-14`. The `.css` spacing scan in `check-bans.mjs` is on; the whole tree passes.
+- **Left alone:** `insights.css`, `Slider.svelte`, `motion.ts`, the non-button copies in search assist/bulk/table/facets.

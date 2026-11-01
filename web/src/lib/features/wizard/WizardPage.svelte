@@ -133,7 +133,7 @@
 	</header>
 
 	<nav aria-label={m.wizard_progress()}>
-		<ol class="flex flex-wrap gap-4 text-label" data-testid="wizard-progress">
+		<ol class="flex flex-wrap gap-4 text-small" data-testid="wizard-progress">
 			{#each [m.auth_setup_step_token(), m.auth_setup_step_password()] as past (past)}
 				<li class="flex items-center gap-1 text-muted-text">
 					<IconCheck aria-hidden="true" class="text-success" />

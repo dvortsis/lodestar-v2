@@ -15,7 +15,7 @@
 </script>
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-core-h">
-	<h2 id="filters-core-h" class="text-label font-semibold">{m.filters_core_heading()}</h2>
+	<h2 id="filters-core-h" class="text-small font-semibold">{m.filters_core_heading()}</h2>
 	<p class="text-muted-text">{m.filters_core_help()}</p>
 	<ul class="flex flex-col gap-2" data-testid="filters-core">
 		{#each o.core as r (r.id)}
@@ -52,7 +52,7 @@
 
 {#if o.pending_floor_removals.length}
 	<section class="flex flex-col gap-3" aria-labelledby="filters-floor-h">
-		<h2 id="filters-floor-h" class="text-label font-semibold">{m.filters_pending_heading()}</h2>
+		<h2 id="filters-floor-h" class="text-small font-semibold">{m.filters_pending_heading()}</h2>
 		<p class="text-muted-text">{m.filters_pending_help()}</p>
 		<ul class="flex flex-col gap-2">
 			{#each o.pending_floor_removals as p (p.source)}
@@ -83,7 +83,7 @@
 {/if}
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-packs-h">
-	<h2 id="filters-packs-h" class="text-label font-semibold">{m.filters_packs_heading()}</h2>
+	<h2 id="filters-packs-h" class="text-small font-semibold">{m.filters_packs_heading()}</h2>
 	<ul class="flex flex-col gap-2" data-testid="filters-packs">
 		{#each o.packs as p (p.id)}
 			<li class="flex flex-wrap items-center gap-3" data-testid="pack-{p.id}">

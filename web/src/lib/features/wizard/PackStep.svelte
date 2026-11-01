@@ -98,7 +98,7 @@
 		<p class="text-body" data-testid="wizard-packs-stored">{m.wizard_packs_stored()}</p>
 	{/if}
 	<fieldset class="flex flex-col gap-3" data-testid="wizard-packs">
-		<legend class="mb-1 text-label font-semibold">{m.wizard_packs_legend()}</legend>
+		<legend class="mb-1 text-small font-semibold">{m.wizard_packs_legend()}</legend>
 		{#each packs as pack (pack.id)}
 			<div class="flex flex-col">
 				<Checkbox

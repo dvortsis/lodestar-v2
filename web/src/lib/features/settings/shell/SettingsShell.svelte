@@ -36,7 +36,7 @@
 			href={href('/settings')}
 			aria-current={overview ? 'page' : undefined}>{m.settings_shell_title()}</a
 		>
-		<label class="flex flex-col gap-2 text-label">
+		<label class="flex flex-col gap-2 text-small">
 			{m.settings_shell_filter_sections()}
 			<input class="input ls-focus w-full" type="search" bind:value={query} />
 		</label>
@@ -45,7 +45,7 @@
 				{@const members = matches.filter((screen) => screen.group === group.id)}
 				{#if members.length}
 					<div class="flex flex-col gap-2">
-						<h2 class="text-label text-muted-text">{group.label()}</h2>
+						<h2 class="text-small text-muted-text">{group.label()}</h2>
 						{#each members as screen (screen.id)}
 							<a
 								class="settings-link ls-focus flex items-center gap-2 rounded-field px-3 py-2"
@@ -87,11 +87,6 @@
 	.settings-link[aria-current='page'] {
 		background: var(--color-base-200);
 		font-weight: 600;
-	}
-	@media (pointer: coarse) {
-		.settings-link {
-			min-height: var(--target-min);
-		}
 	}
 	@media (min-width: 1024px) {
 		.settings-shell {

@@ -432,3 +432,15 @@ test('resync refreshes restart requirements and locks while preserving unrelated
 	await expect(page.getByTestId('save-bar-status')).toContainText('1 unsaved change');
 	expect(mock.calls('patchSettingsBatch')).toHaveLength(0);
 });
+
+test.describe('under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+	test('the section links are 44 px targets', async ({ page, go }) => {
+		await go('/settings');
+		const link = page
+			.getByRole('navigation', { name: 'Settings sections' })
+			.getByRole('link', { name: 'General', exact: true });
+		const box = (await link.boundingBox())!;
+		expect(box.height).toBeGreaterThanOrEqual(44);
+	});
+});

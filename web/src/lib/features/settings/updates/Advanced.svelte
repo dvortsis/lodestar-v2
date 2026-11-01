@@ -126,7 +126,7 @@
 	{/if}
 
 	<fieldset class="flex flex-col gap-2" data-testid="updates-channel">
-		<legend class="text-label font-semibold">{m.settings_updates_adv_channel()}</legend>
+		<legend class="text-small font-semibold">{m.settings_updates_adv_channel()}</legend>
 		{#if lock('channel')}<p class="text-small">{lockText('channel')}</p>{/if}
 		{#each channels as c (c)}
 			<label class="inline-flex items-center gap-2 text-body">
@@ -211,7 +211,7 @@
 	</div>
 
 	<fieldset class="flex flex-col gap-2">
-		<legend class="text-label font-semibold">{m.settings_updates_adv_notify()}</legend>
+		<legend class="text-small font-semibold">{m.settings_updates_adv_notify()}</legend>
 		<p class="text-small text-muted-text">{m.settings_updates_adv_notify_help()}</p>
 		{#each notes as [name, label] (name)}
 			<label class="inline-flex items-center gap-2 text-body">

@@ -43,7 +43,7 @@
 			y="46"
 			text-anchor="middle"
 			fill="currentColor"
-			class="text-label font-semibold">{labels[i]!()}</text
+			class="text-small font-semibold">{labels[i]!()}</text
 		>
 		{#if i < 3}
 			<path

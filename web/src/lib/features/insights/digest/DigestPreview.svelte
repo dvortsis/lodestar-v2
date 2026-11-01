@@ -34,7 +34,7 @@
 </script>
 
 <div class="flex flex-col gap-3" data-testid="digest-preview">
-	<h3 class="text-label font-semibold">{m.insights_digest_preview_title()}</h3>
+	<h3 class="text-small font-semibold">{m.insights_digest_preview_title()}</h3>
 	<p class="text-muted-text">{m.insights_digest_preview_help()}</p>
 	<div>
 		<Button

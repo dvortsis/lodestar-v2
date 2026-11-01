@@ -87,11 +87,6 @@
 		padding-block: calc(var(--spacing) * 2);
 		font-weight: var(--font-weight-medium);
 	}
-	@media (pointer: coarse) {
-		summary {
-			min-height: var(--target-min);
-		}
-	}
 	summary:focus-visible {
 		outline-width: var(--focus-ring-width);
 		outline-style: solid;

@@ -156,7 +156,7 @@
 			<!-- eslint-disable svelte/no-navigation-without-resolve -- alertPath() resolves -->
 			<a
 				href={alertPath(s.id)}
-				class="al-name"
+				class="al-name target"
 				data-alert-name={s.id}
 				data-testid="alerts-name-{s.id}">{s.name}</a
 			>
@@ -322,11 +322,6 @@
 		overflow-wrap: anywhere;
 		text-decoration: underline;
 		text-underline-offset: calc(var(--spacing) * 1);
-	}
-	@media (pointer: coarse) {
-		.al-name {
-			min-block-size: var(--target-min);
-		}
 	}
 	.al-num {
 		font-variant-numeric: tabular-nums;
