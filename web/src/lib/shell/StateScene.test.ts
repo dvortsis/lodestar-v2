@@ -22,11 +22,8 @@ describe('StateScene', () => {
 		expect(render(StateScene, { id }).container.querySelector('img')).not.toBeNull();
 	});
 
-	it('renders nothing before any preference is cached, and nothing appears later', () => {
-		const { container } = render(StateScene, { id });
-		expect(container.querySelector('img, picture')).toBeNull();
-		cache(true);
-		expect(container.querySelector('img, picture')).toBeNull();
+	it('renders the picture before any preference is cached', () => {
+		expect(render(StateScene, { id }).container.querySelector('img')).not.toBeNull();
 	});
 
 	it('renders nothing when illustrations are off', () => {

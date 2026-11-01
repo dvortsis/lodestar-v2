@@ -10,17 +10,16 @@
 	// Off when the account turned them off or the browser's data saver is on. Not rendered, so no
 	// image is fetched. Read from the per-browser cache (written by `applyLook` on every change)
 	// when a scene is built: the pre-paint script sets the theme only and the appearance boot waits
-	// for first interaction, so the cache is what a first view has. With no cache the scene stays
-	// off, so one is never shown and then removed (docs/decisions/2026-11-01-X-web-polish-1101e.md).
+	// for first interaction, so the cache is what a first view has.
 	// svelte-ignore non_reactive_update
-	let shown = false;
+	let shown = true;
 	try {
 		shown = !(
 			(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData ||
 			!JSON.parse(localStorage['lodestar.appearance']).illustrations
 		);
 	} catch {
-		/* no cache yet (a first visit) or storage blocked: no scene until the app has written it */
+		/* no cache yet, or storage blocked: show them */
 	}
 	const scene = $derived(scenes.find((s) => s.id === id && s.mode === themeMode()));
 </script>
