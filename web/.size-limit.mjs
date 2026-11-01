@@ -1140,7 +1140,8 @@ export default [
 	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
-	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
+	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
+	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.15 KB'),
 	// S-logs-3: every event's plain name and help, en and zh. Measured 10.73 KB; limit = measured + 10%.
 	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '11.8 KB'),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
