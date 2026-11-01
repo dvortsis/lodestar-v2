@@ -3268,6 +3268,10 @@
     {
       "t": "2026-11-01T19:00Z",
       "event": "Queued F-filter-load-fail-closed (Opus + /security-review): crates/filter/src/load.rs drops unparseable stored rule/unless/classification rows with only a note. Make it fail closed for loosening kinds (hide/drop/quarantine/adult classification): surface as a health error + keep a safe default (e.g. quarantine-all or refuse to start filtering-relaxed), never silently drop. Tightening kinds (override/allow) may skip with a warning. Tests: unparseable row of each kind. Launch in next free slot after #349."
+    },
+    {
+      "t": "2026-11-01T19:05Z",
+      "event": "merged #349 X-web-cleanup-1 (38789bcb) after re-measuring near-limit entries on merge result (all pass; tightest /t 7 B, Detail 7 B). Archived. Launched X-appearance-undo (Opus). Open: #350 (safety fix push pending), #351 gate-file-cold (runner MERGE, CI). Next free slot: F-filter-load-fail-closed after #350; openapi-example-size after #350."
     }
   ],
   "reviews": {
