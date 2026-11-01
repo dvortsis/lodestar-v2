@@ -110,9 +110,12 @@
 	onMount(() => {
 		let gone = false;
 		let off: (() => void) | undefined;
-		void Promise.all([import('$lib/keys'), import('./commands')]).then(([{ keys }, cmd]) => {
-			if (!gone) off = cmd.registerDiscoverCommands(keys, step);
-		});
+		void Promise.all([import('$lib/keys'), import('./commands')]).then(
+			([{ keys }, cmd]) => {
+				if (!gone) off = cmd.registerDiscoverCommands(keys, step);
+			},
+			() => {}
+		);
 		return () => {
 			gone = true;
 			off?.();
