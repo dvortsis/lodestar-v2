@@ -74,4 +74,15 @@ describe('Parsed', () => {
 			expect(screen.queryByText(word)).toBeNull();
 		}
 	});
+
+	it('uses singular labels for one plain value, plural for several or a range', async () => {
+		get.mockResolvedValue({
+			identity: { ...identity, years: ['2019'], seasons: ['1-2'] }
+		});
+		render(Parsed, { hash: HASH, hit: searchHit() });
+		await waitFor(() => expect(screen.getByTestId('detail-parsed-years')).toBeTruthy());
+		const label = (id: string) => screen.getByTestId(id).previousElementSibling?.textContent;
+		expect(label('detail-parsed-years')).toBe('Year');
+		expect(label('detail-parsed-seasons')).toBe('Seasons');
+	});
 });
