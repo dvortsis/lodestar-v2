@@ -2673,7 +2673,8 @@
     "tailwind-comments": "2026-11-01 (#309): a component word like \"card\" in a comment makes Tailwind emit daisyUI .card (+147 B CSS). Avoid daisyUI component names in comments; tests and scripts are excluded from scanning since #308.",
     "reviews-opus": "Reviews always run on Opus (CLAUDE.md delegation policy), even for translation/test slices.",
     "prettier-docs": "Check slice diffs for stray formatter passes over docs/decisions (#321 reformatted ~88 files); review with git show --stat per commit, not only the file list you expect.",
-    "t-headroom": "After #332: /t 31 B left, Detail sections 2 B left (1000-based). X-web-polish-1101d could not cut (dedupe <=4 B; moves only trade between them). The next change to /t or Detail sections must bring its own cut in shared detail code; the runner may then rule on Detail sections (on demand) under §2.26."
+    "t-headroom": "After #332: /t 31 B left, Detail sections 2 B left (1000-based). X-web-polish-1101d could not cut (dedupe <=4 B; moves only trade between them). The next change to /t or Detail sections must bring its own cut in shared detail code; the runner may then rule on Detail sections (on demand) under §2.26.",
+    "slot-hold": "13:37Z: 4th slot held for G-m5b's design-review fix batches (Sonnet) rather than a low-value followup."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
@@ -3313,14 +3314,7 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-11-01T12:58Z",
-  "open_prs": {
-    "339": {
-      "slice": "X-web-polish-1101e",
-      "head": "9c48d965e19760e3f8c4734dff222e3f50047a57",
-      "verdict": "runner MERGE pending CI (bulk bar only)",
-      "session": "session_01MMjhnBCyarPyutpaXadHCe"
-    }
-  },
+  "open_prs": {},
   "merged_log": [
     {
       "pr": 331,
@@ -3376,6 +3370,12 @@
       "sha": "64ac9e149223ca980fdff18576de426c2977f0c1",
       "at": "2026-11-01T13:04Z",
       "slice": "S-search-meta-web"
+    },
+    {
+      "pr": 339,
+      "sha": "11279c049a081914d1c480dc0973456d9c469e5c",
+      "at": "2026-11-01T13:37Z",
+      "slice": "X-web-polish-1101e (bulk bar only)"
     }
   ],
   "active_sessions": {
