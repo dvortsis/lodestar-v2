@@ -3273,14 +3273,7 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-10-31T13:07Z",
-  "open_prs": {
-    "335": {
-      "slice": "B-search-meta",
-      "head": "5b4a0bb7976e73dec007581b19ef703e13bdf994",
-      "verdict": "runner MERGE pending CI (count_approx naming accepted; no §2.19)",
-      "session": "session_01MMjhnAoWChkh36XUhq2grc"
-    }
-  },
+  "open_prs": {},
   "merged_log": [
     {
       "pr": 331,
@@ -3312,6 +3305,12 @@
       "sha": "26c25b4ad8cbf832ecb5b10b7518d693405c6714",
       "at": "2026-11-01T11:28Z",
       "slice": "X-web-polish-1101d"
+    },
+    {
+      "pr": 335,
+      "sha": "544e040d798ab1c9b16b602493b5c8d8eedf72bc",
+      "at": "2026-11-01T11:44Z",
+      "slice": "B-search-meta"
     }
   ],
   "active_sessions": {
@@ -3338,6 +3337,12 @@
       "model": "opus",
       "launched": "2026-11-01T11:17Z",
       "brief": "briefs/F-suggest-adult-field.md"
+    },
+    "S-search-meta-web": {
+      "session": "session_01MMjhnBxuWngHmqG5NkcL67",
+      "model": "sonnet",
+      "launched": "2026-11-01T11:44Z",
+      "brief": "briefs/S-search-meta-web.md"
     }
   },
   "queued_followups": [
