@@ -195,7 +195,7 @@ test.describe('keyboard: Settings → Updates', () => {
 
 		await kbd.tabTo(button, 200);
 		await kbd.press('Enter');
-		await kbd.tabTo(dialog.getByRole('button', { name: 'Roll back', exact: true }), 10);
+		await kbd.tabTo(dialog.getByRole('button', { name: 'Roll back to 0.5.1', exact: true }), 10);
 		await kbd.press('Enter');
 		await expect.poll(() => sent.map((s) => s.op)).toEqual(['rollbackUpdate']);
 		expect(sent[0]?.body).toEqual({ confirm: true });

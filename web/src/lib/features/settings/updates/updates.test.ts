@@ -8,10 +8,15 @@ import UpdatesScreen from './UpdatesScreen.svelte';
 import type { Release, Status } from './logic';
 import { cannotAuto, noticesOf, safeHttps, securityDefault, securityVisible } from './logic';
 
-const asked = vi.hoisted(() => ({ answer: 'cancel' as string | null, count: 0 }));
+const asked = vi.hoisted(() => ({
+	answer: 'cancel' as string | null,
+	count: 0,
+	last: undefined as { title: string; body: string[] } | undefined
+}));
 vi.mock('../form/dialogs', () => ({
-	ask: async () => {
+	ask: async (q: { title: string; body: string[] }) => {
 		asked.count++;
+		asked.last = q;
 		return asked.answer;
 	}
 }));
@@ -572,9 +577,71 @@ describe('the Updates screen', () => {
 			await until(() => expect(mutations()).toEqual(['POST /updates/rollback {"confirm":true}']));
 		});
 
+		it('the dialog says what is lost: a count, none, or unknown; "image" in words', async () => {
+			const open = async (lost: number | null, to = '0.5.0') => {
+				document.body.innerHTML = '';
+				status.rollback = { available: true, lost_torrents: lost, reason: null, to_version: to };
+				render(UpdatesScreen);
+				await fireEvent.click(await screen.findByTestId('updates-rollback'));
+				await until(() => expect(asked.last).toBeTruthy());
+				const body = asked.last!.body.join(' ');
+				const title = asked.last!.title;
+				asked.last = undefined;
+				return { body, title };
+			};
+			expect((await open(1_204_331)).body).toContain('1,204,331 torrents');
+			expect((await open(1)).body).toContain('1 torrent ');
+			expect((await open(0)).body).toContain('No torrents will be lost');
+			expect((await open(null)).body).toContain("can't say how many");
+			const img = await open(null, 'image');
+			expect(img.title).not.toContain('image?');
+			expect(img.title).toContain('container image');
+		});
+
+		it('a manual rollback is not worded as a failed update', async () => {
+			status.notices = ['rolled_back'];
+			status.history = [
+				{
+					at: 2,
+					from: '0.6.0',
+					level: 'fix',
+					lost_torrents: null,
+					reason: 'manual',
+					result: 'rolled_back',
+					version: '0.5.2'
+				}
+			];
+			render(UpdatesScreen);
+			const t = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
+			expect(t).toContain('You rolled Lodestar back to 0.5.2');
+			expect(t).not.toContain("didn't work");
+			expect(t).not.toContain('manual');
+		});
+
+		it('any other refusal says it did not start', async () => {
+			offer();
+			asked.answer = 'rollback';
+			rollbackAnswer = reply(428, { error: { code: 'confirmation_required', message: 'x' } });
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-rollback'));
+			expect((await screen.findByTestId('updates-error')).textContent).toContain("didn't start");
+		});
+
+		it('a 202 takes the returned status', async () => {
+			offer();
+			asked.answer = 'rollback';
+			rollbackAnswer = reply(202, {
+				...status,
+				rollback: { available: false, lost_torrents: null, reason: 'busy', to_version: null }
+			});
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-rollback'));
+			await until(() => expect(screen.queryByTestId('updates-rollback')).toBeNull());
+		});
+
 		it.each([
-			['not_supervised', "isn't running under its updater"],
-			['image_mode', 'pulling a new container image'],
+			['not_supervised', 'supervisor that can restart'],
+			['image_mode', 'image does the updating'],
 			['busy', 'check or install is running'],
 			['no_previous_version', 'no previous version'],
 			['snapshot_missing', 'snapshot of your data'],
@@ -618,6 +685,9 @@ describe('the Updates screen', () => {
 			const t = await fail('download_mismatch');
 			expect(t).toContain("didn't match what was signed");
 			expect(t).not.toContain('download_mismatch');
+		});
+		it('words no_space as a disk problem', async () => {
+			expect(await fail('no_space')).toContain('free disk space');
 		});
 		it('falls back to a generic sentence for an unknown code', async () => {
 			const t = await fail('brand_new_code');
