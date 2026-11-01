@@ -273,9 +273,7 @@ impl Writer {
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
-                () = std::future::ready(()), if !self.backfill_done && self.backfill_backoff.ready() => {
-                    self.backfill().await
-                }
+                () = std::future::ready(()), if self.backfill_ready() => self.backfill().await,
                 () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
@@ -626,6 +624,12 @@ impl Writer {
         if self.have.is_full() {
             self.rebuild_have().await;
         }
+    }
+
+    /// The backfill has a batch to enrich now: not done, and not waiting
+    /// out a store error.
+    fn backfill_ready(&self) -> bool {
+        !self.backfill_done && self.backfill_backoff.ready()
     }
 
     /// Enriches the next batch of stored torrents that lack an up-to-date
@@ -1868,7 +1872,11 @@ mod tests {
     /// loop) and shuts down promptly.
     #[tokio::test]
     async fn backfill_backs_off_after_a_store_error_and_resumes() {
-        let (mut w, _) = arms_writer();
+        let (mut w, stored) = arms_writer();
+        let id = {
+            let store = w.store.as_mut().unwrap();
+            store.find(&InfoHash(stored)).unwrap().unwrap()
+        };
         let conn = |w: &Writer, sql: &str| {
             w.store
                 .as_ref()
@@ -1880,41 +1888,44 @@ mod tests {
         // A temporary table shadows `torrent_parsed` without the column
         // the backfill's query reads: every batch fails.
         conn(&w, "CREATE TEMP TABLE torrent_parsed (x INTEGER);");
+        // Partway through: the cursor is past the one row.
+        w.backfill_after = id;
         let errors = w.stats.errors.load(Ordering::Relaxed);
         let before = unix_now();
         w.backfill().await;
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), errors + 1);
         let at = w.backfill_backoff.retry_at.expect("waits after an error");
         assert!(at >= before + RETRY_FIRST, "{at} {before}");
-        assert!(!w.backfill_done && !w.backfill_backoff.ready());
-        assert_eq!(w.backfill_after, 0, "where it left off");
+        assert!(!w.backfill_done && !w.backfill_ready());
+        assert_eq!(w.backfill_after, id, "where it left off");
         w.backfill_backoff.retry_due(at - 1);
-        assert!(!w.backfill_backoff.ready(), "not before it's due");
+        assert!(!w.backfill_ready(), "not before it's due");
         w.backfill_backoff.retry_due(at);
+        assert!(w.backfill_ready());
         let before = unix_now();
         w.backfill().await;
         let again = w.backfill_backoff.retry_at.expect("waits longer");
         assert!(again >= before + 2 * RETRY_FIRST, "{again} {before}");
         assert!(!w.backfill_done);
 
-        // The error clears: the same batch, then done.
+        assert_eq!(w.backfill_after, id);
+
+        // The error clears: it resumes past the cursor, where nothing is
+        // left, rather than starting over.
         conn(&w, "DROP TABLE temp.torrent_parsed;");
         w.backfill_backoff.retry_due(again);
         w.backfill().await;
-        assert!(w.backfill_after > 0, "the batch went through");
-        assert_eq!(w.stats.enriched.load(Ordering::Relaxed), 1);
-        w.backfill().await;
         assert!(w.backfill_done && w.backfill_backoff.failures == 0);
+        assert_eq!(w.stats.enriched.load(Ordering::Relaxed), 0, "not redone");
 
-        // Waiting out an error, the run loop leaves backfill alone and
-        // stops as soon as its inputs close.
+        // Waiting out an error (the loop's branch is off, as checked
+        // above), shutdown doesn't wait for the backoff.
         conn(&w, "CREATE TEMP TABLE torrent_parsed (x INTEGER);");
         w.backfill_after = 0;
         w.backfill_done = false;
         w.candidates.done = true;
         w.backfill().await;
-        let errors = w.stats.errors.load(Ordering::Relaxed);
-        let stats = w.stats.clone();
+        assert!(!w.backfill_ready());
         let (results_tx, results) = mpsc::channel(1);
         let (touches_tx, touches) = mpsc::channel(1);
         let (queues_tx, queues) = mpsc::channel(1);
@@ -1935,7 +1946,6 @@ mod tests {
             .await
             .expect("prompt shutdown")
             .unwrap();
-        assert_eq!(stats.errors.load(Ordering::Relaxed), errors, "no retry");
     }
 
     /// Every log event this test binary emits, rendered with every field
