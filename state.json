@@ -2086,11 +2086,14 @@
       "merged_at": "2026-11-01T08:33Z"
     },
     "X-web-polish-1101b": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhn8gRjhoSLpqHG12RCc",
       "model": "sonnet",
       "brief": "briefs/X-web-polish-1101b.md",
-      "launched_at": "2026-11-01T08:05Z"
+      "launched_at": "2026-11-01T08:05Z",
+      "pr": 328,
+      "head": "fb68886",
+      "review": "runner MERGE at fb68886"
     },
     "B-update-6": {
       "status": "building",
