@@ -3316,8 +3316,8 @@
   "open_prs": {
     "339": {
       "slice": "X-web-polish-1101e",
-      "head": "82e39f3",
-      "verdict": "CHANGES r1: revert StateScene (runner reverses own ruling: no-cache must show scene for first-run empty states); bulk bar MERGE",
+      "head": "9c48d965e19760e3f8c4734dff222e3f50047a57",
+      "verdict": "runner MERGE pending CI (bulk bar only)",
       "session": "session_01MMjhnBCyarPyutpaXadHCe"
     }
   },
