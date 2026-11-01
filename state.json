@@ -3280,5 +3280,13 @@
       "verdict": "runner MERGE pending CI",
       "session": "session_01MMjhnA1PYR1bubrPSKmbpg"
     }
-  }
+  },
+  "merged_log": [
+    {
+      "pr": 331,
+      "sha": "7607fb8f9d2ba300819994ea4a2332a53c4d854c",
+      "at": "2026-11-01T10:05Z",
+      "slice": "X-web-polish-1101c"
+    }
+  ]
 }
