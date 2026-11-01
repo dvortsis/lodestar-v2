@@ -6361,6 +6361,16 @@
               }
             }
           },
+          "500": {
+            "description": "`updates_not_saved`: `when: window` couldn't be saved, so nothing is queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "`updates_unavailable`: this process serves no update engine.",
             "content": {

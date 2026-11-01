@@ -12128,6 +12128,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `updates_not_saved`: `when: window` couldn't be saved, so nothing is queued. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `updates_unavailable`: this process serves no update engine. */
             503: {
                 headers: {
