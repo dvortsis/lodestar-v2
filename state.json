@@ -578,13 +578,13 @@
       "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture). | 02:45Z launched Sonnet. | 03:17Z PR #314 head c929a794 (audit; Settings smoke fixture; not-found state baselines). Runner MERGE. Marker in; after CI baselines (Settings + state-not-found only) author removes marker."
     },
     "H-zh": {
-      "status": "running",
+      "status": "pr-review",
       "model": "haiku",
       "session": "session_01MMjhn8pbNzRQPDMtoEPfEw",
-      "pr": null,
+      "pr": 315,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (§2.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file."
+      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (§2.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file. | 03:32Z PR #315 head dcea076a (473 filled; locale tests stubbed; Natural phrasing 1.75). Opus reviewer session_01MMjhnAxHndkhC8BH4gveMt (mechanical placeholder check + translation sample incl. all content-safety keys)."
     },
     "G-m5": {
       "status": "pending",
@@ -2442,7 +2442,8 @@
     "plan-1101": "02:15Z owner asked for build plan during soak re-run. Order: B-update-5 (Opus), analyzer corpus view, S-e2e, detail/t cuts -> S-filters-2c, H-zh. Hold E-v06-workers/companions until soak verdict; E-M6 rest after B-update-5. ~12 sessions/$60-90 next 31 h; offered 2-slot overnight cap.",
     "unraid-r2": "Re-run r2 started 2026-11-01T02:09:28Z; baseline ends 2026-11-02T08:39:28Z; then owner approves gluetun; then analyze_cr0.",
     "owner-plan-ok": "02:15Z owner chose 1: proceed with 4 slots and the build order; E-v06-workers/companions and E-M6 held.",
-    "tailwind-comments": "2026-11-01 (#309): a component word like \"card\" in a comment makes Tailwind emit daisyUI .card (+147 B CSS). Avoid daisyUI component names in comments; tests and scripts are excluded from scanning since #308."
+    "tailwind-comments": "2026-11-01 (#309): a component word like \"card\" in a comment makes Tailwind emit daisyUI .card (+147 B CSS). Avoid daisyUI component names in comments; tests and scripts are excluded from scanning since #308.",
+    "reviews-opus": "Reviews always run on Opus (CLAUDE.md delegation policy), even for translation/test slices."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
