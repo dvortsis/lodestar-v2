@@ -175,7 +175,7 @@
 
 <div
 	bind:this={host}
-	class="w-full"
+	class="w-full line-chart"
 	style:min-height="{height}px"
 	role="img"
 	aria-label={label}
@@ -183,3 +183,21 @@
 	data-ready={ready}
 	data-failed={failed}
 ></div>
+
+<style>
+	/* The legend keys series with a line swatch, not a checkbox square, and shows values only
+	   while the pointer is over the chart (the data table has them all). */
+	.line-chart :global(.u-legend .u-marker) {
+		width: calc(var(--spacing) * 4);
+		height: calc(var(--spacing) * 0.5);
+		border-width: 0;
+		border-radius: 0;
+		vertical-align: middle;
+	}
+	.line-chart:not(:hover) :global(.u-legend .u-value) {
+		visibility: hidden;
+	}
+	.line-chart:not(:hover) :global(.u-legend .u-series:first-child) {
+		visibility: hidden;
+	}
+</style>

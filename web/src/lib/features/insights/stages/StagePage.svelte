@@ -3,6 +3,7 @@
 	// drivers and tables. One component for the four stages that have a typed endpoint; the data
 	// mapping is in `model.ts`. The range and Compare come from the URL and are kept by every link.
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { api, isAbort, latest } from '$lib/api/client';
 	import DataTableAlternative from '$lib/charts/DataTableAlternative.svelte';
@@ -19,6 +20,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import ChartPanel from '../overview/ChartPanel.svelte';
 	import type { Route } from '../overview/href';
@@ -26,7 +28,14 @@
 	import ImportMarkers from '../overview/ImportMarkers.svelte';
 	import type { Annotation } from '../overview/imports';
 	import LinkedBars from '../overview/LinkedBars.svelte';
-	import { apiQuery, parseQuery, RANGES, searchFor, type InsightsQuery } from '../overview/query';
+	import {
+		apiQuery,
+		parseQuery,
+		RANGES,
+		searchFor,
+		type InsightsQuery,
+		type RangeId
+	} from '../overview/query';
 	import Skeleton from '../overview/Skeleton.svelte';
 	import '../overview/insights.css';
 	import {
@@ -210,6 +219,27 @@
 		if (!keep) return path + s;
 		return `${path}${s}${s ? '&' : '?'}reason=${encodeURIComponent(keep)}`;
 	};
+	const ranges = $derived(
+		RANGES.filter((r) => r !== 'custom' || query.range === 'custom').map((r) => ({
+			value: r,
+			label: rangeNames[r]?.() ?? r
+		}))
+	);
+	const rangeLink = (r: RangeId) =>
+		withContext(
+			`/insights/${stage}`,
+			{
+				...query,
+				range: r,
+				compare: r !== 'all' && query.compare,
+				from: query.from,
+				to: query.to
+			},
+			reason
+		);
+	const compareLink = $derived(
+		withContext(`/insights/${stage}`, { ...query, compare: !query.compare }, reason)
+	);
 	const overviewHref = $derived(withContext('/insights', query));
 	const stageLink = (s: Stage) => stageHref(s, query, { compare: true, reason: undefined });
 	const staleReason: Record<string, () => string> = {
@@ -278,41 +308,22 @@
 	</nav>
 
 	<div class="ins-row" data-testid="insights-stage-context">
-		<ul class="ins-row" aria-label={m.insights_overview_range_label()}>
-			{#each RANGES.filter((r) => r !== 'custom' || query.range === 'custom') as r (r)}
-				<li>
-					<a
-						class="ins-link"
-						href={resolve(
-							withContext(
-								`/insights/${stage}`,
-								{
-									...query,
-									range: r,
-									compare: r !== 'all' && query.compare,
-									from: query.from,
-									to: query.to
-								},
-								reason
-							) as Route
-						)}
-						aria-current={query.range === r ? 'true' : undefined}
-						data-testid="insights-range-{r}">{rangeNames[r]?.()}</a
-					>
-				</li>
-			{/each}
-		</ul>
+		<SegmentedControl
+			options={ranges}
+			value={query.range}
+			label={m.insights_overview_range_label()}
+			onchange={(r) => void goto(resolve(rangeLink(r as RangeId) as Route))}
+		/>
 		{#if query.range !== 'all'}
-			<a
-				class="ins-link"
-				href={resolve(
-					withContext(`/insights/${stage}`, { ...query, compare: !query.compare }, reason) as Route
-				)}
-				aria-current={query.compare ? 'true' : undefined}
+			<Button
+				variant={query.compare ? 'primary' : 'secondary'}
+				dense
+				aria-pressed={query.compare}
+				onclick={() => void goto(resolve(compareLink as Route))}
 				data-testid="insights-stage-compare"
-				>{m.insights_overview_compare()}:
-				{query.compare ? m.insights_stage_compare_on() : m.insights_stage_compare_off()}</a
 			>
+				{m.insights_overview_compare()}
+			</Button>
 		{/if}
 		{#if reason}
 			<a

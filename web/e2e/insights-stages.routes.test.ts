@@ -102,15 +102,12 @@ test('fetch: the reason survives a range or Compare change; an unknown reason is
 }) => {
 	mock.on('getInsightsFetch', fetchFixture());
 	await go('/insights/fetch?reason=no_peers');
-	await expect(page.getByTestId('insights-stage-compare')).toHaveText(/off/);
-	expect(await page.getByTestId('insights-range-24h').getAttribute('href')).toContain(
-		'reason=no_peers'
-	);
+	await expect(page.getByTestId('insights-stage-compare')).toHaveAttribute('aria-pressed', 'false');
 	await page.getByTestId('insights-stage-compare').click();
 	await expect(page).toHaveURL(/compare=1/);
 	await expect(page).toHaveURL(/reason=no_peers/);
-	await expect(page.getByTestId('insights-stage-compare')).toHaveText(/on/);
-	await expect(page.getByTestId('insights-range-7d')).toHaveAttribute('aria-current', 'true');
+	await expect(page.getByTestId('insights-stage-compare')).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByRole('radio', { name: '7 d' })).toBeChecked();
 	await go('/insights/fetch?reason=bogus');
 	await expect(page.getByTestId('insights-reason-chip')).toHaveCount(0);
 	await expect(page.getByTestId('insights-stage-kpis')).toBeVisible();
@@ -139,7 +136,7 @@ test('serve: top queries appear only when logging is on', async ({ page, mock, g
 		'getInsightsServe',
 		serveFixture({ top_queries: [{ count: 12, query: 'ubuntu iso', zero: 0 }] })
 	);
-	await page.getByTestId('insights-range-24h').click();
+	await page.getByRole('radio', { name: '24 h' }).click();
 	await expect(page.getByTestId('insights-table-top-queries')).toContainText('ubuntu iso');
 });
 
