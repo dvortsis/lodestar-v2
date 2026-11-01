@@ -1943,14 +1943,16 @@
       "merged_at": "2026-11-01T04:33Z"
     },
     "X-illustrations": {
-      "status": "fix round: Discover 45.07/45 KB on merge ref; runner \u00a72.26: limit 45 -> 45.2 KB, restore decoding=async",
+      "status": "merged",
       "session": "session_01MMjhnAwWQUyJub17EM9cTc",
       "model": "sonnet",
       "brief": "briefs/X-illustrations.md",
       "launched_at": "2026-11-01T03:53Z",
       "pr": 317,
       "head": "23f684b",
-      "review": "runner MERGE at 23f684b (decoding=async removal accepted \u00a72.26)"
+      "review": "runner MERGE at 23f684b (decoding=async removal accepted \u00a72.26)",
+      "merge_sha": "2e908cf1",
+      "merged_at": "2026-11-01T05:21Z"
     },
     "X-settings-polish": {
       "status": "review-ready",
