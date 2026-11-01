@@ -151,5 +151,21 @@
 	"settings_updates_adv_notify_after": "After an update",
 	"settings_updates_adv_notify_failure": "When an update fails or is rolled back",
 	"settings_updates_error_busy": "Another change is still being saved. Try again in a moment.",
-	"settings_updates_adv_switch_back": "Lodestar never goes back to an older version, so moving to {channel} waits for the next release on that channel."
+	"settings_updates_adv_switch_back": "Lodestar never goes back to an older version, so moving to {channel} waits for the next release on that channel.",
+	"settings_updates_install_now": "Install now",
+	"settings_updates_install_title": "Install {version}?",
+	"settings_updates_install_manual_body": "This release has manual steps. Read its release notes before you continue. Lodestar will download it, restart, and check that it works.",
+	"settings_updates_install_action": "Install",
+	"settings_updates_error_install": "The install didn't start. Nothing was changed.",
+	"settings_updates_error_install_unknown_version": "That version is no longer offered. Check for updates again.",
+	"settings_updates_error_install_version_skipped": "You skipped that version, so it can't be installed.",
+	"settings_updates_error_install_unavailable": "That version can't be installed right now: {reason}",
+	"settings_updates_error_install_manual_confirmation": "This release has manual steps. Confirm them first.",
+	"settings_updates_error_install_not_saved": "The install wasn't saved, so nothing was started.",
+	"settings_updates_install_reason_busy": "Another update is already running.",
+	"settings_updates_install_reason_not_candidate": "It isn't the release offered now.",
+	"settings_updates_install_reason_not_current": "The last check is out of date. Check now first.",
+	"settings_updates_install_reason_upgrade_path": "This release can't be reached from this version in one step.",
+	"settings_updates_install_reason_unknown": "The server gave no reason.",
+	"settings_updates_error_install_failed": "The install failed ({reason}). The running version carries on."
 }

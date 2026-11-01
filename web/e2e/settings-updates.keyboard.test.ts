@@ -117,9 +117,9 @@ test.describe('keyboard: Settings → Updates', () => {
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		on('getUpdates', () => ({ status: 200, body: status() }));
 		on('getSystem', () => ({ status: 200, body: { deployment: { kind: 'docker' } } }));
-		for (const op of ['checkUpdates', 'skipUpdate'])
+		for (const op of ['checkUpdates', 'skipUpdate', 'installUpdate'])
 			on(op, (r: { postDataJSON(): unknown }) => {
-				sent.push({ op, body: op === 'skipUpdate' ? r.postDataJSON() : null });
+				sent.push({ op, body: op === 'checkUpdates' ? null : r.postDataJSON() });
 				return { status: 200, body: status() };
 			});
 	});
@@ -158,6 +158,15 @@ test.describe('keyboard: Settings → Updates', () => {
 		await kbd.press('Enter');
 		await expect.poll(() => sent.map((s) => s.op)).toEqual(['checkUpdates', 'skipUpdate']);
 		expect(sent[1]?.body).toEqual({ version: '0.5.3' });
+	});
+
+	test('Install now by keyboard sends the version, now', async ({ page, go, kbd }) => {
+		await go('/settings/updates');
+		await kbd.tabTo(page.getByTestId('updates-install'), 200);
+		await expectNoA11yViolations(page);
+		await kbd.press('Enter');
+		await expect.poll(() => sent.map((s) => s.op)).toEqual(['installUpdate']);
+		expect(sent[0]?.body).toEqual({ version: '0.5.3', when: 'now', confirm_manual: false });
 	});
 
 	test('Advanced: the channel dialog by keyboard, Cancel sends nothing', async ({
