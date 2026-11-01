@@ -1,6 +1,6 @@
 /* The /t/[hash] page layout. Only that route imports it, so the drawer doesn't carry it. */
 .ls-detail-page {
-	max-width: var(--manuscript-width);
+	max-width: calc(var(--results-min-width) * 2);
 	margin-inline: auto;
 	padding: calc(var(--spacing) * 4);
 	display: flex;
@@ -19,4 +19,7 @@
 	line-height: var(--text-title--line-height);
 	font-weight: var(--font-weight-semibold);
 	overflow-wrap: anywhere;
+}
+.ls-detail-page > header {
+	max-width: var(--manuscript-width);
 }

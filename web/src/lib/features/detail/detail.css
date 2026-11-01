@@ -45,7 +45,8 @@
 	gap: calc(var(--spacing) * 2);
 }
 .ls-detail-tree {
-	height: calc(var(--row-height-compact) * 10);
+	/* Rows × row height up to a cap of 10 (--ls-tree-rows); the tree virtualises beyond it. */
+	height: calc(var(--row-height-compact) * var(--ls-tree-rows, 10) + 2px);
 	border: var(--border) solid var(--color-base-300);
 	border-radius: var(--radius-field);
 }

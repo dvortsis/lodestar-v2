@@ -9,7 +9,7 @@
 	import IconWarning from '~icons/ph/warning';
 	import IconOffline from '~icons/ph/wifi-slash';
 	import IconUnknown from '~icons/ph/circle-dashed';
-	import IconConnecting from '~icons/ph/dots-three';
+	import IconConnecting from '~icons/ph/circle-notch';
 	import IconStarting from '~icons/ph/hourglass-medium';
 	import IconStalled from '~icons/ph/warning-octagon';
 	import { resolve } from '$app/paths';

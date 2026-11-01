@@ -222,6 +222,7 @@
 	data-testid="detail-file-tree"
 	data-tree-worker={useWorker ? 'true' : 'false'}
 	aria-busy={loading}
+	style:--ls-tree-rows={Math.min(nodes.length, 10)}
 >
 	<div class="ls-detail-row">
 		<div class="ls-detail-grow">
