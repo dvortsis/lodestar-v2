@@ -1874,6 +1874,15 @@
       "attempt": 1,
       "review_rounds": 0,
       "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus."
+    },
+    "X-stale-tab": {
+      "status": "launching",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2692,7 +2701,6 @@
     }
   },
   "followups": [
-    "App-wide stale-tab check (from S-about): compare UI build id vs server on every page load (app shell), offer reload; About-only check can't fire after upgrade because its chunk is gone. Shell slice (Sonnet ok, Opus review). Coordinate with #296's version name.",
     "2026-10-30T07:18Z Default DHT bind is IPv4-only; NAT64/IPv6-only hosts need [::] (from CR-0f)",
     "CR-0d: optional state volume for the witness, only at a path outside the backed-up appdata (snapshot backups roll back witness + data together)",
     "cr0-soak.ps1: record settings.leg and settings.rehearsal if a Windows run must ever count as gate evidence (CR-COL-2 decision) [runner 20:15Z: not triggered; Windows runs stay non-gate per CR-COL-2, and test_windows_run_with_the_real_settings_shape pins it. Do only if the owner makes a Windows run gate evidence.]",
