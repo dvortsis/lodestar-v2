@@ -7,10 +7,14 @@ import { mount, unmount } from 'svelte';
 const UNMOUNT_MS = 400;
 
 const open = new Set<() => void>();
+/** Closed reveals still waiting out `UNMOUNT_MS`: each unmounts now, or when its timer fires. */
+const closing = new Set<() => void>();
 
-/** Closes every open reveal, its secret with it (the screen unmounted). */
+/** Closes every open reveal, its secret with it (the screen unmounted), and removes the ones
+ * already closed but still waiting to unmount, so no timer outlives the screen. */
 export function dismissReveals(): void {
 	for (const close of [...open]) close();
+	for (const flush of [...closing]) flush();
 }
 
 /** Loads the dialog. Call it before asking for the password: if it can't load, nothing is sent,
@@ -34,7 +38,13 @@ export async function revealSecret(name: string, secret: string): Promise<void> 
 				onclose: () => {
 					if (!open.delete(dismiss)) return;
 					resolve();
-					setTimeout(() => void unmount(app), UNMOUNT_MS);
+					const flush = () => {
+						clearTimeout(timer);
+						closing.delete(flush);
+						void unmount(app);
+					};
+					const timer = setTimeout(flush, UNMOUNT_MS);
+					closing.add(flush);
 				}
 			}
 		});
