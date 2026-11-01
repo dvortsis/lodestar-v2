@@ -1,9 +1,8 @@
 <script module lang="ts">
 	import { results } from './results.svelte';
-	// A rule was added by "Block this…" (here or in the drawer, which fires `ls-stale`): refetch, so
-	// a hidden torrent drops. With no query yet `reload` makes no request.
-	if (typeof addEventListener === 'function')
-		addEventListener('ls-stale', () => void results.reload());
+	// A rule was added by "Block this…" in the drawer, which fires `ls-stale` (the row's own dialog reloads when it closes): refetch, so
+	// a hidden torrent drops. Not on /t, where no list is mounted.
+	addEventListener('ls-stale', () => location.pathname.startsWith('/t/') || results.reload());
 </script>
 
 <script lang="ts">
@@ -56,6 +55,8 @@
 	// adds a rule, previewed first, for this row's hash and the name the row shows.
 	let Block = $state.raw<typeof import('$lib/features/filters/flows-root').BlockThisDialog>();
 	let blocking = $state(false);
+	// Refetch only once the dialog closes: the hidden row (and this dialog) goes with the reload.
+	let applied = false;
 
 	async function select(id: string) {
 		if (id === 'block')
@@ -135,6 +136,7 @@
 	<Block
 		torrent={{ hash: hit.hash, hash_v2: hit.hash_v2, name: hit.name }}
 		bind:open={blocking}
-		onapplied={() => dispatchEvent(new Event('ls-stale'))}
+		onapplied={() => (applied = true)}
+		onclose={() => applied && results.reload()}
 	/>
 {/if}

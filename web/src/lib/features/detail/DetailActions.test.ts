@@ -7,9 +7,10 @@ import DetailActions from './DetailActions.svelte';
 const copyMagnet = vi.hoisted(() => vi.fn());
 const sendHash = vi.hoisted(() => vi.fn());
 const client = vi.hoisted(() => ({ name: null as string | null }));
+const label = vi.hoisted(() => vi.fn());
 vi.mock('./magnet', () => ({ copyMagnet }));
 vi.mock('./send', () => ({
-	sendLabel: async () => client.name && `Send to ${client.name}`,
+	sendLabel: async (fresh?: boolean) => (label(fresh), client.name && `Send to ${client.name}`),
 	sendHash
 }));
 
@@ -54,6 +55,7 @@ describe('Send to the client', () => {
 		const button = await screen.findByTestId('detail-send');
 		expect(button.textContent?.trim()).toBe('Send to qBittorrent');
 		expect(screen.getByTestId('detail-copy-magnet')).toBeTruthy();
+		expect(label).toHaveBeenCalledWith(true); // re-read, not the session cache
 		button.click();
 		await vi.waitFor(() => expect(sendHash).toHaveBeenCalledExactlyOnceWith(detail.hash), {
 			timeout: 10_000

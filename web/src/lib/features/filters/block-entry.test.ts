@@ -115,7 +115,7 @@ describe.each(Object.entries(entries))('Block this… from %s', (_, entry) => {
 		expect(net.to('/filters/apply')).toEqual([]);
 	});
 
-	it('a successful apply refetches the list so the hidden torrent drops; Cancel or refusal does not', async () => {
+	it('a successful apply refetches the list so the hidden torrent drops; Cancel does not', async () => {
 		const reload = vi.spyOn(results, 'reload').mockResolvedValue();
 		await open('Lantern.Keeper.1');
 		await opened();
@@ -128,6 +128,7 @@ describe.each(Object.entries(entries))('Block this… from %s', (_, entry) => {
 		await waitFor(() => expect(dialogState()).toBe('review'));
 		await fireEvent.click(screen.getByTestId('change-apply'));
 		await waitFor(() => expect(dialogState()).toBe('done'));
+		await fireEvent.click(screen.getByTestId('change-cancel'));
 		await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
 		reload.mockRestore();
 	});
@@ -174,4 +175,20 @@ it('the drawer closes the dialog when its torrent stops being the one shown', as
 	clearDetailCaches(false); // visibility changed, e.g. "Show adult content" turned off
 	await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 	expect(changes()).toEqual([]);
+});
+
+it('a refused apply does not refetch the list', async () => {
+	net.error('POST /filters/apply', 500, 'internal', { message: 'The rule store is locked.' });
+	const reload = vi.spyOn(results, 'reload').mockResolvedValue();
+	entries['a result'].mount('Lantern.Keeper.1');
+	await entries['a result'].press();
+	await opened();
+	await fireEvent.click(screen.getByTestId('block-preview'));
+	await waitFor(() => expect(dialogState()).toBe('review'));
+	await fireEvent.click(screen.getByTestId('change-apply'));
+	await waitFor(() => expect(dialogState()).toBe('failed'));
+	await fireEvent.click(screen.getByTestId('change-cancel'));
+	await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+	expect(reload).not.toHaveBeenCalled();
+	reload.mockRestore();
 });
