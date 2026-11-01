@@ -3205,6 +3205,10 @@
     {
       "t": "2026-11-01T17:16Z",
       "event": "FX-5 second size ruling: /t 21.14 KB, Detail sections 37.52 KB (review fixes)."
+    },
+    {
+      "t": "2026-11-01T17:21Z",
+      "event": "merged #343 FX-2 (5205ecad); archived FX-2; launched FX-6-I9 (Opus, query printer IEC sizes; stop-and-report if canonical text is persisted/compared). Global coarse rule now on main: coarse-copy follow-up (DiscoverPage, row.css, FileDiff, SettingsShell, SaveBar, AlertsListPage) unblocked once FX-4/FX-5 merge."
     }
   ],
   "reviews": {
