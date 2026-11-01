@@ -43,9 +43,5 @@ export function isActive(destination: Destination, pathname: string): boolean {
 	return pathname === root || pathname.startsWith(root + '/');
 }
 
-/** Density is URL state (§10.3): keep it when moving between destinations. */
-export function withDensity(href: string, search: URLSearchParams): string {
-	const density = search.get('density');
-	if (!density) return href;
-	return `${href}${href.includes('?') ? '&' : '?'}density=${encodeURIComponent(density)}`;
-}
+// Density in links lives in density.ts, so link-only pages don't load this table (X-alert-search-headroom).
+export { withDensity } from './density';

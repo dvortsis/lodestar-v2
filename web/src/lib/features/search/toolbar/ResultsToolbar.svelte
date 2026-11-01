@@ -64,7 +64,8 @@
 	async function save() {
 		saving = true;
 		try {
-			Dialog ??= (await import('$lib/features/alerts/SaveSearchDialog.svelte')).default;
+			// Two hops on purpose: save-dialog.ts holds the dialog's preload list (see that file).
+			Dialog ??= (await (await import('./save-dialog')).load()).default;
 			open = true;
 		} catch {
 			// The dialog's chunk didn't load (offline, or a new version replaced it): say so.
