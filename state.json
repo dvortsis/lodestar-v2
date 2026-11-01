@@ -3080,6 +3080,16 @@
       "status": "asked",
       "text": "r2 soak stopped early (host event suspected). Runner recommends: find cause, disable it, fresh r3 on rc.2 (~30.5 h). Owner says 'start r3'.",
       "at": "2026-11-01T14:58Z"
+    },
+    {
+      "id": "flag-341-percolator-first",
+      "status": "to-send",
+      "text": "§2.19 (#341 X-file-clause-cold): alert runs' file-clause scans now stop under the run's token/budget, except the run's first search, which always completes (as the main scan already did). Cold broad file clause at 1M: 95.75 -> 53.3 ms p95 (§3: 150)."
+    },
+    {
+      "id": "q-file-size-bucket",
+      "status": "to-send",
+      "text": "FORMAT QUESTION (later, at the 10M pilot): to keep cold file-size searches under §3's 150 ms at 10M (projected ~600 ms today) and with 4 concurrent cold queries, index a size bucket in the file index: ~30-45 MB at 1M, ~300-450 MB at 10M, rebuild via SCHEMA_VERSION bump with the old index serving read-only. Runner will measure at 10M first; no action now."
     }
   ],
   "external_gates": {
@@ -3349,8 +3359,8 @@
     },
     "341": {
       "slice": "X-file-clause-cold",
-      "head": "767a077",
-      "verdict": "awaiting final push, then review",
+      "head": "c62dbe8c02e42fddd86c69ddd2aea65506b82cf0",
+      "verdict": "runner MERGE pending CI; 1M cold broad p95 95.75->53.3 ms",
       "session": "session_01MMjhnCgGvjvQEZp75TiWKa"
     },
     "343": {
@@ -3526,6 +3536,11 @@
       "id": "coarse-cleanup",
       "what": "After FX-2 merges: delete per-feature pointer:coarse copies in DiscoverPage.svelte, search/results/row.css, compare/FileDiff.svelte (FX-1 left them), plus SettingsShell/SaveBar (FX-4) and insights.css (FX-6) if those batches can't.",
       "at": "2026-11-01T15:00Z"
+    },
+    {
+      "id": "bench-nrt-reuse",
+      "what": "search-bench reusing --dir fails only NRT ('live indexer never indexed a new torrent'): likely bench reuse bug (from #341); give to bench owner after G-m5a",
+      "at": "2026-11-01T15:16Z"
     }
   ],
   "soak_r2": {
