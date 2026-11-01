@@ -6,45 +6,16 @@
 #![cfg(all(unix, feature = "fixture"))]
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, Read, Write};
-use std::net::TcpStream;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 use lodestar_bench::fixture as data;
 use serde_json::Value;
 
-const PASSWORD: &str = "correct horse battery";
-
 mod common;
+mod fixture_server;
 
-fn request(port: u16, head: &str, body: &str) -> Option<String> {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    s.set_read_timeout(Some(Duration::from_secs(30))).ok()?;
-    write!(
-        s,
-        "{head}\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
-        body.len()
-    )
-    .ok()?;
-    let mut out = String::new();
-    s.read_to_string(&mut out).ok()?;
-    Some(out)
-}
-
-/// A request's JSON body; panics unless it's a 200.
-fn json(port: u16, path: &str, cookie: &str) -> Value {
-    let r = request(
-        port,
-        &format!("GET {path} HTTP/1.0\r\nCookie: {cookie}"),
-        "",
-    )
-    .unwrap();
-    assert!(r.starts_with("HTTP/1.0 200"), "{path}: {r}");
-    let body = r.split_once("\r\n\r\n").unwrap().1;
-    serde_json::from_str(body).unwrap_or_else(|e| panic!("{path}: {e}: {body}"))
-}
+use fixture_server::{PASSWORD, json, request, spawn};
 
 /// Percent-encodes a query value.
 fn enc(s: &str) -> String {
@@ -54,107 +25,6 @@ fn enc(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
-}
-
-/// A running `serve --fixture`, with its log collected. `port` is known
-/// once [`ready`](Server::ready) has seen its `app.serving` line.
-struct Server {
-    child: Child,
-    port: u16,
-    ports: std::sync::mpsc::Receiver<u16>,
-    log: std::thread::JoinHandle<String>,
-}
-
-fn spawn(args: &[&str], env: &[(&str, &str)]) -> Server {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lodestar"));
-    cmd.arg("serve")
-        .args(args)
-        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-        .env("LODESTAR_LOG", "info")
-        .env_remove("LODESTAR_DATA_DIR")
-        .env_remove("LODESTAR_SHOW_ADULT")
-        .env_remove("LODESTAR_FIXTURE_PASSWORD");
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let mut child = cmd
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let (port_tx, ports) = std::sync::mpsc::channel();
-    let log = std::thread::spawn(move || {
-        let mut all = String::new();
-        for line in std::io::BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-        {
-            if let Some(port) = common::serving_port(&line) {
-                let _ = port_tx.send(port);
-            }
-            all.push_str(&line);
-            all.push('\n');
-        }
-        all
-    });
-    Server {
-        child,
-        port: 0,
-        ports,
-        log,
-    }
-}
-
-impl Server {
-    /// Waits for `/healthz` (the first start builds the fixture).
-    fn ready(&mut self) {
-        let start = Instant::now();
-        loop {
-            if self.port == 0 {
-                self.port = self.ports.try_recv().unwrap_or(0);
-            }
-            if self.port != 0
-                && let Some(r) = request(self.port, "GET /healthz HTTP/1.0", "")
-            {
-                assert!(r.starts_with("HTTP/1.0 200"), "{r}");
-                return;
-            }
-            if let Some(exit) = self.child.try_wait().unwrap() {
-                panic!("exited {exit:?}");
-            }
-            assert!(start.elapsed() < Duration::from_secs(180), "didn't come up");
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-
-    fn login(&self) -> String {
-        let r = request(
-            self.port,
-            "POST /api/v1/login HTTP/1.0\r\nContent-Type: application/json",
-            &format!(r#"{{"password":"{PASSWORD}"}}"#),
-        )
-        .unwrap();
-        assert!(r.starts_with("HTTP/1.0 200"), "{r}");
-        r.lines()
-            .find_map(|l| l.strip_prefix("set-cookie: "))
-            .and_then(|c| c.split(';').next())
-            .expect("session cookie")
-            .to_string()
-    }
-
-    /// SIGTERM; returns the log after a clean exit.
-    fn stop(mut self) -> String {
-        let killed = Command::new("kill")
-            .args(["-TERM", &self.child.id().to_string()])
-            .status()
-            .unwrap();
-        assert!(killed.success());
-        let exit = self.child.wait().unwrap();
-        let log = self.log.join().unwrap();
-        assert!(exit.success(), "exit {exit:?}: {log}");
-        log
-    }
 }
 
 fn manifest(dir: &Path) -> Value {

@@ -206,7 +206,7 @@
 		</h2>
 		<p class="text-muted-text">
 			{channel}{#if b.date !== null}
-				· {m.settings_about_released({ date: formatDateTime(b.date, locale) })}{/if}
+				&nbsp;· {m.settings_about_released({ date: formatDateTime(b.date, locale) })}{/if}
 		</p>
 		<dl class="flex flex-col gap-1">
 			{#if b.commit}

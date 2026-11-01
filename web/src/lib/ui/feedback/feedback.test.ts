@@ -61,6 +61,20 @@ describe('EmptyState', () => {
 		expect(screen.getByTestId('art').parentElement!.getAttribute('aria-hidden')).toBe('true');
 	});
 
+	it('puts the copy and the action before the art in the DOM (§10.19)', () => {
+		const { container } = render(EmptyState, {
+			title: 'T',
+			action: html('<button>Go</button>'),
+			illustration: html('<svg data-testid="art"></svg>')
+		});
+		const copy = container.querySelector('h2')!;
+		const art = screen.getByTestId('art');
+		expect(copy.compareDocumentPosition(art) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(
+			screen.getByRole('button').compareDocumentPosition(art) & Node.DOCUMENT_POSITION_FOLLOWING
+		).toBeTruthy();
+	});
+
 	it('heading level is configurable; illustration and action are optional', () => {
 		render(EmptyState, { title: 'Nothing', headingLevel: 3 });
 		expect(screen.getByRole('heading', { level: 3 })).toBeTruthy();

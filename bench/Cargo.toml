@@ -22,5 +22,13 @@ rand_chacha = "0.10.0"
 tempfile = "3.27.0"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time"] }
 
+# `examples/reporting-overhead.rs` drives the API's router in process. As
+# dev-dependencies they stay out of the bench gates' change detection
+# (`.github/scripts/ci_changes.py`), so an API change doesn't start them.
+[dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "matched-path"] }
+lodestar-api.workspace = true
+tower = { version = "0.5.3", features = ["util"] }
+
 [lints]
 workspace = true

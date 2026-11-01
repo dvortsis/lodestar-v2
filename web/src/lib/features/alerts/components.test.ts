@@ -169,11 +169,11 @@ describe('the list page', () => {
 		expect(screen.queryByRole('table')).toBeNull();
 		expect(screen.getByTestId('alerts-stack')).toBeTruthy();
 	});
-	it('offers one next step when there are no saved searches', async () => {
+	it('offers one next step (the header button) when there are no saved searches', async () => {
 		api.listSavedSearches.mockResolvedValue([]);
 		render(AlertsListPage);
 		await screen.findByRole('heading', { level: 2, name: 'No saved searches yet' });
-		expect(screen.getAllByRole('button', { name: 'New alert' })).toHaveLength(2);
+		expect(screen.getAllByRole('button', { name: 'New alert' })).toHaveLength(1);
 	});
 	it('keeps the rows and shows a Retry when a refresh fails', async () => {
 		api.listSavedSearches.mockResolvedValueOnce(three);

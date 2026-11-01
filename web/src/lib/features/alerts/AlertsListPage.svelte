@@ -150,9 +150,6 @@
 	{:else if list.items && list.items.length === 0}
 		<EmptyState title={m.alerts_empty_title()} text={m.alerts_empty_text()}>
 			{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
-			{#snippet action()}
-				<Button variant="primary" onclick={openCreate}>{m.alerts_new()}</Button>
-			{/snippet}
 		</EmptyState>
 	{:else if list.items}
 		{#snippet name(s: SavedSearch)}
@@ -187,7 +184,7 @@
 		{/snippet}
 		{#snippet status(s: SavedSearch)}
 			{#if s.paused}
-				<Badge variant="warning"
+				<Badge
 					><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
 						data-testid="alerts-paused-{s.id}">{m.alerts_paused()}</span
 					></Badge

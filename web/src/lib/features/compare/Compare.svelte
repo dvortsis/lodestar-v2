@@ -9,6 +9,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import StateScene from '$lib/shell/StateScene.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import EmptyState from '$lib/ui/feedback/EmptyState.svelte';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -206,20 +207,18 @@
 
 	<div aria-busy={busy || (data !== undefined && !Body)} data-testid="compare-region">
 		{#if hashes.length < 2}
-			<!-- EmptyState's <svelte:element> would add ~0.4 KB to the runtime every page loads (§10.1
-				headroom), so this is its markup, written out. TODO(runner): switch back once it is cheap. -->
-			<div class="flex flex-col items-center gap-4 p-6 text-center" data-testid="compare-choose">
-				<div class="h-(--art-height-small) large:h-(--art-height-large)" aria-hidden="true">
-					<StateScene id="empty_state_explore" />
-				</div>
-				<div class="flex max-w-(--prose-measure) flex-col gap-1">
-					<h2 class="text-title font-semibold">{m.compare_choose_title()}</h2>
-					<p class="text-body text-muted-text">{m.compare_choose_text()}</p>
-				</div>
-				<a href={resolve('/search')} class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
-					>{m.compare_go_to_search()}</a
-				>
-			</div>
+			<EmptyState
+				title={m.compare_choose_title()}
+				text={m.compare_choose_text()}
+				data-testid="compare-choose"
+			>
+				{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
+				{#snippet action()}
+					<a href={resolve('/search')} class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
+						>{m.compare_go_to_search()}</a
+					>
+				{/snippet}
+			</EmptyState>
 		{:else if failure === 'fixable'}
 			<ErrorPanel
 				testid="compare-error-{error?.code}"
