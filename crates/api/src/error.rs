@@ -27,6 +27,8 @@ pub struct ApiError {
     message: Cow<'static, str>,
     field: Option<Cow<'static, str>>,
     span: Option<(usize, usize)>,
+    /// A stable code for the cause, when `code` has several.
+    reason: Option<&'static str>,
     /// Top-level keys beside `error` (keep these rare).
     setup_required: Option<bool>,
     assessment: Option<Box<Assessment>>,
@@ -53,6 +55,7 @@ impl ApiError {
             message: message.into(),
             field: None,
             span: None,
+            reason: None,
             setup_required: None,
             assessment: None,
         }
@@ -71,6 +74,13 @@ impl ApiError {
     /// The byte span of the fault within `field`.
     pub fn span(mut self, start: usize, end: usize) -> ApiError {
         self.span = Some((start, end));
+        self
+    }
+
+    /// The cause as a stable snake_case code (`error.reason`), for a
+    /// `code` with several; the message names it too.
+    pub fn reason(mut self, reason: &'static str) -> ApiError {
+        self.reason = Some(reason);
         self
     }
 
@@ -103,6 +113,7 @@ impl ApiError {
             end: self.span.map(|(_, end)| end),
             field: self.field.as_deref().map(str::to_string),
             message: self.message.to_string(),
+            reason: self.reason.map(str::to_string),
             start: self.span.map(|(start, _)| start),
         }
     }

@@ -69,7 +69,7 @@ use super::log_events::{
 };
 use super::policy::{self, Block, Reason, Refusal};
 use super::window::{When, Window};
-use super::{download, history, install, layout, pending, trust_file};
+use super::{download, history, install, journal, layout, pending, trust_file};
 use crate::settings::updates::{Mode, Updates};
 
 /// Between scheduled checks, before the random minute.
@@ -233,6 +233,9 @@ pub struct Installer {
     pub verify: Verify,
     /// A restart (or shutdown) has been asked for: nothing starts now.
     pub restarting: Box<dyn Fn() -> bool + Send + Sync>,
+    /// Asks for the rollback to the previous version (the torrents it
+    /// loses, when counted): the intent, then the graceful shutdown.
+    pub rollback: Box<dyn Fn(Option<u64>) + Send + Sync>,
 }
 
 impl Installer {
@@ -257,6 +260,7 @@ impl Installer {
                 .or_else(|| lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET"))),
             verify: Box::new(|bin, v| super::overlay::verify(bin, v).is_ok()),
             restarting: Box::new(|| crate::system::Restart::global().was_requested()),
+            rollback: Box::new(super::control::request_rollback),
         }
     }
 }
@@ -1050,20 +1054,88 @@ impl Engine {
         })
     }
 
-    /// Roll back arrives with installing (part 5); until then it's never
-    /// offered, though where it would go is shown.
+    /// Whether Roll back is offered now, why not, and where it goes.
     fn rollback(&self) -> RollbackInfo {
-        let active: Option<pending::Active> = self
-            .inner
-            .bin
-            .as_ref()
-            .and_then(|b| b.read("active").ok().flatten())
-            .filter(|a: &pending::Active| a.version == self.inner.ctx.running.to_string());
+        let active = self.active();
+        let reason = match self.rollback_target() {
+            // A check or an install holds the lock: it waits for that.
+            Ok(_) if self.inner.checking.try_lock().is_err() => Some("busy"),
+            Ok(_) => None,
+            Err(r) => Some(r),
+        };
         RollbackInfo {
-            available: false,
+            available: reason.is_none(),
+            reason: reason.map(str::to_string),
             to_version: active.map(|a| a.previous),
             lost_torrents: super::probation::current().and_then(|c| c.lost_torrents()),
         }
+    }
+
+    /// `active`, when it names the running version (the one Roll back
+    /// rolls back).
+    fn active(&self) -> Option<pending::Active> {
+        self.inner
+            .bin
+            .as_ref()
+            .and_then(|b| b.read("active").ok().flatten())
+            .filter(|a: &pending::Active| a.version == self.inner.ctx.running.to_string())
+    }
+
+    /// What Roll back would roll back (`active`), or why it can't now:
+    /// the checks before the supervisor's own (step 2 of the journal,
+    /// which verifies the snapshot and can still refuse).
+    fn rollback_target(&self) -> Result<pending::Active, &'static str> {
+        let ctx = &self.inner.ctx;
+        if !ctx.supervised {
+            return Err("not_supervised");
+        }
+        if self.inner.settings.borrow().mode == Mode::Image {
+            return Err("image_mode");
+        }
+        if self.switching() {
+            return Err("busy");
+        }
+        let bin = self.inner.bin.as_ref().ok_or("no_previous_version")?;
+        let active = self.active().ok_or("no_previous_version")?;
+        let jctx = journal::Ctx {
+            bin: bin.clone(),
+            db: ctx.db.clone(),
+            index_root: ctx.data_dir.join("index"),
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            image_version: ctx.image.to_string(),
+        };
+        if !journal::kept(&jctx, &active.version) {
+            return Err("snapshot_missing");
+        }
+        Ok(active)
+    }
+
+    /// `POST /updates/rollback`: takes the one-check lock for the rest of
+    /// the process (nothing checks or installs before the restart), then
+    /// asks for the rollback; the supervisor runs the journal after the
+    /// graceful shutdown. Refused while a check or an install holds the
+    /// lock, or a restart was asked for (`busy`).
+    pub async fn rollback_request(&self) -> Result<UpdatesStatus, UpdatesError> {
+        let e = self.clone();
+        blocking(move || e.rollback_target())
+            .await
+            .map_err(UpdatesError::RollbackUnavailable)?;
+        let Ok(one) = self.inner.checking.clone().try_lock_owned() else {
+            return Err(UpdatesError::RollbackUnavailable("busy"));
+        };
+        // Again with the lock held: an install may have asked for its
+        // switch meanwhile.
+        let e = self.clone();
+        let active = blocking(move || e.rollback_target())
+            .await
+            .map_err(UpdatesError::RollbackUnavailable)?;
+        *lock(&self.inner.switching) = Some(one);
+        self.publish(UpdatesState::Restarting, Some(active.previous), None);
+        (self.inner.installer.rollback)(
+            super::probation::current().and_then(|c| c.lost_torrents()),
+        );
+        let e = self.clone();
+        Ok(blocking(move || e.status()).await)
     }
 
     /// A manual check, at most once a minute and one at a time.
@@ -1630,6 +1702,10 @@ impl UpdatesApi for Engine {
         let e = self.clone();
         Box::pin(blocking(move || e.clear_history()))
     }
+
+    fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(self.rollback_request())
+    }
 }
 
 #[cfg(test)]
@@ -1669,6 +1745,8 @@ mod tests {
         busy: Arc<Mutex<Option<&'static str>>>,
         /// The versions a switch was asked for.
         switched: Arc<Mutex<Vec<String>>>,
+        /// The rollbacks asked for (the torrents each loses).
+        rollbacks: Arc<Mutex<Vec<Option<u64>>>>,
         /// Runs when a staged overlay is verified; its result is the
         /// verification's when `Some(false)` (a failure) is returned.
         on_verify: Arc<Mutex<VerifyHook>>,
@@ -1714,7 +1792,9 @@ mod tests {
         let downloads = Arc::new(super::super::download::tests::Fake::default());
         let busy = Arc::new(Mutex::new(None));
         let switched = Arc::new(Mutex::new(Vec::new()));
+        let rollbacks = Arc::new(Mutex::new(Vec::new()));
         let (b, sw, verify_keys) = (busy.clone(), switched.clone(), trust.clone());
+        let rb = rollbacks.clone();
         let on_verify: Arc<Mutex<VerifyHook>> = Arc::new(Mutex::new(Box::new(|| None)));
         let hook_verify = on_verify.clone();
         let installer = Installer {
@@ -1748,6 +1828,7 @@ mod tests {
                 .is_ok()
             }),
             restarting: Box::new(|| false),
+            rollback: Box::new(move |lost| lock(&rb).push(lost)),
         };
         let engine = Engine::with(
             Context {
@@ -1786,6 +1867,7 @@ mod tests {
             downloads,
             busy,
             switched,
+            rollbacks,
             on_verify,
             engine,
         }
@@ -2611,6 +2693,306 @@ mod tests {
             std::fs::metadata(&staged).unwrap().modified().unwrap(),
             before
         );
+    }
+
+    /// `<data>/bin`'s entries (names), sorted.
+    fn bin_names(e: &Env) -> Vec<String> {
+        let mut n: Vec<_> = std::fs::read_dir(e.bin())
+            .unwrap()
+            .map(|d| d.unwrap().file_name().into_string().unwrap())
+            .collect();
+        n.sort();
+        n
+    }
+
+    /// The path `version`'s artifact is served at.
+    fn artifact_path(version: &str) -> String {
+        format!("/dvortsis/lodestar-v2/releases/download/v{version}/lodestar")
+    }
+
+    /// The release source over real HTTP on loopback (the allowlist sees
+    /// the signed GitHub URLs): a wrong hash, a wrong size, an oversized
+    /// body and another target's artifact each fail with their stable
+    /// code and leave nothing in `<data>/bin` (no `.part`, `.tmp` or
+    /// overlay); then the right bytes install.
+    #[tokio::test]
+    async fn a_loopback_source_refuses_each_bad_artifact_and_leaves_nothing() {
+        let e = env(Mode::Notify);
+        // The release also ships an aarch64 binary, pinned at its own URL.
+        let arm: &[u8] = b"arm64!";
+        e.serve_with(NOW - 100, "0.6.0", None, |m| {
+            let mut other = m["releases"][0]["artifacts"][0].clone();
+            other["target"] = "aarch64-unknown-linux-musl".into();
+            other["url"] = (artifact("0.6.0") + "-arm64").into();
+            other["sha256"] = lodestar_update::Sha256::of(arm).to_hex().into();
+            m["releases"][0]["artifacts"]
+                .as_array_mut()
+                .unwrap()
+                .push(other);
+        });
+        let server = super::super::download::tests::Loopback::start().await;
+        *lock(&e.downloads.forward) = Some(server.base.clone());
+        e.engine.run_check().await.unwrap();
+        // `Bin::open` made it; the check wrote its trust state.
+        let clean = bin_names(&e);
+        let path = artifact_path("0.6.0");
+        for (what, body, code) in [
+            ("a wrong hash", b"binarY".to_vec(), "download_mismatch"),
+            ("a wrong size", b"binar".to_vec(), "download_mismatch"),
+            ("oversized", vec![0u8; 100_000], "download_too_large"),
+            ("another target's", arm.to_vec(), "download_mismatch"),
+        ] {
+            server.serve(&path, 200, None, &body);
+            lock(&e.events).clear();
+            e.engine
+                .install_request("0.6.0", InstallWhen::Now, false)
+                .await
+                .unwrap();
+            e.until(what, |e| e.states().contains(&UpdatesState::Failed))
+                .await;
+            let failed = lock(&e.events).last().cloned().unwrap();
+            assert_eq!(failed.error.as_deref(), Some(code), "{what}");
+            assert_eq!(bin_names(&e), clean, "{what}: nothing left in bin");
+            assert!(e.switched().is_empty(), "{what}");
+        }
+        server.serve(&path, 200, None, BINARY);
+        lock(&e.events).clear();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("switched", |e| !e.switched().is_empty()).await;
+        // It went over HTTP, with the updater's request and nothing more.
+        let heads = server.heads.lock().unwrap().clone();
+        assert_eq!(heads.len(), 5, "{heads:?}");
+        for h in &heads {
+            assert!(h.starts_with(&format!("GET {path} HTTP/1.1")), "{h}");
+            assert!(h.contains("Lodestar-Updater"), "{h}");
+            assert!(!h.to_ascii_lowercase().contains("cookie"), "{h}");
+        }
+    }
+
+    /// A manifest with no artifact for this build's target installs
+    /// nothing and downloads nothing.
+    #[tokio::test]
+    async fn a_release_for_another_target_only_is_refused_before_the_download() {
+        let e = env(Mode::Notify);
+        e.serve_with(NOW - 100, "0.6.0", None, |m| {
+            m["releases"][0]["artifacts"][0]["target"] = "aarch64-unknown-linux-musl".into();
+        });
+        e.engine.run_check().await.unwrap();
+        let clean = bin_names(&e);
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
+            .await;
+        let failed = lock(&e.events).last().cloned().unwrap();
+        assert_eq!(failed.error.as_deref(), Some("no_artifact"));
+        assert!(e.downloads.asked.lock().unwrap().is_empty());
+        assert_eq!(bin_names(&e), clean);
+    }
+
+    /// The log over a whole install against the loopback source, through a
+    /// redirect whose URL carries a credential: the catalogue's events by
+    /// name (`update.available` at the check; `update.install_failed` with
+    /// its code only for the failed attempt), and no URL, host, query or
+    /// credential anywhere.
+    #[tokio::test]
+    async fn the_log_over_an_install_names_events_and_never_urls() {
+        crate::test_log::install();
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        let server = super::super::download::tests::Loopback::start().await;
+        *lock(&e.downloads.forward) = Some(server.base.clone());
+        let path = artifact_path("0.6.0");
+        let asset = "/zq7asset/lodestar?sig=Zq7InstallSecret&X-Amz-Credential=zq7cred";
+        server.serve(
+            &path,
+            302,
+            Some(&format!(
+                "https://release-assets.githubusercontent.com{asset}"
+            )),
+            b"",
+        );
+        server.serve(asset, 200, None, b"binarY");
+        e.engine.run_check().await.unwrap();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
+            .await;
+        server.serve(asset, 200, None, BINARY);
+        lock(&e.events).clear();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("switched", |e| !e.switched().is_empty()).await;
+        // Every test's events are in the capture: these are the lines
+        // naming this install's codes, and its secrets appear nowhere.
+        let text = crate::test_log::text();
+        assert!(
+            text.lines().any(|l| l.contains("update.available")),
+            "{text}"
+        );
+        assert!(
+            text.lines()
+                .any(|l| l.contains("update.install_failed") && l.contains("download_mismatch")),
+            "{text}"
+        );
+        let port = server.base.port().unwrap().to_string();
+        for secret in [
+            "Zq7InstallSecret",
+            "zq7cred",
+            "zq7asset",
+            "release-assets.githubusercontent.com",
+            &format!("127.0.0.1:{port}"),
+        ] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
+
+    /// `active` naming the running version, the image before it.
+    fn activate(e: &Env) {
+        Bin::open(&e.data)
+            .unwrap()
+            .write(
+                "active",
+                &pending::Active {
+                    version: "0.5.0".into(),
+                    previous: pending::IMAGE.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    /// Roll back is offered only with a previous version; asking for it
+    /// asks the supervisor once (the torrents it loses, when counted),
+    /// keeps the one-check lock until the restart, and refuses a second
+    /// rollback, an install and a check meanwhile.
+    #[tokio::test]
+    async fn rollback_is_offered_then_asked_for_once() {
+        let e = env(Mode::Notify);
+        let s = e.engine.status();
+        assert!(!s.rollback.available);
+        assert_eq!(s.rollback.reason.as_deref(), Some("no_previous_version"));
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("no_previous_version")
+        );
+
+        activate(&e);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let s = e.engine.status();
+        assert!(s.rollback.available, "{:?}", s.rollback);
+        assert_eq!(s.rollback.reason, None);
+        assert_eq!(s.rollback.to_version.as_deref(), Some("image"));
+
+        let s = e.engine.rollback_request().await.unwrap();
+        assert_eq!(*lock(&e.rollbacks), [None]);
+        assert!(!s.rollback.available);
+        assert_eq!(s.rollback.reason.as_deref(), Some("busy"));
+        assert!(e.states().contains(&UpdatesState::Restarting));
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("busy")
+        );
+        assert_eq!(
+            e.engine
+                .install_request("0.6.0", InstallWhen::Now, false)
+                .await
+                .unwrap_err(),
+            UpdatesError::InstallUnavailable("busy")
+        );
+        assert!(e.engine.check_now().await.is_err());
+        assert_eq!(lock(&e.rollbacks).len(), 1, "asked once");
+        assert!(e.switched().is_empty());
+    }
+
+    /// Image mode, a check or an install holding the lock, and a migrated
+    /// store whose snapshot is gone each refuse with their reason, and
+    /// ask nothing of the supervisor.
+    #[tokio::test]
+    async fn rollback_is_refused_in_image_mode_while_busy_or_without_its_snapshot() {
+        let e = env(Mode::Image);
+        activate(&e);
+        assert_eq!(
+            e.engine.status().rollback.reason.as_deref(),
+            Some("image_mode")
+        );
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("image_mode")
+        );
+
+        let e = env(Mode::Notify);
+        activate(&e);
+        let held = e.engine.inner.checking.clone().try_lock_owned().unwrap();
+        assert_eq!(e.engine.status().rollback.reason.as_deref(), Some("busy"));
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("busy")
+        );
+        drop(held);
+        assert!(e.engine.status().rollback.available);
+
+        // 0.5.0 migrated the store from the schema before this one, and
+        // no snapshot of that is left.
+        drop(
+            lodestar_store::Store::open(
+                &e.dir.path().join("lodestar.db"),
+                lodestar_store::StoreConfig::default(),
+            )
+            .unwrap(),
+        );
+        let overlay = Bin::open(&e.data)
+            .unwrap()
+            .overlay(&Version::new(0, 5, 0));
+        std::fs::create_dir_all(&overlay).unwrap();
+        let latest = lodestar_store::latest_schema_version();
+        std::fs::write(
+            overlay.join("migration.json"),
+            serde_json::json!({"from": latest - 1, "to": latest, "started_at": 1}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            e.engine.status().rollback.reason.as_deref(),
+            Some("snapshot_missing")
+        );
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("snapshot_missing")
+        );
+        assert!(lock(&e.rollbacks).is_empty());
+    }
+
+    /// Crash safety of the route's entry: before the graceful shutdown
+    /// writes `request.json`, asking writes nothing under `<data>/bin`
+    /// (no journal, `active` as it was), so a crash there changes nothing
+    /// and the next start offers Roll back again. From `request.json` on
+    /// it's the supervisor's journal (`tests/supervisor.rs`).
+    #[tokio::test]
+    async fn a_crash_before_the_shutdown_leaves_nothing_to_finish() {
+        let e = env(Mode::Notify);
+        activate(&e);
+        let names = |e: &Env| {
+            let mut n: Vec<_> = std::fs::read_dir(e.bin())
+                .unwrap()
+                .map(|d| d.unwrap().file_name().into_string().unwrap())
+                .collect();
+            n.sort();
+            n
+        };
+        let before = names(&e);
+        e.engine.rollback_request().await.unwrap();
+        assert_eq!(names(&e), before);
+        assert!(!e.bin().join(journal::FILE).exists());
+        let again = e.restart();
+        assert!(again.engine.status().rollback.available);
     }
 
     #[tokio::test]

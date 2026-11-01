@@ -345,18 +345,35 @@ describe('the Updates screen', () => {
 		it.each([
 			[404, 'unknown_version', 'no longer offered'],
 			[409, 'version_skipped', 'skipped that version'],
-			[409, 'install_unavailable', 'Another update is already running', ' (busy)'],
-			[409, 'install_unavailable', 'trust data is damaged', ' (trust_damaged)'],
+			[409, 'install_unavailable', 'Another update is already running', 'busy'],
+			[409, 'install_unavailable', 'trust data is damaged', 'trust_damaged'],
 			[422, 'manual_confirmation_required', 'manual steps'],
 			[500, 'updates_not_saved', "wasn't saved"]
-		])('shows the %i %s answer and stays usable', async (code, name, text, tail = '') => {
-			answer = [code, { error: { code: name, message: `refused${tail}` } }];
+		])('shows the %i %s answer and stays usable', async (code, name, text, reason?: string) => {
+			const tail = reason ? ` (${reason})` : '';
+			answer = [code, { error: { code: name, message: `refused${tail}`, reason } }];
 			render(UpdatesScreen);
 			await screen.findByTestId('updates-install');
 			await install();
 			await until(() => expect(screen.getByTestId('updates-error').textContent).toContain(text));
 			expect((screen.getByTestId('updates-install') as HTMLButtonElement).disabled).toBe(false);
 			expect(screen.getByTestId('updates-skip')).toBeTruthy();
+		});
+
+		it('reads install_unavailable\'s reason from error.reason, never the message', async () => {
+			answer = [
+				409,
+				{ error: { code: 'install_unavailable', message: 'refused (trust_damaged)', reason: 'busy' } }
+			];
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-install');
+			await install();
+			await until(() =>
+				expect(screen.getByTestId('updates-error').textContent).toContain(
+					'Another update is already running'
+				)
+			);
+			expect(screen.getByTestId('updates-error').textContent).not.toContain('trust data is damaged');
 		});
 	});
 

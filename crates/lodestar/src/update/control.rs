@@ -150,6 +150,16 @@ pub fn set_intent(action: Action, version: Option<String>, lost: Option<u64>) {
     *INTENT.lock().unwrap_or_else(|e| e.into_inner()) = Some((action, version, lost));
 }
 
+/// Asks for a rollback to the previous version: the intent, then the
+/// graceful shutdown. `main.rs` turns it into `request.json` and
+/// [`EXIT_ROLLBACK`]; the supervisor then runs the rollback journal, the
+/// one `lodestar rollback` runs. Roll back in the API and the test fault
+/// `child:rollback` both come here.
+pub fn request_rollback(lost: Option<u64>) {
+    set_intent(Action::Rollback, None, lost);
+    crate::system::Restart::global().request();
+}
+
 pub fn intent() -> Option<Intent> {
     INTENT.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }

@@ -507,6 +507,42 @@ fn a_crash_at_every_journal_step_finishes_at_the_next_start() {
     }
 }
 
+/// Roll back from the API (`POST /updates/rollback`) asks through the same
+/// intent as the fault `child:rollback` (`control::request_rollback`):
+/// `request.json`, `EXIT_ROLLBACK`, then the supervisor's journal. A kill
+/// right after each journal step, then a restart: the rollback finishes
+/// as `manual`, the snapshot is restored, and `trust.json` (the
+/// revocations) is never rolled back.
+#[test]
+fn a_requested_rollback_crashing_at_every_journal_step_finishes() {
+    for k in 2..=7 {
+        let env = Env::new();
+        env.stage(NEW, None, now() + 86_400);
+        env.migrated_by(NEW);
+        env.activate(NEW, false);
+        let trust = br#"{"zq7":"revocations stay"}"#;
+        std::fs::write(env.bin("trust.json"), trust).unwrap();
+        let crash = env.overrides(json!({"fault": format!("child:rollback@{NEW},journal:{k}")}));
+        let (status, log) = env.run_to_exit(&crash, LONG);
+        assert_eq!(status, 86, "journal:{k}: {log}");
+        let mut r = env.start(&env.overrides(json!({})));
+        r.wait_until(&format!("journal:{k}: not finished"), LONG, || {
+            !env.bin("pending").exists() && !env.bin("rollback.json").exists() && env.healthy()
+        });
+        assert!(!env.bin(NEW).exists() && !env.bin("active").exists());
+        assert_eq!(
+            env.json("skipped").unwrap(),
+            json!([{"version": NEW, "reason": "manual"}])
+        );
+        let history = env.json("history.json").unwrap();
+        assert_eq!(history["entries"].as_array().unwrap().len(), 1, "{history}");
+        assert_eq!(history["entries"][0]["reason"], "manual");
+        assert_eq!(marker(&env.db()), "first", "the snapshot is restored");
+        assert_eq!(std::fs::read(env.bin("trust.json")).unwrap(), trust);
+        assert_eq!(r.stop(), 0);
+    }
+}
+
 /// The restored image failing too halts instead of looping, until a newer
 /// image arrives.
 #[test]

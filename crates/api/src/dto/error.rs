@@ -42,6 +42,12 @@ pub struct ErrorBody {
     pub field: Option<String>,
     /// A sentence for people.
     pub message: String,
+    /// Why, as a stable snake_case code, when the `code` has several
+    /// causes (`install_unavailable`'s `busy`, `rollback_unavailable`'s
+    /// `no_previous_version`, …). The `message` names it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub reason: Option<String>,
     /// The start of the fault's byte span within `field`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]

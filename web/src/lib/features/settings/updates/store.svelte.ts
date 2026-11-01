@@ -167,9 +167,8 @@ export class UpdatesStore {
 		this.reason = e instanceof ApiError ? e.message : '';
 		if (kind === 'install' && e instanceof ApiError) {
 			this.error = INSTALL_ANSWERS[e.code] ?? 'install';
-			// `install_unavailable` names its reason in parentheses: "(busy)".
-			this.reason =
-				e.code === 'install_unavailable' ? (/\(([a-z_]+)\)/.exec(e.message)?.[1] ?? '') : '';
+			// `install_unavailable` carries its reason as a code (`busy`).
+			this.reason = e.code === 'install_unavailable' ? (e.reason ?? '') : '';
 		}
 	}
 

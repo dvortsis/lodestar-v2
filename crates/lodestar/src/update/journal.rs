@@ -163,6 +163,30 @@ pub fn preview(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<String>
     restore_plan(ctx, failed, previous).map(|s| s.map(|s| s.name))
 }
 
+/// Whether a rollback of `failed` looks possible now, cheaply and without
+/// writing anything (Roll back in the API offers it on this): `failed`
+/// didn't migrate the store, or a `pre-v<from+1>` snapshot of its
+/// migration is still there, or the store is still at `from`. The
+/// snapshot is verified only when the rollback begins (step 2, in the
+/// supervisor), which can still refuse it.
+pub fn kept(ctx: &Ctx, failed: &str) -> bool {
+    let Some(v) = layout::parse_version(failed) else {
+        return true;
+    };
+    let m: Migration = match layout::read_json(&ctx.bin.overlay(&v).join("migration.json")) {
+        Ok(None) => return true,
+        Ok(Some(m)) => m,
+        Err(_) => return false,
+    };
+    let listed = snapshots::list(&ctx.db).is_ok_and(|all| {
+        all.iter().any(|s| {
+            !m.before.contains(&s.name)
+                && matches!(s.kind, SnapKind::PreMigration { version, .. } if version == m.from + 1)
+        })
+    });
+    listed || matches!(store_schema(&ctx.db), Ok(None)) || store_schema(&ctx.db) == Ok(Some(m.from))
+}
+
 /// What a rollback of `failed` restores. Without `<failed>/migration.json`
 /// it never touched the schema: nothing. With it, the snapshot this
 /// migration took, if it verifies; else nothing only while the store is
@@ -642,6 +666,64 @@ mod tests {
             }
             assert_rolled_back(&s);
         }
+    }
+
+    /// §12.2: no rollback can undo a revocation. `trust.json` (the
+    /// revocations and the freshness marks) is never part of what a
+    /// rollback restores, whichever step it crashes after.
+    #[test]
+    fn trust_survives_a_rollback() {
+        for k in 2..=LAST {
+            let s = setup();
+            let trust = br#"{"revoked":["zq7revoked"],"channels":{"stable":{"hwm_ts":99}}}"#;
+            fs::write(s.ctx.bin.path(super::super::trust_file::FILE), trust).unwrap();
+            let mut j = begin_it(&s);
+            while j.steps_done < k {
+                step(&s.ctx, &mut j).unwrap();
+            }
+            if let Some(again) = current(&s.ctx.bin).unwrap() {
+                finish(&s.ctx, again).unwrap();
+            }
+            assert_rolled_back(&s);
+            assert_eq!(
+                fs::read(s.ctx.bin.path(super::super::trust_file::FILE)).unwrap(),
+                trust,
+                "journal:{k}"
+            );
+        }
+    }
+
+    /// Roll back's cheap check: no marker, or the snapshot still there,
+    /// or the store still at `from`; not when the snapshot is gone after
+    /// a migration step committed, or the marker can't be read.
+    #[test]
+    fn kept_needs_the_snapshot_only_after_a_migration() {
+        let s = setup();
+        assert!(kept(&s.ctx, "0.9.0"));
+        assert!(kept(&s.ctx, "0.8.0"), "no marker: nothing to restore");
+        let latest = lodestar_store::latest_schema_version();
+        let snap = s
+            .ctx
+            .db
+            .with_file_name(format!("lodestar.pre-v{}.db", latest + 1));
+        fs::remove_file(&snap).unwrap();
+        // The store is still at `from` (the "migration" wrote no step).
+        assert!(kept(&s.ctx, "0.9.0"));
+        let marker = s
+            .ctx
+            .bin
+            .overlay(&Version::parse("0.9.0").unwrap())
+            .join("migration.json");
+        let m = Migration {
+            from: latest - 1,
+            to: latest,
+            started_at: 1,
+            before: vec![],
+        };
+        fs::write(&marker, serde_json::to_vec(&m).unwrap()).unwrap();
+        assert!(!kept(&s.ctx, "0.9.0"), "migrated, and no snapshot");
+        fs::write(&marker, b"{").unwrap();
+        assert!(!kept(&s.ctx, "0.9.0"), "an unreadable marker");
     }
 
     #[test]

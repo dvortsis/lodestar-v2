@@ -26,13 +26,15 @@ export class ApiError extends Error {
 	readonly assessment?: ErrorEnvelope['assessment'];
 	/** A refused settings change: the section at fault. */
 	readonly section?: string;
+	/** The cause as a stable code, for a `code` with several (`install_unavailable`'s `busy`). */
+	readonly reason?: string;
 	/** On a 409 `stale_revision`: each stale section's values now (envelope top level). */
 	readonly current?: SettingsErrorEnvelope['current'];
 	constructor(
 		status: number,
 		code: string,
 		message: string,
-		extra: Pick<ErrorBody, 'field' | 'start' | 'end'> &
+		extra: Pick<ErrorBody, 'field' | 'start' | 'end' | 'reason'> &
 			Pick<ErrorEnvelope, 'setup_required' | 'assessment'> &
 			Pick<SettingsErrorEnvelope, 'current'> & { section?: string; retryAfter?: number } = {}
 	) {
@@ -47,6 +49,7 @@ export class ApiError extends Error {
 		this.setupRequired = extra.setup_required;
 		this.assessment = extra.assessment;
 		this.section = extra.section;
+		this.reason = extra.reason;
 		this.current = extra.current;
 	}
 }
@@ -95,6 +98,7 @@ export async function errorFromResponse(res: Response): Promise<ApiError> {
 			field: e.field,
 			start: e.start,
 			end: e.end,
+			reason: e.reason,
 			retryAfter,
 			setup_required: body.setup_required,
 			assessment: body.assessment,
