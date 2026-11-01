@@ -2719,9 +2719,15 @@
     },
     {
       "id": "unraid-rerun",
-      "status": "asked",
-      "text": "02:03Z Unraid leg 1 tripped the old working-set rule at 19.6 h (private 887 MiB; slope 1.85 MiB/h CI [0.92,2.77] partial; bar upper CI <= 2.0). Proposed: no tuning, re-run leg 1 on rc.2 with fresh data dir + main collector (anon basis), full 24 h, then gluetun >=2 h continuation, then analyze_cr0. Awaiting owner go.",
+      "status": "approved",
+      "text": "02:03Z Unraid leg 1 tripped the old working-set rule at 19.6 h (private 887 MiB; slope 1.85 MiB/h CI [0.92,2.77] partial; bar upper CI <= 2.0). Proposed: no tuning, re-run leg 1 on rc.2 with fresh data dir + main collector (anon basis), full 24 h, then gluetun >=2 h continuation, then analyze_cr0. Awaiting owner go. | 02:07Z owner GO (items 1-6). Antigravity: collect.py @673692a4 (identical to current main), new run dir + fresh data dir, rc.2. Gluetun leg needs separate owner approval after baseline. Expect report: dir name, collector sha256, memory_stop_basis.",
       "unblocks": "v0.5.1 Linux soak gate"
+    },
+    {
+      "id": "gluetun-approve",
+      "status": "waiting",
+      "text": "Gluetun leg (>=2 h) after the leg-1 re-run baseline ends: owner approves separately.",
+      "unblocks": "VPN yield evidence"
     }
   ],
   "external_gates": {
