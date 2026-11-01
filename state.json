@@ -2056,6 +2056,13 @@
       "model": "sonnet",
       "brief": "briefs/X-flake-security-test.md",
       "launched_at": "2026-11-01T07:31Z"
+    },
+    "X-detail-polish": {
+      "status": "building",
+      "session": "session_01MMjhnCYpDYsdfoATJ22wVM",
+      "model": "sonnet",
+      "brief": "briefs/X-detail-polish.md",
+      "launched_at": "2026-11-01T07:42Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2976,11 +2983,9 @@
     "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
     "Settings engine: lift the shared reveal + hash-focus logic (SectionForm, screens2/GroupedForm) into form/reveal.svelte.ts only alongside a change that already touches those chunks: done alone it cost +0.2 KB on Settings first views and +0.6 KB on Wizard steps via form/embed.ts (#319 skipped it)",
     "S-updates-4: Roll back button in Settings \u2192 Updates using can_roll_back from B-update-5b; plus plain words per install_failed code (#318) \u2014 use GET /updates rollback.available + rollback.reason (B-update-5b #324)",
-    "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
     "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off",
     "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails",
     "Possible flake: e2e/insights-print.routes.test.ts:57 \"one page on A4 and Letter at 1024 px\" [core] printed 2 Letter pages on #322 b58f4ea (06:42Z), outside the diff; passed on #320 minutes earlier. Runner re-ran once. If it recurs: likely content- or time-dependent height (freeze clock / fixed fixture), fix once.",
-    "S-send (#321): renamed/removed download client shows stale in the Send label until reload; no stale-press guard on the Send button; `s` on /t before the torrent loads",
     "e2e fixture specs (#323): the 5 fixture files use exactly the 5-login burst; a sixth fixture file needs a shared storageState sign-in (docs/decisions/2026-11-01-X-e2e-fixture-ci.md)"
   ],
   "main_health": [
