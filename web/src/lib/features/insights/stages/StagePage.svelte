@@ -443,7 +443,7 @@
 									: [])
 							])}
 							label={summaryOf(c)}
-							unit={c.snapshot ? m.insights_stage_unit_torrents() : unit}
+							unit={c.snapshot ? (c.snapshotUnit ?? m.insights_stage_unit_torrents()) : unit}
 							format={c.approx ? approxCount : formatCount}
 							axisFormat={formatCompact}
 							{bucket}
