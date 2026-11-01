@@ -154,8 +154,10 @@ fn unix_now() -> i64 {
 /// every torrent it could have matched. With the query unreadable that's
 /// every torrent that reaches your rules outside its `unless`; a known
 /// query keeps its own scope. Exceptions to the rule, *Always allow* and
-/// CSX-5 still release from it, as they would from the real rule. Quarantine, not drop or hide: it holds nothing back for good,
-/// expires in 30 days, and fixing the rule releases it.
+/// CSX-5 still release from it, as they would from the real rule, and it
+/// never pre-empts a stronger decision from the layers after it
+/// ([`Engine::stand_ins`]). Quarantine, not drop or hide: it holds nothing
+/// back for good, expires in 30 days, and fixing the rule releases it.
 fn fail_closed(
     id: u32,
     query: Option<Node>,
@@ -242,6 +244,7 @@ impl Engine {
     pub fn load_rules(&mut self, set: &RuleSet) -> Vec<String> {
         let mut notes = Vec::new();
         let mut found = Vec::new();
+        let mut stand_ins = Vec::new();
         self.packs = pack_switches(&set.pack_switches);
         self.rules = set
             .rules
@@ -296,11 +299,13 @@ impl Engine {
                                 "it no longer parses"
                             }
                         ));
+                        stand_ins.extend(rule.as_ref().map(|r| r.id));
                         rule
                     }
                 }
             })
             .collect();
+        self.stand_ins = stand_ins;
         self.overrides = set
             .overrides
             .iter()

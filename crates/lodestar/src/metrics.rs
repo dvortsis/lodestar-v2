@@ -1217,8 +1217,6 @@ pub fn render_storage(out: &mut String, g: &crate::storage::Gauges) {
     *out = o.0;
 }
 
-/// The search side's in-process caches (R-gauges): the serving index's
-/// `file:(…)` id sets and browse tops, and the result cache.
 /// Stored filter rows the engine couldn't read, by kind: rules,
 /// `unless` queries and classification rules fail closed; overrides,
 /// exceptions and *Always allow* entries are skipped (F-filter-load-
@@ -1242,6 +1240,8 @@ pub fn render_filter(out: &mut String, unreadable: &[lodestar_filter::load::Unre
     *out = o.0;
 }
 
+/// The search side's in-process caches (R-gauges): the serving index's
+/// `file:(…)` id sets and browse tops, and the result cache.
 pub fn render_caches(
     out: &mut String,
     index: &lodestar_search::CacheUsage,

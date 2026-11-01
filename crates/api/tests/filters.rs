@@ -2542,15 +2542,22 @@ async fn a_core_switch_off_is_judged_by_the_stored_switch() {
 async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
     let f = fixture();
     let cookie = logged_in(&f).await;
-    let (rule, class, allow) = {
+    let (rule, unless, class, allow, over, exc) = {
         let mut s = f.api.store.lock().unwrap();
         (
             s.add_rule("cam size:>>", Action::Hide.code(), None, None)
                 .unwrap(),
+            s.add_rule("spam", Action::Drop.code(), None, Some("size:>>"))
+                .unwrap(),
             s.add_class_rule("size:>>", true).unwrap(),
             s.add_allow("size:>>").unwrap(),
+            s.add_override(1, b"alpha", 0, Some("size:>>"), 0, None, None)
+                .unwrap(),
+            s.add_exception("Z-1", 1, b"alpha").unwrap(),
         )
     };
+    let held = [0x4e; 20];
+    hold(&f, held, &format!("U-{rule}"), Held::Quarantine, 1);
     // Any applied change reloads the layers from the store.
     let (status, _) = apply(
         &f,
@@ -2572,14 +2579,21 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
         l.sort();
         l
     };
-    assert_eq!(
-        labels(&f),
-        [
-            format!("A-{allow}"),
-            format!("C-{class}"),
-            format!("U-{rule}")
-        ]
-    );
+    let mut want = vec![
+        format!("A-{allow}"),
+        format!("C-{class}"),
+        format!("E-{exc}"),
+        format!("O-{over}"),
+        format!("U-{rule}"),
+        format!("U-{unless}"),
+    ];
+    want.sort();
+    assert_eq!(labels(&f), want);
+    let e = f.api.engine.current();
+    let strict = e.rules.iter().find(|r| i64::from(r.id) == unless).unwrap();
+    assert!(strict.unless.is_none(), "applies without its unless");
+    assert!(e.overrides.is_empty() && e.exceptions.is_empty() && e.allow.is_empty());
+    drop(e);
     let e = f.api.engine.current();
     let stand_in = e.rules.iter().find(|r| i64::from(r.id) == rule).unwrap();
     assert_eq!(stand_in.action, Action::Quarantine);
@@ -2596,6 +2610,7 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body["released"].is_null(), "{body}");
+    assert!(f.api.held.contains(&held), "still held");
     let (status, body) = apply(
         &f,
         &cookie,
@@ -2604,7 +2619,16 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["released"], 0, "released what it held: {body}");
+    assert_eq!(body["released"], 1, "released what it held: {body}");
+    assert!(!f.api.held.contains(&held));
+    for change in [
+        json!({ "op": "update_rule", "id": unless, "unless": "" }),
+        json!({ "op": "remove_override", "id": over }),
+        json!({ "op": "remove_exception", "id": exc }),
+    ] {
+        let (status, body) = apply(&f, &cookie, change, Some(PASSWORD)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
     let (status, body) = apply(
         &f,
         &cookie,

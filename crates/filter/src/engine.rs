@@ -137,6 +137,9 @@ pub struct Engine {
     pub class_rules: ClassRules,
     /// Stored rows the last load couldn't read ([`crate::load`]).
     pub unreadable: Vec<crate::load::Unreadable>,
+    /// Your rules that are stand-ins for unreadable rows, by id: usually
+    /// none.
+    pub stand_ins: Vec<u32>,
     pub version: u64,
 }
 
@@ -153,6 +156,7 @@ impl Engine {
             allow: Vec::new(),
             class_rules: ClassRules::default(),
             unreadable: Vec::new(),
+            stand_ins: Vec::new(),
             version: 1,
         }
     }
@@ -302,6 +306,7 @@ impl Engine {
         }) {
             return None;
         }
+        let mut held: Option<Decision> = None;
         for i in doc.candidates(&self.rules, neutral_words) {
             let (query, unless) = self.rules.compiled(i);
             if !doc.matches_compiled(query, neutral_words)
@@ -322,7 +327,14 @@ impl Engine {
                 shadow.push(d);
                 continue;
             }
-            return Some(d);
+            // A stand-in for an unreadable rule ([`crate::load`]) never
+            // pre-empts what the layers after it would decide: the
+            // stronger of the two applies, so a drop stays a drop.
+            if self.stand_ins.contains(&r.id) {
+                held = held.or(Some(d));
+                continue;
+            }
+            return stronger_of(held, Some(d));
         }
         let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words));
         let packs = PackRule::ALL
@@ -336,10 +348,11 @@ impl Engine {
         // Each pack and list is excepted on its own (§20.12), before the
         // strongest action left wins (§20.6): an exception to one list
         // never lifts another that also has the torrent.
-        packs
+        let rest = packs
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc))
-            .max_by_key(|d| d.action)
+            .max_by_key(|d| d.action);
+        stronger_of(held, rest)
     }
 
     /// How many of your rules a torrent meets: those the narrowing
@@ -412,6 +425,15 @@ impl Engine {
         if let Some(l) = layer {
             self.lists.push(l);
         }
+    }
+}
+
+/// The stronger of a stand-in's decision and the real one; the real one
+/// on a tie, so it's named.
+fn stronger_of(stand_in: Option<Decision>, real: Option<Decision>) -> Option<Decision> {
+    match (stand_in, real) {
+        (Some(s), Some(r)) => Some(if s.action > r.action { s } else { r }),
+        (s, r) => r.or(s),
     }
 }
 

@@ -1871,6 +1871,8 @@ fn unreadable_rows(rows: &[lodestar_filter::load::Unreadable]) -> Option<Insight
     let mut labels: Vec<String> = rows.iter().map(|u| u.label()).collect();
     labels.sort();
     labels.dedup();
+    // A rule whose query and `unless` both fail is one row.
+    let count = labels.len();
     // The count says how many; the list names enough to start with.
     labels.truncate(MAX_ROWS_NAMED);
     Some(InsightsException {
@@ -1887,7 +1889,7 @@ fn unreadable_rows(rows: &[lodestar_filter::load::Unreadable]) -> Option<Insight
         },
         since,
         unit: Some("rows".into()),
-        value: Some(rows.len() as f64),
+        value: Some(count as f64),
     })
 }
 
@@ -2638,7 +2640,7 @@ mod tests {
             .collect();
         let e = unreadable_rows(&many).unwrap();
         assert_eq!(e.severity, Severity::Error);
-        assert_eq!(e.value, Some(31.0));
+        assert_eq!(e.value, Some(30.0), "U-3 counts once");
         assert_eq!(e.rows.len(), MAX_ROWS_NAMED, "U-3 is named once");
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json["rows"].as_array().unwrap().len(), MAX_ROWS_NAMED);

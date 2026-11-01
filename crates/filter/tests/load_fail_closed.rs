@@ -7,8 +7,8 @@
 use lodestar_classify::{FileInfo, classify};
 use lodestar_filter::load::{KIND_KEYWORD, RowKind};
 use lodestar_filter::{
-    Action, Core, CoreRule, CsList, Engine, Facts, Item, Lists, Origin, PackSwitches, RuleRef,
-    Switches, TermSet,
+    Action, Core, CoreRule, CsList, Engine, Facts, Item, ListLayer, Lists, Origin, PackSwitches,
+    RuleRef, Switches, TermSet,
 };
 use lodestar_store::{ExceptionRow, OverrideRow, RuleRow, RuleSet};
 
@@ -37,16 +37,9 @@ const NAMES: &[&str] = &[
     "Rolea one two Lexa",
 ];
 
-/// How much a decision holds back: withheld (quarantine or drop) counts
-/// the same, since an unreadable drop rule quarantines instead.
+/// How much a decision holds back.
 fn rank(a: Option<Action>) -> u8 {
-    match a {
-        None => 0,
-        Some(Action::Flag) => 1,
-        Some(Action::Demote) => 2,
-        Some(Action::Hide) => 3,
-        Some(Action::Quarantine | Action::Drop) => 4,
-    }
+    a.map_or(0, |a| a.code() + 1)
 }
 
 /// The decision and classification correction for `name`.
@@ -96,8 +89,11 @@ fn assert_not_looser(good: &Engine, broken: &Engine) {
     for name in NAMES {
         let (g, gc) = judge(good, name, [1; 20]);
         let (b, bc) = judge(broken, name, [1; 20]);
+        // The one allowed difference: an unreadable drop rule quarantines
+        // its own matches instead (reversible, and nothing is stored).
+        let own_drop = matches!((g, b), (Some((gr, Action::Drop)), Some((br, Action::Quarantine))) if gr == br);
         assert!(
-            rank(b.map(|d| d.1)) >= rank(g.map(|d| d.1)),
+            own_drop || rank(b.map(|d| d.1)) >= rank(g.map(|d| d.1)),
             "{name}: {g:?} readable, {b:?} unreadable"
         );
         if gc == Some(true) {
@@ -333,4 +329,40 @@ fn fixing_a_row_clears_it_and_reloads_keep_when_it_was_found() {
     assert!(e.unreadable.is_empty());
     assert_eq!(judge(&e, "alpha beta documentary", [1; 20]).0, None);
     assert_floor_intact(&e);
+}
+
+#[test]
+fn a_stand_in_never_preempts_a_later_drop() {
+    let set = |q: &str| RuleSet {
+        rules: vec![
+            rule(1, q, Action::Hide, None),
+            rule(2, "documentary", Action::Drop, None),
+        ],
+        ..RuleSet::default()
+    };
+    let list = ListLayer {
+        id: 3,
+        action: Action::Drop,
+        hashes: std::sync::Arc::new([[1; 20]].into_iter().collect()),
+    };
+    let mut good = load(&set("cam"), &[]);
+    let mut broken = load(&set(BAD), &[]);
+    assert_not_looser(&good, &broken);
+    assert_eq!(
+        judge(&broken, "alpha beta documentary", [2; 20]).0,
+        Some((RuleRef::User(2), Action::Drop)),
+        "a later rule's drop stays a drop"
+    );
+    assert_eq!(
+        judge(&broken, "Other Movie 2021 1080p", [2; 20]).0,
+        Some((RuleRef::User(1), Action::Quarantine))
+    );
+    good.set_list(Some(list.clone()), 3);
+    broken.set_list(Some(list), 3);
+    assert_not_looser(&good, &broken);
+    assert_eq!(
+        judge(&broken, "Other Movie 2021 1080p", [1; 20]).0,
+        Some((RuleRef::List(3), Action::Drop)),
+        "a list's drop stays a drop"
+    );
 }

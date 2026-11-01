@@ -20,20 +20,28 @@ fn unparseable_rows_fail_closed_at_start_and_the_floor_stays() {
         .add_rule("cam", Action::Hide.code(), None, Some("size:>>"))
         .unwrap();
     let class = store.add_class_rule("size:>>", true).unwrap();
+    let over = store
+        .add_override(1, b"alpha", 0, Some("size:>>"), 0, None, None)
+        .unwrap();
+    let exc = store.add_exception("Z-1", 1, b"alpha").unwrap();
+    let allow = store.add_allow("size:>>").unwrap();
     let filter = Handle::new(Engine::new(Core::new(
         Lists::shipped().unwrap(),
         CsList::default(),
         Switches::default(),
     )));
     let notes = load_filter(&filter, &StoreFilter::read(&store).unwrap());
-    assert_eq!(notes.len(), 3, "{notes:?}");
+    assert_eq!(notes.len(), 6, "{notes:?}");
     let e = filter.current();
     let mut found: Vec<(RowKind, i64)> = e.unreadable.iter().map(|u| (u.kind, u.id)).collect();
     found.sort_by_key(|(k, id)| (k.as_str(), *id));
     assert_eq!(
         found,
         [
+            (RowKind::Allow, allow),
             (RowKind::ClassRule, class),
+            (RowKind::Exception, exc),
+            (RowKind::Override, over),
             (RowKind::Rule, rule),
             (RowKind::Unless, unless)
         ]
@@ -51,5 +59,7 @@ fn unparseable_rows_fail_closed_at_start_and_the_floor_stays() {
         .iter()
         .map(|n| lodestar_pipeline::log_events::filter_note(n).2)
         .collect();
-    assert_eq!(reasons, ["fails_closed"; 3]);
+    let closed = reasons.iter().filter(|r| **r == "fails_closed").count();
+    assert_eq!(closed, 3, "{reasons:?}");
+    assert!(e.overrides.is_empty() && e.exceptions.is_empty() && e.allow.is_empty());
 }
