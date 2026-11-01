@@ -211,7 +211,7 @@ test.describe('the list', () => {
 		listMocks(mock, []);
 		await go('/alerts');
 		await expect(page.getByRole('heading', { name: 'No saved searches yet' })).toBeVisible();
-		await expect(page.getByRole('button', { name: 'New alert' })).toHaveCount(2);
+		await expect(page.getByRole('button', { name: 'New alert' })).toHaveCount(1);
 	});
 
 	test('a failed load shows a banner with Retry, and a retry recovers', async ({

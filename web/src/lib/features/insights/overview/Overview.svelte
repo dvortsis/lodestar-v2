@@ -236,8 +236,6 @@
 				load={() => import('./States.svelte')}
 				props={{
 					kind: paused ? ('paused' as const) : ('starting' as const),
-					busy: insights.busy === 'resume',
-					onresume: () => void insights.resume(),
 					live: insights.live
 				}}
 				height="ins-sk-panel"
