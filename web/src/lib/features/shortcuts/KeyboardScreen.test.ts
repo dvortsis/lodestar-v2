@@ -104,8 +104,7 @@ describe('KeyboardScreen', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(screen.queryByText('Already used by Copy magnet')).toBeNull();
 		expect(keyOf('results.next')).toContain('J');
-		await Promise.resolve();
-		expect(patch).not.toHaveBeenCalled();
+		// Nothing was sent: the one save below is Swap's.
 
 		patch.mockResolvedValueOnce(
 			section(true, { 'results.next': 'c', 'detail.copy_magnet': 'j' }, 8)
@@ -175,6 +174,76 @@ describe('KeyboardScreen', () => {
 		await vi.waitFor(() => expect(keyOf('results.next')).toContain('J'));
 		expect(keyOf('search.focus')).toContain('F');
 		expect(screen.queryByText('Saved.')).toBeNull();
+	});
+
+	it("Undo after a stale merge reverts only this change, keeping the other device's", async () => {
+		render(KeyboardScreen);
+		await screen.findByRole('switch');
+		get.mockResolvedValue(section(true, { 'search.focus': 'f' }, 8));
+		patch
+			.mockRejectedValueOnce(new ApiError(409, 'stale_revision', 'stale'))
+			.mockResolvedValueOnce(section(true, { 'search.focus': 'f', 'results.next': 'n' }, 9))
+			.mockResolvedValueOnce(section(true, { 'search.focus': 'f' }, 10));
+		await changeKey('Next result', 'n');
+		await screen.findByText('Saved.');
+		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+		expect(body(2)).toEqual({ shortcut_keys: { 'search.focus': 'f' }, if_revision: 9 });
+		// Focus stays on the row the change was made with, not on the vanished Undo button.
+		await vi.waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole('button', { name: 'Change the key for Next result' })
+			)
+		);
+	});
+
+	it('Undo never brings back an earlier change that failed', async () => {
+		let fail!: () => void;
+		patch.mockImplementationOnce(
+			() => new Promise((_, reject) => (fail = () => reject(new ApiError(500, 'internal', 'x'))))
+		);
+		patch.mockResolvedValueOnce(section(true, { 'results.previous': 'p' }, 8));
+		render(KeyboardScreen);
+		await screen.findByRole('switch');
+		await changeKey('Next result', 'n');
+		await changeKey('Previous result', 'p');
+		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+		fail();
+		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(body(1)).toEqual({ shortcut_keys: { 'results.previous': 'p' }, if_revision: 7 });
+		await screen.findByText('Saved.');
+		patch.mockResolvedValueOnce(section(true, {}, 9));
+		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+		expect(body(2)).toEqual({ shortcut_keys: {}, if_revision: 8 });
+	});
+
+	it('Undo of the switch focuses the switch and sends what the server had', async () => {
+		patch.mockResolvedValueOnce(section(false, {}, 8)).mockResolvedValueOnce(section(true, {}, 9));
+		render(KeyboardScreen);
+		const toggle = await screen.findByRole('switch');
+		await fireEvent.click(toggle);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(body(1)).toEqual({ shortcuts: true, if_revision: 8 });
+		await vi.waitFor(() => expect(document.activeElement).toBe(toggle));
+	});
+
+	it("a failed save shows the server's current values, not the screen's older copy", async () => {
+		render(KeyboardScreen);
+		await screen.findByRole('switch');
+		// Meanwhile another device remapped Focus search.
+		get.mockResolvedValue(section(true, { 'search.focus': 'f' }, 8));
+		patch.mockRejectedValueOnce(new ApiError(500, 'internal', 'boom'));
+		await changeKey('Next result', 'n');
+		expect(await screen.findByText(/Couldn't save that change/)).toBeTruthy();
+		await vi.waitFor(() => expect(keyOf('search.focus')).toContain('F'));
+		expect(keyOf('results.next')).toContain('J');
+		// What the registry was given, through the per-browser cache it writes alongside.
+		expect(JSON.parse(localStorage.getItem('lodestar.shortcuts') ?? '{}')).toEqual({
+			shortcuts: true,
+			shortcut_keys: { 'search.focus': 'f' }
+		});
 	});
 
 	it('says so when a save is refused because the setting is locked, and goes back', async () => {

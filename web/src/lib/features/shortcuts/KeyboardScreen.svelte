@@ -4,7 +4,7 @@
 	// section with `if_revision`, then offers Undo, as Appearance does. Saves go one at a time. A
 	// stale revision reloads and lays only this change over the newer values, so it never overwrites
 	// what another tab or device saved.
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ApiError, api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -39,7 +39,8 @@
 	let stale = $state(false);
 	let failed = $state(false);
 	let locked = $state(false);
-	let undo = $state<Partial<Prefs> | null>(null);
+	/** The last saved change, inverted: what Undo runs. */
+	let undo = $state<Delta | null>(null);
 	let errors = $state<Record<Name, Record<string, string>>>(NO_ERRORS());
 	let queue: Promise<void> = Promise.resolve();
 	let saving = 0;
@@ -93,10 +94,18 @@
 			(a, b) => message.indexOf(a) - message.indexOf(b)
 		)[0] ?? '';
 
-	/** Sends one change; a stale revision reloads and tries once more over the newer values. */
-	async function send(before: Partial<Prefs>, after: Partial<Prefs>): Promise<boolean> {
+	/** One change: the fields it touches, as they were and as it makes them. */
+	type Delta = { before: Partial<Prefs>; after: Partial<Prefs> };
+
+	/**
+	 * Sends one change; a stale revision reloads and tries once more over the newer values. Remaps
+	 * send only this change's own adds, changes and removals laid over the server's map. Resolves to
+	 * whether it merged, and the switch as the server had it, for Undo.
+	 */
+	async function send({ before, after }: Delta): Promise<{ merged: boolean; was: boolean }> {
 		let merged = false;
 		for (;;) {
+			const was = saved.shortcuts;
 			const body: Record<string, unknown> = { if_revision: revision };
 			if (after.shortcuts !== undefined) body.shortcuts = after.shortcuts;
 			if (after.shortcut_keys)
@@ -111,7 +120,7 @@
 					body: body as unknown as Record<string, never>
 				});
 				if (!take(res as never)) throw new Error('malformed');
-				return merged;
+				return { merged, was };
 			} catch (e) {
 				if (merged || !(e instanceof ApiError && e.code === 'stale_revision')) throw e;
 				if (!take(await fetchSection())) throw e;
@@ -120,16 +129,32 @@
 		}
 	}
 
-	/** Applies a change at once, then saves it after any save already under way. */
-	function change(patch: Partial<Prefs>, undoing = false): Promise<void> {
-		const names = NAMES.filter((n) => n in patch && !locks[n]);
-		if (!names.length) return queue;
+	/** A change made on the screen: from what it shows to `patch`. */
+	const change = (patch: Partial<Prefs>) => {
 		const now = copy(prefs);
-		const before = Object.fromEntries(names.map((n) => [n, now[n]])) as Partial<Prefs>;
-		const after = structuredClone(
-			Object.fromEntries(names.map((n) => [n, $state.snapshot(patch[n])]))
-		) as Partial<Prefs>;
-		prefs = { ...now, ...after };
+		const names = NAMES.filter((n) => n in patch);
+		return run({
+			before: Object.fromEntries(names.map((n) => [n, now[n]])),
+			after: structuredClone(Object.fromEntries(names.map((n) => [n, $state.snapshot(patch[n])])))
+		});
+	};
+
+	/** Applies a change at once, then saves it after any save already under way. */
+	function run(delta: Delta, undoing = false): Promise<void> {
+		const names = NAMES.filter((n) => n in delta.after && !locks[n]);
+		if (!names.length) return queue;
+		const pick = (p: Partial<Prefs>) =>
+			Object.fromEntries(names.map((n) => [n, p[n]])) as Partial<Prefs>;
+		const d: Delta = { before: pick(delta.before), after: pick(delta.after) };
+		const now = copy(prefs);
+		if (d.after.shortcuts !== undefined) now.shortcuts = d.after.shortcuts;
+		if (d.after.shortcut_keys)
+			now.shortcut_keys = rebase(
+				now.shortcut_keys,
+				d.before.shortcut_keys ?? {},
+				d.after.shortcut_keys
+			);
+		prefs = now;
 		applyPrefs(prefs);
 		undo = null;
 		stale = failed = locked = false;
@@ -137,22 +162,29 @@
 		saving++;
 		queue = queue.then(async () => {
 			try {
-				stale = await send(before, after);
-				if (!undoing) undo = before;
+				const { merged, was } = await send(d);
+				stale = merged;
+				// Undo inverts this change only: never another device's, nor one that failed.
+				if (!undoing)
+					undo = {
+						before: d.after,
+						after: { ...d.before, ...('shortcuts' in d.after ? { shortcuts: was } : {}) }
+					};
 			} catch (e) {
-				// Nothing of this change was saved; the screen goes back to the server's values below.
+				// Nothing of this change was saved. The screen goes back to the server's values, read
+				// again so a change made elsewhere meanwhile isn't undone in the registry.
+				if (e instanceof ApiError && e.status === 401) return;
+				try {
+					take(await fetchSection());
+				} catch {
+					/* the banner still says why */
+				}
 				if (!(e instanceof ApiError)) failed = true;
 				else if (e.code === 'invalid_setting') {
 					const name: Name = e.field === 'shortcuts' ? 'shortcuts' : 'shortcut_keys';
 					errors[name] = { [name === 'shortcuts' ? '' : rowOf(e.message)]: e.message };
-				} else if (e.code !== 'stale_revision' && e.status === 409) {
-					try {
-						take(await fetchSection());
-					} catch {
-						/* the banner still says why */
-					}
-					locked = true;
-				} else failed = e.status !== 401;
+				} else if (e.code !== 'stale_revision' && e.status === 409) locked = true;
+				else failed = true;
 			} finally {
 				if (--saving === 0) {
 					prefs = copy(saved);
@@ -161,6 +193,26 @@
 			}
 		});
 		return queue;
+	}
+
+	/** Undo removes its own button: focus goes to the control the change was made with. */
+	function undoLast() {
+		const last = undo!;
+		undo = null;
+		void run(last, true);
+		const { before, after } = last;
+		const id = Object.keys({ ...before.shortcut_keys, ...after.shortcut_keys }).find(
+			(k) => before.shortcut_keys?.[k] !== after.shortcut_keys?.[k]
+		);
+		void tick().then(() =>
+			document
+				.querySelector<HTMLElement>(
+					id
+						? `[data-testid="shortcut-change-${id}"]`
+						: '[data-testid="keyboard-screen"] [role="switch"]'
+				)
+				?.focus()
+		);
 	}
 
 	onMount(() => void load());
@@ -178,14 +230,7 @@
 		<div role="status" class="sc-status">
 			{#if undo}
 				{m.shortcuts_saved()}
-				<Button
-					variant="quiet"
-					onclick={() => {
-						const back = undo!;
-						undo = null;
-						void change(back, true);
-					}}>{m.shortcuts_undo()}</Button
-				>
+				<Button variant="quiet" onclick={undoLast}>{m.shortcuts_undo()}</Button>
 			{/if}
 		</div>
 		<section>
