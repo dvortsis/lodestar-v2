@@ -951,13 +951,8 @@
       "pr2": 310
     },
     "S-doc-shots": {
-      "status": "building",
-      "model": "sonnet",
-      "session": null,
-      "pr": null,
-      "attempt": 0,
-      "review_rounds": 0,
-      "notes": "from #86"
+      "status": "merged",
+      "notes": "#354 9a8c6f68"
     },
     "P-release": {
       "status": "merged",
@@ -3296,6 +3291,10 @@
     {
       "t": "2026-11-01T20:13Z",
       "event": "merged #353 X-appearance-undo (7be005dc); archived. Open: #354 (CI), F-filter-load-fail-closed (building)."
+    },
+    {
+      "t": "2026-11-01T20:40Z",
+      "event": "merged #354 S-doc-shots (9a8c6f68; its completion event was lost, verified green by check runs). Archived. Open: F-filter-load-fail-closed (self-review). 3 slots free; queued items wait on fail-closed (shared api files)."
     }
   ],
   "reviews": {
