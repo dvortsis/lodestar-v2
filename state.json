@@ -1863,6 +1863,15 @@
       "review_rounds": 0,
       "notes": "23:11Z brief briefs/X-alert-search-headroom.md.",
       "note": " 23:12Z launched (Opus) on branch slice/X-alert-search-headroom. 00:05Z PR #304 head 96d693ac: Alert 45,976->45,404; Search results 43,288->42,744; Alerts 29,168->25,732 (limit 26.3); toolbar 4,597->4,290 (4.6); Settings first views -540 B. manualChunks claimed blocked by preserveEntrySignatures strict. Reviewer session_01MMjhn9m5pFCfKTgc6G79zR (also verifies that claim). #299 head a02f9fa6 marker removed, merge on green; #303 MERGE, merge on green."
+    },
+    "X-pipeline-1101": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01MMjhn9qYxKgGn7fsP4e54P",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2697,19 +2706,11 @@
     "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
     "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
     "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)",
-    {
-      "id": "B-refetch-funnel",
-      "model": "opus",
-      "source": "IMP-5 (2026-10-31)",
-      "what": "REFETCH leases skip funnel recording in crates/pipeline/src/{worker,coordinator,writer}.rs so FILES_PARTIAL imports queued at startup (lib.rs ~l.905) never land in the start hour's funnel; test that a refetch moves no cohort or FUNNEL_EVENTS row",
-      "when": "after IMP-5 merges, when a slot frees"
-    },
     "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
     "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
     "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
     "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
     "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)",
-    "#274 optional: crates/pipeline/tests/pipeline.rs:517 comment says sighting arrives while refetch lease is out; reword: imported row is in the have-filter, so the sighting is a rediscovery and never reaches the coordinator",
     "Percolator file-clause path: real CancelToken (X-search-files-perf left it out to avoid overlap with B-import-server-1)",
     "web vitest flake: query/QueryBar.test.ts 'the Syntax popover > opens on its button, and Try sets and submits' failed 1 of 3 cold local runs in #275 author's and reviewer's sessions (passes alone; waits already 10 s). Not seen in CI yet; get the error text before a fix slice (#275 review)",
     "live.svelte.ts (#275 optional a): a tab hidden >=35 s fires both the visibility and the status path -> two again() calls (one extra POST+DELETE, no leak); debounce a second again() within 1-2 s",
@@ -2722,7 +2723,6 @@
     "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
     "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
     "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
-    "pipeline lib.rs: backfill error arm needs the same retry-with-backoff as the candidate sweep (#282)",
     "Search at 10M: measure cold broad file clause (the size scan may cross §3 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
     "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
