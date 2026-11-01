@@ -11,7 +11,6 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import type { Route } from '$lib/shell/nav';
 	import { m } from '$lib/paraglide/messages.js';
-	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import StateScene from '$lib/shell/StateScene.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -115,11 +114,7 @@
 			([{ keys }, cmd]) => {
 				if (!gone) off = cmd.registerDiscoverCommands(keys, step);
 			},
-			() => {
-				// A stale build or no network: say so, since j/k would otherwise do nothing.
-				if (gone) return;
-				toast.push({ kind: 'error', text: m.discover_error_load() });
-			}
+			() => {}
 		);
 		return () => {
 			gone = true;

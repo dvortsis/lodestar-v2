@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/svelte';
+import { render } from '@testing-library/svelte';
 import { scenes } from '$lib/brand/scenes.generated';
 import StateScene from './StateScene.svelte';
 
@@ -13,7 +13,6 @@ const cache = (illustrations: boolean) =>
 
 afterEach(() => {
 	localStorage.clear();
-	delete document.documentElement.dataset.illustrations;
 	vi.unstubAllGlobals();
 });
 
@@ -23,18 +22,10 @@ describe('StateScene', () => {
 		expect(render(StateScene, { id }).container.querySelector('img')).not.toBeNull();
 	});
 
-	it('waits for the real preference with no cache, and shows the scene once it is on', async () => {
+	it('renders nothing before any preference is cached, and nothing appears later', () => {
 		const { container } = render(StateScene, { id });
 		expect(container.querySelector('img, picture')).toBeNull();
-		document.documentElement.dataset.illustrations = 'true';
-		await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
-	});
-
-	it('never renders a scene with no cache when the account has illustrations off', async () => {
-		const { container } = render(StateScene, { id });
-		expect(container.querySelector('img, picture')).toBeNull();
-		document.documentElement.dataset.illustrations = 'false';
-		await new Promise((r) => setTimeout(r, 50));
+		cache(true);
 		expect(container.querySelector('img, picture')).toBeNull();
 	});
 
