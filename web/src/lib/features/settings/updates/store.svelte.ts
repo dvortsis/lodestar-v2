@@ -32,7 +32,8 @@ export type Failure =
 	| 'install_version_skipped'
 	| 'install_unavailable'
 	| 'install_manual_confirmation'
-	| 'install_not_saved';
+	| 'install_not_saved'
+	| 'install_failed';
 
 /** `POST /updates/install` refusals by their code; anything else is the general `install` failure. */
 const INSTALL_ANSWERS: Record<string, Failure> = {
@@ -79,6 +80,11 @@ export class UpdatesStore {
 				this.step = isStep(e.state) ? e.state : null;
 				this.stepVersion = this.step ? e.version : null;
 				this.progress = { done: e.bytes_done, total: e.bytes_total };
+				if (e.state === 'failed') {
+					// An install that was accepted and then failed: its stable code, never a URL.
+					this.error = 'install_failed';
+					this.reason = e.error ?? '';
+				}
 				if (!isStep(e.state)) void this.refresh();
 			},
 			{

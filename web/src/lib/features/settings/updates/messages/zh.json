@@ -166,5 +166,6 @@
 	"settings_updates_install_reason_not_candidate": "它不是当前提供的版本。",
 	"settings_updates_install_reason_not_current": "上次检查已过期。请先立即检查。",
 	"settings_updates_install_reason_upgrade_path": "无法从此版本一步升级到该版本。",
-	"settings_updates_install_reason_unknown": "服务器未给出原因。"
+	"settings_updates_install_reason_unknown": "服务器未给出原因。",
+	"settings_updates_error_install_failed": "安装失败（{reason}）。当前版本继续运行。"
 }

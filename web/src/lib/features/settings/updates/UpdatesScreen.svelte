@@ -2,7 +2,7 @@
 	// Settings → Updates (§10.10.14, part 1). It shows only what the server says (`GET /updates`
 	// and the `updates` settings): a failed or refused request leaves the last server state on
 	// screen with an error, and a control's position is put back to the server's value afterwards.
-	// Release notes and history load right after the first paint (Releases.svelte). Advanced, Roll back and the restart overlay are part 2 (docs/decisions/*-S-updates.md).
+	// Release notes and history load right after the first paint (Releases.svelte). Roll back and the restart overlay are part 2 (docs/decisions/*-S-updates.md).
 	import { onDestroy, onMount, tick, type Component } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -36,6 +36,13 @@
 	const noEngine = $derived(store.unavailable || !!status?.unavailable);
 	const noAuto = $derived(noEngine ? (status?.unavailable ?? 'unavailable') : cannotAuto(status));
 	const release = $derived(status ? newest(status) : undefined);
+	const canInstall = $derived(
+		!!release &&
+			!store.step &&
+			!status?.installing &&
+			status?.unavailable === null &&
+			!!status?.capability.can_install
+	);
 	const rolledBack = $derived(status?.history.findLast((h) => h.result === 'rolled_back'));
 	/** A time as the server gave it, in words that carry their own date. */
 	const when = (seconds: number) => whenOf(seconds, currentLocale());
@@ -186,7 +193,9 @@
 						? (installReasons[store.reason]?.() ?? cause(store.reason))
 						: m.settings_updates_install_reason_unknown()
 				})
-			: errors[kind]?.();
+			: kind === 'install_failed'
+				? m.settings_updates_error_install_failed({ reason: store.reason || '—' })
+				: errors[kind]?.();
 
 	/** Install now: a release with manual steps asks first; only a confirm sends `confirm_manual`. */
 	async function install(r: { version: string; manual_steps: boolean }) {
@@ -245,6 +254,15 @@
 	}
 	onMount(loadParts);
 </script>
+
+{#snippet revokedInstall()}
+	<Button
+		variant="primary"
+		onclick={() => release && install(release)}
+		loading={store.busy === 'install'}
+		data-testid="updates-install-revoked">{m.settings_updates_install_now()}</Button
+	>
+{/snippet}
 
 {#snippet choice(o: {
 	field: 'mode' | 'level';
@@ -308,6 +326,7 @@
 					<Banner
 						kind="warning"
 						title={notice[code]?.[0]() ?? m.settings_updates_notice_unknown({ code })}
+						action={code === 'revoked_key' && canInstall ? revokedInstall : undefined}
 					>
 						<span data-testid="updates-notice-{code}"
 							>{notice[code]?.[1]() ?? m.settings_updates_notice_unknown_body()}</span
@@ -393,8 +412,8 @@
 					>
 					<!-- Install now: hidden whenever the capability says no (trust damaged included), while
 					     an install is under way, or when the engine is unavailable. -->
-					{#if release && !store.step && !status.installing && status.unavailable === null}
-						{#if status.capability.can_install}
+					{#if release && !store.step && status.unavailable === null}
+						{#if status.capability.can_install && !status.installing}
 							<Button
 								variant="primary"
 								onclick={() => install(release)}

@@ -166,5 +166,6 @@
 	"settings_updates_install_reason_not_candidate": "It isn't the release offered now.",
 	"settings_updates_install_reason_not_current": "The last check is out of date. Check now first.",
 	"settings_updates_install_reason_upgrade_path": "This release can't be reached from this version in one step.",
-	"settings_updates_install_reason_unknown": "the server gave no reason."
+	"settings_updates_install_reason_unknown": "The server gave no reason.",
+	"settings_updates_error_install_failed": "The install failed ({reason}). The running version carries on."
 }

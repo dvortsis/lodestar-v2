@@ -295,6 +295,53 @@ describe('the Updates screen', () => {
 			expect(posts()[0]).toContain('"confirm_manual":true');
 		});
 
+		it('is offered in the revoked-key notice, and hidden while a step shows', async () => {
+			status.notices = ['revoked_key'];
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-install-revoked'));
+			await until(() => expect(posts()).toHaveLength(1));
+			document.body.innerHTML = '';
+			status.notices = [];
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-install');
+			const handler = events.on.mock.calls.findLast((c) => c[0] === 'updates')![1];
+			handler({
+				state: 'downloading',
+				version: '0.6.0',
+				bytes_done: 1,
+				bytes_total: 2,
+				error: null
+			});
+			await until(() => expect(screen.getByTestId('updates-progress')).toBeTruthy());
+			expect(screen.queryByTestId('updates-install')).toBeNull();
+			handler({
+				state: 'failed',
+				version: '0.6.0',
+				bytes_done: null,
+				bytes_total: null,
+				error: 'no_space'
+			});
+			await until(() =>
+				expect(screen.getByTestId('updates-error').textContent).toContain('no_space')
+			);
+			expect(screen.getByTestId('updates-install')).toBeTruthy();
+		});
+
+		it('keeps Skip while an install is queued, and words an unmapped code generally', async () => {
+			status.installing = { version: '0.6.0', when: 'window' };
+			render(UpdatesScreen);
+			expect(await screen.findByTestId('updates-skip')).toBeTruthy();
+			expect(screen.queryByTestId('updates-install')).toBeNull();
+			document.body.innerHTML = '';
+			status.installing = null;
+			answer = [503, { error: { code: 'bin_unavailable', message: 'x' } }];
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-install'));
+			await until(() =>
+				expect(screen.getByTestId('updates-error').textContent).toContain("install didn't start")
+			);
+		});
+
 		it.each([
 			[404, 'unknown_version', 'no longer offered'],
 			[409, 'version_skipped', 'skipped that version'],
