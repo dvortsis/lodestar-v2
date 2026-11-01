@@ -2,7 +2,7 @@
 	// Settings → Updates (§10.10.14, part 1). It shows only what the server says (`GET /updates`
 	// and the `updates` settings): a failed or refused request leaves the last server state on
 	// screen with an error, and a control's position is put back to the server's value afterwards.
-	// Release notes and history load right after the first paint (Releases.svelte). Roll back and the restart overlay are part 2 (docs/decisions/*-S-updates.md).
+	// Release notes and history load right after the first paint (Releases.svelte). Roll back sits in the Danger zone at the end (S-updates-4).
 	import { onDestroy, onMount, tick, type Component } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -11,6 +11,8 @@
 	import { FOCUS_RING } from '$lib/ui/classes';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { whenOf } from './time';
+	import IconWarn from '~icons/ph/warning';
+	import { formatCount } from '$lib/format';
 	import { ask } from '../form/dialogs';
 	import {
 		LEVELS,
@@ -177,7 +179,36 @@
 		install_unknown_version: m.settings_updates_error_install_unknown_version,
 		install_version_skipped: m.settings_updates_error_install_version_skipped,
 		install_manual_confirmation: m.settings_updates_error_install_manual_confirmation,
-		install_not_saved: m.settings_updates_error_install_not_saved
+		install_not_saved: m.settings_updates_error_install_not_saved,
+		rollback: m.settings_updates_error_rollback,
+		rollback_updates_unavailable: m.settings_updates_error_rollback_updates_unavailable
+	};
+	const rollbackReasons: Record<string, () => string> = {
+		not_supervised: m.settings_updates_cannot_not_supervised,
+		image_mode: m.settings_updates_cannot_image_mode,
+		busy: m.settings_updates_rollback_reason_busy,
+		no_previous_version: m.settings_updates_rollback_reason_no_previous_version,
+		snapshot_missing: m.settings_updates_rollback_reason_snapshot_missing
+	};
+	/** A plain sentence per stable install-failure code; never the code's own text, never a URL. */
+	const failedWords: Record<string, () => string> = {
+		download_mismatch: m.settings_updates_failed_download_mismatch,
+		download_too_large: m.settings_updates_failed_download_too_large,
+		download_io: m.settings_updates_failed_download_io,
+		no_artifact: m.settings_updates_failed_no_artifact,
+		redirect_refused: m.settings_updates_failed_redirect_refused,
+		stage_failed: m.settings_updates_failed_stage_failed,
+		no_space: m.settings_updates_failed_no_space,
+		bad_overlay: m.settings_updates_failed_bad_overlay,
+		timeout: m.settings_updates_failed_timeout,
+		network: m.settings_updates_failed_network,
+		blocked: m.settings_updates_failed_blocked,
+		http_status: m.settings_updates_failed_http_status,
+		too_large: m.settings_updates_failed_too_large,
+		bin_unavailable: m.settings_updates_failed_bin_unavailable,
+		rebuild_running: m.settings_updates_failed_rebuild_running,
+		trust_damaged: m.settings_updates_failed_trust_damaged,
+		not_current: m.settings_updates_failed_not_current
 	};
 	const installReasons: Record<string, () => string> = {
 		busy: m.settings_updates_install_reason_busy,
@@ -193,9 +224,18 @@
 						? (installReasons[store.reason]?.() ?? cause(store.reason))
 						: m.settings_updates_install_reason_unknown()
 				})
-			: kind === 'install_failed'
-				? m.settings_updates_error_install_failed({ reason: store.reason || '—' })
-				: errors[kind]?.();
+			: kind === 'rollback_unavailable'
+				? m.settings_updates_error_rollback_unavailable({
+						reason:
+							(store.reason && rollbackReasons[store.reason]?.()) ||
+							m.settings_updates_install_reason_unknown()
+					})
+				: kind === 'install_failed'
+					? m.settings_updates_error_install_failed({
+							reason:
+								(store.reason && failedWords[store.reason]?.()) || m.settings_updates_failed_other()
+						})
+					: errors[kind]?.();
 
 	/** Install now: a release with manual steps asks first; only a confirm sends `confirm_manual`. */
 	async function install(r: { version: string; manual_steps: boolean }) {
@@ -232,6 +272,38 @@
 			store.signal
 		);
 		if (answer === 'skip') await store.skip(version);
+	}
+
+	/** Roll back: the confirmation says what is lost; only Roll back sends `confirm: true`. */
+	async function rollBack(to: string) {
+		const lost = status?.rollback.lost_torrents;
+		const name = to === 'image' ? m.settings_updates_rollback_dialog_image() : to;
+		const answer = await ask(
+			{
+				title: m.settings_updates_rollback_title({ version: name }),
+				body: [
+					m.settings_updates_rollback_body({ version: name }),
+					lost == null
+						? m.settings_updates_rollback_lost_unknown()
+						: lost === 0
+							? m.settings_updates_rollback_lost_none()
+							: lost === 1
+								? m.settings_updates_rollback_lost_one()
+								: m.settings_updates_rollback_lost({ count: formatCount(lost, currentLocale()) })
+				],
+				actions: [
+					{ id: 'cancel', label: m.settings_updates_cancel() },
+					{
+						id: 'rollback',
+						label: m.settings_updates_rollback_button({ version: name }),
+						variant: 'danger'
+					}
+				],
+				initial: 'cancel'
+			},
+			store.signal
+		);
+		if (answer === 'rollback') await store.rollback();
 	}
 
 	// Advanced loads when it is first opened.
@@ -394,10 +466,12 @@
 				{#if rolledBack && status.notices.includes('rolled_back')}
 					<Banner kind="warning">
 						<span data-testid="updates-rolled-back">
-							{m.settings_updates_rolled_back({
-								version: rolledBack.version,
-								reason: rolledBack.reason ?? ''
-							})}
+							{rolledBack.reason === 'manual'
+								? m.settings_updates_rolled_back_manual({ version: status.running.version })
+								: m.settings_updates_rolled_back({
+										version: rolledBack.version,
+										reason: rolledBack.reason ?? ''
+									})}
 							{m.settings_updates_rolled_back_next()}
 						</span>
 					</Banner>
@@ -575,6 +649,33 @@
 					>{m.settings_updates_retry()}</Button
 				>
 			</p>
+		{/if}
+
+		{#if status?.rollback.available && status.rollback.to_version && !store.step}
+			{@const to = status.rollback.to_version}
+			<section
+				class="flex flex-col gap-3 rounded-box border border-error p-4"
+				aria-labelledby="updates-danger"
+			>
+				<h2 id="updates-danger" class="inline-flex items-center gap-2 text-body-lg font-semibold">
+					<IconWarn
+						class="size-5 text-error"
+						aria-hidden="true"
+					/>{m.settings_updates_rollback_danger()}
+				</h2>
+				<p class="text-muted-text">{m.settings_updates_rollback_danger_lead()}</p>
+				<div>
+					<Button
+						variant="danger"
+						onclick={() => rollBack(to)}
+						loading={store.busy === 'rollback'}
+						data-testid="updates-rollback"
+						>{m.settings_updates_rollback_button({
+							version: to === 'image' ? m.settings_updates_rollback_dialog_image() : to
+						})}</Button
+					>
+				</div>
+			</section>
 		{/if}
 	</div>
 {/if}

@@ -117,7 +117,7 @@ test.describe('keyboard: Settings → Updates', () => {
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		on('getUpdates', () => ({ status: 200, body: status() }));
 		on('getSystem', () => ({ status: 200, body: { deployment: { kind: 'docker' } } }));
-		for (const op of ['checkUpdates', 'skipUpdate', 'installUpdate'])
+		for (const op of ['checkUpdates', 'skipUpdate', 'installUpdate', 'rollbackUpdate'])
 			on(op, (r: { postDataJSON(): unknown }) => {
 				sent.push({ op, body: op === 'checkUpdates' ? null : r.postDataJSON() });
 				return { status: 200, body: status() };
@@ -167,6 +167,38 @@ test.describe('keyboard: Settings → Updates', () => {
 		await kbd.press('Enter');
 		await expect.poll(() => sent.map((s) => s.op)).toEqual(['installUpdate']);
 		expect(sent[0]?.body).toEqual({ version: '0.5.3', when: 'now', confirm_manual: false });
+	});
+
+	test('Roll back by keyboard: Cancel sends nothing, Roll back sends confirm', async ({
+		page,
+		go,
+		kbd,
+		mock
+	}) => {
+		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
+		const offered = () => ({
+			...status(),
+			rollback: { available: true, lost_torrents: 2, reason: null, to_version: '0.5.1' }
+		});
+		on('getUpdates', () => ({ status: 200, body: offered() }));
+		await go('/settings/updates');
+		const button = page.getByTestId('updates-rollback');
+		await expect(button).toHaveText('Roll back to 0.5.1');
+		await kbd.tabTo(button, 200);
+		await kbd.press('Enter');
+		const dialog = page.getByRole('dialog', { name: 'Roll back to 0.5.1?' });
+		await expect(dialog).toBeVisible();
+		await expectNoA11yViolations(page);
+		await kbd.press('Escape');
+		await expect(dialog).toBeHidden();
+		expect(sent).toEqual([]);
+
+		await kbd.tabTo(button, 200);
+		await kbd.press('Enter');
+		await kbd.tabTo(dialog.getByRole('button', { name: 'Roll back to 0.5.1', exact: true }), 10);
+		await kbd.press('Enter');
+		await expect.poll(() => sent.map((s) => s.op)).toEqual(['rollbackUpdate']);
+		expect(sent[0]?.body).toEqual({ confirm: true });
 	});
 
 	test('Advanced: the channel dialog by keyboard, Cancel sends nothing', async ({
