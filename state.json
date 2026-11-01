@@ -591,7 +591,7 @@
       "merged_at": "2026-11-01T04:26Z"
     },
     "G-m5": {
-      "status": "in progress: G-m5a (matrix+bench) and G-m5b (design-review) running",
+      "status": "G-m5b report #340 (7 blocking); FX-1..4 clear blocking; FX-2 launching 14:05Z",
       "model": "opus",
       "session": null,
       "pr": null,
@@ -3054,6 +3054,16 @@
       "status": "asked",
       "at": "2026-11-01T12:58Z",
       "unblocks": "IMP online trigger (deferred)"
+    },
+    {
+      "id": "flag-fx5-connecting-glyph",
+      "status": "to-send",
+      "text": "§2.19 (G-m5b I2 / FX-5): the status pill's Connecting glyph changes from dots (2026-10-30-F-status.md) because it duplicated the overflow menu's glyph beside it."
+    },
+    {
+      "id": "flag-fx3-keyboard-apply",
+      "status": "to-send",
+      "text": "§2.19 (G-m5b B3 / FX-3): Settings → Keyboard switches to apply-at-once with Undo (§10.10.1), superseding the interim Save/Cancel in 2026-10-23-S-keys.md."
     }
   ],
   "external_gates": {
@@ -3314,7 +3324,14 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-11-01T12:58Z",
-  "open_prs": {},
+  "open_prs": {
+    "340": {
+      "slice": "G-m5b",
+      "head": "0cec6bb2f768414fc71555c6c77b6cdd23bb1dae",
+      "verdict": "runner MERGE pending CI (report 7B/10I/11P; batches FX-1..6)",
+      "session": "session_01MMjhnByisxRDJSU7rGJj7o"
+    }
+  },
   "merged_log": [
     {
       "pr": 331,
