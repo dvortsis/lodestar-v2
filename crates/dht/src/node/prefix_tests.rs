@@ -83,7 +83,9 @@ fn switch_off_draws_each_target_uniformly_as_before() {
     let (p1, p2) = (peer(&mut a), peer(&mut a));
     // Before CR-1b a tick with a low frontier drew the exploration target,
     // then each sample's in frontier order, as one uniform 20-byte draw
-    // apiece.
+    // apiece. The replay relies on that order (p1, then p2) and on the
+    // explore draw happening even though the empty table gives the lookup
+    // nothing to send.
     a.rng = StdRng::seed_from_u64(9);
     let mut rng = StdRng::seed_from_u64(9);
     let _explore: [u8; 20] = rng.random();
@@ -266,4 +268,42 @@ fn the_explore_cursor_moves_only_when_its_lookup_sends() {
     assert_eq!(a.stats.snapshot().target_prefix_queries[0], 1);
     let target = a.lookups.values().find(|l| l.explore).unwrap().target;
     assert_eq!(target.0[0], 0, "position 0's prefix");
+}
+
+#[test]
+fn a_throttled_exploration_lookup_moves_its_cursor_when_it_sends() {
+    let (mut a, sockets) = actor(true);
+    a.families[0].table.insert(
+        NodeInfo {
+            id: NodeId([9; 20]),
+            addr: "127.0.0.1:40300".parse().unwrap(),
+        },
+        Contact::Response,
+        0,
+    );
+    let (rate, burst, tokens) = (a.query_rate.rate, a.query_rate.burst, a.query_rate.tokens);
+    (a.query_rate.rate, a.query_rate.tokens) = (0.0, 0.0);
+    a.sample_tick(&sockets, Instant::now());
+    let lid = *a
+        .lookups
+        .iter()
+        .find(|(_, l)| l.explore)
+        .expect("the throttled lookup waits, stalled")
+        .0;
+    assert!(a.stalled.contains(&lid));
+    assert_eq!(cursor(&a, TargetKind::Explore), 0, "nothing sent yet");
+    assert_eq!(a.stats.snapshot().target_prefix_queries[0], 0);
+
+    (a.query_rate.rate, a.query_rate.burst, a.query_rate.tokens) = (rate, burst, tokens);
+    a.drive_lookup(&sockets, lid);
+    assert_eq!(
+        cursor(&a, TargetKind::Explore),
+        1,
+        "its later send used the prefix"
+    );
+    assert_eq!(a.stats.snapshot().target_prefix_queries[0], 1);
+    assert_eq!(a.lookups[&lid].target.0[0], 0);
+    // Further sends of the same lookup don't count again.
+    a.drive_lookup(&sockets, lid);
+    assert_eq!(a.stats.snapshot().target_prefix_queries[0], 1);
 }

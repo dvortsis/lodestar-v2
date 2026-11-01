@@ -1720,10 +1720,10 @@ impl Actor {
         known: &[NodeInfo],
         seeds: &[SocketAddr],
         info_hash: Option<InfoHash>,
-    ) -> Option<u32> {
+    ) {
         self.start_lookup_as(
             sockets, family, target, known, seeds, info_hash, false, None,
-        )
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1737,9 +1737,9 @@ impl Actor {
         info_hash: Option<InfoHash>,
         scrape: bool,
         owner: Option<u32>,
-    ) -> Option<u32> {
+    ) {
         if info_hash.is_none() && self.maintenance_lookups() >= MAX_LOOKUPS {
-            return None;
+            return;
         }
         let lid = self.insert_lookup(family, target, known, info_hash, scrape, owner);
         // A router answers in the family it sees the query arrive in. Through
@@ -1762,7 +1762,6 @@ impl Actor {
             }
         }
         self.drive_lookup(sockets, lid);
-        Some(lid)
     }
 
     /// A new lookup seeded from the routing table and `known`, not yet
@@ -1906,9 +1905,14 @@ impl Actor {
             };
             match sent {
                 Sent::Yes => {
+                    // CR-1b: an exploration lookup's first send uses its prefix.
+                    let prefix_used = std::mem::take(&mut l.prefix_pending);
                     if let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o)) {
                         r.inflight += 1;
                         r.sent += 1;
+                    }
+                    if prefix_used {
+                        self.advance_prefix(family, TargetKind::Explore);
                     }
                 }
                 // A scrape's budget was paid when it started, so running
@@ -2288,20 +2292,15 @@ impl Actor {
                     }
                 }
                 let target = self.routing_target(f, TargetKind::Explore);
-                if let Some(lid) = self.start_lookup(sockets, f, target, &[], &[], None) {
+                // `start_lookup` with no seeds, flagged before its first
+                // drive: CR-1b moves the explore cursor on its first send.
+                if self.maintenance_lookups() < MAX_LOOKUPS {
+                    let lid = self.insert_lookup(f, target, &[], None, false, None);
                     if let Some(l) = self.lookups.get_mut(&lid) {
                         l.explore = true;
+                        l.prefix_pending = self.prefixes.is_some();
                     }
-                    // CR-1b: only a lookup that sent a query used its prefix.
-                    // One with no usable candidate finished at once, unsent.
-                    if self.prefixes.is_some()
-                        && self
-                            .pending
-                            .values()
-                            .any(|p| matches!(p.purpose, Purpose::Lookup(l) if l == lid))
-                    {
-                        self.advance_prefix(f, TargetKind::Explore);
-                    }
+                    self.drive_lookup(sockets, lid);
                 }
             }
         }
