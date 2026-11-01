@@ -98,14 +98,16 @@
 			// when it is down.
 			loadToaster();
 			void import('./ErrorView.svelte');
-			// A newer server build is noticed when the tab is shown again (dev builds have none).
-			if (!import.meta.env.DEV && !bare)
-				void import('./stale').then((mod) => {
-					if (!disposed)
-						offStale = mod.watchStale(() =>
-							import('./StaleBanner.svelte').then((b) => (Stale = b.default))
-						);
-				});
+			// A newer server build is noticed when the tab is shown again (dev builds have none). The
+			// banner is fetched now, with the check, while this build's chunks still exist: after an
+			// upgrade the server no longer has them. Bare screens (sign-in) can become the app without
+			// remounting this, so the check always starts and only the banner waits for `!bare`.
+			if (!import.meta.env.DEV)
+				void Promise.all([import('./stale'), import('./StaleBanner.svelte')])
+					.then(([mod, banner]) => {
+						if (!disposed) offStale = mod.watchStale(() => (Stale = banner.default));
+					})
+					.catch(() => {});
 		});
 		return () => {
 			disposed = true;

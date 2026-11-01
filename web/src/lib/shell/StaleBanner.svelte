@@ -8,14 +8,19 @@
 	import { hasUnsaved } from './stale';
 
 	let unsaved = $state(hasUnsaved());
-	// A draft can start after the banner shows; edits are the only way it does.
+	// The answer changes with edits, Save, Discard and leaving a screen: ask again shortly after
+	// any of them (one probe per burst, since kit saves page state on each).
 	$effect(() => {
-		const ask = () => (unsaved = hasUnsaved());
-		document.addEventListener('input', ask, true);
-		document.addEventListener('change', ask, true);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const ask = () => {
+			clearTimeout(timer);
+			timer = setTimeout(() => (unsaved = hasUnsaved()), 250);
+		};
+		const events = ['input', 'change', 'focusout', 'click'] as const;
+		for (const e of events) document.addEventListener(e, ask, true);
 		return () => {
-			document.removeEventListener('input', ask, true);
-			document.removeEventListener('change', ask, true);
+			clearTimeout(timer);
+			for (const e of events) document.removeEventListener(e, ask, true);
 		};
 	});
 </script>

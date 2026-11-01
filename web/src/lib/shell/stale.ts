@@ -16,7 +16,7 @@ export interface StaleDeps {
 	build?: string;
 }
 
-async function fetchBuild(): Promise<string | null> {
+export async function fetchBuild(): Promise<string | null> {
 	try {
 		const res = await fetch('/_app/version.json', { cache: 'no-store' });
 		if (!res.ok) return null;
@@ -43,13 +43,15 @@ export function watchStale(onStale: () => void, deps: StaleDeps = {}): () => voi
 		if (document.visibilityState !== 'visible' || busy || now() - last < STALE_THROTTLE_MS) return;
 		busy = true;
 		last = now();
-		void get().then((server) => {
-			busy = false;
-			if (server && server !== mine) {
-				stop();
-				onStale();
-			}
-		});
+		void get()
+			.catch(() => null)
+			.then((server) => {
+				busy = false;
+				if (server && server !== mine) {
+					stop();
+					onStale();
+				}
+			});
 	}
 	document.addEventListener('visibilitychange', check);
 	return stop;
@@ -61,7 +63,11 @@ export function watchStale(onStale: () => void, deps: StaleDeps = {}): () => voi
  * `beforeunload` and cancels it when one objects.
  */
 export function hasUnsaved(): boolean {
+	// Kit's handler also saves scroll and snapshot state, and (when nothing objects) hands scroll
+	// restoration back to the browser; the latter is undone here.
+	const restoration = history.scrollRestoration;
 	const e = new Event('beforeunload', { cancelable: true });
 	window.dispatchEvent(e);
+	if (history.scrollRestoration !== restoration) history.scrollRestoration = restoration;
 	return e.defaultPrevented;
 }

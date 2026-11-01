@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
-import { STALE_THROTTLE_MS, hasUnsaved, watchStale } from './stale';
+import { STALE_THROTTLE_MS, fetchBuild as realFetch, hasUnsaved, watchStale } from './stale';
 import StaleBanner from './StaleBanner.svelte';
 
 const show = () => document.dispatchEvent(new Event('visibilitychange'));
@@ -76,6 +76,58 @@ describe('watchStale', () => {
 		show();
 		expect(fetchBuild).toHaveBeenCalledTimes(2);
 		release('a');
+	});
+});
+
+describe('fetchBuild', () => {
+	const answer = (res: Partial<Response> | Error) =>
+		vi.stubGlobal('fetch', async () => {
+			if (res instanceof Error) throw res;
+			return res;
+		});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('reads the version', async () => {
+		answer({ ok: true, json: async () => ({ version: '1.2-abc' }) });
+		expect(await realFetch()).toBe('1.2-abc');
+	});
+
+	it.each([
+		['a thrown fetch', new Error('down')],
+		['a non-OK answer', { ok: false, json: async () => ({ version: 'x' }) }],
+		['a non-JSON body', { ok: true, json: async () => Promise.reject(new Error('x')) }],
+		['no version', { ok: true, json: async () => ({}) }],
+		['an empty version', { ok: true, json: async () => ({ version: '' }) }],
+		['a non-string version', { ok: true, json: async () => ({ version: 3 }) }],
+		['a null body', { ok: true, json: async () => null }]
+	])('says nothing for %s', async (_, res) => {
+		answer(res as Partial<Response> | Error);
+		expect(await realFetch()).toBeNull();
+	});
+});
+
+describe('while hidden or after a rejected check', () => {
+	it('does not ask while the tab is hidden', () => {
+		const fetchBuild = vi.fn(async () => 'b');
+		stop = watchStale(vi.fn(), { fetchBuild, now: () => STALE_THROTTLE_MS, build: 'a' });
+		const spy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+		show();
+		spy.mockRestore();
+		expect(fetchBuild).not.toHaveBeenCalled();
+	});
+
+	it('a rejected check does not stop later ones', async () => {
+		let t = 0;
+		const fetchBuild = vi.fn(async () => {
+			throw new Error('x');
+		});
+		stop = watchStale(vi.fn(), { fetchBuild, now: () => t, build: 'a' });
+		t = STALE_THROTTLE_MS;
+		show();
+		await flush();
+		t += STALE_THROTTLE_MS;
+		show();
+		expect(fetchBuild).toHaveBeenCalledTimes(2);
 	});
 });
 

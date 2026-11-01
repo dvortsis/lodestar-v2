@@ -48,6 +48,23 @@ test('a different server build shows the banner, axe clean, Reload reachable by 
 	await kbd.tabTo(page.getByRole('button', { name: 'Reload' }), 80);
 });
 
+test("the banner shows although the old build's chunks are gone from the new server", async ({
+	page,
+	go
+}) => {
+	let asked = 0;
+	await page.route('**/_app/version.json', (route) => {
+		asked++;
+		return route.fulfill({ json: { version: 'another-build' } });
+	});
+	await go('/search');
+	await expect(page.getByTestId('status-pill')).toBeVisible();
+	// The new server answers any `_app/` file of the old build with a 404.
+	await page.route('**/_app/immutable/**', (route) => route.fulfill({ status: 404, body: '' }));
+	await expect.poll(() => shown(page).then(() => asked), { timeout: 15_000 }).toBeGreaterThan(0);
+	await expect(page.getByTestId('stale-banner')).toBeVisible();
+});
+
 test('the same build shows nothing', async ({ page, go }) => {
 	let asked = 0;
 	await page.route('**/_app/version.json', (route) => {
