@@ -3234,6 +3234,10 @@
     {
       "t": "2026-11-01T18:15Z",
       "event": "#349 X-web-cleanup-1 (d25d51e4) runner review MERGE (mechanical; every removed coarse copy covered by app.css :where(button,[role=tab],summary,nav a)/.target; text-label->text-small + ban; css scan on). Pending baselines + marker removal + main green (#347). FX-6 #348 fixes at 60ab1605 (stage pages 38989 B); needs main merge after #347."
+    },
+    {
+      "t": "2026-11-01T18:26Z",
+      "event": "merged #347 FX-5 (7fdae787): main green expected (Detail 37.52, logging parts 17.15). Archived FX-5. Told FX-6 (#348) and X-web-cleanup-1 (#349, runner MERGE) to merge main. Launched gate-file-cold (Sonnet, bench only). appearance-undo (Opus) waits for #349 (touches appearance/editor.css)."
     }
   ],
   "reviews": {
