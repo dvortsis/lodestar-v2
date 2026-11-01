@@ -1,7 +1,7 @@
 //! Updates (architecture §12.2, §10.10.14): `GET /updates`,
 //! `POST /updates/check`, `POST /updates/install`, `POST /updates/skip`,
-//! `POST /updates/pause` and `POST /updates/history/clear` **(§2.19, a
-//! new route)**.
+//! `POST /updates/pause`, `POST /updates/rollback` and
+//! `POST /updates/history/clear` **(§2.19, a new route)**.
 //!
 //! - **The binary answers** through [`UpdatesApi`], an `Extension`
 //!   beside `SystemApi`; without it every route is
@@ -33,8 +33,8 @@ use crate::auth;
 use crate::dto::error::ErrorEnvelope;
 pub use crate::dto::updates::{
     Blocked, Capability, CheckState, CheckStatus, HistoryEntry, InstallRequest, InstallWhen,
-    Installing, PauseRequest, PendingInstall, Policy, ReleaseInfo, RollbackInfo, Running,
-    SkipRequest, UpdatesStatus, UpdatesUnavailable,
+    Installing, PauseRequest, PendingInstall, Policy, ReleaseInfo, RollbackInfo, RollbackRequest,
+    Running, SkipRequest, UpdatesStatus, UpdatesUnavailable,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json as JsonBody, same_origin_json};
@@ -42,7 +42,7 @@ use crate::ops::BoxFuture;
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(status, check, install, skip, pause, clear_history))]
+#[openapi(paths(status, check, install, skip, pause, rollback, clear_history))]
 pub(crate) struct ApiDoc;
 
 /// What these routes ask of the update engine.
@@ -64,6 +64,10 @@ pub trait UpdatesApi: Send + Sync + fmt::Debug {
     /// Pauses automatic installs for `days` (0 resumes).
     fn pause(&self, days: u32) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>>;
     fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>>;
+    /// Rolls the running version back to the previous one, through the
+    /// supervisor's rollback journal (as `lodestar rollback` does): the
+    /// graceful shutdown follows the answer.
+    fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>>;
 }
 
 /// Why an updates route refused.
@@ -88,6 +92,9 @@ pub enum UpdatesError {
     /// It can't be installed now; the reason is a stable code
     /// (`not_supervised`, `not_current`, `upgrade_path`, `busy`, …).
     InstallUnavailable(&'static str),
+    /// Roll back isn't possible now; the reason is a stable code
+    /// (`no_previous_version`, `snapshot_missing`, `busy`, …).
+    RollbackUnavailable(&'static str),
     /// A value the route doesn't take; the message says which.
     Invalid {
         field: &'static str,
@@ -141,7 +148,14 @@ impl From<UpdatesError> for ApiError {
                 StatusCode::CONFLICT,
                 "install_unavailable",
                 format!("That version can't be installed now ({reason})."),
-            ),
+            )
+            .reason(reason),
+            UpdatesError::RollbackUnavailable(reason) => ApiError::new(
+                StatusCode::CONFLICT,
+                "rollback_unavailable",
+                format!("Lodestar can't roll back now ({reason})."),
+            )
+            .reason(reason),
             UpdatesError::Invalid { field, message } => {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_value", message)
                     .field(field)
@@ -175,6 +189,7 @@ pub fn routes() -> Router<ApiState> {
             .route("/updates/install", post(install))
             .route("/updates/skip", post(skip))
             .route("/updates/pause", post(pause))
+            .route("/updates/rollback", post(rollback))
             .route("/updates/history/clear", post(clear_history)),
     )
 }
@@ -327,6 +342,45 @@ pub(crate) async fn pause(
     Ok(answer(api(handle)?.pause(req.days).await))
 }
 
+/// Rolls back to the previous version while it and the snapshot it needs
+/// are kept (`rollback.available` in `GET /updates`). It runs the same
+/// journal as `lodestar rollback`: Lodestar shuts down gracefully, the
+/// supervisor rolls back (restoring the store when the update migrated
+/// it) and starts the previous version, which never installs the
+/// rolled-back one automatically again. Revocations are kept.
+#[utoipa::path(
+    operation_id = "rollbackUpdate",
+    post,
+    path = "/updates/rollback",
+    tag = "settings",
+    request_body = RollbackRequest,
+    responses(
+        (status = 202, description = "Started: the restart follows; `rolled_back` is announced on the `updates` topic once the previous version runs.", body = UpdatesStatus),
+        (status = 409, description = "`rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture or Windows).", body = ErrorEnvelope),
+        (status = 428, description = "`confirmation_required`: `confirm` wasn't true.", body = ErrorEnvelope),
+        (status = 503, description = "`updates_unavailable`: this process serves no update engine.", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn rollback(
+    handle: Handle,
+    headers: HeaderMap,
+    JsonBody(req): JsonBody<RollbackRequest>,
+) -> ApiResult<Response> {
+    same_origin_json(&headers)?;
+    let api = api(handle)?;
+    if !req.confirm {
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "confirmation_required",
+            "Confirm the rollback: torrents stored since the update may be lost.",
+        ));
+    }
+    Ok(match api.rollback().await {
+        Ok(s) => (StatusCode::ACCEPTED, Json(s)).into_response(),
+        Err(e) => refusal(e),
+    })
+}
+
 /// Clears the update history (`history.json`).
 #[utoipa::path(
     operation_id = "clearUpdateHistory",
@@ -361,6 +415,26 @@ mod tests {
         );
         let e = ApiError::from(UpdatesError::Internal("/secret".into()));
         assert!(!e.body().to_string().contains("secret"));
+    }
+
+    /// The cause is a field of its own; the message is unchanged.
+    #[test]
+    fn unavailable_refusals_carry_their_reason() {
+        let e = ApiError::from(UpdatesError::InstallUnavailable("busy"));
+        assert_eq!(e.code(), "install_unavailable");
+        assert_eq!(e.body()["error"]["reason"], "busy");
+        assert_eq!(
+            e.body()["error"]["message"],
+            "That version can't be installed now (busy)."
+        );
+        let e = ApiError::from(UpdatesError::RollbackUnavailable("snapshot_missing"));
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::CONFLICT, "rollback_unavailable")
+        );
+        assert_eq!(e.body()["error"]["reason"], "snapshot_missing");
+        let e = ApiError::from(UpdatesError::UnknownVersion);
+        assert!(e.body()["error"].get("reason").is_none());
     }
 
     /// DUR-26: the fixed code and sentence, a 500, nothing variable.

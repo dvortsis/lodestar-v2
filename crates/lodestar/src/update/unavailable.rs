@@ -53,6 +53,7 @@ impl Unavailable {
             installing: None,
             rollback: RollbackInfo {
                 available: false,
+                reason: Some(self.why.code().to_string()),
                 to_version: None,
                 lost_torrents: None,
             },
@@ -97,6 +98,10 @@ impl UpdatesApi for Unavailable {
     fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         self.refused()
     }
+
+    fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        self.refused()
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +129,12 @@ mod tests {
         assert!(u.skip("0.5.4".into()).await.is_err());
         assert!(u.pause(7).await.is_err());
         assert!(u.clear_history().await.is_err());
+        assert_eq!(
+            u.rollback().await.unwrap_err(),
+            UpdatesError::Unavailable(UpdatesUnavailable::WindowsHelper)
+        );
+        assert_eq!(json["rollback"]["available"], false);
+        assert_eq!(json["rollback"]["reason"], "windows_helper");
     }
 
     #[test]

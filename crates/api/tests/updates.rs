@@ -33,6 +33,8 @@ struct FakeEngine {
     /// A failed pause's process-only hold.
     held: Mutex<bool>,
     installing: Mutex<Option<Installing>>,
+    /// A rollback was asked for: a second one is `busy`.
+    rolling_back: Mutex<bool>,
 }
 
 fn status(e: &FakeEngine) -> UpdatesStatus {
@@ -120,10 +122,20 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
         releases,
         pending: None,
         installing: e.installing.lock().unwrap().clone(),
-        rollback: RollbackInfo {
-            available: false,
-            to_version: Some("image".into()),
-            lost_torrents: None,
+        rollback: if *e.rolling_back.lock().unwrap() {
+            RollbackInfo {
+                available: false,
+                reason: Some("busy".into()),
+                to_version: Some("image".into()),
+                lost_torrents: Some(12),
+            }
+        } else {
+            RollbackInfo {
+                available: true,
+                reason: None,
+                to_version: Some("image".into()),
+                lost_torrents: Some(12),
+            }
         },
         notices: vec![],
         history: vec![HistoryEntry {
@@ -205,6 +217,18 @@ impl UpdatesApi for FakeEngine {
             let mut s = status(self);
             s.history.clear();
             Ok(s)
+        })
+    }
+
+    fn rollback(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
+        Box::pin(async move {
+            let mut busy = self.rolling_back.lock().unwrap();
+            if *busy {
+                return Err(UpdatesError::RollbackUnavailable("busy"));
+            }
+            *busy = true;
+            drop(busy);
+            Ok(status(self))
         })
     }
 }
@@ -312,6 +336,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/updates/install"),
     ("POST", "/api/v1/updates/skip"),
     ("POST", "/api/v1/updates/pause"),
+    ("POST", "/api/v1/updates/rollback"),
     ("POST", "/api/v1/updates/history/clear"),
 ];
 
@@ -321,6 +346,7 @@ fn body_for(path: &str) -> Value {
         Some("skip") => json!({"version": "0.6.0"}),
         Some("install") => json!({"version": "0.6.0", "when": "now"}),
         Some("pause") => json!({"days": 1}),
+        Some("rollback") => json!({"confirm": true}),
         _ => json!({}),
     }
 }
@@ -499,6 +525,26 @@ async fn updates_golden() {
         started["installing"],
         json!({"version": "0.6.0", "when": "now"})
     );
+}
+
+/// Roll back needs `confirm: true` (`428`), answers `202` with the
+/// status, and a second one is `409 rollback_unavailable` with its
+/// reason as a field.
+#[tokio::test]
+async fn rollback_is_confirmed_then_accepted_once() {
+    let f = fixture_with(true);
+    let c = session(&f);
+    let rollback = |body| req("POST", "/api/v1/updates/rollback", Some(&c), Some(body));
+    let unconfirmed = golden(&f, "rollback_unconfirmed", rollback(json!({}))).await;
+    assert_eq!(unconfirmed["error"]["code"], "confirmation_required");
+    assert!(!*f.engine.as_ref().unwrap().rolling_back.lock().unwrap());
+    let started = golden(&f, "rollback", rollback(json!({"confirm": true}))).await;
+    assert_eq!(started["rollback"]["reason"], "busy");
+    let busy = golden(&f, "rollback_busy", rollback(json!({"confirm": true}))).await;
+    assert_eq!(busy["error"]["code"], "rollback_unavailable");
+    assert_eq!(busy["error"]["reason"], "busy");
+    let (status, _, _) = send(&f, rollback(json!({"confirm": true, "to": "0.1.0"}))).await;
+    assert_eq!(status, 422);
 }
 
 /// DUR-26: a pause that couldn't be saved is `500 updates_not_saved`

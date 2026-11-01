@@ -306,8 +306,7 @@ impl Child {
             if fault == Some("rollback") {
                 tokio::spawn(async {
                     tokio::time::sleep(Duration::from_secs(3)).await;
-                    control::set_intent(control::Action::Rollback, None, None);
-                    crate::system::Restart::global().request();
+                    control::request_rollback(None);
                 });
             }
             return;

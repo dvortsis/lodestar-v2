@@ -122,6 +122,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/updates/install"),
     ("POST", "/updates/skip"),
     ("POST", "/updates/pause"),
+    ("POST", "/updates/rollback"),
     ("POST", "/updates/history/clear"),
     ("GET", "/saved-searches/{id}/alerts"),
     ("POST", "/alerts/read"),

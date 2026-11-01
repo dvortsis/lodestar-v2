@@ -20,6 +20,7 @@ use std::future::Future;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin as BoxPin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_integrations::net::{GuardedClient, NetPolicy};
@@ -39,6 +40,29 @@ pub const OVERALL: Duration = Duration::from_secs(30 * 60);
 pub const IDLE: Duration = Duration::from_secs(60);
 /// Chunks in flight to the writer.
 const QUEUE: usize = 8;
+
+/// How long a download may take, in all and between chunks.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    overall: Duration,
+    idle: Duration,
+}
+
+const LIMITS: Limits = Limits {
+    overall: OVERALL,
+    idle: IDLE,
+};
+
+/// Where the writer thread is, for tests that hold it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriterAt {
+    /// About to create the `.part` file.
+    Start,
+    /// Finished: the file is closed (or was never created).
+    Done,
+}
+
+type WriterHook = Arc<dyn Fn(WriterAt) + Send + Sync>;
 
 /// One response: its status and `Location`, and its body chunk by chunk.
 pub struct Opened {
@@ -115,47 +139,43 @@ pub async fn download(
     pin: &Pin,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> Result<PathBuf, DownloadError> {
-    download_within(src, bin, pin, progress, IDLE).await
+    download_with(src, bin, pin, progress, LIMITS, None).await
 }
 
-/// [`download`], waiting at most `idle` for each chunk.
-async fn download_within(
+/// [`download`] within `limits`. A failure removes the `.part` file only
+/// once the writer thread has finished with it, the overall timeout
+/// included, so no write (or the file's creation) lands after the
+/// removal. The join itself isn't bounded: a disk write that hangs keeps
+/// the download past `limits.overall` rather than remove the file under
+/// the writer.
+async fn download_with(
     src: &dyn Source,
     bin: &Bin,
     pin: &Pin,
     progress: &mut (dyn FnMut(u64) + Send),
-    idle: Duration,
+    limits: Limits,
+    hook: Option<WriterHook>,
 ) -> Result<PathBuf, DownloadError> {
     remove_stale_parts(bin);
     let path = part_path(bin, pin);
-    let result = tokio::time::timeout(OVERALL, fetch_to(src, &path, pin, progress, idle))
-        .await
-        .unwrap_or(Err(DownloadError::Fetch(CheckError::Timeout)));
+    let deadline = tokio::time::Instant::now() + limits.overall;
+    let result = fetch_to(src, &path, pin, progress, limits.idle, deadline, hook).await;
     if result.is_err() {
         let _ = std::fs::remove_file(&path);
     }
     result.map(|()| path)
 }
 
-async fn fetch_to(
-    src: &dyn Source,
-    path: &Path,
-    pin: &Pin,
-    progress: &mut (dyn FnMut(u64) + Send),
-    idle: Duration,
-) -> Result<(), DownloadError> {
+/// The response for `pin`, every hop through the allowlist.
+async fn open_pinned(src: &dyn Source, pin: &Pin) -> Result<Opened, DownloadError> {
     let mut at = Url::parse(&pin.url).map_err(|_| CheckError::Redirect)?;
-    let mut opened = None;
     for _ in 0..=MAX_HOPS {
         if !hop_allowed(&at) {
             return Err(CheckError::Redirect.into());
         }
         let hop = src.open(&at).await?;
         match hop.status {
-            200 => {
-                opened = Some(hop);
-                break;
-            }
+            200 => return Ok(hop),
             301 | 302 | 303 | 307 | 308 => {
                 at = hop
                     .location
@@ -166,25 +186,50 @@ async fn fetch_to(
             s => return Err(CheckError::Status(s).into()),
         }
     }
-    let Some(mut opened) = opened else {
-        return Err(CheckError::Redirect.into());
-    };
+    Err(CheckError::Redirect.into())
+}
+
+async fn fetch_to(
+    src: &dyn Source,
+    path: &Path,
+    pin: &Pin,
+    progress: &mut (dyn FnMut(u64) + Send),
+    idle: Duration,
+    deadline: tokio::time::Instant,
+    hook: Option<WriterHook>,
+) -> Result<(), DownloadError> {
+    let timeout = || DownloadError::Fetch(CheckError::Timeout);
+    let mut opened = tokio::time::timeout_at(deadline, open_pinned(src, pin))
+        .await
+        .map_err(|_| timeout())??;
     // The file's writes, its hash and its fsync run off the async
     // workers; this side counts the bytes (the size cap) and reports.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(QUEUE);
     let target = path.to_path_buf();
     let writer = tokio::task::spawn_blocking(move || -> io::Result<Sha256> {
-        let mut file = create_part(&target)?;
-        let mut hash = sha2::Sha256::new();
-        while let Some(chunk) = rx.blocking_recv() {
-            hash.update(&chunk);
-            file.write_all(&chunk)?;
-        }
-        file.sync_all()?;
-        Ok(Sha256(hash.finalize().into()))
+        let at = |w| {
+            if let Some(h) = &hook {
+                h(w);
+            }
+        };
+        at(WriterAt::Start);
+        let written = (|| {
+            let mut file = create_part(&target)?;
+            let mut hash = sha2::Sha256::new();
+            while let Some(chunk) = rx.blocking_recv() {
+                hash.update(&chunk);
+                file.write_all(&chunk)?;
+            }
+            file.sync_all()?;
+            Ok(Sha256(hash.finalize().into()))
+        })();
+        at(WriterAt::Done);
+        written
     });
     let mut len = 0u64;
-    let streamed = async {
+    // The overall deadline ends the streaming only: the writer is joined
+    // below whatever happens, before the caller removes the file.
+    let streamed = tokio::time::timeout_at(deadline, async {
         loop {
             let next = tokio::time::timeout(idle, opened.body.next())
                 .await
@@ -202,8 +247,9 @@ async fn fetch_to(
             }
             progress(len);
         }
-    }
-    .await;
+    })
+    .await
+    .unwrap_or_else(|_| Err(timeout()));
     // The writer ends (and closes the file) before anything is decided,
     // so a failure's file can be removed.
     drop(tx);
@@ -292,6 +338,9 @@ pub mod tests {
     pub struct Fake {
         pub routes: Mutex<HashMap<String, Route>>,
         pub asked: Mutex<Vec<String>>,
+        /// When set, every request goes over real HTTP to this loopback
+        /// server instead (its path and query kept): see [`Loopback`].
+        pub forward: Mutex<Option<Url>>,
     }
 
     impl Fake {
@@ -317,6 +366,19 @@ pub mod tests {
     impl Source for Fake {
         fn open<'a>(&'a self, url: &'a Url) -> BoxFuture<'a, Result<Opened, CheckError>> {
             self.asked.lock().unwrap().push(url.to_string());
+            if let Some(base) = self.forward.lock().unwrap().clone() {
+                // The allowlist already passed `url`; only where it's
+                // fetched from changes, as a DNS override would.
+                let mut to = base;
+                to.set_path(url.path());
+                to.set_query(url.query());
+                return Box::pin(async move {
+                    let client =
+                        GuardedClient::new(NetPolicy::download_client(), Duration::from_secs(30))
+                            .map_err(CheckError::from)?;
+                    Guarded { client }.open(&to).await
+                });
+            }
             let route = self.routes.lock().unwrap().get(url.as_str()).cloned();
             Box::pin(async move {
                 let (status, location, body) = route.unwrap_or((404, None, vec![]));
@@ -328,6 +390,78 @@ pub mod tests {
                     )),
                 })
             })
+        }
+    }
+
+    /// A real HTTP/1.1 server on loopback (never the network): path →
+    /// (status, `Location`, body), one response per connection; every
+    /// request's head is recorded.
+    pub struct Loopback {
+        pub base: Url,
+        routes: Arc<Mutex<HashMap<String, Route>>>,
+        pub heads: Arc<Mutex<Vec<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for Loopback {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl Loopback {
+        pub async fn start() -> Loopback {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let routes: Arc<Mutex<HashMap<String, Route>>> = Arc::default();
+            let heads: Arc<Mutex<Vec<String>>> = Arc::default();
+            let (r, h) = (routes.clone(), heads.clone());
+            let task = tokio::spawn(async move {
+                while let Ok((mut conn, _)) = listener.accept().await {
+                    let (r, h) = (r.clone(), h.clone());
+                    tokio::spawn(async move {
+                        let mut head = Vec::new();
+                        let mut buf = [0u8; 1024];
+                        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                            match conn.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => head.extend_from_slice(&buf[..n]),
+                            }
+                        }
+                        let head = String::from_utf8_lossy(&head).into_owned();
+                        let path = head.split(' ').nth(1).unwrap_or("").to_string();
+                        h.lock().unwrap().push(head);
+                        let route = r.lock().unwrap().get(&path).cloned();
+                        let (status, location, body) = route.unwrap_or((404, None, vec![]));
+                        let mut out = format!(
+                            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                            body.len()
+                        );
+                        if let Some(l) = location {
+                            out.push_str(&format!("Location: {l}\r\n"));
+                        }
+                        out.push_str("\r\n");
+                        let _ = conn.write_all(out.as_bytes()).await;
+                        let _ = conn.write_all(&body).await;
+                        let _ = conn.shutdown().await;
+                    });
+                }
+            });
+            Loopback {
+                base,
+                routes,
+                heads,
+                task,
+            }
+        }
+
+        /// Serves `path` (with its query, if any).
+        pub fn serve(&self, path: &str, status: u16, location: Option<&str>, body: &[u8]) {
+            self.routes.lock().unwrap().insert(
+                path.to_string(),
+                (status, location.map(str::to_owned), body.to_vec()),
+            );
         }
     }
 
@@ -474,9 +608,75 @@ pub mod tests {
         let data = tempfile::tempdir().unwrap();
         let bin = Bin::open(data.path()).unwrap();
         let p = pin(&binary());
-        let got = download_within(&Source1, &bin, &p, &mut |_| {}, Duration::from_millis(50)).await;
+        let limits = Limits {
+            overall: OVERALL,
+            idle: Duration::from_millis(50),
+        };
+        let got = download_with(&Source1, &bin, &p, &mut |_| {}, limits, None).await;
         assert_eq!(got, Err(DownloadError::Fetch(CheckError::Timeout)));
         assert!(!part_path(&bin, &p).exists());
+    }
+
+    /// When the overall timeout fires, the writer is joined before the
+    /// `.part` file is removed: it's held at its start past the deadline
+    /// here, and has finished (and its file is gone) by the time the
+    /// download returns, so nothing it does can land after the removal.
+    #[tokio::test]
+    async fn the_overall_timeout_joins_the_writer_before_removing_the_file() {
+        struct OneThenStall(bool);
+        impl Chunks for OneThenStall {
+            fn next(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, CheckError>> {
+                if std::mem::replace(&mut self.0, true) {
+                    return Box::pin(std::future::pending());
+                }
+                Box::pin(async { Ok(Some(vec![7u8; 100])) })
+            }
+        }
+        struct Source1;
+        impl Source for Source1 {
+            fn open<'a>(&'a self, _: &'a Url) -> BoxFuture<'a, Result<Opened, CheckError>> {
+                Box::pin(async {
+                    Ok(Opened {
+                        status: 200,
+                        location: None,
+                        body: Box::new(OneThenStall(false)),
+                    })
+                })
+            }
+        }
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let p = pin(&binary());
+        let overall = Duration::from_millis(100);
+        // Paces the writer (never assumes work finished): held at its
+        // start until well past the deadline.
+        let held_until = std::time::Instant::now() + overall * 10;
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = done.clone();
+        let hook: WriterHook = Arc::new(move |w| match w {
+            WriterAt::Start => {
+                while std::time::Instant::now() < held_until {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            WriterAt::Done => seen.store(true, std::sync::atomic::Ordering::SeqCst),
+        });
+        let limits = Limits {
+            overall,
+            idle: OVERALL,
+        };
+        let got = download_with(&Source1, &bin, &p, &mut |_| {}, limits, Some(hook)).await;
+        assert_eq!(got, Err(DownloadError::Fetch(CheckError::Timeout)));
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "the writer was joined before the download returned"
+        );
+        assert!(!part_path(&bin, &p).exists());
+        assert!(
+            std::fs::read_dir(bin.dir())
+                .unwrap()
+                .all(|e| { !e.unwrap().file_name().to_string_lossy().ends_with(".part") })
+        );
     }
 
     /// A `.part` left by an earlier download goes; one planted as a link

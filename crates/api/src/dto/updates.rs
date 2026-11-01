@@ -177,10 +177,18 @@ pub struct PendingInstall {
     pub attempts: u32,
 }
 
-/// Whether Roll back is offered (§10.10.7's Danger zone).
+/// Whether Roll back is offered (§10.10.7's Danger zone): this is the
+/// "can roll back" the Updates screen shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct RollbackInfo {
+    /// `POST /updates/rollback` would start a rollback now.
     pub available: bool,
+    /// Why not, when `available` is false: `not_supervised`,
+    /// `image_mode`, `busy`, `no_previous_version` or `snapshot_missing`
+    /// (or the `unavailable` reason). Always sent; not `required` in the
+    /// schema yet, so clients built before it still type-check.
+    #[serde(default)]
+    pub reason: Option<String>,
     /// `image` or a version.
     #[schema(required = true)]
     pub to_version: Option<String>,
@@ -284,4 +292,15 @@ pub struct SkipRequest {
 #[serde(deny_unknown_fields)]
 pub struct PauseRequest {
     pub days: u32,
+}
+
+/// `POST /updates/rollback`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(example = json!({ "confirm": true }))]
+pub struct RollbackRequest {
+    /// Must be true: the dialog that showed what a rollback loses was
+    /// confirmed (§10.10.7, a destructive action).
+    #[serde(default)]
+    pub confirm: bool,
 }
