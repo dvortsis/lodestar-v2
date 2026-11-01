@@ -1956,14 +1956,16 @@
       "merged_at": "2026-11-01T05:21Z"
     },
     "X-settings-polish": {
-      "status": "review-ready",
+      "status": "merged",
       "session": "session_01MMjhnBnH4Dc9AJBWfgzYCj",
       "model": "sonnet",
       "brief": "briefs/X-settings-polish.md",
       "launched_at": "2026-11-01T04:27Z",
       "pr": 319,
       "head": "bc6d2ba",
-      "review": "runner MERGE at bc6d2ba"
+      "review": "runner MERGE at bc6d2ba",
+      "merge_sha": "9f1789f1",
+      "merged_at": "2026-11-01T05:23Z"
     },
     "S-updates-3": {
       "status": "merged",
