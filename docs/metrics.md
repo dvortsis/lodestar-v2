@@ -788,3 +788,11 @@ Added for the v0.5.1 Linux soak, so a memory or disk ramp can be explained (owne
 | `search_result_cache_entries{kind}`, `search_result_cache_bytes{kind}` | gauge | The result cache by `kind` (`search`, `facets`): entries and estimated bytes. |
 
 The cache series render only with search on. There is no server-side detail cache: the detail caches are in the browser. SQLite's page cache isn't reported (see the decision).
+
+## Unreadable filter rows (F-filter-load-fail-closed, 2026-11-01)
+
+See [the decision](decisions/2026-11-01-F-filter-load-fail-closed.md).
+
+| Series | Type | Meaning |
+| --- | --- | --- |
+| `filter_rows_unreadable{kind}` | gauge | Stored filter rows the engine couldn't read at its last load, by `kind`: `rule`, `unless` and `class_rule` fail closed; `override`, `exception` and `allow` are skipped. Every kind is rendered, 0 included. It drops back to 0 once the row is fixed or removed. The Insights exception `filter_rows_unreadable` names the rows. |

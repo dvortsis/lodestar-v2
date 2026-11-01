@@ -198,6 +198,27 @@ describe('Exceptions', () => {
 		);
 	});
 
+	it('names unreadable filter rows and links to Filters & Safety', () => {
+		render(Exceptions, {
+			exceptions: [
+				{
+					kind: 'filter_rows_unreadable',
+					severity: 'error',
+					since: 1,
+					unit: 'rows',
+					value: 2,
+					rows: ['C-2', 'U-3'],
+					fix: { kind: 'settings', target: 'filters' }
+				}
+			]
+		});
+		const row = screen.getByTestId('insights-exception-filter_rows_unreadable');
+		expect(row.textContent).toContain("2 saved filter rows can't be read (C-2, U-3)");
+		expect(
+			screen.getByTestId('insights-exception-filter_rows_unreadable-fix').getAttribute('href')
+		).toBe('/settings/filters');
+	});
+
 	it('says so when nothing needs attention', () => {
 		render(Exceptions, { exceptions: [] });
 		expect(text('insights-exceptions-empty')).toBe('Nothing needs attention');

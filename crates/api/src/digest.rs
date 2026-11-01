@@ -526,6 +526,11 @@ fn alert(e: &InsightsException) -> Alert {
         ("yield_below_baseline", Some(v)) => {
             format!("Yield is {v} for the newest completed cohorts, below the 7 days before them.")
         }
+        ("filter_rows_unreadable", _) => format!(
+            "Some filter rows can't be read ({}): filtering holds back more until you fix \
+             or remove them in Filters & Safety.",
+            e.rows.join(", ")
+        ),
         ("yield_below_baseline", None) => {
             "Yield for the newest completed cohorts is below the 7 days before them.".into()
         }
@@ -1197,6 +1202,7 @@ mod tests {
         InsightsException {
             fix: f,
             kind: kind.into(),
+            rows: Vec::new(),
             severity: Severity::Warning,
             since: T - 600,
             unit: unit.map(Into::into),

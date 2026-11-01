@@ -1219,6 +1219,29 @@ pub fn render_storage(out: &mut String, g: &crate::storage::Gauges) {
 
 /// The search side's in-process caches (R-gauges): the serving index's
 /// `file:(…)` id sets and browse tops, and the result cache.
+/// Stored filter rows the engine couldn't read, by kind: rules,
+/// `unless` queries and classification rules fail closed; overrides,
+/// exceptions and *Always allow* entries are skipped (F-filter-load-
+/// fail-closed). Every kind is always rendered, 0 included.
+pub fn render_filter(out: &mut String, unreadable: &[lodestar_filter::load::Unreadable]) {
+    use lodestar_filter::load::RowKind;
+    let mut o = Out(std::mem::take(out));
+    o.family(
+        "filter_rows_unreadable",
+        "gauge",
+        "Stored filter rows that no longer read, by kind.",
+    );
+    for kind in RowKind::ALL {
+        let n = unreadable.iter().filter(|u| u.kind == kind).count();
+        o.value(
+            "filter_rows_unreadable",
+            &format!("kind=\"{}\"", kind.as_str()),
+            n,
+        );
+    }
+    *out = o.0;
+}
+
 pub fn render_caches(
     out: &mut String,
     index: &lodestar_search::CacheUsage,
@@ -1591,5 +1614,24 @@ mod tests {
         }
         // Not duplicated: the have-filter and hot columns render elsewhere.
         assert!(!out.contains("have_bytes") && !out.contains("hot_columns"));
+    }
+
+    #[test]
+    fn unreadable_filter_rows_render_by_kind() {
+        use lodestar_filter::load::{RowKind, Unreadable};
+        let mut out = String::new();
+        let row = |kind, id| Unreadable { kind, id, since: 0 };
+        render_filter(
+            &mut out,
+            &[
+                row(RowKind::Rule, 1),
+                row(RowKind::Rule, 2),
+                row(RowKind::Allow, 3),
+            ],
+        );
+        assert!(out.contains("# TYPE lodestar_filter_rows_unreadable gauge"));
+        assert!(out.contains("lodestar_filter_rows_unreadable{kind=\"rule\"} 2"));
+        assert!(out.contains("lodestar_filter_rows_unreadable{kind=\"allow\"} 1"));
+        assert!(out.contains("lodestar_filter_rows_unreadable{kind=\"class_rule\"} 0"));
     }
 }

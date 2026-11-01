@@ -272,7 +272,8 @@ pub fn state(s: lodestar_store::SourceState) -> &'static str {
     }
 }
 
-/// A filter loader's note (`rule U-12 skipped: it no longer parses`) as
+/// A filter loader's note (`rule U-12 skipped: it no longer parses`,
+/// `rule U-3 fails closed: unreadable`) as
 /// what was skipped, its id and why, so the note's text (which a later
 /// loader could make name a term) is never logged.
 pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
@@ -291,7 +292,10 @@ pub fn filter_note(note: &str) -> (&'static str, u64, &'static str) {
     };
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     let id = rest[..digits].parse().unwrap_or(0);
-    let reason = if rest.ends_with("it no longer parses") {
+    // Checked first: a row that fails closed also says why.
+    let reason = if rest.contains(" fails closed:") {
+        "fails_closed"
+    } else if rest.ends_with("it no longer parses") {
         "no_longer_parses"
     } else if rest.ends_with("unreadable") {
         "unreadable"
@@ -327,6 +331,14 @@ mod tests {
             (
                 "always-allow 4 skipped: it no longer parses",
                 ("always_allow", 4, "no_longer_parses"),
+            ),
+            (
+                "rule U-5 fails closed: its unless no longer parses",
+                ("rule", 5, "fails_closed"),
+            ),
+            (
+                "classification rule 2 fails closed: it no longer parses",
+                ("class_rule", 2, "fails_closed"),
             ),
             ("rule about sometermhere", ("other", 0, "other")),
         ] {

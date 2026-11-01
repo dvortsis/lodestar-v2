@@ -1404,6 +1404,7 @@ fn stalled(rows: &NowRows, now_h: i64) -> Option<InsightsException> {
             target: "fetch".into(),
         },
         kind: "cohort_stalled".into(),
+        rows: Vec::new(),
         severity: Severity::Warning,
         since: from * 3600,
         unit: Some("torrents".into()),
@@ -1452,6 +1453,7 @@ fn yield_below_baseline(rows: &[CohortCount], now_h: i64) -> Option<InsightsExce
             target: "fetch".into(),
         },
         kind: "yield_below_baseline".into(),
+        rows: Vec::new(),
         severity: if recent_yield < base_yield * BASELINE_ERROR {
             Severity::Error
         } else {
@@ -1737,6 +1739,7 @@ fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
                     target: "index".into(),
                 },
                 kind: "index_lag".into(),
+                rows: Vec::new(),
                 severity: if lag > INDEX_LAG_ERROR_S {
                     Severity::Error
                 } else {
@@ -1846,7 +1849,46 @@ pub(crate) async fn overview_response(
     .await
     .map_err(internal)??;
     apply_snapshot(&mut response, snap);
+    if let Some(e) = s
+        .filters
+        .as_ref()
+        .and_then(|f| unreadable_rows(&f.engine.current().unreadable))
+    {
+        response.exceptions.insert(0, e);
+    }
     Ok(response)
+}
+
+/// [`unreadable_rows`] names at most this many.
+const MAX_ROWS_NAMED: usize = 20;
+
+/// Stored filter rows the engine couldn't read (§20.7): an error while
+/// any of them fails closed (your rules and classification rules hold
+/// back more than they would), a warning while they're only entries
+/// that release, skipped. It clears once every row reads again.
+fn unreadable_rows(rows: &[lodestar_filter::load::Unreadable]) -> Option<InsightsException> {
+    let since = rows.iter().map(|u| u.since).min()?;
+    let mut labels: Vec<String> = rows.iter().map(|u| u.label()).collect();
+    labels.sort();
+    labels.dedup();
+    // The count says how many; the list names enough to start with.
+    labels.truncate(MAX_ROWS_NAMED);
+    Some(InsightsException {
+        fix: Fix {
+            kind: "settings".into(),
+            target: "filters".into(),
+        },
+        kind: "filter_rows_unreadable".into(),
+        rows: labels,
+        severity: if rows.iter().any(|u| u.kind.loosening()) {
+            Severity::Error
+        } else {
+            Severity::Warning
+        },
+        since,
+        unit: Some("rows".into()),
+        value: Some(rows.len() as f64),
+    })
 }
 
 /// The overview's rollup part, inside the caller's read transaction.
@@ -2571,5 +2613,34 @@ mod tests {
             assert_eq!(type_name(u32::from(t.code())).1, Some(t));
             assert!(!group_of(t).is_empty());
         }
+    }
+
+    /// F-filter-load-fail-closed: an error while a row fails closed, a
+    /// warning while they only release, nothing once all read again.
+    #[test]
+    fn unreadable_filter_rows_are_an_exception_until_fixed() {
+        use lodestar_filter::load::{RowKind, Unreadable};
+        let row = |kind, id, since| Unreadable { kind, id, since };
+        assert_eq!(unreadable_rows(&[]), None);
+        let e =
+            unreadable_rows(&[row(RowKind::Allow, 6, 50), row(RowKind::Override, 2, 40)]).unwrap();
+        assert_eq!(e.kind, "filter_rows_unreadable");
+        assert_eq!(e.severity, Severity::Warning);
+        assert_eq!((e.since, e.value), (40, Some(2.0)));
+        assert_eq!(e.rows, ["A-6", "O-2"]);
+        assert_eq!(
+            (e.fix.kind.as_str(), e.fix.target.as_str()),
+            ("settings", "filters")
+        );
+        let many: Vec<_> = (0..30)
+            .map(|i| row(RowKind::Rule, i, 10))
+            .chain([row(RowKind::Unless, 3, 10)])
+            .collect();
+        let e = unreadable_rows(&many).unwrap();
+        assert_eq!(e.severity, Severity::Error);
+        assert_eq!(e.value, Some(31.0));
+        assert_eq!(e.rows.len(), MAX_ROWS_NAMED, "U-3 is named once");
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json["rows"].as_array().unwrap().len(), MAX_ROWS_NAMED);
     }
 }

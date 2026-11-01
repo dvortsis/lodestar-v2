@@ -2533,3 +2533,92 @@ async fn a_core_switch_off_is_judged_by_the_stored_switch() {
     assert!(f.api.held.contains(&[0x61; 20]));
     assert!(f.api.store.lock().unwrap().core_switch("CS-3a").unwrap());
 }
+
+/// F-filter-load-fail-closed: stored rows that no longer parse are read
+/// on apply as failing closed or skipped, listed for the health
+/// exception, and cleared once they're fixed or removed. Fixing the rule
+/// releases what its stand-in held, to be judged again as fixed.
+#[tokio::test]
+async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let (rule, class, allow) = {
+        let mut s = f.api.store.lock().unwrap();
+        (
+            s.add_rule("cam size:>>", Action::Hide.code(), None, None)
+                .unwrap(),
+            s.add_class_rule("size:>>", true).unwrap(),
+            s.add_allow("size:>>").unwrap(),
+        )
+    };
+    // Any applied change reloads the layers from the store.
+    let (status, _) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "add_rule", "query": "spamword", "action": "flag" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let labels = |f: &Fixture| {
+        let mut l: Vec<String> = f
+            .api
+            .engine
+            .current()
+            .unreadable
+            .iter()
+            .map(|u| u.label())
+            .collect();
+        l.sort();
+        l
+    };
+    assert_eq!(
+        labels(&f),
+        [
+            format!("A-{allow}"),
+            format!("C-{class}"),
+            format!("U-{rule}")
+        ]
+    );
+    let e = f.api.engine.current();
+    let stand_in = e.rules.iter().find(|r| i64::from(r.id) == rule).unwrap();
+    assert_eq!(stand_in.action, Action::Quarantine);
+    assert_eq!(stand_in.query, lodestar_search::Node::All);
+    drop(e);
+
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "update_rule", "id": rule, "query": "cam" }),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], 0, "released what it held: {body}");
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "remove_allow", "id": allow }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(labels(&f), [format!("C-{class}")]);
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/rules/remove",
+            Some(&cookie),
+            json!({ "id": class }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(labels(&f).is_empty());
+    let e = f.api.engine.current();
+    let fixed = e.rules.iter().find(|r| i64::from(r.id) == rule).unwrap();
+    assert_eq!(
+        (fixed.action, fixed.query.to_query()),
+        (Action::Hide, "cam".into())
+    );
+}

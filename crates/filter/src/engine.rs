@@ -135,6 +135,8 @@ pub struct Engine {
     /// Classification rules (§20.9): they decide what's stored, and an
     /// Is adult one adds the Adult-only core checks.
     pub class_rules: ClassRules,
+    /// Stored rows the last load couldn't read ([`crate::load`]).
+    pub unreadable: Vec<crate::load::Unreadable>,
     pub version: u64,
 }
 
@@ -150,6 +152,7 @@ impl Engine {
             exceptions: Vec::new(),
             allow: Vec::new(),
             class_rules: ClassRules::default(),
+            unreadable: Vec::new(),
             version: 1,
         }
     }

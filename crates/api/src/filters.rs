@@ -1405,6 +1405,15 @@ impl FiltersApi {
                     .into_iter()
                     .find(|r| r.id == *id)
                     .ok_or_else(gone)?;
+                // It failed closed while unreadable (lodestar_filter::load):
+                // what it held then is released below, to be judged again
+                // as fixed, never by the stand-in.
+                let was_unreadable = parse(&row.query).is_err()
+                    || Action::from_code(row.action).is_none()
+                    || row
+                        .unless_query
+                        .as_deref()
+                        .is_some_and(|u| parse(u).is_err());
                 if let Some(q) = q {
                     row.query = query(q)?.to_query();
                 }
@@ -1425,6 +1434,9 @@ impl FiltersApi {
                     row.shadow_until = days(*shadow_days, now);
                 }
                 store.update_rule(&row).map_err(internal)?;
+                if was_unreadable {
+                    out.released = Some(self.release_rules(store, &[format!("U-{id}")])?);
+                }
             }
             Change::RemoveRule { id } => {
                 if !store.remove_rule(*id).map_err(internal)? {
@@ -2546,19 +2558,17 @@ impl FiltersApi {
     }
 
     /// [`FiltersApi::requeue`] for a stored query text; one that no longer
-    /// parses matches nothing, so its entry is just cleared.
+    /// parses re-queues everything.
     fn requeue_text(&self, text: &str, now: i64) -> ApiResult<(Option<usize>, bool)> {
         #[cfg(test)]
         if tests::FAIL_REQUEUE.with(|f| f.borrow().as_deref() == Some(text)) {
             return Err(internal("injected"));
         }
-        match parse(text) {
-            Ok(node) => self.requeue(&node, text, now),
-            Err(_) => {
-                drop_pending_requeue(&mut self.store(), text)?;
-                Ok((None, false))
-            }
-        }
+        // A rule that didn't parse matched everything while it was loaded
+        // (an Is adult one, lodestar_filter::load): everything is
+        // classified again.
+        let node = parse(text).unwrap_or(Node::All);
+        self.requeue(&node, text, now)
     }
 
     fn requeue_marks(&self, node: &Node, now: i64) -> ApiResult<(Option<usize>, bool)> {
