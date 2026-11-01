@@ -591,13 +591,8 @@
       "merged_at": "2026-11-01T04:26Z"
     },
     "G-m5": {
-      "status": "exit-met; decisions PR #352 waits on all-themes dispatch on main",
-      "model": "opus",
-      "session": null,
-      "pr": null,
-      "attempt": 0,
-      "review_rounds": 0,
-      "notes": ""
+      "status": "merged",
+      "notes": "M5 exit met; decisions #352 (5107710e); all-themes dispatch 41342644909 green on 6ef00355"
     },
     "E-M6": {
       "status": "pending",
@@ -3293,6 +3288,10 @@
     {
       "t": "2026-11-01T20:00Z",
       "event": "#353 X-appearance-undo d6c1fc0f: review fixes in (saved/was split; ThemePicker effect.pre); runner MERGE on green. #354 S-doc-shots runner MERGE on green. #352 waits all-themes dispatch (check-in 20:20). Settings section 44.4/45 kB (0.6 kB headroom) noted."
+    },
+    {
+      "t": "2026-11-01T20:12Z",
+      "event": "G-m5 DONE: merged #352 (5107710e) after all-themes dispatch green. Open: #353 (runner MERGE on green), #354 (runner MERGE on green), F-filter-load-fail-closed building."
     }
   ],
   "reviews": {
