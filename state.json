@@ -3286,6 +3286,13 @@
       "sha": "9c4a72e284ad97417af2a460e2c616c2e7b140fd",
       "at": "2026-11-01T10:17Z",
       "slice": "X-search-headroom-2"
+    },
+    {
+      "pr": 330,
+      "sha": "9c8501a29c4a6d92783633d05183dce534ed8156",
+      "at": "2026-11-01T10:22Z",
+      "slice": "B-update-6",
+      "note": "full-ci incl macOS via manual dispatch run 41295041539"
     }
   ],
   "active_sessions": {
