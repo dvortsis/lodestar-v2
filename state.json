@@ -3369,6 +3369,12 @@
       "model": "sonnet",
       "launched": "2026-11-01T11:46Z",
       "brief": "briefs/X-web-polish-1101e.md"
+    },
+    "G-m5a": {
+      "session": "session_01MMjhnAee9Q1wKPEXsZnFC9",
+      "model": "opus",
+      "launched": "2026-11-01T12:42Z",
+      "brief": "briefs/G-m5a.md"
     }
   },
   "queued_followups": [
