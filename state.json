@@ -3121,6 +3121,11 @@
       "id": "flag-i9-range-syntax",
       "status": "to-send",
       "text": "I9 (#350): query language gains `a..<b` (same AST as a..b-1). Printed two-sided ranges keep the old inclusive form for one release so a rollback never drops stored filter rules (content safety); stage 2 prints `..<` after that."
+    },
+    {
+      "id": "note-filter-load-fail-closed",
+      "status": "to-send",
+      "text": "Found in review: the filter loader silently skips stored rules it cannot parse (pre-existing). A slice will make it fail closed for block and adult rules (tightening only)."
     }
   ],
   "external_gates": {
@@ -3259,6 +3264,10 @@
     {
       "t": "2026-11-01T18:58Z",
       "event": "#350 Opus security review CHANGES: `..<` in stored rule/unless/class text is skipped by older binary on rollback (load.rs drops unparseable rows) -> loosens filtering. Runner ruling (c): keep parser `..<`, printer keeps old inclusive two-sided form now (IEC lower/upper where exact), test no store write emits `..<`. Stage 2 queued: i9-stage2 (print `..<` again one release after the parser ships)."
+    },
+    {
+      "t": "2026-11-01T19:00Z",
+      "event": "Queued F-filter-load-fail-closed (Opus + /security-review): crates/filter/src/load.rs drops unparseable stored rule/unless/classification rows with only a note. Make it fail closed for loosening kinds (hide/drop/quarantine/adult classification): surface as a health error + keep a safe default (e.g. quarantine-all or refuse to start filtering-relaxed), never silently drop. Tightening kinds (override/allow) may skip with a warning. Tests: unparseable row of each kind. Launch in next free slot after #349."
     }
   ],
   "reviews": {
