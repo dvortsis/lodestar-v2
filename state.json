@@ -941,13 +941,13 @@
       "catch_ups": 2
     },
     "S-updates": {
-      "status": "pr-review-part2",
+      "status": "merged-1-2",
       "model": "sonnet",
       "session": "session_01MMjhn9ZkgCEsH1xWRJeT7g",
       "pr": 306,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater). | 00:27Z brief briefs/S-updates.md (part 1; part 2 = advanced, rollback, overview, pill, overlay, wizard step). Merges main after #299. | 00:27Z launched Sonnet. | 01:06Z PR #306 head a90f96ad (Updates first view 33.9 KB; registry +115-123 B; Install now slot; Settings marker). Reviewer session_01MMjhnD6VCmLiUvS2vGc1LL (+/security-review). | 01:21Z reviewer CHANGES: I1 progress heading guesses version (use stepVersion ?? pending.version, else unversioned). /security-review clean. Relayed I1 + O3-O7 (+O2 if <50 B) with marker removal in one push; runner checks delta. | 01:40Z fix push 746ba13a checked by runner (I1, O3-O7, marker removed; first view 34.06). Merge on green. | 01:49Z Playwright core red: search-results.keyboard:70 (outside diff) -> re-ran failed job once. | 01:59Z flake re-run green; local merge-with-main build checked (CSS 19.96, Settings section 43.76); merged #306 (83d5c107). Part 2 brief briefs/S-updates-2.md sent to same session. | 02:32Z PR #310 (part 2) head d99c049e: Advanced + channel dialog; Roll back, Install now, pill, Overview, overlay are slots (no API / hooks too big). Updates first view 34.56; Advanced 4.44 (new). Reviewer session_01MMjhnCo6C3wzTQANSTUNdD (+/security-review). | 02:45Z #310 reviewer MERGE (security clean, mutation-checked); I1 error rendering in Advanced + O2 relayed; runner checks delta.",
+      "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater). | 00:27Z brief briefs/S-updates.md (part 1; part 2 = advanced, rollback, overview, pill, overlay, wizard step). Merges main after #299. | 00:27Z launched Sonnet. | 01:06Z PR #306 head a90f96ad (Updates first view 33.9 KB; registry +115-123 B; Install now slot; Settings marker). Reviewer session_01MMjhnD6VCmLiUvS2vGc1LL (+/security-review). | 01:21Z reviewer CHANGES: I1 progress heading guesses version (use stepVersion ?? pending.version, else unversioned). /security-review clean. Relayed I1 + O3-O7 (+O2 if <50 B) with marker removal in one push; runner checks delta. | 01:40Z fix push 746ba13a checked by runner (I1, O3-O7, marker removed; first view 34.06). Merge on green. | 01:49Z Playwright core red: search-results.keyboard:70 (outside diff) -> re-ran failed job once. | 01:59Z flake re-run green; local merge-with-main build checked (CSS 19.96, Settings section 43.76); merged #306 (83d5c107). Part 2 brief briefs/S-updates-2.md sent to same session. | 02:32Z PR #310 (part 2) head d99c049e: Advanced + channel dialog; Roll back, Install now, pill, Overview, overlay are slots (no API / hooks too big). Updates first view 34.56; Advanced 4.44 (new). Reviewer session_01MMjhnCo6C3wzTQANSTUNdD (+/security-review). | 02:45Z #310 reviewer MERGE (security clean, mutation-checked); I1 error rendering in Advanced + O2 relayed; runner checks delta. | 03:01Z merged #310 part 2 (ce8143d9); session archived. Install now wiring follows B-update-5.",
       "merge_part1": "83d5c107",
       "pr2": 310
     },
@@ -1909,6 +1909,15 @@
       "review_rounds": 0,
       "notes": "02:39Z brief briefs/X-analyzer-memview.md (informational corpus-normalised memory view; gate unchanged). | 02:39Z launched Sonnet. | 02:44Z PR #311 head 59bb3e7f (203 lines; memory_context informational, gate pinned). Runner review MERGE. Merge on green. | 02:45Z merged #311 (88dfc592); session archived.",
       "merge": "88dfc592"
+    },
+    "X-detail-headroom": {
+      "status": "launching",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2801,7 +2810,8 @@
     "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too.",
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
-    "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md."
+    "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
+    "S-updates-3: wire Install now (and Roll back if B-update-5 adds it) once B-update-5 lands POST /updates/install; un-skip the Install-now test TODO (#306/#310)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
