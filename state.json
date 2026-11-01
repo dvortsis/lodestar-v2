@@ -1884,6 +1884,15 @@
       "attempt": 1,
       "review_rounds": 0,
       "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth). | 00:46Z launched Sonnet. | 01:17Z PR #307 head b5b3657a (version.json on visibilitychange, <=1/5 min; banner with chrome, not first load). Reviewer session_01MMjhnBqNbZEXAMvXRTNJxH."
+    },
+    "X-web-hygiene-1101": {
+      "status": "launching",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "01:26Z brief briefs/X-web-hygiene-1101.md (CSS headroom >=0.4 KB, modulesIn throw, void import catches)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2752,10 +2761,7 @@
     "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
     "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too.",
-    "first-load.mjs modulesIn(): throw when the manifest exists but the graph file is missing, so the first-load guard cannot pass vacuously (#304 review b)",
-    "Unhandled rejection on failed chunk loads: AlertsListPage.svelte:101, AlertDetailPage, DetailHostBody `void import(...)` without catch; repo-wide sweep (#304 review c)",
-    "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
-    "CSS budget: 19.97/20 KB after S-wizard (#302); next slice adding utilities will tip it. Find dead CSS or decide under §2.26 before then."
+    "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
