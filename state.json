@@ -1901,13 +1901,13 @@
       "merge": "cbf1ed69"
     },
     "X-analyzer-memview": {
-      "status": "running",
+      "status": "pr-review",
       "model": "sonnet",
       "session": "session_01MMjhnAUpZ5Y2uaqExgvqoh",
-      "pr": null,
+      "pr": 311,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "02:39Z brief briefs/X-analyzer-memview.md (informational corpus-normalised memory view; gate unchanged). | 02:39Z launched Sonnet."
+      "notes": "02:39Z brief briefs/X-analyzer-memview.md (informational corpus-normalised memory view; gate unchanged). | 02:39Z launched Sonnet. | 02:44Z PR #311 head 59bb3e7f (203 lines; memory_context informational, gate pinned). Runner review MERGE. Merge on green."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
