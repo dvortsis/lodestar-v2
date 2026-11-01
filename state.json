@@ -3352,6 +3352,12 @@
       "head": "767a077",
       "verdict": "awaiting final push, then review",
       "session": "session_01MMjhnCgGvjvQEZp75TiWKa"
+    },
+    "343": {
+      "slice": "FX-2",
+      "head": "81dcaec",
+      "verdict": "runner MERGE after baseline regen (marker) + marker removal + green CI",
+      "session": "session_01MMjhnAAdf5t6QJNK35ET6m"
     }
   },
   "merged_log": [
