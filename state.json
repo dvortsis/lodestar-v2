@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T22:21:00Z",
+  "updated_at": "2026-11-01T22:40:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2210,8 +2210,11 @@
       "notes": "queued: one release after the a..<b parser ships"
     },
     "CR-1b": {
-      "status": "building",
-      "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware"
+      "status": "fixing",
+      "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware",
+      "pr": 359,
+      "head": "f949e6b4",
+      "note": "Opus review MERGE; runner asked one push: throttled explore prefix_pending fix, rename dht_sample_sent_total, test comment, decisions"
     },
     "X-web-followups-1101f": {
       "status": "merged",
@@ -2223,10 +2226,12 @@
       "session": "session_01MMjhn9y1RFyN62gb7BnJQW (archived)"
     },
     "SRC-0": {
-      "status": "building",
+      "status": "in-review",
       "model": "opus",
       "session": "session_01MMjhnDAGAiTp7Vw2eCzbsH",
-      "launched": "2026-11-01T21:30Z"
+      "launched": "2026-11-01T21:30Z",
+      "pr": 360,
+      "head": "200e7a41"
     },
     "F-filter-standin-undo": {
       "status": "queued",
@@ -3259,6 +3264,11 @@
       "id": "flag-t-limit-2120",
       "status": "to-send",
       "text": "§2.26 ruling: /t/[hash] size limit 21.14 → 21.20 KB (#357). Cause: CI puts the commit SHA into the app version name, which shifts chunk hashes by up to ~30 B; no /t code grew. Follow-up X-size-deterministic makes size builds use a fixed version name."
+    },
+    {
+      "id": "flag-cr1b-order",
+      "status": "to-send",
+      "text": "§2.19 flag from CR-1b (#359): 256-prefix targets (switch off by default) visit prefixes in bit-reversed order with a cursor per kind (sample, find_node) and per family. The order was chosen after a first CR-SIM screen on the same seeds (sequential cost ~6% of new contacts), so CR-SIM is not independent evidence for it; the order is frozen before the live A/B. CR-SIM verdict: neutral, inside noise; expected live result \"inconclusive, stays off\"."
     }
   ],
   "external_gates": {
