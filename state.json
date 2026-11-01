@@ -2088,6 +2088,14 @@
       "model": "sonnet",
       "brief": "briefs/X-web-polish-1101b.md",
       "launched_at": "2026-11-01T08:05Z"
+    },
+    "B-update-6": {
+      "status": "building",
+      "session": "session_01MMjhn9Jg52uqLHmWj6STnH",
+      "model": "opus",
+      "brief": "briefs/B-update-6.md",
+      "launched_at": "2026-11-01T08:33Z",
+      "review": "runner + /security-review; full-ci"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
