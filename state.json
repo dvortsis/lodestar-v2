@@ -2121,11 +2121,14 @@
       "launched_at": "2026-11-01T09:11Z"
     },
     "X-web-polish-1101c": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhn9QxqquJeb25KvJGuM",
       "model": "sonnet",
       "brief": "briefs/X-web-polish-1101c.md",
-      "launched_at": "2026-11-01T09:15Z"
+      "launched_at": "2026-11-01T09:15Z",
+      "pr": 331,
+      "head": "e5fc7bc",
+      "review": "runner MERGE at e5fc7bc (items 2,3; item 1 skipped by design)"
     },
     "B-search-meta": {
       "status": "building",
@@ -3052,7 +3055,8 @@
     "e2e fixture specs (#323): the 5 fixture files use exactly the 5-login burst; a sixth fixture file needs a shared storageState sign-in (docs/decisions/2026-11-01-X-e2e-fixture-ci.md)",
     "S-updates-5 (web, after B-update-6): use rollback.restores_store in the Roll back dialog to state the data restore exactly",
     "Detail (#327): results reload after Block keeps scroll position instead of reloading from the top (the `s`-on-/t gate, neutral door-failure string and Search results headroom went to X-search-headroom-2)",
-    "Web (after B-search-meta): show \u2248 on approximate suggestion counts; Builder field list from GET /search/fields instead of schema enums"
+    "Web (after B-search-meta): show \u2248 on approximate suggestion counts; Builder field list from GET /search/fields instead of schema enums",
+    "Privacy-logging banner (\u00a710.10.7/\u00a710.10.12): add a server-side flag (privacy logging on + which kinds) to the existing status/SSE event (crates, Opus), then a shell banner loaded on demand when it is set (web, Sonnet). No extra first-paint request (#331 found no existing signal)."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
