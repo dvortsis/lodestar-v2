@@ -33,7 +33,7 @@ export type ScreenGroup = (typeof groups)[number]['id'];
 /** The order inside each group (§10.10.2); an id not listed goes last, by title. */
 export const SCREEN_ORDER: Record<ScreenGroup, readonly string[]> = {
 	preferences: ['appearance', 'keyboard', 'language'],
-	crawling: ['crawler', 'network', 'sources', 'workers', 'companions'],
+	crawling: ['crawler', 'network', 'sources', 'workers', 'jobs', 'companions'],
 	library: ['storage', 'search', 'trackers', 'filters'],
 	connections: ['integrations', 'notifications', 'insights'],
 	system: ['general', 'updates', 'logging', 'security', 'about']

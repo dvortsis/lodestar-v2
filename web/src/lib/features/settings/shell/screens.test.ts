@@ -19,6 +19,7 @@ describe('the screen registry', () => {
 			'language',
 			'crawler',
 			'network',
+			'jobs',
 			'storage',
 			'search',
 			'trackers',
