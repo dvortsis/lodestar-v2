@@ -3246,6 +3246,10 @@
     {
       "t": "2026-11-01T18:42Z",
       "event": "Heartbeat: 4 slots = FX-6 (#348 c56b1fc, CI), X-web-cleanup-1 (#349 baselines 7a711e2e ok settings 54/welcome 60, nudged), FX-6-I9 (#350 held, Opus security review running), gate-file-cold (building). Runner disk filled (session allowance): removed own target/ and stale scratch l5; rebuildable."
+    },
+    {
+      "t": "2026-11-01T18:50Z",
+      "event": "merged #348 FX-6 (cff61ee9); all six FX batches merged. Archived FX-6. Remaining for G-m5: #350 FX-6-I9 (held, safety review), #349 cleanup (CI on 072b1e4e; re-measure near-limit entries on merge result before merging), gate-file-cold. Slot free: appearance-undo after #349; openapi-example-size after #350."
     }
   ],
   "reviews": {
