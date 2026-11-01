@@ -2888,44 +2888,54 @@
     },
     {
       "item": "QUESTION (low priority): online import (into a running server) needs a server-side trigger, i.e. an API that takes a source file path or PostgreSQL credentials. That's a new attack surface (file reads, outbound connections), so it's yours to decide, like uploads and the wizard (plan A6). Today the offline CLI covers the pilots (stop the server, import, start). Want online import before v0.6, or keep it offline-only?",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) #276 B-import-server-1: imported jobs complete when the index catches up; the shared filter loader is two calls (config sync in the binary + pipeline::load_filter); floor term tested as a floor signature; floor-marked subscribed list not yet in the parity test (follow-up).",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.26) #278 X-search-files-perf: file-ID cache keeps 8 MiB; sets stored as list or bitset (broad clause at 1M: 0.12 MiB, was ~5 MiB); warm p95 9 ms at 1M. Known gap: a cold broad file clause (e.g. every .mkv) at 1M takes 211 ms p95 vs §3's 150 ms file-level row; follow-up slice gates and investigates it. The classification re-queue stays uncancellable on purpose (content safety).",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.26) #277 S-settings-2b: Language first view 43.25 -> 44.14 kB (group headings, preload list; nav titles stay eager); Notifications first view 44.67 kB, with the 45 KB limit kept and >=0.3 kB headroom required; client passwords saved/removed in their own request (never staged, so never in the sessionStorage draft).",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) #280 B-import-refile: when filter/class rules change, waiting import candidates are re-judged; a held candidate moves to filtered/quarantined on its job (counters stay conserved), and a finished job whose only issue was waiting candidates flips complete_with_issues -> complete.",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.26) #284 S-logs-1: adding /logs made 5 existing routes share VirtualList / the virtualiser index client / state/sse as separate chunks; their limits rose by the measured bytes only (Alerts +69 B, Alert +86 B, Search results +92 B, Search cards +21 B, /t/[hash] +35 B). The root cause is legitimate code reuse.",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) #285 M-security-settings part 1: the Security screen restates the engine's leave-guard rules instead of importing them (keeps leave.ts off every Settings page; a table test against the engine's rules follows in part 2); secure cookies is a read-only status line.",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19, content safety) #287 B-held-exact: fixes a pre-existing race where releasing a hold at the same moment an import re-held the same hash could leave a held torrent fetchable until restart. Memory now always matches the store's holds; a hash a release frees may stay refused for the few seconds the release runs (over-strict, safe).",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.26) S-logs-2: the Settings Notifications first-view limit goes 45 -> 45.1 KB (+~90 B) because each new Settings screen's nav entry adds ~80 B to every Settings page. A structural fix (titles out of the shared chunk) is queued next and should bring it back under 45 KB.",
-      "status": "to-send"
+      "status": "sent",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) #288 M-security-settings-2 merged: API keys/feed tokens (reveal once, Copy falls back on plain-HTTP LAN), trusted-proxy sign-in UI (off recommended, password + explicit warning to turn on, env lock), revoke asks a plain question (B12). Runner calls: keys/proxy load right after first paint.",
-      "status": "to-send",
-      "at": "2026-10-31T18:23Z"
+      "status": "sent",
+      "at": "2026-10-31T18:23Z",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) X-soak-docker-memrule (#292, when merged): Linux collector's 1 GiB x5 stop rule judges cgroup anon (process memory) in Docker mode, new reason process_memory_over_1GiB_for_five_samples; working set kept as evidence. Only for runs started after merge (could cover the gluetun leg if you update the collector copy); current rc.2 run unaffected.",
@@ -2935,40 +2945,47 @@
     },
     {
       "item": "FYI (§2.19) #291 B-held-precommit merged: intake refuses a new hold from before its store commit (pending marks kept apart from the held set); ingest commit and API correct are now exact too. Content safety tightened only.",
-      "status": "to-send",
-      "at": "2026-10-31T19:51Z"
+      "status": "sent",
+      "at": "2026-10-31T19:51Z",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) #293 X-settings-registry-slim (merged f5569027): reverses the runner's Notifications 45.1 KB raise; every Settings first view drops ~1.2-1.6 KB. Titles stay in the shared registry (25 B each; moving them saves nothing).",
-      "status": "to-send",
-      "at": "2026-10-31T20:39Z"
+      "status": "sent",
+      "at": "2026-10-31T20:39Z",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) X-build-stable-name (#296, merged): web builds now deterministic (version = package version + commit SHA); runner raised 'Results toolbar (lazy)' 4.6 -> 4.65 KB because the SHA in the version literal changes gzip by a few bytes per commit. Docker images now get the commit SHA via the REVISION build arg.",
-      "status": "to-send",
-      "at": "2026-10-31T21:14Z"
+      "status": "sent",
+      "at": "2026-10-31T21:14Z",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI: Settings → Logging is complete (#289 2a + #294 2b): events, data kinds with duration dialogs and banners, opt-ins, never-logged list, outputs, log files (downloads redact torrent details by default), delete with confirmation. Runner UX calls (§2.26): one size-preview panel instead of per-field; console format shows text/json until event labels land.",
-      "status": "to-send",
-      "at": "2026-10-31T21:31Z"
+      "status": "sent",
+      "at": "2026-10-31T21:31Z",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "item": "FYI (§2.19) #297 X-polish-1031d merged: classification re-queue list capped at 64 texts, then one full re-mark stored under classify.requeue_all (survives downgrade; runs on next start with search on, in range-UPDATE chunks). Content safety: marks more, never fewer.",
-      "status": "to-send",
-      "at": "2026-10-31T22:14Z"
+      "status": "sent",
+      "at": "2026-10-31T22:14Z",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-backfill-retry",
-      "status": "to-send",
+      "status": "sent",
       "text": "§2.19 flag: backfill now retries with backoff (5 s doubling to 300 s) after a store error instead of stopping until the next start (supersedes architecture.md §16 line; X-pipeline-1101, #305).",
-      "unblocks": "nothing (information)"
+      "unblocks": "nothing (information)",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-stale-tab",
-      "status": "to-send",
+      "status": "sent",
       "text": "§2.19 flag: app-wide stale-tab banner wording and cadence (checked when the tab is shown, at most every 5 min) refine §10.10.13/§16 (X-stale-tab, #307).",
-      "unblocks": "nothing (information)"
+      "unblocks": "nothing (information)",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "unraid-rerun",
@@ -2984,40 +3001,53 @@
     },
     {
       "id": "flag-wizard-packs",
-      "status": "to-send",
+      "status": "sent",
       "text": "§2.19 flag: the wizard pre-checks all five packs again when every pack is off, because the API has no \"choice stored\" flag (refines §2.8; turning them on still needs Continue; S-wizard-2, #309).",
-      "unblocks": "nothing (information)"
+      "unblocks": "nothing (information)",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-zh-autoselect",
-      "status": "to-send",
+      "status": "sent",
       "text": "§2.19 flag: with the zh catalogue complete (H-zh), browsers set to Chinese now get the Chinese UI automatically (the existing 0.95 coverage gate); the Natural phrasing chunk limit rose 1.64 -> 1.75 KB for the inlined zh strings. The zh labels in docs/ui-glossary.md are still marked \"TBD until the owner or a reviewer confirms\"; the owner may want to confirm them (a reviewer checked 80+ entries and every content-safety string).",
-      "unblocks": "nothing (information)"
+      "unblocks": "nothing (information)",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-312-updater-unreadable",
-      "status": "to-send",
-      "text": "§2.19 (#312): queuing an install for the window while updater.json is unreadable is refused (install_unavailable: updater_unreadable), following F-updater's rule that only a saved pause/resume may replace that file; Install now still works."
+      "status": "sent",
+      "text": "§2.19 (#312): queuing an install for the window while updater.json is unreadable is refused (install_unavailable: updater_unreadable), following F-updater's rule that only a saved pause/resume may replace that file; Install now still works.",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-316-filters-limits",
-      "status": "to-send",
-      "text": "§2.19/§2.26 (#316 S-filters-2c): \"Filters dialogs (on demand)\" limit 34.4 -> 35.9 KB because the change flow moved there from the Filters first view (first view -2.43 KB; its limit lowered 45 -> 31.0 KB); plus the author's refinements: one forwarder door into filters flows, and Block pre-fills the raw name (shown in full before apply)."
+      "status": "sent",
+      "text": "§2.19/§2.26 (#316 S-filters-2c): \"Filters dialogs (on demand)\" limit 34.4 -> 35.9 KB because the change flow moved there from the Filters first view (first view -2.43 KB; its limit lowered 45 -> 31.0 KB); plus the author's refinements: one forwarder door into filters flows, and Block pre-fills the raw name (shown in full before apply).",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-317-discover-limit",
-      "status": "to-send",
-      "text": "§2.19/§2.26 (#317 X-illustrations): Discover route limit 45 -> 45.2 KB so state illustrations honour the Show illustrations toggle and Save-Data (§10.19 gate; ~80 B check on that route)."
+      "status": "sent",
+      "text": "§2.19/§2.26 (#317 X-illustrations): Discover route limit 45 -> 45.2 KB so state illustrations honour the Show illustrations toggle and Save-Data (§10.19 gate; ~80 B check on that route).",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-321-send-limits",
-      "status": "to-send",
-      "text": "§2.19/§2.26 (#321 S-send): /t limit 20.8 -> 21.0 KB and drawer 27.2 -> 27.4 KB for Send to client, the §10.5 primary action (+~0.16 KB each). Offset: #322 cut Discover 45.08 -> 42.39 KB and lowered its limit 45.2 -> 43 KB."
+      "status": "sent",
+      "text": "§2.19/§2.26 (#321 S-send): /t limit 20.8 -> 21.0 KB and drawer 27.2 -> 27.4 KB for Send to client, the §10.5 primary action (+~0.16 KB each). Offset: #322 cut Discover 45.08 -> 42.39 KB and lowered its limit 45.2 -> 43 KB.",
+      "sent_at": "2026-11-01T12:58Z"
     },
     {
       "id": "flag-325-flows-door-2",
-      "status": "to-send",
-      "text": "§2.19/§2.26 (#325 X-flows-door-2): a second flows root (flows-adult.ts via door.loadAdult) for the Appearance 18+ dialog; the wizard's first Continue now loads the flows' on-demand chunk; turning adult OFF sends its request directly (no door load; tightening only). Appearance first view −0.32 KB, Wizard steps −2.1 KB."
+      "status": "sent",
+      "text": "§2.19/§2.26 (#325 X-flows-door-2): a second flows root (flows-adult.ts via door.loadAdult) for the Appearance 18+ dialog; the wizard's first Continue now loads the flows' on-demand chunk; turning adult OFF sends its request directly (no door load; tightening only). Appearance first view −0.32 KB, Wizard steps −2.1 KB.",
+      "sent_at": "2026-11-01T12:58Z"
+    },
+    {
+      "item": "QUESTION online import (online vs offline before v0.6)",
+      "status": "asked",
+      "at": "2026-11-01T12:58Z",
+      "unblocks": "IMP online trigger (deferred)"
     }
   ],
   "external_gates": {
@@ -3277,7 +3307,7 @@
   "owner_standing": {
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
-  "last_daily_summary": "2026-10-31T13:07Z",
+  "last_daily_summary": "2026-11-01T12:58Z",
   "open_prs": {
     "338": {
       "slice": "S-search-meta-web",
