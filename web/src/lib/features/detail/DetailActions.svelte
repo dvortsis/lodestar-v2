@@ -50,9 +50,11 @@
 <Button variant="primary" dense disabled={!magnet} data-testid="detail-copy-magnet" onclick={copy}>
 	{m.detail_copy_magnet()}
 </Button>
-<Button dense disabled={!detail} data-testid="detail-block" onclick={block}
-	>{m.detail_block()}</Button
->
+<!-- Shown once there is a torrent, never disabled first: an outline button fading from its
+     disabled colours reads as low contrast mid-transition (axe, rose-pine-dark). -->
+{#if detail}
+	<Button dense data-testid="detail-block" onclick={block}>{m.detail_block()}</Button>
+{/if}
 {#if Block && target && target.hash === detail?.hash}
 	<Block torrent={target} bind:open={blocking} />
 {/if}
