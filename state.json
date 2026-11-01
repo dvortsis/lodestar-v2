@@ -2663,7 +2663,7 @@
     "tailwind-comments": "2026-11-01 (#309): a component word like \"card\" in a comment makes Tailwind emit daisyUI .card (+147 B CSS). Avoid daisyUI component names in comments; tests and scripts are excluded from scanning since #308.",
     "reviews-opus": "Reviews always run on Opus (CLAUDE.md delegation policy), even for translation/test slices.",
     "prettier-docs": "Check slice diffs for stray formatter passes over docs/decisions (#321 reformatted ~88 files); review with git show --stat per commit, not only the file list you expect.",
-    "t-headroom": "After #332 (X-search-headroom-2): /t/[hash] has 31 B left under 21.0 KB; drawer ~72 B. The next slice that touches /t or the drawer must bring its own cut."
+    "t-headroom": "After #332: /t 31 B left, Detail sections 2 B left (1000-based KB). X-web-polish-1101d cuts >=0.3 KB on both."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
@@ -3273,20 +3273,19 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-10-31T13:07Z",
-  "open_prs": {
-    "332": {
-      "slice": "X-search-headroom-2",
-      "head": "e4619c36b0c11ec3ed49864e34f1317f331789b5",
-      "verdict": "runner MERGE pending CI",
-      "session": "session_01MMjhnA1PYR1bubrPSKmbpg"
-    }
-  },
+  "open_prs": {},
   "merged_log": [
     {
       "pr": 331,
       "sha": "7607fb8f9d2ba300819994ea4a2332a53c4d854c",
       "at": "2026-11-01T10:05Z",
       "slice": "X-web-polish-1101c"
+    },
+    {
+      "pr": 332,
+      "sha": "9c4a72e284ad97417af2a460e2c616c2e7b140fd",
+      "at": "2026-11-01T10:17Z",
+      "slice": "X-search-headroom-2"
     }
   ],
   "active_sessions": {
