@@ -7,6 +7,7 @@
 	"detail_loading": "Loading torrent…",
 	"detail_announce": "Showing {title}",
 	"detail_copy_magnet": "Copy magnet",
+	"detail_block": "Block this…",
 	"detail_open_magnet": "Open magnet",
 	"detail_open_full": "Open full page",
 	"detail_magnet_copied": "Magnet copied",

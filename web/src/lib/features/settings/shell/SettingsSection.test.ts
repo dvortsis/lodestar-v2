@@ -126,9 +126,24 @@ it('waits for the purpose line with the form, and says so when it cannot load', 
 	render(SettingsSection, { section: 'fail' });
 	await until(() => expect(screen.getByRole('status').textContent).toContain('Loading settings'));
 	expect(screen.queryByTestId('stub')).toBeNull();
+	// The purpose line's height is kept while it loads, ahead of the status line.
+	const line = document.querySelector('p.h-6');
+	expect(line?.nextElementSibling).toBe(screen.getByRole('status'));
 	pending.reject(new Error('chunk'));
 	await screen.findByRole('button', { name: 'Reload' }, { timeout: 10_000 });
 	expect(screen.queryByText('Fail purpose')).toBeNull();
+});
+
+it('puts the purpose in the line it kept, without the reserved height', async () => {
+	const pending = deferred<Record<string, About>>();
+	registry.about = () => pending.promise;
+	render(SettingsSection, { section: 'net' });
+	const line = await waitFor(() => document.querySelector('p.h-6') as HTMLElement, {
+		timeout: 10_000
+	});
+	pending.resolve({ net: { purpose: () => 'Net purpose' } });
+	await until(() => expect(line.textContent).toBe('Net purpose'));
+	expect(line.classList.contains('h-6')).toBe(false);
 });
 
 it('never shows a purpose line that arrives after leaving its screen', async () => {

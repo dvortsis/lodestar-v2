@@ -279,6 +279,11 @@
 				onchange={(e) => void change({ illustrations: e.currentTarget.checked })}
 			/>
 			<p class="as-text">{m.appearance_illustrations_help()}</p>
+			{#if (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData}<p
+					class="as-text"
+				>
+					{m.appearance_illustrations_save_data()}
+				</p>{/if}
 		</section>
 
 		<section class="as-section" aria-labelledby="ap-adult">

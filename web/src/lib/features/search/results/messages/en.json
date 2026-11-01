@@ -35,6 +35,7 @@
 	"search_results_more": "More actions for {name}",
 	"search_results_open_tab": "Open in a new tab",
 	"search_results_copy_hash": "Copy info hash",
+	"search_results_block": "Block this…",
 	"search_results_hash_copied": "Info hash copied",
 	"search_results_copy_failed": "Couldn't copy the info hash",
 	"search_results_next": "Next torrent",

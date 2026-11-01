@@ -58,7 +58,9 @@ export function createModel() {
 	/** Previews `change` through the flow's dialog; nothing is sent until the dialog says so. */
 	async function start(change: Change, p: Pending) {
 		// One flow, however many activations arrive while its module loads.
-		creating ??= import('../flows/flow.svelte').then((m) => m.createChangeFlow());
+		creating ??= import('../flows-door')
+			.then((door) => door.load())
+			.then((m) => m.createChangeFlow());
 		const f = await creating;
 		// A screen that went away meanwhile starts nothing (its preview job would never be cancelled).
 		if (destroyed) return;

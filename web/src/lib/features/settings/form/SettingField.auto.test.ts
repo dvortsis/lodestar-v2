@@ -83,6 +83,19 @@ describe.each(['staged', 'instant'] as const)(
 			await until(() => expect(toggle().checked).toBe(true));
 		});
 
+		it('forgets a focus that left with the removed box', async () => {
+			const { root, toggle } = await open(mode);
+			await fireEvent.click(toggle());
+			(await within(root).findByRole('textbox')).focus();
+			await fireEvent.click(toggle()); // on: the focused box goes without a focusout
+			await until(() => expect(within(root).queryByRole('textbox')).toBeNull());
+			await fireEvent.click(toggle()); // off: a new box, not focused
+			const box = (await within(root).findByRole('textbox')) as HTMLInputElement;
+			await fireEvent.input(box, { target: { value: 'd' } });
+			await fireEvent.input(box, { target: { value: '' } });
+			await until(() => expect(toggle().checked).toBe(true)); // not held open by the old focus
+		});
+
 		it('follows a server update to the empty value', async () => {
 			const { toggle } = await open(mode, 'de');
 			expect(toggle().checked).toBe(false);

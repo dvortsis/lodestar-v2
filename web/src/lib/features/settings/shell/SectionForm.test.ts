@@ -109,6 +109,29 @@ it('reveals and focuses an Advanced deep link after loading', async () => {
 	expect(document.querySelector('details')!.open).toBe(true);
 });
 
+it('waits for the form to load before it focuses a #field link', async () => {
+	state.page.url = new URL('http://localhost/settings/crawler#crawler.paused');
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	const fetchNow = server.fetch;
+	let asked = 0;
+	vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+		asked++;
+		await gate;
+		return fetchNow(args[0] as string, args[1]);
+	});
+	mount();
+	await waitFor(() => expect(asked).toBeGreaterThan(0), { timeout: 10_000 });
+	expect(screen.queryByRole('switch', { name: 'Pause crawling' })).toBeNull();
+	expect(document.activeElement).toBe(document.body);
+	release();
+	await waitFor(
+		() =>
+			expect(document.activeElement).toBe(screen.getByRole('switch', { name: 'Pause crawling' })),
+		{ timeout: 10_000 }
+	);
+});
+
 it('waits for a lazy choice and focuses its selected option instead of the menu', async () => {
 	server.sections.get('crawler')!.fields.intensity = sv('balanced');
 	state.page.url = new URL('http://localhost/settings/crawler#crawler.intensity');

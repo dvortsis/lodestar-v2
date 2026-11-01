@@ -26,6 +26,7 @@
 	"appearance_motion_full": "Full",
 	"appearance_illustrations": "Show illustrations",
 	"appearance_illustrations_help": "Pictures in empty and first-run screens. They are off automatically in low-resource mode.",
+	"appearance_illustrations_save_data": "Off while your browser's data saver is on.",
 	"appearance_adult": "Adult content",
 	"appearance_adult_help": "Off by default. This applies to the whole server, not only to you.",
 	"appearance_adult_label": "Show adult content",
