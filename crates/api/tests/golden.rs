@@ -578,7 +578,8 @@ async fn search_and_parse_endpoints() {
             &parse(
                 "(dark | knight) -cam \"dark knight\" dark NEAR/3 knight comput* ~knigth \
                  size:700MB..1.5GB discovered:<7d ext:mkv private:no res:1080 \
-                 file:(ext:flac size:>50MB) cat:video>=80% bytes:video=10..50 year:2019..2021",
+                 file:(ext:flac size:>50MB) cat:video>=80% bytes:video=10..50 year:2019..2021 \
+                 largest:1GiB..<4GiB",
             ),
             c,
         ),

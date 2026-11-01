@@ -1,8 +1,17 @@
 //! Parser invariants: never panics, and whatever parses renders back to
 //! text that parses to the same AST (the UI builder depends on it).
 
+use lodestar_search::query::NumField;
 use lodestar_search::{Node, parse};
 use proptest::prelude::*;
+
+/// A byte bound: near whole units (the brush's edges), near `u64::MAX`, or any.
+fn bound() -> impl Strategy<Value = Option<u64>> {
+    let near_unit =
+        (0u32..64, -2i64..=2).prop_map(|(shift, d)| (1u64 << shift).wrapping_add_signed(d));
+    let near_max = (0u64..3).prop_map(|d| u64::MAX - d);
+    prop::option::of(prop_oneof![near_unit, near_max, any::<u64>()])
+}
 
 const FRAGMENTS: &[&str] = &[
     "dark",
@@ -24,6 +33,8 @@ const FRAGMENTS: &[&str] = &[
     "path:",
     "size:>1GB",
     "size:1MB..2GB",
+    "size:1GiB..<4GiB",
+    "piece:<16MiB",
     "files:<=3",
     "largest:>=1.5GB",
     "ext:mkv,mp4",
@@ -104,6 +115,28 @@ proptest! {
             let json = serde_json::to_string(&ast).unwrap();
             prop_assert_eq!(serde_json::from_str::<Node>(&json).unwrap(), ast);
         }
+    }
+
+    /// Byte ranges round-trip whatever their bounds, and the printed text
+    /// is a fixed point (§10.12's units, `a..<b` for a brush's top edge).
+    #[test]
+    fn byte_ranges_round_trip(
+        lo in bound(),
+        hi in bound(),
+        field in prop::sample::select(&[NumField::Size, NumField::Largest, NumField::Piece][..]),
+    ) {
+        let (lo, hi) = match (lo, hi) {
+            (None, None) => (Some(0), None),
+            (Some(l), Some(h)) if l > h => (Some(h), Some(l)),
+            b => b,
+        };
+        let ast = Node::Range { field, lo, hi };
+        let text = ast.to_query();
+        prop_assert_eq!(parse(&text).ok(), Some(ast), "{}", text);
+        // Stored filter text must parse on the release before (FX-6-I9).
+        prop_assert!(!text.contains("..<"), "{}", text);
+        let again = parse(&text).unwrap().to_query();
+        prop_assert_eq!(again, text);
     }
 
     #[test]

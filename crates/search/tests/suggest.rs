@@ -761,7 +761,7 @@ fn a_new_index_directory_gets_its_own_title_set() {
 const NATURAL: &[(&str, &str)] = &[
     (
         "4k movies from 2020 over 10gb",
-        "res:2160p type:movie year:2020 size:>=10GB",
+        "res:2160p type:movie year:2020 size:>=10GiB",
     ),
     ("1080p tv shows", "res:1080p type:tv"),
     ("the dark knight in 4k", "the dark knight res:2160p"),
@@ -777,11 +777,11 @@ const NATURAL: &[(&str, &str)] = &[
     ("french movies", "lang:fr type:movie"),
     (
         "english audiobooks under 500mb",
-        "lang:en type:audiobook size:<=500MB",
+        "lang:en type:audiobook size:<=500MiB",
     ),
     ("ebooks added this week", "type:ebook discovered:<7d"),
-    ("software under 1 gb", "type:software size:<=1GB"),
-    ("games over 50 gb", "type:game size:>=50GB"),
+    ("software under 1 gb", "type:software size:<=1GiB"),
+    ("games over 50 gb", "type:game size:>=50GiB"),
     (
         "4k hdr dolby vision movies",
         "res:2160p hdr:hdr,dv type:movie",
@@ -790,7 +790,7 @@ const NATURAL: &[(&str, &str)] = &[
     ("breaking bad season 1 episode 5", "breaking bad s:1 e:5"),
     ("movies without subtitles", "type:movie -has:subs"),
     ("movies with subtitles", "type:movie has:subs"),
-    ("mkv files over 4gb", "ext:mkv size:>=4GB"),
+    ("mkv files over 4gb", "ext:mkv size:>=4GiB"),
     ("linux iso", "linux ext:iso"),
     ("star wars 1977", "star wars year:1977"),
     ("movies after 2015", "type:movie year:>=2016"),
@@ -800,8 +800,8 @@ const NATURAL: &[(&str, &str)] = &[
     ("1999-2001 films", "year:1999..2001 type:movie"),
     ("more than 10 files", "files:>=11"),
     ("at least 100 files", "files:>=101"),
-    ("between 1 and 4 gb", "size:1GB..4GB"),
-    ("between 1gb and 4gb", "size:1GB..4GB"),
+    ("between 1 and 4 gb", "size:1GiB..4GiB"),
+    ("between 1gb and 4gb", "size:1GiB..4GiB"),
     ("last 3 days", "discovered:<3d"),
     ("today 1080p", "discovered:<1d res:1080p"),
     ("recent anime", "discovered:<7d anime"),
@@ -880,7 +880,7 @@ const NATURAL: &[(&str, &str)] = &[
     ("german dubbed movies", "lang:de type:movie"),
     (
         "movies under 700mb in 720p",
-        "type:movie size:<=700MB res:720p",
+        "type:movie size:<=700MiB res:720p",
     ),
     ("a b c", "a b c"),
     ("", ""),

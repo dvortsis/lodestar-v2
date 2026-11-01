@@ -295,6 +295,40 @@ async fn the_floor_is_locked() {
     assert!(body["assessment"]["neutralize"].is_object());
 }
 
+/// Stored filter text never uses `..<`: a binary one release back can't
+/// parse it and would skip the rule, loosening filtering (FX-6-I9).
+#[tokio::test]
+async fn stored_rule_text_reads_on_the_release_before() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let brushed = "size:1GiB..<4GiB";
+    for (change, password) in [
+        (
+            json!({ "op": "add_rule", "query": brushed, "action": "hide", "unless": brushed }),
+            None,
+        ),
+        (
+            json!({ "op": "add_allow", "query": brushed }),
+            Some(PASSWORD),
+        ),
+        (
+            json!({ "op": "add_override", "query": brushed, "scope": brushed, "expires_days": 30 }),
+            Some(PASSWORD),
+        ),
+    ] {
+        let (status, body) = apply(&f, &c, change.clone(), password).await;
+        assert_eq!(status, StatusCode::OK, "{change}: {body}");
+    }
+    let o = overview(&f, &c).await;
+    let text = o.to_string();
+    assert!(!text.contains("..<"), "{text}");
+    assert_eq!(o["rules"][0]["query"], json!("size:1GiB..4294967295"));
+    assert_eq!(o["rules"][0]["unless"], json!("size:1GiB..4294967295"));
+    assert_eq!(o["allow"][0]["query"], json!("size:1GiB..4294967295"));
+    assert_eq!(o["overrides"][0]["query"], json!("size:1GiB..4294967295"));
+    assert_eq!(o["overrides"][0]["scope"], json!("size:1GiB..4294967295"));
+}
+
 #[tokio::test]
 async fn undo_goes_back_one_step() {
     let f = fixture();
