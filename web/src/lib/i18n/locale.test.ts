@@ -1,6 +1,5 @@
 import { render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
-import { AUTO_LOCALE_COVERAGE, coverage } from './coverage.generated';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	applyLocale,
 	currentLocale,
@@ -10,7 +9,22 @@ import {
 } from './locale.svelte';
 import Probe from './testing/Probe.svelte';
 
-afterEach(() => applyLocale('en'));
+afterEach(() => {
+	applyLocale('en');
+	vi.doUnmock('./coverage.generated');
+	vi.resetModules();
+});
+
+// Loads locale.svelte.ts against a stubbed catalogue coverage, so the gate is tested with
+// known numbers rather than the live catalogue (which changes as translations land).
+async function localeWithCoverage(zh: number) {
+	vi.resetModules();
+	vi.doMock('./coverage.generated', () => ({
+		AUTO_LOCALE_COVERAGE: 0.95,
+		coverage: { en: 1, zh }
+	}));
+	return import('./locale.svelte');
+}
 
 describe('resolveLocale', () => {
 	it('prefers the setting over the browser', () => {
@@ -21,13 +35,17 @@ describe('resolveLocale', () => {
 		expect(resolveLocale('xx', ['fr-FR'])).toBe('en');
 		expect(resolveLocale(undefined, [])).toBe('en');
 	});
-	it('does not auto-select zh from the browser while its catalogue is mostly untranslated', () => {
-		// The glossary zh labels are TBD, so zh coverage is far under the auto-select bar.
-		expect(coverage['zh']).toBeLessThan(AUTO_LOCALE_COVERAGE);
-		expect(resolveLocale(null, ['zh-CN'])).toBe('en');
-		expect(resolveLocale(null, ['zh-CN', 'en-US'])).toBe('en');
+	it('does not auto-select zh from the browser while its catalogue is mostly untranslated', async () => {
+		const { resolveLocale: gated } = await localeWithCoverage(0.5);
+		expect(gated(null, ['zh-CN'])).toBe('en');
+		expect(gated(null, ['zh-CN', 'en-US'])).toBe('en');
 		// An explicit choice still applies.
-		expect(resolveLocale('zh', ['zh-CN'])).toBe('zh');
+		expect(gated('zh', ['zh-CN'])).toBe('zh');
+	});
+	it('auto-selects zh from the browser once its catalogue is at full coverage', async () => {
+		const { resolveLocale: gated } = await localeWithCoverage(1);
+		expect(gated(null, ['zh-CN'])).toBe('zh');
+		expect(gated(null, ['fr-FR', 'zh-TW'])).toBe('zh');
 	});
 	it('auto-selects a locale the covered() check accepts', () => {
 		expect(matchLocale(['zh-CN'], () => true)).toBe('zh');
@@ -57,10 +75,12 @@ describe('rendered messages', () => {
 		expect(screen.getByTestId('probe-language').textContent).toBe('English');
 		expect(screen.getByTestId('probe-age').textContent).toBe('Seen 3 hours ago');
 	});
-	it('renders zh, falling back to en where zh is not translated yet', () => {
+	it('renders zh where zh is translated', () => {
+		// Every en key now has a zh message (scripts/messages.zh-complete.test.ts), so there is no
+		// untranslated key left to use as a fallback probe; this checks the zh path instead.
 		applyLocale('zh');
 		render(Probe, { relative: '3 hours ago' });
 		expect(screen.getByTestId('probe-language').textContent).toBe('中文');
-		expect(screen.getByTestId('probe-age').textContent).toBe('Seen 3 hours ago');
+		expect(screen.getByTestId('probe-age').textContent).toBe('检查于3 hours ago');
 	});
 });
