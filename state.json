@@ -3100,7 +3100,7 @@
     {
       "id": "flag-fx5-limits",
       "status": "to-send",
-      "text": "FX-5 raised /t route 21.0→21.12 KB and Detail sections 37.31→37.45 KB (runner §2.26) for the connecting glyph, tree height and parsed rows."
+      "text": "FX-5 raised /t route 21.0→21.14 KB and Detail sections 37.31→37.52 KB (runner §2.26) for the connecting glyph, a page that really widens, a tree sized to visible rows, and parsed rows."
     },
     {
       "id": "flag-fx3-stale-resend",
@@ -3201,6 +3201,10 @@
     {
       "t": "2026-11-01T17:11Z",
       "event": "merged #346 FX-3 (1962f499); archived FX-3; launched FX-6 UI session_01MMjhnAYaWy5XAkp2k2cnkM (Sonnet; I4, I10, P7, P8, dead .ins-scene). I9 query printer (Opus) is its own PR when a slot frees."
+    },
+    {
+      "t": "2026-11-01T17:16Z",
+      "event": "FX-5 second size ruling: /t 21.14 KB, Detail sections 37.52 KB (review fixes)."
     }
   ],
   "reviews": {
