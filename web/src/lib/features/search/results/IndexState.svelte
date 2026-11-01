@@ -7,6 +7,7 @@
 	import StateScene from '$lib/shell/StateScene.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import EmptyState from '$lib/ui/feedback/EmptyState.svelte';
 	import { results } from './results.svelte';
 	import type { Banner as Kind, IndexState } from './recover';
 
@@ -52,19 +53,22 @@
 	</Banner>
 {/if}
 {#if full && state}
-	<div class="rp-empty" data-testid="results-cold-page">
-		<p class="rp-empty-title">{m.search_state_cold_title()}</p>
-		<p data-testid="results-cold-start">
-			{rate !== null
-				? m.search_state_cold_body_rate({
-						count: formatCount(state.searchable_torrents, locale),
-						rate: formatRate(rate, locale)
-					})
-				: m.search_state_cold_body({ count: formatCount(state.searchable_torrents, locale) })}
-		</p>
-		<Button onclick={focusBar}>{m.search_results_empty_focus()}</Button>
-		<StateScene id="searching_crawling" />
-	</div>
+	<EmptyState
+		title={m.search_state_cold_title()}
+		text={rate !== null
+			? m.search_state_cold_body_rate({
+					count: formatCount(state.searchable_torrents, locale),
+					rate: formatRate(rate, locale)
+				})
+			: m.search_state_cold_body({ count: formatCount(state.searchable_torrents, locale) })}
+		data-testid="results-cold-page"
+		textTestid="results-cold-start"
+	>
+		{#snippet illustration()}<StateScene id="searching_crawling" />{/snippet}
+		{#snippet action()}
+			<Button onclick={focusBar}>{m.search_results_empty_focus()}</Button>
+		{/snippet}
+	</EmptyState>
 {:else if banner?.kind === 'growing' && results.status !== 'empty'}
 	<Banner kind="info" class="rp-banner">
 		<span data-testid="results-cold-start">{growing(state?.searchable_torrents ?? 0)}</span>
