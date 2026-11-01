@@ -1953,11 +1953,14 @@
       "review": "runner MERGE at 23f684b (decoding=async removal accepted \u00a72.26)"
     },
     "X-settings-polish": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhnBnH4Dc9AJBWfgzYCj",
       "model": "sonnet",
       "brief": "briefs/X-settings-polish.md",
-      "launched_at": "2026-11-01T04:27Z"
+      "launched_at": "2026-11-01T04:27Z",
+      "pr": 319,
+      "head": "bc6d2ba",
+      "review": "runner MERGE at bc6d2ba"
     },
     "S-updates-3": {
       "status": "review-ready",
@@ -2885,7 +2888,8 @@
     "B-update-5b: POST /updates/rollback; binary-level fake-source test (wrong hash/size/oversized/other target); trust survives a rollback; log capture over a whole install; plus the #312 reviewer note: the download writer is not awaited when the overall timeout fires (#312)",
     "Updates API (#318): install_unavailable reason only in the message text (client regex-parses \"(reason)\"); add a structured reason field to the error envelope, then drop the regex",
     "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
-    "Discover route headroom: ~0.1 KB left after #317 (limit 45.2 KB); brief a headroom pass before the next Discover feature. Also #317: first visit with no appearance cache shows the first scene even when the account has illustrations off."
+    "Discover route headroom: ~0.1 KB left after #317 (limit 45.2 KB); brief a headroom pass before the next Discover feature. Also #317: first visit with no appearance cache shows the first scene even when the account has illustrations off.",
+    "Settings engine: lift the shared reveal + hash-focus logic (SectionForm, screens2/GroupedForm) into form/reveal.svelte.ts only alongside a change that already touches those chunks: done alone it cost +0.2 KB on Settings first views and +0.6 KB on Wizard steps via form/embed.ts (#319 skipped it)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
