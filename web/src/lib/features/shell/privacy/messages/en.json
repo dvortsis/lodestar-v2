@@ -1,0 +1,9 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"shell_privacy_queries_title": "Search queries are being saved",
+	"shell_privacy_queries_body": "Insights keeps what was searched for its top queries.",
+	"shell_privacy_queries_manage": "Manage in Settings → Insights & digest",
+	"shell_privacy_turn_off": "Turn off now",
+	"shell_privacy_failed_off": "Couldn't turn it off: {message}",
+	"shell_privacy_identifying_title": "Log lines may identify torrents or people"
+}

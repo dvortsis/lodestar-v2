@@ -40,6 +40,7 @@ pub mod network;
 pub mod notifications;
 mod portable;
 pub mod preferences;
+pub mod privacy;
 pub mod search;
 pub mod storage;
 pub mod trackers;
@@ -1709,6 +1710,14 @@ impl SettingsApi for Registry {
         endpoints: &[(&str, Value)],
     ) -> Option<String> {
         self.find(section)?.saved_secret(key, endpoints)
+    }
+
+    fn privacy(&self, now: i64) -> lodestar_api::dto::insights::PrivacySummary {
+        // Both sections are always registered: a missing one panics, as `subscribe` does,
+        // rather than reporting "off".
+        let logging = self.entry::<logging::Logging>().tx.borrow().clone();
+        let insights = self.entry::<insights::Insights>().tx.borrow().clone();
+        privacy::summary(&logging, &insights, now)
     }
 
     fn send_limits(&self) -> &lodestar_api::settings::SendLimits {

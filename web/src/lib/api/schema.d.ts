@@ -5629,6 +5629,7 @@ export interface components {
              *     present only with `compare=1`, and never for `all`.
              */
             previous?: components["schemas"]["PreviousPeriod"];
+            privacy: null | components["schemas"]["PrivacySummary"];
             range: components["schemas"]["InsightsRange"];
             segments: components["schemas"]["Segments"];
             serve: components["schemas"]["Serve"];
@@ -5861,6 +5862,27 @@ export interface components {
             serve: number | null;
             /** Format: int64 */
             understand: number;
+        };
+        /**
+         * @description Whether something that identifies torrents or people is being recorded
+         *     now (§10.10.7 Privacy, §10.10.12), for the Overview's banner. Booleans
+         *     and a time only: never which kinds, a path, a query or a name. Read at
+         *     each request, never cached with the rollups.
+         * @example {
+         *       "identifying_until": 1700003600,
+         *       "query_logging": false
+         *     }
+         */
+        PrivacySummary: {
+            /**
+             * Format: int64
+             * @description When the log stops writing data kinds that identify torrents or
+             *     people (the opt-ins included): -1 not until turned off, else Unix
+             *     seconds. Null while none is on.
+             */
+            identifying_until: number | null;
+            /** @description Searches are being saved for Insights (`insights.query_logging`). */
+            query_logging: boolean;
         };
         /**
          * @description `GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.

@@ -14922,6 +14922,7 @@
           "funnel_total",
           "ingest_per_hour",
           "kpi",
+          "privacy",
           "range",
           "segments",
           "serve",
@@ -14971,6 +14972,17 @@
           "previous": {
             "$ref": "#/components/schemas/PreviousPeriod",
             "description": "The period of equal length just before, in the same shape;\npresent only with `compare=1`, and never for `all`."
+          },
+          "privacy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PrivacySummary",
+                "description": "Null while nothing identifying is recorded (the Overview then loads\nno banner code)."
+              }
+            ]
           },
           "range": {
             "$ref": "#/components/schemas/InsightsRange"
@@ -15474,6 +15486,32 @@
             "format": "int64",
             "minimum": 0
           }
+        }
+      },
+      "PrivacySummary": {
+        "type": "object",
+        "description": "Whether something that identifies torrents or people is being recorded\nnow (§10.10.7 Privacy, §10.10.12), for the Overview's banner. Booleans\nand a time only: never which kinds, a path, a query or a name. Read at\neach request, never cached with the rollups.",
+        "required": [
+          "identifying_until",
+          "query_logging"
+        ],
+        "properties": {
+          "identifying_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the log stops writing data kinds that identify torrents or\npeople (the opt-ins included): -1 not until turned off, else Unix\nseconds. Null while none is on."
+          },
+          "query_logging": {
+            "type": "boolean",
+            "description": "Searches are being saved for Insights (`insights.query_logging`)."
+          }
+        },
+        "example": {
+          "identifying_until": 1700003600,
+          "query_logging": false
         }
       },
       "ProxySettings": {

@@ -283,6 +283,27 @@ const insightsPrintLazy = requireMeasuredJs(
 	'Insights print layout (on demand)',
 	ownChunk(PRINT, [], false, ownChunk(OVERVIEW, [new RegExp(`${PRINT.replaceAll('/', '\\/')}$`)]))
 );
+// The Overview's privacy banner (S-privacy-banner): mounted only while the overview's `privacy`
+// summary is set (something identifying is recorded). The Overview reaches it through
+// `door.ts` alone, so its own chunks stop at the door, and with the flag off none of these
+// modules load. Turn off now's two Settings → Logging modules load
+// on the press, as on /logs; they're gated by "Settings logging parts".
+const PRIVACY_DOOR = 'src/lib/features/shell/privacy/door.ts';
+const overviewOwn = ownChunk(OVERVIEW, [new RegExp(`${PRIVACY_DOOR.replaceAll('/', '\\/')}$`)]);
+const privacyCarried = modulesIn(overviewOwn).filter((id) => /features\/shell\/privacy\//.test(id));
+if (privacyCarried.length)
+	throw new Error(
+		`The Overview loads the privacy banner with the flag off (S-privacy-banner):\n  ${privacyCarried.join('\n  ')}`
+	);
+const privacyBannerLazy = requireMeasuredJs(
+	'Privacy banner (on demand)',
+	ownChunk(
+		PRIVACY_DOOR,
+		[/features\/settings\/logging\/(?:catalog\.svelte|privacy)\.ts$/],
+		false,
+		overviewOwn
+	)
+);
 const settingsEditLazy = requireMeasuredJs(
 	'Settings edit chunk (on demand)',
 	onDemandOf('/settings/[section]', settingsEdit)
@@ -1093,6 +1114,8 @@ export default [
 	entry('Settings edit chunk (on demand)', settingsEditLazy, '11.3 KB'),
 	entry('Insights digest preview (on demand)', insightsDigestLazy, '1.9 KB'),
 	entry('Insights print layout (on demand)', insightsPrintLazy, '1.62 KB'),
+	// S-privacy-banner: measured + 10%.
+	entry('Privacy banner (on demand)', privacyBannerLazy, '3.71 KB'),
 	entry('Settings messages (on demand)', settingsMessagesLazy, '4 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
