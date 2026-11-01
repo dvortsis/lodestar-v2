@@ -3376,8 +3376,8 @@
     },
     "344": {
       "slice": "G-m5a",
-      "head": "c9d242d3",
-      "verdict": "decisions sent: noise allowance accepted (budget unchanged, gate +8%/-5% + duty cycle <=1%), nightly-only with own concurrency group (CHANGE), one PR ok; runner to review tests before merge; full-ci",
+      "head": "2338046ad4b0e43e29a33432066b257b105eebb9",
+      "verdict": "runner MERGE pending full-ci green (concurrency fix in; tests skimmed: expectations from fixture manifest, independent)",
       "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     }
   },
