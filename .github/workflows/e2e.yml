@@ -238,9 +238,12 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
-      # The binary embeds web/build, so the UI is built first.
+      # The binary embeds web/build, so the UI is built first. VITE_DEV_ROUTES=1 because the
+      # shortcuts specs drive /dev/shortcuts, which exists only in such a build.
       - run: npm ci && npm run build
         working-directory: web
+        env:
+          VITE_DEV_ROUTES: '1'
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo build -p lodestar --release
