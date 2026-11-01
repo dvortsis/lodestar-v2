@@ -2006,7 +2006,7 @@
       "note": "Playwright core 10m40s on normal run (no trim needed)"
     },
     "S-send": {
-      "status": "main merged, conflict resolved (only .size-limit.mjs); runner MERGE stands; CI on 76b93a9",
+      "status": "merged",
       "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
       "model": "sonnet",
       "brief": "briefs/S-send.md",
@@ -2014,7 +2014,9 @@
       "pr": 321,
       "head": "76b93a9",
       "ruling": "\u00a72.26: /t 20.8 -> 21.0 KB, drawer 27.2 -> 27.4 KB (Send = \u00a710.5 primary action)",
-      "review": "runner MERGE at faf3384"
+      "review": "runner MERGE at faf3384",
+      "merge_sha": "1ca1b643",
+      "merged_at": "2026-11-01T07:31Z"
     },
     "X-discover-headroom": {
       "status": "merged",
