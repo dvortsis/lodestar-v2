@@ -1925,13 +1925,14 @@
       "merge": "96e436f2"
     },
     "S-filters-2c": {
-      "status": "running",
+      "status": "draft; limit ruling sent",
       "model": "opus",
       "session": "session_01MMjhnBEzcgRDjcmTd73NYJ",
-      "pr": null,
+      "pr": 316,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "03:44Z brief briefs/S-filters-2c.md (Block this\u2026 hooks; single forwarder door into filters/flows to stop the regroup; guard). | 03:43Z launched Opus."
+      "notes": "03:44Z brief briefs/S-filters-2c.md (Block this\u2026 hooks; single forwarder door into filters/flows to stop the regroup; guard). | 03:43Z launched Opus.",
+      "ruling": "\u00a72.26: Filters dialogs 34.4->35.9 KB (move from first view -2.43 KB), Filters first view limit 45->31.0 KB"
     },
     "B-update-5": {
       "review": "MERGE at 5fe6738 (session_01MMjhn9NMLTHdjwMAZFVDP8); ubuntu test red, logs pending",
@@ -2816,6 +2817,11 @@
       "id": "flag-312-updater-unreadable",
       "status": "to-send",
       "text": "\u00a72.19 (#312): queuing an install for the window while updater.json is unreadable is refused (install_unavailable: updater_unreadable), following F-updater's rule that only a saved pause/resume may replace that file; Install now still works."
+    },
+    {
+      "id": "flag-316-filters-limits",
+      "status": "to-send",
+      "text": "\u00a72.19/\u00a72.26 (#316 S-filters-2c): \"Filters dialogs (on demand)\" limit 34.4 -> 35.9 KB because the change flow moved there from the Filters first view (first view -2.43 KB; its limit lowered 45 -> 31.0 KB); plus the author's refinements: one forwarder door into filters flows, and Block pre-fills the raw name (shown in full before apply)."
     }
   ],
   "external_gates": {
