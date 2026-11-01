@@ -1016,7 +1016,8 @@ fn parse_percent(s: &str) -> Option<u64> {
 
 // ---- values ----------------------------------------------------------------
 
-/// `>x`, `>=x`, `<x`, `<=x`, `=x`, `x`, `a..b`, `a..`, `..b`, inclusive.
+/// `>x`, `>=x`, `<x`, `<=x`, `=x`, `x`, `a..b`, `a..`, `..b`, inclusive;
+/// `a..<b` stops short of `b`.
 fn range(
     value: &str,
     unit: fn(&str) -> Option<u64>,
@@ -1031,7 +1032,12 @@ fn range(
     let one = |s: &str| unit(s).ok_or_else(bad);
     if let Some((a, b)) = value.split_once("..") {
         let lo = if a.is_empty() { None } else { Some(one(a)?) };
-        let hi = if b.is_empty() { None } else { Some(one(b)?) };
+        // `a..<b` excludes `b`, as `<b` does.
+        let hi = match b.strip_prefix('<') {
+            Some(b) => Some(one(b)?.checked_sub(1).ok_or_else(bad)?),
+            None if b.is_empty() => None,
+            None => Some(one(b)?),
+        };
         if lo.is_none() && hi.is_none() {
             return Err(bad());
         }
@@ -1401,11 +1407,24 @@ impl Node {
                 };
                 let count = field.is_count();
                 let v = |n: u64| if count { n.to_string() } else { bytes_text(n) };
+                // A byte bound one short of (or past) a whole unit reads as
+                // the exclusive form: a brush's `[1GiB, 4GiB)` is `1GiB..<4GiB`.
+                let below = |n: u64| n.checked_add(1).filter(|&m| !count && in_unit(m, n));
+                let above = |n: u64| n.checked_sub(1).filter(|&m| !count && in_unit(m, n));
                 let _ = match (lo, hi) {
                     (Some(l), Some(h)) if l == h => write!(out, "{name}:{}", v(*l)),
-                    (Some(l), Some(h)) => write!(out, "{name}:{}..{}", v(*l), v(*h)),
-                    (Some(l), None) => write!(out, "{name}:>={}", v(*l)),
-                    (None, Some(h)) => write!(out, "{name}:<={}", v(*h)),
+                    (Some(l), Some(h)) => match below(*h) {
+                        Some(b) => write!(out, "{name}:{}..<{}", v(*l), v(b)),
+                        None => write!(out, "{name}:{}..{}", v(*l), v(*h)),
+                    },
+                    (Some(l), None) => match above(*l) {
+                        Some(a) => write!(out, "{name}:>{}", v(a)),
+                        None => write!(out, "{name}:>={}", v(*l)),
+                    },
+                    (None, Some(h)) => match below(*h) {
+                        Some(b) => write!(out, "{name}:<{}", v(b)),
+                        None => write!(out, "{name}:<={}", v(*h)),
+                    },
                     (None, None) => write!(out, "{name}:0.."),
                 };
             }
@@ -1508,8 +1527,16 @@ pub(crate) fn is_plain_word(w: &str) -> bool {
     )
 }
 
+/// Whether `m` is a whole number of KiB and its neighbour `n` isn't.
+fn in_unit(m: u64, n: u64) -> bool {
+    let whole = |x: u64| x >= 1 << 10 && x.is_multiple_of(1 << 10);
+    whole(m) && !whole(n)
+}
+
+/// Bytes in the largest IEC unit that divides them exactly (§10.12), else
+/// plain bytes; `parse_bytes` reads every form back.
 fn bytes_text(n: u64) -> String {
-    for (unit, shift) in [("TB", 40), ("GB", 30), ("MB", 20), ("KB", 10)] {
+    for (unit, shift) in [("TiB", 40), ("GiB", 30), ("MiB", 20), ("KiB", 10)] {
         if n >= 1 << shift && n.is_multiple_of(1 << shift) {
             return format!("{}{unit}", n >> shift);
         }
@@ -1985,6 +2012,58 @@ mod tests {
             .is_err()
         );
         assert!(parse(&"x".repeat(MAX_QUERY_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn sizes_print_in_iec_units() {
+        let (k, g, t) = (1u64 << 10, 1u64 << 30, 1u64 << 40);
+        let size = |lo, hi| {
+            Node::Range {
+                field: NumField::Size,
+                lo,
+                hi,
+            }
+            .to_query()
+        };
+        for (lo, hi, text) in [
+            (Some(0), Some(0), "size:0"),
+            (Some(1), Some(1), "size:1"),
+            (Some(k), Some(k), "size:1KiB"),
+            (Some(3 << 20), None, "size:>=3MiB"),
+            (Some(g), Some(4 * g), "size:1GiB..4GiB"),
+            // The brush's bins are `[lo, hi)`: its top edge is one short.
+            (Some(g), Some(4 * g - 1), "size:1GiB..<4GiB"),
+            (None, Some(16 * g - 1), "size:<16GiB"),
+            (Some(4 * g + 1), None, "size:>4GiB"),
+            (Some(2 * t), None, "size:>=2TiB"),
+            (Some(1536 << 20), None, "size:>=1536MiB"),
+            (Some(1000), Some(1023), "size:1000..<1KiB"),
+            (Some(1025), Some(1500), "size:1025..1500"),
+            (Some(0), None, "size:>=0"),
+            (None, Some(0), "size:<=0"),
+            (Some(1), None, "size:>=1"),
+            (None, Some(u64::MAX), "size:<=18446744073709551615"),
+            (Some(u64::MAX), None, "size:>=18446744073709551615"),
+            (Some(1 << 63), None, "size:>=8388608TiB"),
+        ] {
+            assert_eq!(size(lo, hi), text, "{lo:?}..{hi:?}");
+            let node = parse(text).unwrap();
+            assert_eq!(
+                node,
+                Node::Range {
+                    field: NumField::Size,
+                    lo,
+                    hi
+                },
+                "{text}"
+            );
+        }
+        // Counts keep plain numbers.
+        assert_eq!(parse("files:>1024").unwrap().to_query(), "files:>=1025");
+        // `..<` is a range's exclusive top; it can't run below zero or backwards.
+        assert!(parse("size:..<0").is_err());
+        assert!(parse("size:1GiB..<1GiB").is_err());
+        assert!(parse("size:1..<").is_err());
     }
 
     #[test]

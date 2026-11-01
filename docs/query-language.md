@@ -258,9 +258,11 @@ Ranges work the same way everywhere:
 | `size:>4GB`, `size:>=4GB` | more than / at least |
 | `size:<700MB`, `size:<=700MB` | less than / at most |
 | `size:700MB..1.5GB` | from – to, both ends included |
+| `size:1GiB..<4GiB` | from 1 GiB up to, but not including, 4 GiB |
 | `size:..2GiB`, `size:1GB..` | open-ended |
 
 - **Units:** `B`, `KB`, `MB`, `GB`, `TB`, and the `KiB`, `MiB`… spellings, also single letters (`1.5G`). All of them are 1024-based, the same as the sizes the UI shows. No unit means bytes.
+- **How Lodestar writes sizes back:** in the largest unit that fits exactly (`size:4GiB`), or in bytes when no unit does. A range that stops just short of a unit is written with `..<`, so dragging across the Size chart gives `size:1GiB..<4GiB`.
 - **Fields using bytes:** `size:` (total), `largest:` (the biggest file), `piece:` (the **piece length**: torrents are shared in equal-sized pieces, and this is the size of one, e.g. `piece:16MB`).
 - **Fields using plain numbers:** `files:` (file count, `files:>=10`), `year:`, `s:`, `e:`, `junk:`.
 
@@ -271,6 +273,7 @@ size:>=4GB
 size:<700MB
 size:<=700MB
 size:700MB..1.5GB
+size:1GiB..<4GiB
 size:..2GiB
 size:1GB..
 size:1.5G

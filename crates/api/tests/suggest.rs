@@ -319,7 +319,7 @@ async fn parse_proposes_natural_phrasing() {
     .await;
     assert_eq!(
         body["natural"]["canonical"],
-        "res:2160p type:movie year:2020 size:>=10GB"
+        "res:2160p type:movie year:2020 size:>=10GiB"
     );
     // The query itself is still parsed as written.
     assert_eq!(body["canonical"], q);
