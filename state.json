@@ -3274,12 +3274,6 @@
   },
   "last_daily_summary": "2026-10-31T13:07Z",
   "open_prs": {
-    "333": {
-      "slice": "X-web-polish-1101d",
-      "head": "7d4b8c4011c58b6031e568b8f124c2225a2272be",
-      "verdict": "runner MERGE pending CI; Search results 40,153 (+142 B accepted)",
-      "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg"
-    },
     "335": {
       "slice": "B-search-meta",
       "head": "5b4a0bb7976e73dec007581b19ef703e13bdf994",
@@ -3312,6 +3306,12 @@
       "sha": "dcd81152d61b2439c74720c709da919a1ba5bffb",
       "at": "2026-11-01T11:17Z",
       "slice": "S-updates-5"
+    },
+    {
+      "pr": 333,
+      "sha": "26c25b4ad8cbf832ecb5b10b7518d693405c6714",
+      "at": "2026-11-01T11:28Z",
+      "slice": "X-web-polish-1101d"
     }
   ],
   "active_sessions": {
@@ -3347,6 +3347,11 @@
       "from": "#335",
       "at": "2026-11-01T11:15Z",
       "status": "launched 11:17Z"
+    },
+    {
+      "id": "S-search-meta-web",
+      "what": "Builder fields from /search/fields (hard-coded FIELDS always lists adult: content-safety), ≈ on count_approx. Launch after #335 merges.",
+      "at": "2026-11-01T11:29Z"
     }
   ]
 }
