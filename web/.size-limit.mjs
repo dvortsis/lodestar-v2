@@ -1097,6 +1097,10 @@ export default [
 	entry('Builder (on demand)', builderLazy, '5.69 KB'),
 	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
 	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
+	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
+	// only), page.css (/t only), raw.css (RawViewer, dev route only). Keep page, host and raw rules out
+	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
+	// (visibility.ts and commands.ts are the only doors).
 	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).

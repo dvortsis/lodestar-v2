@@ -1,0 +1,30 @@
+/* DetailHost placement. Only the drawer host imports it, so /t/[hash] doesn't carry it. */
+/* §10.15: the host's parent must be positioned for the overlay modes. */
+.ls-detail-host {
+	display: contents;
+}
+.ls-detail-host[data-mode='overlay'],
+.ls-detail-host[data-mode='narrow'] {
+	display: block;
+	position: absolute;
+	inset-block: 0;
+	inset-inline-end: 0;
+	z-index: 20;
+	max-width: 100%;
+}
+.ls-detail-host[data-mode='full'] {
+	display: block;
+	position: fixed;
+	inset: 0;
+	z-index: 40;
+	background: var(--color-base-100);
+}
+.ls-detail-host:not([data-mode='inline']) [role='separator'] {
+	display: none;
+}
+
+/* The host stays mounted for history focus restoration, but an empty host
+   must not cover Search after the outgoing drawer transition finishes. */
+.ls-detail-host:not(:has([data-testid='drawer'])) {
+	display: contents;
+}

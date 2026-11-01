@@ -16,6 +16,7 @@
 	import { DetailModel } from './model.svelte';
 	import { closeDetail, markClosed, returnFocusTarget } from './open';
 	import './detail.css';
+	import './host.css';
 
 	const STORAGE_KEY = 'lodestar.drawer.width';
 
