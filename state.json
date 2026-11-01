@@ -1911,13 +1911,13 @@
       "merge": "88dfc592"
     },
     "X-detail-headroom": {
-      "status": "launching",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhnCWhTw1CWQNwZ3Gocu",
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room)."
+      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
