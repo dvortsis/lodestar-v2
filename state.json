@@ -2006,7 +2006,7 @@
       "note": "Playwright core 10m40s on normal run (no trim needed)"
     },
     "S-send": {
-      "status": "review-ready",
+      "status": "CI green at faf3384 but merge conflict with main (#322 .size-limit.mjs); author merging main",
       "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
       "model": "sonnet",
       "brief": "briefs/S-send.md",
@@ -2029,13 +2029,13 @@
       "merged_at": "2026-11-01T06:58Z"
     },
     "X-e2e-fixture-ci": {
-      "status": "PR open; dispatched run 41281763895 pending",
+      "status": "workflow OK; author fixing shortcuts sign-in reuse + search-query popup race, then re-dispatch (12/13 on run 41282899265)",
       "session": "session_01MMjhn9VUD1RyRvEv1Y68Qn",
       "model": "sonnet",
       "brief": "briefs/X-e2e-fixture-ci.md",
       "launched_at": "2026-11-01T06:38Z",
       "pr": 323,
-      "head": "e91931f"
+      "head": "82719a3"
     },
     "X-flows-door-2": {
       "status": "building",
