@@ -2021,6 +2021,13 @@
       "pr": 322,
       "head": "b58f4ea",
       "review": "runner MERGE at b58f4ea (Discover 45,076 -> 42,392 B; limit 45.2 -> 43 KB)"
+    },
+    "X-e2e-fixture-ci": {
+      "status": "building",
+      "session": "session_01MMjhn9VUD1RyRvEv1Y68Qn",
+      "model": "sonnet",
+      "brief": "briefs/X-e2e-fixture-ci.md",
+      "launched_at": "2026-11-01T06:38Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2936,7 +2943,7 @@
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
-    "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
+    "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too. [runner 06:38Z: low value \u2014 the icons are ~0.2 KB each and loading them on demand would flicker; do only alongside another lib/ui change]",
     "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
     "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
     "Settings engine: lift the shared reveal + hash-focus logic (SectionForm, screens2/GroupedForm) into form/reveal.svelte.ts only alongside a change that already touches those chunks: done alone it cost +0.2 KB on Settings first views and +0.6 KB on Wizard steps via form/embed.ts (#319 skipped it)",
@@ -2944,7 +2951,6 @@
     "Filters flows door (#316): AppearanceScreen (flows/adult.svelte, AdultConfirmDialog), wizard/PackStep (flow.svelte) and the dev route still import filters/flows/** directly; route them through the door and extend the first-load guard to Appearance and wizard views",
     "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
     "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off",
-    "e2e fixture project (#320): wire a CI job for *.fixture.test.ts (needs the Rust binary in the e2e workflow; cost estimate in docs/decisions/2026-11-01-S-e2e-2.md)",
     "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails"
   ],
   "main_health": [
