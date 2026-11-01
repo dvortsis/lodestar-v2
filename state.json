@@ -2023,11 +2023,13 @@
       "review": "runner MERGE at b58f4ea (Discover 45,076 -> 42,392 B; limit 45.2 -> 43 KB)"
     },
     "X-e2e-fixture-ci": {
-      "status": "building",
+      "status": "PR open; dispatched run 41281763895 pending",
       "session": "session_01MMjhn9VUD1RyRvEv1Y68Qn",
       "model": "sonnet",
       "brief": "briefs/X-e2e-fixture-ci.md",
-      "launched_at": "2026-11-01T06:38Z"
+      "launched_at": "2026-11-01T06:38Z",
+      "pr": 323,
+      "head": "e91931f"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2951,7 +2953,8 @@
     "Filters flows door (#316): AppearanceScreen (flows/adult.svelte, AdultConfirmDialog), wizard/PackStep (flow.svelte) and the dev route still import filters/flows/** directly; route them through the door and extend the first-load guard to Appearance and wizard views",
     "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
     "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off",
-    "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails"
+    "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails",
+    "Possible flake: e2e/insights-print.routes.test.ts:57 \"one page on A4 and Letter at 1024 px\" [core] printed 2 Letter pages on #322 b58f4ea (06:42Z), outside the diff; passed on #320 minutes earlier. Runner re-ran once. If it recurs: likely content- or time-dependent height (freeze clock / fixed fixture), fix once."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
