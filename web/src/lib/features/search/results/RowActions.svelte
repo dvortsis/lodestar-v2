@@ -136,6 +136,11 @@
 		torrent={{ hash: hit.hash, hash_v2: hit.hash_v2, name: hit.name }}
 		bind:open={blocking}
 		onapplied={() => (applied = true)}
-		onclose={() => applied && void import('./settle').then((mod) => mod.settle(hit.hash))}
+		onclose={() =>
+			applied &&
+			void import('./settle').then(
+				(mod) => mod.settle(hit.hash),
+				() => results.reload() // a failed chunk (offline, a stale build) still drops the row
+			)}
 	/>
 {/if}
