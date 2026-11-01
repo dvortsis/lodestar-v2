@@ -750,6 +750,7 @@ impl Pipeline {
             store: Some(store),
             backfill_after: 0,
             backfill_done: false,
+            backfill_backoff: Default::default(),
             reenrich: config.reenrich.clone(),
             cfg: writer::WriterConfig {
                 flush_every: config.flush_every,
