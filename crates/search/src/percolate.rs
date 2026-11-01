@@ -21,8 +21,9 @@
 //!   too, so one heavy search can't overrun the budget by much. The same
 //!   holds for a search's `file:(…)` clauses, whose file-index scan stops
 //!   under the token too. A run's first search is never stopped inside
-//!   its scans, so a run that starts one always finishes one. A search the token stops is reported as
-//!   not run; what a run didn't reach runs next time.
+//!   its scans, so a run that starts one always finishes one. A search
+//!   the token stops is reported as not run; what a run didn't reach
+//!   runs next time.
 //!
 //! No store writes here: the caller records the result in one
 //! transaction per range ([`lodestar_store::Store::record_percolation`]).
@@ -711,6 +712,30 @@ mod tests {
         let seen = visits.load(Ordering::Relaxed);
         assert!((100..=per as usize).contains(&seen), "{seen} files visited");
         assert_eq!(index.cache_usage().file_set_entries, 0);
+    }
+
+    /// The run's first search, not stoppable, keeps its file scan whole
+    /// though the token stops partway: a run that starts one finishes
+    /// one, and the next search isn't run.
+    #[test]
+    fn the_first_search_keeps_its_file_scan_whole() {
+        let (index, _) = index_with(10, 1);
+        let per = u64::from(CHECK_EVERY);
+        append_files(&index, 1..11, per);
+        let files = parse("file:(size:>0)").unwrap();
+        let plain = parse("Common").unwrap();
+        let due = [file_due(1, &files, false), file_due(2, &plain, false)];
+        let token = CancelToken::new();
+        let (trip, visits) = tripwire(100, &token);
+        FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+        let p = percolate(&index, &due, 10, ALL, 0, &token).unwrap();
+        FILE_QUERY.with(|q| q.borrow_mut().take());
+        assert!(token.is_stopped());
+        assert!(visits.load(Ordering::Relaxed) >= 10 * per as usize);
+        assert_eq!(p.matched.len(), 1);
+        assert_eq!(p.matched[0].id, 1);
+        assert_eq!(p.matched[0].count, 10);
+        assert!(p.stopped);
     }
 
     /// A broad file clause that would take minutes stops at the run's
