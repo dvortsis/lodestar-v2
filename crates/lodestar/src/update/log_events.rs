@@ -38,6 +38,15 @@ lodestar_log::catalogue! {
         message: "The update check failed",
         fields: { error: Label },
     }
+    /// An install failed before the switch (the code says why; never a
+    /// URL). The running version carries on.
+    UPDATE_INSTALL_FAILED {
+        id: "update.install_failed",
+        component: System,
+        level: Warn,
+        message: "The update couldn't be installed",
+        fields: { error: Label },
+    }
     /// An updater state file (`updater.json`, `skipped`, `history.json`)
     /// couldn't be saved durably, so the change wasn't acknowledged
     /// (DUR-26). `file` is its name, never a path.

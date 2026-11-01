@@ -49,6 +49,20 @@ type Beat = (Arc<AtomicBool>, std::thread::JoinHandle<()>);
 
 static CHILD: OnceLock<Child> = OnceLock::new();
 static FAILED: AtomicBool = AtomicBool::new(false);
+static PASSED: AtomicBool = AtomicBool::new(false);
+static PASSED_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Waits until this version's self-test has passed (for the update
+/// engine's `done` event). Never returns when it fails.
+pub async fn passed() {
+    loop {
+        let now = PASSED_NOW.notified();
+        if PASSED.load(Ordering::SeqCst) {
+            return;
+        }
+        now.await;
+    }
+}
 
 /// This process's child state, once `serve --child` set it up.
 pub fn current() -> Option<&'static Child> {
@@ -334,9 +348,31 @@ impl Child {
             match result {
                 Ok(()) => {
                     with_probation(|| {
+                        // An install that passed is history (a restored
+                        // version's rollback recorded its own entry).
+                        if let Ok(Some(p)) = pending::read(&self.bin)
+                            && p.kind == pending::Kind::Install
+                            && p.version == self.version
+                        {
+                            let _ = super::history::append(
+                                &self.bin,
+                                super::history::Entry {
+                                    version: p.version,
+                                    from: p.previous,
+                                    level: None,
+                                    at: crate::unix_now().max(0) as u64,
+                                    result: super::history::Outcome::Installed,
+                                    reason: None,
+                                    lost_torrents: None,
+                                    journal: None,
+                                },
+                            );
+                        }
                         let _ = self.bin.remove("pending");
                         let _ = self.bin.remove("probation.json");
                     });
+                    PASSED.store(true, Ordering::SeqCst);
+                    PASSED_NOW.notify_waiters();
                     log_event!(UPDATE_PROBATION_PASSED);
                 }
                 Err(check) => {

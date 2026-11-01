@@ -88,7 +88,8 @@ pub struct Capability {
     pub can_install: bool,
     /// Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
     /// `package_managed`, `image_mode`, `trust_damaged`,
-    /// `channel_unavailable` or `not_built_yet`; or, when `unavailable`
+    /// `skipped_unreadable`, `noexec_unknown` or `channel_unavailable`;
+    /// or, when `unavailable`
     /// is set, the same reason (`windows_helper`, …). Install
     /// automatically then behaves as Check and notify.
     #[schema(required = true)]
@@ -222,6 +223,11 @@ pub struct UpdatesStatus {
     pub releases: Vec<ReleaseInfo>,
     #[schema(required = true)]
     pub pending: Option<PendingInstall>,
+    /// An install under way (`now`), or one asked for at the next window
+    /// (`window`); null otherwise. Progress is on the `updates` topic.
+    /// Always sent; not `required` in the schema yet, so clients built
+    /// before it (the Updates screen's fixtures) still type-check.
+    pub installing: Option<Installing>,
     pub rollback: RollbackInfo,
     /// `revoked_key`, `clock_behind`, `clock_ahead`, `trust_damaged`,
     /// `pending_unwritable`, `bad_overlay`, `rolled_back`,
@@ -232,6 +238,38 @@ pub struct UpdatesStatus {
     /// new state, which rewrites the file and ends the hold), …
     pub notices: Vec<String>,
     pub history: Vec<HistoryEntry>,
+}
+
+/// An install under way or queued for the window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Installing {
+    pub version: String,
+    #[schema(inline)]
+    pub when: InstallWhen,
+}
+
+/// When `POST /updates/install` installs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallWhen {
+    /// At once, skipping the window and the wait.
+    Now,
+    /// At the next install window (the wait still doesn't apply).
+    Window,
+}
+
+/// `POST /updates/install`. A release with manual steps needs
+/// `confirm_manual: true` (the steps are in its notes), else
+/// `422 manual_confirmation_required`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(example = json!({ "version": "0.6.0", "when": "now", "confirm_manual": false }))]
+pub struct InstallRequest {
+    pub version: String,
+    #[schema(inline)]
+    pub when: InstallWhen,
+    #[serde(default)]
+    pub confirm_manual: bool,
 }
 
 /// `POST /updates/skip`.
