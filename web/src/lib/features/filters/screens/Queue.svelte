@@ -67,7 +67,7 @@
 		queue ? [...queue.quarantine, ...more].filter((r) => model.adult || !r.adult_hold) : []
 	);
 	async function reveal(hash: string) {
-		Reveal ??= (await import('../flows/RevealNameDialog.svelte')).default;
+		Reveal ??= (await (await import('../flows-door')).load()).RevealNameDialog;
 		revealHash = hash;
 		revealOpen = true;
 	}

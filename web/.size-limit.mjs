@@ -119,6 +119,11 @@ const ownChunk = (sourceKey, onDemand = [], collectOnDemand = false, beyond = []
 };
 const onDemandOf = (route, onDemand) => walk(route, onDemand, true);
 
+// The filters change flows load only through their one door (S-filters-2c): `flows-door.ts`, then
+// `flows-root.ts`. Every view that can start a change (Settings → Filters & Safety, a result's More
+// menu, the detail drawer and /t) stops there; "Filters dialogs (on demand)" measures what they load.
+const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
+
 // Detail: the DetailHost module, and the sections that load when scrolled to (or on an error).
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
@@ -461,9 +466,7 @@ const appearanceEditor = [new RegExp(`${APPEARANCE}/ThemeEditor\\.svelte$`)];
 const appearanceAdult = [/features\/filters\/flows\/AdultConfirmDialog\.svelte$/];
 // Filters & Safety (S-filters): the change dialogs load on the first change, and the review queue
 // and the override editor on their own, so its first view stops at them (own entries below).
-const filtersDialogs = [
-	/features\/filters\/flows\/(?:ChangeDialog|OverrideDialog|RevealNameDialog)\.svelte$/
-];
+const filtersDialogs = filtersDoor;
 const appearanceLater = [...appearancePicker, ...appearanceEditor, ...appearanceAdult];
 const settingsHandBuilt = bodyKeys.map((key) => ({
 	name: key
@@ -631,9 +634,16 @@ const filtersLazy = (res) =>
 				)
 		)
 	]);
+// The flows themselves, from their root; the door (one module holding the root's preload list,
+// fetched first on the first change from any view) has its own entry below.
 const filtersDialogsLazy = filtersLazy({
 	name: 'Filters dialogs (on demand)',
-	keys: filtersDialogs
+	keys: [/features\/filters\/flows-root\.ts$/]
+});
+const filtersDoorLazy = filtersLazy({
+	name: 'Filters flows door (on demand)',
+	keys: [/features\/filters\/flows-door\.ts$/],
+	stop: [/features\/filters\/flows-root\.ts$/]
 });
 const filtersQueueLazy = filtersLazy({
 	name: 'Filters review queue (on demand)',
@@ -705,6 +715,7 @@ const resultsOnDemand = [
 	/features\/search\/(live|cards)\//,
 	/^chunk:magnet$/,
 	/^chunk:Menu$/,
+	...filtersDoor,
 	...tableOnDemand,
 	...bulkOnDemand,
 	...recoverOnDemand,
@@ -916,6 +927,26 @@ if (carried.length)
 	throw new Error(
 		`A view carries shared code it should load later or not at all (X-alert-search-headroom):\n  ${carried.join('\n  ')}`
 	);
+// The views that open "Block this…" or a filters change carry none of the flows (S-filters-2c):
+// they load through `flows-door.ts` alone. A static import of `flows/**`, or a second dynamic root
+// that makes the bundler regroup the flows with a first view, fails here before measuring.
+const drawerView = ownChunk(DRAWER, [...detailLazy, ...filtersDoor]);
+const torrentView = own('/t/[hash]', { onDemand: [...detailLazy, ...filtersDoor] });
+const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-root\.ts$)/;
+const flowsCarried = [
+	['Settings FiltersScreen (first view)', filtersFirst],
+	['Search results (lazy)', resultsLazy],
+	['Detail drawer', drawerView],
+	['/t/[hash] route', torrentView]
+].flatMap(([name, files]) =>
+	modulesIn(files)
+		.filter((id) => FLOWS.test(id))
+		.map((id) => `${name}: ${id}`)
+);
+if (flowsCarried.length)
+	throw new Error(
+		`A view carries the filters flows; load them through features/filters/flows-door.ts only (S-filters-2c):\n  ${flowsCarried.join('\n  ')}`
+	);
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
@@ -1019,6 +1050,10 @@ export default [
 	// Filters & Safety: its change dialogs and its review queue, beyond the screen's first view.
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '34.4 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
+	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
+	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
+	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
+	entry('Filters flows door (on demand)', filtersDoorLazy, '0.58 KB'),
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
@@ -1103,10 +1138,10 @@ export default [
 	// only), page.css (/t only), raw.css (RawViewer, dev route only). Keep page, host and raw rules out
 	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
 	// (visibility.ts and commands.ts are the only doors).
-	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '27.2 KB'),
+	entry('Detail drawer (own JS + CSS)', drawerView, '27.2 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '20.8 KB'),
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '20.8 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],

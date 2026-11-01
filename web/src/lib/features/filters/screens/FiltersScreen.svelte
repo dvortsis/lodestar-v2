@@ -20,7 +20,7 @@
 	async function ensureDialog() {
 		if (Dialog) return true;
 		try {
-			Dialog = (await import('../flows/ChangeDialog.svelte')).default as never;
+			Dialog = (await (await import('../flows-door')).load()).ChangeDialog as never;
 			return true;
 		} catch {
 			dialogFailed = true;

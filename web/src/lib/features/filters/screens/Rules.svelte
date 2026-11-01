@@ -54,7 +54,7 @@
 	let OverrideDialog = $state.raw<typeof import('../flows/OverrideDialog.svelte').default>();
 	let overrideOpen = $state(false);
 	async function openOverride() {
-		OverrideDialog ??= (await import('../flows/OverrideDialog.svelte')).default;
+		OverrideDialog ??= (await (await import('../flows-door')).load()).OverrideDialog;
 		overrideOpen = true;
 	}
 </script>
