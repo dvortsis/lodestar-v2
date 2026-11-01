@@ -11,7 +11,10 @@ import { expect, test } from './support/test';
 
 type Mock = Parameters<Parameters<typeof test>[2]>[0]['mock'];
 
-function serve(mock: Mock, privacy: { identifying_until: number | null; query_logging: boolean }) {
+function serve(
+	mock: Mock,
+	privacy: { identifying_until: number | null; query_logging: boolean } | null
+) {
 	mock.on('getInsightsOverview', overviewFixture({ privacy, updated_at: NOW }));
 	mock.on('getCrawler', crawlerFixture());
 }
@@ -51,7 +54,7 @@ test('shows nothing and loads no banner code while nothing is on', async ({ page
 	const chunk = manifest['src/lib/features/shell/privacy/PrivacyBanner.svelte'].file;
 	const scripts: string[] = [];
 	page.on('request', (r) => r.resourceType() === 'script' && scripts.push(r.url()));
-	serve(mock, { identifying_until: null, query_logging: false });
+	serve(mock, null);
 	await go('/insights');
 	await expect(page.getByTestId('insights-kpi-searchable-value')).toHaveText('1.2M');
 	await expect(page.getByTestId('privacy-banners')).toHaveCount(0);

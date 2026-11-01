@@ -1806,10 +1806,7 @@ async fn the_overview_carries_the_privacy_summary_to_a_session_only() {
     let cookie = session(&f).await;
     // No settings wired: nothing can be on.
     let o = json_get(&f, &cookie, "/api/v1/insights/overview").await;
-    assert_eq!(
-        o["privacy"],
-        json!({ "identifying_until": null, "query_logging": false })
-    );
+    assert_eq!(o["privacy"], Value::Null);
 
     let settings = Arc::new(PrivacySettings::default());
     let mut state = f.state.clone();
@@ -1832,6 +1829,10 @@ async fn the_overview_carries_the_privacy_summary_to_a_session_only() {
     };
     let o = json_get(&f, &cookie, "/api/v1/insights/overview").await;
     assert_eq!(o["privacy"]["identifying_until"], -1);
+    // Everything off again: null, so the Overview loads no banner code.
+    *settings.0.lock().unwrap() = PrivacySummary::default();
+    let o = json_get(&f, &cookie, "/api/v1/insights/overview").await;
+    assert_eq!(o["privacy"], Value::Null);
 
     // Without a session: the same 401 as before, with nothing about privacy.
     let (status, body) = send(&f, get("/api/v1/insights/overview", None)).await;

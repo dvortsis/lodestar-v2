@@ -122,14 +122,9 @@ export function createInsights() {
 		const offInsights = events.on('insights', () => void fetchOverview(query, true), {
 			onResync: () => void fetchOverview(query, true)
 		});
-		// The privacy banner's summary follows a Logging or Insights save (S-privacy-banner).
-		const offSettings = events.on('settings', (d) => {
-			if (d.section === 'logging' || d.section === 'insights') void fetchOverview(query, true);
-		});
 		return () => {
 			offCrawler();
 			offInsights();
-			offSettings();
 			overviewSlot.cancel();
 			allSlot.cancel();
 			crawlerSlot.cancel();

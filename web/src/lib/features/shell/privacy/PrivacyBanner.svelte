@@ -1,10 +1,10 @@
 <script lang="ts">
-	// The privacy banners on the Overview (§10.10.7 Privacy, §10.10.12), loaded only while the
-	// overview's `privacy` summary says something is on: one while the log writes data kinds that
+	// The privacy banners on the Overview (§10.10.7 Privacy, §10.10.12), loaded (through door.ts)
+	// only while the overview's `privacy` summary is set: one while the log writes data kinds that
 	// identify torrents or people, with the time left and Turn off now (the same request as
 	// Settings → Logging's and /logs'), and one while searches are saved, linking to Settings →
 	// Insights. Neither can be dismissed except by turning the thing off. Deadlines are on the
-	// server's clock, kept as an offset from `serverAt`.
+	// server's clock, kept as an offset from the response's `updated_at`.
 	import { resolve } from '$app/paths';
 	import type { components } from '$lib/api/schema';
 	import { m } from '$lib/paraglide/messages.js';
@@ -15,13 +15,14 @@
 	import { ahead, timeLeft } from '../../settings/logging/state';
 
 	interface Props {
-		privacy: components['schemas']['PrivacySummary'];
-		/** The response's `updated_at` (server Unix seconds). */
-		serverAt: number;
+		/** The overview response: its `privacy` summary and `updated_at` (server Unix seconds). */
+		overview: { privacy: components['schemas']['PrivacySummary']; updated_at: number };
 		/** Reads the summary again (after Turn off now, and once the time runs out). */
 		reload: () => void;
 	}
-	let { privacy, serverAt, reload }: Props = $props();
+	let { overview, reload }: Props = $props();
+	const privacy = $derived(overview.privacy);
+	const serverAt = $derived(overview.updated_at);
 
 	/** How often the time left is redrawn. */
 	const TICK_MS = 15_000;
@@ -62,24 +63,26 @@
 	}
 </script>
 
-<div class="flex flex-col gap-2" data-testid="privacy-banners">
-	{#if left}
-		<Banner kind="warning" title={m.shell_privacy_identifying_title()}>
-			<span data-testid="privacy-identifying">{left}</span>
-			{#snippet action()}
-				<Button variant="secondary" disabled={busy} onclick={turnOff}
-					>{m.shell_privacy_turn_off()}</Button
+{#if left || error || privacy.query_logging}
+	<div class="flex flex-col gap-2" data-testid="privacy-banners">
+		{#if left}
+			<Banner kind="warning" title={m.shell_privacy_identifying_title()}>
+				<span data-testid="privacy-identifying">{left}</span>
+				{#snippet action()}
+					<Button variant="secondary" disabled={busy} onclick={turnOff}
+						>{m.shell_privacy_turn_off()}</Button
+					>
+				{/snippet}
+			</Banner>
+		{/if}
+		{#if error}<p role="alert" class="text-small text-error">{error}</p>{/if}
+		{#if privacy.query_logging}
+			<Banner kind="warning" title={m.shell_privacy_queries_title()}>
+				<span data-testid="privacy-queries">{m.shell_privacy_queries_body()}</span>
+				<a class="underline" href={resolve('/settings/[section]', { section: 'insights' })}
+					>{m.shell_privacy_queries_manage()}</a
 				>
-			{/snippet}
-		</Banner>
-	{/if}
-	{#if error}<p role="alert" class="text-small text-error">{error}</p>{/if}
-	{#if privacy.query_logging}
-		<Banner kind="warning" title={m.shell_privacy_queries_title()}>
-			<span data-testid="privacy-queries">{m.shell_privacy_queries_body()}</span>
-			<a class="underline" href={resolve('/settings/[section]', { section: 'insights' })}
-				>{m.shell_privacy_queries_manage()}</a
-			>
-		</Banner>
-	{/if}
-</div>
+			</Banner>
+		{/if}
+	</div>
+{/if}

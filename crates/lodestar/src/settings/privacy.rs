@@ -110,4 +110,30 @@ mod tests {
         let s = summary(&Logging::default(), &i, NOW);
         assert_eq!((s.query_logging, s.identifying_until), (true, None));
     }
+
+    #[test]
+    fn the_registry_follows_each_save_and_the_clock() {
+        use lodestar_api::settings::SettingsApi;
+        use serde_json::json;
+
+        use crate::settings::tests::{config, patch, registry};
+
+        let dir = tempfile::tempdir().unwrap();
+        let r = registry(dir.path(), &config(dir.path(), None, &[]));
+        let now = crate::logging::unix_now();
+        assert_eq!(r.privacy(now), PrivacySummary::default());
+        r.patch("logging", patch(json!({ "kinds": { "name": now + 3600 } })))
+            .unwrap();
+        assert_eq!(r.privacy(now).identifying_until, Some(now + 3600));
+        r.patch("insights", patch(json!({ "query_logging": true })))
+            .unwrap();
+        let s = r.privacy(now);
+        assert_eq!(
+            (s.identifying_until, s.query_logging),
+            (Some(now + 3600), true)
+        );
+        // The deadline passes with no save.
+        let later = r.privacy(now + 3600);
+        assert_eq!((later.identifying_until, later.query_logging), (None, true));
+    }
 }

@@ -206,15 +206,13 @@
 	{:else if !overview}
 		<Skeleton />
 	{:else}
-		{#if overview.privacy.query_logging || overview.privacy.identifying_until !== null}
+		{#if overview.privacy}
 			<!-- Loaded only while something identifying is recorded (§10.10.12). -->
-			{#await import('$lib/features/shell/privacy/PrivacyBanner.svelte') then { default: Privacy }}
-				<Privacy
-					privacy={overview.privacy}
-					serverAt={overview.updated_at}
-					reload={() => void insights.refresh()}
-				/>
-			{/await}
+			<Lazy
+				load={() => import('$lib/features/shell/privacy/door').then((d) => d.load())}
+				props={{ overview, reload: insights.refresh }}
+				height=""
+			/>
 		{/if}
 		{#if stalled}
 			<Banner kind="warning" title={m.insights_overview_stalled_title()}>

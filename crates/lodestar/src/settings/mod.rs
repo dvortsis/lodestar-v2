@@ -1713,14 +1713,11 @@ impl SettingsApi for Registry {
     }
 
     fn privacy(&self, now: i64) -> lodestar_api::dto::insights::PrivacySummary {
-        fn current<T: Section + Default>(r: &Registry) -> T {
-            r.sections
-                .iter()
-                .find_map(|s| s.as_any().downcast_ref::<Entry<T>>())
-                .map(|e| e.tx.borrow().clone())
-                .unwrap_or_default()
-        }
-        privacy::summary(&current(self), &current(self), now)
+        // Both sections are always registered: a missing one panics, as `subscribe` does,
+        // rather than reporting "off".
+        let logging = self.entry::<logging::Logging>().tx.borrow().clone();
+        let insights = self.entry::<insights::Insights>().tx.borrow().clone();
+        privacy::summary(&logging, &insights, now)
     }
 
     fn send_limits(&self) -> &lodestar_api::settings::SendLimits {

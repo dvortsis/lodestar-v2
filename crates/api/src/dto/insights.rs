@@ -62,7 +62,10 @@ pub struct OverviewResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub previous: Option<PreviousPeriod>,
-    pub privacy: PrivacySummary,
+    /// Null while nothing identifying is recorded (the Overview then loads
+    /// no banner code).
+    #[schema(required = true)]
+    pub privacy: Option<PrivacySummary>,
     pub range: InsightsRange,
     pub segments: Segments,
     pub serve: Serve,

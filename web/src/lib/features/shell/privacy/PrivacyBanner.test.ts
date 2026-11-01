@@ -33,8 +33,7 @@ afterEach(() => vi.useRealTimers());
 describe('PrivacyBanner', () => {
 	it('names query logging and links to Settings → Insights', () => {
 		render(PrivacyBanner, {
-			privacy: { ...off, query_logging: true },
-			serverAt: NOW,
+			overview: { privacy: { ...off, query_logging: true }, updated_at: NOW },
 			reload: () => {}
 		});
 		expect(screen.getByText('Search queries are being saved')).toBeTruthy();
@@ -49,8 +48,7 @@ describe('PrivacyBanner', () => {
 		// The browser runs 10 minutes behind the server.
 		vi.setSystemTime((NOW - 600) * 1000);
 		render(PrivacyBanner, {
-			privacy: { ...off, identifying_until: NOW + 3600 },
-			serverAt: NOW,
+			overview: { privacy: { ...off, identifying_until: NOW + 3600 }, updated_at: NOW },
 			reload
 		});
 		expect(screen.getByTestId('privacy-identifying').textContent).toContain('about 1 h more');
@@ -66,8 +64,7 @@ describe('PrivacyBanner', () => {
 
 	it('shows until turned off without a countdown', () => {
 		render(PrivacyBanner, {
-			privacy: { ...off, identifying_until: -1 },
-			serverAt: NOW,
+			overview: { privacy: { ...off, identifying_until: -1 }, updated_at: NOW },
 			reload: () => {}
 		});
 		expect(screen.getByTestId('privacy-identifying').textContent).toContain(
@@ -98,8 +95,7 @@ describe('PrivacyBanner', () => {
 		});
 		const reload = vi.fn();
 		render(PrivacyBanner, {
-			privacy: { ...off, identifying_until: -1 },
-			serverAt: NOW,
+			overview: { privacy: { ...off, identifying_until: -1 }, updated_at: NOW },
 			reload
 		});
 		const button = screen.getByRole('button', { name: 'Turn off now' });
