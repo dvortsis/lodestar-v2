@@ -93,6 +93,7 @@ test('illustrated state: empty Alerts', async ({ page, go, mock, density }) => {
 	mock.on('listSavedSearches', []);
 	await go('/alerts');
 	await expect(page.getByRole('heading', { name: 'Alerts', level: 1 })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'No saved searches yet' })).toBeVisible();
 	await settle(page, density, 'main', 'state-alerts-empty');
 });
 

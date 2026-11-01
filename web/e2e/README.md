@@ -30,7 +30,7 @@ E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
   npx playwright test --project=fixture
 ```
 
-Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on :4173 is reused); the fixture specs never use it.
+Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on :4173 is reused); the fixture specs never use it.
 
 **Rotating sample.** `sampleThemes(seed)` (`support/themes.ts`) takes the 46 non-Riverstone themes, permutes them with a coprime stride and returns a 6-wide window that moves by 6 each run. The seed is `GITHUB_RUN_NUMBER`, or the day number locally. Eight consecutive runs cover every theme.
 
