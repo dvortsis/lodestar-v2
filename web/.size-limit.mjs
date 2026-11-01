@@ -1173,10 +1173,12 @@ export default [
 	// only), page.css (/t only), raw.css (RawViewer, dev route only). Keep page, host and raw rules out
 	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
 	// (visibility.ts and commands.ts are the only doors).
-	entry('Detail drawer (own JS + CSS)', drawerView, '27.2 KB'),
+	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
+	entry('Detail drawer (own JS + CSS)', drawerView, '27.4 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '20.8 KB'),
+	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.0 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
