@@ -578,13 +578,13 @@
       "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture). | 02:45Z launched Sonnet."
     },
     "H-zh": {
-      "status": "launching",
+      "status": "running",
       "model": "haiku",
-      "session": null,
+      "session": "session_01MMjhn8pbNzRQPDMtoEPfEw",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test)."
+      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku."
     },
     "G-m5": {
       "status": "pending",
