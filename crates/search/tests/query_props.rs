@@ -133,6 +133,8 @@ proptest! {
         let ast = Node::Range { field, lo, hi };
         let text = ast.to_query();
         prop_assert_eq!(parse(&text).ok(), Some(ast), "{}", text);
+        // Stored filter text must parse on the release before (FX-6-I9).
+        prop_assert!(!text.contains("..<"), "{}", text);
         let again = parse(&text).unwrap().to_query();
         prop_assert_eq!(again, text);
     }

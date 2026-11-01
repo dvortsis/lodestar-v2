@@ -1407,16 +1407,15 @@ impl Node {
                 };
                 let count = field.is_count();
                 let v = |n: u64| if count { n.to_string() } else { bytes_text(n) };
-                // A byte bound one short of (or past) a whole unit reads as
-                // the exclusive form: a brush's `[1GiB, 4GiB)` is `1GiB..<4GiB`.
+                // A one-sided byte bound one short of (or past) a whole unit
+                // reads as the exclusive form: `<16GiB`, `>4GiB`. A two-sided
+                // range doesn't print `a..<b` yet: filter rules store this
+                // text, and a binary one release back can't parse it (FX-6-I9).
                 let below = |n: u64| n.checked_add(1).filter(|&m| !count && in_unit(m));
                 let above = |n: u64| n.checked_sub(1).filter(|&m| !count && in_unit(m));
                 let _ = match (lo, hi) {
                     (Some(l), Some(h)) if l == h => write!(out, "{name}:{}", v(*l)),
-                    (Some(l), Some(h)) => match below(*h) {
-                        Some(b) => write!(out, "{name}:{}..<{}", v(*l), v(b)),
-                        None => write!(out, "{name}:{}..{}", v(*l), v(*h)),
-                    },
+                    (Some(l), Some(h)) => write!(out, "{name}:{}..{}", v(*l), v(*h)),
                     (Some(l), None) => match above(*l) {
                         Some(a) => write!(out, "{name}:>{}", v(a)),
                         None => write!(out, "{name}:>={}", v(*l)),
@@ -2031,12 +2030,14 @@ mod tests {
             (Some(3 << 20), None, "size:>=3MiB"),
             (Some(g), Some(4 * g), "size:1GiB..4GiB"),
             // The brush's bins are `[lo, hi)`: its top edge is one short.
-            (Some(g), Some(4 * g - 1), "size:1GiB..<4GiB"),
+            // `..<` parses but isn't printed yet (stored rule text must read on
+            // the release before), so the brush's top edge stays in bytes.
+            (Some(g), Some(4 * g - 1), "size:1GiB..4294967295"),
             (None, Some(16 * g - 1), "size:<16GiB"),
             (Some(4 * g + 1), None, "size:>4GiB"),
             (Some(2 * t), None, "size:>=2TiB"),
             (Some(1536 << 20), None, "size:>=1536MiB"),
-            (Some(1000), Some(1023), "size:1000..<1KiB"),
+            (Some(1000), Some(1023), "size:1000..1023"),
             (Some(1025), Some(1500), "size:1025..1500"),
             (Some(0), None, "size:>=0"),
             (None, Some(0), "size:<=0"),
@@ -2076,7 +2077,7 @@ mod tests {
             parse("bytes:video=10..49").unwrap()
         );
         let brushed = parse("file:(size:1GiB..<4GiB)").unwrap();
-        assert_eq!(brushed.to_query(), "file:(size:1GiB..<4GiB)");
+        assert_eq!(brushed.to_query(), "file:(size:1GiB..4294967295)");
     }
 
     #[test]
