@@ -132,14 +132,14 @@ test.describe('where the static shell must not show', () => {
 		}
 	});
 
-	// The app picks a browser language only when its catalogue is complete (zh is not yet), so a
-	// zh browser gets the English app and the English static shell is right for it.
-	test.describe('another language, not yet auto-selectable', () => {
+	// The app picks a browser language once its catalogue is complete (zh is, since H-zh), so a zh
+	// browser gets the Chinese app and the English static shell must not show for it.
+	test.describe('another language, auto-selected once complete', () => {
 		test.use({ locale: 'zh-CN' });
-		test('keeps the static shell, because the app will show English too', async ({ page, go }) => {
+		test('drops the static shell, because the app will show Chinese', async ({ page, go }) => {
 			await blockApp(page);
 			await go('/search');
-			await expect(page.locator('#boot')).toHaveCount(1);
+			await expect(page.locator('#boot')).toHaveCount(0);
 		});
 	});
 });
