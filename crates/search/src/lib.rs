@@ -4,6 +4,7 @@
 
 mod cache;
 mod cancel;
+pub mod catalogue;
 mod compile;
 mod count;
 mod cursor;

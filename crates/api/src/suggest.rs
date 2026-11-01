@@ -7,7 +7,11 @@
 //! content" is on (§20.3, §20.9). The work runs on the blocking pool
 //! under the request's cancel token, which a client disconnect (the UI
 //! aborting a stale request) cancels.
+//!
+//! `/search/fields` lists the fields the query language accepts, from
+//! the parser's own table (`lodestar_search::catalogue`), for the Builder.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::Router;
@@ -19,7 +23,9 @@ use lodestar_search::suggest::{self, DEFAULT_LIMIT, MAX_LIMIT, Request, Shown};
 use lodestar_search::{CancelToken, Error as SearchError, Node};
 use utoipa::OpenApi;
 
-use crate::dto::suggest::{CharRange, SuggestItem, SuggestQuery, SuggestResponse};
+use crate::dto::suggest::{
+    CharRange, SearchField, SearchFieldsResponse, SuggestItem, SuggestQuery, SuggestResponse,
+};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::Query;
 use crate::search::{Visibility, base_query, search_error, unix_now};
@@ -27,7 +33,7 @@ use crate::{ApiState, auth};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(suggest_get))]
+#[openapi(paths(suggest_get, fields_get))]
 pub(crate) struct ApiDoc;
 
 /// How long a suggestion may take before the request gives up: far past
@@ -35,7 +41,11 @@ pub(crate) struct ApiDoc;
 pub const BUDGET: Duration = Duration::from_secs(2);
 
 pub fn routes() -> Router<ApiState> {
-    auth::protected(Router::new().route("/suggest", get(suggest_get)))
+    auth::protected(
+        Router::new()
+            .route("/suggest", get(suggest_get))
+            .route("/search/fields", get(fields_get)),
+    )
 }
 
 /// Suggestions for the token at the caret: field names, values with
@@ -109,6 +119,7 @@ pub(crate) async fn suggest_get(
                 .into_iter()
                 .map(|i| SuggestItem {
                     count: i.count,
+                    count_approx: i.count_approx,
                     insert: i.insert,
                     kind: i.kind.into(),
                     replace: CharRange {
@@ -122,4 +133,32 @@ pub(crate) async fn suggest_get(
     })
     .await
     .map_err(internal)?
+}
+
+/// The fields the query language accepts: name, aliases, value type,
+/// operators, fixed values and whether `/facets` counts it. With "Show
+/// adult content" off, `adult:` and `type:adult` aren't listed (§20.9).
+/// It doesn't need the index, so it answers while search is off.
+#[utoipa::path(
+    operation_id = "search_fields",
+    get,
+    path = "/search/fields",
+    tag = "search",
+    responses((status = 200, body = SearchFieldsResponse))
+)]
+pub(crate) async fn fields_get(State(s): State<ApiState>) -> axum::Json<SearchFieldsResponse> {
+    axum::Json(fields(s.adult.shown()).clone())
+}
+
+/// The response for each visibility, built once.
+fn fields(adult: bool) -> &'static SearchFieldsResponse {
+    static SHOWN: OnceLock<SearchFieldsResponse> = OnceLock::new();
+    static HIDDEN: OnceLock<SearchFieldsResponse> = OnceLock::new();
+    let cell = if adult { &SHOWN } else { &HIDDEN };
+    cell.get_or_init(|| SearchFieldsResponse {
+        fields: lodestar_search::catalogue::catalogue(adult)
+            .iter()
+            .map(SearchField::from)
+            .collect(),
+    })
 }
