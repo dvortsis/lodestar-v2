@@ -1,0 +1,22 @@
+/* The /t/[hash] page layout. Only that route imports it, so the drawer doesn't carry it. */
+.ls-detail-page {
+	max-width: var(--manuscript-width);
+	margin-inline: auto;
+	padding: calc(var(--spacing) * 4);
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 4);
+}
+.ls-detail-page > header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: calc(var(--spacing) * 3);
+}
+.ls-detail-page h1 {
+	font-size: var(--text-title);
+	line-height: var(--text-title--line-height);
+	font-weight: var(--font-weight-semibold);
+	overflow-wrap: anywhere;
+}

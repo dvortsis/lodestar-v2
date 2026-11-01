@@ -9,6 +9,7 @@
 	import { setDrawerTarget } from '$lib/features/detail/target';
 	import { DetailModel } from '$lib/features/detail/model.svelte';
 	import '$lib/features/detail/detail.css';
+	import '$lib/features/detail/page.css';
 
 	let { data } = $props();
 	const model = new DetailModel();
