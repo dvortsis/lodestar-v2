@@ -3288,5 +3288,13 @@
       "at": "2026-11-01T10:05Z",
       "slice": "X-web-polish-1101c"
     }
-  ]
+  ],
+  "active_sessions": {
+    "S-privacy-banner": {
+      "session": "session_01MMjhnATZedJze4kWMUf3Pg",
+      "model": "opus",
+      "launched": "2026-11-01T10:05Z",
+      "brief": "briefs/S-privacy-banner.md"
+    }
+  }
 }
