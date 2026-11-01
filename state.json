@@ -3340,7 +3340,20 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-11-01T12:58Z",
-  "open_prs": {},
+  "open_prs": {
+    "342": {
+      "slice": "FX-1",
+      "head": "8438570a",
+      "verdict": "runner MERGE pending CI; local baselines risk -> marker if state-* fail",
+      "session": "session_01MMjhn8Y4DKBsAvcLSueLk5"
+    },
+    "341": {
+      "slice": "X-file-clause-cold",
+      "head": "767a077",
+      "verdict": "awaiting final push, then review",
+      "session": "session_01MMjhnCgGvjvQEZp75TiWKa"
+    }
+  },
   "merged_log": [
     {
       "pr": 331,
@@ -3502,6 +3515,11 @@
       "id": "FX-queue",
       "what": "After #340 merges: launch FX-1 (Sonnet). Then FX-3 (Opus), FX-4 (Sonnet), FX-5 (Sonnet), FX-6 UI (Sonnet) + FX-6 I9 (Opus) as slots free.",
       "at": "2026-11-01T14:04Z"
+    },
+    {
+      "id": "coarse-cleanup",
+      "what": "After FX-2 merges: delete per-feature pointer:coarse copies in DiscoverPage.svelte, search/results/row.css, compare/FileDiff.svelte (FX-1 left them), plus SettingsShell/SaveBar (FX-4) and insights.css (FX-6) if those batches can't.",
+      "at": "2026-11-01T15:00Z"
     }
   ],
   "soak_r2": {
