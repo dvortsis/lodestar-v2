@@ -29,6 +29,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         paused: false,
         restart: None,
         responder_hints: false,
+        target_prefixes: false,
     }
 }
 

@@ -14,6 +14,7 @@ mod actor;
 mod hints;
 mod lookup;
 mod peers;
+mod prefixes;
 mod proof;
 mod sampler;
 mod seen;
@@ -162,6 +163,11 @@ pub struct Config {
     /// asks the BEP 51 responder that listed its hash. Off allocates no
     /// hint state and sends nothing differently.
     pub responder_hints: bool,
+    /// CR-1b's target prefixes (`dht.target_prefixes`): BEP 51 sample and
+    /// exploration targets take the next of 256 eight-bit prefixes, per
+    /// family, with a random suffix. Off draws every target at random, as
+    /// before, and allocates no cursor.
+    pub target_prefixes: bool,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -228,6 +234,7 @@ impl Default for Config {
             paused: false,
             restart: None,
             responder_hints: false,
+            target_prefixes: false,
         }
     }
 }
@@ -347,6 +354,14 @@ pub struct Stats {
     /// its count: sessions that sent one.
     pub peer_stream_first_batch_millis: AtomicU64,
     pub peer_stream_first_batches: AtomicU64,
+    /// CR-1b: contacts from replies that entered the sampler's frontier,
+    /// by the [`TargetKind`] of the query that brought them. Counts with
+    /// the switch on or off.
+    pub target_novel_nodes: [AtomicU64; TargetKind::ALL.len()],
+    /// Queries sent with a prefix target, by [`TargetKind`], and full
+    /// passes over the 256 prefixes. Only with `target_prefixes` on.
+    pub target_prefix_queries: [AtomicU64; TargetKind::ALL.len()],
+    pub target_prefix_cycles: AtomicU64,
 }
 
 impl Stats {
@@ -432,6 +447,9 @@ impl Stats {
             peer_stream_terminals: std::array::from_fn(|i| g(&self.peer_stream_terminals[i])),
             peer_stream_first_batch_millis: g(&self.peer_stream_first_batch_millis),
             peer_stream_first_batches: g(&self.peer_stream_first_batches),
+            target_novel_nodes: std::array::from_fn(|i| g(&self.target_novel_nodes[i])),
+            target_prefix_queries: std::array::from_fn(|i| g(&self.target_prefix_queries[i])),
+            target_prefix_cycles: g(&self.target_prefix_cycles),
         }
     }
 }
@@ -526,6 +544,28 @@ impl HintReject {
             HintReject::Private => HintFallback::Private,
             HintReject::Family => HintFallback::Family,
             HintReject::Full => HintFallback::GuardFull,
+        }
+    }
+}
+
+/// Which random routing target a query carried (CR-1b,
+/// `dht_target_*_total{kind}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    /// The `find_node` lookup that explores a region when the sampler's
+    /// frontier runs low.
+    Explore,
+    /// A BEP 51 `sample_infohashes` target.
+    Sample,
+}
+
+impl TargetKind {
+    pub const ALL: [TargetKind; 2] = [TargetKind::Explore, TargetKind::Sample];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetKind::Explore => "explore",
+            TargetKind::Sample => "sample",
         }
     }
 }
@@ -724,6 +764,10 @@ pub struct StatsSnapshot {
     pub peer_stream_terminals: [u64; LookupEnd::ALL.len()],
     pub peer_stream_first_batch_millis: u64,
     pub peer_stream_first_batches: u64,
+    /// By [`TargetKind::ALL`].
+    pub target_novel_nodes: [u64; TargetKind::ALL.len()],
+    pub target_prefix_queries: [u64; TargetKind::ALL.len()],
+    pub target_prefix_cycles: u64,
 }
 
 impl StatsSnapshot {

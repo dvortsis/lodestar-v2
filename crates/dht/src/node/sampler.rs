@@ -79,7 +79,9 @@ impl Sampler {
         }
     }
 
-    pub fn offer(&mut self, mut node: NodeInfo, now: Instant) {
+    /// Queues `node` on the frontier if it's eligible and not already
+    /// queued. True when it was queued (CR-1b counts these as new).
+    pub fn offer(&mut self, mut node: NodeInfo, now: Instant) -> bool {
         node.addr = lodestar_network_policy::normalize(node.addr);
         if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token })
             if *until > now && token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED)
@@ -92,7 +94,9 @@ impl Sampler {
         {
             self.queued.insert(node.addr);
             self.frontier.push_back(node);
+            return true;
         }
+        false
     }
 
     pub fn next(&mut self, now: Instant) -> Option<NodeInfo> {

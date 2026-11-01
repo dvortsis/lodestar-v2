@@ -681,3 +681,121 @@ fn streaming_peers_screen() {
         );
     }
 }
+
+/// CR-1b's switch on a short healthy run: sample and exploration targets
+/// really take the cursors' prefixes, the off arm counts none, the query
+/// rate and BEP 51 intervals hold, and the same seed is byte-identical.
+#[test]
+fn target_prefixes_sweep_deterministically() {
+    let mut off = scenario::healthy();
+    off.minutes = 4;
+    let on = Scenario {
+        switches: Switches {
+            target_prefixes: true,
+            ..Switches::default()
+        },
+        ..off.clone()
+    };
+    let (a, b) = (simulate(&off), simulate(&on));
+    assert_eq!(a.dht.target_prefix_queries, [0, 0], "{}", a.text);
+    assert_eq!(a.dht.target_prefix_cycles, 0);
+    assert!(b.text.contains("target_prefixes=true"));
+    let [explore, sample] = b.dht.target_prefix_queries;
+    assert!(explore > 0, "{}", b.text);
+    assert_eq!(sample, b.dht.samples_sent, "every sample took a prefix");
+    assert!(b.dht.target_prefix_cycles > 0, "{}", b.text);
+    // Both arms count novelty, so the A/B compares like with like.
+    assert!(a.dht.target_novel_nodes[1] > 0 && b.dht.target_novel_nodes[1] > 0);
+    // Politeness: the query rate's bucket and the BEP 51 intervals.
+    let secs = 60 * u64::from(on.minutes);
+    let qps = u64::from(on.intensity.queries_per_sec());
+    assert!(b.dht.queries_out <= qps * (secs + 1), "{}", b.text);
+    assert!(b.net.sample_early <= a.net.sample_early, "{}", b.text);
+    assert_eq!(simulate(&on).text, b.text);
+}
+
+/// The CR-1b screen: random targets against the 256-prefix sweep over
+/// `SCREEN_SEEDS`. Stored per minute is the primary metric; new sample
+/// hashes, new frontier contacts and the per-call yield are discovery's.
+/// `cargo test -p lodestar-crawler-sim --test sim target_prefixes_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn target_prefixes_screen() {
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    let spread = |v: &[f64]| {
+        let (lo, hi) = v
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(*x), b.max(*x))
+            });
+        100.0 * (hi - lo) / mean(v).max(1.0)
+    };
+    let change = |v: &[Vec<f64>; 2]| 100.0 * (mean(&v[1]) - mean(&v[0])) / mean(&v[0]).max(1.0);
+    for off in [
+        scenario::healthy(),
+        scenario::high_latency(),
+        scenario::admission_pressure(),
+    ] {
+        let on = Scenario {
+            switches: Switches {
+                target_prefixes: true,
+                ..Switches::default()
+            },
+            ..off.clone()
+        };
+        println!("\n## {}", off.name);
+        println!(
+            "seed | arm | samples | new hashes | hashes/sample | novel sample/explore | cycles | early | rate limited | stored | steady/min"
+        );
+        let mut steady: [Vec<f64>; 2] = Default::default();
+        let mut hashes: [Vec<f64>; 2] = Default::default();
+        let mut novel: [Vec<f64>; 2] = Default::default();
+        let (mut d_stored, mut d_hashes) = (Vec::new(), Vec::new());
+        for seed in SCREEN_SEEDS {
+            let mut row = [(0.0, 0.0); 2];
+            for (arm, s) in [(0, &off), (1, &on)] {
+                let mut s = s.clone();
+                s.seed = seed;
+                let r = simulate(&s);
+                let d = &r.dht;
+                println!(
+                    "{seed} | {} | {} | {} | {:.2} | {}/{} | {} | {} | {} | {} | {:.1}",
+                    ["off", "on"][arm],
+                    d.samples_sent,
+                    d.harvested_sample,
+                    d.harvested_sample as f64 / d.samples_sent.max(1) as f64,
+                    d.target_novel_nodes[1],
+                    d.target_novel_nodes[0],
+                    d.target_prefix_cycles,
+                    r.net.sample_early,
+                    r.net.rate_limited,
+                    r.stored,
+                    r.steady_stored
+                );
+                let h = d.harvested_sample as f64;
+                row[arm] = (r.steady_stored, h);
+                steady[arm].push(r.steady_stored);
+                hashes[arm].push(h);
+                novel[arm].push(d.target_novel_nodes.iter().sum::<u64>() as f64);
+            }
+            d_stored.push(row[1].0 - row[0].0);
+            d_hashes.push(row[1].1 - row[0].1);
+        }
+        println!(
+            "steady stored/min: off {:.1} (spread {:.1}%), on {:.1}, change {:+.1}%, sign {:?}; new hashes: off {:.0} (spread {:.1}%), on {:.0}, change {:+.1}%, sign {:?}; novel contacts: off {:.0}, on {:.0}, change {:+.1}%",
+            mean(&steady[0]),
+            spread(&steady[0]),
+            mean(&steady[1]),
+            change(&steady),
+            sign_test(&d_stored),
+            mean(&hashes[0]),
+            spread(&hashes[0]),
+            mean(&hashes[1]),
+            change(&hashes),
+            sign_test(&d_hashes),
+            mean(&novel[0]),
+            mean(&novel[1]),
+            change(&novel),
+        );
+    }
+}
