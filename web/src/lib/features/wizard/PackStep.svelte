@@ -25,7 +25,8 @@
 	// With any pack on, the server has a stored choice: show it as it is.
 	const stored = $derived(packs?.some((p) => p.on) ?? false);
 
-	async function load() {
+	/** `keep`: after an apply, a pack still off keeps the user's check (their choice isn't lost). */
+	async function load(keep = false) {
 		const mine = ++gen;
 		failed = false;
 		try {
@@ -33,7 +34,10 @@
 			if (mine !== gen) return;
 			packs = overview.packs;
 			const any = overview.packs.some((p) => p.on);
-			checked = Object.fromEntries(overview.packs.map((p) => [p.id, any ? p.on : true]));
+			const before = checked;
+			checked = Object.fromEntries(
+				overview.packs.map((p) => [p.id, p.on || (keep ? before[p.id] === true : !any)])
+			);
 		} catch {
 			if (mine === gen && !stop.signal.aborted) failed = true;
 		}
@@ -66,12 +70,13 @@
 		const flows = await import('../filters/flows/flow.svelte');
 		const result = await applyPacks(ids, flows, stop.signal);
 		if (!result.failed) {
-			await load();
+			await load(true);
 			return true;
 		}
 		problem = result.failed;
-		// Whatever did go through, the screen shows the server's state, not what was asked for.
-		await load();
+		// Whatever did go through, the screen shows the server's state; the packs still off keep
+		// their checks, so pressing Continue again tries them again.
+		await load(true);
 		return false;
 	}
 </script>

@@ -63,6 +63,7 @@ export async function applyPacks(
 ): Promise<PackResult> {
 	const applied: string[] = [];
 	for (const id of ids) {
+		if (signal.aborted) return { applied };
 		const flow = flows.createChangeFlow();
 		const stopOnAbort = () => flow.cancel();
 		signal.addEventListener('abort', stopOnAbort, { once: true });
@@ -73,12 +74,17 @@ export async function applyPacks(
 				return { applied, failed: { id, message: said(preview.error) } };
 			// Only a plain strengthening change goes through here. A warning or a password means the
 			// server sees it as weakening something: the wizard doesn't take that decision.
-			if (preview.kind !== 'review' || preview.assessment.weakening || preview.assessment.confirm) {
+			if (
+				preview.kind !== 'review' ||
+				preview.assessment.weakening ||
+				preview.assessment.confirm ||
+				preview.assessment.warning
+			) {
 				flow.cancel();
 				return { applied, failed: { id, message: null } };
 			}
 			flow.apply();
-			const result = await settle(flow, ['done', 'failed', 'confirm', 'closed'], signal);
+			const result = await settle(flow, ['done', 'failed', 'confirm', 'review', 'closed'], signal);
 			if (result.kind === 'done') {
 				applied.push(id);
 				continue;

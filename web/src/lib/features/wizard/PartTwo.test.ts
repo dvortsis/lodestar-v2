@@ -132,6 +132,8 @@ describe('rule-pack step', () => {
 		await waitFor(async () => expect((await box('malware')).disabled).toBe(true));
 		expect(applies()).toHaveLength(2);
 		expect(server.packs.map((p) => p.on)).toEqual([true, false, false, false, false]);
+		// The user's choice for the others is kept, so Continue tries them again.
+		for (const id of PACK_IDS.slice(1)) expect((await box(id)).checked).toBe(true);
 	});
 
 	it('leaves a change that needs a confirmation to Settings: nothing is applied', async () => {
