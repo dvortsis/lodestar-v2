@@ -172,7 +172,7 @@
 	"settings_updates_rollback_title": "Roll back to {version}?",
 	"settings_updates_rollback_body_restores": "Lodestar will restart on the previous version ({version}). Your data goes back to its state from before the update; settings and data changed since then are lost.",
 	"settings_updates_rollback_body_keeps": "Lodestar will restart on the previous version ({version}). Your data and settings stay as they are.",
-	"settings_updates_rollback_body_unknown": "Lodestar will restart on the previous version ({version}).",
+	"settings_updates_rollback_body_unknown": "Lodestar will restart on the previous version ({version}). If the last update changed how your data is stored, your data goes back to the snapshot taken before it, and settings and data changed since then are lost.",
 	"settings_updates_rollback_lost": "This removes {count} torrents added since then.",
 	"settings_updates_rollback_lost_unknown": "Lodestar can't say how many torrents that affects.",
 	"settings_updates_error_rollback": "The rollback didn't start. Nothing was changed.",

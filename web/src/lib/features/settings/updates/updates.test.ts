@@ -640,10 +640,12 @@ describe('the Updates screen', () => {
 				expect(body).not.toContain('torrents');
 			});
 
-			it('absent or null: no claim about the data; the button is unchanged', async () => {
+			it('absent or null: the conditional caveat, not a claim', async () => {
 				for (const v of [undefined, null]) {
 					const body = await ask1(v);
-					expect(body).toBe('Lodestar will restart on the previous version (0.5.0).');
+					expect(body).toContain('If the last update changed how your data is stored');
+					expect(body).not.toContain('torrents');
+					expect(body).not.toContain('stay as they are');
 				}
 			});
 
