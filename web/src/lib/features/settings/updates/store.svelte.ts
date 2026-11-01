@@ -18,7 +18,30 @@ export interface Settings {
 }
 
 export type Failure =
-	'load' | 'check' | 'pause' | 'skip' | 'clear' | 'setting' | 'locked' | 'stale' | 'busy';
+	| 'load'
+	| 'check'
+	| 'pause'
+	| 'skip'
+	| 'clear'
+	| 'setting'
+	| 'locked'
+	| 'stale'
+	| 'busy'
+	| 'install'
+	| 'install_unknown_version'
+	| 'install_version_skipped'
+	| 'install_unavailable'
+	| 'install_manual_confirmation'
+	| 'install_not_saved';
+
+/** `POST /updates/install` refusals by their code; anything else is the general `install` failure. */
+const INSTALL_ANSWERS: Record<string, Failure> = {
+	unknown_version: 'install_unknown_version',
+	version_skipped: 'install_version_skipped',
+	install_unavailable: 'install_unavailable',
+	manual_confirmation_required: 'install_manual_confirmation',
+	updates_not_saved: 'install_not_saved'
+};
 
 const SECTION = { path: { section: 'updates' } };
 
@@ -136,6 +159,12 @@ export class UpdatesStore {
 		if (e instanceof ApiError && e.status === 401) return; // the shell takes the user to sign in
 		this.error = kind;
 		this.reason = e instanceof ApiError ? e.message : '';
+		if (kind === 'install' && e instanceof ApiError) {
+			this.error = INSTALL_ANSWERS[e.code] ?? 'install';
+			// `install_unavailable` names its reason in parentheses: "(busy)".
+			this.reason =
+				e.code === 'install_unavailable' ? (/\(([a-z_]+)\)/.exec(e.message)?.[1] ?? '') : '';
+		}
 	}
 
 	private async run(name: string, kind: Failure, f: () => Promise<Status | void>) {
@@ -164,6 +193,17 @@ export class UpdatesStore {
 		this.run('pause', 'pause', () => api.post('/updates/pause', { body: { days } }));
 	skip = (version: string) =>
 		this.run('skip', 'skip', () => api.post('/updates/skip', { body: { version } }));
+	/**
+	 * Starts an install now. `confirmManual` is true only after the person confirmed the release's
+	 * manual steps. The 202 answer carries the status; the steps arrive on the `updates` topic.
+	 */
+	install = async (version: string, confirmManual = false) => {
+		return this.run('install', 'install', () =>
+			api.post('/updates/install', {
+				body: { version, when: 'now', confirm_manual: confirmManual }
+			})
+		);
+	};
 	clearHistory = () =>
 		this.run('clear', 'clear', async () => {
 			await api.post('/updates/history/clear', {});

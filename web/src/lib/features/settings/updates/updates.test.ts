@@ -228,8 +228,7 @@ describe('the Updates screen', () => {
 		expect(mutations().join()).toContain('0.6.0');
 	});
 
-	// TODO(part 2): Install now has no API yet (decisions file, "Slots"). When the button exists,
-	// rewrite this against it: with `trust_damaged` it must not be offered.
+	// Install now is never offered with damaged trust data (the server would refuse it anyway).
 	it('offers no Install now with damaged trust data', async () => {
 		status.releases = [release];
 		status.notices = ['trust_damaged'];
@@ -238,8 +237,80 @@ describe('the Updates screen', () => {
 		expect((await screen.findByTestId('updates-notice-trust_damaged')).textContent).toContain(
 			'blocked'
 		);
+		expect(screen.queryByTestId('updates-install')).toBeNull();
 		expect(screen.queryByRole('button', { name: /install now/i })).toBeNull();
 		expect(screen.getByTestId('updates-cannot-auto').textContent).toContain('trust data');
+	});
+
+	describe('Install now', () => {
+		const install = () => fireEvent.click(screen.getByTestId('updates-install'));
+		const posts = () => mutations().filter((x) => x.includes('/updates/install'));
+		let answer: [number, unknown] | null = null;
+		beforeEach(() => {
+			answer = null;
+			status.releases = [release];
+			const inner = globalThis.fetch as unknown as (
+				u: string,
+				i?: RequestInit
+			) => Promise<Response>;
+			vi.stubGlobal('fetch', async (u: string, i: RequestInit = {}) => {
+				if (new URL(u, 'http://x').pathname.endsWith('/updates/install') && i.method === 'POST') {
+					sent.push(`POST /updates/install ${i.body}`);
+					return answer ? reply(answer[0], answer[1]) : reply(202, status);
+				}
+				return inner(u, i);
+			});
+		});
+
+		it('posts the version, now, and no manual confirmation', async () => {
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-install');
+			await install();
+			await until(() => expect(posts()).toHaveLength(1));
+			expect(JSON.parse(posts()[0]!.split('/updates/install ')[1]!)).toEqual({
+				version: '0.6.0',
+				when: 'now',
+				confirm_manual: false
+			});
+			expect(asked.count).toBe(0);
+		});
+
+		it('is hidden while an install is under way', async () => {
+			status.installing = { version: '0.6.0', when: 'now' };
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-available');
+			expect(screen.queryByTestId('updates-install')).toBeNull();
+		});
+
+		it('asks about manual steps: Cancel sends nothing, Install sends the confirmation', async () => {
+			status.releases = [{ ...release, manual_steps: true }];
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-install');
+			await install();
+			await until(() => expect(asked.count).toBe(1));
+			expect(posts()).toHaveLength(0);
+			asked.answer = 'install';
+			await install();
+			await until(() => expect(posts()).toHaveLength(1));
+			expect(posts()[0]).toContain('"confirm_manual":true');
+		});
+
+		it.each([
+			[404, 'unknown_version', 'no longer offered'],
+			[409, 'version_skipped', 'skipped that version'],
+			[409, 'install_unavailable', 'Another update is already running', ' (busy)'],
+			[409, 'install_unavailable', 'trust data is damaged', ' (trust_damaged)'],
+			[422, 'manual_confirmation_required', 'manual steps'],
+			[500, 'updates_not_saved', "wasn't saved"]
+		])('shows the %i %s answer and stays usable', async (code, name, text, tail = '') => {
+			answer = [code, { error: { code: name, message: `refused${tail}` } }];
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-install');
+			await install();
+			await until(() => expect(screen.getByTestId('updates-error').textContent).toContain(text));
+			expect((screen.getByTestId('updates-install') as HTMLButtonElement).disabled).toBe(false);
+			expect(screen.getByTestId('updates-skip')).toBeTruthy();
+		});
 	});
 
 	it('shows the three F-updater notices', async () => {
