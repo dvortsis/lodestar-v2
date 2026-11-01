@@ -11,6 +11,7 @@ import {
 	rowOf,
 	server
 } from './search-results.fixtures';
+import { expectNoA11yViolations } from './a11y';
 import { test } from './support/test';
 
 test.beforeEach(({ mock }) => server(mock, () => body(hits(5))));
@@ -95,4 +96,42 @@ test('c without the clipboard shows the magnet to copy by hand', async ({ page, 
 	await expect(page.getByTestId('detail-magnet-field')).toHaveValue(
 		`magnet:?xt=urn:btih:${hashOf(1)}`
 	);
+});
+
+test('search, open, send: the drawer’s primary action and `s` send to the client', async ({
+	page,
+	go,
+	kbd,
+	mock
+}) => {
+	const sent: unknown[] = [];
+	mock.on('getSettings', {
+		section: 'integrations',
+		revision: 1,
+		restart_required: [],
+		fields: {
+			clients: { value: [{ id: 'q', name: 'qBittorrent' }], source: 'db', read_only: false },
+			default_client: { value: '', source: 'default', read_only: false }
+		}
+	} as never);
+	mock.on('sendToClient', (request) => {
+		const { hashes } = request.postDataJSON() as { hashes: string[] };
+		sent.push(hashes);
+		return {
+			client: 'q',
+			sent: 1,
+			results: hashes.map((hash) => ({ hash, outcome: 'sent' }))
+		} as never;
+	});
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await go('/search?q=lantern');
+	await expect(rowOf(page, 1)).toBeVisible();
+	await kbd.tabTo(rowOf(page, 1));
+	await kbd.press('Enter');
+	const send = page.getByTestId('detail-send');
+	await expect(send).toHaveText('Send to qBittorrent');
+	await expectNoA11yViolations(page);
+	await kbd.press('s');
+	await expect(page.getByText('Sent to qBittorrent')).toBeVisible();
+	expect(sent).toEqual([[hashOf(1)]]);
 });

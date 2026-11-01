@@ -1,5 +1,6 @@
 <script lang="ts">
-	// The header's one primary action. Send to qBittorrent waits for a download-client endpoint.
+	// The header's one primary action: Send to the download client once one is known (send.ts, read
+	// lazily after mount), else Copy magnet, which then stays as the secondary action.
 	import { onDestroy } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -21,6 +22,16 @@
 		if (!gone && generation === detailGeneration() && value === magnet)
 			await copyMagnet({ magnet: value });
 	}
+	let label = $state<string | null>(null);
+	let go: (hash: string) => unknown = () => {};
+	void import('./send').then(
+		(s) =>
+			s.sendLabel().then((l) => {
+				go = s.sendHash;
+				label = l;
+			}),
+		() => {}
+	);
 
 	// "Block this…" (§20.2) through the flows' one door (S-filters-2c): it only ever adds a rule,
 	// previewed first, for the torrent shown when it was pressed (its hash and name), and only
@@ -47,7 +58,18 @@
 	}
 </script>
 
-<Button variant="primary" dense disabled={!magnet} data-testid="detail-copy-magnet" onclick={copy}>
+{#if label && detail}
+	<Button variant="primary" dense data-testid="detail-send" onclick={() => go(detail.hash)}
+		>{label}</Button
+	>
+{/if}
+<Button
+	variant={label ? undefined : 'primary'}
+	dense
+	disabled={!magnet}
+	data-testid="detail-copy-magnet"
+	onclick={copy}
+>
 	{m.detail_copy_magnet()}
 </Button>
 <!-- Shown once there is a torrent, never disabled first: an outline button fading from its

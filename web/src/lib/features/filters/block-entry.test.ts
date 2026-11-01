@@ -138,7 +138,9 @@ it('the drawer drops a press whose torrent changed before the flows loaded', asy
 	await view.rerender({ detail: first });
 	await vi.dynamicImportSettled();
 	expect(screen.queryByRole('dialog')).toBeNull();
-	expect(net.sent).toEqual([]);
+	// No filters request of any kind, and no change at all; the header's one GET reads the client.
+	expect(net.sent.filter((r) => r.path.startsWith('/filters'))).toEqual([]);
+	expect(changes()).toEqual([]);
 });
 
 it('the drawer closes the dialog when its torrent stops being the one shown', async () => {

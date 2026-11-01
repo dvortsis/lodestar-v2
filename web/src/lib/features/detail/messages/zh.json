@@ -74,5 +74,11 @@
 	"detail_raw_show_all": "显示全部",
 	"detail_raw_truncated": "{count} 个字符，已截断",
 	"detail_raw_depth": "层级过深，不再显示",
-	"detail_raw_empty": "（空）"
+	"detail_raw_empty": "（空）",
+	"detail_send": "发送到 {name}",
+	"detail_sent": "已发送到 {name}",
+	"detail_send_duplicate": "{name} 中已有此项",
+	"detail_send_refused": "{name} 未接收。{reason}",
+	"detail_send_failed": "无法发送到 {name}。请重试。",
+	"detail_send_no_client": "尚未设置下载客户端。请在“设置”的“集成”中添加。"
 }

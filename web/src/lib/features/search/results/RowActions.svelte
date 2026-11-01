@@ -3,7 +3,7 @@
 	// hover and focus, and always under a coarse pointer (row.css). Loaded with the first results,
 	// never by Discover or Alerts. Out of the tab order: the list is one tab stop with roving focus.
 	// The keyboard has `c` and `o`, and Shift+F10 or the menu key on a row opens More (the panel).
-	// Send waits for an integration to send to (a follow-up).
+	// "Send to <client>" joins the menu once a download client is known (read on the first More).
 	import Copy from '~icons/ph/copy-bold';
 	import Dots from '~icons/ph/dots-three-bold';
 	import { m } from '$lib/paraglide/messages.js';
@@ -20,12 +20,20 @@
 	// results: it opens as it mounts, on the button that replaced the placeholder.
 	let Menu = $state<typeof import('$lib/ui/overlays/Menu.svelte').default>();
 	let open = $state(false);
+	let sendLabel = $state<string | null>(null);
 	function more(event: MouseEvent) {
 		event.stopPropagation();
 		void import('$lib/ui/overlays/Menu.svelte').then((mod) => {
 			Menu = mod.default;
 			open = true;
 		});
+		// The Send item joins when the client's name arrives; the menu doesn't wait for it.
+		void import('$lib/features/detail/send')
+			.then((s) => s.sendLabel())
+			.then(
+				(label) => (sendLabel = label),
+				() => {}
+			);
 	}
 
 	function copy(event: MouseEvent) {
@@ -49,6 +57,11 @@
 					(mod) => ((Block = mod.BlockThisDialog), (blocking = true)),
 					() => toast.push({ kind: 'error', text: m.search_results_error_body() })
 				);
+		if (id === 'send')
+			void import('$lib/features/detail/send').then(
+				(mod) => mod.sendHash(hit.hash),
+				() => toast.push({ kind: 'error', text: m.search_results_error_body() })
+			);
 		if (id === 'open') window.open(torrentTabHref(hit.hash), '_blank', 'noopener');
 		if (id === 'hash') {
 			// The Clipboard API, else the textarea fallback (plain-HTTP LAN origins have no API).
@@ -93,6 +106,7 @@
 		bind:open
 		label={m.search_results_more({ name })}
 		items={[
+			...(sendLabel ? [{ id: 'send', label: sendLabel }] : []),
 			{ id: 'open', label: m.search_results_open_tab() },
 			{ id: 'hash', label: m.search_results_copy_hash() },
 			{ id: 'block', label: m.search_results_block() }

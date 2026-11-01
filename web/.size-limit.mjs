@@ -69,7 +69,10 @@ const keyOf = new Map(Object.entries(manifest).map(([key, chunk]) => [`build/${c
 // and, in the entries that collect what loads later, don't hide modules the view shares with them
 // (Banner, Input, Radio). A walk that reaches it as part of a first view walks on, so a view that
 // loads the flows at mount counts them, and the guard by "Filters dialogs" names it.
-const FLOWS_DOOR = /features\/filters\/flows-door\.ts$/;
+// The send module (S-send) is such a door too: the drawer and /t read the client's name from it
+// after mount, and the row menu and `s` load it on a press, so a walk stops at it. It has its own
+// entry ("Send to client (on demand)"), and the drawer and /t carry only the small import.
+const FLOWS_DOOR = /features\/(?:filters\/flows-door|detail\/send)\.ts$/;
 const walk = (route, onDemand, collectOnDemand, beyond = [], byChunk = false) => {
 	const mine = routeFiles(route);
 	const shared = new Set([...search.js, ...search.css, ...beyond]);
@@ -152,7 +155,10 @@ const detailLazy = [
 	// The settings subscription (event client and SSE) starts right after mount, not before paint.
 	/features\/detail\/visibility-events\.ts$/,
 	// "Block this…" loads the filters flows on the press (S-filters-2c).
-	...filtersDoor
+	...filtersDoor,
+	// The send module (S-send): the download client's name is read after mount, and a press sends.
+	// Gated on its own below.
+	/features\/detail\/send\.ts$/
 ];
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
@@ -1087,6 +1093,16 @@ export default [
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
 	entry('Filters flows door (on demand)', filtersDoorLazy, '0.58 KB'),
+	// "Send to client" (S-send): the module the drawer, /t, the row menu and `s` load after mount
+	// or on a press, with the settings read, the POST and the toasts.
+	entry(
+		'Send to client (on demand)',
+		requireMeasuredJs(
+			'Send to client (on demand)',
+			ownChunk('src/lib/features/detail/send.ts', [], false, engagedSearch)
+		),
+		'5 KB' // measured 4.6 KB (settings read, POST, toasts, the key), over the first views' budgets
+	),
 	// General's export panel beyond the section's first view, and what a hand-built body loads on an
 	// interaction (Keyboard's shortcut sheet and toggle): limit = measured + 10%.
 	entry('Settings screen extras (on demand)', settingsExtrasLazy, '25 KB'),
@@ -1172,10 +1188,12 @@ export default [
 	// only), page.css (/t only), raw.css (RawViewer, dev route only). Keep page, host and raw rules out
 	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
 	// (visibility.ts and commands.ts are the only doors).
-	entry('Detail drawer (own JS + CSS)', drawerView, '27.2 KB'),
+	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
+	entry('Detail drawer (own JS + CSS)', drawerView, '27.4 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '20.8 KB'),
+	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.0 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
