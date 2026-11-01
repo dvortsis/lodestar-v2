@@ -11,11 +11,11 @@ const packOn = (id: string): Change => ({ op: 'pack_switch', id, on: true });
 /** What a refused change says: the server's sentence, or nothing, so the caller words it. */
 const said = (e: { message: string; code: string }) => e.message.trim() || e.code;
 
-// Only what the Filters screen itself loads, loaded the same way (`flows/flow.svelte`, a dynamic
-// import of a module that screen already imports dynamically), and the change as a typed literal:
-// importing the flows' index or `errors.ts` from here would make a second consumer of the dialogs'
-// code and split its chunks (docs/decisions/2026-10-31-S-wizard.md, part 2).
-export type Flows = typeof import('../filters/flows/flow.svelte');
+// Only what the Filters screen itself loads, loaded the same way (the flows' door, `load()`), and
+// the change as a typed literal: importing the flows' index or `errors.ts` from here would make a
+// second consumer of the dialogs' code and split its chunks (docs/decisions/2026-10-31-S-wizard.md,
+// part 2; X-flows-door-2).
+export type Flows = Pick<typeof import('../filters/flows/flow.svelte'), 'createChangeFlow'>;
 
 export interface PackFailure {
 	id: string;

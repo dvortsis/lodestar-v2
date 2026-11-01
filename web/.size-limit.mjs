@@ -486,12 +486,22 @@ if (laterStatic.length)
 const APPEARANCE = 'src/lib/features/appearance';
 const appearancePicker = [new RegExp(`${APPEARANCE}/ThemePicker\\.svelte$`)];
 const appearanceEditor = [new RegExp(`${APPEARANCE}/ThemeEditor\\.svelte$`)];
-// The 18+ dialog (Bits UI overlays) loads with the first turn-on of Show adult content.
-const appearanceAdult = [/features\/filters\/flows\/AdultConfirmDialog\.svelte$/];
+// The 18+ dialog (Bits UI overlays) and the switch's save load with the first change of Show adult
+// content, through the flows' door (X-flows-door-2). The door stops Appearance's first view, so
+// these aren't in its stop list: a direct import of either puts it back in the first view, where
+// the flows guard below names it.
+const appearanceAdult = [
+	/features\/filters\/flows-adult\.ts$/,
+	/features\/filters\/flows\/AdultConfirmDialog\.svelte$/,
+	/features\/filters\/flows\/adult\.svelte\.ts$/,
+	// The bundler puts `adult.svelte.ts` in a shared chunk (with no source key) when the change
+	// flows' errors share it.
+	/^chunk:adult\.svelte$/
+];
 // Filters & Safety (S-filters): the change dialogs load on the first change, and the review queue
 // and the override editor on their own, so its first view stops at them (own entries below).
 const filtersDialogs = filtersDoor;
-const appearanceLater = [...appearancePicker, ...appearanceEditor, ...appearanceAdult];
+const appearanceLater = [...appearancePicker, ...appearanceEditor];
 const settingsHandBuilt = bodyKeys.map((key) => ({
 	name: key
 		.split('/')
@@ -638,11 +648,15 @@ const settingsPickerLazy = requireMeasuredJs(
 		? ownChunk(pickerKey, appearanceEditor, false, [...settingsShellView, ...appearanceFirst])
 		: []
 );
-const adultKey = appearanceKey(appearanceAdult[0]);
-const settingsAdultLazy = requireMeasuredJs(
-	'Appearance 18+ dialog (on demand)',
-	adultKey ? ownChunk(adultKey, [], false, [...settingsShellView, ...appearanceFirst]) : []
-);
+const settingsAdultLazy = requireMeasuredJs('Appearance 18+ dialog (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) =>
+				appearanceAdult.some((re) => re.test(key) || re.test(`chunk:${manifest[key].name}`))
+			)
+			.flatMap((key) => ownChunk(key, [], false, [...settingsShellView, ...appearanceFirst]))
+	)
+]);
 const filtersFirst = settingsHandBuilt.find(({ name }) => name === 'FiltersScreen')?.files ?? [];
 const filtersLazy = (res) =>
 	requireMeasuredJs(res.name, [
@@ -667,7 +681,13 @@ const filtersDialogsLazy = filtersLazy({
 const filtersDoorLazy = filtersLazy({
 	name: 'Filters flows door (on demand)',
 	keys: [/features\/filters\/flows-door\.ts$/],
-	stop: [/features\/filters\/flows-root\.ts$/]
+	// What its loaders import is gated by "Filters dialogs" and "Appearance 18+ dialog"; the wizard's
+	// change flow is part of the former.
+	stop: [
+		/features\/filters\/flows-root\.ts$/,
+		...appearanceAdult,
+		/features\/filters\/flows\/flow\.svelte\.ts$/
+	]
 });
 const filtersQueueLazy = filtersLazy({
 	name: 'Filters review queue (on demand)',
@@ -951,14 +971,23 @@ if (carried.length)
 	throw new Error(
 		`A view carries shared code it should load later or not at all (X-alert-search-headroom):\n  ${carried.join('\n  ')}`
 	);
-// The views that open "Block this…" or a filters change carry none of the flows (S-filters-2c):
-// they load through `flows-door.ts` alone. A static import of `flows/**`, or a second dynamic root
-// that makes the bundler regroup the flows with a first view, fails here before measuring.
+// The views that open "Block this…" or a filters change carry none of the flows (S-filters-2c),
+// nor do Appearance (its 18+ confirmation) or the wizard (its pack step) (X-flows-door-2): they load
+// through `flows-door.ts` alone. The dev showcase at /dev/filters-flows imports the flows directly;
+// it's linked into test builds only (scripts/dev-routes.mjs), never into this production build.
+// A static import of `flows/**`, or a second dynamic root that makes the bundler regroup the flows
+// with a first view, fails here before measuring.
 const drawerView = ownChunk(DRAWER, detailLazy);
 const torrentView = own('/t/[hash]', { onDemand: detailLazy });
-const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-root\.ts$)/;
+const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
+	[
+		'Settings AppearanceScreen (first view)',
+		settingsHandBuilt.find(({ name }) => name === 'AppearanceScreen')?.files ?? []
+	],
+	['Welcome route', wizardFirst],
+	['Wizard steps (on demand)', wizardLazy],
 	['Search results (lazy)', resultsLazy],
 	['Detail drawer', drawerView],
 	['/t/[hash] route', torrentView]

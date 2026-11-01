@@ -67,7 +67,9 @@
 		const ids = (packs ?? []).filter((p) => !p.on && checked[p.id]).map((p) => p.id);
 		problem = undefined;
 		if (!ids.length) return true;
-		const flows = await import('../filters/flows/flow.svelte');
+		// The change flow loads through the flows' door (X-flows-door-2) on the first Continue, with
+		// the Filters screen's dialogs: one root keeps the flows in one on-demand chunk.
+		const flows = await (await import('../filters/flows-door')).load();
 		const result = await applyPacks(ids, flows, stop.signal);
 		if (!result.failed) {
 			await load(true);
