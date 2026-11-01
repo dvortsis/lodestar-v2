@@ -57,7 +57,6 @@
 	let blocking = $state(false);
 	// Refetch only once the dialog closes: the hidden row (and this dialog) goes with the reload.
 	let applied = false;
-
 	async function select(id: string) {
 		if (id === 'block')
 			void import('$lib/features/filters/flows-door')
@@ -137,6 +136,11 @@
 		torrent={{ hash: hit.hash, hash_v2: hit.hash_v2, name: hit.name }}
 		bind:open={blocking}
 		onapplied={() => (applied = true)}
-		onclose={() => applied && results.reload()}
+		onclose={() =>
+			applied &&
+			void import('./settle').then(
+				(mod) => mod.settle(hit.hash),
+				() => results.reload() // a failed chunk (offline, a stale build) still drops the row
+			)}
 	/>
 {/if}

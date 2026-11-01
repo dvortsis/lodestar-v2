@@ -4729,6 +4729,35 @@
         ]
       }
     },
+    "/search/fields": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "The fields the query language accepts: name, aliases, value type,\noperators, fixed values and whether `/facets` counts it. With \"Show\nadult content\" off, `adult:` and `type:adult` aren't listed (§20.9).\nIt doesn't need the index, so it answers while search is off.",
+        "operationId": "search_fields",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchFieldsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/search/live": {
       "post": {
         "tags": [
@@ -11720,6 +11749,23 @@
           }
         }
       },
+      "FieldOperator": {
+        "type": "string",
+        "description": "How a value is written after `name:`.",
+        "enum": [
+          "eq",
+          "gt",
+          "gte",
+          "lt",
+          "lte",
+          "range",
+          "any_of",
+          "phrase",
+          "prefix",
+          "fuzzy",
+          "group"
+        ]
+      },
       "FieldPreview": {
         "type": "object",
         "description": "One patched field, as it would be saved.",
@@ -11750,6 +11796,24 @@
             }
           }
         }
+      },
+      "FieldType": {
+        "type": "string",
+        "description": "What a field's value is.",
+        "enum": [
+          "text",
+          "number",
+          "size",
+          "date",
+          "enum",
+          "keyword",
+          "flag",
+          "hash",
+          "magnet",
+          "share",
+          "file",
+          "time"
+        ]
       },
       "FileDiff": {
         "type": "object",
@@ -16288,6 +16352,107 @@
           }
         }
       },
+      "SearchField": {
+        "type": "object",
+        "description": "One field of the query language.",
+        "required": [
+          "aliases",
+          "facetable",
+          "name",
+          "operators",
+          "type"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Other names for it, which parse the same (`age` for `discovered`)."
+          },
+          "facetable": {
+            "type": "boolean",
+            "description": "`/facets` counts its values as a term facet. The histograms\n(`size`, `discovered`, `year`) aren't term facets: false."
+          },
+          "name": {
+            "type": "string",
+            "description": "What goes before the `:`."
+          },
+          "operators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldOperator"
+            },
+            "description": "How a value can be written after `name:`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/FieldType"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The values it takes, when they're a fixed list (for `share`, the\nfile categories); absent when it's open."
+          }
+        }
+      },
+      "SearchFieldsResponse": {
+        "type": "object",
+        "description": "`GET /search/fields`: the fields the query language accepts, for the\nquery Builder (§8, §10.4), in the parser's order.",
+        "required": [
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchField"
+            }
+          }
+        },
+        "example": {
+          "fields": [
+            {
+              "aliases": [],
+              "facetable": true,
+              "name": "res",
+              "operators": [
+                "eq",
+                "any_of"
+              ],
+              "type": "keyword"
+            },
+            {
+              "aliases": [
+                "age"
+              ],
+              "facetable": false,
+              "name": "discovered",
+              "operators": [
+                "eq",
+                "gt",
+                "lt",
+                "range"
+              ],
+              "type": "date"
+            },
+            {
+              "aliases": [],
+              "facetable": true,
+              "name": "v2",
+              "operators": [
+                "eq"
+              ],
+              "type": "flag",
+              "values": [
+                "yes",
+                "no"
+              ]
+            }
+          ]
+        }
+      },
       "SearchHit": {
         "type": "object",
         "description": "One search result: the torrent summary (`docs/metrics.md` §7.1), its\nrelevance and, for a query with a file clause, the files that matched.",
@@ -18679,6 +18844,10 @@
             "description": "Torrents it would find, of those this search may show; absent for\nfield names, categories and \"did you mean\".",
             "minimum": 0
           },
+          "count_approx": {
+            "type": "boolean",
+            "description": "`count` is an estimate, shown with \"≈\" as `total_approx` is on a\nsearch (§8): a title's past 1,000 matches, from the title set\nrather than counted live.\nAbsent when the count is exact or there's no count."
+          },
           "insert": {
             "type": "string",
             "description": "The query text to put in."
@@ -18742,6 +18911,17 @@
                 "start": 0
               },
               "text": "The Dark Knight"
+            },
+            {
+              "count": 4210,
+              "count_approx": true,
+              "insert": "title:\"The Office\"",
+              "kind": "title",
+              "replace": {
+                "end": 5,
+                "start": 0
+              },
+              "text": "The Office"
             }
           ]
         }

@@ -107,6 +107,12 @@ pub struct Suggestion {
     pub replace: (usize, usize),
     /// Torrents it would find, among those the request may see.
     pub count: Option<u64>,
+    /// `count` isn't an exact count of those torrents: a title's above
+    /// 1,000 comes from the title set rather than a live count (shown
+    /// with "≈", as an estimated search total is, §8). Every other count
+    /// is exact (a title set a build behind can still undercount a title
+    /// newer torrents share, as before, until its next build).
+    pub count_approx: bool,
 }
 
 /// A suggest request.
@@ -393,6 +399,7 @@ fn field_names(
             insert: format!("{name}:"),
             replace,
             count: None,
+            count_approx: false,
         })
         .collect()
 }
@@ -435,6 +442,7 @@ fn values(
         insert: format!("{name}:{head}{value}"),
         replace,
         count,
+        count_approx: false,
     };
     let f = cx.index.fields();
     let (field, prefix, of) = match kind {
@@ -536,19 +544,10 @@ fn titles(
         if query::parse(&insert).ok().as_ref() != Some(&node) {
             continue;
         }
-        // The FST may be a build behind: a title hidden or purged since
-        // isn't offered, and its count is never more than the torrents
-        // the request may see now. That's counted up to the FST's count
-        // or [`LIVE_CAP`]: past the cap the FST's count stands.
-        let cap = (t.count as usize).min(LIVE_CAP);
-        let live = cx.count_up_to(node, cap)?;
-        if live == 0 {
+        let Some((count, count_approx)) =
+            title_count(t.count, |n| cx.count_up_to(node.clone(), n))?
+        else {
             continue;
-        }
-        let count = if live < cap {
-            live as u64
-        } else {
-            u64::from(t.count)
         };
         out.push(Suggestion {
             kind: Kind::Title,
@@ -556,9 +555,30 @@ fn titles(
             insert,
             replace,
             count: Some(count),
+            count_approx,
         });
     }
     Ok(out)
+}
+
+/// A title's count and whether it's approximate, from the title set's
+/// count `fst` and `live(n)`, the torrents the request may see now that
+/// the title matches, counted up to `n`; `None` when it has none.
+///
+/// The set may be a build behind: a title hidden or purged since isn't
+/// offered, and its count is never more than the torrents the request may
+/// see now. That's counted up to the set's count or [`LIVE_CAP`],
+/// whichever is less, stopping there (one walk, as before the flag).
+/// Under the cap the live count stands, exact. Past it the set's count
+/// stands, not counted live: approximate.
+fn title_count(fst: u32, live: impl FnOnce(usize) -> Result<usize>) -> Result<Option<(u64, bool)>> {
+    let cap = (fst as usize).min(LIVE_CAP);
+    let n = live(cap)?;
+    Ok(match n {
+        0 => None,
+        n if n < cap || fst as usize <= LIVE_CAP => Some((n as u64, false)),
+        _ => Some((u64::from(fst), true)),
+    })
 }
 
 // ---- smart chips ------------------------------------------------------------
@@ -696,6 +716,7 @@ fn chips(
             insert,
             replace,
             count,
+            count_approx: false,
         });
     }
     Ok(out)
@@ -741,6 +762,7 @@ fn did_you_mean(
                 insert,
                 replace: span(start, t.end),
                 count: None,
+                count_approx: false,
             });
         }
     }
@@ -793,6 +815,7 @@ fn did_you_mean(
                 insert: better,
                 replace: span(t.start, t.end),
                 count: None,
+                count_approx: false,
             });
         }
     }
@@ -938,5 +961,42 @@ mod tests {
             assert_eq!(did_you_mean_for(q, true), [fixed], "{q}");
         }
         assert_eq!(did_you_mean_for("typ:movie", false), ["type:movie"]);
+    }
+
+    /// `title_count` against a live count of `visible` torrents, with
+    /// the bounds it asked for.
+    fn title_count_with(fst: u32, visible: usize) -> (Option<(u64, bool)>, Vec<usize>) {
+        let mut asked = Vec::new();
+        let got = title_count(fst, |n| {
+            asked.push(n);
+            Ok(visible.min(n))
+        })
+        .unwrap();
+        (got, asked)
+    }
+
+    #[test]
+    fn a_title_count_is_exact_up_to_the_live_cap_and_approximate_past_it() {
+        // The set has it right: one walk, stopping at its count, exact.
+        assert_eq!(title_count_with(12, 12), (Some((12, false)), vec![12]));
+        // Hidden or purged since: fewer, exact; none, not offered.
+        assert_eq!(title_count_with(12, 5), (Some((5, false)), vec![12]));
+        assert_eq!(title_count_with(12, 0), (None, vec![12]));
+        // Up to the cap, still counted live.
+        let cap = LIVE_CAP as u32;
+        assert_eq!(
+            title_count_with(cap, LIVE_CAP),
+            (Some((LIVE_CAP as u64, false)), vec![LIVE_CAP])
+        );
+        // Past the cap with fewer live: the live count, exact.
+        assert_eq!(
+            title_count_with(5000, 400),
+            (Some((400, false)), vec![LIVE_CAP])
+        );
+        // Past the cap: the set's count, not walked further, approximate.
+        assert_eq!(
+            title_count_with(5000, 4000),
+            (Some((5000, true)), vec![LIVE_CAP])
+        );
     }
 }

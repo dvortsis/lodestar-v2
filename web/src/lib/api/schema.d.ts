@@ -1372,6 +1372,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/search/fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The fields the query language accepts: name, aliases, value type,
+         *     operators, fixed values and whether `/facets` counts it. With "Show
+         *     adult content" off, `adult:` and `type:adult` aren't listed (§20.9).
+         *     It doesn't need the index, so it answers while search is off.
+         */
+        get: operations["search_fields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search/live": {
         parameters: {
             query?: never;
@@ -4166,6 +4188,11 @@ export interface components {
              */
             queued: number;
         };
+        /**
+         * @description How a value is written after `name:`.
+         * @enum {string}
+         */
+        FieldOperator: "eq" | "gt" | "gte" | "lt" | "lte" | "range" | "any_of" | "phrase" | "prefix" | "fuzzy" | "group";
         /** @description One patched field, as it would be saved. */
         FieldPreview: {
             estimates: components["schemas"]["PreviewEstimate"][];
@@ -4175,6 +4202,11 @@ export interface components {
             value: unknown;
             warnings: components["schemas"]["PreviewWarning"][];
         };
+        /**
+         * @description What a field's value is.
+         * @enum {string}
+         */
+        FieldType: "text" | "number" | "size" | "date" | "enum" | "keyword" | "flag" | "hash" | "magnet" | "share" | "file" | "time";
         /**
          * @description The file lists compared: files match when their path (inside the
          *     torrent, `/`-separated, decoded) and size are equal. Padding files
@@ -6257,6 +6289,74 @@ export interface components {
             two_phase: boolean;
             weights: components["schemas"]["ExplainWeights"];
         };
+        /** @description One field of the query language. */
+        SearchField: {
+            /** @description Other names for it, which parse the same (`age` for `discovered`). */
+            aliases: string[];
+            /**
+             * @description `/facets` counts its values as a term facet. The histograms
+             *     (`size`, `discovered`, `year`) aren't term facets: false.
+             */
+            facetable: boolean;
+            /** @description What goes before the `:`. */
+            name: string;
+            /** @description How a value can be written after `name:`. */
+            operators: components["schemas"]["FieldOperator"][];
+            type: components["schemas"]["FieldType"];
+            /**
+             * @description The values it takes, when they're a fixed list (for `share`, the
+             *     file categories); absent when it's open.
+             */
+            values?: string[];
+        };
+        /**
+         * @description `GET /search/fields`: the fields the query language accepts, for the
+         *     query Builder (§8, §10.4), in the parser's order.
+         * @example {
+         *       "fields": [
+         *         {
+         *           "aliases": [],
+         *           "facetable": true,
+         *           "name": "res",
+         *           "operators": [
+         *             "eq",
+         *             "any_of"
+         *           ],
+         *           "type": "keyword"
+         *         },
+         *         {
+         *           "aliases": [
+         *             "age"
+         *           ],
+         *           "facetable": false,
+         *           "name": "discovered",
+         *           "operators": [
+         *             "eq",
+         *             "gt",
+         *             "lt",
+         *             "range"
+         *           ],
+         *           "type": "date"
+         *         },
+         *         {
+         *           "aliases": [],
+         *           "facetable": true,
+         *           "name": "v2",
+         *           "operators": [
+         *             "eq"
+         *           ],
+         *           "type": "flag",
+         *           "values": [
+         *             "yes",
+         *             "no"
+         *           ]
+         *         }
+         *       ]
+         *     }
+         */
+        SearchFieldsResponse: {
+            fields: components["schemas"]["SearchField"][];
+        };
         /**
          * @description One search result: the torrent summary (`docs/metrics.md` §7.1), its
          *     relevance and, for a query with a file clause, the files that matched.
@@ -7475,6 +7575,13 @@ export interface components {
              *     field names, categories and "did you mean".
              */
             count?: number;
+            /**
+             * @description `count` is an estimate, shown with "≈" as `total_approx` is on a
+             *     search (§8): a title's past 1,000 matches, from the title set
+             *     rather than counted live.
+             *     Absent when the count is exact or there's no count.
+             */
+            count_approx?: boolean;
             /** @description The query text to put in. */
             insert: string;
             kind: components["schemas"]["SuggestKind"];
@@ -7513,6 +7620,17 @@ export interface components {
          *             "start": 0
          *           },
          *           "text": "The Dark Knight"
+         *         },
+         *         {
+         *           "count": 4210,
+         *           "count_approx": true,
+         *           "insert": "title:\"The Office\"",
+         *           "kind": "title",
+         *           "replace": {
+         *             "end": 5,
+         *             "start": 0
+         *           },
+         *           "text": "The Office"
          *         }
          *       ]
          *     }
@@ -11056,6 +11174,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    search_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchFieldsResponse"];
                 };
             };
             default: components["responses"]["Error"];

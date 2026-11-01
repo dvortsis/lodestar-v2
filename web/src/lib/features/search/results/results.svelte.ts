@@ -20,6 +20,8 @@ type Notice = components['schemas']['SearchNotice'];
 type Recovery = components['schemas']['SearchRecovery'];
 
 export const PAGE = 50;
+/** The API's largest page (`MAX_LIMIT`, crates/api/src/search.rs). */
+const MAX_LIMIT = 200;
 
 /** What the results depend on. `ast` null means no query (the empty state). */
 export interface ResultsQuery {
@@ -69,14 +71,16 @@ export function createResults() {
 	/** The rows were reloaded from the top because the cursor expired (cleared by the next query). */
 	let expired = $state(false);
 
+	/** A polite message for the live region (e.g. after a Block); the panel reads and clears it. */
+	let note = $state('');
 	const slot = latest();
 	let current: ResultsQuery | null = null;
 
-	const body = (q: ResultsQuery, after: string | null) => ({
+	const body = (q: ResultsQuery, after: string | null, limit = PAGE) => ({
 		ast: q.ast,
 		q: null,
 		sort: q.sort,
-		limit: PAGE,
+		limit,
 		offset: null,
 		cursor: after,
 		hidden: q.hidden,
@@ -88,7 +92,7 @@ export function createResults() {
 	// effect depend on them, so every answer would load the query again.
 	const load = (q: ResultsQuery) => untrack(() => run(q, false));
 
-	async function run(q: ResultsQuery, force: boolean) {
+	async function run(q: ResultsQuery, force: boolean, keep = 0) {
 		const key = empty(q) ? null : keyOf(q);
 		// The query already shown, or already asked for: nothing to do (see the header).
 		if (!force && key !== null) {
@@ -122,8 +126,19 @@ export function createResults() {
 		error = null;
 		inflightKey = key;
 		try {
-			const r = await slot.run((signal) => api.post('/search', { body: body(q, null), signal }));
-			hits = r.hits;
+			// A reload that keeps the place refetches as many rows as were shown, so the scroll holds:
+			// in the API's largest pages (MAX_LIMIT), not the list's.
+			const size = keep > PAGE ? MAX_LIMIT : PAGE;
+			let r = await slot.run((signal) =>
+				api.post('/search', { body: body(q, null, size), signal })
+			);
+			let rows = r.hits;
+			while (rows.length < keep && r.next_cursor) {
+				const after = r.next_cursor;
+				r = await slot.run((signal) => api.post('/search', { body: body(q, after, size), signal }));
+				rows = [...rows, ...r.hits];
+			}
+			hits = rows;
 			total = r.total;
 			totalApprox = r.total_approx;
 			notices = r.notices;
@@ -214,6 +229,12 @@ export function createResults() {
 		get shown() {
 			return shownKey;
 		},
+		get note() {
+			return note;
+		},
+		set note(v: string) {
+			note = v;
+		},
 		/** The rows were reloaded from the top because the cursor expired. */
 		get expired() {
 			return expired;
@@ -249,8 +270,8 @@ export function createResults() {
 			status = 'empty';
 		},
 		/** The current query again from the top, whatever failed before (the live banner's Show). */
-		reload() {
-			return current ? untrack(() => run(current!, true)) : Promise.resolve();
+		reload(keep = 0) {
+			return current ? untrack(() => run(current!, true, keep)) : Promise.resolve();
 		},
 		/** Retry: the current query again (after an error), or the next page. */
 		retry() {
