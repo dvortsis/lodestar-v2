@@ -1990,14 +1990,17 @@
       "review": "fresh Opus + /security-review; full-ci"
     },
     "S-e2e-2": {
-      "status": "marker removed; 98 new PNGs only; awaiting normal-run Playwright time vs ~13.5 min baseline",
+      "status": "merged",
       "session": "session_01MMjhnC2EShFoeTVej4jRbr",
       "model": "sonnet",
       "brief": "briefs/S-e2e-2.md",
       "launched_at": "2026-11-01T05:21Z",
       "pr": 320,
       "head": "3c9021c",
-      "review": "runner MERGE at 12d28a7 pending new-PNG-only check + marker removal"
+      "review": "runner MERGE at 12d28a7 pending new-PNG-only check + marker removal",
+      "merge_sha": "07957532",
+      "merged_at": "2026-11-01T06:37Z",
+      "note": "Playwright core 10m40s on normal run (no trim needed)"
     },
     "S-send": {
       "status": "draft; ruling sent",
