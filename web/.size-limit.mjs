@@ -70,17 +70,22 @@ const keyOf = new Map(Object.entries(manifest).map(([key, chunk]) => [`build/${c
 // (Banner, Input, Radio). A walk that reaches it as part of a first view walks on, so a view that
 // loads the flows at mount counts them, and the guard by "Filters dialogs" names it.
 const FLOWS_DOOR = /features\/filters\/flows-door\.ts$/;
-const walk = (route, onDemand, collectOnDemand, beyond = []) => {
+const walk = (route, onDemand, collectOnDemand, beyond = [], byChunk = false) => {
 	const mine = routeFiles(route);
 	const shared = new Set([...search.js, ...search.css, ...beyond]);
 	const seen = new Set();
 	const files = new Set();
 	const later = new Set();
-	const matches = (key) => onDemand.some((re) => re.test(key));
+	// With `byChunk`, `chunk:<its name>` is tested too (as `ownChunk` does), for a shared chunk with
+	// no source key. Opt-in: other entries' regexes would otherwise start matching chunks.
+	const matches = (key, chunk) =>
+		onDemand.some(
+			(re) => re.test(key) || (byChunk && !!chunk.name && re.test(`chunk:${chunk.name}`))
+		);
 	const visit = (key, demanded) => {
 		const chunk = manifest[key];
 		if (!chunk || shared.has(`build/${chunk.file}`)) return;
-		const demand = demanded || matches(key);
+		const demand = demanded || matches(key, chunk);
 		if (demand && FLOWS_DOOR.test(key)) return;
 		const id = `${demand}:${key}`;
 		if (seen.has(id)) return;
@@ -95,7 +100,8 @@ const walk = (route, onDemand, collectOnDemand, beyond = []) => {
 	for (const f of mine.css) if (!shared.has(f)) files.add(f);
 	return collectOnDemand ? [...later].filter((f) => !files.has(f)) : [...files];
 };
-const own = (route, { onDemand = [], beyond = [] } = {}) => walk(route, onDemand, false, beyond);
+const own = (route, { onDemand = [], beyond = [], byChunk = false } = {}) =>
+	walk(route, onDemand, false, beyond, byChunk);
 // A lazily imported module (a manifest key), measured the same way: what the search route doesn't
 // already load, through static imports and mount-time dynamic imports. A shared chunk has no source
 // key, so `onDemand` also tests `chunk:<its name>` (e.g. /^chunk:magnet$/).
@@ -988,7 +994,16 @@ export default [
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	// runner §2.26, X-illustrations: §10.19 requires illustrations off for the toggle and Save-Data; the
 	// StateScene check costs ~80 B on this route.
-	entry('Discover route (own JS + CSS)', own('/discover'), '45.2 KB'),
+	// runner §2.26, X-discover-headroom: measured 42.4 KB after the keys moved on demand.
+	// Don't import the key registry (`$lib/keys`) or `./commands` statically; j/k register after mount.
+	entry(
+		'Discover route (own JS + CSS)',
+		own('/discover', {
+			onDemand: [/^chunk:keys$/, /features\/discover\/commands\.ts$/],
+			byChunk: true
+		}),
+		'43 KB'
+	),
 	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
 	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
 	// Turn off now's privacy requests (S-logs-2) load on the click: gated with Logging's parts.
