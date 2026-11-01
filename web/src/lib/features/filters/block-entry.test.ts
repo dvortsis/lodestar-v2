@@ -128,9 +128,14 @@ describe.each(Object.entries(entries))('Block this… from %s', (_, entry) => {
 });
 
 it('the drawer drops a press whose torrent changed before the flows loaded', async () => {
-	const view = render(DetailActions, { detail: torrentDetail({ hash: HASH, name: 'First' }) });
+	const first = torrentDetail({ hash: HASH, name: 'First' });
+	const view = render(DetailActions, { detail: first });
 	await fireEvent.click(screen.getByTestId('detail-block'));
 	await view.rerender({ detail: torrentDetail({ hash: 'ef'.repeat(20), name: 'Second' }) });
+	await vi.dynamicImportSettled();
+	expect(screen.queryByRole('dialog')).toBeNull();
+	// Back to the first torrent (A → B → A): the dropped press must not open its dialog now.
+	await view.rerender({ detail: first });
 	await vi.dynamicImportSettled();
 	expect(screen.queryByRole('dialog')).toBeNull();
 	expect(net.sent).toEqual([]);
