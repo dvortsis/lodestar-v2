@@ -1911,13 +1911,13 @@
       "merge": "88dfc592"
     },
     "X-detail-headroom": {
-      "status": "running",
+      "status": "pr-fixing",
       "model": "sonnet",
       "session": "session_01MMjhnCWhTw1CWQNwZ3Gocu",
-      "pr": null,
+      "pr": 313,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet."
+      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet. | 03:12Z draft #313: only ~40 B found (css split). Runner ruled (§2.26) option 1 as a MOVE: event client+SSE (~2.3 KB) from drawer and /t first view to Detail sections; lower drawer and /t limits, raise Detail sections by at most the moved bytes (+10%), keep >=0.2 KB for magnet toasts."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2811,7 +2811,8 @@
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
-    "S-updates-3: wire Install now (and Roll back if B-update-5 adds it) once B-update-5 lands POST /updates/install; un-skip the Install-now test TODO (#306/#310)."
+    "S-updates-3: wire Install now (and Roll back if B-update-5 adds it) once B-update-5 lands POST /updates/install; un-skip the Install-now test TODO (#306/#310).",
+    "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
