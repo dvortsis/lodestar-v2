@@ -3280,12 +3280,6 @@
       "verdict": "runner MERGE pending CI; Search results 40,153 (+142 B accepted)",
       "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg"
     },
-    "334": {
-      "slice": "S-updates-5",
-      "head": "217eb16ad25ab2c79fd484dd2a80278f41678a7c",
-      "verdict": "runner MERGE pending CI (r1 fixed)",
-      "session": "session_01MMjhnBgKsNwUQtRhVBqSsX"
-    },
     "335": {
       "slice": "B-search-meta",
       "head": "5b4a0bb7976e73dec007581b19ef703e13bdf994",
@@ -3312,6 +3306,12 @@
       "at": "2026-11-01T10:22Z",
       "slice": "B-update-6",
       "note": "full-ci incl macOS via manual dispatch run 41295041539"
+    },
+    {
+      "pr": 334,
+      "sha": "dcd81152d61b2439c74720c709da919a1ba5bffb",
+      "at": "2026-11-01T11:17Z",
+      "slice": "S-updates-5"
     }
   ],
   "active_sessions": {
@@ -3332,6 +3332,12 @@
       "model": "sonnet",
       "launched": "2026-11-01T10:23Z",
       "brief": "briefs/S-updates-5.md"
+    },
+    "F-suggest-adult-field": {
+      "session": "session_01MMjhn9VKY4h8TyGn6oQEky",
+      "model": "opus",
+      "launched": "2026-11-01T11:17Z",
+      "brief": "briefs/F-suggest-adult-field.md"
     }
   },
   "queued_followups": [
@@ -3339,7 +3345,8 @@
       "id": "F-suggest-adult-field",
       "what": "/suggest field_names offers `adult:` (and maybe adult values) while Show adult is off; /search/fields already hides it. Content-safety tightening (Opus, /security-review). Small.",
       "from": "#335",
-      "at": "2026-11-01T11:15Z"
+      "at": "2026-11-01T11:15Z",
+      "status": "launched 11:17Z"
     }
   ]
 }
