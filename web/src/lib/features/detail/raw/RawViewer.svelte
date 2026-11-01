@@ -3,7 +3,7 @@
 	// is rendered through Svelte's escaping, so a string like "<script>" is shown, never run. Long
 	// strings are cut with "Show all", long lists with a count, and depth is limited. Not mounted in
 	// the drawer yet (no endpoint serves an info dict); the dev harness and tests use it.
-	import './raw.css';
+	import '../raw.css';
 	import IconCaretRight from '~icons/ph/caret-right';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
