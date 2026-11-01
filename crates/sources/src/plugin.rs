@@ -12,7 +12,10 @@ use lodestar_metainfo::InfoHash;
 use lodestar_store::SourceId;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::manifest::Manifest;
+use crate::claims::{Claims, Provenance};
+use crate::http::{Client, Fetch, HostLimiter, NoEgress};
+use crate::manifest::{Manifest, Policy, UserLimits};
+use crate::state::{MemoryState, PluginState};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -87,6 +90,13 @@ pub struct PeerRequest {
 /// [`run`]: SourcePlugin::run
 pub trait SourcePlugin: Send + Sync {
     fn manifest(&self) -> &Manifest;
+
+    /// Politeness caps, config schema, placement and schedule (manifest
+    /// v2). Plugins that don't say get [`Policy::STRICT`].
+    fn policy(&self) -> &Policy {
+        &Policy::STRICT
+    }
+
     fn run(&self, ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>>;
 }
 
@@ -115,9 +125,74 @@ pub struct SourceCtx {
     /// never through this lossy emitter.
     pub peer_replies: Option<Emitter>,
     pub shutdown: Shutdown,
+    /// State and HTTP pacing.
+    pub kit: Kit,
 }
 
-/// One key as a plugin reports it.
+/// A plugin's own state store and its HTTP client, paced per host
+/// (§18.1).
+#[derive(Debug, Clone)]
+pub struct Kit {
+    pub state: Arc<dyn PluginState>,
+    /// The only way the plugin sends HTTP. Its limiter also holds the
+    /// poll and full-scrape gates.
+    pub http: Client,
+}
+
+impl Kit {
+    /// The client's limiter takes `policy`'s caps met with the user's
+    /// settings.
+    pub fn new(
+        state: Arc<dyn PluginState>,
+        fetch: Arc<dyn Fetch>,
+        policy: &Policy,
+        user: &UserLimits,
+    ) -> Kit {
+        Kit::with_limiter(state, fetch, HostLimiter::new(policy.limits(user)))
+    }
+
+    /// A kit for `plugin`, on its own policy.
+    pub fn for_plugin(
+        plugin: &dyn SourcePlugin,
+        state: Arc<dyn PluginState>,
+        fetch: Arc<dyn Fetch>,
+        user: &UserLimits,
+    ) -> Kit {
+        Kit::new(state, fetch, plugin.policy(), user)
+    }
+
+    pub fn with_limiter(
+        state: Arc<dyn PluginState>,
+        fetch: Arc<dyn Fetch>,
+        limiter: HostLimiter,
+    ) -> Kit {
+        Kit {
+            state,
+            http: Client::new(fetch, limiter),
+        }
+    }
+
+    pub fn limiter(&self) -> &HostLimiter {
+        self.http.limiter()
+    }
+}
+
+impl Default for Kit {
+    /// In-memory state, no egress ([`NoEgress`]: every request fails and
+    /// nothing leaves the machine) and [`Policy::STRICT`]'s caps.
+    fn default() -> Kit {
+        Kit::new(
+            Arc::new(MemoryState::new()),
+            Arc::new(NoEgress),
+            &Policy::STRICT,
+            &UserLimits::default(),
+        )
+    }
+}
+
+/// One key as a plugin reports it: the discovery event (§18.1). The DHT
+/// sends bare keys; feeds add claims and provenance, boxed so a bare key
+/// stays small.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
     pub key: InfoHash,
@@ -132,6 +207,10 @@ pub struct Found {
     pub private_source: bool,
     /// A user is waiting on it: it jumps the fetch queue.
     pub interest: bool,
+    /// What the source asserted about the key. The [`Emitter`] clamps it
+    /// to the [`claims`](crate::claims) limits.
+    pub claims: Option<Box<Claims>>,
+    pub provenance: Option<Box<Provenance>>,
 }
 
 impl Found {
@@ -142,12 +221,38 @@ impl Found {
             strategy,
             private_source: false,
             interest: false,
+            claims: None,
+            provenance: None,
         }
     }
 
     pub fn with_peers(mut self, peers: Vec<SocketAddr>) -> Found {
         self.peers = peers;
         self
+    }
+
+    /// Attaches claims; empty ones are dropped.
+    pub fn with_claims(mut self, claims: Claims) -> Found {
+        self.claims = (!claims.is_empty()).then(|| Box::new(claims));
+        self
+    }
+
+    pub fn with_provenance(mut self, provenance: Provenance) -> Found {
+        self.provenance = Some(Box::new(provenance));
+        self
+    }
+
+    /// Cuts claims and provenance to their limits.
+    pub fn clamp(&mut self) {
+        if let Some(c) = &mut self.claims {
+            c.clamp();
+            if c.is_empty() {
+                self.claims = None;
+            }
+        }
+        if let Some(p) = &mut self.provenance {
+            p.clamp();
+        }
     }
 }
 
@@ -221,7 +326,8 @@ impl Emitter {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    fn stamp(&self, found: Found) -> Discovery {
+    fn stamp(&self, mut found: Found) -> Discovery {
+        found.clamp();
         Discovery {
             source: self.source,
             found,
