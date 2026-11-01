@@ -302,8 +302,11 @@ const settingsAboutParts = [
 // icon and purpose line (for the filter) on demand; gated on their own below. They only load from
 // Updates' body.
 const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/];
+// Advanced loads when its section is opened, and is gated on its own below.
+const settingsUpdatesAdvanced = [/features\/settings\/updates\/Advanced\.svelte$/];
 const settingsUpdatesParts = [
 	/features\/settings\/updates\/Releases\.svelte$/,
+	...settingsUpdatesAdvanced,
 	...settingsUpdatesModules
 ];
 // Logging (S-logs-2): the Verbosity control, the event list and the component levels (loaded when
@@ -550,8 +553,22 @@ const settingsUpdatesPartsLazy = requireMeasuredJs('Settings updates parts (on d
 			.filter(
 				(key) =>
 					settingsUpdatesParts.some((re) => re.test(key)) &&
-					!settingsUpdatesModules.some((re) => re.test(key))
+					!settingsUpdatesModules.some((re) => re.test(key)) &&
+					!settingsUpdatesAdvanced.some((re) => re.test(key))
 			)
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...updatesFirstView
+				])
+			)
+	)
+]);
+// Advanced, opened on demand: what it adds beyond Updates' first view.
+const settingsUpdatesAdvancedLazy = requireMeasuredJs('Settings updates advanced (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsUpdatesAdvanced.some((re) => re.test(key)))
 			.flatMap((key) =>
 				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
 					...settingsShellView,
@@ -968,6 +985,7 @@ export default [
 	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
 	// Updates' release notes and history (S-updates): measured + 10%.
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
+	entry('Settings updates advanced (on demand)', settingsUpdatesAdvancedLazy, '4.65 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
