@@ -16,6 +16,8 @@
 	onDestroy(() => form.destroy());
 
 	export async function save(): Promise<boolean> {
+		// Nothing was shown, so nothing is done: stay and let the engine's Retry load it.
+		if (form.status === 'loading' || form.status === 'load-error') return false;
 		const result = await form.save();
 		return result.ok || result.reason === 'nothing';
 	}
@@ -76,5 +78,5 @@
 			>
 		</Banner>
 	{/if}
-	{#if error}<p id="wizard-updates-error" class="text-error" role="alert">{error}</p>{/if}
+	{#if error}<p id="wizard-updates-error" class="text-small text-error">{error}</p>{/if}
 </SettingsForm>

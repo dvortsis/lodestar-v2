@@ -22,6 +22,12 @@ const start = (step: StepId, over: Parameters<typeof wizardValues>[0] = {}) => {
 	return render(WizardPage);
 };
 const patches = () => server.requests('PATCH', '/settings');
+/** Waits until a button is no longer busy (its click has been handled), then returns it. */
+const settled = async (name: string) => {
+	const button = await screen.findByRole('button', { name });
+	await waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
+	return button;
+};
 const heading = (name: string) => screen.findByRole('heading', { level: 2, name });
 
 beforeEach(() => {
@@ -131,6 +137,8 @@ describe('wizard shell', () => {
 		server.next('PATCH /settings', { status: 0, body: null });
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await waitFor(() => expect(patches()).toHaveLength(1));
+		await settled('Save and continue');
+		await screen.findByTestId('offline-text');
 		expect(screen.getByRole('heading', { level: 2, name: 'Storage & retention' })).toBeTruthy();
 	});
 });
@@ -280,7 +288,22 @@ describe('restart and load failures', () => {
 		await heading('Crawl intensity');
 		await screen.findByRole('button', { name: 'Retry' });
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await settled('Save and continue');
 		expect(screen.getByRole('heading', { level: 2, name: 'Crawl intensity' })).toBeTruthy();
+		expect(JSON.parse(sessionStorage.getItem('lodestar.wizard')!).done).toEqual([]);
+	});
+
+	it('the Updates step likewise stays when its setting could not be read', async () => {
+		server = wizardServer();
+		server.next('GET /settings/updates', server.err(500, 'internal'));
+		vi.stubGlobal('fetch', server.fetch);
+		writeProgress({ step: 'updates', skipped: [], done: [] });
+		render(WizardPage);
+		await heading('Updates');
+		await screen.findByRole('button', { name: 'Retry' });
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await settled('Save and continue');
+		expect(screen.getByRole('heading', { level: 2, name: 'Updates' })).toBeTruthy();
 		expect(JSON.parse(sessionStorage.getItem('lodestar.wizard')!).done).toEqual([]);
 	});
 });

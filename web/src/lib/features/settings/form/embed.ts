@@ -2,7 +2,7 @@
 // Settings section form (`shell/SectionForm.svelte`) and the first-run wizard (§10.10.10) import
 // the engine only from here. Rolldown groups modules by the entries that reach them, so a second
 // consumer reaching a subset of the engine through other paths would split its chunk and grow every
-// Settings first view; going through one module keeps one engine graph (docs/decisions/2026-11-01-S-wizard-embed.md).
+// Settings first view; going through one module keeps one engine graph (docs/decisions/2026-10-31-S-wizard.md).
 export { loadControls } from './controls.svelte';
 export { focusSettingField } from './focus';
 export { loadMessages, messagesLoaded } from './messages';
