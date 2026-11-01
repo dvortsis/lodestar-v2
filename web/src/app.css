@@ -31,3 +31,9 @@
 		justify-content: center;
 	}
 }
+
+/* A state illustration built before the appearance answer (no cache on a first visit) is hidden once
+   `applyLook` says illustrations are off. It keeps its space, so nothing below it jumps. */
+[data-illustrations='false'] picture {
+	visibility: hidden;
+}

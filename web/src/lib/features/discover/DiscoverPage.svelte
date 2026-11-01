@@ -16,6 +16,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import EmptyState from '$lib/ui/feedback/EmptyState.svelte';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
+	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import VirtualList from '$lib/ui/lists/VirtualList.svelte';
 	import { defaultRowHeight, tokenPx } from '$lib/ui/overlays/motion';
 	import { Discover, type HitGroup, type SearchHit } from './discover.svelte';
@@ -114,7 +115,9 @@
 			([{ keys }, cmd]) => {
 				if (!gone) off = cmd.registerDiscoverCommands(keys, step);
 			},
-			() => {}
+			() => {
+				if (!gone) toast.push({ text: m.discover_keys_unavailable() });
+			}
 		);
 		return () => {
 			gone = true;
