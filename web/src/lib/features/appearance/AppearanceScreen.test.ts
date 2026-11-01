@@ -13,7 +13,25 @@ import AppearanceScreen from './AppearanceScreen.svelte';
 import { narrow } from './prefs';
 import { savePending } from './themes';
 
-configure({ defaultHidden: true });
+configure({ defaultHidden: true, asyncUtilTimeout: 10_000 });
+/** Waits for a condition, with the 10 s deadline the slowest CI runner needs. */
+const wait = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
+/** The next save stays open until `release` (or `fail`) is called. */
+const hold = () => {
+	const h: { release: () => void; fail: (e: unknown) => void } = { release() {}, fail() {} };
+	patch.mockImplementationOnce(
+		() =>
+			new Promise((resolve, reject) => {
+				h.release = () => resolve({ revision: 5 });
+				h.fail = reject;
+			})
+	);
+	return h;
+};
+const lockedDensity = () => ({
+	...prefs(),
+	fields: { ...prefs().fields, density: field('comfortable', { env: 'LODESTAR_DENSITY' }) }
+});
 
 const field = (value: unknown, extra = {}) => ({ value, env: null, read_only: false, ...extra });
 const prefs = (over: Record<string, unknown> = {}, revision = 4) => ({
@@ -93,7 +111,7 @@ describe('AppearanceScreen', () => {
 				(c) => c[0] === '/settings/{section}' && c[1].path.section === 'content'
 			);
 		await fireEvent.click(await screen.findByRole('switch', { name: 'Show adult content' }));
-		await screen.findByRole('dialog', { name: 'Show adult content?' }, { timeout: 5000 });
+		await screen.findByRole('dialog', { name: 'Show adult content?' });
 		await fireEvent.click(screen.getByTestId('adult-cancel'));
 		await waitFor(() => expect(screen.queryByTestId('adult-cancel')).toBeNull());
 		expect(contentCalls()).toHaveLength(0);
@@ -101,11 +119,11 @@ describe('AppearanceScreen', () => {
 			(screen.getByRole('switch', { name: 'Show adult content' }) as HTMLInputElement).checked
 		).toBe(false);
 		await fireEvent.click(screen.getByRole('switch', { name: 'Show adult content' }));
-		await screen.findByRole('dialog', { name: 'Show adult content?' }, { timeout: 5000 });
+		await screen.findByRole('dialog', { name: 'Show adult content?' });
 		await fireEvent.click(screen.getByTestId('adult-show'));
 		await waitFor(() => expect(contentCalls()).toHaveLength(1));
 		expect(contentCalls()[0]![1].body).toEqual({ show_adult: true, confirm_adult: true });
-	});
+	}, 20_000);
 
 	it('shows the switch as the server has it when turning adult off fails', async () => {
 		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
@@ -206,6 +224,79 @@ describe('AppearanceScreen', () => {
 		expect(await screen.findByText(/density \(LODESTAR_DENSITY\)/)).toBeTruthy();
 		const compact = screen.getByRole('radio', { name: 'Compact' }) as HTMLInputElement;
 		expect(compact.disabled).toBe(true);
+	});
+
+	it('offers Undo only once nothing later is saving, and then it reverts the latest change', async () => {
+		patch.mockResolvedValueOnce({ revision: 5 });
+		const b = { release: () => {} };
+		patch.mockImplementationOnce(() => new Promise((r) => (b.release = () => r({ revision: 6 }))));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }));
+		// A has saved, B is still open: no Undo for the older change.
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+		b.release();
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(3));
+		expect(patch.mock.calls[2]![1].body).toEqual({ motion: 'system', if_revision: 6 });
+	});
+
+	it('Undo moves focus to the control the change was made with', async () => {
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() =>
+			expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Comfortable' }))
+		);
+		await fireEvent.click(screen.getByRole('switch', { name: 'Show illustrations' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole('switch', { name: 'Show illustrations' })
+			)
+		);
+	});
+
+	it('hides Undo when the field it would change is locked', async () => {
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content'
+				? content()
+				: get.mock.calls.filter((c) => c[1].path.section === 'preferences').length > 1
+					? lockedDensity()
+					: prefs()
+		);
+		const a = hold();
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Cards' }));
+		a.fail(new ApiError(409, 'stale_revision', 'x'));
+		await screen.findByText(/density \(LODESTAR_DENSITY\)/);
+		await wait(() => expect(savePending()).toBe(false));
+		expect(patch).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+	});
+
+	it('a later save that succeeds clears the error banner', async () => {
+		const a = hold();
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }));
+		a.fail(new ApiError(500, 'internal', 'x'));
+		await screen.findByRole('button', { name: 'Undo' });
+		expect(screen.queryByText(/Couldn't save that change/)).toBeNull();
+	});
+
+	it('a 2xx it cannot read re-reads the server and shows no error', async () => {
+		patch.mockResolvedValueOnce({});
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await wait(() =>
+			expect(get.mock.calls.filter((c) => c[1].path.section === 'preferences').length).toBe(2)
+		);
+		await wait(() => expect(savePending()).toBe(false));
+		expect(screen.queryByText(/Couldn't save that change/)).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
 	});
 
 	it('shows a load failure', async () => {

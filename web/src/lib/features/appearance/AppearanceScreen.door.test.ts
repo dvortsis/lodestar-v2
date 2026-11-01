@@ -18,7 +18,9 @@ vi.mock('../filters/flows-door', async (orig) => {
 
 import AppearanceScreen from './AppearanceScreen.svelte';
 
-configure({ defaultHidden: true });
+configure({ defaultHidden: true, asyncUtilTimeout: 10_000 });
+// The 18+ flow loads on first use; on a cold or slow runner that outlasts the default 5 s.
+vi.setConfig({ testTimeout: 20_000 });
 
 const field = (value: unknown, extra = {}) => ({ value, env: null, read_only: false, ...extra });
 let adultField = field(false);

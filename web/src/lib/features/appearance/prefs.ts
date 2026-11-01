@@ -72,13 +72,18 @@ export async function load(signal?: AbortSignal): Promise<Loaded | undefined> {
 	return { prefs, revision: res.revision, locks };
 }
 
-/** Saves some fields; resolves to the new revision. Errors are the api client's. */
+/** A 2xx reply that can't be read: the save may have landed. */
+export class Unreadable extends Error {}
+
+/** Saves some fields; resolves to the new revision. Errors are the api client's, or Unreadable. */
 export async function save(patch: Partial<Appearance>, revision: number): Promise<number> {
 	const res = await api.patch('/settings/{section}', {
 		...SECTION,
 		body: { ...patch, if_revision: revision } as unknown as Record<string, never>
 	});
-	return (res as unknown as { revision: number }).revision;
+	const next = (res as unknown as { revision?: unknown } | null)?.revision;
+	if (typeof next !== 'number') throw new Unreadable();
+	return next;
 }
 
 // ---- applying -----------------------------------------------------------------------------
