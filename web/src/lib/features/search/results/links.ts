@@ -2,7 +2,7 @@
 // navigation does. No base path, so resolve() returns the path unchanged (shell/nav.ts does the same).
 import { page } from '$app/state';
 import { resolve } from '$app/paths';
-import { withDensity } from '$lib/shell/nav';
+import { withDensity } from '$lib/shell/density';
 
 const keep = (path: string) => withDensity(path, page.url.searchParams);
 
