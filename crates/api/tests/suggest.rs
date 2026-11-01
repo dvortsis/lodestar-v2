@@ -271,6 +271,24 @@ async fn adult_and_hidden_follow_the_search() {
     assert!(!texts(&body, "value").contains(&"hidgrp".to_string()));
 }
 
+/// `ad` offers `adult:` only while "Show adult content" is on, as
+/// `/search/fields` lists it (§20.9).
+#[tokio::test]
+async fn the_adult_field_follows_show_adult() {
+    let f = fixture();
+    let c = session(&f).await;
+    let fields = |f: &Fixture, c: String| {
+        let app = f.app.clone();
+        async move {
+            let (_, _, body) = call(&app, get("/api/v1/suggest?q=ad", Some(&c))).await;
+            texts(&serde_json::from_str(&body).unwrap(), "field")
+        }
+    };
+    assert!(!fields(&f, c.clone()).await.contains(&"adult:".to_string()));
+    f.show.send(true).unwrap();
+    assert!(fields(&f, c.clone()).await.contains(&"adult:".to_string()));
+}
+
 #[tokio::test]
 async fn bad_requests() {
     let f = fixture();

@@ -179,7 +179,12 @@ pub fn suggest(
             word,
         } => {
             out.extend(chips(&cx, word, at.in_file, span(*replace))?);
-            out.extend(field_names(partial, at.in_file, span(*replace)));
+            out.extend(field_names(
+                partial,
+                at.in_file,
+                req.shown.adult,
+                span(*replace),
+            ));
             if !at.in_file
                 && let Some(i) = at.token
             {
@@ -202,7 +207,12 @@ pub fn suggest(
         } => {
             if *name_only {
                 let colon = replace.0 + name.len() + 1;
-                out.extend(field_names(partial, at.in_file, span((replace.0, colon))));
+                out.extend(field_names(
+                    partial,
+                    at.in_file,
+                    req.shown.adult,
+                    span((replace.0, colon)),
+                ));
             } else if *kind == FieldKind::Text(TextField::Title) && !at.in_file {
                 out.extend(titles(&cx, partial, span(*replace), limit)?);
             } else {
@@ -333,7 +343,30 @@ fn file_field(kind: FieldKind) -> bool {
     )
 }
 
-fn field_names(partial: &str, in_file: bool, replace: (usize, usize)) -> Vec<Suggestion> {
+/// Whether `node` has an Adult clause (`adult:…`, `type:adult`), either
+/// way round: while Adult is hidden nothing offers one (§20.9).
+fn names_adult(node: &Node) -> bool {
+    match node {
+        Node::Tag {
+            key: TagKey::Adult, ..
+        } => true,
+        Node::Tag {
+            key: TagKey::Type,
+            any,
+        } => any.iter().any(|t| t == ContentType::Adult.as_str()),
+        Node::And { of } | Node::Or { of } => of.iter().any(names_adult),
+        Node::Not { of } => names_adult(of),
+        _ => false,
+    }
+}
+
+/// The field names `partial` starts; `adult:` only while Adult is shown.
+fn field_names(
+    partial: &str,
+    in_file: bool,
+    adult: bool,
+    replace: (usize, usize),
+) -> Vec<Suggestion> {
     let p = partial.to_ascii_lowercase();
     if p.is_empty() || !query::is_field_name(&p) {
         return Vec::new();
@@ -344,6 +377,7 @@ fn field_names(partial: &str, in_file: bool, replace: (usize, usize)) -> Vec<Sug
         .filter(|(_, (name, kind))| {
             name.starts_with(&p)
                 && !matches!(kind, FieldKind::Later(_))
+                && (adult || !matches!(kind, FieldKind::Tag(TagKey::Adult)))
                 && (!in_file || file_field(*kind))
         })
         .map(|(i, (name, _))| (i, *name))
@@ -693,6 +727,14 @@ fn did_you_mean(
         }
         if let Some(near) = query::near_field(name) {
             let insert = format!("{near}:{value}");
+            // `adul:x` → `adult:x`, `typ:adult` → `type:adult`: an
+            // Adult clause, not offered while Adult is hidden.
+            if !cx.req.shown.adult
+                && (query::field(near) == Some(FieldKind::Tag(TagKey::Adult))
+                    || query::parse(&insert).is_ok_and(|n| names_adult(&n)))
+            {
+                continue;
+            }
             out.push(Suggestion {
                 kind: Kind::DidYouMean,
                 text: format!("{}{insert}{}", &q[..start], &q[t.end..]),
@@ -848,5 +890,53 @@ mod tests {
         assert!((100..=per as usize).contains(&seen), "{seen} files visited");
         assert_eq!(index.cache_usage().file_set_entries, 0);
         FILE_QUERY.with(|q| q.borrow_mut().take());
+    }
+
+    fn field_texts(adult: bool, partial: &str) -> Vec<String> {
+        field_names(partial, false, adult, (0, 0))
+            .into_iter()
+            .map(|s| s.text)
+            .collect()
+    }
+
+    /// `ad` offers `adult:` only while Adult is shown (§20.9).
+    #[test]
+    fn the_adult_field_is_offered_only_while_adult_is_shown() {
+        assert!(!field_texts(false, "ad").contains(&"adult:".to_owned()));
+        assert!(field_texts(false, "adult").is_empty());
+        assert!(field_texts(true, "ad").contains(&"adult:".to_owned()));
+    }
+
+    fn did_you_mean_for(q: &str, adult: bool) -> Vec<String> {
+        let (index, _) = index_with(1, 1);
+        let restrict = |n: Node| n;
+        let req = Request {
+            q,
+            pos: None,
+            limit: 8,
+            shown: Shown {
+                adult,
+                hidden: false,
+            },
+            restrict: &restrict,
+            now: 0,
+        };
+        suggest(&index, &req, &CancelToken::new())
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.kind == Kind::DidYouMean)
+            .map(|s| s.insert)
+            .collect()
+    }
+
+    /// A near field name that would write an Adult clause isn't offered
+    /// while Adult is hidden; other corrections are.
+    #[test]
+    fn did_you_mean_writes_no_adult_clause_while_adult_is_hidden() {
+        for (q, fixed) in [("adul:vr", "adult:vr"), ("typ:adult", "type:adult")] {
+            assert!(did_you_mean_for(q, false).is_empty(), "{q}");
+            assert_eq!(did_you_mean_for(q, true), [fixed], "{q}");
+        }
+        assert_eq!(did_you_mean_for("typ:movie", false), ["type:movie"]);
     }
 }
