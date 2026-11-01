@@ -1943,7 +1943,7 @@
       "merged_at": "2026-11-01T04:33Z"
     },
     "X-illustrations": {
-      "status": "review-ready",
+      "status": "fix round: Discover 45.07/45 KB on merge ref; runner \u00a72.26: limit 45 -> 45.2 KB, restore decoding=async",
       "session": "session_01MMjhnAwWQUyJub17EM9cTc",
       "model": "sonnet",
       "brief": "briefs/X-illustrations.md",
@@ -2828,6 +2828,11 @@
       "id": "flag-316-filters-limits",
       "status": "to-send",
       "text": "\u00a72.19/\u00a72.26 (#316 S-filters-2c): \"Filters dialogs (on demand)\" limit 34.4 -> 35.9 KB because the change flow moved there from the Filters first view (first view -2.43 KB; its limit lowered 45 -> 31.0 KB); plus the author's refinements: one forwarder door into filters flows, and Block pre-fills the raw name (shown in full before apply)."
+    },
+    {
+      "id": "flag-317-discover-limit",
+      "status": "to-send",
+      "text": "\u00a72.19/\u00a72.26 (#317 X-illustrations): Discover route limit 45 -> 45.2 KB so state illustrations honour the Show illustrations toggle and Save-Data (\u00a710.19 gate; ~80 B check on that route)."
     }
   ],
   "external_gates": {
@@ -2878,9 +2883,9 @@
     "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage.",
     "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
     "B-update-5b: POST /updates/rollback; binary-level fake-source test (wrong hash/size/oversized/other target); trust survives a rollback; log capture over a whole install; plus the #312 reviewer note: the download writer is not awaited when the overall timeout fires (#312)",
-    "web size headroom (#317): Discover route ~45.0/45 KB (about 4 B left) after X-illustrations; the next Discover-touching change or chunk-hash noise needs headroom work or a \u00a72.26 ruling. Also: first visit with no appearance cache shows the first scene even if the account has illustrations off (#317 decisions).",
     "Updates API (#318): install_unavailable reason only in the message text (client regex-parses \"(reason)\"); add a structured reason field to the error envelope, then drop the regex",
-    "Updates UI (#318): install_failed shows the raw stable code; give each code plain words"
+    "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
+    "Discover route headroom: ~0.1 KB left after #317 (limit 45.2 KB); brief a headroom pass before the next Discover feature. Also #317: first visit with no appearance cache shows the first scene even when the account has illustrations off."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
