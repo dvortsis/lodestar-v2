@@ -3416,6 +3416,12 @@
       "model": "opus",
       "launched": "2026-11-01T12:48Z",
       "brief": "briefs/G-m5b.md"
+    },
+    "X-file-clause-cold": {
+      "session": "session_01MMjhnCgGvjvQEZp75TiWKa",
+      "model": "opus",
+      "launched": "2026-11-01T13:04Z",
+      "brief": "briefs/X-file-clause-cold.md"
     }
   },
   "queued_followups": [
@@ -3430,6 +3436,11 @@
       "id": "S-search-meta-web",
       "what": "Builder fields from /search/fields (hard-coded FIELDS always lists adult: content-safety), ≈ on count_approx. Launch after #335 merges.",
       "at": "2026-11-01T11:29Z"
+    },
+    {
+      "id": "gate-file-cold",
+      "what": "After G-m5a merges: add X-file-clause-cold's cold broad file clause line to search-bench --gate / CI (bench & ci.yml were G-m5a-owned)",
+      "at": "2026-11-01T13:05Z"
     }
   ]
 }
