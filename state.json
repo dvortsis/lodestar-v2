@@ -1942,6 +1942,13 @@
       "model": "sonnet",
       "brief": "briefs/X-illustrations.md",
       "launched_at": "2026-11-01T03:53Z"
+    },
+    "X-settings-polish": {
+      "status": "building",
+      "session": "session_01MMjhnBnH4Dc9AJBWfgzYCj",
+      "model": "sonnet",
+      "brief": "briefs/X-settings-polish.md",
+      "launched_at": "2026-11-01T04:27Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2818,7 +2825,6 @@
     "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
     "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)",
     "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
-    "Settings engine polish (fold into S-settings-2b or next engine touch): SettingField.svelte:150-154 reset `editing` in setAutomatic/when automatic turns true (focused box removed without focusout); .size-limit.mjs:158 pick largest map by gzip size; shared labels-ready helper; SectionForm #field link-wait unit test (#264 review)",
     "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
     "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
     "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)",
@@ -2829,14 +2835,11 @@
     "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under \u00a72.26 if so)",
     "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
     "Logging slice: the \u00a710.10.7 banner while query_logging is on (#277 review; left to \u00a710.10.12)",
-    "lib/ui Lazy.svelte: load-failure message lacks role=alert/status (#277 review)",
-    "Settings engine: lift the reveal + hash-focus logic shared by SectionForm and screens2/GroupedForm into form/reveal.svelte.ts (#277 review)",
     "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
     "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
     "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
     "Search at 10M: measure cold broad file clause (the size scan may cross \u00a73 150 ms on 4 cores); then decide whether to index size in the file index (index-format change) (#283)",
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
-    "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
