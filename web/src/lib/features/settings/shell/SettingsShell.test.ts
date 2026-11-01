@@ -40,6 +40,7 @@ const EN = [
 	'Notifications',
 	'Insights & digest',
 	'General',
+	'Updates',
 	'Logging',
 	'Security',
 	'About'

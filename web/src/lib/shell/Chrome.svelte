@@ -26,6 +26,7 @@
 
 	let Toaster = $state<typeof import('$lib/ui/feedback/Toaster.svelte').default>();
 	let Palette = $state<typeof import('./CommandPalette.svelte').default>();
+	let Stale = $state<typeof import('./StaleBanner.svelte').default>();
 
 	function loadToaster() {
 		if (!Toaster)
@@ -59,6 +60,7 @@
 		return stop;
 	}
 
+	let offStale: (() => void) | undefined;
 	let offCommands: (() => void) | undefined;
 	let offShortcuts: (() => void) | undefined;
 	let offAppearance: (() => void) | undefined;
@@ -96,10 +98,21 @@
 			// when it is down.
 			loadToaster();
 			void import('./ErrorView.svelte');
+			// A newer server build is noticed when the tab is shown again (dev builds have none). The
+			// banner is fetched now, with the check, while this build's chunks still exist: after an
+			// upgrade the server no longer has them. Bare screens (sign-in) can become the app without
+			// remounting this, so the check always starts and only the banner waits for `!bare`.
+			if (!import.meta.env.DEV)
+				void Promise.all([import('./stale'), import('./StaleBanner.svelte')])
+					.then(([mod, banner]) => {
+						if (!disposed) offStale = mod.watchStale(() => (Stale = banner.default));
+					})
+					.catch(() => {});
 		});
 		return () => {
 			disposed = true;
 			stopWaiting();
+			offStale?.();
 			detachKeys?.();
 			offCommands?.();
 			offShortcuts?.();
@@ -144,5 +157,6 @@
 </script>
 
 {#if !bare}<TopBar />{/if}
+{#if !bare && Stale}<Stale />{/if}
 {#if Toaster}<Toaster />{/if}
 {#if !bare && Palette}<Palette bind:open={shell.paletteOpen} />{/if}
