@@ -3272,6 +3272,10 @@
     {
       "t": "2026-11-01T19:05Z",
       "event": "merged #349 X-web-cleanup-1 (38789bcb) after re-measuring near-limit entries on merge result (all pass; tightest /t 7 B, Detail 7 B). Archived. Launched X-appearance-undo (Opus). Open: #350 (safety fix push pending), #351 gate-file-cold (runner MERGE, CI). Next free slot: F-filter-load-fail-closed after #350; openapi-example-size after #350."
+    },
+    {
+      "t": "2026-11-01T19:25Z",
+      "event": "merged #351 gate-file-cold (6551de9c); archived. Open: #350 (CI on 661f9e40), X-appearance-undo (building). 2 slots free; F-filter-load-fail-closed waits for #350."
     }
   ],
   "reviews": {
