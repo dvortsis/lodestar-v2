@@ -3101,6 +3101,11 @@
       "id": "flag-fx5-limits",
       "status": "to-send",
       "text": "FX-5 raised /t route 21.0→21.12 KB and Detail sections 37.31→37.45 KB (runner §2.26) for the connecting glyph, tree height and parsed rows."
+    },
+    {
+      "id": "flag-fx3-stale-resend",
+      "status": "to-send",
+      "text": "FX-3: with no Save button, a stale-revision Keyboard change now re-sends itself once (merged with the server state). Recorded in 2026-11-01-FX-3.md."
     }
   ],
   "external_gates": {
@@ -3171,6 +3176,10 @@
     {
       "t": "2026-11-01T16:24Z",
       "event": "FX-5 size ruling (runner §2.26): /t route 21.0→21.12 KB (StatusPill circle-notch), Detail sections 37.31→37.45 KB (I1 tree height + P4). Flag to owner as flag-fx5-limits."
+    },
+    {
+      "t": "2026-11-01T16:35Z",
+      "event": "FX-3 opened #346 (head cabff97c); Opus review started. Follow-up queued: appearance-undo-focus (Appearance Undo loses focus when its button removes itself; features/appearance, after FX-4 merges). FX-4 #345 CHANGES relayed (enum exemptions, zh 哈希, I3 number/slider/json, bans lookahead) + E2E 45 fails (merge main, settings.routes:116, marker)."
     }
   ],
   "reviews": {
