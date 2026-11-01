@@ -1876,13 +1876,13 @@
       "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus."
     },
     "X-stale-tab": {
-      "status": "launching",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhn91afz7dkXUehAG2sp",
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth)."
+      "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth). | 00:46Z launched Sonnet."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
