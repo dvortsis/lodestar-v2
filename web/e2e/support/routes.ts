@@ -1,6 +1,7 @@
 import { HASH, mockTorrent } from '../detail.fixtures';
 import type { OpenApiMock } from '../mock/openapi-mock';
 import { discoverResponse, showAdultSettings } from '../../src/lib/features/discover/testing';
+import { mockSettings } from './settings-fixture';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -151,7 +152,13 @@ export const ROUTES: RouteCase[] = [
 		// Signed in with setup done, or the page redirects to sign-in (or setup) instead.
 		mock: (m) => m.on('getAuthStatus', { logged_in: true, setup_required: false })
 	},
-	{ name: 'settings', path: '/settings/general', key: true },
+	{
+		name: 'settings',
+		path: '/settings/general',
+		key: true,
+		// The settings index and the General section, so the snapshots render a field.
+		mock: mockSettings
+	},
 	{
 		name: 'torrent',
 		path: `/t/${HASH}`,

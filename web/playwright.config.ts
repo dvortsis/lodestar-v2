@@ -5,7 +5,7 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 
 // Projects (filter with `--project=<name>`; see e2e/README.md):
 //   core                          pre-existing specs + harness self-tests + theme gate
-//   bp<width>-<theme>-<density>   smoke per breakpoint × Riverstone light/dark × density: axe on every
+//   bp<width>-<theme>-<density>   smoke + illustrated states per breakpoint × Riverstone light/dark × density: axe on every
 //                                 route, baselines for key routes (Compact: density-aware routes)
 //   sample-<theme-id>             smoke at 1366 for the rotating 6 non-Riverstone themes; key-route
 //                                 baselines come from the shared 46-theme set
@@ -16,6 +16,7 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 
 const allThemes = !!process.env.E2E_ALL_THEMES || process.argv.join(' ').includes('all-themes');
 const smoke = /smoke\.test\.ts$/;
+const matrixSpecs = [smoke, /states\.test\.ts$/];
 // The theme set's baselines (key screens × 46 non-Riverstone themes, at 1366) are shared by the
 // rotating `sample-*` projects and the nightly `all-themes` project: no project name in the path.
 const themeSnapshots = '{snapshotDir}/{testFileDir}/theme-snapshots/{arg}{-snapshotSuffix}{ext}';
@@ -25,7 +26,7 @@ const matrix: Project<Appearance>[] = BREAKPOINTS.flatMap((bp) =>
 	RIVERSTONE.flatMap((theme) =>
 		DENSITIES.map((density) => ({
 			name: `bp${bp.name}-${theme.id}-${density}`,
-			testMatch: smoke,
+			testMatch: matrixSpecs,
 			use: {
 				viewport: { width: bp.width, height: bp.height },
 				themeId: theme.id,
