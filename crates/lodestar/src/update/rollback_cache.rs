@@ -5,14 +5,17 @@
 //! The answer depends on `<bin>/<version>/migration.json`, the snapshots
 //! beside the store and the store's schema. It's reused only while a
 //! probe of the same inputs (the marker's size and time, the store
-//! folder's time, which any snapshot added, removed or restored changes,
-//! whoever does it) still matches, for [`MAX_AGE`] at most, and never
-//! when an input changed less than [`SETTLE`] ago: a coarse file clock
-//! may not move again for a change right after it. The engine also
-//! clears it on every `updates` event, and `POST /updates/rollback`
-//! never uses it.
+//! folder's time) still matches, for [`MAX_AGE`] at most, and never when
+//! an input changed less than [`SETTLE`] ago: a coarse file clock may not
+//! move again for a change right after it. A cached "restores the store"
+//! also needs one of the snapshots it found to still be a file, checked
+//! on every poll, since not every filesystem (a union or network one)
+//! moves the folder's time when a file in it goes. A stale "not kept" or
+//! "keeps the store" only offers Roll back later. The engine also clears
+//! it on every `updates` event, and `POST /updates/rollback` never uses
+//! it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -65,9 +68,16 @@ impl Probe {
     }
 }
 
-/// The last answer and when it was computed.
+/// The last answer, the snapshots it found, and when it was computed.
 #[derive(Default)]
-pub struct Cache(Mutex<Option<(Probe, Kept, Instant)>>);
+pub struct Cache(Mutex<Option<Entry>>);
+
+struct Entry {
+    probe: Probe,
+    kept: Kept,
+    snapshots: Vec<PathBuf>,
+    at: Instant,
+}
 
 impl Cache {
     /// [`journal::kept`], from the cache when its inputs haven't changed.
@@ -79,16 +89,34 @@ impl Cache {
         // Probed before the answer: a change between the two leaves a
         // probe that no longer matches, so it's computed again next time.
         let probe = Probe::of(ctx, version);
-        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let (Some(p), Some((cached, kept, at))) = (&probe, &*slot)
-            && p == cached
-            && now.saturating_duration_since(*at) < MAX_AGE
+        if let Some(p) = &probe
+            && let Some(kept) = self.cached(p, now)
         {
-            return *kept;
+            return kept;
         }
-        let kept = journal::kept(ctx, version);
-        *slot = probe.filter(|p| p.settled(wall)).map(|p| (p, kept, now));
+        // Computed without the lock: polls don't queue behind the store.
+        let (kept, snapshots) = journal::kept_with(ctx, version);
+        let entry = probe.filter(|p| p.settled(wall)).map(|probe| Entry {
+            probe,
+            kept,
+            snapshots,
+            at: now,
+        });
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = entry;
         kept
+    }
+
+    /// The cached answer, if `probe` matches it, it's young enough, and
+    /// (when it restores the store) one of its snapshots is still a file.
+    fn cached(&self, probe: &Probe, now: Instant) -> Option<Kept> {
+        let slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let e = slot.as_ref()?;
+        let fresh = e.probe == *probe && now.saturating_duration_since(e.at) < MAX_AGE;
+        let there = e.kept != Kept::RestoresStore
+            || e.snapshots
+                .iter()
+                .any(|s| std::fs::symlink_metadata(s).is_ok_and(|m| m.is_file()));
+        (fresh && there).then_some(e.kept)
     }
 
     /// Forgets the answer (an install, a rollback or a restart began).
@@ -97,8 +125,19 @@ impl Cache {
     }
 
     #[cfg(test)]
-    fn is_filled(&self) -> bool {
+    pub fn is_filled(&self) -> bool {
         self.0.lock().unwrap().is_some()
+    }
+
+    /// Fills the cache as if every input had settled long ago.
+    #[cfg(test)]
+    pub fn fill_for_test(&self, ctx: &journal::Ctx, version: &str, now: Instant) {
+        self.kept_at(
+            ctx,
+            version,
+            SystemTime::now() + Duration::from_secs(3600),
+            now,
+        );
     }
 }
 
@@ -117,8 +156,8 @@ mod tests {
     }
 
     /// A store folder with `0.9.0`'s marker: it migrated the store from
-    /// `latest - 1`, and its `pre-v<latest>` snapshot is there. `later` is far enough
-    /// past every input's time for them to count as settled.
+    /// `latest - 1`, and its `pre-v<latest>` snapshot is there. `later` is
+    /// far enough past every input's time for them to count as settled.
     fn setup() -> Setup {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("data");
@@ -224,18 +263,40 @@ mod tests {
         assert!(!c.is_filled());
 
         c.kept_at(&s.ctx, "0.9.0", s.later, t);
-        // Gone, with a probe that (as if the file clock missed it) still
-        // matches: only the age limit catches that.
-        std::fs::remove_file(snapshot(&s)).unwrap();
-        let p = Probe::of(&s.ctx, "0.9.0").unwrap();
-        *c.0.lock().unwrap() = Some((p.clone(), Kept::RestoresStore, t));
         assert_eq!(
             c.kept_at(&s.ctx, "0.9.0", s.later, t + MAX_AGE / 2),
             Kept::RestoresStore,
             "within the age limit, a matching probe is trusted"
         );
-        *c.0.lock().unwrap() = Some((p, Kept::RestoresStore, t));
-        let stale = c.kept_at(&s.ctx, "0.9.0", s.later, t + MAX_AGE);
-        assert_eq!(stale, Kept::Missing, "past the age limit");
+        // A "keeps the store" answer older than the limit, with a probe
+        // that still matches, is computed again.
+        let probe = Probe::of(&s.ctx, "0.9.0").unwrap();
+        *c.0.lock().unwrap() = Some(Entry {
+            probe,
+            kept: Kept::KeepsStore,
+            snapshots: vec![],
+            at: t,
+        });
+        let aged = c.kept_at(&s.ctx, "0.9.0", s.later, t + MAX_AGE);
+        assert_eq!(aged, Kept::RestoresStore, "past the age limit");
+    }
+
+    /// A snapshot gone while the folder's time didn't move (a union or
+    /// network filesystem): the probe still matches, but the cached
+    /// "restores the store" isn't trusted without its file.
+    #[test]
+    fn a_snapshot_gone_behind_an_unmoved_folder_time_is_seen() {
+        let s = setup();
+        let c = Cache::default();
+        let t = Instant::now();
+        assert_eq!(c.kept_at(&s.ctx, "0.9.0", s.later, t), Kept::RestoresStore);
+        std::fs::remove_file(snapshot(&s)).unwrap();
+        // As if the folder's time hadn't moved: the probe after removal.
+        let probe = Probe::of(&s.ctx, "0.9.0").unwrap();
+        c.0.lock().unwrap().as_mut().unwrap().probe = probe;
+        assert_eq!(c.kept_at(&s.ctx, "0.9.0", s.later, t), Kept::Missing);
+        // A folder in its place isn't the snapshot either.
+        std::fs::create_dir(snapshot(&s)).unwrap();
+        assert_eq!(c.kept_at(&s.ctx, "0.9.0", s.later, t), Kept::Missing);
     }
 }

@@ -187,28 +187,39 @@ pub enum Kept {
 /// version that can't be read fails closed ([`Kept::Missing`]): its
 /// marker can't be found, so nothing says the store is safe to keep.
 pub fn kept(ctx: &Ctx, failed: &str) -> Kept {
+    kept_with(ctx, failed).0
+}
+
+/// [`kept`], and for [`Kept::RestoresStore`] the snapshots it found (any
+/// one of them still there keeps the answer).
+pub fn kept_with(ctx: &Ctx, failed: &str) -> (Kept, Vec<PathBuf>) {
     let Some(v) = layout::parse_version(failed) else {
-        return Kept::Missing;
+        return (Kept::Missing, Vec::new());
     };
     let m: Migration = match layout::read_json(&ctx.bin.overlay(&v).join("migration.json")) {
-        Ok(None) => return Kept::KeepsStore,
+        Ok(None) => return (Kept::KeepsStore, Vec::new()),
         Ok(Some(m)) => m,
-        Err(_) => return Kept::Missing,
+        Err(_) => return (Kept::Missing, Vec::new()),
     };
-    let listed = snapshots::list(&ctx.db).is_ok_and(|all| {
-        all.iter().any(|s| {
-            !m.before.contains(&s.name)
-                && matches!(s.kind, SnapKind::PreMigration { version, .. } if version == m.from + 1)
+    let found: Vec<PathBuf> = snapshots::list(&ctx.db)
+        .map(|all| {
+            all.into_iter()
+                .filter(|s| {
+                    !m.before.contains(&s.name)
+                        && matches!(s.kind, SnapKind::PreMigration { version, .. } if version == m.from + 1)
+                })
+                .map(|s| s.path)
+                .collect()
         })
-    });
-    if listed {
-        return Kept::RestoresStore;
+        .unwrap_or_default();
+    if !found.is_empty() {
+        return (Kept::RestoresStore, found);
     }
     let schema = store_schema(&ctx.db);
     if matches!(schema, Ok(None)) || schema == Ok(Some(m.from)) {
-        Kept::KeepsStore
+        (Kept::KeepsStore, Vec::new())
     } else {
-        Kept::Missing
+        (Kept::Missing, Vec::new())
     }
 }
 

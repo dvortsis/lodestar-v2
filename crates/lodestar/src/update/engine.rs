@@ -3058,7 +3058,8 @@ mod tests {
     /// `restores_store` says whether a rollback restores the snapshot of
     /// a migration; a snapshot removed after a status is seen on the next
     /// one (never `available` without it), and asking for the rollback
-    /// checks afresh.
+    /// checks afresh. (Every input here was just written, so nothing is
+    /// cached: `rollback_cache`'s own tests cover the cache.)
     #[tokio::test]
     async fn rollback_says_whether_it_restores_the_store_and_sees_a_removed_snapshot() {
         let e = env(Mode::Notify);
@@ -3099,6 +3100,28 @@ mod tests {
             e.engine.rollback_request().await.unwrap_err(),
             UpdatesError::RollbackUnavailable("snapshot_missing")
         );
+    }
+
+    /// Every `updates` event clears Roll back's cached check (an install,
+    /// a rollback or a restart may change what it found).
+    #[tokio::test]
+    async fn an_updates_event_clears_the_rollback_cache() {
+        let e = env(Mode::Notify);
+        activate(&e);
+        let ctx = journal::Ctx {
+            bin: Bin::open(&e.data).unwrap(),
+            db: e.dir.path().join("lodestar.db"),
+            index_root: e.data.join("index"),
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            image_version: "0.5.0".into(),
+        };
+        e.engine
+            .inner
+            .rollback_kept
+            .fill_for_test(&ctx, "0.5.0", Instant::now());
+        assert!(e.engine.inner.rollback_kept.is_filled());
+        e.engine.publish(UpdatesState::Restarting, None, None);
+        assert!(!e.engine.inner.rollback_kept.is_filled());
     }
 
     /// Crash safety of the route's entry: before the graceful shutdown
