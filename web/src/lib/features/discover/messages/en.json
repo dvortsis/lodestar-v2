@@ -43,5 +43,5 @@
 	"discover_newest_unit": "torrents",
 	"discover_key_next": "Next torrent",
 	"discover_key_previous": "Previous torrent",
-	"discover_keys_unavailable": "Keyboard shortcuts (j and k) are unavailable right now. Reload the page to try again."
+	"discover_keys_unavailable": "Keyboard shortcuts for moving through the list are unavailable right now. Reload the page to try again."
 }

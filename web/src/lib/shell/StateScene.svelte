@@ -25,7 +25,7 @@
 </script>
 
 {#if shown && scene}
-	<picture class="block overflow-hidden rounded-box bg-base-100">
+	<picture data-scene class="block overflow-hidden rounded-box bg-base-100">
 		<source type="image/avif" srcset={scene.srcset.avif} sizes="160px" />
 		<source type="image/webp" srcset={scene.srcset.webp} sizes="160px" />
 		<img

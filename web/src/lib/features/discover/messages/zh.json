@@ -43,5 +43,5 @@
 	"discover_newest_unit": "个种子",
 	"discover_key_next": "下一个种子",
 	"discover_key_previous": "上一个种子",
-	"discover_keys_unavailable": "键盘快捷键（j 和 k）暂时不可用。请刷新页面重试。"
+	"discover_keys_unavailable": "用于在列表中移动的键盘快捷键暂时不可用。请重新加载页面后再试。"
 }

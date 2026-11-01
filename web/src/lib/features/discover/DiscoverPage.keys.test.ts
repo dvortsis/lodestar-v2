@@ -26,9 +26,13 @@ describe('Discover when the key registry fails to load', () => {
 		stubLayout(720);
 		get.mockResolvedValue({ data: undefined, error: undefined });
 		render(DiscoverPage, { search: new URLSearchParams() });
-		await waitFor(() => expect(toasts.items.map((t) => t.text).join()).toMatch(/j and k/), {
-			timeout: 10_000
-		});
+		await waitFor(
+			() => expect(toasts.items.map((t) => t.text).join()).toMatch(/Keyboard shortcuts/),
+			{
+				timeout: 10_000
+			}
+		);
+		expect(toasts.items).toHaveLength(1);
 		expect(toasts.items[0]?.kind).toBe('info');
 	});
 });
