@@ -26,7 +26,7 @@
 	let go: (hash: string) => unknown = () => {};
 	void import('./send').then(
 		(s) =>
-			s.sendLabel().then((l) => {
+			s.sendLabel(true).then((l) => {
 				go = s.sendHash;
 				label = l;
 			}),
@@ -46,10 +46,9 @@
 		if (!detail) return;
 		const { hash, hash_v2, name } = detail;
 		const generation = detailGeneration();
-		const mod = await import('$lib/features/filters/flows-door').then(
-			(door) => door.load(),
-			() => null
-		);
+		const mod = await import('$lib/features/filters/flows-door')
+			.then((door) => door.load())
+			.catch(() => (void import('./commands').then((c) => c.failed()), null));
 		if (!mod) return; // offline or a stale build: the button stays, a press tries again
 		if (gone || generation !== detailGeneration() || hash !== detail?.hash) return;
 		Block = mod.BlockThisDialog;
@@ -78,5 +77,9 @@
 	<Button dense data-testid="detail-block" onclick={block}>{m.detail_block()}</Button>
 {/if}
 {#if Block && target && target.hash === detail?.hash}
-	<Block torrent={target} bind:open={blocking} />
+	<Block
+		torrent={target}
+		bind:open={blocking}
+		onapplied={() => dispatchEvent(new Event('ls-stale'))}
+	/>
 {/if}

@@ -125,3 +125,13 @@ describe('the s key', () => {
 		setCommandTarget(null);
 	});
 });
+
+describe('freshness', () => {
+	it('asks again when the drawer asks fresh, so a renamed client shows its new name', async () => {
+		get.mockResolvedValueOnce(section([{ id: 'a', name: 'Home' }]));
+		expect(await mod.clientName()).toBe('Home');
+		get.mockResolvedValueOnce(section([{ id: 'a', name: 'Seedbox' }]));
+		expect(await mod.clientName(true)).toBe('Seedbox');
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+});

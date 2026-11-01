@@ -8,7 +8,7 @@ import { commandTarget as target } from './target';
 export { commandTarget, setCommandTarget, setDrawerTarget } from './target';
 
 // A failed chunk load is an interaction that did nothing: say so.
-const failed = () => toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
+export const failed = () => toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
 
 let registered: Promise<void> | undefined;
 

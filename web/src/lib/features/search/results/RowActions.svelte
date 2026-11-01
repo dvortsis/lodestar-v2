@@ -1,3 +1,11 @@
+<script module lang="ts">
+	import { results } from './results.svelte';
+	// A rule was added by "Block this…" (here or in the drawer, which fires `ls-stale`): refetch, so
+	// a hidden torrent drops. With no query yet `reload` makes no request.
+	if (typeof addEventListener === 'function')
+		addEventListener('ls-stale', () => void results.reload());
+</script>
+
 <script lang="ts">
 	// Search's row actions (§10.4): Copy magnet (icon + label in Comfortable) and More. They show on
 	// hover and focus, and always under a coarse pointer (row.css). Loaded with the first results,
@@ -124,5 +132,9 @@
 	{@render moreButton({ 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, more)}
 {/if}
 {#if Block}
-	<Block torrent={{ hash: hit.hash, hash_v2: hit.hash_v2, name: hit.name }} bind:open={blocking} />
+	<Block
+		torrent={{ hash: hit.hash, hash_v2: hit.hash_v2, name: hit.name }}
+		bind:open={blocking}
+		onapplied={() => dispatchEvent(new Event('ls-stale'))}
+	/>
 {/if}

@@ -8,6 +8,7 @@ import { torrentDetail } from '$lib/features/detail/fixtures';
 import DetailActions from '$lib/features/detail/DetailActions.svelte';
 import { hit } from '$lib/features/search/results/fixtures';
 import RowActions from '$lib/features/search/results/RowActions.svelte';
+import { results } from '$lib/features/search/results/results.svelte';
 import { mockFetch } from './flows/testing/fetch';
 import { HOSTILE, applied, finished, strengthening } from './flows/testing/fixtures';
 
@@ -112,6 +113,23 @@ describe.each(Object.entries(entries))('Block this… from %s', (_, entry) => {
 		await fireEvent.click(screen.getByTestId('change-cancel'));
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(net.to('/filters/apply')).toEqual([]);
+	});
+
+	it('a successful apply refetches the list so the hidden torrent drops; Cancel or refusal does not', async () => {
+		const reload = vi.spyOn(results, 'reload').mockResolvedValue();
+		await open('Lantern.Keeper.1');
+		await opened();
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(reload).not.toHaveBeenCalled();
+		await entry.press();
+		await opened();
+		await fireEvent.click(screen.getByTestId('block-preview'));
+		await waitFor(() => expect(dialogState()).toBe('review'));
+		await fireEvent.click(screen.getByTestId('change-apply'));
+		await waitFor(() => expect(dialogState()).toBe('done'));
+		await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+		reload.mockRestore();
 	});
 
 	it('a refused apply shows the server’s message and sends nothing more', async () => {
