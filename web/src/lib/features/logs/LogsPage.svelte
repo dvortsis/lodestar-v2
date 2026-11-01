@@ -255,7 +255,11 @@
 		</Banner>
 	{/if}
 
-	<div class="flex flex-wrap items-center gap-2" role="toolbar" aria-label={m.logs_toolbar()}>
+	<div
+		class="logs-toolbar flex flex-wrap items-center gap-2"
+		role="toolbar"
+		aria-label={m.logs_toolbar()}
+	>
 		<Select
 			dense
 			aria-label={m.logs_level_label()}
@@ -445,6 +449,19 @@
 	}
 	.logs-filter {
 		max-width: 16rem;
+	}
+	@media (min-width: 64rem) {
+		.logs-toolbar {
+			flex-wrap: nowrap;
+		}
+		.logs-toolbar :global(select) {
+			width: auto;
+			flex: none;
+		}
+		.logs-toolbar :global(.logs-filter) {
+			flex: 1 1 auto;
+			max-width: var(--manuscript-width);
+		}
 	}
 	.logs-level {
 		width: 5rem;

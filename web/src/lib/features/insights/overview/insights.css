@@ -108,16 +108,6 @@
 	outline: var(--focus-ring-width) solid var(--color-primary);
 	outline-offset: var(--focus-ring-offset);
 }
-@media (pointer: coarse) {
-	.ins-link,
-	.ins-stage {
-		min-height: var(--target-min);
-	}
-	.ins-link {
-		display: inline-flex;
-		align-items: center;
-	}
-}
 
 /* Levels */
 .ins-section {
@@ -280,17 +270,6 @@
 	overflow-y: auto;
 }
 
-/* Scenes: copy and the next step first, art after. */
-.ins-scene {
-	display: flex;
-	flex-direction: column;
-	gap: calc(var(--spacing) * 4);
-	align-items: flex-start;
-	min-height: var(--art-height-small);
-}
-.ins-scene-art {
-	min-height: var(--art-height-small);
-}
 .ins-counters {
 	display: flex;
 	flex-wrap: wrap;
@@ -372,7 +351,7 @@
 	.ins-pair {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		align-items: start;
+		align-items: stretch;
 		gap: calc(var(--spacing) * 6);
 	}
 	.ins-detail {

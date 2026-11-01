@@ -123,7 +123,7 @@
 		<div class="ins-card-head">
 			<h3 class="ins-card-title">{m.insights_overview_annotations()}</h3>
 			<a
-				class="ins-link"
+				class="ins-link target"
 				href={resolve(csvHref('annotations', query) as Route)}
 				download
 				data-testid="insights-annotations-csv">{m.insights_overview_csv()}</a

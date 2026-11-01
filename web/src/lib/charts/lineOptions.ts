@@ -103,7 +103,10 @@ export function buildOptions(args: {
 	return {
 		width: args.width,
 		height: args.height,
-		legend: { live: true },
+		legend: {
+			live: true,
+			markers: { width: 0, fill: (_u, i) => palette.series[i - 1] ?? 'transparent' }
+		},
 		cursor: { drag: { x: false, y: false } },
 		scales: { x: { time: true }, y: { range: (_u, _min, max) => [0, max > 0 ? max * 1.1 : 1] } },
 		axes: [

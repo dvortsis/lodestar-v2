@@ -28,7 +28,7 @@
 	{#each STAGES as stage (stage)}
 		<li class="ins-card">
 			<a
-				class="ins-link ins-card-title"
+				class="ins-link target ins-card-title"
 				href={resolve(stageHref(stage, query, { compare: true }) as Route)}
 				data-testid="insights-detail-{stage}">{names[stage]()}</a
 			>

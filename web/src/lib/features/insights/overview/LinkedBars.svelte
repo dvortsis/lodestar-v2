@@ -43,8 +43,10 @@
 			<div class="ins-item-row">
 				<span>
 					{#if item.href}
-						<a class="ins-link" href={resolve(item.href as Route)} aria-describedby={describedby}
-							>{item.label}</a
+						<a
+							class="ins-link target"
+							href={resolve(item.href as Route)}
+							aria-describedby={describedby}>{item.label}</a
 						>
 					{:else}
 						{item.label}

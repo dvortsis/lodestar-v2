@@ -62,7 +62,7 @@
 			{/if}
 			{#if csv}
 				<a
-					class="ins-link"
+					class="ins-link target"
 					href={resolve(csvHref(csv, query) as Route)}
 					download
 					data-testid="{testid}-csv">{m.insights_overview_csv()}</a
