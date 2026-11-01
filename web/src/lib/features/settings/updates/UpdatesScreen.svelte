@@ -185,6 +185,16 @@
 		if (answer === 'skip') await store.skip(version);
 	}
 
+	// Advanced loads when it is first opened.
+	let Advanced = $state<Component<{ store: UpdatesStore }> | false>();
+	function openAdvanced(e: Event) {
+		if (!(e.currentTarget as HTMLDetailsElement).open || Advanced) return;
+		import('./Advanced.svelte').then(
+			(p) => (Advanced = p.default),
+			() => (Advanced = false)
+		);
+	}
+
 	let Parts = $state<Component<{ store: UpdatesStore }> | false>();
 	function loadParts() {
 		Parts = undefined;
@@ -474,6 +484,19 @@
 					</div>
 				{/if}
 			</section>
+		{/if}
+
+		{#if settings}
+			<details ontoggle={openAdvanced} data-testid="updates-advanced-section">
+				<summary class="cursor-pointer text-label font-semibold"
+					>{m.settings_updates_adv_heading()}</summary
+				>
+				{#if Advanced}
+					<Advanced {store} />
+				{:else if Advanced === false}
+					<p>{m.settings_updates_part_failed()}</p>
+				{/if}
+			</details>
 		{/if}
 
 		{#if Parts}

@@ -11,6 +11,8 @@ export interface Settings {
 	/** The saved sentinel: `auto`, `on` or `off`. */
 	securityFixes: string;
 	revision: number;
+	/** Every field's value as the server last said it (Advanced reads these). */
+	values: Record<string, unknown>;
 	/** The reason a field is locked (the environment variable), by field name. */
 	locks: Record<string, string | 'read_only'>;
 }
@@ -113,6 +115,7 @@ export class UpdatesStore {
 				level: f.level.value,
 				securityFixes: String(f.security_fixes?.value ?? 'auto'),
 				revision: r.revision,
+				values: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.value])),
 				locks
 			};
 		} catch (e) {
@@ -164,7 +167,7 @@ export class UpdatesStore {
 		});
 
 	/** Saves one setting; the server's value comes back with the new revision. A locked one is refused here. */
-	async set(name: 'mode' | 'level' | 'security_fixes', value: string) {
+	async set(name: string, value: unknown) {
 		if (!this.settings || this.settings.locks[name]) return false;
 		const revision = this.settings.revision;
 		const ok = await this.run('setting', 'setting', async () => {

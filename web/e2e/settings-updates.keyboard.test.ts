@@ -37,7 +37,18 @@ const values: Values[] = [
 		section: 'updates',
 		revision: 1,
 		restart_required: [],
-		fields: { mode: field('notify'), level: field('fixes'), security_fixes: field('auto') }
+		fields: {
+			mode: field('notify'),
+			level: field('fixes'),
+			security_fixes: field('auto'),
+			channel: field('stable'),
+			wait_days: field(3),
+			window: field('02:00-05:00'),
+			allow_reindex: field(false),
+			notify_before: field(false),
+			notify_after: field(false),
+			notify_failure: field(true)
+		}
 	}
 ];
 
@@ -147,5 +158,38 @@ test.describe('keyboard: Settings → Updates', () => {
 		await kbd.press('Enter');
 		await expect.poll(() => sent.map((s) => s.op)).toEqual(['checkUpdates', 'skipUpdate']);
 		expect(sent[1]?.body).toEqual({ version: '0.5.3' });
+	});
+
+	test('Advanced: the channel dialog by keyboard, Cancel sends nothing', async ({
+		page,
+		go,
+		kbd,
+		mock
+	}) => {
+		const patches: unknown[] = [];
+		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
+		const inner = new SettingsBackend(index, values);
+		inner.attach(mock as unknown as MockLike);
+		on('getUpdates', () => ({ status: 200, body: status() }));
+		on('getSystem', () => ({ status: 200, body: { deployment: { kind: 'docker' } } }));
+		await go('/settings/updates');
+		const summary = page.getByText('Advanced', { exact: true });
+		await kbd.tabTo(summary, 300);
+		await kbd.press('Enter');
+		const nightly = page.getByTestId('updates-channel-nightly');
+		await expect(nightly).toBeVisible();
+		await kbd.tabTo(page.getByTestId('updates-channel-stable'), 20);
+		await kbd.press('ArrowDown');
+		await kbd.press('ArrowDown');
+		const dialog = page.getByRole('dialog', { name: 'Switch to Nightly?' });
+		await expect(dialog).toBeVisible();
+		await expect(dialog).toContainText('for testing only');
+		await expectNoA11yViolations(page);
+		await kbd.press('Escape');
+		await expect(dialog).toBeHidden();
+		await expect(page.getByTestId('updates-channel-stable')).toBeChecked();
+		expect(patches).toEqual([]);
+		expect(inner.patches).toEqual([]);
+		await expectNoA11yViolations(page);
 	});
 });
