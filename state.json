@@ -1917,7 +1917,7 @@
       "pr": 313,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet. | 03:12Z draft #313: only ~40 B found (css split). Runner ruled (§2.26) option 1 as a MOVE: event client+SSE (~2.3 KB) from drawer and /t first view to Detail sections; lower drawer and /t limits, raise Detail sections by at most the moved bytes (+10%), keep >=0.2 KB for magnet toasts."
+      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet. | 03:12Z draft #313: only ~40 B found (css split). Runner ruled (§2.26) option 1 as a MOVE: event client+SSE (~2.3 KB) from drawer and /t first view to Detail sections; lower drawer and /t limits, raise Detail sections by at most the moved bytes (+10%), keep >=0.2 KB for magnet toasts. | 03:13Z measured move: drawer 28,899->26,637, /t 22,539->20,287, sections 34,458->36,967 (+0.25 KB compression cost). Runner ruled (a): sections limit 37.3, drawer 27.2, /t 20.8, toasts added."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
