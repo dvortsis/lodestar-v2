@@ -3276,8 +3276,8 @@
   "open_prs": {
     "333": {
       "slice": "X-web-polish-1101d",
-      "head": "b78beb8",
-      "verdict": "CHANGES r1: Search results +358 B (40,011->40,369) -> lazy settle(); plural; keep-loop 200/page. Item 2 dropped (no limit change).",
+      "head": "636de004",
+      "verdict": "CHANGES r2 (small): settle import catch -> reload; size +139 B accepted §2.26",
       "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg"
     },
     "334": {
