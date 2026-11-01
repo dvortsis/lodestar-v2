@@ -2573,7 +2573,12 @@
     "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
     "2026-10-23 00:58 owner (session_01SE4bp9YdZmHr8RN4FHpbmm, verified user message 'raise the cap by 50%'): max_launches_per_day 40 -> 60. Branch claude/zealous-lovelace-qv6e22.",
     "2026-10-23 01:10 owner delegated 8 questions (deciding factors UX + performance). Runner decisions: (1) DHT session question resolved = §2.16; rule indexes -> B8; typed held reason -> later migration. (2) #66 closes on #97 merge. (3) all rule shapes held to 50us via realistic mixed-shape case (F-perf), per-shape reported, hostile-input linear; UX guard if a shape can't meet budget. (4) snapshots purge + 90-day expiry (S-snapshots). (5) F-near: note only. (6) separate nightly key + release env tags-only w/ reviewer (P-release; owner sets env/secrets). (7) recovery key: accepted risk. (8) filter session told no self-merge; no branch protection (all sessions share the owner account, so protection can't distinguish them and would block runner merges).",
-    "2026-10-23 01:07 owner (verified): approved runner process change (#106) and deferred code-signing cert ('not selling this commercially'). Told P-release, M6-win, DOC-install."
+    "2026-10-23 01:07 owner (verified): approved runner process change (#106) and deferred code-signing cert ('not selling this commercially'). Told P-release, M6-win, DOC-install.",
+    {
+      "at": "2026-11-01T12:35Z",
+      "by": "runner §2.26",
+      "what": "X-web-polish-1101e: StateScene with no appearance cache shows no scene (no observer, ~0 B); Discover j/k failure toast dropped (+0.45 KB); retry-on-press only if <=0.05 KB"
+    }
   ],
   "runner_notes": {
     "106": "02:55 MERGED d243361 (CI fully green). Broadcast sent to 20 sessions. Next heartbeat: verify each branch contains d243361; chase; report filter-session merges to owner. Owner step: ruleset on main.",
