@@ -1,5 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => vi.unstubAllGlobals());
 import {
 	formatCompact,
 	formatCount,
@@ -13,6 +15,7 @@ import Funnel from './Funnel.svelte';
 import { COMPARE_KPI, IMPORT_ANNOTATIONS, overviewFixture } from './fixtures';
 import ImportMarkers from './ImportMarkers.svelte';
 import { importText } from './imports';
+import Movement from './Movement.svelte';
 import KpiRow from './KpiRow.svelte';
 import Segments from './Segments.svelte';
 import ServePanel from './ServePanel.svelte';
@@ -247,6 +250,22 @@ describe('imports (IMP-5)', () => {
 			'Import finished: 250,000 new, 1,234 already known'
 		);
 		expect(importText(IMPORT_ANNOTATIONS[2]!, 'en')).toBe('Import removed: 4,321 deleted');
+	});
+	it('makes restart and pause notes keyboard-reachable too', () => {
+		vi.stubGlobal(
+			'ResizeObserver',
+			class {
+				observe() {}
+				disconnect() {}
+				unobserve() {}
+			}
+		);
+		render(Movement, { overview: o, query: q, rangeText: 'the last 7 days' });
+		for (const kind of ['restart', 'paused']) {
+			const li = screen.getByTestId(`insights-annotation-${kind}`);
+			expect(li.getAttribute('tabindex')).toBe('0');
+			expect(li.getAttribute('aria-label')).toContain(li.querySelector('span')!.textContent!);
+		}
 	});
 	it('lists keyboard-reachable markers, and nothing without an import', () => {
 		const { unmount } = render(ImportMarkers, { annotations: IMPORT_ANNOTATIONS, tz: 'UTC' });

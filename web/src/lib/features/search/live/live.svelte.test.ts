@@ -1,4 +1,5 @@
 // The live controller (runes need a `.svelte` test file). Waits are conditions, never sleeps.
+import { flushSync } from 'svelte';
 import { afterEach, expect, it, vi } from 'vitest';
 import { page } from '../results/fixtures';
 import type { ResultsQuery } from '../results/results.svelte';
@@ -8,6 +9,7 @@ const WAIT = { timeout: 10_000 };
 
 const post = vi.hoisted(() => vi.fn());
 const del = vi.hoisted(() => vi.fn());
+const ev = vi.hoisted(() => ({ status: (): string => 'live' }));
 const bus = vi.hoisted(() => ({
 	live: undefined as undefined | ((e: { id: string; matched: number; through: number }) => void),
 	resync: undefined as undefined | (() => void),
@@ -19,7 +21,9 @@ vi.mock('$lib/api/client', async (original) => ({
 }));
 vi.mock('$lib/state/events.svelte', () => ({
 	events: {
-		status: 'live',
+		get status() {
+			return ev.status();
+		},
 		on: (topic: string, h: never, o: { onResync?: () => void } = {}) => {
 			if (topic === 'search_live') {
 				bus.live = h;
@@ -288,5 +292,77 @@ it('announces a count that changed inside the throttle window on a later tick', 
 		expect(announce).toHaveBeenLastCalledWith(4);
 	} finally {
 		vi.useRealTimers();
+	}
+});
+
+let statusNow = $state('live');
+let totalNow = $state(10);
+const track = () => {
+	let reads = 0;
+	ev.status = () => {
+		reads++;
+		return statusNow;
+	};
+	post.mockReset();
+	del.mockReset();
+	del.mockResolvedValue(undefined);
+	registers('a1');
+	const live = createLive({
+		shown: () => ({ query: q, total: totalNow, approx: false }),
+		paused: () => false,
+		intervalMs: 30_000
+	});
+	stops.push(live.start());
+	return { live, reads: () => reads };
+};
+const reset = () => {
+	ev.status = () => 'live';
+	statusNow = 'live';
+	vi.useRealTimers();
+};
+
+it('coalesces the visibility and status re-registrations of one return', async () => {
+	vi.useFakeTimers();
+	try {
+		const { live } = track();
+		await live.follow(q);
+		// The tab is hidden and the stream is down for the same 30 s: both paths fire on return.
+		const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+		document.dispatchEvent(new Event('visibilitychange'));
+		statusNow = 'down';
+		flushSync();
+		await vi.advanceTimersByTimeAsync(30_000);
+		hidden.mockReturnValue(false);
+		document.dispatchEvent(new Event('visibilitychange'));
+		statusNow = 'live';
+		flushSync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(liveCalls()).toHaveLength(2); // one re-registration, not two
+		hidden.mockRestore();
+	} finally {
+		reset();
+	}
+});
+
+it('the status effect does not track search state', async () => {
+	vi.useFakeTimers();
+	try {
+		const { live, reads } = track();
+		await live.follow(q);
+		// Only the status path fires (the tab stays visible): `again()` runs inside the effect.
+		statusNow = 'down';
+		flushSync();
+		await vi.advanceTimersByTimeAsync(30_000);
+		statusNow = 'live';
+		flushSync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(liveCalls()).toHaveLength(2);
+		// A search-state change must not re-run the effect.
+		const before = reads();
+		totalNow = 11;
+		flushSync();
+		expect(reads()).toBe(before);
+	} finally {
+		reset();
 	}
 });

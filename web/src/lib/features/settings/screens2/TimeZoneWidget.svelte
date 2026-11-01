@@ -32,7 +32,10 @@
 	const saved = () => (typeof f.value === 'string' ? f.value : '');
 	let text = $state(saved());
 	let sent = saved();
+	// A bad name is flagged (aria-invalid) as typed but announced (role="alert") only once the
+	// field is left, so a screen reader doesn't speak on every key; once shown it stays until valid.
 	let invalid = $state(false);
+	let announced = $state(false);
 	// An Undo, a conflict or another tab changing the value replaces what's typed.
 	$effect(() => {
 		const v = saved();
@@ -40,10 +43,12 @@
 		sent = v;
 		text = v;
 		invalid = false;
+		announced = false;
 	});
 	function input(value: string) {
 		text = value;
 		invalid = !knownZone(value);
+		if (!invalid) announced = false;
 		if (invalid) return;
 		sent = value;
 		form.set(key, value);
@@ -52,7 +57,7 @@
 
 <Input
 	{...controlProps}
-	aria-describedby={[controlProps['aria-describedby'], invalid ? errorId : undefined]
+	aria-describedby={[controlProps['aria-describedby'], invalid && announced ? errorId : undefined]
 		.filter(Boolean)
 		.join(' ') || undefined}
 	aria-invalid={invalid || controlProps['aria-invalid'] ? true : undefined}
@@ -64,9 +69,12 @@
 	spellcheck={false}
 	autocomplete="off"
 	oninput={(e) => input(e.currentTarget.value)}
-	onblur={() => form.blur(key)}
+	onblur={() => {
+		announced = invalid;
+		form.blur(key);
+	}}
 />
-{#if invalid}<p id={errorId} class="text-label text-error" role="alert">
+{#if invalid && announced}<p id={errorId} class="text-label text-error" role="alert">
 		{m.settings_screen_time_zone_unknown()}
 	</p>{/if}
 <datalist id={listId}>
