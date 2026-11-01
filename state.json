@@ -1855,14 +1855,15 @@
       "note": " 23:13Z merged #301 (a5e6b97c); session archived."
     },
     "X-alert-search-headroom": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnAuLgRm2txBmt4x9j5",
       "pr": 304,
       "attempt": 0,
       "review_rounds": 0,
       "notes": "23:11Z brief briefs/X-alert-search-headroom.md.",
-      "note": " 23:12Z launched (Opus) on branch slice/X-alert-search-headroom. 00:05Z PR #304 head 96d693ac: Alert 45,976->45,404; Search results 43,288->42,744; Alerts 29,168->25,732 (limit 26.3); toolbar 4,597->4,290 (4.6); Settings first views -540 B. manualChunks claimed blocked by preserveEntrySignatures strict. Reviewer session_01MMjhn9m5pFCfKTgc6G79zR (also verifies that claim). #299 head a02f9fa6 marker removed, merge on green; #303 MERGE, merge on green."
+      "note": " 23:12Z launched (Opus) on branch slice/X-alert-search-headroom. 00:05Z PR #304 head 96d693ac: Alert 45,976->45,404; Search results 43,288->42,744; Alerts 29,168->25,732 (limit 26.3); toolbar 4,597->4,290 (4.6); Settings first views -540 B. manualChunks claimed blocked by preserveEntrySignatures strict. Reviewer session_01MMjhn9m5pFCfKTgc6G79zR (also verifies that claim). #299 head a02f9fa6 marker removed, merge on green; #303 MERGE, merge on green. 00:25Z reviewer MERGE (sizes reproduced, groups claim verified); merged #304 (064f69c8). Sessions archived. Runner accepts Alerts 26.3 / toolbar 4.6 limits (0.5 KB headroom target, §2.26).",
+      "merge": "064f69c8"
     },
     "X-pipeline-1101": {
       "status": "running",
@@ -2728,7 +2729,10 @@
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
     "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
-    "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too."
+    "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too.",
+    "first-load.mjs modulesIn(): throw when the manifest exists but the graph file is missing, so the first-load guard cannot pass vacuously (#304 review b)",
+    "Unhandled rejection on failed chunk loads: AlertsListPage.svelte:101, AlertDetailPage, DetailHostBody `void import(...)` without catch; repo-wide sweep (#304 review c)",
+    "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
