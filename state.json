@@ -525,7 +525,7 @@
       "pr": 302,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": " | 23:20Z brief briefs/S-wizard.md (part 1: shell, network, how-it-works, intensity, storage, updates, done; part 2: import, client, packs). | 23:14Z launched Sonnet. | 23:50Z draft PR #302 head 12330a2b; engine from a 2nd lazy root regroups chunks: Settings section +1.36, Notifications +1.46 KB, Alert +10 B over, CSS +8 B over. Runner ruled (b): import engine via Settings lazy root entry; CSS reuse; else park until headroom lands. No limit raises. | 23:52Z no clean import path for the engine; runner ruled C: park draft, CSS pass locally; asked X-alert-search-headroom to add a settings/form/** manualChunks group (else follow-up). Wizard merges main after it lands. | 00:10Z groups ruled out (#304). After #304 merges: option A, form/embed.ts re-export used by SectionForm (static) and wizard (dynamic); ownership widened to embed.ts + SectionForm engine import lines. | 00:31Z option A measured: Settings first views +0.14..0.22 KB, section chunks 41->43 (parallel preloads), all under limits, CSS 19.97/20. Runner accepted under §2.26 (no limit change). Author pushes once with welcome marker, then removes marker; review after. | 00:55Z pushed ecadb401 (ready for review, welcome marker). Reviewer session_01MMjhnAafY3pZVgNSUwMmiw launched in parallel with baseline regen. | 01:16Z baselines 1c84bd19 verified (60 welcome; 50 Settings identical to main via merge ref); marker removed, head 5ec1ea3e. | 01:31Z reviewer CHANGES: I1 UpdatesStep save lacks load guard (advances on failed GET); I2 tests assert before async save resolves. Relayed with O3/O4; runner checks delta. CSS 19.96/20."
+      "notes": " | 23:20Z brief briefs/S-wizard.md (part 1: shell, network, how-it-works, intensity, storage, updates, done; part 2: import, client, packs). | 23:14Z launched Sonnet. | 23:50Z draft PR #302 head 12330a2b; engine from a 2nd lazy root regroups chunks: Settings section +1.36, Notifications +1.46 KB, Alert +10 B over, CSS +8 B over. Runner ruled (b): import engine via Settings lazy root entry; CSS reuse; else park until headroom lands. No limit raises. | 23:52Z no clean import path for the engine; runner ruled C: park draft, CSS pass locally; asked X-alert-search-headroom to add a settings/form/** manualChunks group (else follow-up). Wizard merges main after it lands. | 00:10Z groups ruled out (#304). After #304 merges: option A, form/embed.ts re-export used by SectionForm (static) and wizard (dynamic); ownership widened to embed.ts + SectionForm engine import lines. | 00:31Z option A measured: Settings first views +0.14..0.22 KB, section chunks 41->43 (parallel preloads), all under limits, CSS 19.97/20. Runner accepted under §2.26 (no limit change). Author pushes once with welcome marker, then removes marker; review after. | 00:55Z pushed ecadb401 (ready for review, welcome marker). Reviewer session_01MMjhnAafY3pZVgNSUwMmiw launched in parallel with baseline regen. | 01:16Z baselines 1c84bd19 verified (60 welcome; 50 Settings identical to main via merge ref); marker removed, head 5ec1ea3e. | 01:31Z reviewer CHANGES: I1 UpdatesStep save lacks load guard (advances on failed GET); I2 tests assert before async save resolves. Relayed with O3/O4; runner checks delta. CSS 19.96/20. | 01:37Z fix push f6406502 checked by runner (guard + tests). Merge on green."
     },
     "S-appearance": {
       "status": "merged",
@@ -945,7 +945,7 @@
       "pr": 306,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater). | 00:27Z brief briefs/S-updates.md (part 1; part 2 = advanced, rollback, overview, pill, overlay, wizard step). Merges main after #299. | 00:27Z launched Sonnet. | 01:06Z PR #306 head a90f96ad (Updates first view 33.9 KB; registry +115-123 B; Install now slot; Settings marker). Reviewer session_01MMjhnD6VCmLiUvS2vGc1LL (+/security-review). | 01:21Z reviewer CHANGES: I1 progress heading guesses version (use stepVersion ?? pending.version, else unversioned). /security-review clean. Relayed I1 + O3-O7 (+O2 if <50 B) with marker removal in one push; runner checks delta."
+      "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater). | 00:27Z brief briefs/S-updates.md (part 1; part 2 = advanced, rollback, overview, pill, overlay, wizard step). Merges main after #299. | 00:27Z launched Sonnet. | 01:06Z PR #306 head a90f96ad (Updates first view 33.9 KB; registry +115-123 B; Install now slot; Settings marker). Reviewer session_01MMjhnD6VCmLiUvS2vGc1LL (+/security-review). | 01:21Z reviewer CHANGES: I1 progress heading guesses version (use stepVersion ?? pending.version, else unversioned). /security-review clean. Relayed I1 + O3-O7 (+O2 if <50 B) with marker removal in one push; runner checks delta. | 01:40Z fix push 746ba13a checked by runner (I1, O3-O7, marker removed; first view 34.06). Merge on green."
     },
     "S-doc-shots": {
       "status": "pending",
@@ -1877,13 +1877,13 @@
       "merge": "17e444a9"
     },
     "X-stale-tab": {
-      "status": "pr-review",
+      "status": "pr-fixing",
       "model": "sonnet",
       "session": "session_01MMjhn91afz7dkXUehAG2sp",
       "pr": 307,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth). | 00:46Z launched Sonnet. | 01:17Z PR #307 head b5b3657a (version.json on visibilitychange, <=1/5 min; banner with chrome, not first load). Reviewer session_01MMjhnBqNbZEXAMvXRTNJxH."
+      "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth). | 00:46Z launched Sonnet. | 01:17Z PR #307 head b5b3657a (version.json on visibilitychange, <=1/5 min; banner with chrome, not first load). Reviewer session_01MMjhnBqNbZEXAMvXRTNJxH. | 01:45Z reviewer CHANGES: B1 live region inserted with text (not announced); O2 throttle wording; O3 CLS note. Relayed; runner checks delta."
     },
     "X-web-hygiene-1101": {
       "status": "running",
