@@ -46,7 +46,9 @@
 	{#if net.failed && !check}
 		<Banner kind="error">{m.wizard_net_error()}</Banner>
 	{:else if !check}
-		<Banner kind="info" title={m.wizard_net_loading()}>&nbsp;</Banner>
+		<Banner kind="info" title={m.wizard_net_loading()}
+			><span aria-hidden="true">&nbsp;</span></Banner
+		>
 		<p class="text-body" aria-hidden="true">&nbsp;</p>
 	{:else}
 		{#if off}
