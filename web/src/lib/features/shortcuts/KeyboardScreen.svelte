@@ -96,6 +96,8 @@
 
 	/** One change: the fields it touches, as they were and as it makes them. */
 	type Delta = { before: Partial<Prefs>; after: Partial<Prefs> };
+	/** A 2xx reply that can't be read: the save may have landed, so re-read rather than say it failed. */
+	class Unreadable extends Error {}
 
 	/**
 	 * Sends one change; a stale revision reloads and tries once more over the newer values. Remaps
@@ -119,7 +121,7 @@
 					...SECTION,
 					body: body as unknown as Record<string, never>
 				});
-				if (!take(res as never)) throw new Error('malformed');
+				if (!take(res as never)) throw new Unreadable();
 				return { merged, was };
 			} catch (e) {
 				if (merged || !(e instanceof ApiError && e.code === 'stale_revision')) throw e;
@@ -164,8 +166,10 @@
 			try {
 				const { merged, was } = await send(d);
 				stale = merged;
-				// Undo inverts this change only: never another device's, nor one that failed.
-				if (!undoing)
+				failed = locked = false;
+				// Undo inverts this change only: never another device's, nor one that failed. It is
+				// offered only once nothing later is queued, so it never belongs to an older change.
+				if (!undoing && saving === 1)
 					undo = {
 						before: d.after,
 						after: { ...d.before, ...('shortcuts' in d.after ? { shortcuts: was } : {}) }
@@ -179,6 +183,7 @@
 				} catch {
 					/* the banner still says why */
 				}
+				if (e instanceof Unreadable) return;
 				if (!(e instanceof ApiError)) failed = true;
 				else if (e.code === 'invalid_setting') {
 					const name: Name = e.field === 'shortcuts' ? 'shortcuts' : 'shortcut_keys';
@@ -228,7 +233,7 @@
 		{#if locked}<Banner kind="warning">{m.shortcuts_read_only_banner()}</Banner>{/if}
 		{#if failed}<Banner kind="error">{m.shortcuts_save_failed()}</Banner>{/if}
 		<div role="status" class="sc-status">
-			{#if undo}
+			{#if undo && !NAMES.some((n) => n in undo!.after && locks[n])}
 				{m.shortcuts_saved()}
 				<Button variant="quiet" onclick={undoLast}>{m.shortcuts_undo()}</Button>
 			{/if}

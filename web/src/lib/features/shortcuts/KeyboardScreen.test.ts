@@ -12,7 +12,9 @@ vi.mock('$lib/api/client', async (orig) => ({
 
 import KeyboardScreen from './KeyboardScreen.svelte';
 
-configure({ defaultHidden: true });
+configure({ defaultHidden: true, asyncUtilTimeout: 10_000 });
+/** Waits for a condition, with the 10 s deadline the slowest CI runner needs. */
+const wait = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
 
 const section = (
 	shortcuts: unknown,
@@ -63,7 +65,7 @@ describe('KeyboardScreen', () => {
 		render(KeyboardScreen);
 		await fireEvent.click(await screen.findByRole('switch'));
 		expect(keys.singleKeys).toBe(false);
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(1));
 		expect(patch).toHaveBeenCalledWith('/settings/{section}', {
 			path: { section: 'preferences' },
 			body: { shortcuts: false, if_revision: 7 }
@@ -72,11 +74,11 @@ describe('KeyboardScreen', () => {
 		expect(status.getAttribute('role')).toBe('status');
 		patch.mockResolvedValueOnce(section(true, {}, 9));
 		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
 		expect(body(1)).toEqual({ shortcuts: true, if_revision: 8 });
-		await vi.waitFor(() => expect(keys.singleKeys).toBe(true));
+		await wait(() => expect(keys.singleKeys).toBe(true));
 		// Undoing is not itself undoable.
-		await vi.waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull());
+		await wait(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull());
 	});
 
 	it('a remap saves at once and the registry follows; Undo puts the old key back', async () => {
@@ -84,15 +86,15 @@ describe('KeyboardScreen', () => {
 		render(KeyboardScreen);
 		await screen.findByRole('switch');
 		await changeKey('Next result', 'n');
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(1));
 		expect(body(0)).toEqual({ shortcut_keys: { 'results.next': 'n' }, if_revision: 7 });
 		await screen.findByText('Saved.');
 		expect(keyOf('results.next')).toContain('N');
 		patch.mockResolvedValueOnce(section(true, {}, 9));
 		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
 		expect(body(1)).toEqual({ shortcut_keys: {}, if_revision: 8 });
-		await vi.waitFor(() => expect(keyOf('results.next')).toContain('J'));
+		await wait(() => expect(keyOf('results.next')).toContain('J'));
 	});
 
 	it('a clashing key saves nothing until Swap, and Cancel saves nothing at all', async () => {
@@ -112,7 +114,7 @@ describe('KeyboardScreen', () => {
 		await changeKey('Next result', 'c');
 		expect(patch).not.toHaveBeenCalled();
 		await fireEvent.click(screen.getByRole('button', { name: 'Swap' }));
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(1));
 		expect(body(0)).toEqual({
 			shortcut_keys: { 'results.next': 'c', 'detail.copy_magnet': 'j' },
 			if_revision: 7
@@ -131,13 +133,67 @@ describe('KeyboardScreen', () => {
 		render(KeyboardScreen);
 		await fireEvent.click(await screen.findByRole('switch'));
 		await changeKey('Next result', 'n');
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(1));
 		release();
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
 		expect(body(1)).toEqual({ shortcut_keys: { 'results.next': 'n' }, if_revision: 8 });
 		await screen.findByText('Saved.');
 		expect(keyOf('results.next')).toContain('N');
 		expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false);
+	});
+
+	it('offers Undo only once nothing later is still saving, and then for the latest change', async () => {
+		let release!: () => void;
+		patch.mockResolvedValueOnce(section(false, {}, 8));
+		patch.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					release = () => resolve(section(false, { 'results.next': 'n' }, 9));
+				})
+		);
+		render(KeyboardScreen);
+		await fireEvent.click(await screen.findByRole('switch'));
+		await changeKey('Next result', 'n');
+		// The switch's save finished, the remap's is still open: no Undo for the older change.
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
+		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+		release();
+		await screen.findByText('Saved.');
+		patch.mockResolvedValueOnce(section(false, {}, 10));
+		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(3));
+		expect(body(2)).toEqual({ shortcut_keys: {}, if_revision: 9 });
+	});
+
+	it('hides Undo once the field it would change is locked', async () => {
+		patch.mockResolvedValueOnce(section(false, {}, 8, { env: 'LODESTAR_SHORTCUTS' }));
+		render(KeyboardScreen);
+		await fireEvent.click(await screen.findByRole('switch'));
+		await wait(() => expect(screen.getByText('Set by LODESTAR_SHORTCUTS')).toBeTruthy());
+		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+	});
+
+	it('a later save that succeeds clears the error banner', async () => {
+		patch
+			.mockRejectedValueOnce(new ApiError(500, 'internal', 'boom'))
+			.mockResolvedValueOnce(section(false, {}, 8));
+		render(KeyboardScreen);
+		await fireEvent.click(await screen.findByRole('switch'));
+		expect(await screen.findByText(/Couldn't save that change/)).toBeTruthy();
+		await fireEvent.click(screen.getByRole('switch'));
+		await screen.findByText('Saved.');
+		expect(screen.queryByText(/Couldn't save that change/)).toBeNull();
+	});
+
+	it('a 2xx it cannot read re-reads the server and shows no error', async () => {
+		patch.mockResolvedValueOnce({ revision: 8, fields: {} });
+		get.mockResolvedValue(section(false, {}, 8));
+		render(KeyboardScreen);
+		await fireEvent.click(await screen.findByRole('switch'));
+		await wait(() => expect(get).toHaveBeenCalledTimes(2));
+		await wait(() => expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false));
+		expect(screen.queryByText(/Couldn't save that change/)).toBeNull();
+		expect(screen.queryByText('Saved.')).toBeNull();
 	});
 
 	it('a stale revision reloads and lays only this change over the newer settings', async () => {
@@ -171,7 +227,7 @@ describe('KeyboardScreen', () => {
 		await changeKey('Next result', 'n');
 		expect(await screen.findByText(/Couldn't save that change/)).toBeTruthy();
 		expect(patch).toHaveBeenCalledTimes(2);
-		await vi.waitFor(() => expect(keyOf('results.next')).toContain('J'));
+		await wait(() => expect(keyOf('results.next')).toContain('J'));
 		expect(keyOf('search.focus')).toContain('F');
 		expect(screen.queryByText('Saved.')).toBeNull();
 	});
@@ -187,10 +243,10 @@ describe('KeyboardScreen', () => {
 		await changeKey('Next result', 'n');
 		await screen.findByText('Saved.');
 		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(3));
 		expect(body(2)).toEqual({ shortcut_keys: { 'search.focus': 'f' }, if_revision: 9 });
 		// Focus stays on the row the change was made with, not on the vanished Undo button.
-		await vi.waitFor(() =>
+		await wait(() =>
 			expect(document.activeElement).toBe(
 				screen.getByRole('button', { name: 'Change the key for Next result' })
 			)
@@ -207,14 +263,14 @@ describe('KeyboardScreen', () => {
 		await screen.findByRole('switch');
 		await changeKey('Next result', 'n');
 		await changeKey('Previous result', 'p');
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(1));
 		fail();
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
 		expect(body(1)).toEqual({ shortcut_keys: { 'results.previous': 'p' }, if_revision: 7 });
 		await screen.findByText('Saved.');
 		patch.mockResolvedValueOnce(section(true, {}, 9));
 		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(3));
 		expect(body(2)).toEqual({ shortcut_keys: {}, if_revision: 8 });
 	});
 
@@ -224,9 +280,9 @@ describe('KeyboardScreen', () => {
 		const toggle = await screen.findByRole('switch');
 		await fireEvent.click(toggle);
 		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
-		await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(2));
 		expect(body(1)).toEqual({ shortcuts: true, if_revision: 8 });
-		await vi.waitFor(() => expect(document.activeElement).toBe(toggle));
+		await wait(() => expect(document.activeElement).toBe(toggle));
 	});
 
 	it("a failed save shows the server's current values, not the screen's older copy", async () => {
@@ -237,7 +293,7 @@ describe('KeyboardScreen', () => {
 		patch.mockRejectedValueOnce(new ApiError(500, 'internal', 'boom'));
 		await changeKey('Next result', 'n');
 		expect(await screen.findByText(/Couldn't save that change/)).toBeTruthy();
-		await vi.waitFor(() => expect(keyOf('search.focus')).toContain('F'));
+		await wait(() => expect(keyOf('search.focus')).toContain('F'));
 		expect(keyOf('results.next')).toContain('J');
 		// What the registry was given, through the per-browser cache it writes alongside.
 		expect(JSON.parse(localStorage.getItem('lodestar.shortcuts') ?? '{}')).toEqual({
@@ -253,7 +309,7 @@ describe('KeyboardScreen', () => {
 		expect(
 			await screen.findByText("These settings are locked, so your change wasn't saved.")
 		).toBeTruthy();
-		await vi.waitFor(() => expect(keys.singleKeys).toBe(true));
+		await wait(() => expect(keys.singleKeys).toBe(true));
 		expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(true);
 	});
 
@@ -276,7 +332,7 @@ describe('KeyboardScreen', () => {
 		);
 		await changeKey('Next result', 'n');
 		const row = await screen.findByTestId('shortcut-row-results.previous');
-		await vi.waitFor(() => expect(row.textContent).toContain(message));
+		await wait(() => expect(row.textContent).toContain(message));
 		// Nothing was saved, so the row shows the saved key.
 		expect(keyOf('results.next')).toContain('J');
 	});
@@ -290,7 +346,7 @@ describe('KeyboardScreen', () => {
 		);
 		await changeKey('Next result', 'p');
 		const row = await screen.findByTestId('shortcut-row-results.next');
-		await vi.waitFor(() => expect(row.textContent).toContain(message));
+		await wait(() => expect(row.textContent).toContain(message));
 	});
 
 	it('shows a field the environment sets as locked, with its source', async () => {
