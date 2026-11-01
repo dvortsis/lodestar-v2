@@ -3294,6 +3294,12 @@
       "model": "opus",
       "launched": "2026-11-01T10:05Z",
       "brief": "briefs/S-privacy-banner.md"
+    },
+    "X-web-polish-1101d": {
+      "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg",
+      "model": "sonnet",
+      "launched": "2026-11-01T10:17Z",
+      "brief": "briefs/X-web-polish-1101d.md"
     }
   }
 }
