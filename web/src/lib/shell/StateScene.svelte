@@ -8,16 +8,15 @@
 	let { id }: { id: SceneId } = $props();
 
 	// Off when the account turned them off or the browser's data saver is on. Not rendered, so no
-	// image is fetched. The per-browser cache (written with `data-illustrations` on every change)
-	// holds only strings and `illustrations`, the one boolean, so "false" in it means off; it is
-	// read when a scene is built, so a change made on the Appearance screen applies from then on.
-	// The pre-paint script sets the theme only and the appearance boot waits for first interaction,
-	// so the attribute on <html> is not there yet on a first view.
+	// image is fetched. Read from the per-browser cache (written by `applyLook` on every change)
+	// when a scene is built: the pre-paint script sets the theme only and the appearance boot waits
+	// for first interaction, so the cache is what a first view has.
+	// svelte-ignore non_reactive_update
 	let shown = true;
 	try {
 		shown = !(
 			(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData ||
-			localStorage['lodestar.appearance'].includes('false')
+			!JSON.parse(localStorage['lodestar.appearance']).illustrations
 		);
 	} catch {
 		/* no cache yet, or storage blocked: show them */

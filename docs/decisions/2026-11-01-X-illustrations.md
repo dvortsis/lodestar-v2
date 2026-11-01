@@ -13,7 +13,9 @@ Closes the app gap named in `2026-11-01-S-e2e.md` (§10.19, §10.10.8).
   cache says, and nothing is rewritten: the stored preference comes back when Save-Data is off. The
   Appearance screen shows one hint line under the toggle (`appearance_illustrations_save_data`, en
   and zh).
-- **Known limit:** with browser storage blocked there is no cache, so the scene shows.
+- **Known limits:** with browser storage blocked, or on a first visit in a browser with no cache yet
+  (account off, nothing cached), the first scene shows; the cache is filled once the appearance boot
+  runs. Following the attribute too would cost bytes the Discover route (44,996 of 45,000 B) lacks.
 - **Follow-up:** low-resource mode does not exist in the app yet and is not invented here. When it
   lands it should feed the same gate.
 - **Layout:** unchanged; no snapshot moves. `decoding="async"` was dropped from the scene's `<img>`
