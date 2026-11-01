@@ -2003,13 +2003,13 @@
       "note": "Playwright core 10m40s on normal run (no trim needed)"
     },
     "S-send": {
-      "status": "draft; ruling sent",
+      "status": "CHANGES: revert unrelated prettier reformat of ~88 docs/decisions files; code OK",
       "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
       "model": "sonnet",
       "brief": "briefs/S-send.md",
       "launched_at": "2026-11-01T05:52Z",
       "pr": 321,
-      "head": "64f92c4",
+      "head": "8b6c055",
       "ruling": "\u00a72.26: /t 20.8 -> 21.0 KB, drawer 27.2 -> 27.4 KB (Send = \u00a710.5 primary action)"
     },
     "X-discover-headroom": {
@@ -2555,7 +2555,8 @@
     "unraid-r2": "Re-run r2 started 2026-11-01T02:09:28Z; baseline ends 2026-11-02T08:39:28Z; then owner approves gluetun; then analyze_cr0.",
     "owner-plan-ok": "02:15Z owner chose 1: proceed with 4 slots and the build order; E-v06-workers/companions and E-M6 held.",
     "tailwind-comments": "2026-11-01 (#309): a component word like \"card\" in a comment makes Tailwind emit daisyUI .card (+147 B CSS). Avoid daisyUI component names in comments; tests and scripts are excluded from scanning since #308.",
-    "reviews-opus": "Reviews always run on Opus (CLAUDE.md delegation policy), even for translation/test slices."
+    "reviews-opus": "Reviews always run on Opus (CLAUDE.md delegation policy), even for translation/test slices.",
+    "prettier-docs": "Check slice diffs for stray formatter passes over docs/decisions (#321 reformatted ~88 files); review with git show --stat per commit, not only the file list you expect."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
@@ -2954,7 +2955,8 @@
     "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
     "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off",
     "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails",
-    "Possible flake: e2e/insights-print.routes.test.ts:57 \"one page on A4 and Letter at 1024 px\" [core] printed 2 Letter pages on #322 b58f4ea (06:42Z), outside the diff; passed on #320 minutes earlier. Runner re-ran once. If it recurs: likely content- or time-dependent height (freeze clock / fixed fixture), fix once."
+    "Possible flake: e2e/insights-print.routes.test.ts:57 \"one page on A4 and Letter at 1024 px\" [core] printed 2 Letter pages on #322 b58f4ea (06:42Z), outside the diff; passed on #320 minutes earlier. Runner re-ran once. If it recurs: likely content- or time-dependent height (freeze clock / fixed fixture), fix once.",
+    "S-send (#321): renamed/removed download client shows stale in the Send label until reload; no stale-press guard on the Send button; `s` on /t before the torrent loads"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
