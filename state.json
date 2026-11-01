@@ -3279,6 +3279,12 @@
       "head": "594316fa37e72fd02e2b6674717577db9e200e0e",
       "verdict": "runner MERGE pending CI; Overview +80 B accepted §2.26; carrier GET /insights/overview privacy",
       "session": "session_01MMjhnATZedJze4kWMUf3Pg"
+    },
+    "337": {
+      "slice": "F-suggest-adult-field",
+      "head": "2b761d1fdb310cb69f0012612fb3e47fb4d6ddb2",
+      "verdict": "runner MERGE pending CI (tightening only)",
+      "session": "session_01MMjhn9VKY4h8TyGn6oQEky"
     }
   },
   "merged_log": [
