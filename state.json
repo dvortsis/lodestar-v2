@@ -1934,7 +1934,11 @@
       "notes": "03:44Z brief briefs/S-filters-2c.md (Block this\u2026 hooks; single forwarder door into filters/flows to stop the regroup; guard). | 03:43Z launched Opus."
     },
     "B-update-5": {
-      "review": "MERGE at 5fe6738 (session_01MMjhn9NMLTHdjwMAZFVDP8); ubuntu test red, logs pending"
+      "review": "MERGE at 5fe6738 (session_01MMjhn9NMLTHdjwMAZFVDP8); ubuntu test red, logs pending",
+      "status": "merged",
+      "pr": 312,
+      "merge_sha": "114da04f",
+      "merged_at": "2026-11-01T04:33Z"
     },
     "X-illustrations": {
       "status": "building",
@@ -2799,6 +2803,11 @@
       "status": "to-send",
       "text": "\u00a72.19 flag: with the zh catalogue complete (H-zh), browsers set to Chinese now get the Chinese UI automatically (the existing 0.95 coverage gate); the Natural phrasing chunk limit rose 1.64 -> 1.75 KB for the inlined zh strings. The zh labels in docs/ui-glossary.md are still marked \"TBD until the owner or a reviewer confirms\"; the owner may want to confirm them (a reviewer checked 80+ entries and every content-safety string).",
       "unblocks": "nothing (information)"
+    },
+    {
+      "id": "flag-312-updater-unreadable",
+      "status": "to-send",
+      "text": "\u00a72.19 (#312): queuing an install for the window while updater.json is unreadable is refused (install_unavailable: updater_unreadable), following F-updater's rule that only a saved pause/resume may replace that file; Install now still works."
     }
   ],
   "external_gates": {
@@ -2844,11 +2853,11 @@
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
-    "S-updates-3: wire Install now (and Roll back if B-update-5 adds it) once B-update-5 lands POST /updates/install; un-skip the Install-now test TODO (#306/#310).",
     "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
     "App gap (S-e2e #314, \u00a710.17 flow): no Send button in the UI although the API has sendToClient; the keyboard flow search -> open -> send stops at copy. Add Send to client in the detail/row actions (size budget!) + e2e.",
     "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage.",
-    "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)"
+    "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
+    "B-update-5b: POST /updates/rollback; binary-level fake-source test (wrong hash/size/oversized/other target); trust survives a rollback; log capture over a whole install; plus the #312 reviewer note: the download writer is not awaited when the overall timeout fires (#312)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
