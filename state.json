@@ -2663,7 +2663,7 @@
     "tailwind-comments": "2026-11-01 (#309): a component word like \"card\" in a comment makes Tailwind emit daisyUI .card (+147 B CSS). Avoid daisyUI component names in comments; tests and scripts are excluded from scanning since #308.",
     "reviews-opus": "Reviews always run on Opus (CLAUDE.md delegation policy), even for translation/test slices.",
     "prettier-docs": "Check slice diffs for stray formatter passes over docs/decisions (#321 reformatted ~88 files); review with git show --stat per commit, not only the file list you expect.",
-    "t-headroom": "After #332: /t 31 B left, Detail sections 2 B left (1000-based KB). X-web-polish-1101d cuts >=0.3 KB on both."
+    "t-headroom": "After #332: /t 31 B left, Detail sections 2 B left (1000-based). X-web-polish-1101d could not cut (dedupe <=4 B; moves only trade between them). The next change to /t or Detail sections must bring its own cut in shared detail code; the runner may then rule on Detail sections (on demand) under §2.26."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
@@ -3273,7 +3273,14 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-10-31T13:07Z",
-  "open_prs": {},
+  "open_prs": {
+    "333": {
+      "slice": "X-web-polish-1101d",
+      "head": "b78beb8",
+      "verdict": "CHANGES r1: Search results +358 B (40,011->40,369) -> lazy settle(); plural; keep-loop 200/page. Item 2 dropped (no limit change).",
+      "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg"
+    }
+  },
   "merged_log": [
     {
       "pr": 331,
