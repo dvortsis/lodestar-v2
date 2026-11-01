@@ -11,10 +11,14 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 //                                 baselines come from the shared 46-theme set
 //   reduced-motion                axe + motion tokens with prefers-reduced-motion: reduce (no baselines)
 //   keyboard-only                 *.keyboard.test.ts flows (no pointer allowed)
+//   fixture                       *.fixture.test.ts against a real `lodestar serve --fixture` server
+//                                 (opt-in: --project=fixture or E2E_FIXTURE=1; no CI job yet)
 //   all-themes                    axe on every route in all 48 themes + the 46-theme key-route
 //                                 baselines (nightly; opt-in: --project=all-themes or E2E_ALL_THEMES=1)
 
 const allThemes = !!process.env.E2E_ALL_THEMES || process.argv.join(' ').includes('all-themes');
+const fixture =
+	!!process.env.E2E_FIXTURE || process.argv.join(' ').split(/[ =]/).includes('fixture');
 const smoke = /smoke\.test\.ts$/;
 const matrixSpecs = [smoke, /states\.test\.ts$/];
 // The theme set's baselines (key screens × 46 non-Riverstone themes, at 1366) are shared by the
@@ -78,6 +82,8 @@ export default defineConfig<Appearance>({
 			use: { ...desktop, contextOptions: { reducedMotion: 'reduce' }, motion: 'reduce' }
 		},
 		{ name: 'keyboard-only', testMatch: /\.keyboard\.test\.ts$/, use: desktop },
+		// Specs that need the real server: only when asked for (see e2e/README.md).
+		...(fixture ? [{ name: 'fixture', testMatch: /\.fixture\.test\.ts$/, use: desktop }] : []),
 		// 48 themes × every route: only when asked for (`--project=all-themes` or E2E_ALL_THEMES=1).
 		...(allThemes
 			? [

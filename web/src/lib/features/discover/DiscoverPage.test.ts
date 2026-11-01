@@ -483,14 +483,27 @@ describe('keyboard', () => {
 		const view = mount();
 		await screen.findByTestId('discover-newest-total');
 		const mine = () => keys.list().filter((c) => c.scope === 'discover');
-		expect(mine().map((c) => [c.id, c.keys])).toEqual(
-			expect.arrayContaining([
-				['results.next', ['j']],
-				['results.previous', ['k']]
-			])
+		await waitFor(
+			() =>
+				expect(mine().map((c) => [c.id, c.keys])).toEqual(
+					expect.arrayContaining([
+						['results.next', ['j']],
+						['results.previous', ['k']]
+					])
+				),
+			{ timeout: 10_000 }
 		);
 		view.unmount();
 		expect(mine()).toHaveLength(0);
+	});
+
+	it('registers nothing when unmounted before the keys load', async () => {
+		const view = mount();
+		view.unmount();
+		await import('./commands');
+		await import('$lib/keys');
+		await Promise.resolve();
+		expect(keys.list().filter((c) => c.scope === 'discover')).toHaveLength(0);
 	});
 
 	it('moves through the rows with j and k', async () => {
@@ -501,6 +514,11 @@ describe('keyboard', () => {
 				'[role="option"]'
 			)!;
 			first.focus();
+			await waitFor(() =>
+				expect(keys.list().some((c) => c.scope === 'discover' && c.id === 'results.next')).toBe(
+					true
+				)
+			);
 			await fireEvent.keyDown(first, { key: 'j' });
 			await waitFor(() => expect(document.activeElement?.getAttribute('data-index')).toBe('1'));
 			await fireEvent.keyDown(document.activeElement!, { key: 'k' });
