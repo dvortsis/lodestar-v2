@@ -32,7 +32,7 @@
 >
 	{#each COMPONENT_IDS.filter((c) => c !== 'libraries') as c (c)}
 		<label class="flex flex-col gap-1">
-			<span class="text-label">{componentLabel(c)}</span>
+			<span class="text-small">{componentLabel(c)}</span>
 			<Select
 				dense
 				{options}

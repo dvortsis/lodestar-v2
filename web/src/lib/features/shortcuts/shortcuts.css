@@ -39,7 +39,7 @@
 	@apply min-w-0 flex-1 text-body;
 }
 .sc-key {
-	@apply flex min-w-16 justify-end;
+	@apply flex min-w-14 justify-end;
 }
 .sc-prompt {
 	@apply text-small text-muted-text;

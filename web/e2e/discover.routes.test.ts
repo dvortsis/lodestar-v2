@@ -393,3 +393,16 @@ test.describe('the first-load reveal', () => {
 		});
 	});
 });
+
+test.describe('under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+	test('the tabs and “See all” are 44 px targets', async ({ page, go, mock }) => {
+		serve(mock);
+		await go('/discover');
+		for (const id of ['discover-tab-all', 'discover-see-all']) {
+			const box = (await page.getByTestId(id).boundingBox())!;
+			expect(box.height).toBeGreaterThanOrEqual(44);
+			expect(box.width).toBeGreaterThanOrEqual(44);
+		}
+	});
+});

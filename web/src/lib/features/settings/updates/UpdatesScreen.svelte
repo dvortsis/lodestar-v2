@@ -436,7 +436,7 @@
 			</div>
 
 			<section class="flex flex-col gap-3" aria-labelledby="updates-status">
-				<h2 id="updates-status" class="text-label font-semibold">
+				<h2 id="updates-status" class="text-small font-semibold">
 					{m.settings_updates_status_heading()}
 				</h2>
 				{#if store.step}
@@ -535,7 +535,7 @@
 
 		{#if settings}
 			<section class="flex flex-col gap-3" aria-labelledby="updates-how" bind:this={form}>
-				<h2 id="updates-how" class="text-label font-semibold">
+				<h2 id="updates-how" class="text-small font-semibold">
 					{m.settings_updates_how_heading()}
 				</h2>
 				<p class="text-muted-text" data-testid="updates-contacts">
@@ -568,7 +568,7 @@
 							</div>
 							{#if o.id === 'auto' && mode === 'auto'}
 								<fieldset class="ps-4 flex flex-col gap-2" data-testid="updates-levels">
-									<legend class="text-label font-semibold"
+									<legend class="text-small font-semibold"
 										>{m.settings_updates_level_heading()}</legend
 									>
 									{#if lock('level')}<p class="text-small">{lockText('level')}</p>{/if}
@@ -627,7 +627,7 @@
 				aria-labelledby="updates-pause"
 				data-testid="updates-pause"
 			>
-				<h2 id="updates-pause" class="text-label font-semibold">
+				<h2 id="updates-pause" class="text-small font-semibold">
 					{m.settings_updates_pause_heading()}
 				</h2>
 				{#if status.policy.paused_until}
@@ -657,7 +657,7 @@
 
 		{#if settings}
 			<details ontoggle={openAdvanced} data-testid="updates-advanced-section">
-				<summary class="cursor-pointer text-label font-semibold"
+				<summary class="cursor-pointer text-small font-semibold"
 					>{m.settings_updates_adv_heading()}</summary
 				>
 				{#if Advanced}

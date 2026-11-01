@@ -138,10 +138,6 @@
 	.rr-row .rr-actions {
 		opacity: 1;
 	}
-	.rr-action {
-		min-width: var(--target-min);
-		min-height: var(--target-min);
-	}
 }
 
 .rr-leechers {

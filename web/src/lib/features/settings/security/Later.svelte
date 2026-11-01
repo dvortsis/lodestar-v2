@@ -26,7 +26,7 @@
 </script>
 
 <section class="flex flex-col gap-4" aria-labelledby={id} aria-busy={Part === undefined}>
-	<h2 {id} class="text-label font-semibold">{heading}</h2>
+	<h2 {id} class="text-small font-semibold">{heading}</h2>
 	{#if Part}
 		<Part />
 	{:else if Part === false}

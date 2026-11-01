@@ -35,7 +35,7 @@
 </script>
 
 <section class="flex flex-col gap-2" aria-labelledby="security-sessions">
-	<h2 id="security-sessions" class="text-label font-semibold">
+	<h2 id="security-sessions" class="text-small font-semibold">
 		{m.settings_security_sessions_heading()}
 	</h2>
 	<p>{m.settings_security_sessions_current()}</p>

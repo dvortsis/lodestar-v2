@@ -26,7 +26,7 @@
 </script>
 
 <section class="flex flex-col gap-2" aria-labelledby="security-cookies">
-	<h2 id="security-cookies" class="text-label font-semibold">
+	<h2 id="security-cookies" class="text-small font-semibold">
 		{m.settings_security_cookies_heading()}
 	</h2>
 	<p class="text-muted-text">{m.settings_security_cookies_help()}</p>

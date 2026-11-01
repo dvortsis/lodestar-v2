@@ -68,7 +68,7 @@
 					advanced.some((s) => form.field(s.key).error !== undefined)}
 				ontoggle={(e) => (toggled[g.id] = e.currentTarget.open)}
 			>
-				<summary class="ls-focus cursor-pointer py-3 text-label"
+				<summary class="ls-focus cursor-pointer py-3 text-small"
 					>{m.settings_shell_advanced({
 						count: formatCount(advanced.length, currentLocale())
 					})}</summary

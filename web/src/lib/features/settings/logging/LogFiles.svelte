@@ -153,7 +153,7 @@
 	{:else}
 		{#if listing.folder}
 			<div class="flex flex-wrap items-center gap-2">
-				<span class="text-label">{m.settings_logging_files_folder()}</span>
+				<span class="text-small">{m.settings_logging_files_folder()}</span>
 				<span bind:this={folderEl} data-testid="log-folder"><Mono wrap>{listing.folder}</Mono></span
 				>
 				<Button

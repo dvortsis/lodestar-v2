@@ -79,7 +79,7 @@
 		<Switches {o} {ask} />
 		<Rules {o} {ask} reload={model.load} />
 		<section class="flex flex-col gap-3" aria-labelledby="filters-undo-h">
-			<h2 id="filters-undo-h" class="text-label font-semibold">{m.filters_undo_heading()}</h2>
+			<h2 id="filters-undo-h" class="text-small font-semibold">{m.filters_undo_heading()}</h2>
 			<p class="text-muted-text">{m.filters_undo_help()}</p>
 			<div>
 				<Button

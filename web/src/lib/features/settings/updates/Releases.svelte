@@ -52,7 +52,7 @@
 		aria-labelledby="updates-releases"
 		data-testid="updates-releases"
 	>
-		<h2 id="updates-releases" class="text-label font-semibold">
+		<h2 id="updates-releases" class="text-small font-semibold">
 			{m.settings_updates_releases_heading()}
 		</h2>
 		{#each status.releases as r (r.version)}
@@ -86,7 +86,7 @@
 		aria-labelledby="updates-history"
 		data-testid="updates-history"
 	>
-		<h2 id="updates-history" class="text-label font-semibold">
+		<h2 id="updates-history" class="text-small font-semibold">
 			{m.settings_updates_history_heading()}
 		</h2>
 		{#if status.history.length}

@@ -60,7 +60,7 @@
 </script>
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-rules-h">
-	<h2 id="filters-rules-h" class="text-label font-semibold">{m.filters_rules_heading()}</h2>
+	<h2 id="filters-rules-h" class="text-small font-semibold">{m.filters_rules_heading()}</h2>
 	{#if o.rules.length === 0}
 		<p class="text-muted-text">{m.filters_rules_empty()}</p>
 	{/if}
@@ -120,7 +120,7 @@
 </section>
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-overrides-h">
-	<h2 id="filters-overrides-h" class="text-label font-semibold">{m.filters_overrides_heading()}</h2>
+	<h2 id="filters-overrides-h" class="text-small font-semibold">{m.filters_overrides_heading()}</h2>
 	<p class="text-muted-text">{m.filters_overrides_help()}</p>
 	<ul class="flex flex-col gap-2" data-testid="filters-overrides">
 		{#each o.overrides as v (v.id)}
@@ -149,7 +149,7 @@
 </section>
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-exceptions-h">
-	<h2 id="filters-exceptions-h" class="text-label font-semibold">
+	<h2 id="filters-exceptions-h" class="text-small font-semibold">
 		{m.filters_exceptions_heading()}
 	</h2>
 	<p class="text-muted-text">{m.filters_exceptions_help()}</p>
@@ -173,7 +173,7 @@
 </section>
 
 <section class="flex flex-col gap-3" aria-labelledby="filters-allow-h">
-	<h2 id="filters-allow-h" class="text-label font-semibold">{m.filters_allow_heading()}</h2>
+	<h2 id="filters-allow-h" class="text-small font-semibold">{m.filters_allow_heading()}</h2>
 	<p class="text-muted-text">{m.filters_allow_help()}</p>
 	<ul class="flex flex-col gap-2" data-testid="filters-allow">
 		{#each o.allow as a (a.id)}

@@ -129,7 +129,7 @@
 	onsubmit={submit}
 	data-testid="security-password"
 >
-	<h2 id="security-password" class="text-label font-semibold">
+	<h2 id="security-password" class="text-small font-semibold">
 		{m.settings_security_password_heading()}
 	</h2>
 	<p class="text-muted-text">{m.settings_security_password_signs_out()}</p>

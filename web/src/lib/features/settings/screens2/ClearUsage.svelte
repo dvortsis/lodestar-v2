@@ -51,7 +51,7 @@
 </script>
 
 <div class="flex flex-col gap-2" data-testid="danger-zone">
-	<h3 class="text-label font-semibold">{m.settings_screen_usage_zone()}</h3>
+	<h3 class="text-small font-semibold">{m.settings_screen_usage_zone()}</h3>
 	<p class="text-muted-text">{m.settings_screen_usage_help()}</p>
 	<div class="flex flex-wrap items-center gap-3">
 		<Button variant="danger" loading={busy} onclick={clear}

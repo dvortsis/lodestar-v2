@@ -206,7 +206,7 @@
 						</p>
 					{/if}
 					<a
-						class="dsc-see-all {FOCUS_RING}"
+						class="dsc-see-all target {FOCUS_RING}"
 						href={resolve(searchHref(tab ?? null, search) as Route)}
 						data-testid="discover-see-all">{m.discover_see_all()}</a
 					>
@@ -339,7 +339,7 @@
 									<p class="dsc-caption">{m.discover_unavailable_label()}</p>
 									{#if why}<p>{why.text}</p>
 										{#if why.action}<a
-												class="dsc-inline-link {FOCUS_RING}"
+												class="dsc-inline-link target {FOCUS_RING}"
 												href={resolve(why.action.href as Route)}>{why.action.label}</a
 											>{/if}
 									{/if}
@@ -408,11 +408,16 @@
 		padding: 0;
 		list-style: none;
 	}
+	/* Under a coarse pointer app.css's 44 px target applies instead; a scoped rule would beat it. */
+	@media (pointer: fine) {
+		.dsc-tab {
+			min-height: var(--control-height);
+		}
+	}
 	.dsc-tab {
 		display: inline-flex;
 		align-items: center;
 		box-sizing: border-box;
-		min-height: var(--control-height);
 		padding-inline: calc(var(--spacing) * 3);
 		border-bottom: calc(var(--spacing) * 0.5) solid transparent;
 		white-space: nowrap;
@@ -430,13 +435,6 @@
 		color: var(--color-base-content);
 		border-bottom-color: var(--color-primary);
 		font-weight: var(--font-weight-semibold);
-	}
-	@media (pointer: coarse) {
-		.dsc-tab {
-			min-height: var(--target-min);
-			min-width: var(--target-min);
-			justify-content: center;
-		}
 	}
 	.dsc-grid {
 		display: grid;
@@ -487,14 +485,6 @@
 	}
 	.dsc-see-all {
 		margin-inline-start: auto;
-	}
-	@media (pointer: coarse) {
-		.dsc-see-all,
-		.dsc-inline-link {
-			display: inline-flex;
-			align-items: center;
-			min-height: var(--target-min);
-		}
 	}
 	.dsc-notice-box {
 		padding: 0 calc(var(--spacing) * 4) calc(var(--spacing) * 3);

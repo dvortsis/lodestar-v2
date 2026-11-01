@@ -36,7 +36,7 @@
 	@apply flex items-center gap-2;
 }
 .ed-name {
-	@apply w-24 shrink-0 text-small;
+	@apply min-w-14 flex-1 text-small;
 }
 .ed-swatch {
 	@apply shrink-0 cursor-pointer rounded-field border border-field-border bg-base-100;

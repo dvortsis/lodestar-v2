@@ -21,7 +21,7 @@
 </script>
 
 <details {open} ontoggle={(event) => ontoggle?.(event.currentTarget.open)}>
-	<summary class="ls-focus cursor-pointer py-3 text-label"
+	<summary class="ls-focus cursor-pointer py-3 text-small"
 		>{m.settings_shell_advanced({ count: formatCount(specs.length) })}</summary
 	>
 	<div class="flex flex-col gap-6 pt-4">
