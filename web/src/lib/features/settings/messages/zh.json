@@ -76,7 +76,7 @@
 	"settings_screen_language_purpose": "语言、时区和每周的第一天。",
 	"settings_screen_time_zone_unknown": "不认识这个时区。请从列表中选择，如 Europe/Berlin。",
 	"settings_trackers_label": "Tracker",
-	"settings_trackers_help": "Lodestar 用来查询种子有多少做种和下载者的公共 tracker。",
+	"settings_trackers_help": "Lodestar 用来查询种子做种数和下载数的公共 tracker。",
 	"settings_integrations_label": "集成",
 	"settings_integrations_help": "下载客户端和 Torznab 端点。",
 	"settings_notifications_label": "通知",
@@ -359,5 +359,18 @@
 	"settings_insights_digest_day_option_thu": "星期四",
 	"settings_insights_digest_day_option_fri": "星期五",
 	"settings_insights_digest_day_option_sat": "星期六",
-	"settings_insights_digest_day_option_sun": "星期日"
+	"settings_insights_digest_day_option_sun": "星期日",
+	"settings_crawler_intensity_option_low": "低",
+	"settings_crawler_intensity_option_balanced": "均衡",
+	"settings_crawler_intensity_option_aggressive": "激进",
+	"settings_logging_console_level_option_error": "错误",
+	"settings_logging_console_level_option_warn": "警告",
+	"settings_logging_console_level_option_info": "信息",
+	"settings_logging_console_level_option_debug": "调试",
+	"settings_logging_console_level_option_trace": "跟踪",
+	"settings_logging_file_level_option_error": "错误",
+	"settings_logging_file_level_option_warn": "警告",
+	"settings_logging_file_level_option_info": "信息",
+	"settings_logging_file_level_option_debug": "调试",
+	"settings_logging_file_level_option_trace": "跟踪"
 }

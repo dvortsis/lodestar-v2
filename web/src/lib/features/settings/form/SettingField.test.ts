@@ -39,6 +39,15 @@ const SPECS: FieldSpec[] = [
 	}),
 	spec('network.http_bind', { format: 'socket-addr' }),
 	spec('general.data_dir', { readOnly: true }),
+	spec('general.lock_num', { kind: 'integer', readOnly: true }),
+	spec('general.lock_slider', {
+		kind: 'integer',
+		minimum: 0,
+		maximum: 10,
+		widget: 'slider',
+		readOnly: true
+	}),
+	spec('general.lock_json', { kind: 'unknown', readOnly: true }),
 	spec('secrets.token', { writeOnly: true }),
 	spec('logging.events', { kind: 'map', widget: 'log-events' }),
 	spec('logging.mystery', { kind: 'unknown' }),
@@ -59,7 +68,12 @@ const initial = () => [
 		dht_port: sv(6881, 'env', { env: 'LODESTAR_DHT_PORT', read_only: true }),
 		http_bind: sv('0.0.0.0:8090', 'file')
 	}),
-	values('general', 1, { data_dir: sv('/data', 'default', { read_only: true }) }),
+	values('general', 1, {
+		data_dir: sv('/data', 'default', { read_only: true }),
+		lock_num: sv(42, 'default', { read_only: true }),
+		lock_slider: sv(7, 'default', { read_only: true }),
+		lock_json: sv([1, 2], 'default', { read_only: true })
+	}),
 	values('secrets', 1, { token: sv(null, 'db') }),
 	values('logging', 1, {
 		events: sv({ a: true }),
@@ -149,7 +163,7 @@ describe('SettingField', () => {
 		expect(env.textContent).toContain('Set by LODESTAR_DHT_PORT');
 		expect(env.textContent).toContain('container template');
 		expect(within(env).getByRole('button', { name: 'Copy LODESTAR_DHT_PORT' })).toBeTruthy();
-		expect((screen.getByLabelText('DHT port') as HTMLInputElement).disabled).toBe(true);
+		expect((screen.getByLabelText('DHT port') as HTMLInputElement).readOnly).toBe(true);
 		show('general.data_dir');
 		const ro = within(root('general.data_dir')).getByTestId('status-read-only');
 		expect(
@@ -189,6 +203,28 @@ describe('SettingField', () => {
 		expect(input.readOnly).toBe(true);
 		expect(input.disabled).toBe(false);
 		expect(input.classList.contains('text-base-content')).toBe(true);
+	});
+
+	it('shows locked number, slider and JSON values as readonly, readable fields', () => {
+		show('general.lock_num');
+		const num = within(root('general.lock_num')).getByRole('textbox') as HTMLInputElement;
+		expect(num.readOnly).toBe(true);
+		expect(num.disabled).toBe(false);
+		expect(num.classList.contains('text-base-content')).toBe(true);
+
+		show('general.lock_slider');
+		const box = root('general.lock_slider');
+		// The slider is replaced by its value as text.
+		expect(within(box).queryByRole('slider')).toBeNull();
+		const shown = within(box).getByRole('textbox') as HTMLInputElement;
+		expect(shown.value).toBe('7');
+		expect(shown.readOnly).toBe(true);
+
+		show('general.lock_json');
+		const json = within(root('general.lock_json')).getByRole('textbox') as HTMLTextAreaElement;
+		expect(json.readOnly).toBe(true);
+		expect(json.disabled).toBe(false);
+		expect(json.classList.contains('text-base-content')).toBe(true);
 	});
 
 	it('hides Reset for a default, file or locked value', async () => {
@@ -291,7 +327,7 @@ describe('SettingField', () => {
 		server.change('crawler', { intensity: { value: 'aggressive', source: 'db' } });
 		await form.save();
 		const c = await screen.findByTestId('conflict');
-		expect(c.textContent).toContain('Changed elsewhere to aggressive');
+		expect(c.textContent).toContain('Changed elsewhere to Aggressive');
 		await fireEvent.click(within(c).getByRole('button', { name: 'Use theirs' }));
 		expect(form.conflicts).toEqual([]);
 		expect(form.field('crawler.intensity').value).toBe('aggressive');
@@ -309,7 +345,7 @@ describe('SettingField', () => {
 	it('renders segmented, radio, toggle, chips and the JSON fallback', async () => {
 		show('crawler.intensity');
 		const seg = screen.getByRole('radiogroup', { name: 'Crawl intensity' });
-		await fireEvent.click(within(seg).getByRole('radio', { name: 'low' }));
+		await fireEvent.click(within(seg).getByRole('radio', { name: 'Low' }));
 		expect(form.field('crawler.intensity').value).toBe('low');
 
 		show('crawler.encryption');

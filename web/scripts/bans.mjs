@@ -16,7 +16,7 @@ export const ARBITRARY_VALUE =
  * (`text-muted-text`), alignment and wrapping utilities are not sizes and stay allowed.
  */
 export const OFF_SCALE_TEXT =
-	/(?:^|[\s"'`:!(])text-(?:xs|sm|base|lg|xl|[2-9]xl|h[1-6]|heading|headline|subtitle|large|huge|tiny|md|medium)(?=$|[\s"'`)!])/;
+	/(?:^|[\s"'`:!(])text-(?:xs|sm|base|lg|xl|[2-9]xl|h[1-6]|heading|headline|subtitle|large|huge|tiny|md|medium)(?=$|[\s"'`)!;=/,}])/;
 
 /**
  * Spacing steps allowed in utilities (design-tokens.md §5): the §10.2 ramp as Tailwind steps,

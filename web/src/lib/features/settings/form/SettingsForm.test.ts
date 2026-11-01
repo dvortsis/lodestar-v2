@@ -286,7 +286,7 @@ describe('SettingsForm', () => {
 
 	it.each([
 		['a radio group', 'crawler.encryption', 'radio', 'Prefer encryption'],
-		['a segmented control', 'crawler.intensity', 'radio', 'balanced'],
+		['a segmented control', 'crawler.intensity', 'radio', 'Balanced'],
 		['a toggle', 'crawler.paused', 'switch', 'Pause crawling']
 	] as const)(
 		'moves focus from the summary to %s, never to its menu',

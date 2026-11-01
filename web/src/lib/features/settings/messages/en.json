@@ -359,5 +359,18 @@
 	"settings_insights_digest_day_option_thu": "Thursday",
 	"settings_insights_digest_day_option_fri": "Friday",
 	"settings_insights_digest_day_option_sat": "Saturday",
-	"settings_insights_digest_day_option_sun": "Sunday"
+	"settings_insights_digest_day_option_sun": "Sunday",
+	"settings_crawler_intensity_option_low": "Low",
+	"settings_crawler_intensity_option_balanced": "Balanced",
+	"settings_crawler_intensity_option_aggressive": "Aggressive",
+	"settings_logging_console_level_option_error": "Error",
+	"settings_logging_console_level_option_warn": "Warning",
+	"settings_logging_console_level_option_info": "Info",
+	"settings_logging_console_level_option_debug": "Debug",
+	"settings_logging_console_level_option_trace": "Trace",
+	"settings_logging_file_level_option_error": "Error",
+	"settings_logging_file_level_option_warn": "Warning",
+	"settings_logging_file_level_option_info": "Info",
+	"settings_logging_file_level_option_debug": "Debug",
+	"settings_logging_file_level_option_trace": "Trace"
 }

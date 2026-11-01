@@ -52,7 +52,8 @@
 		inputmode={f.spec.kind === 'integer' ? 'numeric' : 'decimal'}
 		autocomplete="off"
 		value={text}
-		disabled={f.locked}
+		readonly={f.locked}
+		class={f.locked ? 'text-base-content' : ''}
 		aria-describedby={[controlProps['aria-describedby'], unit ? unitId : '']
 			.filter(Boolean)
 			.join(' ') || undefined}

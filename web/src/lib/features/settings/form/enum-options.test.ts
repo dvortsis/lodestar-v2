@@ -11,13 +11,20 @@ const GOLDEN = join(
 	import.meta.dirname,
 	'../../../../../../crates/lodestar/src/settings/golden/settings_index.txt'
 );
-const HAND_BUILT = [
-	'crawler.intensity', // CrawlerScreen
-	'updates.', // UpdatesScreen
-	'preferences.', // AppearanceScreen
-	'logging.' // LoggingScreen
-];
-const handBuilt = (field: string) => HAND_BUILT.some((p) => field.startsWith(p));
+// Exact field keys, each with the component that labels its values itself.
+const HAND_BUILT = new Set([
+	'updates.mode', // UpdatesScreen (modes)
+	'updates.level', // UpdatesScreen (levels)
+	'updates.security_fixes', // UpdatesScreen (security card)
+	'updates.channel', // updates/Advanced.svelte
+	'preferences.mode', // AppearanceScreen (modeOptions)
+	'preferences.density', // AppearanceScreen (densityOptions)
+	'preferences.motion', // AppearanceScreen (motionOptions)
+	'logging.verbosity', // logging/VerbosityWidget.svelte
+	'logging.temporary_verbosity', // no Settings screen renders it (the live log sets it)
+	'logging.data' // logging/DataKinds.svelte (presets)
+]);
+const handBuilt = (field: string) => HAND_BUILT.has(field);
 
 type Index = { sections: { section: string; fields: { name: string }[]; schema: unknown }[] };
 const golden = (): Index => {

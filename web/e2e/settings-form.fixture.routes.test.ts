@@ -58,7 +58,7 @@ test.describe('settings form on serve --fixture', () => {
 
 		await a.getByTestId('save-bar').getByRole('button', { name: 'Save changes' }).click();
 		const conflict = a.locator('[data-field="crawler.intensity"]').getByTestId('conflict');
-		await expect(conflict).toContainText('Changed elsewhere to aggressive');
+		await expect(conflict).toContainText('Changed elsewhere to Aggressive');
 		await conflict.getByRole('button', { name: 'Keep mine' }).click();
 		await a.getByTestId('save-bar').getByRole('button', { name: 'Save changes' }).click();
 		await expect(a.getByTestId('save-bar')).toContainText('Saved');

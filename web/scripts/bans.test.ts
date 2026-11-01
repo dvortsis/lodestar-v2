@@ -58,6 +58,9 @@ describe('lint bans', () => {
 		expect(kinds('<h1 class="text-h2 font-semibold">')).toEqual(['text']);
 		expect(kinds('<p class="md:text-lg">')).toEqual(['text']);
 		expect(kinds("const c = cond ? 'text-xs' : 'text-2xl';")).toEqual(['text']);
+		expect(kinds('@apply font-semibold text-lg;')).toEqual(['text']);
+		expect(kinds('<p class:text-xl={big}>')).toEqual(['text']);
+		expect(kinds('<p class="text-sm/6">')).toEqual(['text']);
 	});
 
 	it('accepts the type scale, colours, alignment and wrapping', () => {

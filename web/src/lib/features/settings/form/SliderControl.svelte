@@ -11,14 +11,15 @@
 </script>
 
 <div class="flex items-center gap-3">
-	<Slider
-		value={typeof f.value === 'number' ? f.value : (f.spec.minimum ?? 0)}
-		min={f.spec.minimum}
-		max={f.spec.maximum}
-		disabled={f.locked}
-		aria-labelledby={controlProps['aria-labelledby']}
-		oninput={(e) => form.set(key, Number(e.currentTarget.value))}
-		onblur={() => form.blur(key)}
-	/>
+	{#if !f.locked}
+		<Slider
+			value={typeof f.value === 'number' ? f.value : (f.spec.minimum ?? 0)}
+			min={f.spec.minimum}
+			max={f.spec.maximum}
+			aria-labelledby={controlProps['aria-labelledby']}
+			oninput={(e) => form.set(key, Number(e.currentTarget.value))}
+			onblur={() => form.blur(key)}
+		/>
+	{/if}
 	<NumberControl {form} {key} {controlProps} {dense} />
 </div>
