@@ -5,10 +5,10 @@ const on = vi.hoisted(() => vi.fn());
 vi.mock('$lib/state/events.svelte', () => ({ events: { on } }));
 import { watchDetailVisibility } from './visibility';
 
-it('subscribes once and invalidates for content settings from any tab and every resync', () => {
+it('subscribes once and invalidates for content settings from any tab and every resync', async () => {
 	watchDetailVisibility();
 	watchDetailVisibility();
-	expect(on).toHaveBeenCalledTimes(1);
+	await vi.waitFor(() => expect(on).toHaveBeenCalledTimes(1), { timeout: 10_000 });
 	const [topic, received, options] = on.mock.calls[0]!;
 	expect(topic).toBe('settings');
 	cacheDetail(HASH, torrentDetail());

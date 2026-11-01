@@ -129,7 +129,9 @@ const detailLazy = [
 	/features\/detail\/manual-mount\.ts$/,
 	/features\/detail\/magnet\.ts$/,
 	/^chunk:magnet$/,
-	/features\/detail\/commands\.ts$/
+	/features\/detail\/commands\.ts$/,
+	// The settings subscription (event client and SSE) starts right after mount, not before paint.
+	/features\/detail\/visibility-events\.ts$/
 ];
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
