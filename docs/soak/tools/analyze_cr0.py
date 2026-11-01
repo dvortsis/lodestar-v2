@@ -374,29 +374,34 @@ def memory_context(rows):
            "mib_per_1000_stored": None, "mib_per_1000_stored_ci95": None,
            "stored_per_hour": None, "explained_slope_mib_per_hour": None,
            "time_only_slope_mib_per_hour": None, "time_only_ci95_mib_per_hour": None,
-           "stored_coefficient_mib_per_1000": None}
+           "stored_coefficient_mib_per_1000": None, "two_variable_reason": None}
     baseline = [r for r in rows if r["phase"] == "baseline"]
     if not baseline:
         out["reason"] = "no_baseline"
         return out
     t0 = baseline[0]["elapsed_seconds"]
-    pts = []
-    for r in baseline:
-        h = (r["elapsed_seconds"] - t0) / 3600
-        stored = r["values"].get("writer_stored_total")
-        if f["from_hour"] <= h <= f["to_hour"] and number(r.get(f["field"])) and number(stored):
-            pts.append((h, stored / 1000, r[f["field"]] / 2**20, r))
+    window = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
+    window = [(h, r) for h, r in window if f["from_hour"] <= h <= f["to_hour"]]
+    # Same identity check as the gate, over every row in the window.
+    if (len({r["process_id"] for _, r in window}) > 1
+            or len({r["process_identity"] for _, r in window if r.get("process_identity") is not None}) > 1
+            or len({identity(r)[1] for _, r in window if usable(r)}) > 1):
+        out["reason"] = "identity_change"
+        return out
+    pts = [(h, r["values"]["writer_stored_total"] / 1000, r[f["field"]] / 2**20)
+           for h, r in window if number(r.get(f["field"])) and number(r["values"].get("writer_stored_total"))]
     out["samples"] = n = len(pts)
     if not pts:
         out["reason"] = "no_stored_torrent_data"
         return out
-    if len({r["process_id"] for *_, r in pts}) > 1 or len({identity(r)[1] for *_, r in pts if usable(r)}) > 1:
-        out["reason"] = "identity_change"
+    if any(b[1] < a[1] for a, b in zip(pts, pts[1:])):
+        out["reason"] = "counter_reset"
         return out
     if n < f["min_samples"]:
         out["reason"] = "too_few_samples"
         return out
     hs, ss, ys = [p[0] for p in pts], [p[1] for p in pts], [p[2] for p in pts]
+    # n >= 30, so the normal quantile stands in for Student's t.
     mh, ms, my = sum(hs) / n, sum(ss) / n, sum(ys) / n
     shh = sum((h - mh) ** 2 for h in hs)
     sss = sum((x - ms) ** 2 for x in ss)
@@ -412,23 +417,23 @@ def memory_context(rows):
     se1 = math.sqrt(sum((y - my - c1 * (x - ms)) ** 2 for x, y in zip(ss, ys)) / (n - 2) / sss)
     out["mib_per_1000_stored"] = c1
     out["mib_per_1000_stored_ci95"] = [c1 - 1.96 * se1, c1 + 1.96 * se1]
-    growth = sum((h - mh) * (x - ms) for h, x in zip(hs, ss)) / shh * 1000
+    growth = shs / shh * 1000
     out["stored_per_hour"] = growth
-    out["explained_slope_mib_per_hour"] = c1 * growth / 1000
     # Two variables: centred normal equations, 2x2.
     det = shh * sss - shs ** 2
+    # Tolerance: squared correlation within 1e-9 of 1 is treated as collinear.
     if det <= 1e-9 * shh * sss:
-        out["reason"] = "regressors_collinear"
+        out["two_variable_reason"] = "regressors_collinear"
+        out["explained_slope_mib_per_hour"] = c1 * growth / 1000
         return out
     b = (shy * sss - ssy * shs) / det
     c = (ssy * shh - shy * shs) / det
     resid = sum((y - my - b * (h - mh) - c * (x - ms)) ** 2 for h, x, y in zip(hs, ss, ys))
-    if n <= 3:
-        return out
     se_b = math.sqrt(resid / (n - 3) * sss / det)
     out.update(time_only_slope_mib_per_hour=b,
                time_only_ci95_mib_per_hour=[b - 1.96 * se_b, b + 1.96 * se_b],
-               stored_coefficient_mib_per_1000=c)
+               stored_coefficient_mib_per_1000=c,
+               explained_slope_mib_per_hour=c * growth / 1000)
     return out
 
 
@@ -696,11 +701,13 @@ def markdown(report):
         out += [f"- Private memory per 1,000 stored torrents: {ctx['mib_per_1000_stored']:,.3f} MiB, 95% CI "
                 f"{pair(ctx['mib_per_1000_stored_ci95'])} ({ctx['samples']} samples, same hours as the gate)",
                 f"- Stored-torrent growth: {fmt(ctx['stored_per_hour'])} per hour; at that per-torrent cost it "
-                f"would explain {ctx['explained_slope_mib_per_hour']:,.3f} MiB/h of private slope",
+                f"would explain {ctx['explained_slope_mib_per_hour']:,.3f} MiB/h of private slope"
+                + (" (c from the two-variable fit)" if ctx["two_variable_reason"] is None
+                   else " (single-variable cost; ignores any time-only growth)"),
                 f"- Two-variable fit (private ~ a + b*hours + c*stored): time-only growth b = "
-                f"{fmt(ctx['time_only_slope_mib_per_hour'])} MiB/h, 95% CI {pair(ctx['time_only_ci95_mib_per_hour'])}"
+                f"{ctx['time_only_slope_mib_per_hour']:,.3f} MiB/h, 95% CI {pair(ctx['time_only_ci95_mib_per_hour'])}"
                 if ctx["time_only_slope_mib_per_hour"] is not None else
-                f"- Two-variable fit not shown: {ctx['reason']}",
+                f"- Two-variable fit not shown: {ctx['two_variable_reason']}",
                 "- A hint, not a test: samples are not independent and hours and stored torrents are correlated."]
     out += ["", f"Observation freshness: {report['observation_state']}.",
             f"Baseline valid coverage: {report['baseline_coverage_fraction']:.2%}.",

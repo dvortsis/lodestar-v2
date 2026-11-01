@@ -532,7 +532,7 @@ class AnalyzerTests(unittest.TestCase):
         rows = []
         for i in range(int(hours * 3600 // step) + 1):
             t, h = i * step, i * step / 3600
-            total = 669 * h + 4000 * math.sin(i / 37)
+            total = 669 * h + 400 * math.sin(i / 37)  # monotone: 400/37 < 11 per step
             row = sample(t, i, private_bytes=(600 + per_hour * h + per_1000 * total / 1000) * 2**20)
             if stored:
                 row["values"]["writer_stored_total"] = total + 5000
@@ -567,6 +567,36 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(ctx["reason"], "no_stored_torrent_data")
         self.assertIsNone(ctx["mib_per_1000_stored"])
         self.assertIn("Skipped: no_stored_torrent_data", markdown(report))
+
+    def test_memory_context_skip_paths(self):
+        base = self.context_rows(per_1000=2.8, per_hour=0.0)
+        mid = len(base) // 2
+        for row in base[mid:]:
+            row["process_identity"] = "b"
+        for row in base[:mid]:
+            row["process_identity"] = "a"
+        self.rows(base)
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "identity_change")
+        reset = self.context_rows(per_1000=2.8, per_hour=0.0)
+        for row in reset[len(reset) // 2:]:
+            row["values"]["writer_stored_total"] -= 15000
+        self.rows(reset)
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "counter_reset")
+        self.rows(self.context_rows(2.8, 0.0, hours=12.4))
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "too_few_samples")
+        self.rows([sample(0, 0, phase="startup")])
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "no_baseline")
+
+    def test_memory_context_collinear_regressors_skip_the_two_variable_fit(self):
+        rows = self.memory_rows(1.0)
+        for row in rows:
+            row["values"]["writer_stored_total"] = 700 * row["elapsed_seconds"] / 3600
+        self.rows(rows)
+        ctx = analyze(self.root)["memory_context"]
+        self.assertTrue(ctx["available"])
+        self.assertEqual(ctx["two_variable_reason"], "regressors_collinear")
+        self.assertIsNone(ctx["time_only_slope_mib_per_hour"])
+        self.assertIn("Two-variable fit not shown: regressors_collinear", markdown(analyze(self.root)))
 
     def test_memory_gate_is_unchanged_by_the_context_view(self):
         # Pinned from the analyzer before the context view existed.
