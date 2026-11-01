@@ -179,8 +179,10 @@ impl HostRate {
     /// `n` requests per second, no burst.
     pub const fn per_second(n: u32) -> HostRate {
         let n = if n == 0 { 1 } else { n };
+        let ns = 1_000_000_000 / n as u64;
         HostRate {
-            interval: std::time::Duration::from_nanos(1_000_000_000 / n as u64),
+            // Never zero, which would mean no limit at all.
+            interval: std::time::Duration::from_nanos(if ns == 0 { 1 } else { ns }),
             burst: 1,
         }
     }
@@ -328,6 +330,7 @@ impl Limits {
             && self.per_host.burst >= 1
             && self.max_full_scrapes_per_day <= caps.max_full_scrapes_per_day
             && self.backoff.base >= caps.backoff.base
+            && self.backoff.max >= caps.backoff.max
             && self.backoff.max >= self.backoff.base
     }
 }

@@ -17,7 +17,7 @@ pub mod testing;
 
 pub use claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
-pub use http::{Client, Fetch, HostLimiter, HostState, HttpError, Request, Response};
+pub use http::{Client, Fetch, HostLimiter, HostState, HttpError, NoEgress, Request, Response};
 pub use manifest::{
     Backoff, Caps, Consent, Distribution, EMPTY_SCHEMA, Endpoint, HostRate, Kind, Limits, Manifest,
     Network, Policy, Priority, Risk, Schedule, UserLimits, Window,

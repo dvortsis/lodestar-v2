@@ -37,10 +37,23 @@
 //!   commit the result. A key in a URL is replaced by `REDACTED` in both
 //!   the fixture and the test's config.
 //!
-//! The replayer answers each request with the next exchange. A request
-//! that doesn't match it fails with [`HttpError::Unrecorded`], and
-//! [`Replayer::finish`] reports any mismatch or unplayed exchange, so a
-//! test can't pass by skipping requests.
+//! - Number the files with zero padding (`001`, `002`, …): they're
+//!   sorted by name, so `10.http` would come before `2.http`.
+//!
+//! [`Replayer::load`] answers each request with the next exchange. For a
+//! plugin that sends requests in parallel (one per indexer, say),
+//! [`Replayer::load_unordered`] answers with the first unplayed exchange
+//! that matches instead. Either way a request that matches nothing fails
+//! with [`HttpError::Unrecorded`], and [`Replayer::finish`] reports any
+//! mismatch or unplayed exchange, so a test can't pass by skipping
+//! requests.
+//!
+//! # Time
+//!
+//! Contract tests run on tokio's paused clock, so a plugin's 15-minute
+//! poll takes no real time. The harness's waits ([`FakeCtx::next`],
+//! [`wait_for`], [`Running::stop`]) give up after [`DEADLINE`] of *real*
+//! time, however far the paused clock runs meanwhile.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -51,7 +64,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout};
 
-use crate::http::{Fetch, HostLimiter, HttpError, Method, Request, Response};
+use crate::http::{Fetch, HostLimiter, HttpError, Method, NoEgress, Request, Response};
 use crate::manifest::{Policy, UserLimits};
 use crate::plugin::{
     BoxFuture, Discovery, Emitter, Kit, PluginError, Shutdown, SourceCtx, SourcePlugin,
@@ -80,12 +93,27 @@ pub struct FakeCtx {
 
 impl FakeCtx {
     /// A context for `plugin`, paced by its own policy with no user
-    /// settings. Jitter is seeded, so runs repeat.
+    /// settings and no egress. Jitter is seeded, so runs repeat.
     pub fn new(plugin: &dyn SourcePlugin, source: SourceId) -> FakeCtx {
-        FakeCtx::with_limits(plugin.policy(), &UserLimits::default(), source)
+        FakeCtx::with_fetch(plugin, source, Arc::new(NoEgress))
     }
 
-    pub fn with_limits(policy: &Policy, user: &UserLimits, source: SourceId) -> FakeCtx {
+    /// As [`new`](FakeCtx::new), with HTTP answered by `fetch` (usually a
+    /// [`Replayer`]).
+    pub fn with_fetch(
+        plugin: &dyn SourcePlugin,
+        source: SourceId,
+        fetch: Arc<dyn Fetch>,
+    ) -> FakeCtx {
+        FakeCtx::with_limits(plugin.policy(), &UserLimits::default(), source, fetch)
+    }
+
+    pub fn with_limits(
+        policy: &Policy,
+        user: &UserLimits,
+        source: SourceId,
+        fetch: Arc<dyn Fetch>,
+    ) -> FakeCtx {
         let (tx, discoveries) = mpsc::channel(CAPACITY);
         let (trigger, shutdown) = Shutdown::new();
         let state = Arc::new(MemoryState::new());
@@ -96,10 +124,7 @@ impl FakeCtx {
             peer_requests: None,
             peer_replies: None,
             shutdown,
-            kit: Kit {
-                state: state.clone(),
-                limiter: limiter.clone(),
-            },
+            kit: Kit::with_limiter(state.clone(), fetch, limiter.clone()),
         };
         FakeCtx {
             ctx: Some(ctx),
@@ -128,13 +153,17 @@ impl FakeCtx {
         let _ = self.trigger.send(true);
     }
 
-    /// The next discovery, or `None` after [`DEADLINE`] or once the plugin
-    /// has dropped its emitter.
+    /// The next discovery, or `None` after [`DEADLINE`] of real time or
+    /// once the plugin has dropped its emitter.
     pub async fn next(&mut self) -> Option<Discovery> {
-        timeout(DEADLINE, self.discoveries.recv())
-            .await
-            .ok()
-            .flatten()
+        let start = std::time::Instant::now();
+        loop {
+            match timeout(TICK, self.discoveries.recv()).await {
+                Ok(d) => return d,
+                Err(_) if start.elapsed() >= DEADLINE => return None,
+                Err(_) => {}
+            }
+        }
     }
 
     /// Discoveries already sent.
@@ -144,6 +173,23 @@ impl FakeCtx {
             out.push(d);
         }
         out
+    }
+}
+
+/// How often the harness re-checks a condition.
+const TICK: Duration = Duration::from_millis(50);
+
+/// Waits until `cond` holds. Panics after [`DEADLINE`] of real time.
+/// Checking every 50 ms of clock time, it lets a paused clock run on to
+/// the plugin's next timer between checks.
+pub async fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !cond() {
+        assert!(
+            start.elapsed() < DEADLINE,
+            "still waiting for {what} after {DEADLINE:?}"
+        );
+        tokio::time::sleep(TICK).await;
     }
 }
 
@@ -158,7 +204,9 @@ pub struct Running {
 #[derive(Debug)]
 pub struct Stopped {
     pub result: Result<(), PluginError>,
-    /// From the shutdown request to the plugin's return.
+    /// From the shutdown request to the plugin's return: the longer of
+    /// the clock's time (paused or not) and real time, so neither a long
+    /// timer nor blocking work passes unseen.
     pub took: Duration,
 }
 
@@ -167,15 +215,38 @@ impl Running {
     /// return. `Err` if it didn't, or panicked.
     pub async fn stop(self) -> Result<Stopped, String> {
         let asked = Instant::now();
+        let real = std::time::Instant::now();
         let _ = self.trigger.send(true);
-        match timeout(DEADLINE, self.task).await {
-            Ok(Ok(result)) => Ok(Stopped {
-                result,
-                took: asked.elapsed(),
-            }),
-            Ok(Err(e)) => Err(format!("plugin task failed: {e}")),
-            Err(_) => Err(format!("plugin still running {DEADLINE:?} after shutdown")),
+        let mut task = self.task;
+        loop {
+            match timeout(TICK, &mut task).await {
+                Ok(Ok(result)) => {
+                    return Ok(Stopped {
+                        result,
+                        took: asked.elapsed().max(real.elapsed()),
+                    });
+                }
+                Ok(Err(e)) => return Err(format!("plugin task failed: {e}")),
+                Err(_) if real.elapsed() >= DEADLINE => {
+                    task.abort();
+                    return Err(format!("plugin still running {DEADLINE:?} after shutdown"));
+                }
+                Err(_) => {}
+            }
         }
+    }
+
+    /// The contract check: the plugin returns `Ok` within [`STOP_WITHIN`]
+    /// of shutdown.
+    pub async fn stop_within(self) -> Result<(), String> {
+        let stopped = self.stop().await?;
+        if stopped.took > STOP_WITHIN {
+            return Err(format!(
+                "plugin took {:?} to stop (limit {STOP_WITHIN:?})",
+                stopped.took
+            ));
+        }
+        stopped.result.map_err(|e| format!("plugin failed: {e}"))
     }
 
     /// Whether the plugin has returned on its own.
@@ -194,15 +265,19 @@ pub struct Exchange {
 
 #[derive(Debug, Default)]
 struct Log {
+    /// Which exchanges have been played.
+    played: Vec<bool>,
+    /// The first unplayed exchange, in order.
     next: usize,
     seen: Vec<(Instant, Request)>,
     errors: Vec<String>,
 }
 
-/// Answers requests from recorded exchanges, in order.
+/// Answers requests from recorded exchanges.
 #[derive(Debug)]
 pub struct Replayer {
     exchanges: Vec<Exchange>,
+    ordered: bool,
     log: Mutex<Log>,
 }
 
@@ -210,37 +285,35 @@ pub struct Replayer {
 pub const MAX_FIXTURE: u64 = 16 * 1024 * 1024;
 
 impl Replayer {
+    /// Plays `exchanges` in order.
     pub fn new(exchanges: Vec<Exchange>) -> Replayer {
         Replayer {
+            log: Mutex::new(Log {
+                played: vec![false; exchanges.len()],
+                ..Log::default()
+            }),
             exchanges,
-            log: Mutex::default(),
+            ordered: true,
         }
     }
 
-    /// Loads a case directory (see the module docs for the layout).
+    /// Plays `exchanges` in any order: each request takes the first
+    /// unplayed exchange that matches it.
+    pub fn unordered(exchanges: Vec<Exchange>) -> Replayer {
+        Replayer {
+            ordered: false,
+            ..Replayer::new(exchanges)
+        }
+    }
+
+    /// Loads a case directory to play in order (see the module docs).
     pub fn load(dir: &Path) -> Result<Replayer, String> {
-        let mut names: Vec<_> = std::fs::read_dir(dir)
-            .map_err(|e| format!("{}: {e}", dir.display()))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "http"))
-            .collect();
-        names.sort();
-        if names.is_empty() {
-            return Err(format!("{}: no .http files", dir.display()));
-        }
-        let mut exchanges = Vec::with_capacity(names.len());
-        for path in names {
-            let head = read(&path)?;
-            let head =
-                String::from_utf8(head).map_err(|_| format!("{}: not UTF-8", path.display()))?;
-            let body = read_opt(&path.with_extension("body"))?;
-            let req_body = read_opt(&path.with_extension("req.body"))?;
-            let ex = parse_exchange(&head, body, req_body)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            exchanges.push(ex);
-        }
-        Ok(Replayer::new(exchanges))
+        Ok(Replayer::new(load_exchanges(dir)?))
+    }
+
+    /// Loads a case directory to play in any order.
+    pub fn load_unordered(dir: &Path) -> Result<Replayer, String> {
+        Ok(Replayer::unordered(load_exchanges(dir)?))
     }
 
     /// Every request received, with when it arrived.
@@ -254,13 +327,13 @@ impl Replayer {
         if let Some(e) = log.errors.first() {
             return Err(e.clone());
         }
-        if log.next < self.exchanges.len() {
+        let unplayed = log.played.iter().filter(|p| !**p).count();
+        if let Some(i) = log.played.iter().position(|p| !*p) {
             return Err(format!(
-                "{} of {} exchanges never requested; next: {} {}",
-                self.exchanges.len() - log.next,
+                "{unplayed} of {} exchanges never requested; first: {} {}",
                 self.exchanges.len(),
-                self.exchanges[log.next].request.method.as_str(),
-                self.exchanges[log.next].request.url,
+                self.exchanges[i].request.method.as_str(),
+                self.exchanges[i].request.url,
             ));
         }
         Ok(())
@@ -273,22 +346,43 @@ impl Replayer {
     fn answer(&self, req: &Request) -> Result<Response, HttpError> {
         let mut log = self.lock();
         log.seen.push((Instant::now(), req.clone()));
-        let Some(ex) = self.exchanges.get(log.next) else {
-            let e = format!(
-                "unexpected {} {}: all exchanges played",
-                req.method.as_str(),
-                req.url
-            );
-            log.errors.push(e.clone());
-            return Err(HttpError::Unrecorded(e));
+        let pick = if self.ordered {
+            match self.exchanges.get(log.next) {
+                None => Err(format!(
+                    "unexpected {} {}: all exchanges played",
+                    req.method.as_str(),
+                    req.url
+                )),
+                Some(ex) => matches(&ex.request, req)
+                    .map(|()| log.next)
+                    .map_err(|why| format!("exchange {}: {why}", log.next + 1)),
+            }
+        } else {
+            (0..self.exchanges.len())
+                .find(|&i| !log.played[i] && matches(&self.exchanges[i].request, req).is_ok())
+                .ok_or_else(|| {
+                    format!(
+                        "no unplayed exchange matches {} {}",
+                        req.method.as_str(),
+                        req.url
+                    )
+                })
         };
-        if let Err(why) = matches(&ex.request, req) {
-            let e = format!("exchange {}: {why}", log.next + 1);
-            log.errors.push(e.clone());
-            return Err(HttpError::Unrecorded(e));
+        let i = match pick {
+            Ok(i) => i,
+            Err(e) => {
+                log.errors.push(e.clone());
+                return Err(HttpError::Unrecorded(e));
+            }
+        };
+        log.played[i] = true;
+        while log.played.get(log.next) == Some(&true) {
+            log.next += 1;
         }
-        log.next += 1;
-        ex.response.clone().map_err(HttpError::Transport)
+        self.exchanges[i]
+            .response
+            .clone()
+            .map_err(HttpError::Transport)
     }
 }
 
@@ -298,10 +392,28 @@ impl Fetch for Replayer {
     }
 }
 
-impl<T: Fetch + ?Sized> Fetch for Arc<T> {
-    fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
-        (**self).fetch(req)
+fn load_exchanges(dir: &Path) -> Result<Vec<Exchange>, String> {
+    let mut names: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "http"))
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        return Err(format!("{}: no .http files", dir.display()));
     }
+    let mut exchanges = Vec::with_capacity(names.len());
+    for path in names {
+        let head = read(&path)?;
+        let head = String::from_utf8(head).map_err(|_| format!("{}: not UTF-8", path.display()))?;
+        let body = read_opt(&path.with_extension("body"))?;
+        let req_body = read_opt(&path.with_extension("req.body"))?;
+        let ex = parse_exchange(&head, body, req_body)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        exchanges.push(ex);
+    }
+    Ok(exchanges)
 }
 
 fn matches(want: &Request, got: &Request) -> Result<(), String> {

@@ -13,7 +13,7 @@ use lodestar_store::SourceId;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::claims::{Claims, Provenance};
-use crate::http::HostLimiter;
+use crate::http::{Client, Fetch, HostLimiter, NoEgress};
 use crate::manifest::{Manifest, Policy, UserLimits};
 use crate::state::{MemoryState, PluginState};
 
@@ -129,28 +129,61 @@ pub struct SourceCtx {
     pub kit: Kit,
 }
 
-/// A plugin's own state store and per-host limiter (§18.1).
+/// A plugin's own state store and its HTTP client, paced per host
+/// (§18.1).
 #[derive(Debug, Clone)]
 pub struct Kit {
     pub state: Arc<dyn PluginState>,
-    pub limiter: HostLimiter,
+    /// The only way the plugin sends HTTP. Its limiter also holds the
+    /// poll and full-scrape gates.
+    pub http: Client,
 }
 
 impl Kit {
-    /// The limiter takes `policy`'s caps met with the user's settings.
-    pub fn new(state: Arc<dyn PluginState>, policy: &Policy, user: &UserLimits) -> Kit {
+    /// The client's limiter takes `policy`'s caps met with the user's
+    /// settings.
+    pub fn new(
+        state: Arc<dyn PluginState>,
+        fetch: Arc<dyn Fetch>,
+        policy: &Policy,
+        user: &UserLimits,
+    ) -> Kit {
+        Kit::with_limiter(state, fetch, HostLimiter::new(policy.limits(user)))
+    }
+
+    /// A kit for `plugin`, on its own policy.
+    pub fn for_plugin(
+        plugin: &dyn SourcePlugin,
+        state: Arc<dyn PluginState>,
+        fetch: Arc<dyn Fetch>,
+        user: &UserLimits,
+    ) -> Kit {
+        Kit::new(state, fetch, plugin.policy(), user)
+    }
+
+    pub fn with_limiter(
+        state: Arc<dyn PluginState>,
+        fetch: Arc<dyn Fetch>,
+        limiter: HostLimiter,
+    ) -> Kit {
         Kit {
             state,
-            limiter: HostLimiter::new(policy.limits(user)),
+            http: Client::new(fetch, limiter),
         }
+    }
+
+    pub fn limiter(&self) -> &HostLimiter {
+        self.http.limiter()
     }
 }
 
 impl Default for Kit {
-    /// In-memory state and [`Policy::STRICT`]'s caps.
+    /// In-memory state, no egress ([`NoEgress`]: every request fails and
+    /// nothing leaves the machine) and [`Policy::STRICT`]'s caps.
     fn default() -> Kit {
         Kit::new(
             Arc::new(MemoryState::new()),
+            Arc::new(NoEgress),
             &Policy::STRICT,
             &UserLimits::default(),
         )

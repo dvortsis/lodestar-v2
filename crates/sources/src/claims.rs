@@ -34,6 +34,10 @@ pub const MAX_DESCRIPTION: usize = 64 * 1024;
 pub const MAX_PUBLISHER: usize = 256;
 /// Bytes in a provenance external reference (a GUID or item URL).
 pub const MAX_EXTERNAL_REF: usize = 2048;
+/// Bytes of text in one event's claims overall. Every other field fits
+/// in about 200 KiB at its own limit, so this bounds the file list: files
+/// past the budget are dropped. Without it one event could hold 40 MB.
+pub const MAX_TOTAL: usize = 1024 * 1024;
 
 /// One claimed file. Sizes are what the source says, not what's true.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,20 +81,17 @@ impl Claims {
             && self.publisher.is_none()
     }
 
-    /// Cuts every field to its limit. Strings are cut on a character
-    /// boundary; lists keep their first entries. Empty strings become
-    /// `None`, and IDs with an empty part are dropped.
+    /// Cuts every field to its limit and the whole to [`MAX_TOTAL`].
+    /// Strings are cut on a character boundary; lists keep their first
+    /// non-empty entries. Empty strings become `None`, and IDs with an
+    /// empty part are dropped.
     pub fn clamp(&mut self) {
         clamp_opt(&mut self.name, MAX_NAME);
-        self.files.truncate(MAX_FILES);
-        for f in &mut self.files {
-            truncate(&mut f.path, MAX_PATH);
-        }
+        self.trackers.retain(|t| !t.is_empty());
         self.trackers.truncate(MAX_TRACKERS);
         for t in &mut self.trackers {
             truncate(t, MAX_TRACKER);
         }
-        self.trackers.retain(|t| !t.is_empty());
         for id in &mut self.ids {
             truncate(&mut id.scheme, MAX_ID_PART);
             id.scheme.make_ascii_lowercase();
@@ -101,6 +102,37 @@ impl Claims {
         self.ids.truncate(MAX_IDS);
         clamp_opt(&mut self.description, MAX_DESCRIPTION);
         clamp_opt(&mut self.publisher, MAX_PUBLISHER);
+        let mut total = self.fixed_len();
+        self.files.truncate(MAX_FILES);
+        let mut keep = 0;
+        for f in &mut self.files {
+            truncate(&mut f.path, MAX_PATH);
+            total += f.path.len();
+            if total > MAX_TOTAL {
+                break;
+            }
+            keep += 1;
+        }
+        self.files.truncate(keep);
+    }
+
+    /// Bytes of text held, the measure [`MAX_TOTAL`] bounds.
+    pub fn text_len(&self) -> usize {
+        self.fixed_len() + self.files.iter().map(|f| f.path.len()).sum::<usize>()
+    }
+
+    /// Bytes of text outside the file list.
+    fn fixed_len(&self) -> usize {
+        let len = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        len(&self.name)
+            + len(&self.description)
+            + len(&self.publisher)
+            + self.trackers.iter().map(String::len).sum::<usize>()
+            + self
+                .ids
+                .iter()
+                .map(|i| i.scheme.len() + i.value.len())
+                .sum::<usize>()
     }
 }
 
@@ -197,14 +229,31 @@ mod tests {
         };
         c.clamp();
         assert_eq!(c.name.as_ref().unwrap().len(), MAX_NAME);
-        assert_eq!(c.files.len(), MAX_FILES);
         assert!(c.files.iter().all(|f| f.path.len() == MAX_PATH));
+        assert!(c.text_len() <= MAX_TOTAL);
+        assert!(!c.files.is_empty() && c.files.len() < MAX_FILES);
         assert_eq!(c.trackers.len(), MAX_TRACKERS);
         assert_eq!(c.ids.len(), MAX_IDS);
         assert_eq!(c.ids[0].scheme, "imdb");
         assert_eq!(c.ids[0].value.len(), MAX_ID_PART);
         assert_eq!(c.description.as_ref().unwrap().len(), MAX_DESCRIPTION);
         assert_eq!(c.publisher.as_ref().unwrap().len(), MAX_PUBLISHER);
+    }
+
+    #[test]
+    fn small_file_lists_are_kept_whole() {
+        let mut c = Claims {
+            files: vec![
+                ClaimedFile {
+                    path: "a/b.mkv".into(),
+                    size: Some(1)
+                };
+                MAX_FILES + 1
+            ],
+            ..Claims::default()
+        };
+        c.clamp();
+        assert_eq!(c.files.len(), MAX_FILES);
     }
 
     #[test]

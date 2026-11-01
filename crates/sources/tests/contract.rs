@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::http::{WaitReason, backoff_delay};
-use lodestar_sources::testing::{DEADLINE, FakeCtx, Replayer, STOP_WITHIN};
+use lodestar_sources::testing::{Exchange, FakeCtx, Replayer, wait_for};
 use lodestar_sources::{
-    Backoff, BoxFuture, Caps, Claims, Client, Consent, Distribution, EMPTY_SCHEMA, Found,
-    HostLimiter, HostRate, HttpError, Kind, Limits, Manifest, Network, PluginError, Policy,
-    Priority, Request, Risk, Schedule, SourceCtx, SourcePlugin, UserLimits, Window,
+    Backoff, BoxFuture, Caps, Claims, Consent, Distribution, EMPTY_SCHEMA, Found, HostLimiter,
+    HostRate, HttpError, Kind, Limits, Manifest, Network, PluginError, Policy, Priority, Request,
+    Risk, Schedule, SourceCtx, SourcePlugin, UserLimits, Window,
 };
 use lodestar_store::SourceId;
 use proptest::prelude::*;
@@ -84,8 +84,16 @@ proptest! {
     /// No user setting loosens a hard cap (§18.1, §18.4).
     #[test]
     fn user_settings_never_loosen_caps(caps in caps(), user in user()) {
-        let limits = policy(caps).limits(&user);
-        prop_assert!(limits.within(&caps), "{limits:?} looser than {caps:?}");
+        let l = policy(caps).limits(&user);
+        // Checked field by field, not through `Limits::within`, so the
+        // test doesn't share an oracle with the code.
+        prop_assert!(l.poll_interval >= caps.min_poll_interval);
+        prop_assert!(l.per_host.interval >= caps.per_host.interval);
+        prop_assert!(l.per_host.burst >= 1 && l.per_host.burst <= caps.per_host.burst);
+        prop_assert!(l.max_full_scrapes_per_day <= caps.max_full_scrapes_per_day);
+        prop_assert!(l.backoff.base >= caps.backoff.base);
+        prop_assert!(l.backoff.max >= caps.backoff.max && l.backoff.max >= l.backoff.base);
+        prop_assert!(l.within(&caps), "{l:?} looser than {caps:?}");
     }
 
     /// Stricter user settings are kept.
@@ -148,6 +156,29 @@ proptest! {
             if let Err(w) = limiter.try_acquire("h", now) {
                 prop_assert!(limiter.try_acquire("h", w.until).is_ok());
                 break;
+            }
+        }
+    }
+
+    /// Polls of one unit are never closer than the poll interval.
+    #[test]
+    fn polls_never_closer_than_the_interval(
+        iv in 1u64..10_000,
+        gaps in proptest::collection::vec(0u64..5_000, 1..200),
+    ) {
+        let limiter = HostLimiter::with_seed(
+            Limits { poll_interval: Duration::from_millis(iv), ..limits_with(HostRate::per_second(1), 0) },
+            1,
+        );
+        let mut now = Instant::now();
+        let mut last: Option<Instant> = None;
+        for g in gaps {
+            now += Duration::from_millis(g);
+            if limiter.try_poll("feed", now).is_ok() {
+                if let Some(l) = last {
+                    prop_assert!(now.duration_since(l) >= Duration::from_millis(iv));
+                }
+                last = Some(now);
             }
         }
     }
@@ -236,7 +267,7 @@ fn windows_wrap_midnight() {
 fn strict_defaults() {
     let kit = lodestar_sources::Kit::default();
     let strict = Policy::STRICT.limits(&UserLimits::default());
-    assert_eq!(*kit.limiter.limits(), strict);
+    assert_eq!(*kit.limiter().limits(), strict);
     assert_eq!(strict.max_full_scrapes_per_day, 0);
     assert_eq!(Policy::STRICT.distribution, Distribution::Coordinator);
     assert_eq!(Policy::STRICT.config_schema, EMPTY_SCHEMA);
@@ -274,9 +305,7 @@ static POLICY: Policy = Policy {
 
 /// Polls one feed: each body line is `<40 hex> <name>`. Keeps the ETag in
 /// its state and stops promptly on shutdown, whatever it's waiting on.
-struct Feed {
-    fetch: Arc<Replayer>,
-}
+struct Feed;
 
 impl SourcePlugin for Feed {
     fn manifest(&self) -> &Manifest {
@@ -295,16 +324,21 @@ impl SourcePlugin for Feed {
                 kit,
                 ..
             } = ctx;
-            let client = Client::new(self.fetch.clone(), kit.limiter.clone());
-            let poll = kit.limiter.limits().poll_interval;
             let err = |e: &dyn std::fmt::Display| PluginError(e.to_string());
             while !shutdown.is_requested() {
+                // The poll gate holds the cap, whatever the plugin's timers.
+                if let Err(w) = kit.limiter().try_poll(URL, Instant::now()) {
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(w.until) => continue,
+                        _ = shutdown.requested() => break,
+                    }
+                }
                 let mut req = Request::get(URL);
                 if let Some(tag) = kit.state.get("etag").await.map_err(|e| err(&e))? {
                     req = req.header("If-None-Match", String::from_utf8_lossy(&tag));
                 }
                 let res = tokio::select! {
-                    r = client.send(&req) => r,
+                    r = kit.http.send(&req) => r,
                     _ = shutdown.requested() => break,
                 };
                 match res {
@@ -337,10 +371,6 @@ impl SourcePlugin for Feed {
                     },
                     Err(_) => {}
                 }
-                tokio::select! {
-                    _ = tokio::time::sleep(poll) => {}
-                    _ = shutdown.requested() => break,
-                }
             }
             Ok(())
         })
@@ -372,15 +402,6 @@ fn fixture(case: &str, files: &[(&str, &[u8])]) -> PathBuf {
     dir
 }
 
-/// Waits (on paused time) until `cond` holds, failing after [`DEADLINE`].
-async fn until(mut cond: impl FnMut() -> bool) {
-    let deadline = Instant::now() + DEADLINE * 1000;
-    while !cond() {
-        assert!(Instant::now() < deadline, "condition not met");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 #[tokio::test(start_paused = true)]
 async fn feed_replays_fixtures_and_keeps_its_cursor() {
     let body = format!("{HASH} Ubuntu 24.04\nnot a hash line\n");
@@ -399,10 +420,8 @@ async fn feed_replays_fixtures_and_keeps_its_cursor() {
         ],
     );
     let replayer = Arc::new(Replayer::load(&dir).unwrap());
-    let plugin = Arc::new(Feed {
-        fetch: replayer.clone(),
-    });
-    let mut fake = FakeCtx::new(plugin.as_ref(), src());
+    let plugin = Arc::new(Feed);
+    let mut fake = FakeCtx::with_fetch(plugin.as_ref(), src(), replayer.clone());
     let running = fake.start(plugin);
 
     let d = fake.next().await.expect("a discovery");
@@ -412,15 +431,13 @@ async fn feed_replays_fixtures_and_keeps_its_cursor() {
         d.found.claims.as_ref().and_then(|c| c.name.as_deref()),
         Some("Ubuntu 24.04")
     );
-    until(|| replayer.requests().len() >= 2).await;
+    wait_for("condition", || replayer.requests().len() >= 2).await;
     replayer.finish().unwrap();
     let times: Vec<_> = replayer.requests().iter().map(|(t, _)| *t).collect();
     assert!(times[1].duration_since(times[0]) >= POLICY.caps.min_poll_interval);
     assert_eq!(fake.state.len(), 1);
 
-    let stopped = running.stop().await.unwrap();
-    stopped.result.unwrap();
-    assert!(stopped.took <= STOP_WITHIN, "took {:?}", stopped.took);
+    running.stop_within().await.unwrap();
     assert!(fake.drain().is_empty());
 }
 
@@ -434,14 +451,12 @@ async fn blocked_by_source_stops_requests_and_still_cancels() {
         )],
     );
     let replayer = Arc::new(Replayer::load(&dir).unwrap());
-    let plugin = Arc::new(Feed {
-        fetch: replayer.clone(),
-    });
-    let mut fake = FakeCtx::new(plugin.as_ref(), src());
+    let plugin = Arc::new(Feed);
+    let mut fake = FakeCtx::with_fetch(plugin.as_ref(), src(), replayer.clone());
     let running = fake.start(plugin);
-    until(|| replayer.requests().len() == 1).await;
+    wait_for("condition", || replayer.requests().len() == 1).await;
     let host = "feed.example";
-    until(|| {
+    wait_for("condition", || {
         matches!(
             fake.limiter.state(host, Instant::now()),
             lodestar_sources::HostState::Blocked { .. }
@@ -453,8 +468,7 @@ async fn blocked_by_source_stops_requests_and_still_cancels() {
     // end rather than waiting.
     tokio::time::sleep(secs(3600)).await;
     assert_eq!(replayer.requests().len(), 1);
-    let stopped = running.stop().await.unwrap();
-    assert!(stopped.took <= STOP_WITHIN);
+    running.stop_within().await.unwrap();
     replayer.finish().unwrap();
 }
 
@@ -471,13 +485,11 @@ async fn transport_errors_back_off() {
         ],
     );
     let replayer = Arc::new(Replayer::load(&dir).unwrap());
-    let plugin = Arc::new(Feed {
-        fetch: replayer.clone(),
-    });
-    let mut fake = FakeCtx::new(plugin.as_ref(), src());
+    let plugin = Arc::new(Feed);
+    let mut fake = FakeCtx::with_fetch(plugin.as_ref(), src(), replayer.clone());
     let running = fake.start(plugin);
-    until(|| replayer.requests().len() == 1).await;
-    until(|| {
+    wait_for("condition", || replayer.requests().len() == 1).await;
+    wait_for("condition", || {
         matches!(
             fake.limiter.state("feed.example", Instant::now()),
             lodestar_sources::HostState::BackingOff { failures: 1, .. }
@@ -485,35 +497,29 @@ async fn transport_errors_back_off() {
     })
     .await;
     // The next answer is normal, so the back-off resets.
-    until(|| replayer.requests().len() == 2).await;
-    until(|| {
+    wait_for("condition", || replayer.requests().len() == 2).await;
+    wait_for("condition", || {
         fake.limiter.state("feed.example", Instant::now()) == lodestar_sources::HostState::Ready
     })
     .await;
-    running.stop().await.unwrap().result.unwrap();
+    running.stop_within().await.unwrap();
     replayer.finish().unwrap();
 }
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_before_any_request() {
     let replayer = Arc::new(Replayer::new(Vec::new()));
-    let plugin = Arc::new(Feed {
-        fetch: replayer.clone(),
-    });
-    let mut fake = FakeCtx::new(plugin.as_ref(), src());
+    let plugin = Arc::new(Feed);
+    let mut fake = FakeCtx::with_fetch(plugin.as_ref(), src(), replayer.clone());
     fake.shutdown();
     let running = fake.start(plugin);
-    let stopped = running.stop().await.unwrap();
-    assert!(stopped.took <= STOP_WITHIN);
+    running.stop_within().await.unwrap();
     assert!(replayer.requests().is_empty());
 }
 
 #[tokio::test]
 async fn emitter_clamps_claims() {
-    let plugin = Feed {
-        fetch: Arc::new(Replayer::new(Vec::new())),
-    };
-    let mut fake = FakeCtx::new(&plugin, src());
+    let mut fake = FakeCtx::new(&Feed, src());
     let ctx = fake.take();
     let found = Found::key(InfoHash([1; 20]), 0).with_claims(Claims {
         name: Some("n".repeat(10_000)),
@@ -532,5 +538,37 @@ async fn emitter_clamps_claims() {
             .with_claims(Claims::default())
             .claims
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn unordered_replay_matches_any_unplayed_exchange() {
+    let ex = |url: &str| Exchange {
+        request: Request::get(url),
+        response: Ok(lodestar_sources::Response {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+        }),
+    };
+    let r = Replayer::unordered(vec![ex("https://a/1"), ex("https://b/1")]);
+    let fetch = |u: &'static str| {
+        let r = &r;
+        async move { lodestar_sources::Fetch::fetch(r, &Request::get(u)).await }
+    };
+    assert!(fetch("https://b/1").await.is_ok());
+    assert!(r.finish().is_err());
+    assert!(fetch("https://a/1").await.is_ok());
+    r.finish().unwrap();
+    assert!(fetch("https://a/1").await.is_err());
+    assert!(r.finish().is_err());
+}
+
+#[tokio::test]
+async fn the_default_kit_sends_nothing() {
+    let kit = lodestar_sources::Kit::default();
+    assert_eq!(
+        kit.http.send(&Request::get("https://example.org/")).await,
+        Err(HttpError::NoEgress)
     );
 }

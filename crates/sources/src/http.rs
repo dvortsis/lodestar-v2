@@ -104,6 +104,8 @@ pub enum HttpError {
     Transport(String),
     /// A fixture replayer had no recorded exchange for this request.
     Unrecorded(String),
+    /// No HTTP client is configured for this plugin (SRC-5 supplies one).
+    NoEgress,
 }
 
 impl std::fmt::Display for HttpError {
@@ -113,6 +115,7 @@ impl std::fmt::Display for HttpError {
             HttpError::Blocked { .. } => f.write_str("blocked by source"),
             HttpError::Transport(e) => write!(f, "transport: {e}"),
             HttpError::Unrecorded(e) => write!(f, "no recorded exchange: {e}"),
+            HttpError::NoEgress => f.write_str("no HTTP egress configured for this plugin"),
         }
     }
 }
@@ -120,9 +123,31 @@ impl std::fmt::Display for HttpError {
 impl std::error::Error for HttpError {}
 
 /// Sends one request. SRC-5's client and the fixture replayer implement
-/// it; plugins use it only through [`Client`].
+/// it; plugins use it only through the [`Client`] in their
+/// [`Kit`](crate::Kit).
+///
+/// **An implementation never follows redirects.** It returns the 3xx as
+/// it is, so a plugin that follows one sends a new request through the
+/// [`Client`], paced for the new host and checked against its egress.
 pub trait Fetch: Send + Sync {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>>;
+}
+
+impl<T: Fetch + ?Sized> Fetch for Arc<T> {
+    fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+        (**self).fetch(req)
+    }
+}
+
+/// The [`Fetch`] a plugin has until egress is configured: every request
+/// fails with [`HttpError::NoEgress`] and nothing leaves the machine.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoEgress;
+
+impl Fetch for NoEgress {
+    fn fetch<'a>(&'a self, _: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+        Box::pin(async { Err(HttpError::NoEgress) })
+    }
 }
 
 /// The longest `Retry-After` honoured. A source can't park a plugin for
@@ -138,8 +163,9 @@ pub enum Verdict {
     /// Overloaded or failing (5xx, or 429 without `Retry-After`): back off.
     Retry,
     /// The source refused us (401, 403, or 429/503 with `Retry-After`):
-    /// no requests to the host until the given time, or the back-off
-    /// ceiling when the source gave none.
+    /// no requests to the host until the later of the given time and the
+    /// next back-off delay, or until the back-off ceiling when the source
+    /// gave none. It counts as a failure, so repeated refusals escalate.
     Blocked(Option<Duration>),
 }
 
@@ -169,9 +195,28 @@ pub fn parse_retry_after(v: &str) -> Option<Duration> {
 
 /// The host of `scheme://[user@]host[:port]/…`, lower-cased and without a
 /// trailing dot. IPv6 literals keep their brackets.
+///
+/// `None` (so [`HttpError::BadUrl`]) for anything a URL parser might
+/// read differently: a backslash, `%`, whitespace, control or non-ASCII
+/// bytes before the path. A plugin sends plain ASCII URLs (IDNs in
+/// punycode), so refusing the rest keeps the limiter's host the one the
+/// client connects to.
 pub fn host_key(url: &str) -> Option<String> {
-    let (_, rest) = url.split_once("://")?;
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.is_empty()
+        || !scheme
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+    {
+        return None;
+    }
     let authority = rest.split(['/', '?', '#']).next()?;
+    if authority
+        .bytes()
+        .any(|b| b == b'\\' || b == b'%' || !b.is_ascii_graphic())
+    {
+        return None;
+    }
     let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     let host = if hostport.starts_with('[') {
         &hostport[..=hostport.find(']')?]
@@ -225,7 +270,10 @@ pub enum WaitReason {
     Blocked,
     /// The full-scrape quota for the last 24 h is spent.
     DailyCap,
-    /// The limiter tracks [`MAX_HOSTS`] busy hosts already.
+    /// The unit was polled less than the poll interval ago.
+    Poll,
+    /// The limiter tracks [`MAX_HOSTS`] busy hosts (or polled units)
+    /// already.
     Hosts,
 }
 
@@ -243,8 +291,10 @@ pub enum HostState {
     Blocked { until: Instant },
 }
 
-/// Hosts tracked at once. Idle hosts are forgotten first, which loses
-/// nothing: an idle host's bucket is full again.
+/// Hosts tracked at once, and separately polled units. Idle entries are
+/// forgotten to make room, which loses nothing: an idle host's bucket is
+/// full, and a host whose last failure is a whole back-off ceiling old
+/// starts over as a first failure would.
 pub const MAX_HOSTS: usize = 1024;
 
 const DAY: Duration = Duration::from_secs(24 * 3600);
@@ -272,12 +322,12 @@ impl Host {
         }
     }
 
-    fn idle(&mut self, now: Instant) -> bool {
+    fn idle(&mut self, now: Instant, forget: Duration) -> bool {
         while self.scrapes.front().is_some_and(|t| *t + DAY <= now) {
             self.scrapes.pop_front();
         }
         self.tat <= now
-            && self.failures == 0
+            && (self.failures == 0 || self.retry_at.is_none_or(|r| later(r, forget) <= now))
             && self.blocked_until.is_none_or(|u| u <= now)
             && self.scrapes.is_empty()
     }
@@ -302,6 +352,8 @@ impl Host {
 #[derive(Debug)]
 struct Hosts {
     map: HashMap<String, Host>,
+    /// When each polled unit may next be polled.
+    polls: HashMap<String, Instant>,
     /// splitmix64 state for the back-off jitter.
     rng: u64,
 }
@@ -316,10 +368,12 @@ impl Hosts {
     }
 
     /// The host's entry, making room if needed.
-    fn entry(&mut self, host: &str, now: Instant, interval: Duration) -> Result<&mut Host, Wait> {
+    fn entry(&mut self, host: &str, now: Instant, l: &Limits) -> Result<&mut Host, Wait> {
+        let interval = l.per_host.interval;
         if !self.map.contains_key(host) {
             if self.map.len() >= MAX_HOSTS {
-                self.map.retain(|_, h| !h.idle(now));
+                let forget = l.backoff.max;
+                self.map.retain(|_, h| !h.idle(now, forget));
             }
             if self.map.len() >= MAX_HOSTS {
                 return Err(Wait {
@@ -352,6 +406,7 @@ impl HostLimiter {
             limits,
             hosts: Arc::new(Mutex::new(Hosts {
                 map: HashMap::new(),
+                polls: HashMap::new(),
                 rng: seed,
             })),
         }
@@ -371,7 +426,7 @@ impl HostLimiter {
     pub fn try_acquire(&self, host: &str, now: Instant) -> Result<(), Wait> {
         let rate = self.limits.per_host;
         let mut hosts = self.lock();
-        let h = hosts.entry(host, now, rate.interval)?;
+        let h = hosts.entry(host, now, &self.limits)?;
         if let Some(w) = h.hold(now) {
             return Err(w);
         }
@@ -410,7 +465,7 @@ impl HostLimiter {
     pub fn try_full_scrape(&self, host: &str, now: Instant) -> Result<(), Wait> {
         let max = self.limits.max_full_scrapes_per_day as usize;
         let mut hosts = self.lock();
-        let h = hosts.entry(host, now, self.limits.per_host.interval)?;
+        let h = hosts.entry(host, now, &self.limits)?;
         while h.scrapes.front().is_some_and(|t| *t + DAY <= now) {
             h.scrapes.pop_front();
         }
@@ -422,6 +477,32 @@ impl HostLimiter {
             });
         }
         h.scrapes.push_back(now);
+        Ok(())
+    }
+
+    /// Takes a poll of `unit` (a feed URL, an indexer id) if the poll
+    /// interval has passed since the last one. Plugins call it before
+    /// each poll, so no setting or bug polls faster than the cap.
+    pub fn try_poll(&self, unit: &str, now: Instant) -> Result<(), Wait> {
+        let interval = self.limits.poll_interval;
+        let mut hosts = self.lock();
+        if let Some(next) = hosts.polls.get(unit).copied().filter(|n| *n > now) {
+            return Err(Wait {
+                until: next,
+                reason: WaitReason::Poll,
+            });
+        }
+        if !hosts.polls.contains_key(unit) && hosts.polls.len() >= MAX_HOSTS {
+            hosts.polls.retain(|_, n| *n > now);
+            if hosts.polls.len() >= MAX_HOSTS {
+                let until = hosts.polls.values().min().copied().unwrap_or(now);
+                return Err(Wait {
+                    until,
+                    reason: WaitReason::Hosts,
+                });
+            }
+        }
+        hosts.polls.insert(unit.to_owned(), later(now, interval));
         Ok(())
     }
 
@@ -437,7 +518,7 @@ impl HostLimiter {
     pub fn failure(&self, host: &str, now: Instant) -> Duration {
         let mut hosts = self.lock();
         let entropy = hosts.entropy();
-        let Ok(h) = hosts.entry(host, now, self.limits.per_host.interval) else {
+        let Ok(h) = hosts.entry(host, now, &self.limits) else {
             return Duration::ZERO;
         };
         h.failures = h.failures.saturating_add(1);
@@ -448,10 +529,9 @@ impl HostLimiter {
 
     /// The source refused us: nothing goes to `host` before `until`. A
     /// later block only ever extends an earlier one.
-    pub fn block(&self, host: &str, until: Instant) {
-        let now = Instant::now();
+    pub fn block(&self, host: &str, until: Instant, now: Instant) {
         let mut hosts = self.lock();
-        if let Ok(h) = hosts.entry(host, now, self.limits.per_host.interval) {
+        if let Ok(h) = hosts.entry(host, now, &self.limits) {
             h.blocked_until = Some(h.blocked_until.map_or(until, |u| u.max(until)));
         }
     }
@@ -483,7 +563,9 @@ impl HostLimiter {
                     self.failure(host, now);
                 }
                 Verdict::Blocked(d) => {
-                    self.block(host, later(now, d.unwrap_or(self.limits.backoff.max)));
+                    let backoff = self.failure(host, now);
+                    let wait = d.map_or(self.limits.backoff.max, |d| d.max(backoff));
+                    self.block(host, later(now, wait), now);
                 }
             },
             Err(HttpError::Transport(_)) => {
@@ -495,10 +577,18 @@ impl HostLimiter {
 }
 
 /// A [`Fetch`] behind a [`HostLimiter`]: the only way a plugin sends HTTP.
-#[derive(Debug, Clone)]
-pub struct Client<F> {
+#[derive(Clone)]
+pub struct Client<F = Arc<dyn Fetch>> {
     fetch: F,
     limiter: HostLimiter,
+}
+
+impl<F> std::fmt::Debug for Client<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("limiter", &self.limiter)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<F: Fetch> Client<F> {
@@ -551,6 +641,12 @@ mod tests {
         assert_eq!(host_key("http://[::1]:9696/api").as_deref(), Some("[::1]"));
         assert_eq!(host_key("nyaa.si/rss"), None);
         assert_eq!(host_key("http:///x"), None);
+        // Anything a URL parser might read as another host is refused.
+        assert_eq!(host_key("http://evil.example\\@nyaa.si/"), None);
+        assert_eq!(host_key("http://ny%61a.si/"), None);
+        assert_eq!(host_key("http://ny aa.si/"), None);
+        assert_eq!(host_key("http://bücher.example/"), None);
+        assert_eq!(host_key("ht tp://h/"), None);
     }
 
     #[test]
@@ -615,8 +711,9 @@ mod tests {
     async fn block_stops_acquire() {
         let l = HostLimiter::with_seed(limits(0, 1), 7);
         let until = Instant::now() + Duration::from_secs(300);
-        l.block("h", until);
-        l.block("h", until - Duration::from_secs(100));
+        let now = Instant::now();
+        l.block("h", until, now);
+        l.block("h", until - Duration::from_secs(100), now);
         assert_eq!(l.acquire("h").await, Err(HttpError::Blocked { until }));
         assert_eq!(l.state("h", Instant::now()), HostState::Blocked { until });
         assert!(l.try_acquire("h", until).is_ok());
@@ -657,5 +754,59 @@ mod tests {
         let later = t0 + Duration::from_secs(10);
         assert!(l.try_acquire("new", later).is_ok());
         assert!(l.lock().map.len() <= MAX_HOSTS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_hosts_are_forgotten_once_stale() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let t0 = Instant::now();
+        for i in 0..MAX_HOSTS {
+            l.failure(&i.to_string(), t0);
+        }
+        assert_eq!(
+            l.try_acquire("new", t0).unwrap_err().reason,
+            WaitReason::Hosts
+        );
+        // A back-off ceiling after the last retry time, they're forgotten.
+        let later = t0 + Duration::from_secs(121);
+        assert!(l.try_acquire("new", later).is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn polls_are_spaced_per_unit() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let t0 = Instant::now();
+        assert!(l.try_poll("feed-a", t0).is_ok());
+        let w = l
+            .try_poll("feed-a", t0 + Duration::from_secs(59))
+            .unwrap_err();
+        assert_eq!(w.reason, WaitReason::Poll);
+        assert_eq!(w.until, t0 + Duration::from_secs(60));
+        assert!(l.try_poll("feed-b", t0).is_ok());
+        assert!(l.try_poll("feed-a", w.until).is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn refusals_escalate() {
+        let l = HostLimiter::with_seed(limits(0, 1), 7);
+        let refuse = Ok(Response {
+            status: 429,
+            headers: vec![("Retry-After".into(), "0".into())],
+            body: vec![],
+        });
+        let mut now = Instant::now();
+        let mut last = Duration::ZERO;
+        for _ in 0..8 {
+            l.record("h", &refuse, now);
+            let HostState::Blocked { until } = l.state("h", now) else {
+                panic!("not blocked");
+            };
+            let wait = until - now;
+            assert!(wait >= last / 2, "{wait:?} after {last:?}");
+            last = wait;
+            now = until;
+        }
+        // The ceiling (60 s) is reached and kept.
+        assert!(last >= Duration::from_secs(30));
     }
 }
