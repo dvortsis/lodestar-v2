@@ -42,19 +42,19 @@
 		return () => slot.cancel();
 	});
 
-	const label = (v: string[], one: () => string, many: () => string) =>
-		(v.length === 1 ? one : many)();
+	const pick = (v: string[], one: () => string, many: () => string) =>
+		(v.length === 1 && !v[0]!.includes('-') ? one : many)();
 	const rows = $derived(
 		identity
 			? (
 					[
 						[
-							label(identity.years, m.search_filters_year, m.detail_parsed_years),
+							pick(identity.years, m.search_filters_year, m.detail_parsed_years),
 							joinSpans(identity.years),
 							'years'
 						],
 						[
-							label(identity.seasons, m.search_filters_season, m.detail_parsed_seasons),
+							pick(identity.seasons, m.search_filters_season, m.detail_parsed_seasons),
 							joinSpans(identity.seasons),
 							'seasons'
 						],
@@ -87,8 +87,8 @@
 		<dd data-testid="detail-parsed-type">
 			{#if type}{type}{#if adult}, {adult}{/if}{:else}{m.detail_parsed_none()}{/if}
 		</dd>
-		{#each rows as [label, value, key] (key)}
-			<dt>{label}</dt>
+		{#each rows as [name, value, key] (key)}
+			<dt>{name}</dt>
 			<dd class="tabular-nums" data-testid="detail-parsed-{key}">{value}</dd>
 		{/each}
 	</dl>

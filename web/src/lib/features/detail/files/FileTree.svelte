@@ -215,6 +215,13 @@
 	});
 
 	const treeIndex = $derived(index ?? (nodes.length ? buildIndex(nodes) : undefined));
+	// Visible rows (a collapsed folder skips its subtree), capped at 10: the frame height.
+	const rows = $derived.by(() => {
+		let n = 0;
+		for (let i = 0, x; treeIndex && (x = nodes[i]) && n < 10; n++)
+			i = x.dir && !expanded.has(x.id) ? treeIndex.end[i]! : i + 1;
+		return n;
+	});
 </script>
 
 <div
@@ -222,7 +229,7 @@
 	data-testid="detail-file-tree"
 	data-tree-worker={useWorker ? 'true' : 'false'}
 	aria-busy={loading}
-	style:--ls-tree-rows={Math.min(nodes.length, 10)}
+	style:--ls-tree-rows={rows}
 >
 	<div class="ls-detail-row">
 		<div class="ls-detail-grow">

@@ -46,7 +46,7 @@
 }
 .ls-detail-tree {
 	/* Rows × row height up to a cap of 10 (--ls-tree-rows); the tree virtualises beyond it. */
-	height: calc(var(--row-height-compact) * var(--ls-tree-rows, 10) + 2px);
+	height: calc(var(--row-height-compact) * var(--ls-tree-rows, 6) + var(--border) * 2);
 	border: var(--border) solid var(--color-base-300);
 	border-radius: var(--radius-field);
 }
