@@ -360,10 +360,12 @@ describe('the Updates screen', () => {
 			expect(screen.getByTestId('updates-skip')).toBeTruthy();
 		});
 
-		it('reads install_unavailable\'s reason from error.reason, never the message', async () => {
+		it("reads install_unavailable's reason from error.reason, never the message", async () => {
 			answer = [
 				409,
-				{ error: { code: 'install_unavailable', message: 'refused (trust_damaged)', reason: 'busy' } }
+				{
+					error: { code: 'install_unavailable', message: 'refused (trust_damaged)', reason: 'busy' }
+				}
 			];
 			render(UpdatesScreen);
 			await screen.findByTestId('updates-install');
@@ -373,7 +375,9 @@ describe('the Updates screen', () => {
 					'Another update is already running'
 				)
 			);
-			expect(screen.getByTestId('updates-error').textContent).not.toContain('trust data is damaged');
+			expect(screen.getByTestId('updates-error').textContent).not.toContain(
+				'trust data is damaged'
+			);
 		});
 	});
 
