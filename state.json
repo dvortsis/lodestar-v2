@@ -2014,14 +2014,16 @@
       "review": "runner MERGE at faf3384"
     },
     "X-discover-headroom": {
-      "status": "review-ready",
+      "status": "merged",
       "session": "session_01MMjhn91BMmYA9rvP5UBGaz",
       "model": "sonnet",
       "brief": "briefs/X-discover-headroom.md",
       "launched_at": "2026-11-01T05:52Z",
       "pr": 322,
       "head": "b58f4ea",
-      "review": "runner MERGE at b58f4ea (Discover 45,076 -> 42,392 B; limit 45.2 -> 43 KB)"
+      "review": "runner MERGE at b58f4ea (Discover 45,076 -> 42,392 B; limit 45.2 -> 43 KB)",
+      "merge_sha": "dba74346",
+      "merged_at": "2026-11-01T06:58Z"
     },
     "X-e2e-fixture-ci": {
       "status": "PR open; dispatched run 41281763895 pending",
