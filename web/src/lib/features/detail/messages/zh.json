@@ -7,6 +7,7 @@
 	"detail_loading": "正在加载种子…",
 	"detail_announce": "正在显示 {title}",
 	"detail_copy_magnet": "复制磁力链接",
+	"detail_block": "拦截此项…",
 	"detail_open_magnet": "打开磁力链接",
 	"detail_open_full": "打开完整页面",
 	"detail_magnet_copied": "已复制磁力链接",
