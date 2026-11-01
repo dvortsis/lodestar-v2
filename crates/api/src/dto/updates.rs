@@ -196,6 +196,13 @@ pub struct RollbackInfo {
     /// null when it can't be counted.
     #[schema(required = true)]
     pub lost_torrents: Option<u64>,
+    /// Whether a rollback replaces the store with the snapshot taken
+    /// before this version upgraded its schema (`false`: the store is
+    /// kept as it is). Sent when Roll back's check found the version to
+    /// roll back; absent otherwise. The snapshot is verified only when
+    /// the rollback begins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restores_store: Option<bool>,
 }
 
 /// One update in `history.json`, newest last.

@@ -62,6 +62,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use super::check::{self, CheckError, Fetch};
+use super::journal::Kept;
 use super::layout::{Bin, Step};
 use super::log_events::{
     UPDATE_AVAILABLE, UPDATE_CHECK_FAILED, UPDATE_INSTALL_FAILED, UPDATE_OVERLAY_UNREADABLE,
@@ -311,6 +312,8 @@ struct Inner {
     last_progress: Mutex<Option<Instant>>,
     /// Wakes the schedule (a version queued for the window).
     wake: tokio::sync::Notify,
+    /// Roll back's cheap check, between status polls.
+    rollback_kept: super::rollback_cache::Cache,
     /// The keys checks verify with (the embedded ones, or tests').
     keys: Box<dyn Fn() -> Result<lodestar_update::Embedded, lodestar_update::Error> + Send + Sync>,
 }
@@ -408,6 +411,7 @@ impl Engine {
                 failed: Mutex::new(None),
                 last_progress: Mutex::new(None),
                 wake: tokio::sync::Notify::new(),
+                rollback_kept: Default::default(),
                 keys,
             }),
         }
@@ -643,6 +647,8 @@ impl Engine {
     }
 
     fn publish(&self, state: UpdatesState, version: Option<String>, error: Option<String>) {
+        // Whatever changed, Roll back's check is computed again.
+        self.inner.rollback_kept.clear();
         (self.inner.publish)(UpdatesEvent {
             state,
             version,
@@ -1057,7 +1063,9 @@ impl Engine {
     /// Whether Roll back is offered now, why not, and where it goes.
     fn rollback(&self) -> RollbackInfo {
         let active = self.active();
-        let reason = match self.rollback_target() {
+        let target = self.rollback_target(false);
+        let restores_store = target.as_ref().ok().map(|(_, k)| *k == Kept::RestoresStore);
+        let reason = match target {
             // A check or an install holds the lock: it waits for that.
             Ok(_) if self.inner.checking.try_lock().is_err() => Some("busy"),
             Ok(_) => None,
@@ -1068,6 +1076,7 @@ impl Engine {
             reason: reason.map(str::to_string),
             to_version: active.map(|a| a.previous),
             lost_torrents: super::probation::current().and_then(|c| c.lost_torrents()),
+            restores_store,
         }
     }
 
@@ -1083,8 +1092,10 @@ impl Engine {
 
     /// What Roll back would roll back (`active`), or why it can't now:
     /// the checks before the supervisor's own (step 2 of the journal,
-    /// which verifies the snapshot and can still refuse).
-    fn rollback_target(&self) -> Result<pending::Active, &'static str> {
+    /// which verifies the snapshot and can still refuse), and what Roll
+    /// back's cheap check found. `fresh` skips its cache (asking for the
+    /// rollback; a status uses it).
+    fn rollback_target(&self, fresh: bool) -> Result<(pending::Active, Kept), &'static str> {
         let ctx = &self.inner.ctx;
         if !ctx.supervised {
             return Err("not_supervised");
@@ -1104,10 +1115,17 @@ impl Engine {
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             image_version: ctx.image.to_string(),
         };
-        if !journal::kept(&jctx, &active.version) {
+        // `active.version` is the running version's (see `active`), so it
+        // always parses: an unreadable one fails closed in `kept`.
+        let kept = if fresh {
+            journal::kept(&jctx, &active.version)
+        } else {
+            self.inner.rollback_kept.kept(&jctx, &active.version)
+        };
+        if kept == Kept::Missing {
             return Err("snapshot_missing");
         }
-        Ok(active)
+        Ok((active, kept))
     }
 
     /// `POST /updates/rollback`: takes the one-check lock for the rest of
@@ -1117,7 +1135,7 @@ impl Engine {
     /// lock, or a restart was asked for (`busy`).
     pub async fn rollback_request(&self) -> Result<UpdatesStatus, UpdatesError> {
         let e = self.clone();
-        blocking(move || e.rollback_target())
+        blocking(move || e.rollback_target(true))
             .await
             .map_err(UpdatesError::RollbackUnavailable)?;
         let Ok(one) = self.inner.checking.clone().try_lock_owned() else {
@@ -1126,7 +1144,7 @@ impl Engine {
         // Again with the lock held: an install may have asked for its
         // switch meanwhile.
         let e = self.clone();
-        let active = blocking(move || e.rollback_target())
+        let (active, _) = blocking(move || e.rollback_target(true))
             .await
             .map_err(UpdatesError::RollbackUnavailable)?;
         *lock(&self.inner.switching) = Some(one);
@@ -1750,6 +1768,9 @@ mod tests {
         /// Runs when a staged overlay is verified; its result is the
         /// verification's when `Some(false)` (a failure) is returned.
         on_verify: Arc<Mutex<VerifyHook>>,
+        /// What `Installer::restarting` answers (a restart was asked for,
+        /// e.g. by a settings change).
+        restart_requested: Arc<std::sync::atomic::AtomicBool>,
         engine: Engine,
     }
 
@@ -1773,6 +1794,11 @@ mod tests {
     /// An engine whose data folder is `data` (a temporary folder when
     /// `None`).
     fn env_in(mode: Mode, data: Option<PathBuf>) -> Env {
+        env_with(mode, data, true)
+    }
+
+    /// [`env_in`], run under the supervisor or not.
+    fn env_with(mode: Mode, data: Option<PathBuf>, supervised: bool) -> Env {
         let dir = tempfile::tempdir().unwrap();
         let data = data.unwrap_or_else(|| dir.path().to_path_buf());
         let fake = Arc::new(Fake::default());
@@ -1795,6 +1821,8 @@ mod tests {
         let rollbacks = Arc::new(Mutex::new(Vec::new()));
         let (b, sw, verify_keys) = (busy.clone(), switched.clone(), trust.clone());
         let rb = rollbacks.clone();
+        let restart_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let restart = restart_requested.clone();
         let on_verify: Arc<Mutex<VerifyHook>> = Arc::new(Mutex::new(Box::new(|| None)));
         let hook_verify = on_verify.clone();
         let installer = Installer {
@@ -1827,7 +1855,7 @@ mod tests {
                 )
                 .is_ok()
             }),
-            restarting: Box::new(|| false),
+            restarting: Box::new(move || restart.load(std::sync::atomic::Ordering::Relaxed)),
             rollback: Box::new(move |lost| lock(&rb).push(lost)),
         };
         let engine = Engine::with(
@@ -1835,7 +1863,7 @@ mod tests {
                 data_dir: data.clone(),
                 running: Version::new(0, 5, 0),
                 image: Version::new(0, 5, 0),
-                supervised: true,
+                supervised,
                 notices: vec![],
                 repository: "https://github.com/dvortsis/lodestar-v2".into(),
                 db: dir.path().join("lodestar.db"),
@@ -1869,6 +1897,7 @@ mod tests {
             switched,
             rollbacks,
             on_verify,
+            restart_requested,
             engine,
         }
     }
@@ -2985,6 +3014,91 @@ mod tests {
             UpdatesError::RollbackUnavailable("snapshot_missing")
         );
         assert!(lock(&e.rollbacks).is_empty());
+    }
+
+    /// Not under the supervisor, nothing can restart into the previous
+    /// version: Roll back says so, and asks nothing.
+    #[tokio::test]
+    async fn rollback_is_refused_without_the_supervisor() {
+        let e = env_with(Mode::Notify, None, false);
+        activate(&e);
+        let s = e.engine.status();
+        assert!(!s.rollback.available);
+        assert_eq!(s.rollback.reason.as_deref(), Some("not_supervised"));
+        assert_eq!(s.rollback.restores_store, None);
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("not_supervised")
+        );
+        assert!(lock(&e.rollbacks).is_empty());
+    }
+
+    /// A restart asked for elsewhere (a settings change) is on its way:
+    /// Roll back waits for it (`busy`), and is offered again once no
+    /// restart is pending.
+    #[tokio::test]
+    async fn rollback_waits_for_a_pending_restart() {
+        let e = env(Mode::Notify);
+        activate(&e);
+        e.restart_requested
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let s = e.engine.status();
+        assert!(!s.rollback.available);
+        assert_eq!(s.rollback.reason.as_deref(), Some("busy"));
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("busy")
+        );
+        assert!(lock(&e.rollbacks).is_empty());
+        e.restart_requested
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(e.engine.status().rollback.available);
+    }
+
+    /// `restores_store` says whether a rollback restores the snapshot of
+    /// a migration; a snapshot removed after a status is seen on the next
+    /// one (never `available` without it), and asking for the rollback
+    /// checks afresh.
+    #[tokio::test]
+    async fn rollback_says_whether_it_restores_the_store_and_sees_a_removed_snapshot() {
+        let e = env(Mode::Notify);
+        activate(&e);
+        let s = e.engine.status();
+        assert!(s.rollback.available);
+        assert_eq!(s.rollback.restores_store, Some(false), "no migration");
+
+        // 0.5.0 migrated the store, and took its snapshot first.
+        drop(
+            lodestar_store::Store::open(
+                e.dir.path().join("lodestar.db"),
+                lodestar_store::StoreConfig::default(),
+            )
+            .unwrap(),
+        );
+        let latest = lodestar_store::latest_schema_version();
+        let overlay = Bin::open(&e.data).unwrap().overlay(&Version::new(0, 5, 0));
+        std::fs::create_dir_all(&overlay).unwrap();
+        std::fs::write(
+            overlay.join("migration.json"),
+            serde_json::json!({"from": latest - 1, "to": latest, "started_at": 1}).to_string(),
+        )
+        .unwrap();
+        let snap = e.dir.path().join(format!("lodestar.pre-v{latest}.db"));
+        std::fs::write(&snap, b"x").unwrap();
+        for _ in 0..2 {
+            let s = e.engine.status();
+            assert!(s.rollback.available, "{:?}", s.rollback);
+            assert_eq!(s.rollback.restores_store, Some(true));
+        }
+        std::fs::remove_file(&snap).unwrap();
+        let s = e.engine.status();
+        assert!(!s.rollback.available);
+        assert_eq!(s.rollback.reason.as_deref(), Some("snapshot_missing"));
+        assert_eq!(s.rollback.restores_store, None);
+        assert_eq!(
+            e.engine.rollback_request().await.unwrap_err(),
+            UpdatesError::RollbackUnavailable("snapshot_missing")
+        );
     }
 
     /// Crash safety of the route's entry: before the graceful shutdown

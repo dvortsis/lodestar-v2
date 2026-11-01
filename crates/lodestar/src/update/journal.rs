@@ -163,20 +163,37 @@ pub fn preview(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<String>
     restore_plan(ctx, failed, previous).map(|s| s.map(|s| s.name))
 }
 
+/// What Roll back's cheap check found for a version: see [`kept`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    /// A rollback can't restore a store the previous version reads (the
+    /// snapshot is gone, or the record of the migration can't be read),
+    /// or the version can't be read, so nothing can be checked.
+    Missing,
+    /// It never touched the schema, or no migration step committed: the
+    /// store is kept as it is.
+    KeepsStore,
+    /// It migrated the store: a rollback restores the snapshot taken
+    /// before that.
+    RestoresStore,
+}
+
 /// Whether a rollback of `failed` looks possible now, cheaply and without
-/// writing anything (Roll back in the API offers it on this): `failed`
-/// didn't migrate the store, or a `pre-v<from+1>` snapshot of its
-/// migration is still there, or the store is still at `from`. The
-/// snapshot is verified only when the rollback begins (step 2, in the
-/// supervisor), which can still refuse it.
-pub fn kept(ctx: &Ctx, failed: &str) -> bool {
+/// writing anything (Roll back in the API offers it on this), and whether
+/// it restores the store: `failed` didn't migrate the store, or a
+/// `pre-v<from+1>` snapshot of its migration is still there, or the store
+/// is still at `from`. The snapshot is verified only when the rollback
+/// begins (step 2, in the supervisor), which can still refuse it. A
+/// version that can't be read fails closed ([`Kept::Missing`]): its
+/// marker can't be found, so nothing says the store is safe to keep.
+pub fn kept(ctx: &Ctx, failed: &str) -> Kept {
     let Some(v) = layout::parse_version(failed) else {
-        return true;
+        return Kept::Missing;
     };
     let m: Migration = match layout::read_json(&ctx.bin.overlay(&v).join("migration.json")) {
-        Ok(None) => return true,
+        Ok(None) => return Kept::KeepsStore,
         Ok(Some(m)) => m,
-        Err(_) => return false,
+        Err(_) => return Kept::Missing,
     };
     let listed = snapshots::list(&ctx.db).is_ok_and(|all| {
         all.iter().any(|s| {
@@ -185,10 +202,14 @@ pub fn kept(ctx: &Ctx, failed: &str) -> bool {
         })
     });
     if listed {
-        return true;
+        return Kept::RestoresStore;
     }
     let schema = store_schema(&ctx.db);
-    matches!(schema, Ok(None)) || schema == Ok(Some(m.from))
+    if matches!(schema, Ok(None)) || schema == Ok(Some(m.from)) {
+        Kept::KeepsStore
+    } else {
+        Kept::Missing
+    }
 }
 
 /// What a rollback of `failed` restores. Without `<failed>/migration.json`
@@ -236,8 +257,13 @@ fn marked_from(ctx: &Ctx, failed: &str) -> Option<i64> {
 
 /// [`restore_plan`] from `<failed>/migration.json` alone.
 fn marked_plan(ctx: &Ctx, failed: &str, previous: &str) -> Result<Option<SnapshotRef>, String> {
+    // Fails closed: without the version there's no marker to read, and
+    // nothing says the store is one `previous` reads.
     let Some(v) = layout::parse_version(failed) else {
-        return Ok(None);
+        return Err(format!(
+            "\"{failed}\" isn't a version this build reads, so whether it upgraded the store \
+             can't be checked. Nothing was changed"
+        ));
     };
     let marker = ctx.bin.overlay(&v).join("migration.json");
     let m: Migration = match layout::read_json(&marker) {
@@ -703,8 +729,12 @@ mod tests {
     #[test]
     fn kept_needs_the_snapshot_only_after_a_migration() {
         let s = setup();
-        assert!(kept(&s.ctx, "0.9.0"));
-        assert!(kept(&s.ctx, "0.8.0"), "no marker: nothing to restore");
+        assert_eq!(kept(&s.ctx, "0.9.0"), Kept::RestoresStore);
+        assert_eq!(
+            kept(&s.ctx, "0.8.0"),
+            Kept::KeepsStore,
+            "no marker: nothing to restore"
+        );
         let latest = lodestar_store::latest_schema_version();
         let snap = s
             .ctx
@@ -712,7 +742,7 @@ mod tests {
             .with_file_name(format!("lodestar.pre-v{}.db", latest + 1));
         fs::remove_file(&snap).unwrap();
         // The store is still at `from` (the "migration" wrote no step).
-        assert!(kept(&s.ctx, "0.9.0"));
+        assert_eq!(kept(&s.ctx, "0.9.0"), Kept::KeepsStore);
         let marker = s
             .ctx
             .bin
@@ -725,9 +755,34 @@ mod tests {
             before: vec![],
         };
         fs::write(&marker, serde_json::to_vec(&m).unwrap()).unwrap();
-        assert!(!kept(&s.ctx, "0.9.0"), "migrated, and no snapshot");
+        assert_eq!(
+            kept(&s.ctx, "0.9.0"),
+            Kept::Missing,
+            "migrated, and no snapshot"
+        );
         fs::write(&marker, b"{").unwrap();
-        assert!(!kept(&s.ctx, "0.9.0"), "an unreadable marker");
+        assert_eq!(kept(&s.ctx, "0.9.0"), Kept::Missing, "an unreadable marker");
+    }
+
+    /// A version that can't be read fails closed: never kept, whatever
+    /// snapshots are there, and a rollback of it is refused rather than
+    /// begun with nothing restored.
+    #[test]
+    fn an_unreadable_version_is_never_kept() {
+        let s = setup();
+        assert_eq!(kept(&s.ctx, "0.9.0"), Kept::RestoresStore, "the fixture");
+        for bad in ["", "0.9", "v0.9.0", "../0.9.0", "0.9.0/..", "latest"] {
+            assert_eq!(kept(&s.ctx, bad), Kept::Missing, "{bad:?}");
+            assert!(preview(&s.ctx, bad, pending::IMAGE).is_err(), "{bad:?}");
+            assert!(
+                matches!(
+                    begin(&s.ctx, bad, pending::IMAGE, "failed", None, None, 1),
+                    Err(NotBegun::Refused(_))
+                ),
+                "{bad:?}"
+            );
+        }
+        assert!(current(&s.ctx.bin).unwrap().is_none(), "no journal written");
     }
 
     #[test]
