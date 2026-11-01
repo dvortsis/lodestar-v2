@@ -58,7 +58,9 @@ github-docs uses only supplied screenshots, and lists the missing ones in `image
   - an outline on the element the step refers to;
   - written to `docs/user/images/`.
 
-  Until the capture exists, list them in `SHOTLIST.md`.
+  Specs are in `web/e2e/docs/`; each writes `<page>-<step>.png` (plus `-light`/`-dark` for the guide's `<picture>` pairs).
+
+  **Regenerating:** a PR that changes a screen the guide shows runs `cd web && npm run docs:shots` (the opt-in `docs` Playwright project; Chromium only, no CI job) and commits the changed images in `docs/user/images/`. The clock is frozen and the data is the mock fixtures, so unchanged screens come out byte-identical. A new step adds a test to `web/e2e/docs/shots.docs.ts`; list screens it can't capture in `SHOTLIST.md`.
 - **Other products' screens** (Unraid, Windows, routers) are supplied by the owner. Before committing one, check that it shows no hostnames, public IPs, serial numbers, usernames or tokens, and note the product's version in the caption.
 - **Never** show real torrent names, logs written with torrent details on, secrets or setup tokens.
 

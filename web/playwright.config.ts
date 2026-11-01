@@ -13,12 +13,15 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 //   keyboard-only                 *.keyboard.test.ts flows (no pointer allowed)
 //   fixture                       *.fixture.test.ts against a real `lodestar serve --fixture` server
 //                                 (opt-in: --project=fixture or E2E_FIXTURE=1; nightly in e2e.yml)
+//   docs                          documentation screenshots into docs/user/images (opt-in:
+//                                 --project=docs or E2E_DOCS=1; `npm run docs:shots`)
 //   all-themes                    axe on every route in all 48 themes + the 46-theme key-route
 //                                 baselines (nightly; opt-in: --project=all-themes or E2E_ALL_THEMES=1)
 
 const allThemes = !!process.env.E2E_ALL_THEMES || process.argv.join(' ').includes('all-themes');
 const fixture =
 	!!process.env.E2E_FIXTURE || process.argv.join(' ').split(/[ =]/).includes('fixture');
+const docs = !!process.env.E2E_DOCS || process.argv.join(' ').split(/[ =]/).includes('docs');
 const smoke = /smoke\.test\.ts$/;
 const matrixSpecs = [smoke, /states\.test\.ts$/];
 // The theme set's baselines (key screens × 46 non-Riverstone themes, at 1366) are shared by the
@@ -84,6 +87,16 @@ export default defineConfig<Appearance>({
 		{ name: 'keyboard-only', testMatch: /\.keyboard\.test\.ts$/, use: desktop },
 		// Specs that need the real server: only when asked for (see e2e/README.md).
 		...(fixture ? [{ name: 'fixture', testMatch: /\.fixture\.test\.ts$/, use: desktop }] : []),
+		// Documentation screenshots: only when asked for (`npm run docs:shots`); CI never runs them.
+		...(docs
+			? [
+					{
+						name: 'docs',
+						testMatch: /docs\/.*\.docs\.ts$/,
+						use: { viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 }
+					}
+				]
+			: []),
 		// 48 themes × every route: only when asked for (`--project=all-themes` or E2E_ALL_THEMES=1).
 		...(allThemes
 			? [
