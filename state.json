@@ -2583,6 +2583,11 @@
       "at": "2026-11-01T13:13Z",
       "by": "runner §2.26",
       "what": "Reversed 12:35Z ruling: StateScene keeps showing scenes when the appearance cache is missing (first-run empty states matter more than the one-off scene for an illustrations-off user). #317 follow-up closed as not fixed (UX/cost)."
+    },
+    {
+      "at": "2026-11-01T14:37Z",
+      "by": "runner §2.26",
+      "what": "FX-1: Search index-state banners (on demand) 3.3 -> 4.1 KB (shared EmptyState now in cold-start chunk); Detail sections 37.3 -> 37.31 KB (4 B reshuffle). Net first-view savings: Discover -1.55, Logs -1.45, Alerts -1.58, drawer -0.23 KB."
     }
   ],
   "runner_notes": {
@@ -3064,6 +3069,11 @@
       "id": "flag-fx3-keyboard-apply",
       "status": "to-send",
       "text": "§2.19 (G-m5b B3 / FX-3): Settings → Keyboard switches to apply-at-once with Undo (§10.10.1), superseding the interim Save/Cancel in 2026-10-23-S-keys.md."
+    },
+    {
+      "id": "flag-fx1-limits",
+      "status": "to-send",
+      "text": "§2.19/§2.26 (FX-1, design-review B2): 'Search index-state banners (on demand)' limit 3.3 -> 4.1 KB and 'Detail sections (on demand)' 37.3 -> 37.31 KB, because illustrated states now share one §10.19-compliant EmptyState primitive; first views shrank: Discover -1.55 KB, Logs -1.45 KB, Alerts -1.58 KB, drawer -0.23 KB."
     }
   ],
   "external_gates": {
