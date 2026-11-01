@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,11 @@ def sample(elapsed, count=0, phase="baseline", **changes):
     }
     row.update(changes)
     return row
+
+
+def analyze_with(case, rows):
+    case.rows(rows)
+    return analyze(case.root)
 
 
 class AnalyzerTests(unittest.TestCase):
@@ -520,6 +526,102 @@ class AnalyzerTests(unittest.TestCase):
         fit = analyze(self.root)["memory_fit"]
         self.assertIsNone(fit["refused"])
         self.assertTrue(fit["meets_bar"])
+
+    def context_rows(self, per_1000, per_hour, stored=True, hours=24.5, step=60):
+        # Stored torrents grow ~669/h with a slow wobble, so hours and stored differ.
+        rows = []
+        for i in range(int(hours * 3600 // step) + 1):
+            t, h = i * step, i * step / 3600
+            total = 669 * h + 400 * math.sin(i / 37)  # monotone: 400/37 < 11 per step
+            row = sample(t, i, private_bytes=(600 + per_hour * h + per_1000 * total / 1000) * 2**20)
+            if stored:
+                row["values"]["writer_stored_total"] = total + 5000
+            rows.append(row)
+        return rows
+
+    def test_memory_context_tracking_stored_torrents(self):
+        self.rows(self.context_rows(per_1000=2.8, per_hour=0.0))
+        ctx = analyze(self.root)["memory_context"]
+        self.assertTrue(ctx["available"])
+        self.assertAlmostEqual(ctx["mib_per_1000_stored"], 2.8, places=2)
+        self.assertAlmostEqual(ctx["stored_per_hour"], 669, delta=150)
+        self.assertAlmostEqual(ctx["explained_slope_mib_per_hour"], 2.8 * ctx["stored_per_hour"] / 1000, places=3)
+        self.assertAlmostEqual(ctx["time_only_slope_mib_per_hour"], 0.0, places=1)
+        self.assertAlmostEqual(ctx["stored_coefficient_mib_per_1000"], 2.8, places=2)
+        text = markdown(analyze(self.root))
+        self.assertIn("## Memory context (informational, not part of the gate)", text)
+        self.assertIn("A hint, not a test", text)
+
+    def test_memory_context_growth_with_time_alone(self):
+        self.rows(self.context_rows(per_1000=0.0, per_hour=3.0))
+        ctx = analyze(self.root)["memory_context"]
+        self.assertAlmostEqual(ctx["time_only_slope_mib_per_hour"], 3.0, places=1)
+        self.assertGreater(ctx["time_only_ci95_mib_per_hour"][0], 2.0)
+        self.assertAlmostEqual(ctx["stored_coefficient_mib_per_1000"], 0.0, places=1)
+
+    def test_memory_context_skipped_without_stored_data(self):
+        self.rows(self.context_rows(per_1000=0.0, per_hour=1.0, stored=False))
+        report = analyze(self.root)
+        ctx = report["memory_context"]
+        self.assertFalse(ctx["available"])
+        self.assertEqual(ctx["reason"], "no_stored_torrent_data")
+        self.assertIsNone(ctx["mib_per_1000_stored"])
+        self.assertIn("Skipped: no_stored_torrent_data", markdown(report))
+
+    def test_memory_context_skip_paths(self):
+        base = self.context_rows(per_1000=2.8, per_hour=0.0)
+        mid = len(base) // 2
+        for row in base[mid:]:
+            row["process_identity"] = "b"
+        for row in base[:mid]:
+            row["process_identity"] = "a"
+        self.rows(base)
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "identity_change")
+        reset = self.context_rows(per_1000=2.8, per_hour=0.0)
+        for row in reset[len(reset) // 2:]:
+            row["values"]["writer_stored_total"] -= 15000
+        self.rows(reset)
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "counter_reset")
+        self.rows(self.context_rows(2.8, 0.0, hours=12.4))
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "too_few_samples")
+        self.rows([sample(0, 0, phase="startup")])
+        self.assertEqual(analyze(self.root)["memory_context"]["reason"], "no_baseline")
+
+    def test_memory_context_collinear_regressors_skip_the_two_variable_fit(self):
+        rows = self.memory_rows(1.0)
+        for row in rows:
+            row["values"]["writer_stored_total"] = 700 * row["elapsed_seconds"] / 3600
+        self.rows(rows)
+        ctx = analyze(self.root)["memory_context"]
+        self.assertTrue(ctx["available"])
+        self.assertEqual(ctx["two_variable_reason"], "regressors_collinear")
+        self.assertIsNone(ctx["time_only_slope_mib_per_hour"])
+        self.assertIn("Two-variable fit not shown: regressors_collinear", markdown(analyze(self.root)))
+
+    def test_memory_gate_is_unchanged_by_the_context_view(self):
+        # Pinned from the analyzer before the context view existed.
+        plain = analyze_with(self, self.memory_rows(3.0, noise_mib=1.0))
+        with_stored = self.memory_rows(3.0, noise_mib=1.0)
+        for i, row in enumerate(with_stored):
+            row["values"]["writer_stored_total"] = 700 * i
+        self.rows(with_stored)
+        stored_report = analyze(self.root)
+        for report in (plain, stored_report):
+            fit = report["memory_fit"]
+            self.assertEqual(
+                {k: v for k, v in fit.items() if k not in ("ci95_mib_per_hour", "max_gap_seconds", "standard_error")},
+                {"bar_upper_ci_mib_per_hour": 2.0, "from_hour": 12.0, "meets_bar": False, "peak_mib": 674.45,
+                 "refused": None, "samples": 721, "series": "private_bytes", "slope_mib_per_hour": 3.0,
+                 "to_hour": 24.0, "window_complete": True})
+            self.assertEqual(fit["ci95_mib_per_hour"], [2.9789283650019294, 3.0210716349980706])
+            text = markdown(report)
+            gate = text[text.index("## Memory gate"):text.index("## Memory context")]
+            self.assertEqual(gate, (
+                "## Memory gate\n\n"
+                "- Series: `private_bytes`, baseline hours 12-24 (721 samples, window complete: true)\n"
+                "- OLS slope: 3.00 MiB/h, 95% CI [2.98, 3.02] MiB/h\n"
+                "- Bar: upper 95% bound <= 2 MiB/h: misses the bar\n"
+                "- Peak private memory: 674.45 MiB\n\n"))
 
 
 if __name__ == "__main__":

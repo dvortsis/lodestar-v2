@@ -361,6 +361,82 @@ def memory_fit(rows):
     return fit
 
 
+def memory_context(rows):
+    """Informational only, not part of the gate: private memory against stored torrents.
+
+    Same baseline hours 12-24 window as `memory_fit`. Reports the OLS slope per
+    1,000 stored torrents, the store growth, the private slope that growth alone
+    would explain, and a two-variable fit private ~ a + b*hours + c*stored.
+    Absent stored-torrent data is reported as unavailable, never invented.
+    """
+    f = MEMORY_FIT
+    out = {"informational": True, "available": False, "reason": None, "samples": 0,
+           "mib_per_1000_stored": None, "mib_per_1000_stored_ci95": None,
+           "stored_per_hour": None, "explained_slope_mib_per_hour": None,
+           "time_only_slope_mib_per_hour": None, "time_only_ci95_mib_per_hour": None,
+           "stored_coefficient_mib_per_1000": None, "two_variable_reason": None}
+    baseline = [r for r in rows if r["phase"] == "baseline"]
+    if not baseline:
+        out["reason"] = "no_baseline"
+        return out
+    t0 = baseline[0]["elapsed_seconds"]
+    window = [((r["elapsed_seconds"] - t0) / 3600, r) for r in baseline]
+    window = [(h, r) for h, r in window if f["from_hour"] <= h <= f["to_hour"]]
+    # Same identity check as the gate, over every row in the window.
+    if (len({r["process_id"] for _, r in window}) > 1
+            or len({r["process_identity"] for _, r in window if r.get("process_identity") is not None}) > 1
+            or len({identity(r)[1] for _, r in window if usable(r)}) > 1):
+        out["reason"] = "identity_change"
+        return out
+    pts = [(h, r["values"]["writer_stored_total"] / 1000, r[f["field"]] / 2**20)
+           for h, r in window if number(r.get(f["field"])) and number(r["values"].get("writer_stored_total"))]
+    out["samples"] = n = len(pts)
+    if not pts:
+        out["reason"] = "no_stored_torrent_data"
+        return out
+    if any(b[1] < a[1] for a, b in zip(pts, pts[1:])):
+        out["reason"] = "counter_reset"
+        return out
+    if n < f["min_samples"]:
+        out["reason"] = "too_few_samples"
+        return out
+    hs, ss, ys = [p[0] for p in pts], [p[1] for p in pts], [p[2] for p in pts]
+    # n >= 30, so the normal quantile stands in for Student's t.
+    mh, ms, my = sum(hs) / n, sum(ss) / n, sum(ys) / n
+    shh = sum((h - mh) ** 2 for h in hs)
+    sss = sum((x - ms) ** 2 for x in ss)
+    shs = sum((h - mh) * (x - ms) for h, x in zip(hs, ss))
+    shy = sum((h - mh) * (y - my) for h, y in zip(hs, ys))
+    ssy = sum((x - ms) * (y - my) for x, y in zip(ss, ys))
+    if shh == 0 or sss == 0:
+        out["reason"] = "no_spread"
+        return out
+    out["available"] = True
+    # Memory against stored torrents alone.
+    c1 = ssy / sss
+    se1 = math.sqrt(sum((y - my - c1 * (x - ms)) ** 2 for x, y in zip(ss, ys)) / (n - 2) / sss)
+    out["mib_per_1000_stored"] = c1
+    out["mib_per_1000_stored_ci95"] = [c1 - 1.96 * se1, c1 + 1.96 * se1]
+    growth = shs / shh * 1000
+    out["stored_per_hour"] = growth
+    # Two variables: centred normal equations, 2x2.
+    det = shh * sss - shs ** 2
+    # Tolerance: squared correlation within 1e-9 of 1 is treated as collinear.
+    if det <= 1e-9 * shh * sss:
+        out["two_variable_reason"] = "regressors_collinear"
+        out["explained_slope_mib_per_hour"] = c1 * growth / 1000
+        return out
+    b = (shy * sss - ssy * shs) / det
+    c = (ssy * shh - shy * shs) / det
+    resid = sum((y - my - b * (h - mh) - c * (x - ms)) ** 2 for h, x, y in zip(hs, ss, ys))
+    se_b = math.sqrt(resid / (n - 3) * sss / det)
+    out.update(time_only_slope_mib_per_hour=b,
+               time_only_ci95_mib_per_hour=[b - 1.96 * se_b, b + 1.96 * se_b],
+               stored_coefficient_mib_per_1000=c,
+               explained_slope_mib_per_hour=c * growth / 1000)
+    return out
+
+
 def result_state(result):
     if result is None:
         return "completion_unknown"
@@ -553,6 +629,7 @@ def analyze(root, max_gap=90, now=None, intensity=None):
         },
         "baseline_status": status, "baseline_required_hours": hours,
         "memory_fit": fit,
+        "memory_context": memory_context(rows),
         "collector_completed_window": bool(result and result.get("reason") == "baseline_window_complete"),
         "stop_reason": reason,
         "clean_shutdown": clean_shutdown(result),
@@ -615,6 +692,23 @@ def markdown(report):
             f"- Bar: upper 95% bound <= {fit['bar_upper_ci_mib_per_hour']:g} MiB/h: {verdict}"
             + (f" ({fit['refused']})" if fit["refused"] else ""),
             f"- Peak private memory: {fmt(fit['peak_mib'])} MiB"]
+    ctx = report["memory_context"]
+    out += ["", "## Memory context (informational, not part of the gate)", ""]
+    if not ctx["available"]:
+        out.append(f"- Skipped: {ctx['reason']}. No stored-torrent view is shown.")
+    else:
+        pair = lambda v: "unknown" if v is None else f"[{v[0]:,.3f}, {v[1]:,.3f}]"
+        out += [f"- Private memory per 1,000 stored torrents: {ctx['mib_per_1000_stored']:,.3f} MiB, 95% CI "
+                f"{pair(ctx['mib_per_1000_stored_ci95'])} ({ctx['samples']} samples, same hours as the gate)",
+                f"- Stored-torrent growth: {fmt(ctx['stored_per_hour'])} per hour; at that per-torrent cost it "
+                f"would explain {ctx['explained_slope_mib_per_hour']:,.3f} MiB/h of private slope"
+                + (" (c from the two-variable fit)" if ctx["two_variable_reason"] is None
+                   else " (single-variable cost; ignores any time-only growth)"),
+                f"- Two-variable fit (private ~ a + b*hours + c*stored): time-only growth b = "
+                f"{ctx['time_only_slope_mib_per_hour']:,.3f} MiB/h, 95% CI {pair(ctx['time_only_ci95_mib_per_hour'])}"
+                if ctx["time_only_slope_mib_per_hour"] is not None else
+                f"- Two-variable fit not shown: {ctx['two_variable_reason']}",
+                "- A hint, not a test: samples are not independent and hours and stored torrents are correlated."]
     out += ["", f"Observation freshness: {report['observation_state']}.",
             f"Baseline valid coverage: {report['baseline_coverage_fraction']:.2%}.",
             f"Disk summary: {json.dumps(report['disk'])}", "", "## Evidence issues", ""]

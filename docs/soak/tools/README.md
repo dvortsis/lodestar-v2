@@ -49,6 +49,13 @@ torrents, or peer addresses. Keep original process logs private.
 - RSS maximum includes every available process measurement. RSS change is
   first-to-last and is shown only for a continuous phase. Short startup trends
   and host memory pressure cannot establish a leak.
+- The "Memory context" block (`memory_context` in the JSON) is informational and
+  never changes the memory gate. Over the same hours 12-24 it fits private memory
+  against `writer_stored_total` (MiB per 1,000 stored), reports store growth per
+  hour and the private slope that growth alone would explain, and fits
+  private ~ a + b*hours + c*stored, where b is time-only growth. Samples are not
+  independent and the regressors are correlated: a hint, not a test. Without
+  stored-torrent samples the block is skipped.
 - Capacity equality is reported separately from exceeding a cap. These are
   sampled observations; they cannot prove that between-sample ownership was bounded.
 - `writer_stored_total` measures newly stored torrents. It does not prove
