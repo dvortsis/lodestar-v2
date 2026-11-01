@@ -36,4 +36,14 @@
 	<EmptyState title="No saved searches" text="Save a search to be told when new results match.">
 		{#snippet action()}<Button variant="primary">Save search</Button>{/snippet}
 	</EmptyState>
+	<!-- With art: copy first in the DOM; text 7 / art 5 from x-large, art above the text below it. -->
+	<EmptyState
+		title="Nothing discovered yet"
+		text="New torrents appear here as the crawler finds them."
+	>
+		{#snippet illustration()}<div
+				class="h-(--art-height-small) w-40 rounded-box bg-base-200"
+			></div>{/snippet}
+		{#snippet action()}<Button variant="primary">Open Insights</Button>{/snippet}
+	</EmptyState>
 </div>

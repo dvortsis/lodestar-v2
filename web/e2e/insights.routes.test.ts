@@ -168,7 +168,11 @@ test.describe('states', () => {
 		await expect(page.getByTestId('insights-stale')).toContainText('Counting has stalled');
 	});
 
-	test('paused shows the scene copy and a Resume that refetches', async ({ page, mock, go }) => {
+	test("paused shows the scene copy; the context bar's Resume that refetches", async ({
+		page,
+		mock,
+		go
+	}) => {
 		const paused = {
 			kpi: { ...overviewFixture().kpi, health: { state: 'paused' as const, reason: 'paused' } }
 		};
@@ -178,7 +182,7 @@ test.describe('states', () => {
 		await expect(page.getByTestId('insights-paused')).toContainText('The crawler is paused');
 		const before = mock.calls('getInsightsOverview').length;
 		serve(mock, {}, { paused: false });
-		await page.getByTestId('insights-paused-resume').click();
+		await page.getByTestId('insights-resume').click();
 		await expect.poll(() => mock.calls('resumeCrawler').length).toBe(1);
 		await expect.poll(() => mock.calls('getInsightsOverview').length).toBeGreaterThan(before);
 		await expect(page.getByTestId('insights-paused')).toHaveCount(0);
