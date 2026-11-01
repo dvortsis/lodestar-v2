@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, sessionOk } from '$lib/api/client';
 import { isBareRoute } from './chrome';
-import { DESTINATIONS, isActive, withDensity } from './nav';
+import { DESTINATIONS, isActive } from './nav';
+import { withDensity } from './density';
 import { connectionKind, pillState, type CrawlerSnapshot, type RebuildSnapshot } from './status';
 import { createShellStatus } from './status.svelte';
 

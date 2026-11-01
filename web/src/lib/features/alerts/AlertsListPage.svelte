@@ -7,7 +7,6 @@
 	import IconPause from '~icons/ph/pause';
 	import StateScene from '$lib/shell/StateScene.svelte';
 	import { events } from '$lib/state/events.svelte';
-	import { keys } from '$lib/keys';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -94,19 +93,17 @@
 	}
 
 	// onMount, not $effect: registering writes the registry's version, and an effect that reads and
-	// writes the same state loops.
+	// writes the same state loops. Loaded after mount (commands.ts): the key registry stays out of
+	// the page's first view, as on the alert page.
 	onMount(() => {
-		const pop = keys.pushScope('alerts');
-		const off = keys.register({
-			id: 'alerts.new',
-			title: () => m.alerts_new_command(),
-			section: () => m.alerts_section(),
-			scope: 'alerts',
-			run: () => void openCreate()
+		let off: (() => void) | undefined;
+		let gone = false;
+		void import('./commands').then(({ registerAlertsListCommands }) => {
+			if (!gone) off = registerAlertsListCommands(() => void openCreate());
 		});
 		return () => {
-			off();
-			pop();
+			gone = true;
+			off?.();
 		};
 	});
 

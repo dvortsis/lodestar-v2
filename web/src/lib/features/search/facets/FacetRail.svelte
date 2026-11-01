@@ -10,6 +10,7 @@
 	import type { ApiError } from '$lib/api/client';
 	import type { Ast } from '$lib/state/search.svelte';
 	import type { FacetsResponse, TermFacet } from './facets.svelte';
+	import { ADULT_VALUE } from '../query/clauses';
 	import { wholeDays } from './bins';
 	import RangeGroup from './RangeGroup.svelte';
 	import SwarmGroup from './SwarmGroup.svelte';
@@ -97,7 +98,13 @@
 	const yesNo = (v: string) =>
 		v === 'yes' ? m.search_facets_yes() : v === 'no' ? m.search_facets_no() : v;
 	const labelFor = (name: string) =>
-		name === 'type' ? (v: string) => TYPE[v]?.() ?? v : FLAGS.has(name) ? yesNo : (v: string) => v;
+		name === 'type'
+			? (v: string) => TYPE[v]?.() ?? v
+			: name === 'adult'
+				? (v: string) => ADULT_VALUE[v]?.() ?? v
+				: FLAGS.has(name)
+					? yesNo
+					: (v: string) => v;
 
 	const facet = (name: string): TermFacet | undefined => data?.facets[name];
 	const blocked = (name: string) => !!data?.unavailable.includes(name);

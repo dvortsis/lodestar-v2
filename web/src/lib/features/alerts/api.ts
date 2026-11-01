@@ -5,7 +5,7 @@ import { api } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 import { page } from '$app/state';
 import { resolve } from '$app/paths';
-import { withDensity } from '$lib/shell/nav';
+import { withDensity } from '$lib/shell/density';
 
 export type SavedSearch = components['schemas']['SavedSearchView'];
 export type AlertRow = components['schemas']['AlertRow'];
