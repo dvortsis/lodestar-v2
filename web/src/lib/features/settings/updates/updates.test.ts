@@ -14,10 +14,12 @@ const asked = vi.hoisted(() => ({
 	last: undefined as { title: string; body: string[] } | undefined
 }));
 vi.mock('../form/dialogs', () => ({
-	ask: async (q: { title: string; body: string[] }) => {
+	ask: async (q: { title: string; body: string[] }, signal?: AbortSignal) => {
 		asked.count++;
 		asked.last = q;
-		return asked.answer;
+		if (asked.answer !== 'hold') return asked.answer;
+		// An open question: it ends only when the screen closes it.
+		return new Promise((resolve) => signal?.addEventListener('abort', () => resolve(null)));
 	}
 }));
 const events = vi.hoisted(() => ({
@@ -580,7 +582,13 @@ describe('the Updates screen', () => {
 		it('the dialog says what is lost: a count, none, or unknown; "image" in words', async () => {
 			const open = async (lost: number | null, to = '0.5.0') => {
 				document.body.innerHTML = '';
-				status.rollback = { available: true, lost_torrents: lost, reason: null, to_version: to };
+				status.rollback = {
+					available: true,
+					lost_torrents: lost,
+					reason: null,
+					restores_store: true,
+					to_version: to
+				};
 				render(UpdatesScreen);
 				await fireEvent.click(await screen.findByTestId('updates-rollback'));
 				await until(() => expect(asked.last).toBeTruthy());
@@ -596,6 +604,57 @@ describe('the Updates screen', () => {
 			const img = await open(null, 'image');
 			expect(img.title).not.toContain('image?');
 			expect(img.title).toContain('container image');
+		});
+
+		describe('restores_store', () => {
+			const ask1 = async (restores?: boolean | null) => {
+				document.body.innerHTML = '';
+				asked.last = undefined;
+				status.rollback = {
+					available: true,
+					lost_torrents: 3,
+					reason: null,
+					to_version: '0.5.0',
+					...(restores === undefined ? {} : { restores_store: restores })
+				};
+				render(UpdatesScreen);
+				await fireEvent.click(await screen.findByTestId('updates-rollback'));
+				await until(() => expect(asked.last).toBeTruthy());
+				return asked.last!.body.join(' ');
+			};
+
+			it('true: data returns to before the update, changes are lost', async () => {
+				const body = await ask1(true);
+				expect(body).toContain('goes back to its state from before the update');
+				expect(body).toContain('3 torrents');
+			});
+
+			it('false: data and settings stay, nothing is lost', async () => {
+				const body = await ask1(false);
+				expect(body).toContain('stay as they are');
+				expect(body).not.toContain('lost');
+				expect(body).not.toContain('torrents');
+			});
+
+			it('absent or null: no claim about the data; the button is unchanged', async () => {
+				for (const v of [undefined, null]) {
+					const body = await ask1(v);
+					expect(body).toBe('Lodestar will restart on the previous version (0.5.0).');
+				}
+			});
+
+			it('follows the field while the dialog is open; Cancel sends nothing', async () => {
+				asked.answer = 'hold';
+				const body = await ask1(true);
+				expect(body).toContain('goes back to its state');
+				status.rollback = { ...status.rollback, restores_store: false };
+				const handler = events.on.mock.calls.findLast((c) => c[0] === 'updates')![1];
+				handler({ state: 'idle', version: null, bytes_done: null, bytes_total: null, error: null });
+				await until(() => expect(asked.last!.body.join(' ')).toContain('stay as they are'));
+				expect(mutations()).toEqual([]);
+				asked.answer = 'cancel';
+				document.body.innerHTML = '';
+			});
 		});
 
 		it('a manual rollback is not worded as a failed update', async () => {
