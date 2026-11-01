@@ -939,13 +939,13 @@
       "catch_ups": 2
     },
     "S-updates": {
-      "status": "pr-review",
+      "status": "pr-fixing",
       "model": "sonnet",
       "session": "session_01MMjhn9ZkgCEsH1xWRJeT7g",
       "pr": 306,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater). | 00:27Z brief briefs/S-updates.md (part 1; part 2 = advanced, rollback, overview, pill, overlay, wizard step). Merges main after #299. | 00:27Z launched Sonnet. | 01:06Z PR #306 head a90f96ad (Updates first view 33.9 KB; registry +115-123 B; Install now slot; Settings marker). Reviewer session_01MMjhnD6VCmLiUvS2vGc1LL (+/security-review)."
+      "notes": "from #86 | 2026-10-30T04:28Z must surface notices updater_unreadable, check_not_saved and policy.held_in_process (F-updater). | 00:27Z brief briefs/S-updates.md (part 1; part 2 = advanced, rollback, overview, pill, overlay, wizard step). Merges main after #299. | 00:27Z launched Sonnet. | 01:06Z PR #306 head a90f96ad (Updates first view 33.9 KB; registry +115-123 B; Install now slot; Settings marker). Reviewer session_01MMjhnD6VCmLiUvS2vGc1LL (+/security-review). | 01:21Z reviewer CHANGES: I1 progress heading guesses version (use stepVersion ?? pending.version, else unversioned). /security-review clean. Relayed I1 + O3-O7 (+O2 if <50 B) with marker removal in one push; runner checks delta."
     },
     "S-doc-shots": {
       "status": "pending",
