@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T22:15:00Z",
+  "updated_at": "2026-11-01T22:21:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2184,11 +2184,11 @@
       "notes": "#341"
     },
     "F-filter-load-fail-closed": {
-      "status": "fixing",
+      "status": "ci",
       "notes": "Opus + /security-review; session_01MMjhnAvepJm7UgCAppGN9s; stored rule/unless/class rows that fail to parse must fail closed (tightening only)",
       "pr": 357,
-      "head": "53d7d5be",
-      "note": "review fixes verified by runner (MERGE pending CI); Web size red: /t 21145>21140 B; runner approved §2.26 raise to 21.20 KB only if growth is a shared message chunk"
+      "head": "3eeb08df",
+      "note": "runner MERGE on green; /t raised 21.14→21.20 KB (§2.26) because CI GITHUB_SHA in kit.version.name shifts chunk hashes ~30 B"
     },
     "P-v06-sources-plan": {
       "status": "merged",
@@ -2238,6 +2238,11 @@
       "model": "sonnet",
       "session": "session_01MMjhnBWJ84LfMg2vn3RGTr",
       "launched": "2026-11-01T22:14Z"
+    },
+    "X-size-deterministic": {
+      "status": "queued",
+      "model": "sonnet",
+      "note": "Size job builds with a fixed version name / GITHUB_SHA so size-limit is deterministic (SHA noise ~30 B > many entries' headroom; root cause of the recurring \"+3 B in CI\"). Owns web/scripts/build-version.mjs and the web.yml size step; full-ci not needed."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3249,6 +3254,11 @@
       "id": "flag-357-fail-closed",
       "status": "to-send",
       "text": "§2.19 flags from F-filter-load-fail-closed (#357): unknown stored action codes now fail closed (quarantine within the rule's query) instead of being skipped; unreadable flag/demote rules are skipped rather than applied to everything. Follow-up F-filter-standin-undo scheduled to make stand-in holds correctable after an upgrade."
+    },
+    {
+      "id": "flag-t-limit-2120",
+      "status": "to-send",
+      "text": "§2.26 ruling: /t/[hash] size limit 21.14 → 21.20 KB (#357). Cause: CI puts the commit SHA into the app version name, which shifts chunk hashes by up to ~30 B; no /t code grew. Follow-up X-size-deterministic makes size builds use a fixed version name."
     }
   ],
   "external_gates": {
