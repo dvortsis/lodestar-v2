@@ -3150,7 +3150,11 @@
     "2026-10-30T09:03Z main macOS red: aria2 refused_addr hang (#181 regression). Lesson: PRs touching cross-platform test helpers get full-ci."
   ],
   "ops": [
-    "2026-10-30T08:00Z Local disk filled twice from shared runner-target (23 GB, bisect builds). Wiped. Policy: Rust review builds go to cloud review sessions, not local agents."
+    "2026-10-30T08:00Z Local disk filled twice from shared runner-target (23 GB, bisect builds). Wiped. Policy: Rust review builds go to cloud review sessions, not local agents.",
+    {
+      "t": "2026-11-01T16:00Z",
+      "event": "merged #344 G-m5a (b2913c10); archived its session; launched FX-4 session_01MMjhnBV4hiWYeKeM3poM16 (Sonnet); queued gate-file-cold (bench-only: cold4 class + broad file sets, per X-file-clause-cold decisions) for next free slot"
+    }
   ],
   "reviews": {
     "PR211-freshness-key": {
