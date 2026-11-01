@@ -20,7 +20,7 @@
 	"jobs_state_failed": "Failed",
 	"jobs_progress_label": "{kind} #{id} progress",
 	"jobs_progress_exact": "{read} of {total}",
-	"jobs_progress_approx": "{read} of about {total}",
+	"jobs_progress_approx": "{read} of ≈{total}",
 	"jobs_progress_unknown": "{read} so far",
 	"jobs_field_progress": "Progress",
 	"jobs_field_done": "Done",

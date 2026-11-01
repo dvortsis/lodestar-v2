@@ -38,6 +38,7 @@
 	let epoch = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let ctl: AbortController | undefined;
+	let alive = true;
 
 	const locale = () => currentLocale();
 	const kindName = (j: Job) => (j.kind === 'import' ? m.jobs_kind_import() : m.jobs_kind_export());
@@ -77,19 +78,41 @@
 			id: j.id
 		});
 
+	/** Polls again after `ms`; a hidden tab waits for `visibilitychange` instead. */
 	function schedule(ms: number) {
 		clearTimeout(timer);
+		if (!alive || document.hidden) return;
 		timer = setTimeout(() => void refresh(), ms);
 	}
 
+	/** The row whose control has focus now, so focus can be put back if a render removes it. */
+	const focusedRow = () =>
+		(document.activeElement as HTMLElement | null)?.closest?.('li[id^="job-"]')?.id;
+	/** After a render: focus the row's first control (or its heading) if focus fell to the page. */
+	async function restoreFocus(rowId: string | undefined) {
+		if (!rowId) return;
+		await tick();
+		if (!alive || (document.activeElement && document.activeElement !== document.body)) return;
+		const row = document.getElementById(rowId);
+		(
+			row?.querySelector<HTMLElement>('[data-control]') ?? row?.querySelector<HTMLElement>('h2')
+		)?.focus();
+	}
+
 	async function refresh() {
+		if (!alive) return;
 		ctl?.abort();
 		const mine = (ctl = new AbortController());
 		const startedAt = epoch;
 		try {
 			const res = await api.get('/jobs', { signal: mine.signal });
-			if (mine.signal.aborted || startedAt !== epoch) return;
-			jobs = res.jobs;
+			if (mine.signal.aborted) return;
+			// A control answered meanwhile: this list may predate it, so drop it and poll again.
+			if (startedAt === epoch) {
+				const row = focusedRow();
+				jobs = res.jobs;
+				void restoreFocus(row);
+			}
 			stale = false;
 			status = 'ready';
 		} catch (e) {
@@ -108,7 +131,9 @@
 		try {
 			const path = `/jobs/{id}/${c}` as const;
 			const next = await api.post(path, { path: { id: j.id }, body: {} });
+			if (!alive) return;
 			epoch++;
+			const row = focusedRow();
 			jobs = jobs.map((x) => (x.id === next.id ? next : x));
 			announcement = m.jobs_announce({
 				kind: kindName(next),
@@ -116,18 +141,17 @@
 				state: stateName(viewOf(next))
 			});
 			// The pressed button is replaced (Pause by Resume) or gone: keep focus in the row.
-			await tick();
-			const row = document.getElementById(`job-${next.id}`);
-			(
-				row?.querySelector<HTMLElement>('[data-control]') ?? row?.querySelector<HTMLElement>('h2')
-			)?.focus();
+			void restoreFocus(row);
+			// Poll again soon, so the row follows the worker from here.
+			schedule(BUSY_MS);
 		} catch (e) {
-			if (isAbort(e)) return;
+			if (isAbort(e) || !alive) return;
+			const row = focusedRow();
 			refused[j.id] = m.jobs_action_failed({
 				reason: e instanceof ApiError ? e.message : String(e)
 			});
 			// The job may have finished or expired meanwhile: show what the server has now.
-			void refresh();
+			void refresh().then(() => restoreFocus(row));
 		} finally {
 			busy[j.id] = undefined;
 		}
@@ -139,10 +163,17 @@
 	}
 
 	onMount(() => {
+		alive = true;
 		void refresh();
+		const onVisible = () => {
+			if (!document.hidden) void refresh();
+		};
+		document.addEventListener('visibilitychange', onVisible);
 		return () => {
+			alive = false;
 			clearTimeout(timer);
 			ctl?.abort();
+			document.removeEventListener('visibilitychange', onVisible);
 		};
 	});
 </script>
@@ -177,6 +208,7 @@
 			{#each jobs as j (j.id)}
 				{@const v = viewOf(j)}
 				{@const share = ratio(j)}
+				{@const bar = share ?? (j.finished_at === null ? null : 1)}
 				{@const title = m.jobs_item_title({ kind: kindName(j), id: j.id })}
 				<li
 					class="flex flex-col gap-2 rounded-box border border-field-border p-4"
@@ -196,22 +228,26 @@
 							<span>{m.jobs_field_progress()}</span>
 							<span data-testid="job-{j.id}-progress">
 								{progressText(j)}{#if share !== null}
-									({formatPercent(share, locale(), 0)}){/if}
+									({j.total_approx ? '≈' : ''}{formatPercent(
+										Math.floor(share * 100) / 100,
+										locale(),
+										0
+									)}){/if}
 							</span>
 						</div>
 						<progress
 							class="progress w-full"
-							value={share === null ? undefined : share}
-							max={share === null ? undefined : 1}
+							value={bar ?? undefined}
+							max={bar === null ? undefined : 1}
 							aria-label={m.jobs_progress_label({ kind: kindName(j), id: j.id })}
 						></progress>
 					</div>
 
 					<dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-small">
 						<dt class="text-muted-text">{m.jobs_field_done()}</dt>
-						<dd>{count(j.done)}</dd>
+						<dd data-testid="job-{j.id}-done">{count(j.done)}</dd>
 						<dt class="text-muted-text">{m.jobs_field_skipped()}</dt>
-						<dd>{count(j.skipped)}</dd>
+						<dd data-testid="job-{j.id}-skipped">{count(j.skipped)}</dd>
 						{#if v === 'running'}
 							{#if j.rate !== null}
 								<dt class="text-muted-text">{m.jobs_field_rate()}</dt>
@@ -223,10 +259,10 @@
 							{/if}
 						{/if}
 						<dt class="text-muted-text">{m.jobs_field_started()}</dt>
-						<dd>{formatDateTime(j.started_at, locale())}</dd>
+						<dd data-testid="job-{j.id}-started">{formatDateTime(j.started_at, locale())}</dd>
 						{#if j.finished_at !== null}
 							<dt class="text-muted-text">{m.jobs_field_finished()}</dt>
-							<dd>{formatDateTime(j.finished_at, locale())}</dd>
+							<dd data-testid="job-{j.id}-finished">{formatDateTime(j.finished_at, locale())}</dd>
 						{/if}
 					</dl>
 

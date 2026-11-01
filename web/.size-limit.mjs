@@ -1154,7 +1154,7 @@ export default [
 	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
 	// runner §2.26, S-filters-2c: Filters & Safety keeps its −2.43 KB (the change flow loads on the
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
-	// SRC-16: the Jobs screen's first view measured 27.32 KB, limit = measured + ~4%.
+	// SRC-16: the Jobs screen's first view measured 27.57 KB, limit = measured + ~3.4%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,

@@ -128,4 +128,61 @@ describe('JobsScreen', () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it('marks an estimated total with ≈ and floors the percentage', async () => {
+		get.mockResolvedValue({
+			jobs: [job({ done: 996, skipped: 0, total: 1000, total_approx: true })]
+		});
+		render(JobsScreen);
+		await wait(() =>
+			expect(screen.getByTestId('job-3-progress').textContent).toContain('of ≈1,000')
+		);
+		expect(screen.getByTestId('job-3-progress').textContent).toContain('(≈99%)');
+	});
+
+	it('shows a full bar, not an animation, for a finished job with no total', async () => {
+		get.mockResolvedValue({
+			jobs: [job({ state: 'done', finished_at: 1_700_000_100, total: null, eta_s: null })]
+		});
+		render(JobsScreen);
+		await wait(() => expect(screen.getByRole('progressbar').getAttribute('value')).toBe('1'));
+	});
+
+	it('keeps polling when a refresh predates a control answer', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			get.mockResolvedValueOnce({ jobs: [job()] });
+			render(JobsScreen);
+			await wait(() => expect(screen.getByTestId('job-3-cancel')).toBeTruthy());
+			// A refresh starts, then the control answers first; the refresh's list is dropped.
+			let late!: (v: { jobs: Job[] }) => void;
+			get.mockReturnValueOnce(new Promise((r) => (late = r)));
+			await vi.advanceTimersByTimeAsync(2100);
+			post.mockResolvedValue(job({ state: 'cancelled' }));
+			await fireEvent.click(screen.getByTestId('job-3-cancel'));
+			await wait(() => expect(screen.getByTestId('job-3-state').textContent).toBe('Cancelling'));
+			late({ jobs: [job()] });
+			expect(screen.getByTestId('job-3-state').textContent).toBe('Cancelling');
+			get.mockResolvedValue({ jobs: [job({ state: 'cancelled', finished_at: 1_700_000_100 })] });
+			await vi.advanceTimersByTimeAsync(2100);
+			await wait(() => expect(screen.getByTestId('job-3-state').textContent).toBe('Cancelled'));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('stops polling once the screen is gone', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			get.mockResolvedValue({ jobs: [job()] });
+			const view = render(JobsScreen);
+			await wait(() => expect(screen.getByTestId('job-3')).toBeTruthy());
+			view.unmount();
+			const calls = get.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(get.mock.calls.length).toBe(calls);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

@@ -20,7 +20,7 @@
 	"jobs_state_failed": "失败",
 	"jobs_progress_label": "{kind} #{id} 进度",
 	"jobs_progress_exact": "{read} / {total}",
-	"jobs_progress_approx": "{read} / 约 {total}",
+	"jobs_progress_approx": "{read} / ≈{total}",
 	"jobs_progress_unknown": "已处理 {read}",
 	"jobs_field_progress": "进度",
 	"jobs_field_done": "已完成",
