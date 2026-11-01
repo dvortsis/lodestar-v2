@@ -10,7 +10,7 @@
 	import { resolve } from '$app/paths';
 	import type { Route } from './href';
 	import { csvHref } from './links';
-	import { importText, isImport } from './imports';
+	import { importText } from './imports';
 	import type { Overview } from './model';
 	import type { InsightsQuery } from './query';
 
@@ -134,7 +134,8 @@
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<li
 					class="ins-item-row"
-					tabindex={isImport(a) ? 0 : undefined}
+					tabindex="0"
+					aria-label="{note(a)}, {formatDateFull(a.at, locale, { timeZone: tz })}"
 					data-testid="insights-annotation-{a.kind}"
 				>
 					<span>{note(a)}</span>

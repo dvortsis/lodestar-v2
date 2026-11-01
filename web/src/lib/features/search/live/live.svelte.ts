@@ -4,6 +4,7 @@
 // The list never changes by itself: Show is the caller's (it reloads from the top).
 // If registration fails (the 429 cap, offline, search disabled) the old probe takes over for that
 // query: every INTERVAL_MS, one `/search` with limit 1, "N new" only when both totals are exact.
+import { untrack } from 'svelte';
 import { api, isAbort, latest } from '$lib/api/client';
 import { events } from '$lib/state/events.svelte';
 import type { ResultsQuery } from '../results/results.svelte';
@@ -12,6 +13,8 @@ export const INTERVAL_MS = 30_000;
 const DRIFT_MS = 1_000;
 /** Away this long (hidden, or no stream), the server may have freed the registration (30 s grace). */
 const AWAY_MS = 25_000;
+/** A second re-registration this soon after one is the same return. */
+const COALESCE_MS = 1_500;
 
 export interface LiveDeps {
 	/** The query the rows answer, and its shown total (null: no rows, or not ready). */
@@ -154,6 +157,15 @@ export function createLive(deps: LiveDeps) {
 		/** Start listening (and, with no registration, polling); returns the stop. */
 		start() {
 			const again = () => void follow(current(), true);
+			// A tab hidden this long also drops the stream: the visibility and status paths both fire
+			// for one return. A second call within COALESCE_MS is the same return (no extra POST+DELETE).
+			let lastAway = -Infinity;
+			const awayAgain = () => {
+				const t = Date.now();
+				if (t - lastAway < COALESCE_MS) return;
+				lastAway = t;
+				again();
+			};
 			const offLive = events.on(
 				'search_live',
 				(e) => {
@@ -194,7 +206,7 @@ export function createLive(deps: LiveDeps) {
 			const visible = () => {
 				if (document.hidden) hiddenAt ??= Date.now();
 				else {
-					if (hiddenAt !== null && Date.now() - hiddenAt >= AWAY_MS) again();
+					if (hiddenAt !== null && Date.now() - hiddenAt >= AWAY_MS) awayAgain();
 					hiddenAt = null;
 				}
 			};
@@ -209,7 +221,7 @@ export function createLive(deps: LiveDeps) {
 					const status = events.status;
 					const t = Date.now();
 					if (status === 'live') {
-						if (downAt !== null && t - downAt >= AWAY_MS) again();
+						if (downAt !== null && t - downAt >= AWAY_MS) untrack(awayAgain);
 						downAt = null;
 					} else downAt ??= t;
 				});

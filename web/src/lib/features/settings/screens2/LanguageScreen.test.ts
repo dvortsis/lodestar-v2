@@ -113,8 +113,13 @@ describe('Language & region', () => {
 		);
 		const patches = () => server.calls.filter((c) => c.method === 'PATCH');
 		await fireEvent.input(input, { target: { value: 'Foo/Bar' } });
+		await until(() => expect(input.getAttribute('aria-invalid')).toBe('true'));
+		// Nothing is announced while typing; the error shows once the field is left.
+		expect(screen.queryByRole('alert')).toBeNull();
+		await fireEvent.blur(input);
 		await until(() => expect(screen.getByRole('alert').textContent).toMatch(/isn't known/));
 		await fireEvent.input(input, { target: { value: 'Europe/Ber' } });
+		expect(screen.getByRole('alert')).toBeTruthy(); // stays until the value is valid
 		expect(patches()).toHaveLength(0);
 		await fireEvent.input(input, { target: { value: 'Europe/Berlin' } });
 		await until(() =>
