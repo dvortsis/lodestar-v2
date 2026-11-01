@@ -537,6 +537,8 @@
 	"settings_logging_ev_update_available_h": "A newer version of Lodestar exists.",
 	"settings_logging_ev_update_check_failed_n": "Update check failed",
 	"settings_logging_ev_update_check_failed_h": "Checking for a newer version failed.",
+	"settings_logging_ev_update_install_failed_n": "Update install failed",
+	"settings_logging_ev_update_install_failed_h": "An update couldn't be installed; the running version carries on.",
 	"settings_logging_ev_update_state_unsaved_n": "Update state not saved",
 	"settings_logging_ev_update_state_unsaved_h": "The update status couldn't be saved.",
 	"settings_logging_ev_update_state_unreadable_n": "Update state unreadable",

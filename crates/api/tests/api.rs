@@ -590,6 +590,7 @@ async fn errors_share_one_envelope() {
         post("/api/v1/system/restart", None, json!({})),
         get("/api/v1/updates", None),
         post("/api/v1/updates/check", None, json!({})),
+        post("/api/v1/updates/install", None, json!({})),
     ] {
         let (status, _, body) = call(&f.app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);

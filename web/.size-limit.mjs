@@ -1095,7 +1095,8 @@ export default [
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
-	entry('Natural phrasing (on demand)', naturalLazy, '1.64 KB'),
+	// zh strings inlined (H-zh); runner §2.26. 1.64 → 1.75 KB, no meaning trimmed further.
+	entry('Natural phrasing (on demand)', naturalLazy, '1.75 KB'),
 	entry('Builder (on demand)', builderLazy, '5.69 KB'),
 	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
 	// load on demand, from visibility-events.ts, so they are no longer in this first view.
