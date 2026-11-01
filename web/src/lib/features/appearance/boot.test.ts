@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULTS, type Appearance } from './prefs';
-import { applyTheme } from './themes';
+import { applyTheme, markSave } from './themes';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('$lib/api/client', async (orig) => ({
@@ -101,6 +101,24 @@ describe('startAppearance', () => {
 		await refresh();
 		expect(root.dataset.theme).toBe('riverstone-light');
 		expect(root.dataset.density).toBeUndefined();
+	});
+
+	it('keeps a pick whose save is still pending when the server answers with the older choice', async () => {
+		await applyTheme({ ...DEFAULTS, theme: 'nord', mode: 'light' });
+		root.dataset.density = DEFAULTS.density;
+		root.dataset.motion = DEFAULTS.motion;
+		root.dataset.illustrations = String(DEFAULTS.illustrations);
+		// The server still holds the pick before this one (the echo of an earlier save).
+		get.mockResolvedValue(section({ ...DEFAULTS, mode: 'light' }));
+		markSave(true);
+		try {
+			await refresh();
+			expect(root.dataset.theme).toBe('nord-light');
+		} finally {
+			// The skipped refresh runs once the save ends, with the server's answer by then.
+			markSave(false);
+		}
+		await vi.waitFor(() => expect(root.dataset.theme).toBe('riverstone-light'));
 	});
 
 	it('does not overwrite a choice made while the fetch was in flight', async () => {

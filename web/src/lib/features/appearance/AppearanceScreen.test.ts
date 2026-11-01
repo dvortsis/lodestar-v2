@@ -11,6 +11,7 @@ vi.mock('$lib/api/client', async (orig) => ({
 
 import AppearanceScreen from './AppearanceScreen.svelte';
 import { narrow } from './prefs';
+import { savePending } from './themes';
 
 configure({ defaultHidden: true });
 
@@ -150,6 +151,19 @@ describe('AppearanceScreen', () => {
 		await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
 		expect(patch.mock.calls[0]![1].body.if_revision).toBe(4);
 		expect(patch.mock.calls[1]![1].body.if_revision).toBe(5);
+	});
+
+	it('marks saves pending until the last queued one ends, success or failure', async () => {
+		let release!: () => void;
+		patch.mockImplementationOnce(() => new Promise((r) => (release = () => r({ revision: 5 }))));
+		patch.mockRejectedValueOnce(new ApiError(500, 'internal', 'x'));
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Reduced' }));
+		expect(savePending()).toBe(true);
+		release();
+		await screen.findByText(/Couldn't save that change/);
+		await waitFor(() => expect(savePending()).toBe(false));
 	});
 
 	it('a failed save puts back only its own field', async () => {

@@ -24,7 +24,7 @@
 		type Name
 	} from './prefs';
 	import './appearance-screen.css';
-	import { applyTheme, loadThemes, readCustom, writeCustom } from './themes';
+	import { applyTheme, loadThemes, markSave, readCustom, writeCustom } from './themes';
 
 	let status = $state<'loading' | 'ready' | 'failed'>('loading');
 	let prefs = $state<Appearance>({ ...DEFAULTS });
@@ -122,6 +122,7 @@
 		prefs = { ...$state.snapshot(prefs), ...patch } as Appearance;
 		failed = false;
 		void apply(prefs);
+		markSave(true);
 		queue = queue.then(async () => {
 			try {
 				revision = await save(patch, revision);
@@ -134,6 +135,8 @@
 				void apply(prefs);
 				if (e instanceof ApiError && e.code === 'stale_revision') await refresh();
 				failed = !(e instanceof ApiError && e.status === 401);
+			} finally {
+				markSave(false);
 			}
 		});
 		return queue;
