@@ -1990,28 +1990,34 @@
       "review": "fresh Opus + /security-review; full-ci"
     },
     "S-e2e-2": {
-      "status": "review-ready; baselines marker in CI",
+      "status": "marker removed; 98 new PNGs only; awaiting normal-run Playwright time vs ~13.5 min baseline",
       "session": "session_01MMjhnC2EShFoeTVej4jRbr",
       "model": "sonnet",
       "brief": "briefs/S-e2e-2.md",
       "launched_at": "2026-11-01T05:21Z",
       "pr": 320,
-      "head": "12d28a7",
+      "head": "3c9021c",
       "review": "runner MERGE at 12d28a7 pending new-PNG-only check + marker removal"
     },
     "S-send": {
-      "status": "building",
+      "status": "draft; ruling sent",
       "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
       "model": "sonnet",
       "brief": "briefs/S-send.md",
-      "launched_at": "2026-11-01T05:52Z"
+      "launched_at": "2026-11-01T05:52Z",
+      "pr": 321,
+      "head": "64f92c4",
+      "ruling": "\u00a72.26: /t 20.8 -> 21.0 KB, drawer 27.2 -> 27.4 KB (Send = \u00a710.5 primary action)"
     },
     "X-discover-headroom": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhn91BMmYA9rvP5UBGaz",
       "model": "sonnet",
       "brief": "briefs/X-discover-headroom.md",
-      "launched_at": "2026-11-01T05:52Z"
+      "launched_at": "2026-11-01T05:52Z",
+      "pr": 322,
+      "head": "b58f4ea",
+      "review": "runner MERGE at b58f4ea (Discover 45,076 -> 42,392 B; limit 45.2 -> 43 KB)"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2877,6 +2883,11 @@
       "id": "flag-317-discover-limit",
       "status": "to-send",
       "text": "\u00a72.19/\u00a72.26 (#317 X-illustrations): Discover route limit 45 -> 45.2 KB so state illustrations honour the Show illustrations toggle and Save-Data (\u00a710.19 gate; ~80 B check on that route)."
+    },
+    {
+      "id": "flag-321-send-limits",
+      "status": "to-send",
+      "text": "\u00a72.19/\u00a72.26 (#321 S-send): /t limit 20.8 -> 21.0 KB and drawer 27.2 -> 27.4 KB for Send to client, the \u00a710.5 primary action (+~0.16 KB each). Offset: #322 cut Discover 45.08 -> 42.39 KB and lowered its limit 45.2 -> 43 KB."
     }
   ],
   "external_gates": {
@@ -2930,7 +2941,8 @@
     "Filters flows door (#316): AppearanceScreen (flows/adult.svelte, AdultConfirmDialog), wizard/PackStep (flow.svelte) and the dev route still import filters/flows/** directly; route them through the door and extend the first-load guard to Appearance and wizard views",
     "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
     "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off",
-    "e2e fixture project (#320): wire a CI job for *.fixture.test.ts (needs the Rust binary in the e2e workflow; cost estimate in docs/decisions/2026-11-01-S-e2e-2.md)"
+    "e2e fixture project (#320): wire a CI job for *.fixture.test.ts (needs the Rust binary in the e2e workflow; cost estimate in docs/decisions/2026-11-01-S-e2e-2.md)",
+    "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
