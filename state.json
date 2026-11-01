@@ -3279,6 +3279,12 @@
       "head": "b78beb8",
       "verdict": "CHANGES r1: Search results +358 B (40,011->40,369) -> lazy settle(); plural; keep-loop 200/page. Item 2 dropped (no limit change).",
       "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg"
+    },
+    "334": {
+      "slice": "S-updates-5",
+      "head": "a1f2556",
+      "verdict": "CHANGES r1 (small): absent restores_store keeps old conditional caveat; else MERGE",
+      "session": "session_01MMjhnBgKsNwUQtRhVBqSsX"
     }
   },
   "merged_log": [
