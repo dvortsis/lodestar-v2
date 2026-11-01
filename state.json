@@ -1901,13 +1901,13 @@
       "merge": "cbf1ed69"
     },
     "X-analyzer-memview": {
-      "status": "launching",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhnAUpZ5Y2uaqExgvqoh",
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "02:39Z brief briefs/X-analyzer-memview.md (informational corpus-normalised memory view; gate unchanged)."
+      "notes": "02:39Z brief briefs/X-analyzer-memview.md (informational corpus-normalised memory view; gate unchanged). | 02:39Z launched Sonnet."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
