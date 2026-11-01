@@ -1740,6 +1740,7 @@ dependencies = [
  "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-store",
+ "proptest",
  "tokio",
 ]
 

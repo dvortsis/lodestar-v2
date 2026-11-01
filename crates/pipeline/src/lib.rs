@@ -594,6 +594,7 @@ impl Pipeline {
                 peer_requests,
                 peer_replies,
                 shutdown: plugin_shutdown.clone(),
+                kit: lodestar_sources::Kit::default(),
             };
             let p = plugin.clone();
             let running = Arc::new(AtomicBool::new(true));

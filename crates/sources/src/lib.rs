@@ -6,15 +6,25 @@
 //! one shared metadata-fetch pool (§18.4), scheduled fairly per source
 //! under global hard caps.
 
+pub mod claims;
 mod funnel;
+pub mod http;
 mod manifest;
 mod plugin;
 pub mod pool;
+pub mod state;
+pub mod testing;
 
+pub use claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
-pub use manifest::{Consent, Endpoint, Kind, Manifest, Network, Priority, Risk};
+pub use http::{Client, Fetch, HostLimiter, HostState, HttpError, Request, Response};
+pub use manifest::{
+    Backoff, Caps, Consent, Distribution, EMPTY_SCHEMA, Endpoint, HostRate, Kind, Limits, Manifest,
+    Network, Policy, Priority, Risk, Schedule, UserLimits, Window,
+};
 pub use plugin::{
-    BoxFuture, Closed, Discovery, Emitter, Found, LookupSession, PeerRequest, PluginError,
+    BoxFuture, Closed, Discovery, Emitter, Found, Kit, LookupSession, PeerRequest, PluginError,
     SessionAdmission, Shutdown, SourceCtx, SourcePlugin, Terminal,
 };
 pub use pool::{FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats};
+pub use state::{MemoryState, PluginState, StateError};
