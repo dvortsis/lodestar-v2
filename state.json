@@ -3189,6 +3189,10 @@
     {
       "t": "2026-11-01T16:40Z",
       "event": "FX-4 size ruling (runner §2.26): Settings logging messages (on demand) → 1.05 kB for B6 logging level labels. Follow-up adds .css spacing ramp hits (appearance/editor.css, shortcuts/shortcuts.css) to text-label-token follow-up."
+    },
+    {
+      "t": "2026-11-01T16:50Z",
+      "event": "#346 review MERGE; FX-3 folding undo-ownership fix + 10s waits + 3 polish in one push. appearance-undo-focus follow-up widened: Appearance Undo also binds to the wrong change when a later save is queued."
     }
   ],
   "reviews": {
