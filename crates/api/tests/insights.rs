@@ -18,10 +18,15 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
+use lodestar_api::dto::insights::PrivacySummary;
 use lodestar_api::insights::{InsightsSource, OverviewCache};
 use lodestar_api::ops::{
     BoxFuture, CrawlerRuntime, ExternalAddress, FetchStatus, NetworkCheck, OpsApi, OpsError,
     PortMapping, ReachReason, Source, SourcePatch, StatsResponse,
+};
+use lodestar_api::settings::{
+    Imported, Saved, SectionValues, SettingsApi, SettingsBatch, SettingsFailure, SettingsImport,
+    SettingsIndex, SettingsPreview,
 };
 use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_store::rusqlite::{self, params};
@@ -1763,4 +1768,82 @@ async fn insights_events_go_out_only_while_someone_listens() {
     assert_eq!(v["stages"]["index"], 1000);
     assert_eq!(v["stages"]["discover"], 27, "the week's first harvests");
     hub.close();
+}
+
+/// Settings that answer only the privacy summary (S-privacy-banner).
+#[derive(Debug, Default)]
+struct PrivacySettings(Mutex<PrivacySummary>);
+
+impl SettingsApi for PrivacySettings {
+    fn index(&self) -> SettingsIndex {
+        SettingsIndex {
+            sections: Vec::new(),
+        }
+    }
+    fn section(&self, _: &str) -> Option<SectionValues> {
+        None
+    }
+    fn save(&self, _: SettingsBatch) -> Result<Saved, SettingsFailure> {
+        unreachable!("the overview doesn't save")
+    }
+    fn preview(&self, _: SettingsBatch) -> Result<SettingsPreview, SettingsFailure> {
+        unreachable!("the overview doesn't preview")
+    }
+    fn export(&self, _: bool) -> String {
+        unreachable!("the overview doesn't export")
+    }
+    fn import(&self, _: SettingsImport, _: bool) -> Result<Imported, SettingsFailure> {
+        unreachable!("the overview doesn't import")
+    }
+    fn privacy(&self, _: i64) -> PrivacySummary {
+        *self.0.lock().unwrap()
+    }
+}
+
+#[tokio::test]
+async fn the_overview_carries_the_privacy_summary_to_a_session_only() {
+    let mut f = fixture();
+    let cookie = session(&f).await;
+    // No settings wired: nothing can be on.
+    let o = json_get(&f, &cookie, "/api/v1/insights/overview").await;
+    assert_eq!(
+        o["privacy"],
+        json!({ "identifying_until": null, "query_logging": false })
+    );
+
+    let settings = Arc::new(PrivacySettings::default());
+    let mut state = f.state.clone();
+    state.settings = Some(settings.clone() as Arc<dyn SettingsApi>);
+    f.app = Router::new().nest("/api/v1", router(state));
+    *settings.0.lock().unwrap() = PrivacySummary {
+        identifying_until: Some(NOW + 3600),
+        query_logging: true,
+    };
+    let o = json_get(&f, &cookie, "/api/v1/insights/overview").await;
+    // Booleans and a time, nothing else.
+    assert_eq!(
+        o["privacy"],
+        json!({ "identifying_until": NOW + 3600, "query_logging": true })
+    );
+    // It follows the setting at each request, never from the rollups' cache.
+    *settings.0.lock().unwrap() = PrivacySummary {
+        identifying_until: Some(-1),
+        query_logging: false,
+    };
+    let o = json_get(&f, &cookie, "/api/v1/insights/overview").await;
+    assert_eq!(o["privacy"]["identifying_until"], -1);
+
+    // Without a session: the same 401 as before, with nothing about privacy.
+    let (status, body) = send(&f, get("/api/v1/insights/overview", None)).await;
+    assert_eq!(status, 401);
+    assert!(
+        !body.contains("privacy") && !body.contains("query_logging"),
+        "{body}"
+    );
+    let (status, _) = send(
+        &f,
+        get("/api/v1/insights/overview", Some("lodestar_session=forged")),
+    )
+    .await;
+    assert_eq!(status, 401);
 }

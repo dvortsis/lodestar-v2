@@ -40,6 +40,7 @@ pub mod network;
 pub mod notifications;
 mod portable;
 pub mod preferences;
+pub mod privacy;
 pub mod search;
 pub mod storage;
 pub mod trackers;
@@ -1709,6 +1710,17 @@ impl SettingsApi for Registry {
         endpoints: &[(&str, Value)],
     ) -> Option<String> {
         self.find(section)?.saved_secret(key, endpoints)
+    }
+
+    fn privacy(&self, now: i64) -> lodestar_api::dto::insights::PrivacySummary {
+        fn current<T: Section + Default>(r: &Registry) -> T {
+            r.sections
+                .iter()
+                .find_map(|s| s.as_any().downcast_ref::<Entry<T>>())
+                .map(|e| e.tx.borrow().clone())
+                .unwrap_or_default()
+        }
+        privacy::summary(&current(self), &current(self), now)
     }
 
     fn send_limits(&self) -> &lodestar_api::settings::SendLimits {

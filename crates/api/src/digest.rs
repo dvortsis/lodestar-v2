@@ -1285,6 +1285,7 @@ mod tests {
                 },
                 trend: Vec::new(),
             }),
+            privacy: Default::default(),
             range: range(7),
             segments: Segments {
                 by_group,

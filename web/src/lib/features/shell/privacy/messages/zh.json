@@ -1,0 +1,9 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"shell_privacy_queries_title": "正在保存搜索查询",
+	"shell_privacy_queries_body": "洞察会保存搜索内容，用于热门查询。",
+	"shell_privacy_queries_manage": "在“设置 → 洞察和摘要”中管理",
+	"shell_privacy_turn_off": "立即关闭",
+	"shell_privacy_failed_off": "无法关闭：{message}",
+	"shell_privacy_identifying_title": "日志行可能包含可识别种子或个人的信息"
+}

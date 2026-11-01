@@ -1638,6 +1638,7 @@ fn build(
                     .and_then(|q| Some(p.yield_? - q.kpi.yield_?)),
             },
             previous,
+            privacy: Default::default(),
             range: w.dto(),
             segments: segments(&rows, &p.cohorts, &names, adult),
             serve: Serve::default(),
@@ -1783,7 +1784,14 @@ pub(crate) async fn overview(
     State(s): State<ApiState>,
     Query(q): Query<OverviewQuery>,
 ) -> ApiResult<Json<OverviewResponse>> {
-    Ok(Json(overview_response(&s, q).await?))
+    let mut response = overview_response(&s, q).await?;
+    // Only here: the digest, the CSV and the `insights` event don't carry it.
+    response.privacy = s
+        .settings
+        .as_ref()
+        .map(|settings| settings.privacy(crate::unix_now()))
+        .unwrap_or_default();
+    Ok(Json(response))
 }
 
 fn compare_flag(compare: Option<u8>) -> ApiResult<bool> {

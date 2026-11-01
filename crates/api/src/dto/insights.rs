@@ -62,6 +62,7 @@ pub struct OverviewResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub previous: Option<PreviousPeriod>,
+    pub privacy: PrivacySummary,
     pub range: InsightsRange,
     pub segments: Segments,
     pub serve: Serve,
@@ -75,6 +76,22 @@ pub struct OverviewResponse {
     pub trend: Vec<TrendPoint>,
     /// When the numbers were read (unix seconds).
     pub updated_at: i64,
+}
+
+/// Whether something that identifies torrents or people is being recorded
+/// now (§10.10.7 Privacy, §10.10.12), for the Overview's banner. Booleans
+/// and a time only: never which kinds, a path, a query or a name. Read at
+/// each request, never cached with the rollups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "identifying_until": 1_700_003_600i64, "query_logging": false }))]
+pub struct PrivacySummary {
+    /// When the log stops writing data kinds that identify torrents or
+    /// people (the opt-ins included): -1 not until turned off, else Unix
+    /// seconds. Null while none is on.
+    #[schema(required = true)]
+    pub identifying_until: Option<i64>,
+    /// Searches are being saved for Insights (`insights.query_logging`).
+    pub query_logging: bool,
 }
 
 /// The range as the server normalized it: whole UTC hours, or whole UTC

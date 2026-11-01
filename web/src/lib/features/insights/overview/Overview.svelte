@@ -206,6 +206,16 @@
 	{:else if !overview}
 		<Skeleton />
 	{:else}
+		{#if overview.privacy.query_logging || overview.privacy.identifying_until !== null}
+			<!-- Loaded only while something identifying is recorded (§10.10.12). -->
+			{#await import('$lib/features/shell/privacy/PrivacyBanner.svelte') then { default: Privacy }}
+				<Privacy
+					privacy={overview.privacy}
+					serverAt={overview.updated_at}
+					reload={() => void insights.refresh()}
+				/>
+			{/await}
+		{/if}
 		{#if stalled}
 			<Banner kind="warning" title={m.insights_overview_stalled_title()}>
 				<span data-testid="insights-stalled">{m.insights_overview_stalled_body()}</span>

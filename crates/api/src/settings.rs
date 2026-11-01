@@ -130,6 +130,12 @@ pub trait SettingsApi: Send + Sync + fmt::Debug {
     /// [`SettingsApi::save`]'s checks).
     fn import(&self, import: SettingsImport, dry_run: bool) -> Result<Imported, SettingsFailure>;
 
+    /// What the Overview's privacy banner says at `now` (Unix seconds):
+    /// booleans and a deadline, nothing else. Off by default.
+    fn privacy(&self, _now: i64) -> crate::dto::insights::PrivacySummary {
+        Default::default()
+    }
+
     /// A saved secret, for a test or a send on values that leave it out
     /// (the form never has it: secrets are write-only). `key` is a secret
     /// field (`torznab_api_key`) or a list item's secret

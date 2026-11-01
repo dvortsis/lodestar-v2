@@ -96,6 +96,7 @@ export function overviewFixture(over: Partial<Overview> = {}): Overview {
 			yield: 0.4371,
 			yield_delta: null
 		},
+		privacy: { identifying_until: null, query_logging: false },
 		range: { bucket: 'hour', from: NOW - 48 * HOUR, to: NOW, tz: 'UTC' },
 		segments: {
 			by_content_type: [
