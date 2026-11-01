@@ -8,7 +8,8 @@
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
-	import { createAdultConfirm, setShowAdult, SHOW_ADULT_ENV } from '../filters/flows/adult.svelte';
+	import type { AdultConfirm } from '../filters/flows/adult.svelte';
+	import { SHOW_ADULT_ENV } from './show-adult';
 	import {
 		CONTENT,
 		DEFAULTS,
@@ -44,8 +45,8 @@
 	let adultLock = $state<string | null>(null);
 	let adultKey = $state(0);
 	let adultState = $state<'unknown' | 'ready' | 'failed'>('unknown');
-	const confirm = createAdultConfirm();
-	let AdultDialog = $state<Component<{ confirm: typeof confirm }>>();
+	type AdultFlow = Awaited<ReturnType<typeof import('../filters/flows-door').loadAdult>>;
+	let adultFlow = $state.raw<{ flow: AdultFlow; confirm: AdultConfirm }>();
 
 	const locked = (n: Name) => n in locks;
 	const lockedNames = $derived(
@@ -154,16 +155,20 @@
 
 	async function toggleAdult(on: boolean) {
 		adultState = 'ready';
+		let loaded = adultFlow;
 		try {
-			// The 18+ dialog (Bits UI overlays) loads with the first turn-on.
-			if (on && !AdultDialog)
-				AdultDialog = (await import('../filters/flows/AdultConfirmDialog.svelte')).default;
+			// The 18+ dialog (Bits UI overlays) and the switch's save load with the first change,
+			// through the flows' door (X-flows-door-2), so none of the flows is in this first view.
+			if (!loaded) {
+				const flow = await (await import('../filters/flows-door')).loadAdult();
+				loaded = adultFlow ??= { flow, confirm: flow.createAdultConfirm() };
+			}
 		} catch {
 			adultState = 'failed';
 			adultKey++;
 			return;
 		}
-		const res = await setShowAdult(on, confirm);
+		const res = await loaded.flow.setShowAdult(on, loaded.confirm);
 		if (res.ok) adult = on;
 		else if (res.error) adultState = 'failed';
 		// Cancelled or failed: the switch shows what the server has.
@@ -303,7 +308,7 @@
 					/>
 				{/key}
 			{/if}
-			{#if AdultDialog}<AdultDialog {confirm} />{/if}
+			{#if adultFlow}<adultFlow.flow.AdultConfirmDialog confirm={adultFlow.confirm} />{/if}
 		</section>
 	{/if}
 </div>
