@@ -30,6 +30,18 @@
 	let manualEl = $state<HTMLTextAreaElement>();
 	let busy = $state<'copy' | 'export' | null>(null);
 
+	// A manual copy box holds the selection it was opened for. When the selection changes it closes
+	// (never shows stale magnets); focus returns to Copy if it was inside, so a keyboard user can
+	// copy again.
+	let bar = $state<HTMLElement>();
+	let shownFor: string[] = [];
+	$effect(() => {
+		if (manual === null || selection.hashes === shownFor) return;
+		const inside = manualEl?.parentElement?.contains(document.activeElement);
+		manual = null;
+		if (inside) bar?.querySelector<HTMLElement>('[data-testid="bulk-copy"]')?.focus();
+	});
+
 	async function copy() {
 		busy = 'copy';
 		const r = await copyMagnets(selection.hashes);
@@ -46,6 +58,7 @@
 			// The clipboard refused (a slow answer ends the click's permission): show every magnet,
 			// one per line, selected, for Ctrl+C. (Detail's manual field is a single line.)
 			manual = r.text;
+			shownFor = selection.hashes;
 			void tick().then(() => {
 				manualEl?.focus();
 				manualEl?.select();
@@ -86,7 +99,13 @@
 	}
 </script>
 
-<div class="bb" role="region" aria-label={m.search_bulk_label()} data-testid="bulk-bar">
+<div
+	bind:this={bar}
+	class="bb"
+	role="region"
+	aria-label={m.search_bulk_label()}
+	data-testid="bulk-bar"
+>
 	<p class="bb-count" data-testid="bulk-count">
 		{(n === 1 ? m.search_bulk_count_one : m.search_bulk_count_other)({
 			count: formatCount(n, locale)
