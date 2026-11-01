@@ -1953,6 +1953,14 @@
       "model": "sonnet",
       "brief": "briefs/X-settings-polish.md",
       "launched_at": "2026-11-01T04:27Z"
+    },
+    "S-updates-3": {
+      "status": "building",
+      "session": "session_01MMjhnCk7MrRze9Ggp9P3k8",
+      "model": "sonnet",
+      "brief": "briefs/S-updates-3.md",
+      "launched_at": "2026-11-01T04:33Z",
+      "review": "runner + Opus reviewer (starts an install)"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
