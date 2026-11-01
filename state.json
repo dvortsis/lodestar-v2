@@ -2076,6 +2076,13 @@
       "model": "sonnet",
       "brief": "briefs/S-updates-4.md",
       "launched_at": "2026-11-01T07:45Z"
+    },
+    "X-web-polish-1101b": {
+      "status": "building",
+      "session": "session_01MMjhn8gRjhoSLpqHG12RCc",
+      "model": "sonnet",
+      "brief": "briefs/X-web-polish-1101b.md",
+      "launched_at": "2026-11-01T08:05Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2976,15 +2983,11 @@
     "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
     "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
     "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
-    "a11y: TimeZoneWidget role=alert fires on each invalid keystroke while typing a zone name; consider showing the error on blur or debounced (#259)",
     "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
-    "Insights: Movement annotation list gives tabindex only to import markers; make restart/pause notes keyboard-reachable too (#265 review note 5)",
     "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
     "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)",
     "Percolator file-clause path: real CancelToken (X-search-files-perf left it out to avoid overlap with B-import-server-1)",
     "web vitest flake: query/QueryBar.test.ts 'the Syntax popover > opens on its button, and Try sets and submits' failed 1 of 3 cold local runs in #275 author's and reviewer's sessions (passes alone; waits already 10 s). Not seen in CI yet; get the error text before a fix slice (#275 review)",
-    "live.svelte.ts (#275 optional a): a tab hidden >=35 s fires both the visibility and the status path -> two again() calls (one extra POST+DELETE, no leak); debounce a second again() within 1-2 s",
-    "live.svelte.ts (#275 optional b): the status $effect calls again(), which reads deps.shown(), so the effect tracks search state; wrap again() in untrack",
     "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under \u00a72.26 if so)",
     "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
     "Logging slice: the \u00a710.10.7 banner while query_logging is on (#277 review; left to \u00a710.10.12)",
@@ -3003,8 +3006,7 @@
     "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails",
     "Possible flake: e2e/insights-print.routes.test.ts:57 \"one page on A4 and Letter at 1024 px\" [core] printed 2 Letter pages on #322 b58f4ea (06:42Z), outside the diff; passed on #320 minutes earlier. Runner re-ran once. If it recurs: likely content- or time-dependent height (freeze clock / fixed fixture), fix once.",
     "e2e fixture specs (#323): the 5 fixture files use exactly the 5-login burst; a sixth fixture file needs a shared storageState sign-in (docs/decisions/2026-11-01-X-e2e-fixture-ci.md)",
-    "Updates (#324 optional): journal.rs:172 unparsable version returns kept=true (fail-closed would be false); GET /updates runs snapshots::list each call via rollback_target (cache per status call if polled heavily); tests for not_supervised and restart-pending busy reasons",
-    "Flows guard (#325): a direct import() of filters/flows-root.ts (bypassing flows-door) is not caught by the first-load guard; extend the guard to flag any importer of flows-root/flows-adult other than flows-door.ts"
+    "Updates (#324 optional): journal.rs:172 unparsable version returns kept=true (fail-closed would be false); GET /updates runs snapshots::list each call via rollback_target (cache per status call if polled heavily); tests for not_supervised and restart-pending busy reasons"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
