@@ -1,6 +1,7 @@
 // Advanced (S-updates-2): the channel dialog (Cancel sends nothing, the warning names what changes),
 // locked fields, and a refused or failed save putting the server's value back.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { initLocale } from '$lib/i18n/locale.svelte';
 import Advanced from './Advanced.svelte';
@@ -176,6 +177,7 @@ describe('Advanced', () => {
 		const text = asked.questions[0]!.body.join(' ');
 		expect(text).toContain('never goes back to an older version');
 		expect(text).not.toContain('restore from a snapshot');
+		expect(text).toContain('Pre-releases');
 	});
 
 	it('an emptied wait is not saved as 0', async () => {
@@ -204,5 +206,16 @@ describe('Advanced', () => {
 			expect(screen.getByTestId('updates-adv-reason').textContent).toContain('still being saved')
 		);
 		expect(sent).toEqual([]);
+	});
+
+	it('shows only its own kinds of failure, not the top of the screen’s', async () => {
+		const store = await open();
+		store.error = 'pause';
+		store.reason = 'Could not pause.';
+		await tick();
+		expect(screen.queryByTestId('updates-adv-reason')).toBeNull();
+		store.error = 'setting';
+		store.reason = '';
+		await until(() => expect(screen.getByTestId('updates-adv-reason').textContent).toBeTruthy());
 	});
 });

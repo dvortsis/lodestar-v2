@@ -83,7 +83,12 @@
 		const answer = await ask(
 			{
 				title: m.settings_updates_adv_switch_title({ channel: channelText[to][0]() }),
-				body: [warn({ channel: channelText[to][0]() }), m.settings_updates_adv_switch_when()],
+				body: [
+					warn({ channel: channelText[to][0]() }),
+					// Moving back to Beta from Nightly still says what Beta means.
+					...(to === 'beta' && rank[to] < (rank[from] ?? 0) ? [channelText.beta[1]()] : []),
+					m.settings_updates_adv_switch_when()
+				],
 				actions: [
 					{ id: 'cancel', label: m.settings_updates_cancel() },
 					{ id: 'switch', label: m.settings_updates_adv_switch_action(), variant: 'primary' }
@@ -114,7 +119,7 @@
 </script>
 
 <div class="flex flex-col gap-4" bind:this={root} data-testid="updates-advanced">
-	{#if store.error && store.error !== 'load'}
+	{#if store.error && failure[store.error]}
 		<p role="alert" data-testid="updates-adv-reason">
 			{store.reason || failure[store.error]?.()}
 		</p>
