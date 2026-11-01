@@ -349,6 +349,14 @@
 					: m.search_results_announce_other({ count });
 	}
 
+	// A Block that dropped rows says so through the same region (the store's note, read once).
+	$effect(() => {
+		const note = results.note;
+		if (!note) return;
+		said = note;
+		results.note = '';
+	});
+
 	// §10.13: the selection count, politely, through the same region as the result count.
 	let announced = selection.count;
 	$effect(() => {
@@ -390,7 +398,7 @@
 	aria-labelledby="rp-label"
 	aria-busy={results.status === 'loading' || results.refining}
 >
-	<h2 id="rp-label" class="sr-only">{m.search_results_label()}</h2>
+	<h2 id="rp-label" class="sr-only" tabindex="-1">{m.search_results_label()}</h2>
 	{#if results.refining}<div class="rp-hairline" data-testid="results-refining"></div>{/if}
 
 	<p class="sr-only" aria-live="polite" data-testid="results-announce">{said}</p>

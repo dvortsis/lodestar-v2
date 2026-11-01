@@ -128,3 +128,38 @@ test('from the drawer: Block this…, then Esc sends nothing and focus comes bac
 	expect(mock.calls('applyFilterChange')).toHaveLength(0);
 	await expect(page.getByTestId('drawer')).toBeVisible();
 });
+
+test('after Apply the list keeps its place: focus lands on the row that took the blocked row’s slot', async ({
+	page,
+	go,
+	mock,
+	kbd
+}) => {
+	let blocked = false;
+	// The reload after Apply no longer returns the blocked row (the second of five).
+	server(mock, () => body(blocked ? hits(5).filter((_, i) => i !== 1) : hits(5)));
+	await go('/search?q=lantern');
+	await expect(rowOf(page, 2)).toBeVisible();
+	await kbd.tabTo(rowOf(page, 1));
+	await kbd.press('j');
+	await kbd.press('Shift+F10');
+	const item = page.getByRole('menuitem', { name: 'Block this…' });
+	await expect(item).toBeVisible();
+	await kbd.press('End');
+	await expect(item).toBeFocused();
+	await kbd.press('Enter');
+	await settled(page);
+	await kbd.tabTo(page.getByTestId('block-preview'));
+	await kbd.press('Enter');
+	const apply = page.getByTestId('change-apply');
+	await kbd.tabTo(apply);
+	blocked = true;
+	await kbd.press('Enter');
+	await expect(page.getByText('What changed')).toBeVisible();
+	await kbd.press('Escape');
+	await expect(blockDialog(page)).toHaveCount(0);
+	await expect(rowOf(page, 2)).toHaveCount(0);
+	await expect(rowOf(page, 3)).toBeFocused();
+	await expect(page.getByTestId('results-announce')).toHaveText('Blocked. 1 result removed.');
+	mock.assertNoFailures();
+});
