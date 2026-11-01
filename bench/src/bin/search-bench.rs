@@ -619,7 +619,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     }
     ok &= api_path(a, &index, &reader, now)?;
     ok &= recovery_path(a, &index, now)?;
-    ok &= file_sets_path(a, &index, &reader, now)?;
+    ok &= file_sets_path(a, &index, &reader, &db, now)?;
     ok &= facets_path(a, &index, now)?;
     ok &= suggest_path(a, &index, &reader, now)?;
     ok &= nrt(a, &index, &db)?;
@@ -870,12 +870,14 @@ fn recovery_path(
 /// id sets need against the file-set cache's budget, then the search
 /// with a cold cache (emptied before each query) and a warm one (all the
 /// clauses in turn, so they compete for the budget), with the warm
-/// loop's cache hit rate. Cold is gated at [`FILE_P95`] (X-search-files-2),
+/// loop's cache hit rate. A concurrent cold class (four size clauses at
+/// once, one reader each) is reported, not gated. Cold is gated at [`FILE_P95`] (X-search-files-2),
 /// warm at [`KEYWORD_P95`].
 fn file_sets_path(
     a: &Args,
     index: &SearchIndex,
     reader: &Store,
+    db: &std::path::Path,
     now: i64,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if a.only
@@ -892,6 +894,8 @@ fn file_sets_path(
         "file:(ext:jpg)",
         "file:(size:>100MB)",
         "file:(ext:mkv,mp4,avi -path:sample)",
+        "file:(size:>1GB)",
+        "file:(ext:mkv size:>1GB)",
     ];
     let (words, _) = vocabulary(a.seed ^ 0x5eed, 20_000);
     let common = &words[..words.len().min(100)];
@@ -942,6 +946,57 @@ fn file_sets_path(
         index.clear_cache();
         cold.push(search(q)?);
     }
+    // Four different size clauses at once, the cache emptied before each
+    // round: what concurrent cold users see (X-file-clause-cold). Every
+    // thread's time is one sample.
+    let mut cold4 = Vec::with_capacity(a.queries);
+    let mut readers = (0..4)
+        .map(|_| Store::open_reader(db, StoreConfig::default()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sizes = [10, 25, 50, 100, 200, 400, 700, 1000];
+    for round in 0..a.queries.div_ceil(4) {
+        index.clear_cache();
+        let qs: Vec<String> = (0..4)
+            .map(|k| format!("file:(size:>{}MB)", sizes[(round * 4 + k) % sizes.len()]))
+            .collect();
+        // A `Store` reader is one SQLite connection, so each thread owns one,
+        // opened once and handed back each round. The barrier starts the four
+        // timers together, so the queries overlap.
+        let barrier = std::sync::Barrier::new(4);
+        let done = std::thread::scope(|s| {
+            let hs: Vec<_> = std::mem::take(&mut readers)
+                .into_iter()
+                .zip(&qs)
+                .map(|(r, q)| {
+                    let barrier = &barrier;
+                    s.spawn(move || -> Result<(Duration, Store), String> {
+                        barrier.wait();
+                        let started = Instant::now();
+                        let ast = parse(q).map_err(|e| e.to_string())?;
+                        let (res, _) = index
+                            .search_with_fallback(&ast, now, Sort::Relevance, 50, 0)
+                            .map_err(|e| e.to_string())?;
+                        for h in &res.hits {
+                            r.torrent(h.id as i64).map_err(|e| e.to_string())?;
+                        }
+                        Ok((started.elapsed(), r))
+                    })
+                })
+                .collect();
+            hs.into_iter()
+                .map(|h| h.join().expect("cold4 thread"))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("cold4: {e}"))?;
+        let times: Vec<Duration> = done
+            .into_iter()
+            .map(|(t, r)| {
+                readers.push(r);
+                t
+            })
+            .collect();
+        cold4.extend(times);
+    }
     index.clear_cache();
     for q in queries.iter().take(broad.len() * 2) {
         search(q)?;
@@ -960,12 +1015,14 @@ fn file_sets_path(
         usage.file_set_bytes as f64 / f64::from(1 << 20)
     );
     println!(
-        "  {:<24} {:>8} {:>8} {:>8} {:>8}  target",
+        "  {:<30} {:>8} {:>8} {:>8} {:>8}  target",
         "class", "p50", "p95", "p99", "max"
     );
     let mut ok = true;
     for (name, times, target) in [
         ("broad file (cold)", &mut cold, Some(FILE_P95)),
+        // Reported, not gated, until the size index is decided.
+        ("broad file (cold, 4 at once)", &mut cold4, None),
         ("broad file (warm)", &mut warm, Some(KEYWORD_P95)),
     ] {
         times.sort();
@@ -973,7 +1030,7 @@ fn file_sets_path(
         let pass = target.is_none_or(|t| p95 <= t);
         ok &= pass;
         println!(
-            "  {:<24} {:>8} {:>8} {:>8} {:>8}  {}",
+            "  {:<30} {:>8} {:>8} {:>8} {:>8}  {}",
             name,
             ms(pct(times, 0.5)),
             ms(p95),
