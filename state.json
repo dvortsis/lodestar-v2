@@ -3451,6 +3451,12 @@
       "model": "opus",
       "launched": "2026-11-01T13:04Z",
       "brief": "briefs/X-file-clause-cold.md"
+    },
+    "FX-2": {
+      "session": "session_01MMjhnAAdf5t6QJNK35ET6m",
+      "model": "sonnet",
+      "launched": "2026-11-01T14:03Z",
+      "brief": "briefs/FX-batch.md (FX-2)"
     }
   },
   "queued_followups": [
@@ -3470,6 +3476,11 @@
       "id": "gate-file-cold",
       "what": "After G-m5a merges: add X-file-clause-cold's cold broad file clause line to search-bench --gate / CI (bench & ci.yml were G-m5a-owned)",
       "at": "2026-11-01T13:05Z"
+    },
+    {
+      "id": "FX-queue",
+      "what": "After #340 merges: launch FX-1 (Sonnet). Then FX-3 (Opus), FX-4 (Sonnet), FX-5 (Sonnet), FX-6 UI (Sonnet) + FX-6 I9 (Opus) as slots free.",
+      "at": "2026-11-01T14:04Z"
     }
   ]
 }
