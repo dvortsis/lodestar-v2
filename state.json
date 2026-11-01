@@ -3282,8 +3282,8 @@
     },
     "334": {
       "slice": "S-updates-5",
-      "head": "a1f2556",
-      "verdict": "CHANGES r1 (small): absent restores_store keeps old conditional caveat; else MERGE",
+      "head": "217eb16ad25ab2c79fd484dd2a80278f41678a7c",
+      "verdict": "runner MERGE pending CI (r1 fixed)",
       "session": "session_01MMjhnBgKsNwUQtRhVBqSsX"
     }
   },
