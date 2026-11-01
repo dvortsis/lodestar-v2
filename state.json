@@ -3324,13 +3324,15 @@
       "session": "session_01MMjhnBaHUqoyPFLGyGD3Eg",
       "model": "sonnet",
       "launched": "2026-11-01T10:17Z",
-      "brief": "briefs/X-web-polish-1101d.md"
+      "brief": "briefs/X-web-polish-1101d.md",
+      "archived": true
     },
     "S-updates-5": {
       "session": "session_01MMjhnBgKsNwUQtRhVBqSsX",
       "model": "sonnet",
       "launched": "2026-11-01T10:23Z",
-      "brief": "briefs/S-updates-5.md"
+      "brief": "briefs/S-updates-5.md",
+      "archived": true
     },
     "F-suggest-adult-field": {
       "session": "session_01MMjhn9VKY4h8TyGn6oQEky",
@@ -3343,6 +3345,12 @@
       "model": "sonnet",
       "launched": "2026-11-01T11:44Z",
       "brief": "briefs/S-search-meta-web.md"
+    },
+    "X-web-polish-1101e": {
+      "session": "session_01MMjhnBCyarPyutpaXadHCe",
+      "model": "sonnet",
+      "launched": "2026-11-01T11:46Z",
+      "brief": "briefs/X-web-polish-1101e.md"
     }
   },
   "queued_followups": [
