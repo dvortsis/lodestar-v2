@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T15:38Z",
+  "updated_at": "2026-11-01T21:10Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -592,43 +592,43 @@
     },
     "G-m5": {
       "status": "merged",
-      "notes": "M5 exit met; decisions #352 (5107710e); all-themes dispatch 41342644909 green on 6ef00355"
+      "notes": "M5 exit met; decisions #352 (5107710e); all-themes dispatch green on 6ef00355"
     },
     "E-M6": {
-      "status": "pending",
+      "status": "held",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "held until the v0.5.1 soak verdict (r3 baseline 11-01 22:16Z -> 11-02 22:16Z)"
     },
     "E-v06-workers": {
-      "status": "pending",
+      "status": "held",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "held until the v0.5.1 soak verdict (r3 baseline 11-01 22:16Z -> 11-02 22:16Z)"
     },
     "E-v06-companions": {
-      "status": "pending",
+      "status": "held",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "held until the v0.5.1 soak verdict (r3 baseline 11-01 22:16Z -> 11-02 22:16Z)"
     },
     "E-v06-sources": {
-      "status": "pending",
+      "status": "planning",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "P-v06-sources-plan running"
     },
     "E-M7": {
       "status": "pending",
@@ -718,7 +718,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "blocked on B-subscriptions-api (no connect/remove/accept API yet)"
     },
     "F1": {
       "status": "merged",
@@ -952,7 +952,7 @@
     },
     "S-doc-shots": {
       "status": "merged",
-      "notes": "#354 9a8c6f68"
+      "notes": "#354"
     },
     "P-release": {
       "status": "merged",
@@ -2126,6 +2126,82 @@
       "model": "opus",
       "brief": "briefs/B-search-meta.md",
       "launched_at": "2026-11-01T09:26Z"
+    },
+    "G-m5a": {
+      "status": "merged",
+      "notes": "#344"
+    },
+    "G-m5b": {
+      "status": "merged",
+      "notes": "#340"
+    },
+    "FX-1": {
+      "status": "merged",
+      "notes": "#342"
+    },
+    "FX-2": {
+      "status": "merged",
+      "notes": "#343"
+    },
+    "FX-3": {
+      "status": "merged",
+      "notes": "#346"
+    },
+    "FX-4": {
+      "status": "merged",
+      "notes": "#345"
+    },
+    "FX-5": {
+      "status": "merged",
+      "notes": "#347"
+    },
+    "FX-6": {
+      "status": "merged",
+      "notes": "#348"
+    },
+    "FX-6-I9": {
+      "status": "merged",
+      "notes": "#350 (stage 1; stage 2 queued as i9-stage2)"
+    },
+    "X-web-cleanup-1": {
+      "status": "merged",
+      "notes": "#349"
+    },
+    "gate-file-cold": {
+      "status": "merged",
+      "notes": "#351"
+    },
+    "X-appearance-undo": {
+      "status": "merged",
+      "notes": "#353"
+    },
+    "X-pw-local-chromium": {
+      "status": "merged",
+      "notes": "#355"
+    },
+    "X-file-clause-cold": {
+      "status": "merged",
+      "notes": "#341"
+    },
+    "F-filter-load-fail-closed": {
+      "status": "building",
+      "notes": "Opus + /security-review; session_01MMjhnAvepJm7UgCAppGN9s; stored rule/unless/class rows that fail to parse must fail closed (tightening only)"
+    },
+    "P-v06-sources-plan": {
+      "status": "building",
+      "notes": "Opus docs-only plan for E-v06-sources; session_01MMjhnA8E463RsbggYDbphq"
+    },
+    "openapi-example-size": {
+      "status": "queued",
+      "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
+    },
+    "B-subscriptions-api": {
+      "status": "queued",
+      "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)"
+    },
+    "i9-stage2": {
+      "status": "queued",
+      "notes": "queued: one release after the a..<b parser ships"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2506,7 +2582,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-01T18:42Z",
+  "last_heartbeat": "2026-11-01T21:10Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -3303,6 +3379,10 @@
     {
       "t": "2026-11-01T21:12Z",
       "event": "Launched P-v06-sources-plan (Opus, docs-only planning: SRC-* slices, store impact vs V13/V14 order + no migrations before v0.5.1 cut, owner-question list). Running: F-filter-load-fail-closed, P-v06-sources-plan."
+    },
+    {
+      "t": "2026-11-01T21:10Z",
+      "event": "Dashboard reported stale state (updated_at stuck at 15:38Z though ops were pushed). Refreshed updated_at + slice statuses for everything merged today. Runner will set updated_at on every push from now."
     }
   ],
   "reviews": {
