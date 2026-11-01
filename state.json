@@ -569,13 +569,13 @@
       "merged_sha": "5a4ec5a"
     },
     "S-e2e": {
-      "status": "running",
+      "status": "pr-baselines",
       "model": "sonnet",
       "session": "session_01MMjhnD3uSMAJgRTtvWaN35",
-      "pr": null,
+      "pr": 314,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture). | 02:45Z launched Sonnet."
+      "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture). | 02:45Z launched Sonnet. | 03:17Z PR #314 head c929a794 (audit; Settings smoke fixture; not-found state baselines). Runner MERGE. Marker in; after CI baselines (Settings + state-not-found only) author removes marker."
     },
     "H-zh": {
       "status": "running",
@@ -2812,7 +2812,10 @@
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
     "S-updates-3: wire Install now (and Roll back if B-update-5 adds it) once B-update-5 lands POST /updates/install; un-skip the Install-now test TODO (#306/#310).",
-    "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too."
+    "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
+    "App gap (S-e2e #314, §10.19 gate): the \"Show illustrations\" toggle hides nothing and Save-Data is not honoured; illustrations must hide in both cases. Fix + e2e.",
+    "App gap (S-e2e #314, §10.17 flow): no Send button in the UI although the API has sendToClient; the keyboard flow search -> open -> send stops at copy. Add Send to client in the detail/row actions (size budget!) + e2e.",
+    "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
