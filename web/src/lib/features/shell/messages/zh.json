@@ -63,5 +63,8 @@
 	"shell_stage_title": "洞察阶段",
 	"shell_settings_unavailable": "此版本尚未提供设置控件。您可以在洞察页面暂停爬虫或调整运行强度。",
 	"shell_stage_unavailable": "此版本尚未提供详细阶段报告。洞察概览可显示现有的汇总数据和趋势。",
-	"shell_return_insights": "前往洞察"
+	"shell_return_insights": "前往洞察",
+	"shell_stale_text": "Lodestar 有新版本正在运行。请重新加载以更新。",
+	"shell_stale_unsaved": "请先保存或放弃你的更改。",
+	"shell_stale_reload": "重新加载"
 }
