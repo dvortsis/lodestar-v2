@@ -578,13 +578,13 @@
       "notes": " | 02:46Z brief briefs/S-e2e.md (audit §10.17 vs specs, fill gaps, smoke settings fixture). | 02:45Z launched Sonnet. | 03:17Z PR #314 head c929a794 (audit; Settings smoke fixture; not-found state baselines). Runner MERGE. Marker in; after CI baselines (Settings + state-not-found only) author removes marker."
     },
     "H-zh": {
-      "status": "pr-review",
+      "status": "pr-fixing",
       "model": "haiku",
       "session": "session_01MMjhn8pbNzRQPDMtoEPfEw",
       "pr": 315,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (§2.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file. | 03:32Z PR #315 head dcea076a (473 filled; locale tests stubbed; Natural phrasing 1.75). Opus reviewer session_01MMjhnAxHndkhC8BH4gveMt (mechanical placeholder check + translation sample incl. all content-safety keys)."
+      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (§2.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file. | 03:32Z PR #315 head dcea076a (473 filled; locale tests stubbed; Natural phrasing 1.75). Opus reviewer session_01MMjhnAxHndkhC8BH4gveMt (mechanical placeholder check + translation sample incl. all content-safety keys). | 03:45Z reviewer CHANGES: B1 结算->已处理; I content-safety wording, natural_applied info drop, en-fallback test; Playwright core red on dcea076a. Relayed in one push; runner checks delta."
     },
     "G-m5": {
       "status": "pending",
@@ -2776,7 +2776,7 @@
     {
       "id": "flag-zh-autoselect",
       "status": "to-send",
-      "text": "§2.19 flag: with the zh catalogue complete (H-zh), browsers set to Chinese now get the Chinese UI automatically (the existing 0.95 coverage gate); the Natural phrasing chunk limit rose 1.64 -> 1.75 KB for the inlined zh strings.",
+      "text": "§2.19 flag: with the zh catalogue complete (H-zh), browsers set to Chinese now get the Chinese UI automatically (the existing 0.95 coverage gate); the Natural phrasing chunk limit rose 1.64 -> 1.75 KB for the inlined zh strings. The zh labels in docs/ui-glossary.md are still marked \"TBD until the owner or a reviewer confirms\"; the owner may want to confirm them (a reviewer checked 80+ entries and every content-safety string).",
       "unblocks": "nothing (information)"
     }
   ],
