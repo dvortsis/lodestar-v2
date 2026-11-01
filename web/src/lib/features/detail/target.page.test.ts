@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import { HASH, torrentDetail } from './fixtures';
 import { clearDetailCaches } from './cache';
 vi.mock('./visibility', () => ({ watchDetailVisibility: vi.fn() }));
@@ -39,6 +39,15 @@ it('/t: `s` waits for the torrent to load, and stops when the page goes', async 
 	expect(sendTarget()).toBeNull();
 	load.finish(torrentDetail({ hash: HASH }));
 	await waitFor(() => expect(sendTarget()).toBe(HASH), { timeout: 10_000 });
+	// Let the lazy Contents chunk (composition, file tree) finish importing before the environment
+	// is torn down; a stray import after teardown fails the whole run.
+	await waitFor(
+		() => {
+			expect(screen.getByTestId('detail-composition')).toBeTruthy();
+			expect(screen.getByTestId('detail-file-tree')).toBeTruthy();
+		},
+		{ timeout: 10_000 }
+	);
 	unmount();
 	expect(sendTarget()).toBeNull();
 });

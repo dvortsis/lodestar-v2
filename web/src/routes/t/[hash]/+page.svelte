@@ -1,6 +1,6 @@
 <script lang="ts">
 	// /t/{hash} as a full page (a direct link, or "Open full page"). From Search it is a drawer
-	// instead (features/detail/DetailHost). The column is capped at --manuscript-width.
+	// instead (features/detail/DetailHost). The page is up to 2 × --results-min-width wide; its header and summary keep --manuscript-width.
 	import { onMount, untrack } from 'svelte';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';

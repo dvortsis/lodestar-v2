@@ -1140,7 +1140,8 @@ export default [
 	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),
-	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.1 KB'),
+	// runner §2.26, 2026-11-01: CI measures +3 B over local (build variance); main red on 7ea22803 at 17,103 B
+	entry('Settings logging parts (on demand)', settingsLoggingLazy, '17.15 KB'),
 	// S-logs-3: every event's plain name and help, en and zh. Measured 10.73 KB; limit = measured + 10%.
 	entry('Settings logging event names (on demand)', settingsLoggingNamesLazy, '11.8 KB'),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
@@ -1277,11 +1278,12 @@ export default [
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.0 KB'),
+	// runner §2.26, FX-5 incl. review fixes: I2 connecting glyph (+~0.15 KB, StatusPill) / I1 tree height + P4 parsed rows (+~0.13 KB)
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.14 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'37.31 KB' // runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'37.52 KB' // runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
