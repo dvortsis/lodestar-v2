@@ -591,7 +591,7 @@
       "merged_at": "2026-11-01T04:26Z"
     },
     "G-m5": {
-      "status": "pending",
+      "status": "in progress: G-m5a (matrix + overhead bench) launching 12:45Z; G-m5b design-review next",
       "model": "opus",
       "session": null,
       "pr": null,
@@ -3279,12 +3279,6 @@
   },
   "last_daily_summary": "2026-10-31T13:07Z",
   "open_prs": {
-    "336": {
-      "slice": "S-privacy-banner",
-      "head": "594316fa37e72fd02e2b6674717577db9e200e0e",
-      "verdict": "runner MERGE pending CI; Overview +80 B accepted §2.26; carrier GET /insights/overview privacy",
-      "session": "session_01MMjhnATZedJze4kWMUf3Pg"
-    },
     "337": {
       "slice": "F-suggest-adult-field",
       "head": "2b761d1fdb310cb69f0012612fb3e47fb4d6ddb2",
@@ -3329,6 +3323,12 @@
       "sha": "544e040d798ab1c9b16b602493b5c8d8eedf72bc",
       "at": "2026-11-01T11:44Z",
       "slice": "B-search-meta"
+    },
+    {
+      "pr": 336,
+      "sha": "2133ee21ace67583076c7615f16d40b2cb6e8689",
+      "at": "2026-11-01T12:41Z",
+      "slice": "S-privacy-banner"
     }
   ],
   "active_sessions": {
