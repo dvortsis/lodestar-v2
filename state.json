@@ -2002,6 +2002,13 @@
       "model": "sonnet",
       "brief": "briefs/S-send.md",
       "launched_at": "2026-11-01T05:52Z"
+    },
+    "X-discover-headroom": {
+      "status": "building",
+      "session": "session_01MMjhn91BMmYA9rvP5UBGaz",
+      "model": "sonnet",
+      "brief": "briefs/X-discover-headroom.md",
+      "launched_at": "2026-11-01T05:52Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2915,11 +2922,11 @@
     "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
     "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
     "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
-    "Discover route headroom: ~0.1 KB left after #317 (limit 45.2 KB); brief a headroom pass before the next Discover feature. Also #317: first visit with no appearance cache shows the first scene even when the account has illustrations off.",
     "Settings engine: lift the shared reveal + hash-focus logic (SectionForm, screens2/GroupedForm) into form/reveal.svelte.ts only alongside a change that already touches those chunks: done alone it cost +0.2 KB on Settings first views and +0.6 KB on Wizard steps via form/embed.ts (#319 skipped it)",
     "S-updates-4: Roll back button in Settings \u2192 Updates using can_roll_back from B-update-5b; plus plain words per install_failed code (#318)",
     "Filters flows door (#316): AppearanceScreen (flows/adult.svelte, AdultConfirmDialog), wizard/PackStep (flow.svelte) and the dev route still import filters/flows/** directly; route them through the door and extend the first-load guard to Appearance and wizard views",
-    "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch"
+    "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
+    "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
