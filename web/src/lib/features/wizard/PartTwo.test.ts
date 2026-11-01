@@ -148,6 +148,38 @@ describe('rule-pack step', () => {
 		expect(server.packs.some((p) => p.on)).toBe(false);
 	});
 
+	it('does not apply a change whose preview carries a warning', async () => {
+		server.setAssessment(strengthening({ warning: 'This turns off a check.' }));
+		start('packs');
+		await box('malware');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await settled('Save and continue');
+		await screen.findByTestId('wizard-packs-error');
+		expect(applies()).toEqual([]);
+		expect(server.packs.some((p) => p.on)).toBe(false);
+		expect(progress().done).not.toContain('packs');
+	});
+
+	it('re-checks and applies again when the change moved since its preview', async () => {
+		let n = 0;
+		server.onApply((body) => {
+			if (++n === 1)
+				return server.json(409, {
+					error: { code: 'changed_since_preview', message: 'The rules changed.' }
+				});
+			server.packs.find((p) => p.id === body.change.id)!.on = true;
+			return server.json(200, { applied: true, assessment: strengthening(), version: 3 });
+		});
+		start('packs');
+		await box('malware');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await heading('Updates');
+		const bodies = applies().map((c) => c.body as { change: { id: string; on: boolean } });
+		expect(bodies).toHaveLength(6);
+		expect(bodies.every((b) => b.change.on === true)).toBe(true);
+		expect(server.packs.every((p) => p.on)).toBe(true);
+	});
+
 	it('does not apply a weakening change even when the server asks for no password', async () => {
 		server.setAssessment(weakening({ confirm: false }));
 		start('packs');
@@ -183,11 +215,24 @@ describe('download client step', () => {
 	it('offers Test connection on an added client, and Skip sends nothing', async () => {
 		start('download');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Add a download client' }));
-		await screen.findByRole('button', { name: /Test connection/ });
+		await fireEvent.input(await screen.findByLabelText('Address'), {
+			target: { value: 'http://qbittorrent.local:8080' }
+		});
+		await fireEvent.click(await screen.findByRole('button', { name: /Test connection/ }));
+		await waitFor(() =>
+			expect(
+				server.calls.filter((c) => c.method === 'POST' && c.path === '/settings/test')
+			).toHaveLength(1)
+		);
+		// Testing saves nothing and doesn't finish the step.
+		expect(server.requests('PATCH', '/settings')).toEqual([]);
+		expect(progress().done).toEqual([]);
 		await fireEvent.click(screen.getByRole('button', { name: 'Skip this step' }));
 		await heading('Rule packs');
 		expect(server.requests('PATCH', '/settings')).toEqual([]);
-		expect(server.calls.filter((c) => c.method === 'POST')).toEqual([]);
+		expect(
+			server.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)
+		).toEqual(['POST /settings/test']);
 		expect(progress().skipped).toEqual(['download']);
 	});
 

@@ -38,9 +38,11 @@ function settle(
 	return new Promise<FlowState>((resolve) => {
 		const root: { stop?: () => void } = {};
 		let finished = false;
+		const onAbort = () => finish({ kind: 'closed' });
 		const finish = (state: FlowState) => {
 			if (finished) return;
 			finished = true;
+			signal.removeEventListener('abort', onAbort);
 			queueMicrotask(() => root.stop?.());
 			resolve(state);
 		};
@@ -51,9 +53,13 @@ function settle(
 			});
 		});
 		if (signal.aborted) finish({ kind: 'closed' });
-		else signal.addEventListener('abort', () => finish({ kind: 'closed' }), { once: true });
+		else signal.addEventListener('abort', onAbort, { once: true });
 	});
 }
+
+/** A preview of a change that weakens nothing, warns of nothing and asks for nothing. */
+const plain = (s: FlowState) =>
+	s.kind === 'review' && !s.assessment.weakening && !s.assessment.confirm && !s.assessment.warning;
 
 /** Turns the packs on, one at a time, in order; stops at the first that doesn't go through. */
 export async function applyPacks(
@@ -73,23 +79,27 @@ export async function applyPacks(
 			if (preview.kind === 'failed')
 				return { applied, failed: { id, message: said(preview.error) } };
 			// Only a plain strengthening change goes through here. A warning or a password means the
-			// server sees it as weakening something: the wizard doesn't take that decision.
-			if (
-				preview.kind !== 'review' ||
-				preview.assessment.weakening ||
-				preview.assessment.confirm ||
-				preview.assessment.warning
-			) {
-				flow.cancel();
-				return { applied, failed: { id, message: null } };
+			// server sees it as weakening something: the wizard doesn't take that decision. A change
+			// that moved since its preview comes back as a new preview: the same test, one more apply.
+			let state: FlowState = preview;
+			let message: string | null = null;
+			for (let attempt = 0; attempt < 2; attempt++) {
+				if (!plain(state)) {
+					flow.cancel();
+					return { applied, failed: { id, message } };
+				}
+				flow.apply();
+				state = await settle(flow, ['done', 'failed', 'confirm', 'review', 'closed'], signal);
+				if (state.kind === 'done') break;
+				if (state.kind === 'failed') {
+					message = said(state.error);
+					break;
+				}
 			}
-			flow.apply();
-			const result = await settle(flow, ['done', 'failed', 'confirm', 'review', 'closed'], signal);
-			if (result.kind === 'done') {
+			if (state.kind === 'done') {
 				applied.push(id);
 				continue;
 			}
-			const message = result.kind === 'failed' ? said(result.error) : null;
 			flow.cancel();
 			return { applied, failed: { id, message } };
 		} finally {
