@@ -3116,6 +3116,11 @@
       "id": "flag-logging-parts-limit",
       "status": "to-send",
       "text": "Settings logging parts limit 17.1 → 17.15 KB (runner §2.26): main went red on CI build variance (+3 B), not new code."
+    },
+    {
+      "id": "flag-i9-range-syntax",
+      "status": "to-send",
+      "text": "I9 (#350): query language gains `a..<b` (same AST as a..b-1). Printed two-sided ranges keep the old inclusive form for one release so a rollback never drops stored filter rules (content safety); stage 2 prints `..<` after that."
     }
   ],
   "external_gates": {
@@ -3250,6 +3255,10 @@
     {
       "t": "2026-11-01T18:50Z",
       "event": "merged #348 FX-6 (cff61ee9); all six FX batches merged. Archived FX-6. Remaining for G-m5: #350 FX-6-I9 (held, safety review), #349 cleanup (CI on 072b1e4e; re-measure near-limit entries on merge result before merging), gate-file-cold. Slot free: appearance-undo after #349; openapi-example-size after #350."
+    },
+    {
+      "t": "2026-11-01T18:58Z",
+      "event": "#350 Opus security review CHANGES: `..<` in stored rule/unless/class text is skipped by older binary on rollback (load.rs drops unparseable rows) -> loosens filtering. Runner ruling (c): keep parser `..<`, printer keeps old inclusive two-sided form now (IEC lower/upper where exact), test no store write emits `..<`. Stage 2 queued: i9-stage2 (print `..<` again one release after the parser ships)."
     }
   ],
   "reviews": {
