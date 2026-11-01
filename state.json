@@ -3096,6 +3096,11 @@
       "id": "flag-344-overhead-gate",
       "status": "to-send",
       "text": "§2.19/§2.26 (#344 G-m5a): reporting-overhead measured: Insights duty cycle 0.09% CPU, search p95 +4.9%/-0.6%, ingest +0.9%/-1.0%, storage ~3.4 MB/yr (budget 50). §3 budget unchanged; the nightly CI gate allows run-to-run noise (+8% search, -5% ingest) with duty cycle <=1% as the operative check."
+    },
+    {
+      "id": "flag-fx5-limits",
+      "status": "to-send",
+      "text": "FX-5 raised /t route 21.0→21.12 KB and Detail sections 37.31→37.45 KB (runner §2.26) for the connecting glyph, tree height and parsed rows."
     }
   ],
   "external_gates": {
@@ -3162,6 +3167,10 @@
     {
       "t": "2026-11-01T16:17Z",
       "event": "FX-4 opened #345 (head 2b7efa7); Opus review started. Follow-up queued: text-label-token — `text-label` used in 27 files is not a token (renders unstyled, like B4 text-h2); fix the uses, then add it to check-bans. Goes with the coarse-copy follow-up after FX-2/3/5/6 free their files."
+    },
+    {
+      "t": "2026-11-01T16:24Z",
+      "event": "FX-5 size ruling (runner §2.26): /t route 21.0→21.12 KB (StatusPill circle-notch), Detail sections 37.31→37.45 KB (I1 tree height + P4). Flag to owner as flag-fx5-limits."
     }
   ],
   "reviews": {
