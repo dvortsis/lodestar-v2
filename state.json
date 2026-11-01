@@ -1886,13 +1886,13 @@
       "notes": "00:47Z brief briefs/X-stale-tab.md (app-wide stale-tab banner, cheapest signal, <=0.15 KB first load, no CSS growth). | 00:46Z launched Sonnet. | 01:17Z PR #307 head b5b3657a (version.json on visibilitychange, <=1/5 min; banner with chrome, not first load). Reviewer session_01MMjhnBqNbZEXAMvXRTNJxH."
     },
     "X-web-hygiene-1101": {
-      "status": "launching",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01MMjhn9AiawVNkuwJzDi2Mu",
       "pr": null,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "01:26Z brief briefs/X-web-hygiene-1101.md (CSS headroom >=0.4 KB, modulesIn throw, void import catches)."
+      "notes": "01:26Z brief briefs/X-web-hygiene-1101.md (CSS headroom >=0.4 KB, modulesIn throw, void import catches). | 01:26Z launched Sonnet."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
