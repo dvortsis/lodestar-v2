@@ -38,6 +38,8 @@ export function registerDetailCommands(): Promise<void> {
 				if (hash) void import('./magnet').then((mod) => mod.openMagnet({ hash }), failed);
 			}
 		});
+		// `s` registers itself from send.ts once a download client is known.
+		void import('./send').then((mod) => mod.clientName());
 	});
 	return registered;
 }

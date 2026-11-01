@@ -74,5 +74,11 @@
 	"detail_raw_show_all": "Show all",
 	"detail_raw_truncated": "{count} characters, cut",
 	"detail_raw_depth": "Too deep to show",
-	"detail_raw_empty": "(empty)"
+	"detail_raw_empty": "(empty)",
+	"detail_send": "Send to {name}",
+	"detail_sent": "Sent to {name}",
+	"detail_send_duplicate": "Already in {name}",
+	"detail_send_refused": "{name} didn’t take it. {reason}",
+	"detail_send_failed": "Couldn’t send to {name}. Try again.",
+	"detail_send_no_client": "No download client is set up. Add one in Settings, under Integrations."
 }
