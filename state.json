@@ -2414,7 +2414,8 @@
     "verify_premise": "A reviewer's root-cause claim (#289: 'resync remounts the list') turned out false; a follow-up slice (#295) was briefed on it. Lesson: before briefing a follow-up from a review finding, have the finding verified (e.g. mount counter / failing test on main).",
     "alert_search_headroom": "After #296: Alert 45,972-45,982/46,000 B and Search results 43,274-43,282/43,300 B; the SHA moves them 8-10 B per commit. If either flips red on a commit, runner may raise by 0.05 KB citing SHA gzip variance (same rationale as Results toolbar), or better find real bytes to cut.",
     "app_environment_import": "Importing $app/environment (or any new export of the shared SvelteKit runtime chunk) renames that chunk's minified exports and grows every route that imports it (#299: Alerts +32 B). Read __SVELTEKIT_APP_VERSION__ directly instead. Large Settings bodies must load through a tiny body.ts forwarder so their preload list stays out of the registry chunk.",
-    "rolldown-groups": "2026-11-01 (#304): Rolldown manual chunk groups are unusable for app code: includeDependenciesRecursively drags first-load modules into the group, and turning it off needs preserveEntrySignatures allow-extension, which SvelteKit forces to strict (kit/src/exports/vite/index.js:1111). Use import restructuring (single forwarder roots) instead."
+    "rolldown-groups": "2026-11-01 (#304): Rolldown manual chunk groups are unusable for app code: includeDependenciesRecursively drags first-load modules into the group, and turning it off needs preserveEntrySignatures allow-extension, which SvelteKit forces to strict (kit/src/exports/vite/index.js:1111). Use import restructuring (single forwarder roots) instead.",
+    "unraid-leg1": "2026-10-31T23:15Z leg 1 stopped: rss_over_1GiB (working set incl. file cache); 19.64 h baseline; private 887 MiB exit; slope 1.85 MiB/h CI [0.92,2.77] over partial h12-19.6; 22,593 torrents (669/h). Not gate evidence."
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
@@ -2715,6 +2716,12 @@
       "status": "to-send",
       "text": "§2.19 flag: app-wide stale-tab banner wording and cadence (checked when the tab is shown, at most every 5 min) refine §10.10.13/§16 (X-stale-tab, #307).",
       "unblocks": "nothing (information)"
+    },
+    {
+      "id": "unraid-rerun",
+      "status": "asked",
+      "text": "02:03Z Unraid leg 1 tripped the old working-set rule at 19.6 h (private 887 MiB; slope 1.85 MiB/h CI [0.92,2.77] partial; bar upper CI <= 2.0). Proposed: no tuning, re-run leg 1 on rc.2 with fresh data dir + main collector (anon basis), full 24 h, then gluetun >=2 h continuation, then analyze_cr0. Awaiting owner go.",
+      "unblocks": "v0.5.1 Linux soak gate"
     }
   ],
   "external_gates": {
@@ -2764,7 +2771,8 @@
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
     "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too.",
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
-    "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait)."
+    "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
+    "analyze_cr0.py: add a corpus-normalised memory view (private-memory slope per 1,000 stored torrents) so index growth can be told from a leak (Unraid leg 1, 2026-11-01). Tooling only."
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
