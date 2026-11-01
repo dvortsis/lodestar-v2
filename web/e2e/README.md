@@ -7,16 +7,30 @@ Chromium only. Locally it is the preinstalled one in `/opt/pw-browsers`: **never
 
 Filter with `--project=<name>` (globs work). Every project starts the web server from `playwright.config.ts` (`npm run build && npm run preview`, cold ~73 s on CI, so its timeout is 180 s; an already-running server on :4173 is reused locally).
 
-| Project                   | Runs                                                                                                                                                              | Script                   |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `core`                    | `routes`, `tokens`, `harness` (mock, rotation, keyboard guard self-tests), `theme-gate`                                                                           | `npm run e2e:core`       |
-| `bp<w>-<theme>-<density>` | `smoke.test.ts` at widths 320, 390, 768, 1024, 1366, 1920, 2560 × Riverstone light/dark × comfortable/compact (28 projects), e.g. `bp768-riverstone-dark-compact` | `npm run e2e:matrix`     |
-| `sample-<theme-id>`       | the same smoke at 1366 for a rotating 6 non-Riverstone themes                                                                                                     | `npm run e2e:sample`     |
-| `reduced-motion`          | smoke + the motion-token test under `prefers-reduced-motion: reduce`                                                                                              | `npm run e2e:motion`     |
-| `keyboard-only`           | `*.keyboard.test.ts`                                                                                                                                              | `npm run e2e:keyboard`   |
-| `all-themes`              | axe on every route in all 48 themes, plus the 46-theme baselines. Opt-in (`--project=all-themes` or `E2E_ALL_THEMES=1`); nightly in CI                            | `npm run e2e:all-themes` |
+| Project                   | Runs                                                                                                                                                                                                                    | Script                                  |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `core`                    | `routes`, `tokens`, `harness` (mock, rotation, keyboard guard self-tests), `theme-gate`                                                                                                                                 | `npm run e2e:core`                      |
+| `bp<w>-<theme>-<density>` | `smoke.test.ts` and `states.test.ts` (one test per illustrated state) at widths 320, 390, 768, 1024, 1366, 1920, 2560 × Riverstone light/dark × comfortable/compact (28 projects), e.g. `bp768-riverstone-dark-compact` | `npm run e2e:matrix`                    |
+| `sample-<theme-id>`       | the same smoke at 1366 for a rotating 6 non-Riverstone themes                                                                                                                                                           | `npm run e2e:sample`                    |
+| `reduced-motion`          | smoke + the motion-token test under `prefers-reduced-motion: reduce`                                                                                                                                                    | `npm run e2e:motion`                    |
+| `keyboard-only`           | `*.keyboard.test.ts`                                                                                                                                                                                                    | `npm run e2e:keyboard`                  |
+| `fixture`                 | `*.fixture.test.ts` against a real `lodestar serve --fixture` server, not the mock. Opt-in (`--project=fixture` or `E2E_FIXTURE=1`); not in CI yet                                                                      | `npx playwright test --project=fixture` |
+| `all-themes`              | axe on every route in all 48 themes, plus the 46-theme baselines. Opt-in (`--project=all-themes` or `E2E_ALL_THEMES=1`); nightly in CI                                                                                  | `npm run e2e:all-themes`                |
 
-`npx playwright test` runs everything except `all-themes`.
+`npx playwright test` runs everything except `all-themes` and `fixture`.
+
+**Running `fixture` locally.** The specs skip unless `E2E_FIXTURE_URL` is set. Start the fixture backend (bench/README.md "Fixture backend") on a private port, then point the specs at it:
+
+```sh
+npm run build
+LODESTAR_HTTP_BIND=127.0.0.1:8291 LODESTAR_FIXTURE_PASSWORD='correct horse battery' \
+  cargo run -p lodestar -- serve --fixture /tmp/lodestar-fixture &
+E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
+  E2E_FIXTURE_PASSWORD='correct horse battery' LODESTAR_FIXTURE_PASSWORD='correct horse battery' \
+  npx playwright test --project=fixture
+```
+
+Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on :4173 is reused); the fixture specs never use it.
 
 **Rotating sample.** `sampleThemes(seed)` (`support/themes.ts`) takes the 46 non-Riverstone themes, permutes them with a coprime stride and returns a 6-wide window that moves by 6 each run. The seed is `GITHUB_RUN_NUMBER`, or the day number locally. Eight consecutive runs cover every theme.
 
