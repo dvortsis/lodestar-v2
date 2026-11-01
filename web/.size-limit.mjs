@@ -1276,11 +1276,12 @@ export default [
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.0 KB'),
+	// runner §2.26, FX-5: I2 connecting glyph (+~0.15 KB, StatusPill) / I1 tree height + P4 parsed rows (+~0.13 KB)
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.12 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'37.31 KB' // runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'37.45 KB' // runner FX-5 §2.26: 37.31 → 37.45 (I1 tree height + P4 parsed rows, +~0.13 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
