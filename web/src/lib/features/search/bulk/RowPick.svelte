@@ -12,7 +12,7 @@
 
 <input
 	type="checkbox"
-	class="rp-pick"
+	class="checkbox checkbox-sm rp-pick border-field-border"
 	tabindex="-1"
 	checked={selection.has(hit.hash)}
 	aria-label={m.search_bulk_select_row({ name: hit.title ?? hit.name })}

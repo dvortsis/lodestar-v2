@@ -90,7 +90,7 @@
 			</li>
 		{/each}
 	</ul>
-	<button type="button" class="rt-reset" onclick={() => onchange(defaultPrefs())}
+	<button type="button" class="rt-reset target" onclick={() => onchange(defaultPrefs())}
 		>{m.search_table_reset()}</button
 	>
 </div>

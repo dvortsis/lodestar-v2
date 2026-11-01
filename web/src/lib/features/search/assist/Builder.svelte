@@ -93,6 +93,7 @@
 			{@const removeLabel = m.search_filters_remove({ label: clause.label.text })}
 			{#if row}
 				<BuilderRow
+					captions={i === 0}
 					{row}
 					fields={source.fields}
 					label={clause.label.text}
@@ -117,6 +118,7 @@
 				row={blank}
 				fields={source.fields}
 				draft
+				captions={clauses.length === 0}
 				label={m.search_assist_builder_new()}
 				oncommit={(r) => void commit(null, r)}
 			/>

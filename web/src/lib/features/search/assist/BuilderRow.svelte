@@ -17,13 +17,15 @@
 		fields: readonly Field[];
 		/** A new row: shows an "Add filter" button. */
 		draft?: boolean;
+		/** Show the Field / Operator / Value captions (first row only; the rest keep them as screen-reader names). */
+		captions?: boolean;
 		oncommit: (row: Row) => void;
 		onremove?: () => void;
 		/** The group's name (the clause's label). */
 		label: string;
 		removeLabel?: string;
 	}
-	let { row, fields, draft = false, oncommit, onremove, label, removeLabel }: Props = $props();
+	let { row, fields, draft = false, captions = true, oncommit, onremove, label, removeLabel }: Props = $props();
 
 	let field = $state(untrack(() => row.field));
 	let op = $state<string>(untrack(() => row.op));
@@ -71,7 +73,7 @@
 
 <div class="assist-row" role="group" aria-label={label}>
 	<label class="assist-field"
-		>{m.search_assist_builder_field()}
+		><span class:sr-only={!captions}>{m.search_assist_builder_field()}</span>
 		<Select
 			dense
 			bind:value={field}
@@ -80,7 +82,7 @@
 		/></label
 	>
 	<label class="assist-field"
-		>{m.search_assist_builder_operator()}
+		><span class:sr-only={!captions}>{m.search_assist_builder_operator()}</span>
 		<Select
 			dense
 			bind:value={op}
@@ -88,7 +90,7 @@
 		/></label
 	>
 	<label class="assist-field assist-grow"
-		>{m.search_assist_builder_value()}
+		><span class:sr-only={!captions}>{m.search_assist_builder_value()}</span>
 		{#if valueOptions}
 			<Select dense bind:value options={valueOptions} placeholder="" />
 		{:else}

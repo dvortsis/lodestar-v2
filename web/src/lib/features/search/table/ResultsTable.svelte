@@ -160,6 +160,7 @@
 						<th scope="col" class="rt-check">
 							<input
 								type="checkbox"
+								class="checkbox checkbox-sm border-field-border"
 								aria-label={m.search_bulk_select_all()}
 								checked={everyRow}
 								data-testid="table-select-all"
@@ -176,7 +177,7 @@
 							data-testid="table-th-{id}"
 						>
 							{#if field}
-								<button type="button" class="rt-sort" onclick={() => sortBy(field)}>
+								<button type="button" class="rt-sort target" onclick={() => sortBy(field)}>
 									{LABEL[id]()}
 									{#if ariaSort(search.sort, field) === 'ascending'}<ArrowUp aria-hidden="true" />
 									{:else if ariaSort(search.sort, field) === 'descending'}<ArrowDown
@@ -207,6 +208,7 @@
 							<td class="rt-check">
 								<input
 									type="checkbox"
+									class="checkbox checkbox-sm border-field-border"
 									tabindex="-1"
 									checked={selected}
 									aria-label={m.search_bulk_select_row({ name: hit.title ?? hit.name })}

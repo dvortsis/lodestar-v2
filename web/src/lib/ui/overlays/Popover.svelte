@@ -117,6 +117,7 @@
 			{side}
 			{align}
 			sideOffset={4}
+			collisionPadding={16}
 			trapFocus={false}
 			role="dialog"
 			onkeydown={onContentKeydown}
