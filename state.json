@@ -1867,13 +1867,14 @@
       "merge": "064f69c8"
     },
     "X-pipeline-1101": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhn9qYxKgGn7fsP4e54P",
       "pr": 305,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus. | 00:54Z PR #305 head 248b0df7: refetch funnel already correct (test kept); backfill retry with shared writer::Backoff (5s->300s), supersedes §16 \"backfill stops until next start\"; comment fixed. Reviewer session_01MMjhnCBdkNBBzZQnidQxb1. | 01:02Z reviewer MERGE at 248b0df7 (2 optional: shutdown-tail comment, reenrich-during-backoff comment; not worth a push). Merge on green ci-ok."
+      "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus. | 00:54Z PR #305 head 248b0df7: refetch funnel already correct (test kept); backfill retry with shared writer::Backoff (5s->300s), supersedes §16 \"backfill stops until next start\"; comment fixed. Reviewer session_01MMjhnCBdkNBBzZQnidQxb1. | 01:02Z reviewer MERGE at 248b0df7 (2 optional: shutdown-tail comment, reenrich-during-backoff comment; not worth a push). Merge on green ci-ok. | 01:25Z merged #305 (17e444a9); session archived.",
+      "merge": "17e444a9"
     },
     "X-stale-tab": {
       "status": "pr-review",
