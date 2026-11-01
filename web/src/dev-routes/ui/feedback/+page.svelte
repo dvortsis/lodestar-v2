@@ -42,7 +42,7 @@
 		text="New torrents appear here as the crawler finds them."
 	>
 		{#snippet illustration()}<div
-				class="h-(--art-height-small) w-40 rounded-box bg-base-200"
+				class="aspect-square h-(--art-height-small) rounded-box bg-base-200"
 			></div>{/snippet}
 		{#snippet action()}<Button variant="primary">Open Insights</Button>{/snippet}
 	</EmptyState>
