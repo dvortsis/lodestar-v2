@@ -86,7 +86,7 @@ describe("Show adult content through the flows' door", () => {
 		expect(contentCalls()).toHaveLength(0);
 	});
 
-	it('turning it off goes through the door too, and asks nothing', async () => {
+	it('turning it off loads nothing of the flows and asks nothing', async () => {
 		adultField = field(true);
 		render(AppearanceScreen);
 		const on = await toggle();
@@ -94,7 +94,7 @@ describe("Show adult content through the flows' door", () => {
 		await fireEvent.click(on);
 		await waitFor(() => expect(contentCalls()).toHaveLength(1), { timeout: 10_000 });
 		expect(contentCalls()[0]![1].body).toEqual({ show_adult: false });
-		expect(loadAdult).toHaveBeenCalledTimes(1);
+		expect(loadAdult).not.toHaveBeenCalled();
 		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 

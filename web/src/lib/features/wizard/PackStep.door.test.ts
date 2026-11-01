@@ -35,7 +35,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	vi.unstubAllGlobals();
-	vi.restoreAllMocks();
+	vi.mocked(console.warn).mockRestore();
 });
 
 describe("rule-pack step through the flows' door", () => {

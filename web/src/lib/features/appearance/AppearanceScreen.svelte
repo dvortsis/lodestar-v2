@@ -9,7 +9,7 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import type { AdultConfirm } from '../filters/flows/adult.svelte';
-	import { SHOW_ADULT_ENV } from './show-adult';
+	import { SHOW_ADULT_ENV, showAdultOff } from './show-adult';
 	import {
 		CONTENT,
 		DEFAULTS,
@@ -157,9 +157,10 @@
 		adultState = 'ready';
 		let loaded = adultFlow;
 		try {
-			// The 18+ dialog (Bits UI overlays) and the switch's save load with the first change,
-			// through the flows' door (X-flows-door-2), so none of the flows is in this first view.
-			if (!loaded) {
+			// The 18+ dialog (Bits UI overlays) and turning it on load with the first turn-on, through
+			// the flows' door (X-flows-door-2), so none of the flows is in this first view. Turning it
+			// off asks nothing and never waits on that load.
+			if (on && !loaded) {
 				const flow = await (await import('../filters/flows-door')).loadAdult();
 				loaded = adultFlow ??= { flow, confirm: flow.createAdultConfirm() };
 			}
@@ -168,7 +169,8 @@
 			adultKey++;
 			return;
 		}
-		const res = await loaded.flow.setShowAdult(on, loaded.confirm);
+		const res =
+			on && loaded ? await loaded.flow.setShowAdult(on, loaded.confirm) : await showAdultOff();
 		if (res.ok) adult = on;
 		else if (res.error) adultState = 'failed';
 		// Cancelled or failed: the switch shows what the server has.

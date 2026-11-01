@@ -968,8 +968,9 @@ if (carried.length)
 // The views that open "Block this…" or a filters change carry none of the flows (S-filters-2c),
 // nor do Appearance (its 18+ confirmation) or the wizard (its pack step) (X-flows-door-2): they load
 // through `flows-door.ts` alone. The dev showcase at /dev/filters-flows imports the flows directly;
-// it's linked into test builds only (scripts/dev-routes.mjs), never into this production build. A static import of `flows/**`, or a second dynamic root
-// that makes the bundler regroup the flows with a first view, fails here before measuring.
+// it's linked into test builds only (scripts/dev-routes.mjs), never into this production build.
+// A static import of `flows/**`, or a second dynamic root that makes the bundler regroup the flows
+// with a first view, fails here before measuring.
 const drawerView = ownChunk(DRAWER, detailLazy);
 const torrentView = own('/t/[hash]', { onDemand: detailLazy });
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
