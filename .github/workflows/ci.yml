@@ -212,6 +212,19 @@ jobs:
       # A regression gate at 200k; the 10M measurement is in §16.
       - run: cargo run --release -p lodestar-bench --bin search-bench -- --torrents 200000 --gate
 
+  reporting-overhead:
+    name: reporting overhead (§3)
+    # About 17 minutes, so nightly (and on demand) only; a local gate for
+    # Insights changes (bench/README.md, docs/decisions/2026-11-01-G-m5a.md).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --release -p lodestar-bench --example reporting-overhead -- --gate
+
   relevance:
     name: relevance (§8)
     needs: changes

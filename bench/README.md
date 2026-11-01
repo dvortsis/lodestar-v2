@@ -8,6 +8,22 @@ gates on (architecture §3, §8, §17). Run each in release:
 | `size-report` | Bytes per torrent against the §3 size budget | `size budget (§3)` |
 | `search-bench` | Search latency p95 per query class, count estimates | `search latency (§3)` |
 | `relevance` | Ranking quality: NDCG@10, MRR, recall@50 | `relevance (§8)` |
+| `reporting-overhead` (an example: it needs the API crate, a dev-dependency) | Insights' cost: search p95 and ingest with Insights open and the digest running, rollup bytes per year | `reporting overhead (§3)`, nightly |
+
+## Reporting overhead
+
+```sh
+cargo run --release -p lodestar-bench --example reporting-overhead -- --gate   # as the nightly runs it
+```
+
+About 17 minutes: a 100,000-torrent corpus with a year of rollups, then
+six base/loaded pairs of 30 s search phases and six of 10,000-torrent
+ingest phases. The load is an open Insights tab at the UI's rate (the
+overview and the Fetch page refetched every 30 s) plus a digest preview
+each round. The operative gate is a round's share of the 30 s period (at most 1%); the timed deltas are mostly run-to-run noise at that rate and gate only gross regressions. The gates, the noise allowance and the measured numbers are
+in `docs/decisions/2026-11-01-G-m5a.md`. It is too long for a pull
+request's CI, so it runs nightly and is a local gate for changes to
+Insights, the digest or the store reader.
 
 ## Relevance
 
