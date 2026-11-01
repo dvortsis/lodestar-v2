@@ -483,11 +483,13 @@ describe('keyboard', () => {
 		const view = mount();
 		await screen.findByTestId('discover-newest-total');
 		const mine = () => keys.list().filter((c) => c.scope === 'discover');
-		expect(mine().map((c) => [c.id, c.keys])).toEqual(
-			expect.arrayContaining([
-				['results.next', ['j']],
-				['results.previous', ['k']]
-			])
+		await waitFor(() =>
+			expect(mine().map((c) => [c.id, c.keys])).toEqual(
+				expect.arrayContaining([
+					['results.next', ['j']],
+					['results.previous', ['k']]
+				])
+			)
 		);
 		view.unmount();
 		expect(mine()).toHaveLength(0);
@@ -501,6 +503,11 @@ describe('keyboard', () => {
 				'[role="option"]'
 			)!;
 			first.focus();
+			await waitFor(() =>
+				expect(keys.list().some((c) => c.scope === 'discover' && c.id === 'results.next')).toBe(
+					true
+				)
+			);
 			await fireEvent.keyDown(first, { key: 'j' });
 			await waitFor(() => expect(document.activeElement?.getAttribute('data-index')).toBe('1'));
 			await fireEvent.keyDown(document.activeElement!, { key: 'k' });

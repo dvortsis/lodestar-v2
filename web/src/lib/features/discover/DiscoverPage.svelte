@@ -9,7 +9,6 @@
 	import { api } from '$lib/api/client';
 	import { formatCompact, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
-	import { keys } from '$lib/keys';
 	import type { Route } from '$lib/shell/nav';
 	import { m } from '$lib/paraglide/messages.js';
 	import StateScene from '$lib/shell/StateScene.svelte';
@@ -106,30 +105,17 @@
 		if (listBox?.contains(document.activeElement)) list.move(delta);
 		else list.focusActive();
 	}
-	// onMount, not $effect: the registry bumps its own version state, which an effect would track.
+	// On demand, after mount: the key registry is not part of this route's first view. Only j/k
+	// depend on it, and the registry bumps its own version state, which an effect would track.
 	onMount(() => {
-		const pop = keys.pushScope('discover');
-		const off = [
-			keys.register({
-				id: 'results.next',
-				title: () => m.discover_key_next(),
-				section: () => m.discover_section(),
-				scope: 'discover',
-				palette: false,
-				run: () => step(1)
-			}),
-			keys.register({
-				id: 'results.previous',
-				title: () => m.discover_key_previous(),
-				section: () => m.discover_section(),
-				scope: 'discover',
-				palette: false,
-				run: () => step(-1)
-			})
-		];
+		let gone = false;
+		let off: (() => void) | undefined;
+		void Promise.all([import('$lib/keys'), import('./commands')]).then(([{ keys }, cmd]) => {
+			if (!gone) off = cmd.registerDiscoverCommands(keys, step);
+		});
 		return () => {
-			off.forEach((f) => f());
-			pop();
+			gone = true;
+			off?.();
 		};
 	});
 

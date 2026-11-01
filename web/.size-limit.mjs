@@ -76,11 +76,13 @@ const walk = (route, onDemand, collectOnDemand, beyond = []) => {
 	const seen = new Set();
 	const files = new Set();
 	const later = new Set();
-	const matches = (key) => onDemand.some((re) => re.test(key));
+	// A shared chunk has no source key, so `chunk:<its name>` is tested too (as `ownChunk` does).
+	const matches = (key, chunk) =>
+		onDemand.some((re) => re.test(key) || (!!chunk.name && re.test(`chunk:${chunk.name}`)));
 	const visit = (key, demanded) => {
 		const chunk = manifest[key];
 		if (!chunk || shared.has(`build/${chunk.file}`)) return;
-		const demand = demanded || matches(key);
+		const demand = demanded || matches(key, chunk);
 		if (demand && FLOWS_DOOR.test(key)) return;
 		const id = `${demand}:${key}`;
 		if (seen.has(id)) return;
@@ -988,7 +990,13 @@ export default [
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
 	// runner §2.26, X-illustrations: §10.19 requires illustrations off for the toggle and Save-Data; the
 	// StateScene check costs ~80 B on this route.
-	entry('Discover route (own JS + CSS)', own('/discover'), '45.2 KB'),
+	// runner §2.26, X-discover-headroom: measured 42.4 KB after the keys moved on demand.
+	// Don't import the key registry (`$lib/keys`) or `./commands` statically; j/k register after mount.
+	entry(
+		'Discover route (own JS + CSS)',
+		own('/discover', { onDemand: [/^chunk:keys$/, /features\/discover\/commands\.ts$/] }),
+		'43 KB'
+	),
 	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
 	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
 	// Turn off now's privacy requests (S-logs-2) load on the click: gated with Logging's parts.
