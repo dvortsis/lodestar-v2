@@ -3197,6 +3197,10 @@
     {
       "t": "2026-11-01T17:04Z",
       "event": "#347 review CHANGES relayed (I1 width:100% missing, visible-row count, tests, range singular, summary cap, border token). FX-2 #343 marker removed at 0fac0c3, final E2E running."
+    },
+    {
+      "t": "2026-11-01T17:11Z",
+      "event": "merged #346 FX-3 (1962f499); archived FX-3; launched FX-6 UI session_01MMjhnAYaWy5XAkp2k2cnkM (Sonnet; I4, I10, P7, P8, dead .ins-scene). I9 query printer (Opus) is its own PR when a slot frees."
     }
   ],
   "reviews": {
