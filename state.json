@@ -3158,6 +3158,10 @@
     {
       "t": "2026-11-01T16:02Z",
       "event": "merged #342 FX-1 (8bd3e4f7); archived FX-1; told FX-2 to merge main + drop marker; launched FX-5 session_01MMjhnCdCsejdoQUCmaPvxP (Sonnet). Coarse copies FX-1 would have deleted (DiscoverPage, search/results/row.css, compare/FileDiff) now go to a small follow-up after #343 merges, with gate-file-cold queued too."
+    },
+    {
+      "t": "2026-11-01T16:17Z",
+      "event": "FX-4 opened #345 (head 2b7efa7); Opus review started. Follow-up queued: text-label-token — `text-label` used in 27 files is not a token (renders unstyled, like B4 text-h2); fix the uses, then add it to check-bans. Goes with the coarse-copy follow-up after FX-2/3/5/6 free their files."
     }
   ],
   "reviews": {
