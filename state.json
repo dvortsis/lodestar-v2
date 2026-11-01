@@ -3154,6 +3154,10 @@
     {
       "t": "2026-11-01T16:00Z",
       "event": "merged #344 G-m5a (b2913c10); archived its session; launched FX-4 session_01MMjhnBV4hiWYeKeM3poM16 (Sonnet); queued gate-file-cold (bench-only: cold4 class + broad file sets, per X-file-clause-cold decisions) for next free slot"
+    },
+    {
+      "t": "2026-11-01T16:02Z",
+      "event": "merged #342 FX-1 (8bd3e4f7); archived FX-1; told FX-2 to merge main + drop marker; launched FX-5 session_01MMjhnCdCsejdoQUCmaPvxP (Sonnet). Coarse copies FX-1 would have deleted (DiscoverPage, search/results/row.css, compare/FileDiff) now go to a small follow-up after #343 merges, with gate-file-cold queued too."
     }
   ],
   "reviews": {
