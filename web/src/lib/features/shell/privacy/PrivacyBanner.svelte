@@ -6,22 +6,17 @@
 	// Insights. Neither can be dismissed except by turning the thing off. Deadlines are on the
 	// server's clock, kept as an offset from the response's `updated_at`.
 	import { resolve } from '$app/paths';
-	import type { components } from '$lib/api/schema';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	// Through rules.ts too, as Settings → Logging reads them, so the two modules stay one chunk.
 	import { UNTIL_OFF } from '../../settings/logging/rules';
 	import { ahead, timeLeft } from '../../settings/logging/state';
+	import type { BannerProps } from './door';
 
-	interface Props {
-		/** The overview response: its `privacy` summary and `updated_at` (server Unix seconds). */
-		overview: { privacy: components['schemas']['PrivacySummary']; updated_at: number };
-		/** Reads the summary again (after Turn off now, and once the time runs out). */
-		reload: () => void;
-	}
-	let { overview, reload }: Props = $props();
-	const privacy = $derived(overview.privacy);
+	let { overview, reload }: BannerProps = $props();
+	// Mounted only while it's set; null (all off) shows nothing.
+	const privacy = $derived(overview.privacy ?? { identifying_until: null, query_logging: false });
 	const serverAt = $derived(overview.updated_at);
 
 	/** How often the time left is redrawn. */

@@ -16,6 +16,7 @@
 	import Exceptions from './Exceptions.svelte';
 	import Hatch from './Hatch.svelte';
 	import { resolve } from '$app/paths';
+	import type { Loaded } from '$lib/features/shell/privacy/door';
 	import type { Route } from './href';
 	import KpiRow from './KpiRow.svelte';
 	import Lazy from './Lazy.svelte';
@@ -209,7 +210,7 @@
 		{#if overview.privacy}
 			<!-- Loaded only while something identifying is recorded (§10.10.12). -->
 			<Lazy
-				load={() => import('$lib/features/shell/privacy/door').then((d) => d.load())}
+				load={() => import('$lib/features/shell/privacy/door').then<Loaded>((d) => d.load())}
 				props={{ overview, reload: insights.refresh }}
 				height=""
 			/>
