@@ -18,6 +18,10 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 //   all-themes                    axe on every route in all 48 themes + the 46-theme key-route
 //                                 baselines (nightly; opt-in: --project=all-themes or E2E_ALL_THEMES=1)
 
+// Local override, never set in CI: run an already-installed Chromium instead of the build this
+// @playwright/test pins (cloud sessions ship a different one). Unset = unchanged behaviour.
+const chromiumPath = process.env.PW_CHROMIUM_PATH;
+
 const allThemes = !!process.env.E2E_ALL_THEMES || process.argv.join(' ').includes('all-themes');
 const fixture =
 	!!process.env.E2E_FIXTURE || process.argv.join(' ').split(/[ =]/).includes('fixture');
@@ -67,7 +71,10 @@ export default defineConfig<Appearance>({
 		timeout: 180_000,
 		reuseExistingServer: !process.env.CI
 	},
-	use: { baseURL: 'http://localhost:4173' },
+	use: {
+		baseURL: 'http://localhost:4173',
+		...(chromiumPath ? { launchOptions: { executablePath: chromiumPath } } : {})
+	},
 	projects: [
 		{
 			name: 'core',

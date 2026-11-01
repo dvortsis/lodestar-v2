@@ -3,6 +3,14 @@
 Playwright + axe + an OpenAPI mock, plus Lighthouse CI. Architecture §10.17; budgets §10.1.
 Chromium only. Locally it is the preinstalled one in `/opt/pw-browsers`: **never run `playwright install`**. CI runs in the pinned Playwright container, which ships the browser. Locally, snapshot tests have no valid baselines (see Snapshots): use `--ignore-snapshots` for everything else.
 
+**Cloud sessions:** the preinstalled Chromium is a different build from the one `@playwright/test` pins, so point Playwright at it with `PW_CHROMIUM_PATH` (no symlink folder, no `PLAYWRIGHT_BROWSERS_PATH`):
+
+```sh
+PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1243/chrome-linux64/chrome npx playwright test e2e/boot-shell.routes.test.ts --project=core
+```
+
+CI never sets it, so CI's browser and screenshots are unchanged. Local screenshots are not authoritative: they can differ from the baselines on this build; CI's are.
+
 ## Projects
 
 Filter with `--project=<name>` (globs work). Every project starts the web server from `playwright.config.ts` (`npm run build && npm run preview`, cold ~73 s on CI, so its timeout is 180 s; an already-running server on :4173 is reused locally).
