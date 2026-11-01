@@ -1990,11 +1990,14 @@
       "review": "fresh Opus + /security-review; full-ci"
     },
     "S-e2e-2": {
-      "status": "building",
+      "status": "review-ready; baselines marker in CI",
       "session": "session_01MMjhnC2EShFoeTVej4jRbr",
       "model": "sonnet",
       "brief": "briefs/S-e2e-2.md",
-      "launched_at": "2026-11-01T05:21Z"
+      "launched_at": "2026-11-01T05:21Z",
+      "pr": 320,
+      "head": "12d28a7",
+      "review": "runner MERGE at 12d28a7 pending new-PNG-only check + marker removal"
     },
     "S-send": {
       "status": "building",
@@ -2926,7 +2929,8 @@
     "S-updates-4: Roll back button in Settings \u2192 Updates using can_roll_back from B-update-5b; plus plain words per install_failed code (#318)",
     "Filters flows door (#316): AppearanceScreen (flows/adult.svelte, AdultConfirmDialog), wizard/PackStep (flow.svelte) and the dev route still import filters/flows/** directly; route them through the door and extend the first-load guard to Appearance and wizard views",
     "Block this (#316): drawer is silent when the flows door fails to load; a hidden torrent stays listed until the next refetch",
-    "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off"
+    "#317: first visit with no appearance cache shows the first scene even when the account has illustrations off",
+    "e2e fixture project (#320): wire a CI job for *.fixture.test.ts (needs the Rust binary in the e2e workflow; cost estimate in docs/decisions/2026-11-01-S-e2e-2.md)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
