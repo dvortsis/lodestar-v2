@@ -1121,9 +1121,10 @@ export default [
 	// The first-run wizard (S-wizard): /welcome's first view is the auth check, the shell and the
 	// progress list. Each step is a dynamic import made when it opens, so the first view stops at
 	// them and "Wizard steps (on demand)" gates what they bring, the Settings engine's parts among
-	// them. Limits: measured + 10%.
+	// them. Limits: measured + 10%. Part 2 (S-wizard-2) adds the download client's cards and the
+	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
-	entry('Wizard steps (on demand)', wizardLazy, '36.9 KB')
+	entry('Wizard steps (on demand)', wizardLazy, '53.6 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
 ];

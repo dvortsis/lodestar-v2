@@ -274,6 +274,10 @@ describe('restart and load failures', () => {
 			};
 		});
 		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
+		await heading('Download client');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
+		await heading('Rule packs');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
 		await heading('Updates');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
 		expect((await screen.findByTestId('wizard-restart')).textContent).toContain('Restart');
