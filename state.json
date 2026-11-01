@@ -3090,6 +3090,11 @@
       "id": "q-file-size-bucket",
       "status": "to-send",
       "text": "FORMAT QUESTION (later, at the 10M pilot): to keep cold file-size searches under §3's 150 ms at 10M (projected ~600 ms today) and with 4 concurrent cold queries, index a size bucket in the file index: ~30-45 MB at 1M, ~300-450 MB at 10M, rebuild via SCHEMA_VERSION bump with the old index serving read-only. Runner will measure at 10M first; no action now."
+    },
+    {
+      "id": "flag-344-overhead-gate",
+      "status": "to-send",
+      "text": "§2.19/§2.26 (#344 G-m5a): reporting-overhead measured: Insights duty cycle 0.09% CPU, search p95 +4.9%/-0.6%, ingest +0.9%/-1.0%, storage ~3.4 MB/yr (budget 50). §3 budget unchanged; the nightly CI gate allows run-to-run noise (+8% search, -5% ingest) with duty cycle <=1% as the operative check."
     }
   ],
   "external_gates": {
@@ -3368,6 +3373,12 @@
       "head": "81dcaec",
       "verdict": "runner MERGE after baseline regen (marker) + marker removal + green CI",
       "session": "session_01MMjhnAAdf5t6QJNK35ET6m"
+    },
+    "344": {
+      "slice": "G-m5a",
+      "head": "c9d242d3",
+      "verdict": "decisions sent: noise allowance accepted (budget unchanged, gate +8%/-5% + duty cycle <=1%), nightly-only with own concurrency group (CHANGE), one PR ok; runner to review tests before merge; full-ci",
+      "session": "session_01MMjhnAee9Q1wKPEXsZnFC9"
     }
   },
   "merged_log": [
