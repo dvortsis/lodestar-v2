@@ -34,6 +34,8 @@
 		how: () => import('./HowStep.svelte'),
 		intensity: () => import('./IntensityStep.svelte'),
 		storage: () => import('./StorageStep.svelte'),
+		download: () => import('./DownloadStep.svelte'),
+		packs: () => import('./PackStep.svelte'),
 		updates: () => import('./UpdatesStep.svelte'),
 		done: () => import('./DoneStep.svelte')
 	};
@@ -43,6 +45,8 @@
 		how: () => m.wizard_step_how(),
 		intensity: () => m.wizard_step_intensity(),
 		storage: () => m.wizard_step_storage(),
+		download: () => m.wizard_step_download(),
+		packs: () => m.wizard_step_packs(),
 		updates: () => m.wizard_step_updates(),
 		done: () => m.wizard_step_done()
 	};

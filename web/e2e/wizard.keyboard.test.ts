@@ -6,6 +6,11 @@ import {
 	lockedUpdates,
 	wizardValues
 } from '../src/lib/features/wizard/testing/fixtures';
+import {
+	applied,
+	finished,
+	strengthening
+} from '../src/lib/features/filters/flows/testing/fixtures';
 import { expectNoA11yViolations } from './a11y';
 import { expect as baseExpect, test } from './support/test';
 
@@ -13,11 +18,30 @@ const expect = baseExpect.configure({ timeout: 10_000 });
 const h2 = (page: import('@playwright/test').Page, name: string) =>
 	page.getByRole('heading', { level: 2, name });
 
+const PACKS = ['malware', 'lures', 'fakes', 'spam', 'scams'];
+const packs = new Map<string, boolean>();
+const applyBodies: unknown[] = [];
+
 test.describe('first-run wizard', () => {
 	let backend: SettingsBackend;
 	test.beforeEach(async ({ mock }) => {
 		backend = new SettingsBackend(WIZARD_INDEX, wizardValues()).attach(mock);
 		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		// The filters API the pack step drives: packs start off, a preview job, then apply.
+		for (const id of PACKS) packs.set(id, false);
+		applyBodies.length = 0;
+		mock.on('getFilters', (() => ({
+			status: 200,
+			body: { packs: [...packs].map(([id, on]) => ({ id, on, rules: [] })) }
+		})) as never);
+		mock.on('startFilterPreviewJob', { job: 1 } as never);
+		mock.on('getFilterPreviewJob', finished(strengthening()) as never);
+		mock.on('applyFilterChange', ((r: { postDataJSON(): { change: { id: string } } }) => {
+			const body = r.postDataJSON();
+			applyBodies.push(body);
+			packs.set(body.change.id, true);
+			return { status: 200, body: applied(strengthening()) };
+		}) as never);
 	});
 
 	test('keyboard only: every step, Skip, save, Done', async ({ page, go, kbd }) => {
@@ -50,7 +74,28 @@ test.describe('first-run wizard', () => {
 		// Skip sends nothing.
 		await kbd.tabTo(page.getByRole('button', { name: 'Skip this step' }));
 		await kbd.press('Enter');
+		await expect(h2(page, 'Download client')).toBeFocused();
+		await expect(page.getByText(/qBittorrent is the recommended/)).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Add a download client' })).toBeVisible();
+		await expectNoA11yViolations(page);
+		await kbd.tabTo(page.getByRole('button', { name: 'Skip this step' }));
+		await kbd.press('Enter');
+
+		// Rule packs: all five checked; uncheck one by keyboard; Continue turns the other four on.
+		await expect(h2(page, 'Rule packs')).toBeFocused();
+		await expect(page.getByTestId('wizard-pack-malware')).toBeChecked();
+		await expectNoA11yViolations(page);
+		await kbd.tabTo(page.getByTestId('wizard-pack-spam'));
+		await kbd.press('Space');
+		await expect(page.getByTestId('wizard-pack-spam')).not.toBeChecked();
+		await kbd.tabTo(page.getByRole('button', { name: 'Save and continue' }));
+		await kbd.press('Enter');
 		await expect(h2(page, 'Updates')).toBeFocused();
+		expect(applyBodies).toEqual(
+			['malware', 'lures', 'fakes', 'scams'].map((id) => ({
+				change: { op: 'pack_switch', id, on: true }
+			}))
+		);
 		expect(backend.patches).toHaveLength(1);
 		await expect(page.getByRole('radio', { name: 'Off' })).toBeChecked();
 		await expect(page.getByTestId('wizard-updates-github')).toContainText('GitHub');
@@ -89,6 +134,8 @@ test.describe('first-run wizard', () => {
 		await go('/welcome');
 		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Continue' }).click();
+		await page.getByRole('button', { name: 'Skip this step' }).click();
+		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await page.getByRole('button', { name: 'Skip this step' }).click();
 		await expect(h2(page, 'Updates')).toBeVisible();

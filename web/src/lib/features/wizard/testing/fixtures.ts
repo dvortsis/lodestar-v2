@@ -67,6 +67,18 @@ export const WIZARD_INDEX: Index = {
 			} as never
 		},
 		{
+			section: 'integrations',
+			label_key: 'settings.integrations.label',
+			help_key: 'settings.integrations.help',
+			fields: [field('integrations', 'clients')],
+			schema: {
+				type: 'object',
+				properties: {
+					clients: { type: 'array', items: { type: 'object' }, 'x-group': 'clients', 'x-order': 0 }
+				}
+			} as never
+		},
+		{
 			section: 'updates',
 			label_key: 'settings.updates.label',
 			help_key: 'settings.updates.help',
@@ -112,6 +124,12 @@ export const wizardValues = (over: { updates?: Value } = {}): Values[] => [
 			mmap_mib: v(1024, { restart_required: true }),
 			archive_raw: v(false, { restart_required: true })
 		}
+	},
+	{
+		section: 'integrations',
+		revision: 4,
+		restart_required: [],
+		fields: { clients: { ...v([]), secrets_set: [] } as Value }
 	},
 	{
 		section: 'updates',

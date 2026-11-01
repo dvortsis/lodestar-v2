@@ -1,16 +1,13 @@
 // The wizard's steps and its progress (§10.10.10). Steps 1 and 2 happen in /setup; this list holds
-// the rest. Steps 6 (import from bitmagnet), 7 (download client) and the rule-pack step (§20.6) are
-// part 2 (docs/decisions/2026-10-31-S-wizard.md): `SLOTS` names where they go, so adding one is a
-// new entry here and a new loader in the shell, nothing else.
+// the rest. Step 6 (import from bitmagnet) is still a hidden slot (online import is deferred,
+// B-import-server-2): `SLOTS` names where it goes, so adding it is a new entry here and a new
+// loader in the shell, nothing else (docs/decisions/2026-10-31-S-wizard.md).
 
-export type StepId = 'network' | 'how' | 'intensity' | 'storage' | 'updates' | 'done';
+export type StepId =
+	'network' | 'how' | 'intensity' | 'storage' | 'download' | 'packs' | 'updates' | 'done';
 
-/** Where part 2's steps slot in, by the step they follow. Nothing renders from this yet. */
-export const SLOTS = {
-	import: 'storage',
-	'download-client': 'import',
-	'rule-packs': 'download-client'
-} as const;
+/** Where the hidden import step slots in, by the step it follows. Nothing renders from this. */
+export const SLOTS = { import: 'storage' } as const;
 
 export interface StepInfo {
 	id: StepId;
@@ -25,6 +22,8 @@ export const STEPS: readonly StepInfo[] = [
 	{ id: 'how', optional: false, settings: 'general' },
 	{ id: 'intensity', optional: true, settings: 'crawler' },
 	{ id: 'storage', optional: true, settings: 'storage' },
+	{ id: 'download', optional: true, settings: 'integrations' },
+	{ id: 'packs', optional: true, settings: 'filters' },
 	{ id: 'updates', optional: true, settings: 'updates' },
 	{ id: 'done', optional: false, settings: 'general' }
 ];

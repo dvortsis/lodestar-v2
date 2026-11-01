@@ -7,13 +7,14 @@
 		SettingField,
 		SettingsForm,
 		createSettingsForm,
-		type FieldKey
+		type FieldKey,
+		type FieldSpec
 	} from '../settings/form/embed';
 
 	interface Props {
 		/** The draft scope: `wizard.intensity`. */
 		id: string;
-		keys: FieldKey[];
+		keys: FieldKey[] | FieldSpec[];
 		lead: string;
 	}
 	let { id, keys, lead }: Props = $props();

@@ -64,7 +64,7 @@ describe('wizard progress', () => {
 		expect(p.restart).toBe(true);
 	});
 
-	it('leaves part 2 out: Skip exists only on the optional steps', () => {
+	it('Skip exists only on the optional steps', () => {
 		expect(STEPS.filter((s) => !s.optional).map((s) => s.id)).toEqual(['how', 'done']);
 		expect(stepIndex('done')).toBe(STEPS.length - 1);
 	});
