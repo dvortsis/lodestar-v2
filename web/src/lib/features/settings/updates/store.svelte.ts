@@ -33,7 +33,10 @@ export type Failure =
 	| 'install_unavailable'
 	| 'install_manual_confirmation'
 	| 'install_not_saved'
-	| 'install_failed';
+	| 'install_failed'
+	| 'rollback'
+	| 'rollback_unavailable'
+	| 'rollback_updates_unavailable';
 
 /** `POST /updates/install` refusals by their code; anything else is the general `install` failure. */
 const INSTALL_ANSWERS: Record<string, Failure> = {
@@ -165,6 +168,16 @@ export class UpdatesStore {
 		if (e instanceof ApiError && e.status === 401) return; // the shell takes the user to sign in
 		this.error = kind;
 		this.reason = e instanceof ApiError ? e.message : '';
+		if (kind === 'rollback' && e instanceof ApiError) {
+			// `rollback_unavailable` carries its reason as a code (`busy`, `snapshot_missing`, …).
+			this.error =
+				e.code === 'rollback_unavailable'
+					? 'rollback_unavailable'
+					: e.code === 'updates_unavailable'
+						? 'rollback_updates_unavailable'
+						: 'rollback';
+			this.reason = e.code === 'rollback_unavailable' ? (e.reason ?? '') : '';
+		}
 		if (kind === 'install' && e instanceof ApiError) {
 			this.error = INSTALL_ANSWERS[e.code] ?? 'install';
 			// `install_unavailable` carries its reason as a code (`busy`).
@@ -209,6 +222,11 @@ export class UpdatesStore {
 			})
 		);
 	};
+	/** Rolls back to the previous version. Only the confirmed dialog calls it; 202 means the restart follows. */
+	rollback = () =>
+		this.run('rollback', 'rollback', () =>
+			api.post('/updates/rollback', { body: { confirm: true } })
+		);
 	clearHistory = () =>
 		this.run('clear', 'clear', async () => {
 			await api.post('/updates/history/clear', {});

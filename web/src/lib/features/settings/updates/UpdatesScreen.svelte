@@ -177,7 +177,25 @@
 		install_unknown_version: m.settings_updates_error_install_unknown_version,
 		install_version_skipped: m.settings_updates_error_install_version_skipped,
 		install_manual_confirmation: m.settings_updates_error_install_manual_confirmation,
-		install_not_saved: m.settings_updates_error_install_not_saved
+		install_not_saved: m.settings_updates_error_install_not_saved,
+		rollback: m.settings_updates_error_rollback,
+		rollback_updates_unavailable: m.settings_updates_error_rollback_updates_unavailable
+	};
+	const rollbackReasons: Record<string, () => string> = {
+		not_supervised: m.settings_updates_rollback_reason_not_supervised,
+		image_mode: m.settings_updates_rollback_reason_image_mode,
+		busy: m.settings_updates_rollback_reason_busy,
+		no_previous_version: m.settings_updates_rollback_reason_no_previous_version,
+		snapshot_missing: m.settings_updates_rollback_reason_snapshot_missing
+	};
+	/** A plain sentence per stable install-failure code; never the code's own text, never a URL. */
+	const failedWords: Record<string, () => string> = {
+		download_mismatch: m.settings_updates_failed_download_mismatch,
+		download_too_large: m.settings_updates_failed_download_too_large,
+		download_io: m.settings_updates_failed_download_io,
+		no_artifact: m.settings_updates_failed_no_artifact,
+		redirect_refused: m.settings_updates_failed_redirect_refused,
+		stage_failed: m.settings_updates_failed_stage_failed
 	};
 	const installReasons: Record<string, () => string> = {
 		busy: m.settings_updates_install_reason_busy,
@@ -193,9 +211,18 @@
 						? (installReasons[store.reason]?.() ?? cause(store.reason))
 						: m.settings_updates_install_reason_unknown()
 				})
-			: kind === 'install_failed'
-				? m.settings_updates_error_install_failed({ reason: store.reason || '—' })
-				: errors[kind]?.();
+			: kind === 'rollback_unavailable'
+				? m.settings_updates_error_rollback_unavailable({
+						reason:
+							(store.reason && rollbackReasons[store.reason]?.()) ||
+							m.settings_updates_rollback_reason_unknown()
+					})
+				: kind === 'install_failed'
+					? m.settings_updates_error_install_failed({
+							reason:
+								(store.reason && failedWords[store.reason]?.()) || m.settings_updates_failed_other()
+						})
+					: errors[kind]?.();
 
 	/** Install now: a release with manual steps asks first; only a confirm sends `confirm_manual`. */
 	async function install(r: { version: string; manual_steps: boolean }) {
@@ -232,6 +259,29 @@
 			store.signal
 		);
 		if (answer === 'skip') await store.skip(version);
+	}
+
+	/** Roll back: the confirmation says what is lost; only Roll back sends `confirm: true`. */
+	async function rollBack(to: string) {
+		const lost = status?.rollback.lost_torrents;
+		const answer = await ask(
+			{
+				title: m.settings_updates_rollback_title({ version: to }),
+				body: [
+					m.settings_updates_rollback_body({ version: to }),
+					lost != null && lost > 0
+						? m.settings_updates_rollback_lost({ count: lost })
+						: m.settings_updates_rollback_lost_unknown()
+				],
+				actions: [
+					{ id: 'cancel', label: m.settings_updates_cancel() },
+					{ id: 'rollback', label: m.settings_updates_rollback_action(), variant: 'danger' }
+				],
+				initial: 'cancel'
+			},
+			store.signal
+		);
+		if (answer === 'rollback') await store.rollback();
 	}
 
 	// Advanced loads when it is first opened.
@@ -425,6 +475,17 @@
 							onclick={() => skip(release.version)}
 							loading={store.busy === 'skip'}
 							data-testid="updates-skip">{m.settings_updates_skip()}</Button
+						>
+					{/if}
+					{#if status.rollback.available && status.rollback.to_version && !store.step}
+						{@const to = status.rollback.to_version}
+						<Button
+							onclick={() => rollBack(to)}
+							loading={store.busy === 'rollback'}
+							data-testid="updates-rollback"
+							>{m.settings_updates_rollback_button({
+								version: to === 'image' ? m.settings_updates_rollback_image() : to
+							})}</Button
 						>
 					{/if}
 				</div>

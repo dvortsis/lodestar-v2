@@ -73,6 +73,7 @@ let fields: Record<string, { value: unknown; env: string | null; read_only: bool
 let sent: string[];
 let failNext: string | null;
 let failStatus = false;
+let rollbackAnswer: Response | null = null;
 
 const reply = (code: number, b: unknown) =>
 	new Response(JSON.stringify(b), {
@@ -91,6 +92,7 @@ beforeEach(() => {
 	sent = [];
 	failNext = null;
 	failStatus = false;
+	rollbackAnswer = null;
 	asked.answer = 'cancel';
 	asked.count = 0;
 	vi.stubGlobal(
@@ -105,6 +107,7 @@ beforeEach(() => {
 			}
 			if (path === '/updates' && method === 'GET' && failStatus)
 				return reply(500, { error: { code: 'internal', message: 'down' } });
+			if (path === '/updates/rollback' && rollbackAnswer) return rollbackAnswer.clone();
 			if (path === '/system') return reply(200, { deployment: { kind: 'docker' } });
 			if (path === '/settings/updates' && method === 'GET')
 				return reply(200, { section: 'updates', revision: 1, restart_required: [], fields });
@@ -319,10 +322,10 @@ describe('the Updates screen', () => {
 				version: '0.6.0',
 				bytes_done: null,
 				bytes_total: null,
-				error: 'no_space'
+				error: 'download_io'
 			});
 			await until(() =>
-				expect(screen.getByTestId('updates-error').textContent).toContain('no_space')
+				expect(screen.getByTestId('updates-error').textContent).toContain('free disk space')
 			);
 			expect(screen.getByTestId('updates-install')).toBeTruthy();
 		});
@@ -530,5 +533,96 @@ describe('the Updates screen', () => {
 		expect((await screen.findByTestId('updates-notice-brand_new_code')).textContent).toContain(
 			'no explanation'
 		);
+	});
+
+	describe('Roll back', () => {
+		const offer = () => {
+			status.rollback = { available: true, lost_torrents: 3, reason: null, to_version: '0.5.0' };
+		};
+		const refuse = (code: string, reason?: string) =>
+			(rollbackAnswer = reply(409, { error: { code, message: 'x', reason } }));
+
+		it('is hidden when unavailable', async () => {
+			status.rollback = {
+				available: false,
+				lost_torrents: null,
+				reason: 'busy',
+				to_version: null
+			};
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-state');
+			expect(screen.queryByTestId('updates-rollback')).toBeNull();
+		});
+
+		it('names the previous version; Cancel sends nothing', async () => {
+			offer();
+			render(UpdatesScreen);
+			const b = await screen.findByTestId('updates-rollback');
+			expect(b.textContent).toContain('0.5.0');
+			await fireEvent.click(b);
+			await until(() => expect(asked.count).toBe(1));
+			expect(mutations()).toEqual([]);
+		});
+
+		it('Confirm sends confirm: true', async () => {
+			offer();
+			asked.answer = 'rollback';
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-rollback'));
+			await until(() => expect(mutations()).toEqual(['POST /updates/rollback {"confirm":true}']));
+		});
+
+		it.each([
+			['not_supervised', "isn't running under its updater"],
+			['image_mode', 'pulling a new container image'],
+			['busy', 'check or install is running'],
+			['no_previous_version', 'no previous version'],
+			['snapshot_missing', 'snapshot of your data'],
+			['something_new', 'gave no reason']
+		])('shows the refusal %s in words', async (reason, words) => {
+			offer();
+			asked.answer = 'rollback';
+			refuse('rollback_unavailable', reason);
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-rollback'));
+			const t = (await screen.findByTestId('updates-error')).textContent ?? '';
+			expect(t).toContain(words);
+			expect(mutations()).toHaveLength(1); // no retry
+		});
+
+		it('shows updates_unavailable in words', async () => {
+			offer();
+			asked.answer = 'rollback';
+			refuse('updates_unavailable');
+			render(UpdatesScreen);
+			await fireEvent.click(await screen.findByTestId('updates-rollback'));
+			expect((await screen.findByTestId('updates-error')).textContent).toContain(
+				'no update engine'
+			);
+		});
+	});
+
+	describe('install_failed', () => {
+		const fail = async (error: string) => {
+			let push: (e: unknown) => void = () => {};
+			events.on.mockImplementation((_t: string, h: (e: unknown) => void) => {
+				push = h;
+				return () => {};
+			});
+			render(UpdatesScreen);
+			await screen.findByTestId('updates-state');
+			push({ state: 'failed', version: '0.6.0', bytes_done: null, bytes_total: null, error });
+			return (await screen.findByTestId('updates-error')).textContent ?? '';
+		};
+		it('words a known code, not the code', async () => {
+			const t = await fail('download_mismatch');
+			expect(t).toContain("didn't match what was signed");
+			expect(t).not.toContain('download_mismatch');
+		});
+		it('falls back to a generic sentence for an unknown code', async () => {
+			const t = await fail('brand_new_code');
+			expect(t).toContain('Something went wrong while installing');
+			expect(t).not.toContain('brand_new_code');
+		});
 	});
 });
