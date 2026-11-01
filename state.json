@@ -3295,6 +3295,10 @@
     {
       "t": "2026-11-01T20:40Z",
       "event": "merged #354 S-doc-shots (9a8c6f68; its completion event was lost, verified green by check runs). Archived. Open: F-filter-load-fail-closed (self-review). 3 slots free; queued items wait on fail-closed (shared api files)."
+    },
+    {
+      "t": "2026-11-01T21:06Z",
+      "event": "merged #355 X-pw-local-chromium (33106eef; no baseline regen). Archived. Future briefs: say \"set PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1243/chrome-linux64/chrome\" instead of the symlink trick. Open: F-filter-load-fail-closed only."
     }
   ],
   "reviews": {
