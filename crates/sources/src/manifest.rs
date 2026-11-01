@@ -244,6 +244,14 @@ impl Caps {
 /// fields (§18.1, §18.4). It sits beside [`Manifest`] and comes from
 /// [`SourcePlugin::policy`](crate::SourcePlugin::policy), whose default is
 /// [`Policy::STRICT`], so plugins written before it keep compiling.
+///
+/// Write a plugin's policy as `Policy { caps: …, ..Policy::STRICT }`, so a
+/// field added later takes the strict default rather than breaking the
+/// build or loosening anything.
+///
+/// Declared caps are trusted no further than the global [`floors`]:
+/// [`Policy::limits`] and every [`HostLimiter`](crate::HostLimiter) apply
+/// them, so a zero interval or back-off can't turn into a request storm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Policy {
     pub caps: Caps,
@@ -287,17 +295,31 @@ impl Policy {
         let base = base.max(caps.backoff.base);
         Limits {
             poll_interval: poll,
-            per_host: HostRate {
-                burst: per_host.burst.max(1),
-                ..per_host
-            },
+            per_host,
             max_full_scrapes_per_day: scrapes,
             backoff: Backoff {
                 base,
-                max: max.max(caps.backoff.max).max(base),
+                max: max.max(caps.backoff.max),
             },
         }
+        .floored()
     }
+}
+
+/// The global floors under every plugin's declared caps.
+pub mod floors {
+    use std::time::Duration;
+
+    /// The shortest time between two requests to one host.
+    pub const HOST_INTERVAL: Duration = Duration::from_secs(1);
+    /// The largest burst to one host.
+    pub const MAX_BURST: u32 = 4;
+    /// The shortest time between two polls of one unit.
+    pub const POLL_INTERVAL: Duration = Duration::from_secs(60);
+    /// The shortest first back-off.
+    pub const BACKOFF_BASE: Duration = Duration::from_secs(1);
+    /// Full scrapes per tracker per day (BEP 48, §18.1).
+    pub const FULL_SCRAPES_PER_DAY: u32 = 1;
 }
 
 /// A schema that accepts only an empty object.
@@ -322,6 +344,26 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// These limits raised to the global [`floors`] where they fall
+    /// below them. Never loosens anything.
+    pub fn floored(self) -> Limits {
+        let base = self.backoff.base.max(floors::BACKOFF_BASE);
+        Limits {
+            poll_interval: self.poll_interval.max(floors::POLL_INTERVAL),
+            per_host: HostRate {
+                interval: self.per_host.interval.max(floors::HOST_INTERVAL),
+                burst: self.per_host.burst.clamp(1, floors::MAX_BURST),
+            },
+            max_full_scrapes_per_day: self
+                .max_full_scrapes_per_day
+                .min(floors::FULL_SCRAPES_PER_DAY),
+            backoff: Backoff {
+                base,
+                max: self.backoff.max.max(base),
+            },
+        }
+    }
+
     /// Whether these limits are at least as strict as `caps` everywhere.
     pub fn within(&self, caps: &Caps) -> bool {
         self.poll_interval >= caps.min_poll_interval

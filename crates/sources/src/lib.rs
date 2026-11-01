@@ -20,7 +20,7 @@ pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
 pub use http::{Client, Fetch, HostLimiter, HostState, HttpError, NoEgress, Request, Response};
 pub use manifest::{
     Backoff, Caps, Consent, Distribution, EMPTY_SCHEMA, Endpoint, HostRate, Kind, Limits, Manifest,
-    Network, Policy, Priority, Risk, Schedule, UserLimits, Window,
+    Network, Policy, Priority, Risk, Schedule, UserLimits, Window, floors,
 };
 pub use plugin::{
     BoxFuture, Closed, Discovery, Emitter, Found, Kit, LookupSession, PeerRequest, PluginError,

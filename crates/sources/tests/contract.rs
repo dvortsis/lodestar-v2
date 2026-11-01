@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
+use lodestar_sources::floors;
 use lodestar_sources::http::{WaitReason, backoff_delay};
 use lodestar_sources::testing::{Exchange, FakeCtx, Replayer, wait_for};
 use lodestar_sources::{
@@ -109,9 +110,41 @@ proptest! {
             backoff: None,
         };
         let limits = policy(caps).limits(&user);
-        prop_assert_eq!(limits.poll_interval, user.poll_interval.unwrap());
-        prop_assert_eq!(limits.per_host, user.per_host.unwrap());
+        prop_assert_eq!(limits.poll_interval, user.poll_interval.unwrap().max(floors::POLL_INTERVAL));
+        prop_assert_eq!(
+            limits.per_host.interval,
+            user.per_host.unwrap().interval.max(floors::HOST_INTERVAL)
+        );
+        prop_assert_eq!(limits.per_host.burst, 1);
         prop_assert_eq!(limits.max_full_scrapes_per_day, 0);
+    }
+
+    /// Whatever a plugin declares, zeros and extremes included, the
+    /// limits in force sit at or above the global floors.
+    #[test]
+    fn declared_caps_are_floored(
+        poll in 0u64..u64::MAX / 4,
+        iv in 0u64..u64::MAX / 4,
+        burst: u32,
+        scrapes: u32,
+        base in 0u64..u64::MAX / 4,
+        max in 0u64..u64::MAX / 4,
+        user in user(),
+    ) {
+        let caps = Caps {
+            min_poll_interval: Duration::from_nanos(poll),
+            per_host: HostRate { interval: Duration::from_nanos(iv), burst },
+            max_full_scrapes_per_day: scrapes,
+            backoff: Backoff { base: Duration::from_nanos(base), max: Duration::from_nanos(max) },
+        };
+        for l in [policy(caps).limits(&user), *HostLimiter::with_seed(policy(caps).limits(&user), 1).limits()] {
+            prop_assert!(l.poll_interval >= floors::POLL_INTERVAL);
+            prop_assert!(l.per_host.interval >= floors::HOST_INTERVAL);
+            prop_assert!((1..=floors::MAX_BURST).contains(&l.per_host.burst));
+            prop_assert!(l.max_full_scrapes_per_day <= floors::FULL_SCRAPES_PER_DAY);
+            prop_assert!(l.backoff.base >= floors::BACKOFF_BASE);
+            prop_assert!(l.backoff.max >= l.backoff.base);
+        }
     }
 
     /// Whatever the request times, every span of time `t` sees at most
@@ -124,6 +157,9 @@ proptest! {
     ) {
         let rate = HostRate { interval: Duration::from_millis(iv), burst };
         let limiter = HostLimiter::with_seed(limits_with(rate, 0), 1);
+        // The rate in force: the declared one raised to the floors.
+        let rate = limiter.limits().per_host;
+        let burst = rate.burst;
         let t0 = Instant::now();
         let mut now = t0;
         let mut grants = Vec::new();
@@ -170,13 +206,14 @@ proptest! {
             Limits { poll_interval: Duration::from_millis(iv), ..limits_with(HostRate::per_second(1), 0) },
             1,
         );
+        let iv = limiter.limits().poll_interval;
         let mut now = Instant::now();
         let mut last: Option<Instant> = None;
         for g in gaps {
             now += Duration::from_millis(g);
             if limiter.try_poll("feed", now).is_ok() {
                 if let Some(l) = last {
-                    prop_assert!(now.duration_since(l) >= Duration::from_millis(iv));
+                    prop_assert!(now.duration_since(l) >= iv);
                 }
                 last = Some(now);
             }
@@ -190,6 +227,7 @@ proptest! {
         gaps in proptest::collection::vec(0u64..30_000, 1..100),
     ) {
         let limiter = HostLimiter::with_seed(limits_with(HostRate::per_second(1000), max), 1);
+        let max = limiter.limits().max_full_scrapes_per_day;
         let mut now = Instant::now();
         let mut grants = Vec::new();
         for g in gaps {
@@ -204,7 +242,7 @@ proptest! {
         }
     }
 
-    /// Back-off is bounded by the ceiling, never below half the floor,
+    /// Back-off is bounded by the ceiling, never below the floor,
     /// and its envelope never shrinks as failures grow.
     #[test]
     fn backoff_bounded(
@@ -217,10 +255,10 @@ proptest! {
         let ceiling = b.max.max(b.base);
         let d = backoff_delay(b, failures, entropy);
         prop_assert!(d <= ceiling);
-        prop_assert!(d >= b.base.min(ceiling) / 2);
+        prop_assert!(d >= b.base);
         let hi = backoff_delay(b, failures, u64::MAX);
         let next_lo = backoff_delay(b, failures + 1, 0);
-        prop_assert!(next_lo >= hi / 2);
+        prop_assert!(next_lo >= hi);
         prop_assert!(backoff_delay(b, failures + 1, u64::MAX) >= hi);
     }
 
@@ -326,19 +364,13 @@ impl SourcePlugin for Feed {
             } = ctx;
             let err = |e: &dyn std::fmt::Display| PluginError(e.to_string());
             while !shutdown.is_requested() {
-                // The poll gate holds the cap, whatever the plugin's timers.
-                if let Err(w) = kit.limiter().try_poll(URL, Instant::now()) {
-                    tokio::select! {
-                        _ = tokio::time::sleep_until(w.until) => continue,
-                        _ = shutdown.requested() => break,
-                    }
-                }
                 let mut req = Request::get(URL);
                 if let Some(tag) = kit.state.get("etag").await.map_err(|e| err(&e))? {
                     req = req.header("If-None-Match", String::from_utf8_lossy(&tag));
                 }
                 let res = tokio::select! {
-                    r = kit.http.send(&req) => r,
+                    // The poll gate spaces polls; the plugin has no timer.
+                    r = kit.http.poll(URL, &req) => r,
                     _ = shutdown.requested() => break,
                 };
                 match res {

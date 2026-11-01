@@ -9,6 +9,11 @@
 //! Clamping trims; it never rejects, because a long name is still a
 //! useful hint.
 //!
+//! Clamping bounds what crosses the contract, after the fact. **A parser
+//! caps as it reads** (SRC-6 and later): it stops collecting a field at
+//! these limits rather than building a 40 MB value for the emitter to
+//! cut, and the clamp releases what it cuts.
+//!
 //! The child-safety filter still runs on every claim before storage
 //! (§18.7, §20.1). Bounding here doesn't replace it.
 //!
@@ -114,6 +119,9 @@ impl Claims {
             keep += 1;
         }
         self.files.truncate(keep);
+        self.files.shrink_to_fit();
+        self.trackers.shrink_to_fit();
+        self.ids.shrink_to_fit();
     }
 
     /// Bytes of text held, the measure [`MAX_TOTAL`] bounds.
@@ -177,6 +185,8 @@ pub(crate) fn truncate(s: &mut String, max: usize) {
             end -= 1;
         }
         s.truncate(end);
+        // Give back what was cut: clamping bounds memory, not just length.
+        s.shrink_to_fit();
     }
 }
 

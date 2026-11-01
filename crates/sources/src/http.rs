@@ -126,12 +126,21 @@ impl std::error::Error for HttpError {}
 /// it; plugins use it only through the [`Client`] in their
 /// [`Kit`](crate::Kit).
 ///
-/// **An implementation never follows redirects.** It returns the 3xx as
-/// it is, so a plugin that follows one sends a new request through the
-/// [`Client`], paced for the new host and checked against its egress.
+/// The contract an implementation keeps:
+/// - **It never follows redirects.** It returns the 3xx as it is, so a
+///   plugin that follows one sends a new request through the [`Client`],
+///   paced for the new host and checked against its egress.
+/// - **It reads at most [`MAX_BODY`] bytes of body** and fails with
+///   [`HttpError::Transport`] past that, so a hostile server can't fill
+///   memory. A plugin that needs more (a multi-megabyte full scrape)
+///   waits for streaming: a later, additive `fetch_stream` method with a
+///   default implementation, so existing implementations keep compiling.
 pub trait Fetch: Send + Sync {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>>;
 }
+
+/// The largest response body a [`Fetch`] returns.
+pub const MAX_BODY: usize = 16 * 1024 * 1024;
 
 impl<T: Fetch + ?Sized> Fetch for Arc<T> {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
@@ -193,46 +202,33 @@ pub fn parse_retry_after(v: &str) -> Option<Duration> {
     Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER))
 }
 
-/// The host of `scheme://[user@]host[:port]/…`, lower-cased and without a
-/// trailing dot. IPv6 literals keep their brackets.
-///
-/// `None` (so [`HttpError::BadUrl`]) for anything a URL parser might
-/// read differently: a backslash, `%`, whitespace, control or non-ASCII
-/// bytes before the path. A plugin sends plain ASCII URLs (IDNs in
-/// punycode), so refusing the rest keeps the limiter's host the one the
-/// client connects to.
+/// The host an HTTP(S) URL connects to, as the WHATWG URL parser (the
+/// `url` crate reqwest uses) reads it, so the limiter paces the host the
+/// client actually reaches. IPv4 in any form (`127.1`, `0x7f000001`,
+/// `2130706433`) becomes dotted quads, IPv6 is compressed in brackets
+/// (`[::1]`), an IPv4-mapped IPv6 address is its IPv4 address, and
+/// domains are lower-case punycode without a trailing dot. `None` (so
+/// [`HttpError::BadUrl`]) for anything else, other schemes included.
 pub fn host_key(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme.is_empty()
-        || !scheme
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
-    {
+    let url = url::Url::parse(url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
-    let authority = rest.split(['/', '?', '#']).next()?;
-    if authority
-        .bytes()
-        .any(|b| b == b'\\' || b == b'%' || !b.is_ascii_graphic())
-    {
-        return None;
-    }
-    let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    let host = if hostport.starts_with('[') {
-        &hostport[..=hostport.find(']')?]
-    } else {
-        hostport.split(':').next()?
+    let key = match url.host()? {
+        url::Host::Domain(d) => d.trim_end_matches('.').to_ascii_lowercase(),
+        url::Host::Ipv4(a) => a.to_string(),
+        url::Host::Ipv6(a) => match a.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => format!("[{a}]"),
+        },
     };
-    let host = host.trim_end_matches('.');
-    if host.is_empty() {
-        return None;
-    }
-    Some(host.to_ascii_lowercase())
+    (!key.is_empty()).then_some(key)
 }
 
 /// The delay before retry after the `failures`th consecutive failure:
-/// in `[full / 2, full]` where `full = min(max, base × 2^(failures−1))`.
-/// `entropy` picks the point; any value keeps the bounds.
+/// in `[full, 1.5 × full]` capped at `max`, where
+/// `full = min(max, base × 2^(failures−1))`. So it's never below `base`
+/// nor above `max`. `entropy` picks the point; any value keeps the bounds.
 pub fn backoff_delay(b: Backoff, failures: u32, entropy: u64) -> Duration {
     if failures == 0 {
         return Duration::ZERO;
@@ -245,10 +241,9 @@ pub fn backoff_delay(b: Backoff, failures: u32, entropy: u64) -> Duration {
         b.base.checked_mul(1 << shift).map_or(max, |d| d.min(max))
     };
     let full_ns = full.as_nanos();
-    let half = full_ns / 2;
     // `full_ns` is below 2^94, so this can't overflow.
-    let extra = ((full_ns - half) * u128::from(entropy >> 32)) >> 32;
-    let ns = half + extra;
+    let extra = ((full_ns / 2) * u128::from(entropy >> 32)) >> 32;
+    let ns = (full_ns + extra).min(max.as_nanos());
     Duration::new((ns / 1_000_000_000) as u64, (ns % 1_000_000_000) as u32)
 }
 
@@ -367,6 +362,17 @@ impl Hosts {
         z ^ (z >> 31)
     }
 
+    /// The host's entry for recording an answer. It always exists: a
+    /// host that answered held a token a moment ago, so its outcome is
+    /// never dropped for want of room. The map can pass [`MAX_HOSTS`]
+    /// only by hosts with requests in flight, and shrinks back as they go
+    /// idle.
+    fn entry_for_answer(&mut self, host: &str, now: Instant) -> &mut Host {
+        self.map
+            .entry(host.to_owned())
+            .or_insert_with(|| Host::new(now))
+    }
+
     /// The host's entry, making room if needed.
     fn entry(&mut self, host: &str, now: Instant, l: &Limits) -> Result<&mut Host, Wait> {
         let interval = l.per_host.interval;
@@ -396,14 +402,16 @@ pub struct HostLimiter {
 }
 
 impl HostLimiter {
+    /// `limits` are raised to the global floors
+    /// ([`Limits::floored`]) whatever their source.
     pub fn new(limits: Limits) -> HostLimiter {
         HostLimiter::with_seed(limits, RandomState::new().hash_one(0u8))
     }
 
-    /// Deterministic jitter, for tests.
+    /// Deterministic jitter, for tests. Floored as [`new`](Self::new).
     pub fn with_seed(limits: Limits, seed: u64) -> HostLimiter {
         HostLimiter {
-            limits,
+            limits: limits.floored(),
             hosts: Arc::new(Mutex::new(Hosts {
                 map: HashMap::new(),
                 polls: HashMap::new(),
@@ -518,9 +526,7 @@ impl HostLimiter {
     pub fn failure(&self, host: &str, now: Instant) -> Duration {
         let mut hosts = self.lock();
         let entropy = hosts.entropy();
-        let Ok(h) = hosts.entry(host, now, &self.limits) else {
-            return Duration::ZERO;
-        };
+        let h = hosts.entry_for_answer(host, now);
         h.failures = h.failures.saturating_add(1);
         let d = backoff_delay(self.limits.backoff, h.failures, entropy);
         h.retry_at = Some(later(now, d));
@@ -531,9 +537,8 @@ impl HostLimiter {
     /// later block only ever extends an earlier one.
     pub fn block(&self, host: &str, until: Instant, now: Instant) {
         let mut hosts = self.lock();
-        if let Ok(h) = hosts.entry(host, now, &self.limits) {
-            h.blocked_until = Some(h.blocked_until.map_or(until, |u| u.max(until)));
-        }
+        let h = hosts.entry_for_answer(host, now);
+        h.blocked_until = Some(h.blocked_until.map_or(until, |u| u.max(until)));
     }
 
     pub fn state(&self, host: &str, now: Instant) -> HostState {
@@ -600,6 +605,22 @@ impl<F: Fetch> Client<F> {
         &self.limiter
     }
 
+    /// One poll of `unit` (a feed URL, an indexer id): waits for the poll
+    /// gate ([`HostLimiter::try_poll`]), then sends as [`send`](Self::send).
+    /// This is how a plugin polls. Each plugin's contract test checks the
+    /// spacing of its polls from the replayer's timestamps (SRC-7's
+    /// pattern), so a plugin that polls through `send` instead is caught.
+    /// Cancel safe until the gate opens; after that the poll counts.
+    pub async fn poll(&self, unit: &str, req: &Request) -> Result<Response, HttpError> {
+        loop {
+            match self.limiter.try_poll(unit, Instant::now()) {
+                Ok(()) => break,
+                Err(w) => sleep_until(w.until).await,
+            }
+        }
+        self.send(req).await
+    }
+
     /// Waits for the host's token, sends, and records the answer. A
     /// blocked host fails at once with [`HttpError::Blocked`].
     pub async fn send(&self, req: &Request) -> Result<Response, HttpError> {
@@ -640,13 +661,25 @@ mod tests {
         assert_eq!(host_key("http://u:p@h:8080/x").as_deref(), Some("h"));
         assert_eq!(host_key("http://[::1]:9696/api").as_deref(), Some("[::1]"));
         assert_eq!(host_key("nyaa.si/rss"), None);
-        assert_eq!(host_key("http:///x"), None);
-        // Anything a URL parser might read as another host is refused.
-        assert_eq!(host_key("http://evil.example\\@nyaa.si/"), None);
-        assert_eq!(host_key("http://ny%61a.si/"), None);
-        assert_eq!(host_key("http://ny aa.si/"), None);
-        assert_eq!(host_key("http://bücher.example/"), None);
-        assert_eq!(host_key("ht tp://h/"), None);
+        assert_eq!(host_key("http://"), None);
+        // WHATWG skips extra slashes, as reqwest does.
+        assert_eq!(host_key("http:///x").as_deref(), Some("x"));
+        assert_eq!(host_key("ftp://h/x"), None);
+        // The key is the host the client connects to, however it's spelt.
+        let k = |u| host_key(u).unwrap();
+        assert_eq!(k("http://evil.example\\@nyaa.si/"), "evil.example");
+        assert_eq!(k("http://ny%61a.si/"), "nyaa.si");
+        assert_eq!(k("http://bücher.example/"), "xn--bcher-kva.example");
+        for v4 in [
+            "http://127.0.0.1/",
+            "http://127.1/",
+            "http://0x7f000001/",
+            "http://2130706433/",
+            "http://[::ffff:127.0.0.1]/",
+        ] {
+            assert_eq!(k(v4), "127.0.0.1", "{v4}");
+        }
+        assert_eq!(k("http://[0:0::1]/"), "[::1]");
     }
 
     #[test]
@@ -678,6 +711,28 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn declared_limits_are_floored() {
+        let wild = Limits {
+            poll_interval: Duration::ZERO,
+            per_host: HostRate {
+                interval: Duration::ZERO,
+                burst: u32::MAX,
+            },
+            max_full_scrapes_per_day: u32::MAX,
+            backoff: Backoff {
+                base: Duration::ZERO,
+                max: Duration::ZERO,
+            },
+        };
+        let l = HostLimiter::with_seed(wild, 1);
+        assert_eq!(*l.limits(), wild.floored());
+        let t0 = Instant::now();
+        let granted = (0..100).filter(|_| l.try_acquire("h", t0).is_ok()).count();
+        assert_eq!(granted, crate::manifest::floors::MAX_BURST as usize);
+        assert!(l.failure("h", t0) >= crate::manifest::floors::BACKOFF_BASE);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn bucket_spaces_requests() {
         let l = HostLimiter::with_seed(limits(10, 2), 1);
         let t0 = Instant::now();
@@ -696,7 +751,7 @@ mod tests {
         let l = HostLimiter::with_seed(limits(0, 1), 7);
         let t0 = Instant::now();
         let d1 = l.failure("h", t0);
-        assert!(d1 >= Duration::from_millis(500) && d1 <= Duration::from_secs(1));
+        assert!(d1 >= Duration::from_secs(1) && d1 <= Duration::from_millis(1500));
         let w = l.try_acquire("h", t0).unwrap_err();
         assert_eq!(w.reason, WaitReason::Backoff);
         assert!(matches!(

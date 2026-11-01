@@ -1742,6 +1742,7 @@ dependencies = [
  "lodestar-store",
  "proptest",
  "tokio",
+ "url",
 ]
 
 [[package]]

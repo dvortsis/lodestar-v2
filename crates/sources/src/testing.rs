@@ -36,7 +36,6 @@
 //!   (API keys, cookies, account names) from URLs, headers and bodies, and
 //!   commit the result. A key in a URL is replaced by `REDACTED` in both
 //!   the fixture and the test's config.
-//!
 //! - Number the files with zero padding (`001`, `002`, …): they're
 //!   sorted by name, so `10.http` would come before `2.http`.
 //!
@@ -47,6 +46,19 @@
 //! with [`HttpError::Unrecorded`], and [`Replayer::finish`] reports any
 //! mismatch or unplayed exchange, so a test can't pass by skipping
 //! requests.
+//!
+//! # The plugin pattern (SRC-7 and later)
+//!
+//! - A plugin sends HTTP only through `ctx.kit.http`: each poll of a feed
+//!   or indexer through [`Client::poll`](crate::Client::poll) with the
+//!   unit's id, and follow-up requests (pages, `.torrent` files, redirects)
+//!   through [`Client::send`](crate::Client::send).
+//! - It waits on every timer and every send inside a `select!` with
+//!   `shutdown.requested()`, so it returns within [`STOP_WITHIN`].
+//! - Its contract test runs it on [`FakeCtx::with_fetch`] with a
+//!   [`Replayer`], checks the discoveries, checks the poll spacing from
+//!   [`Replayer::requests`] against its policy, calls
+//!   [`Replayer::finish`], and ends with [`Running::stop_within`].
 //!
 //! # Time
 //!
@@ -157,8 +169,9 @@ impl FakeCtx {
     /// once the plugin has dropped its emitter.
     pub async fn next(&mut self) -> Option<Discovery> {
         let start = std::time::Instant::now();
+        let mut ticks = Ticks::new(DEADLINE);
         loop {
-            match timeout(TICK, self.discoveries.recv()).await {
+            match timeout(ticks.step(), self.discoveries.recv()).await {
                 Ok(d) => return d,
                 Err(_) if start.elapsed() >= DEADLINE => return None,
                 Err(_) => {}
@@ -176,20 +189,43 @@ impl FakeCtx {
     }
 }
 
-/// How often the harness re-checks a condition.
-const TICK: Duration = Duration::from_millis(50);
+/// The harness's re-check interval: 50 ms at first, doubling to
+/// `max`. On a paused clock each step lets the clock run on, and the
+/// growing steps get through an hours-long back-off in a few thousand
+/// cheap iterations rather than hundreds of thousands.
+#[derive(Debug)]
+struct Ticks {
+    next: Duration,
+    max: Duration,
+}
+
+impl Ticks {
+    fn new(max: Duration) -> Ticks {
+        Ticks {
+            next: Duration::from_millis(50),
+            max,
+        }
+    }
+
+    fn step(&mut self) -> Duration {
+        let t = self.next;
+        self.next = (t * 2).min(self.max);
+        t
+    }
+}
 
 /// Waits until `cond` holds. Panics after [`DEADLINE`] of real time.
-/// Checking every 50 ms of clock time, it lets a paused clock run on to
-/// the plugin's next timer between checks.
+/// It re-checks at clock steps growing from 50 ms to 1 s, so on a paused
+/// clock it may see the condition up to 1 s of clock time late.
 pub async fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
     let start = std::time::Instant::now();
+    let mut ticks = Ticks::new(Duration::from_secs(1));
     while !cond() {
         assert!(
             start.elapsed() < DEADLINE,
             "still waiting for {what} after {DEADLINE:?}"
         );
-        tokio::time::sleep(TICK).await;
+        tokio::time::sleep(ticks.step()).await;
     }
 }
 
@@ -218,8 +254,9 @@ impl Running {
         let real = std::time::Instant::now();
         let _ = self.trigger.send(true);
         let mut task = self.task;
+        let mut ticks = Ticks::new(DEADLINE);
         loop {
-            match timeout(TICK, &mut task).await {
+            match timeout(ticks.step(), &mut task).await {
                 Ok(Ok(result)) => {
                     return Ok(Stopped {
                         result,
@@ -282,7 +319,7 @@ pub struct Replayer {
 }
 
 /// The largest fixture file read.
-pub const MAX_FIXTURE: u64 = 16 * 1024 * 1024;
+pub const MAX_FIXTURE: u64 = crate::http::MAX_BODY as u64;
 
 impl Replayer {
     /// Plays `exchanges` in order.

@@ -19,6 +19,7 @@ lodestar-metainfo.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-store.workspace = true
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
+url = "2.5.8"
 
 [lints]
 workspace = true
