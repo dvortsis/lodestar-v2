@@ -1925,14 +1925,15 @@
       "merge": "96e436f2"
     },
     "S-filters-2c": {
-      "status": "draft; limit ruling sent",
+      "status": "CI red: axe contrast on Block button (rose-pine-dark) + torrent baselines; relayed 05:03Z; Opus review running session_01MMjhnCAEQS72P4aZv139Es",
       "model": "opus",
       "session": "session_01MMjhnBEzcgRDjcmTd73NYJ",
       "pr": 316,
       "attempt": 1,
       "review_rounds": 0,
       "notes": "03:44Z brief briefs/S-filters-2c.md (Block this\u2026 hooks; single forwarder door into filters/flows to stop the regroup; guard). | 03:43Z launched Opus.",
-      "ruling": "\u00a72.26: Filters dialogs 34.4->35.9 KB (move from first view -2.43 KB), Filters first view limit 45->31.0 KB"
+      "ruling": "\u00a72.26: Filters dialogs 34.4->35.9 KB (move from first view -2.43 KB), Filters first view limit 45->31.0 KB",
+      "head": "ea3c4082"
     },
     "B-update-5": {
       "review": "MERGE at 5fe6738 (session_01MMjhn9NMLTHdjwMAZFVDP8); ubuntu test red, logs pending",
@@ -1959,12 +1960,14 @@
       "launched_at": "2026-11-01T04:27Z"
     },
     "S-updates-3": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhnCk7MrRze9Ggp9P3k8",
       "model": "sonnet",
       "brief": "briefs/S-updates-3.md",
       "launched_at": "2026-11-01T04:33Z",
-      "review": "runner + Opus reviewer (starts an install)"
+      "review": "runner MERGE at ec5b3b2 (+author fresh Opus self-review)",
+      "pr": 318,
+      "head": "ec5b3b2"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2875,7 +2878,9 @@
     "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage.",
     "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
     "B-update-5b: POST /updates/rollback; binary-level fake-source test (wrong hash/size/oversized/other target); trust survives a rollback; log capture over a whole install; plus the #312 reviewer note: the download writer is not awaited when the overall timeout fires (#312)",
-    "web size headroom (#317): Discover route ~45.0/45 KB (about 4 B left) after X-illustrations; the next Discover-touching change or chunk-hash noise needs headroom work or a \u00a72.26 ruling. Also: first visit with no appearance cache shows the first scene even if the account has illustrations off (#317 decisions)."
+    "web size headroom (#317): Discover route ~45.0/45 KB (about 4 B left) after X-illustrations; the next Discover-touching change or chunk-hash noise needs headroom work or a \u00a72.26 ruling. Also: first visit with no appearance cache shows the first scene even if the account has illustrations off (#317 decisions).",
+    "Updates API (#318): install_unavailable reason only in the message text (client regex-parses \"(reason)\"); add a structured reason field to the error envelope, then drop the regex",
+    "Updates UI (#318): install_failed shows the raw stable code; give each code plain words"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
