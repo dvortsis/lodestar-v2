@@ -234,7 +234,7 @@
 
 <section bind:this={root} class="logs flex flex-col gap-2 p-4" aria-labelledby="logs-h">
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-		<h1 id="logs-h" class="text-h2">{m.logs_title()}</h1>
+		<h1 id="logs-h" class="text-display font-semibold">{m.logs_title()}</h1>
 		<span class="text-small text-muted-text" data-testid="logs-status">{showStatus}</span>
 		{#if logging}
 			<a class="text-small underline" href={loggingHref}>{logging.chip}</a>
