@@ -1925,7 +1925,7 @@
       "merge": "96e436f2"
     },
     "S-filters-2c": {
-      "status": "fix pushed (contrast race + baselines marker); /t 135 B headroom accepted \u00a72.26; Opus review pending",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MMjhnBEzcgRDjcmTd73NYJ",
       "pr": 316,
@@ -1933,8 +1933,10 @@
       "review_rounds": 0,
       "notes": "03:44Z brief briefs/S-filters-2c.md (Block this\u2026 hooks; single forwarder door into filters/flows to stop the regroup; guard). | 03:43Z launched Opus.",
       "ruling": "\u00a72.26: Filters dialogs 34.4->35.9 KB (move from first view -2.43 KB), Filters first view limit 45->31.0 KB",
-      "head": "3f2fb5da",
-      "review": "fresh Opus MERGE at ea3c4082 (session_01MMjhnCAEQS72P4aZv139Es); important test gap (A->B->A stale press) to land before merge"
+      "head": "e11d72ba",
+      "review": "fresh Opus MERGE at ea3c4082 (session_01MMjhnCAEQS72P4aZv139Es); important test gap (A->B->A stale press) to land before merge",
+      "merge_sha": "54a464c8",
+      "merged_at": "2026-11-01T05:51Z"
     },
     "B-update-5": {
       "review": "MERGE at 5fe6738 (session_01MMjhn9NMLTHdjwMAZFVDP8); ubuntu test red, logs pending",
@@ -1993,6 +1995,13 @@
       "model": "sonnet",
       "brief": "briefs/S-e2e-2.md",
       "launched_at": "2026-11-01T05:21Z"
+    },
+    "S-send": {
+      "status": "building",
+      "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
+      "model": "sonnet",
+      "brief": "briefs/S-send.md",
+      "launched_at": "2026-11-01T05:52Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2904,7 +2913,6 @@
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
     "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
-    "App gap (S-e2e #314, \u00a710.17 flow): no Send button in the UI although the API has sendToClient; the keyboard flow search -> open -> send stops at copy. Add Send to client in the detail/row actions (size budget!) + e2e.",
     "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
     "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
     "Discover route headroom: ~0.1 KB left after #317 (limit 45.2 KB); brief a headroom pass before the next Discover feature. Also #317: first visit with no appearance cache shows the first scene even when the account has illustrations off.",
