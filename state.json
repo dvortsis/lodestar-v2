@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T21:55:00Z",
+  "updated_at": "2026-11-01T22:15:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2184,11 +2184,11 @@
       "notes": "#341"
     },
     "F-filter-load-fail-closed": {
-      "status": "changes",
+      "status": "fixing",
       "notes": "Opus + /security-review; session_01MMjhnAvepJm7UgCAppGN9s; stored rule/unless/class rows that fail to parse must fail closed (tightening only)",
       "pr": 357,
-      "head": "9062155e",
-      "note": "Opus review 21:50Z: CHANGES (unreadable unless loosens via first-match; metrics.md; not-adult kind; enable test)"
+      "head": "53d7d5be",
+      "note": "review fixes verified by runner (MERGE pending CI); Web size red: /t 21145>21140 B; runner approved §2.26 raise to 21.20 KB only if growth is a shared message chunk"
     },
     "P-v06-sources-plan": {
       "status": "merged",
@@ -2214,11 +2214,13 @@
       "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware"
     },
     "X-web-followups-1101f": {
-      "status": "changes",
+      "status": "merged",
       "notes": "Sonnet; session_01MMjhn9y1RFyN62gb7BnJQW; Discover j/k import failure, #317 first-visit scene, QueryBar popover flake",
       "pr": 358,
       "head": "dd3f912e",
-      "note": "Opus review 21:52Z: CHANGES (app.css picture rule hides brand logo; logo e2e; zh/remap wording)"
+      "note": "Opus review 21:52Z: CHANGES (app.css picture rule hides brand logo; logo e2e; zh/remap wording)",
+      "merge": "657b659c",
+      "session": "session_01MMjhn9y1RFyN62gb7BnJQW (archived)"
     },
     "SRC-0": {
       "status": "building",
@@ -2230,6 +2232,12 @@
       "status": "queued",
       "model": "opus",
       "note": "From #357 review: undo effects of fail-closed stand-ins after an upgrade that reads the row again; Is-adult stand-in holds tombstone after 30 days and are not released by removing the rule (§20 false positives must be correctable). Needs persisted state. /security-review. After #357 merges."
+    },
+    "SRC-16": {
+      "status": "building",
+      "model": "sonnet",
+      "session": "session_01MMjhnBWJ84LfMg2vn3RGTr",
+      "launched": "2026-11-01T22:14Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
