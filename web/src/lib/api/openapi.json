@@ -6471,6 +6471,75 @@
         ]
       }
     },
+    "/updates/rollback": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Rolls back to the previous version while it and the snapshot it needs\nare kept (`rollback.available` in `GET /updates`). It runs the same\njournal as `lodestar rollback`: Lodestar shuts down gracefully, the\nsupervisor rolls back (restoring the store when the update migrated\nit) and starts the previous version, which never installs the\nrolled-back one automatically again. Revocations are kept.",
+        "operationId": "rollbackUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Started: the restart follows; `rolled_back` is announced on the `updates` topic once the previous version runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture or Windows).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`confirmation_required`: `confirm` wasn't true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/updates/skip": {
       "post": {
         "tags": [
@@ -10603,6 +10672,10 @@
           "message": {
             "type": "string",
             "description": "A sentence for people."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why, as a stable snake_case code, when the `code` has several\ncauses (`install_unavailable`'s `busy`, `rollback_unavailable`'s\n`no_previous_version`, …). The `message` names it too."
           },
           "start": {
             "type": "integer",
@@ -15758,7 +15831,7 @@
       },
       "RollbackInfo": {
         "type": "object",
-        "description": "Whether Roll back is offered (§10.10.7's Danger zone).",
+        "description": "Whether Roll back is offered (§10.10.7's Danger zone): this is the\n\"can roll back\" the Updates screen shows.",
         "required": [
           "available",
           "to_version",
@@ -15766,7 +15839,8 @@
         ],
         "properties": {
           "available": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "`POST /updates/rollback` would start a rollback now."
           },
           "lost_torrents": {
             "type": [
@@ -15777,6 +15851,13 @@
             "description": "Torrents a rollback would lose, when the store would be restored;\nnull when it can't be counted.",
             "minimum": 0
           },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why not, when `available` is false: `not_supervised`,\n`image_mode`, `busy`, `no_previous_version` or `snapshot_missing`\n(or the `unavailable` reason). Always sent; not `required` in the\nschema yet, so clients built before it still type-check."
+          },
           "to_version": {
             "type": [
               "string",
@@ -15784,6 +15865,20 @@
             ],
             "description": "`image` or a version."
           }
+        }
+      },
+      "RollbackRequest": {
+        "type": "object",
+        "description": "`POST /updates/rollback`.",
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Must be true: the dialog that showed what a rollback loses was\nconfirmed (§10.10.7, a destructive action)."
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "confirm": true
         }
       },
       "RuleEntry": {

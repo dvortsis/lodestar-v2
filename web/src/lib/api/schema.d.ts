@@ -2000,6 +2000,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/updates/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rolls back to the previous version while it and the snapshot it needs
+         *     are kept (`rollback.available` in `GET /updates`). It runs the same
+         *     journal as `lodestar rollback`: Lodestar shuts down gracefully, the
+         *     supervisor rolls back (restoring the store when the update migrated
+         *     it) and starts the previous version, which never installs the
+         *     rolled-back one automatically again. Revocations are kept.
+         */
+        post: operations["rollbackUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/updates/skip": {
         parameters: {
             query?: never;
@@ -3648,6 +3672,12 @@ export interface components {
             field?: string;
             /** @description A sentence for people. */
             message: string;
+            /**
+             * @description Why, as a stable snake_case code, when the `code` has several
+             *     causes (`install_unavailable`'s `busy`, `rollback_unavailable`'s
+             *     `no_previous_version`, …). The `message` names it too.
+             */
+            reason?: string;
             /** @description The start of the fault's byte span within `field`. */
             start?: number;
         };
@@ -5990,8 +6020,12 @@ export interface components {
          * @enum {string}
          */
         ResyncReason: "restarted" | "expired" | "malformed" | "lagged" | "visibility";
-        /** @description Whether Roll back is offered (§10.10.7's Danger zone). */
+        /**
+         * @description Whether Roll back is offered (§10.10.7's Danger zone): this is the
+         *     "can roll back" the Updates screen shows.
+         */
         RollbackInfo: {
+            /** @description `POST /updates/rollback` would start a rollback now. */
             available: boolean;
             /**
              * Format: int64
@@ -5999,8 +6033,28 @@ export interface components {
              *     null when it can't be counted.
              */
             lost_torrents: number | null;
+            /**
+             * @description Why not, when `available` is false: `not_supervised`,
+             *     `image_mode`, `busy`, `no_previous_version` or `snapshot_missing`
+             *     (or the `unavailable` reason). Always sent; not `required` in the
+             *     schema yet, so clients built before it still type-check.
+             */
+            reason?: string | null;
             /** @description `image` or a version. */
             to_version: string | null;
+        };
+        /**
+         * @description `POST /updates/rollback`.
+         * @example {
+         *       "confirm": true
+         *     }
+         */
+        RollbackRequest: {
+            /**
+             * @description Must be true: the dialog that showed what a rollback loses was
+             *     confirmed (§10.10.7, a destructive action).
+             */
+            confirm?: boolean;
         };
         /** @description One of your rules. */
         RuleEntry: {
@@ -12190,6 +12244,58 @@ export interface operations {
             };
             /** @description `updates_not_saved`: the change couldn't be saved and isn't acknowledged. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rollbackUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Started: the restart follows; `rolled_back` is announced on the `updates` topic once the previous version runs. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatesStatus"];
+                };
+            };
+            /** @description `rollback_unavailable`, with `error.reason` (`not_supervised`, `image_mode`, `busy`, `no_previous_version`, `snapshot_missing`); or `updates_unavailable` (a fixture or Windows). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `confirmation_required`: `confirm` wasn't true. */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };

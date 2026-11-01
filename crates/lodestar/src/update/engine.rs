@@ -2843,15 +2843,25 @@ mod tests {
                 .any(|l| l.contains("update.install_failed") && l.contains("download_mismatch")),
             "{text}"
         );
+        // The credentials appear nowhere, not even in the HTTP client's
+        // own trace lines (third-party lines are capped at warnings and
+        // scrubbed in production anyway).
+        for secret in ["Zq7InstallSecret", "zq7cred"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        // Lodestar's own events name no URL, host or address.
+        let ours: Vec<&str> = text.lines().filter(|l| l.contains("event=")).collect();
         let port = server.base.port().unwrap().to_string();
         for secret in [
-            "Zq7InstallSecret",
-            "zq7cred",
             "zq7asset",
             "release-assets.githubusercontent.com",
+            "github.com",
+            "https://",
             &format!("127.0.0.1:{port}"),
         ] {
-            assert!(!text.contains(secret), "{secret} in {text}");
+            for l in &ours {
+                assert!(!l.contains(secret), "{secret} in {l}");
+            }
         }
     }
 
@@ -2944,14 +2954,12 @@ mod tests {
         // no snapshot of that is left.
         drop(
             lodestar_store::Store::open(
-                &e.dir.path().join("lodestar.db"),
+                e.dir.path().join("lodestar.db"),
                 lodestar_store::StoreConfig::default(),
             )
             .unwrap(),
         );
-        let overlay = Bin::open(&e.data)
-            .unwrap()
-            .overlay(&Version::new(0, 5, 0));
+        let overlay = Bin::open(&e.data).unwrap().overlay(&Version::new(0, 5, 0));
         std::fs::create_dir_all(&overlay).unwrap();
         let latest = lodestar_store::latest_schema_version();
         std::fs::write(

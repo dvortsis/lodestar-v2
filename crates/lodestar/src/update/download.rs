@@ -670,12 +670,11 @@ pub mod tests {
             "the writer was joined before the download returned"
         );
         assert!(!part_path(&bin, &p).exists());
-        assert!(std::fs::read_dir(bin.dir()).unwrap().all(|e| {
-            !e.unwrap()
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".part")
-        }));
+        assert!(
+            std::fs::read_dir(bin.dir())
+                .unwrap()
+                .all(|e| { !e.unwrap().file_name().to_string_lossy().ends_with(".part") })
+        );
     }
 
     /// A `.part` left by an earlier download goes; one planted as a link
