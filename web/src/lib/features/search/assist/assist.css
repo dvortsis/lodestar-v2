@@ -77,3 +77,9 @@
 .assist-actions {
 	@apply flex flex-wrap items-center gap-2;
 }
+
+/* P9: the Field / Operator / Value captions show on the first Builder row only; later rows keep
+   them as screen-reader text, so their controls keep their names. */
+.assist-row:has(.assist-cap) ~ .assist-row .assist-cap {
+	@apply sr-only;
+}

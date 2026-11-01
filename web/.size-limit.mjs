@@ -1135,7 +1135,8 @@ export default [
 	// round (the unreadable-state banner, closing dialogs on leave).
 	// S-logs-3: 0.95 KB for the console format's two option labels (runner decision, §2.26; the
 	// brief allows up to 0.95 KB). Measured 0.89 KB.
-	entry('Settings logging messages (on demand)', settingsLoggingMap, '0.95 KB'),
+	// runner §2.26, FX-4: B6 option labels for logging.console_level and logging.file_level (+~0.12 KB, on demand)
+	entry('Settings logging messages (on demand)', settingsLoggingMap, '1.05 KB'),
 	// The outputs' labels and help (S-logs-2b), split from Logging's map (runner, §2.26). Measured
 	// 0.70 KB; limit = measured + 10%.
 	entry('Settings logging output messages (on demand)', settingsLoggingOutputMap, '0.77 KB'),

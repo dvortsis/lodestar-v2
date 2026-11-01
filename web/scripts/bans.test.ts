@@ -54,6 +54,35 @@ describe('lint bans', () => {
 		expect(kinds('<div class="!inset-x-15 size-11">')).toEqual(['spacing']);
 	});
 
+	it('rejects text size classes outside the type scale', () => {
+		expect(kinds('<h1 class="text-h2 font-semibold">')).toEqual(['text']);
+		expect(kinds('<p class="md:text-lg">')).toEqual(['text']);
+		expect(kinds("const c = cond ? 'text-xs' : 'text-2xl';")).toEqual(['text']);
+		expect(kinds('@apply font-semibold text-lg;')).toEqual(['text']);
+		expect(kinds('<p class:text-xl={big}>')).toEqual(['text']);
+		expect(kinds('<p class="text-sm/6">')).toEqual(['text']);
+	});
+
+	it('accepts the type scale, colours, alignment and wrapping', () => {
+		for (const c of [
+			'text-caption',
+			'text-small',
+			'text-body',
+			'text-body-lg',
+			'text-title',
+			'text-display',
+			'text-muted-text',
+			'text-base-content',
+			'text-error',
+			'text-start',
+			'text-end',
+			'text-center',
+			'text-balance',
+			'text-ellipsis'
+		])
+			expect(kinds(`<p class="${c}">`)).toEqual([]);
+	});
+
 	it('accepts every step on the ramp', () => {
 		expect(kinds('<div class="p-12">')).toEqual([]);
 		expect(kinds('<div class="gap-0.5">')).toEqual([]);

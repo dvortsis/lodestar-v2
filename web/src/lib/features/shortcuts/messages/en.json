@@ -57,13 +57,11 @@
 	"shortcuts_conflict_swap": "Swap",
 	"shortcuts_conflict_cancel": "Cancel",
 	"shortcuts_conflict_command": "{key} is also used by {command}; on a screen with both, neither works.",
-	"shortcuts_save": "Save",
-	"shortcuts_cancel": "Cancel",
-	"shortcuts_saved": "Keyboard settings saved",
-	"shortcuts_stale": "Changed in another tab or device; your edits were kept.",
-	"shortcuts_save_failed": "Couldn't save the keyboard settings.",
+	"shortcuts_saved": "Saved.",
+	"shortcuts_stale": "Changed in another tab or device too; both changes were kept.",
+	"shortcuts_save_failed": "Couldn't save that change. Your last saved setting is back.",
 	"shortcuts_load_failed": "Couldn't load the keyboard settings.",
 	"shortcuts_err_plus": "The + key can't be used for a shortcut",
-	"shortcuts_nothing_to_save": "Nothing to save.",
-	"shortcuts_read_only_banner": "These settings are locked, so your change wasn't saved."
+	"shortcuts_read_only_banner": "These settings are locked, so your change wasn't saved.",
+	"shortcuts_undo": "Undo"
 }

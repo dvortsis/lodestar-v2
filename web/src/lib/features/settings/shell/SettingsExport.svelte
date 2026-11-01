@@ -58,7 +58,7 @@
 	<h2 id="settings-portability" class="text-body-lg font-semibold">
 		{m.settings_shell_portability()}
 	</h2>
-	<p>{m.settings_shell_export_description()}</p>
+	<p class="text-body">{m.settings_shell_export_description()}</p>
 	<p class="text-small text-muted-text">{m.settings_shell_export_exclusions()}</p>
 	<Toggle
 		label={m.settings_shell_export_preferences()}

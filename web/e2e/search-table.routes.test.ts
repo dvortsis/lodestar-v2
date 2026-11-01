@@ -141,3 +141,21 @@ for (const mode of ['light', 'dark'] as const) {
 		}
 	});
 }
+
+test.describe('under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+	test('the sort buttons and Reset columns are 44 px targets', async ({ page, go }) => {
+		await go('/search?q=lantern&view=table');
+		await page.getByTestId('table-columns').click();
+		const targets = [
+			page.getByTestId('table-th-size').getByRole('button'),
+			page.getByTestId('table-th-files').getByRole('button'),
+			page.getByTestId('table-chooser').getByRole('button', { name: /reset/i })
+		];
+		for (const target of targets) {
+			const box = (await target.boundingBox())!;
+			expect(box.width).toBeGreaterThanOrEqual(44);
+			expect(box.height).toBeGreaterThanOrEqual(44);
+		}
+	});
+});

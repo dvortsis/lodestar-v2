@@ -42,7 +42,8 @@
 		{dense}
 		{mono}
 		value={typeof f.value === 'string' ? f.value : ''}
-		disabled={f.locked}
+		readonly={f.locked}
+		class={f.locked ? 'text-base-content' : ''}
 		spellcheck={mono ? false : undefined}
 		autocomplete="off"
 		oninput={(e) => set(e.currentTarget.value)}

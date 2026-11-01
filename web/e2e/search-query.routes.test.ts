@@ -314,6 +314,22 @@ test('a signed-out visitor is sent to sign-in by the first 401, with no interact
 	expect(new URL(page.url()).searchParams.get('next')).toMatch(/^\/search\?q=bunny(&|$)/);
 });
 
+for (const width of [320, 390]) {
+	test(`the open Syntax popover fits the page at ${width} px`, async ({ page, go }) => {
+		await page.setViewportSize({ width, height: 800 });
+		await go('/search');
+		await page.getByRole('button', { name: 'Syntax' }).click();
+		const dialog = page.getByRole('dialog', { name: 'Search syntax' });
+		await expect(dialog).toBeVisible();
+		const box = (await dialog.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(width);
+		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+			width
+		);
+	});
+}
+
 for (const [name, themeId, colorMode] of [
 	['Riverstone light', 'riverstone-light', 'light'],
 	['Riverstone dark', 'riverstone-dark', 'dark']

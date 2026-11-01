@@ -67,7 +67,7 @@
 	@apply flex max-w-xl flex-col gap-4 p-4 text-base-content;
 }
 .sc-h1 {
-	@apply text-display font-semibold;
+	@apply text-title font-semibold;
 }
 .sc-h2 {
 	@apply mb-1 text-title font-semibold;
@@ -78,6 +78,7 @@
 .sc-help {
 	@apply mt-1;
 }
-.sc-buttons {
-	@apply flex gap-2;
+.sc-status {
+	@apply text-body text-muted-text;
+	min-height: calc(var(--spacing) * 6);
 }

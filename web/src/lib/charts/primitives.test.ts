@@ -211,6 +211,11 @@ describe('Histogram', () => {
 		expect(edges[0]).toBe('1 KiB');
 		expect(edges.at(-1)).toBe('16 KiB');
 	});
+	it('draws tickLabels under the plot but keeps edges for tooltips', () => {
+		render(Histogram, { ...base, tickLabels: ['1 KiB', '2 KiB', '4 KiB', '8 KiB', '16 KiB +'] });
+		expect(screen.getAllByTestId('histogram-edge').at(-1)!.textContent).toBe('16 KiB +');
+		expect(screen.getAllByTestId('histogram-bin')[3]!.title).toMatch(/^8 KiB.*16 KiB:/);
+	});
 	it('has no brush without handle labels', () => {
 		render(Histogram, { ...base, handleLabels: undefined });
 		expect(screen.queryByRole('slider')).toBeNull();

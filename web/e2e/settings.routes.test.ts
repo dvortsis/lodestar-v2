@@ -133,7 +133,7 @@ test('desktop navigation, field labels and unknown destinations', async ({ page,
 		page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link')
 	).toHaveCount(1);
 	await page.getByRole('link', { name: 'Network & VPN', exact: true }).click();
-	await expect(page.getByLabel('Web address', { exact: true })).toBeDisabled();
+	await expect(page.getByLabel('Web address', { exact: true })).not.toBeEditable();
 	await expect(page.getByText(/Network settings are read-only/)).toBeVisible();
 	expect(mock.calls('patchSettingsBatch')).toHaveLength(0);
 	await go('/settings/does-not-exist');
@@ -185,6 +185,12 @@ for (const width of [390, 1366]) {
 			restart_required: [],
 			fields: { shortcuts: field(true), shortcut_keys: field({}) }
 		});
+		mock.on('patchSettings', {
+			section: 'preferences',
+			revision: 2,
+			restart_required: [],
+			fields: { shortcuts: field(false), shortcut_keys: field({}) }
+		});
 		await page.setViewportSize({ width, height: 900 });
 		await go('/settings');
 		const nav = page.getByRole('navigation', { name: 'Settings sections' });
@@ -199,6 +205,14 @@ for (const width of [390, 1366]) {
 		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
 			true
 		);
+		// A preference: it applies at once with Undo, never Save and Cancel (§10.10.1).
+		await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
+		await page.getByRole('switch', { name: 'Single-key shortcuts' }).click();
+		await expect(page.getByText('Saved.')).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+		expect(mock.calls('patchSettings').map((request) => request.postDataJSON())).toEqual([
+			{ shortcuts: false, if_revision: 1 }
+		]);
 		await expectNoA11yViolations(page);
 	});
 }
@@ -304,9 +318,9 @@ test('stale revisions require an explicit conflict choice and another save', asy
 		}
 	});
 	await go('/settings/crawler');
-	await page.getByRole('radio', { name: 'low', exact: true }).click();
+	await page.getByRole('radio', { name: 'Low', exact: true }).click();
 	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-	await expect(page.getByTestId('conflict-text')).toContainText('aggressive');
+	await expect(page.getByTestId('conflict-text')).toContainText('Aggressive');
 	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
 	await expect(page.locator('.ls-form [aria-live="polite"]')).toHaveText(
 		'Some settings were changed elsewhere. Choose which value to keep, then save again.'
