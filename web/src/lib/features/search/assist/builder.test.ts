@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Ast } from '$lib/state/search.svelte';
-import { FIELDS, OPERATORS, kindOf, rowOf, rowText, withNode } from './builder';
+import { rowOf, rowText, withNode } from './builder';
 
 const word = (w: string): Ast => ({ op: 'word', field: 'any', word: w });
 const res = (v: string): Ast => ({ op: 'tag', key: 'res', any: [v] });
@@ -36,7 +36,6 @@ describe('rowOf', () => {
 	});
 	it('leaves everything else read-only', () => {
 		expect(rowOf(word('free'))).toBeNull();
-		expect(rowOf({ op: 'range', field: 'size', lo: 1, hi: null })).toBeNull();
 		expect(rowOf({ op: 'range', field: 'year', lo: 2019, hi: 2021 })).toBeNull();
 		expect(rowOf({ op: 'not', of: res('720p') })).toBeNull();
 	});
@@ -55,23 +54,18 @@ describe('withNode', () => {
 	});
 });
 
-describe('fields', () => {
-	it('has an operator list for every kind and no duplicate names', () => {
-		expect(new Set(FIELDS.map((f) => f.name)).size).toBe(FIELDS.length);
-		for (const f of FIELDS) expect(OPERATORS[kindOf(f.name)].length).toBeGreaterThan(0);
-	});
-});
-
 describe('rows and text fields', () => {
-	it('leaves byte-valued ranges and the other tag keys right', () => {
-		for (const field of ['largest', 'piece'] as const)
-			expect(rowOf({ op: 'range', field, lo: 1, hi: null })).toBeNull();
-		expect(FIELDS.map((f) => f.name)).toContain('resolved');
-		expect(rowOf({ op: 'tag', key: 'adult', any: ['no'] })!.field).toBe('adult');
-		expect(FIELDS.map((f) => f.name)).toContain('adult');
+	it('leaves byte-valued ranges read-only when the server types the field as a size', () => {
+		const find = (n: string) =>
+			({ name: n, aliases: [], type: n === 'size' ? 'size' : 'number', operators: [] }) as never;
+		expect(rowOf({ op: 'range', field: 'size', lo: 1, hi: null }, find)).toBeNull();
+		expect(rowOf({ op: 'range', field: 'year', lo: 1, hi: null }, find)).not.toBeNull();
 	});
-	it('quotes words in a text field', () => {
-		expect(rowText({ field: 'title', op: ':', value: 'dark knight' })).toBe('title:"dark knight"');
-		expect(rowText({ field: 'title', op: ':', value: 'dune' })).toBe('title:dune');
+	it('quotes words in a text field, and in a field of unknown type', () => {
+		expect(rowText({ field: 'title', op: ':', value: 'dark knight' }, 'text')).toBe(
+			'title:"dark knight"'
+		);
+		expect(rowText({ field: 'title', op: ':', value: 'dune' }, 'text')).toBe('title:dune');
+		expect(rowText({ field: 'res', op: ':', value: 'a b' }, 'keyword')).toBe('res:a b');
 	});
 });

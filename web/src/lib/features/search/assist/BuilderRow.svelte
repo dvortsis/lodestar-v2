@@ -8,10 +8,13 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
-	import { FIELDS, OPERATORS, kindOf, type Op, type Row } from './builder';
+	import type { Row } from './builder';
+	import { opsOf, type Field, type Op } from './fields.svelte';
 
 	interface Props {
 		row: Row;
+		/** The server's fields (`/search/fields`): all the row may name. */
+		fields: readonly Field[];
 		/** A new row: shows an "Add filter" button. */
 		draft?: boolean;
 		oncommit: (row: Row) => void;
@@ -20,7 +23,7 @@
 		label: string;
 		removeLabel?: string;
 	}
-	let { row, draft = false, oncommit, onremove, label, removeLabel }: Props = $props();
+	let { row, fields, draft = false, oncommit, onremove, label, removeLabel }: Props = $props();
 
 	let field = $state(untrack(() => row.field));
 	let op = $state<string>(untrack(() => row.op));
@@ -37,7 +40,10 @@
 		});
 	});
 
-	const ops = $derived(OPERATORS[kindOf(field)]);
+	const spec = $derived(fields.find((f) => f.name === field));
+	const ops = $derived(opsOf(spec));
+	const opt = (value: string) => ({ value, label: value });
+	const valueOptions = $derived(spec?.values?.map(opt));
 	const dirty = $derived(field !== row.field || op !== row.op || value !== row.value);
 	const OP_LABEL: Record<Op, () => string> = {
 		':': m.search_assist_op_is,
@@ -50,6 +56,7 @@
 	function fieldChanged() {
 		// A field with other operators: the first one that fits.
 		if (!ops.includes(op as Op)) op = ops[0]!;
+		if (valueOptions) value = '';
 	}
 	function commit() {
 		oncommit({ field, op: op as Op, value });
@@ -63,7 +70,7 @@
 			dense
 			bind:value={field}
 			onchange={fieldChanged}
-			options={FIELDS.map((f) => ({ value: f.name, label: f.name }))}
+			options={fields.map((f) => opt(f.name))}
 		/></label
 	>
 	<label class="assist-field"
@@ -76,17 +83,26 @@
 	>
 	<label class="assist-field assist-grow"
 		>{m.search_assist_builder_value()}
-		<Input
-			dense
-			mono
-			bind:value
-			onkeydown={(e) => {
-				if (e.key === 'Enter' && (draft || dirty)) {
-					e.preventDefault();
-					commit();
-				}
-			}}
-		/></label
+		{#if valueOptions}
+			<Select
+				dense
+				bind:value
+				options={valueOptions}
+				placeholder={m.search_assist_builder_choose()}
+			/>
+		{:else}
+			<Input
+				dense
+				mono
+				bind:value
+				onkeydown={(e) => {
+					if (e.key === 'Enter' && (draft || dirty)) {
+						e.preventDefault();
+						commit();
+					}
+				}}
+			/>
+		{/if}</label
 	>
 	{#if draft}
 		<Button variant="primary" dense onclick={commit}>{m.search_assist_builder_add()}</Button>

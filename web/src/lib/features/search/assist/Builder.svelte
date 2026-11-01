@@ -11,6 +11,7 @@
 	import { chipClauses, rootWithout, topLevel } from '../query/clauses';
 	import BuilderRow from './BuilderRow.svelte';
 	import { rowOf, rowText, withNode, type Row } from './builder';
+	import { searchFields as source } from './fields.svelte';
 
 	interface Props {
 		/** The AST the results show. */
@@ -22,7 +23,8 @@
 	}
 	let { ast, apply, close, announce }: Props = $props();
 
-	const blank: Row = { field: 'res', op: ':', value: '' };
+	source.ensure();
+	const blank = $derived<Row>({ field: source.fields[0]?.name ?? '', op: ':', value: '' });
 	const clauses = $derived(chipClauses(ast));
 	let error = $state('');
 	/** Bumped after an add, so the draft row is a fresh, empty one. */
@@ -38,14 +40,18 @@
 		error = '';
 		if (!row.value.trim()) return fail(m.search_assist_builder_empty());
 		try {
-			const parsed = await api.get('/parse', { query: { q: rowText(row) } });
+			const parsed = await api.get('/parse', {
+				query: { q: rowText(row, source.find(row.field)?.type) }
+			});
 			// One clause: a value that reads as several (loose words, `|`) is not a row.
 			if (topLevel(parsed.ast).length !== 1) return fail(m.search_assist_builder_failed());
 			const index = at ? topLevel(ast).indexOf(at) : null;
 			if (index === -1) return fail(m.search_assist_builder_stale());
 			await apply(withNode(ast, index, parsed.ast));
 			if (index === null) draftKey++;
-			announce(m.search_assist_builder_applied({ text: rowText(row) }));
+			announce(
+				m.search_assist_builder_applied({ text: rowText(row, source.find(row.field)?.type) })
+			);
 		} catch (e) {
 			fail(
 				e instanceof ApiError && e.code === 'query_syntax'
@@ -75,38 +81,51 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section class="assist-panel" aria-label={m.search_assist_builder_title()} {onkeydown}>
-	{#each clauses as clause, i (i)}
-		{@const index = topLevel(ast).indexOf(clause.node)}
-		{@const row = rowOf(clause.node)}
-		{@const removeLabel = m.search_filters_remove({ label: clause.label.text })}
-		{#if row}
+	{#if source.status === 'loading'}
+		<p class="assist-note">{m.search_assist_builder_loading()}</p>
+	{:else if source.status === 'error'}
+		<div class="assist-row">
+			<p class="assist-note assist-error assist-grow" role="alert">
+				{m.search_assist_builder_fields_failed()}
+			</p>
+			<Button dense onclick={() => void source.refresh()}>{m.search_assist_builder_retry()}</Button>
+		</div>
+	{:else}
+		{#each clauses as clause, i (i)}
+			{@const index = topLevel(ast).indexOf(clause.node)}
+			{@const row = rowOf(clause.node, source.find)}
+			{@const removeLabel = m.search_filters_remove({ label: clause.label.text })}
+			{#if row}
+				<BuilderRow
+					{row}
+					fields={source.fields}
+					label={clause.label.text}
+					{removeLabel}
+					oncommit={(r) => void commit(clause.node, r)}
+					onremove={() => void remove(index, clause.label.text)}
+				/>
+			{:else}
+				<div class="assist-row" role="group" aria-label={removeLabel}>
+					<p class="assist-grow">{clause.label.text}</p>
+					<Button
+						variant="quiet"
+						dense
+						aria-label={removeLabel}
+						onclick={() => void remove(index, clause.label.text)}>{m.common_remove()}</Button
+					>
+				</div>
+			{/if}
+		{/each}
+		{#key draftKey}
 			<BuilderRow
-				{row}
-				label={clause.label.text}
-				{removeLabel}
-				oncommit={(r) => void commit(clause.node, r)}
-				onremove={() => void remove(index, clause.label.text)}
+				row={blank}
+				fields={source.fields}
+				draft
+				label={m.search_assist_builder_new()}
+				oncommit={(r) => void commit(null, r)}
 			/>
-		{:else}
-			<div class="assist-row" role="group" aria-label={removeLabel}>
-				<p class="assist-grow">{clause.label.text}</p>
-				<Button
-					variant="quiet"
-					dense
-					aria-label={removeLabel}
-					onclick={() => void remove(index, clause.label.text)}>{m.common_remove()}</Button
-				>
-			</div>
-		{/if}
-	{/each}
-	{#key draftKey}
-		<BuilderRow
-			row={blank}
-			draft
-			label={m.search_assist_builder_new()}
-			oncommit={(r) => void commit(null, r)}
-		/>
-	{/key}
+		{/key}
+	{/if}
 	{#if error}
 		<p class="assist-note assist-error">{error}</p>
 	{/if}

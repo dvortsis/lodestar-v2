@@ -236,7 +236,13 @@
 				>
 				{#if o.count !== undefined}
 					<span class="assist-count" data-testid="assist-count"
-						>{formatCount(o.count, currentLocale())}</span
+						>{#if o.approx}<span aria-hidden="true"
+								>{formatCount({ value: o.count, approx: true }, currentLocale())}</span
+							><span class="sr-only"
+								>{m.search_assist_count_about({
+									count: formatCount(o.count, currentLocale())
+								})}</span
+							>{:else}{formatCount(o.count, currentLocale())}{/if}</span
 					>
 				{/if}
 			</li>

@@ -166,6 +166,22 @@ describe('Assist combobox', () => {
 		expect(said).toEqual(['2 suggestions. Arrow keys choose, Tab accepts, Esc closes.']);
 	});
 
+	it('marks an estimated count with ≈ (and says "about" to a screen reader); exact stays plain', async () => {
+		respond = async () =>
+			json({
+				items: [
+					{ ...ITEMS[1], text: 'The Office', kind: 'title', count: 2400, count_approx: true },
+					{ ...ITEMS[1], text: 'res:1080p', count: 12 }
+				]
+			});
+		mount();
+		await type('off');
+		const counts = await screen.findAllByTestId('assist-count');
+		expect(counts[0]!.textContent).toMatch(/^≈\s2,400about 2,400 torrents$/);
+		expect(counts[0]!.querySelector('[aria-hidden="true"]')!.textContent).toMatch(/^≈\s2,400$/);
+		expect(counts[1]!.textContent).toBe('12');
+	});
+
 	it('offers recent queries to an empty, focused bar and runs the one chosen', async () => {
 		localStorage.setItem('lodestar.search.recent', JSON.stringify(['big buck bunny']));
 		mount();
