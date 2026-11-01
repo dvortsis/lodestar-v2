@@ -34,6 +34,7 @@
 			width={scene.width}
 			height={scene.height}
 			loading="lazy"
+			decoding="async"
 			class="h-(--art-height-small) w-auto large:h-(--art-height-large)"
 		/>
 	</picture>

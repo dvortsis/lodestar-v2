@@ -943,7 +943,9 @@ export default [
 	// Measured 42.8 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
-	entry('Discover route (own JS + CSS)', own('/discover'), '45 KB'),
+	// runner §2.26, X-illustrations: §10.19 requires illustrations off for the toggle and Save-Data; the
+	// StateScene check costs ~80 B on this route.
+	entry('Discover route (own JS + CSS)', own('/discover'), '45.2 KB'),
 	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
 	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
 	// Turn off now's privacy requests (S-logs-2) load on the click: gated with Logging's parts.

@@ -18,8 +18,9 @@ Closes the app gap named in `2026-11-01-S-e2e.md` (§10.19, §10.10.8).
   runs. Following the attribute too would cost bytes the Discover route (44,996 of 45,000 B) lacks.
 - **Follow-up:** low-resource mode does not exist in the app yet and is not invented here. When it
   lands it should feed the same gate.
-- **Layout:** unchanged; no snapshot moves. `decoding="async"` was dropped from the scene's `<img>`
-  (it is lazy and off-screen until loaded) to stay inside the Discover route's size limit.
+- **Layout:** unchanged; no snapshot moves. `decoding="async"` stays on the scene's `<img>`.
 - **Byte deltas (gzip):** CSS 0. The first views that show scenes grow by 0 to 0.06 kB (Discover
   route 44.92 to 45.0 kB of its 45 kB limit); Settings overview +0.1 kB (28.03 to 28.14 kB); no limit
   raised.
+- **Ruling (runner §2.26, flagged to the owner under §2.19):** the Discover route limit goes from 45 to
+  45.2 KB for this check. Discover measured 44.92 kB before and 45.08 kB after on current `main`.
