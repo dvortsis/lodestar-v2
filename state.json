@@ -1983,6 +1983,13 @@
       "brief": "briefs/B-update-5b.md",
       "launched_at": "2026-11-01T05:20Z",
       "review": "fresh Opus + /security-review; full-ci"
+    },
+    "S-e2e-2": {
+      "status": "building",
+      "session": "session_01MMjhnC2EShFoeTVej4jRbr",
+      "model": "sonnet",
+      "brief": "briefs/S-e2e-2.md",
+      "launched_at": "2026-11-01T05:21Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2895,7 +2902,6 @@
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
     "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
     "App gap (S-e2e #314, \u00a710.17 flow): no Send button in the UI although the API has sendToClient; the keyboard flow search -> open -> send stops at copy. Add Send to client in the detail/row actions (size budget!) + e2e.",
-    "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage.",
     "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)",
     "Updates UI (#318): install_failed shows the raw stable code; give each code plain words",
     "Discover route headroom: ~0.1 KB left after #317 (limit 45.2 KB); brief a headroom pass before the next Discover feature. Also #317: first visit with no appearance cache shows the first scene even when the account has illustrations off.",
