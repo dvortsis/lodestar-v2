@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Settings → Preferences → Appearance (§10.10.8, §10.18). Preferences apply at once and can be
 	// undone; there is no Save. The theme picker and the custom theme editor load when opened.
-	import { onMount, type Component, type ComponentProps } from 'svelte';
+	import { onMount, tick, type Component, type ComponentProps } from 'svelte';
 	import { ApiError, api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -19,6 +19,7 @@
 		applyLook,
 		load,
 		save,
+		Unreadable,
 		type Appearance,
 		type Loaded,
 		type Name
@@ -28,6 +29,8 @@
 
 	let status = $state<'loading' | 'ready' | 'failed'>('loading');
 	let prefs = $state<Appearance>({ ...DEFAULTS });
+	/** What the server last confirmed; `prefs` is this plus any change still saving. */
+	let saved = $state.raw<Appearance>({ ...DEFAULTS });
 	let locks = $state<Loaded['locks']>({});
 	let revision = 0;
 	let failed = $state(false);
@@ -38,6 +41,9 @@
 	let missing = $state(false);
 	/** Saves go one at a time, each with the revision the last one returned. */
 	let queue: Promise<void> = Promise.resolve();
+	let saving = 0;
+	/** Changes still queued: a re-read lays them back over the server's values. */
+	let pending: Partial<Appearance>[] = [];
 	let systemDark = $state(false);
 	const dark = $derived(prefs.mode === 'dark' || (prefs.mode === 'system' && systemDark));
 
@@ -107,6 +113,8 @@
 				return;
 			}
 			({ prefs, locks, revision } = res);
+			saved = res.prefs;
+			for (const p of pending) prefs = { ...prefs, ...p };
 			status = 'ready';
 			void apply(prefs);
 		} catch {
@@ -115,31 +123,70 @@
 	}
 
 	/** Applies a change at once, then saves it after any save already under way. */
-	function change(patch: Partial<Appearance>): Promise<void> {
+	function change(patch: Partial<Appearance>, undoing = false): Promise<void> {
 		const keys = Object.keys(patch) as Name[];
 		if (keys.some(locked)) return Promise.resolve();
-		const before = Object.fromEntries(keys.map((k) => [k, prefs[k]])) as Partial<Appearance>;
+		const pick = (p: Appearance) =>
+			Object.fromEntries(keys.map((k) => [k, p[k]])) as Partial<Appearance>;
 		prefs = { ...$state.snapshot(prefs), ...patch } as Appearance;
 		failed = false;
+		undo = null;
 		void apply(prefs);
 		markSave(true);
+		saving++;
+		pending.push(patch);
 		queue = queue.then(async () => {
+			// What the server held before this change: Undo never restores a value that never saved.
+			const was = pick(saved);
 			try {
 				revision = await save(patch, revision);
-				undo = before;
+				saved = { ...saved, ...patch };
+				failed = false;
+				// Offered only once nothing later is queued, so Undo always belongs to the latest
+				// change. Undoing is a change of its own and isn't itself undoable.
+				if (!undoing && saving === 1) undo = was;
 			} catch (e) {
+				pending = pending.filter((p) => p !== patch);
+				// A 2xx that can't be read may have landed: re-read rather than say it failed.
+				if (e instanceof Unreadable) return void (await refresh());
 				// Put back only the fields this change set, and only if nothing newer replaced them.
 				const now = $state.snapshot(prefs) as Record<Name, unknown>;
-				for (const k of keys) if (now[k] === patch[k]) now[k] = before[k];
+				for (const k of keys) if (now[k] === patch[k]) now[k] = saved[k];
 				prefs = now as unknown as Appearance;
 				void apply(prefs);
 				if (e instanceof ApiError && e.code === 'stale_revision') await refresh();
 				failed = !(e instanceof ApiError && e.status === 401);
 			} finally {
+				pending = pending.filter((p) => p !== patch);
+				saving--;
 				markSave(false);
 			}
 		});
 		return queue;
+	}
+
+	/** Where each field is changed: focus goes there after Undo, which removes its own button. */
+	const THEME = '[aria-labelledby="ap-theme"]';
+	const CONTROL: Record<Name, string[]> = {
+		theme: [`${THEME} input[type="radio"]:checked`, '#ap-filter'],
+		theme_dark: ['#ap-dark', `${THEME} [role="switch"]`, '#ap-filter'],
+		mode: [`${THEME} [role="radio"][aria-checked="true"]`],
+		density: ['[aria-labelledby="ap-density"] [role="radio"][aria-checked="true"]'],
+		motion: ['[aria-labelledby="ap-motion"] [role="radio"][aria-checked="true"]'],
+		illustrations: ['[data-testid="ap-illustrations"] [role="switch"]']
+	};
+
+	function undoLast() {
+		const back = undo!;
+		undo = null;
+		void change(back, true);
+		const name = Object.keys(back)[0] as Name;
+		void tick().then(() => {
+			for (const sel of CONTROL[name]) {
+				const el = document.querySelector<HTMLElement>(sel);
+				if (el) return el.focus();
+			}
+		});
 	}
 
 	async function loadAdult() {
@@ -216,16 +263,9 @@
 		{#if failed}<Banner kind="error">{m.appearance_save_failed()}</Banner>{/if}
 		{#if themesFailed}<Banner kind="error">{m.appearance_picker_failed()}</Banner>{/if}
 		<div role="status" class="as-status">
-			{#if undo}
+			{#if undo && !Object.keys(undo).some((n) => locked(n as Name))}
 				{m.appearance_saved()}
-				<Button
-					variant="quiet"
-					onclick={() => {
-						const back = undo!;
-						undo = null;
-						void change(back).then(() => (undo = null));
-					}}>{m.appearance_undo()}</Button
-				>
+				<Button variant="quiet" onclick={undoLast}>{m.appearance_undo()}</Button>
 			{/if}
 		</div>
 
@@ -284,7 +324,7 @@
 			/>
 		</section>
 
-		<section class="as-section">
+		<section class="as-section" data-testid="ap-illustrations">
 			<Toggle
 				label={m.appearance_illustrations()}
 				checked={prefs.illustrations}
