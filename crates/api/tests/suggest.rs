@@ -317,3 +317,57 @@ async fn parse_proposes_natural_phrasing() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn the_field_catalogue_follows_show_adult() {
+    let f = fixture();
+    let c = session(&f).await;
+    let names = |body: &Value| -> Vec<String> {
+        body["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let field = |body: &Value, name: &str| -> Value {
+        body["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == name)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let hidden = golden(
+        &f,
+        &c,
+        "search_fields_adult_hidden",
+        "/api/v1/search/fields",
+    )
+    .await;
+    assert!(!names(&hidden).contains(&"adult".to_string()));
+    assert!(
+        !field(&hidden, "type")["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("adult"))
+    );
+    assert_eq!(field(&hidden, "discovered")["aliases"], json!(["age"]));
+    assert_eq!(field(&hidden, "res")["facetable"], true);
+    assert_eq!(field(&hidden, "size")["type"], "size");
+    // "Show adult content" turned on applies to the next request.
+    f.show.send(true).unwrap();
+    let shown = golden(&f, &c, "search_fields_adult_shown", "/api/v1/search/fields").await;
+    assert!(names(&shown).contains(&"adult".to_string()));
+    assert!(
+        field(&shown, "type")["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("adult"))
+    );
+    f.show.send(false).unwrap();
+    // Signed out, it's refused like `/suggest`.
+    let (status, _, _) = call(&f.app, get("/api/v1/search/fields", None)).await;
+    assert_eq!(status.as_u16(), 401);
+}

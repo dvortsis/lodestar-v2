@@ -94,7 +94,7 @@ impl NumField {
     }
 
     /// Counted in plain numbers rather than bytes.
-    fn is_count(self) -> bool {
+    pub(crate) fn is_count(self) -> bool {
         !matches!(self, NumField::Size | NumField::Largest | NumField::Piece)
     }
 }
