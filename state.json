@@ -1891,13 +1891,23 @@
       "merge": "81738ec9"
     },
     "X-web-hygiene-1101": {
-      "status": "pr-review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhn9AiawVNkuwJzDi2Mu",
       "pr": 308,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "01:26Z brief briefs/X-web-hygiene-1101.md (CSS headroom >=0.4 KB, modulesIn throw, void import catches). | 01:26Z launched Sonnet. | 02:27Z PR #308 head c736b822: CSS 19.93->19.32 KB (limit 20->19.65; Tailwind no longer scans tests/scripts); modulesIn throws; 10 import catches (magnet copy/open silent: a toast cost 130 B on Detail sections). Runner review MERGE (136 lines). Merge on green; baselines must not change."
+      "notes": "01:26Z brief briefs/X-web-hygiene-1101.md (CSS headroom >=0.4 KB, modulesIn throw, void import catches). | 01:26Z launched Sonnet. | 02:27Z PR #308 head c736b822: CSS 19.93->19.32 KB (limit 20->19.65; Tailwind no longer scans tests/scripts); modulesIn throws; 10 import catches (magnet copy/open silent: a toast cost 130 B on Detail sections). Runner review MERGE (136 lines). Merge on green; baselines must not change. | 02:39Z merged #308 (cbf1ed69); session archived.",
+      "merge": "cbf1ed69"
+    },
+    "X-analyzer-memview": {
+      "status": "launching",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "02:39Z brief briefs/X-analyzer-memview.md (informational corpus-normalised memory view; gate unchanged)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2785,7 +2795,6 @@
     "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too.",
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
-    "analyze_cr0.py: add a corpus-normalised memory view (private-memory slope per 1,000 stored torrents) so index growth can be told from a leak (Unraid leg 1, 2026-11-01). Tooling only.",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md."
   ],
   "main_health": [
