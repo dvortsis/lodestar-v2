@@ -71,7 +71,7 @@
 
 <div class="assist-row" role="group" aria-label={label}>
 	<label class="assist-field"
-		>{m.search_assist_builder_field()}
+		><span class="assist-cap">{m.search_assist_builder_field()}</span>
 		<Select
 			dense
 			bind:value={field}
@@ -80,7 +80,7 @@
 		/></label
 	>
 	<label class="assist-field"
-		>{m.search_assist_builder_operator()}
+		><span class="assist-cap">{m.search_assist_builder_operator()}</span>
 		<Select
 			dense
 			bind:value={op}
@@ -88,7 +88,7 @@
 		/></label
 	>
 	<label class="assist-field assist-grow"
-		>{m.search_assist_builder_value()}
+		><span class="assist-cap">{m.search_assist_builder_value()}</span>
 		{#if valueOptions}
 			<Select dense bind:value options={valueOptions} placeholder="" />
 		{:else}

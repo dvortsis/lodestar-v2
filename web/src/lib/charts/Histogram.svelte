@@ -27,6 +27,8 @@
 		onbrush?: (range: BrushRange | null) => void;
 		/** The range is settled (pointer released, key pressed, cleared): the moment to query. */
 		oncommit?: (range: BrushRange | null) => void;
+		/** Replaces the labels drawn under the plot (same length as `edges`); tooltips and slider text keep `edges`. */
+		tickLabels?: string[];
 		format?: ValueFormatter;
 		testid?: string;
 	}
@@ -38,6 +40,7 @@
 		selection = $bindable(null),
 		onbrush,
 		oncommit,
+		tickLabels,
 		format = formatCount,
 		testid = 'histogram'
 	}: Props = $props();
@@ -66,12 +69,12 @@
 	});
 	let rowFont = $state('12px sans-serif');
 	const stride = $derived.by(() => {
-		const per = widest(rowFont, edges) + 16;
+		const per = widest(rowFont, tickLabels ?? edges) + 16;
 		const fit = rowWidth > 0 ? Math.max(1, Math.floor(rowWidth / per)) : 2;
 		return Math.max(1, Math.ceil((edges.length - 1) / Math.max(1, fit - 1)));
 	});
 	const shown = $derived(
-		edges
+		(tickLabels ?? edges)
 			.map((text, i) => ({ text, i }))
 			.filter(
 				({ i }) =>

@@ -15,3 +15,19 @@
 }
 @import './lib/theme/tokens.css';
 @import './lib/theme/critical.css';
+
+/* Touch targets (§10.2, §10.13): under a coarse pointer every standalone control is at least
+   --target-min square. Links inside sentences are exempt (WCAG 2.5.8); link-styled controls opt in
+   with `.target`. Per-feature copies are removed as each owner lands. */
+@media (pointer: coarse) {
+	:where(button, [role='button'], [role='tab'], summary, a.btn, nav a),
+	.target {
+		min-block-size: var(--target-min);
+		min-inline-size: var(--target-min);
+	}
+	.target {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+	}
+}

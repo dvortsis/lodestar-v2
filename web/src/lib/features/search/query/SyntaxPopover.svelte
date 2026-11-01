@@ -27,7 +27,7 @@
 			>{m.search_query_syntax()}</button
 		>
 	{/snippet}
-	<div class="flex max-w-md flex-col gap-3">
+	<div class="flex max-w-md min-w-0 flex-col gap-3">
 		<p class="text-body">{m.search_query_syntax_lead()}</p>
 		<ul class="flex flex-col gap-2">
 			{#each EXAMPLES as ex (ex.query)}
