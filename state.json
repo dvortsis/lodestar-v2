@@ -1855,14 +1855,14 @@
       "note": " 23:13Z merged #301 (a5e6b97c); session archived."
     },
     "X-alert-search-headroom": {
-      "status": "running",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhnAuLgRm2txBmt4x9j5",
-      "pr": null,
+      "pr": 304,
       "attempt": 0,
       "review_rounds": 0,
       "notes": "23:11Z brief briefs/X-alert-search-headroom.md.",
-      "note": " 23:12Z launched (Opus) on branch slice/X-alert-search-headroom."
+      "note": " 23:12Z launched (Opus) on branch slice/X-alert-search-headroom. 00:05Z PR #304 head 96d693ac: Alert 45,976->45,404; Search results 43,288->42,744; Alerts 29,168->25,732 (limit 26.3); toolbar 4,597->4,290 (4.6); Settings first views -540 B. manualChunks claimed blocked by preserveEntrySignatures strict. Reviewer session_01MMjhn9m5pFCfKTgc6G79zR (also verifies that claim). #299 head a02f9fa6 marker removed, merge on green; #303 MERGE, merge on green."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
