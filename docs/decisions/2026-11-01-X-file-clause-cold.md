@@ -61,3 +61,11 @@ In `bench/src/bin/search-bench.rs`, `file_sets_path`: add `file:(size:>1GB)` and
 ```
 
 `cold4` times four different cold `file:(size:>NMB)` clauses run at once on scoped threads, with the cache emptied before each round. The existing `("broad file (cold)", &mut cold, Some(FILE_P95))` stays as it is. CI's `search-bench -- --torrents 200000 --gate` line needs no change.
+
+## Addendum: measured by gate-file-cold (200,000 torrents, release, two runs)
+| class | p50 | p95 | p99 | max |
+|---|---|---|---|---|
+| broad file (cold, 4 at once), run 1 | 26.70 ms | 38.61 ms | 41.89 ms | 52.02 ms |
+| broad file (cold, 4 at once), run 2 | 26.45 ms | 37.20 ms | 41.45 ms | 43.60 ms |
+
+For reference the single cold class measured p95 10.45 / 10.30 ms (gate 150 ms) and the warm class 3.02 / 3.17 ms (gate 30 ms), all PASS. The new class is reported, not gated. Each thread opens its own reader, because a `Store` reader is one SQLite connection.
