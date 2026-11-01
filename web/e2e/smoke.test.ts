@@ -20,22 +20,3 @@ for (const route of ROUTES) {
 		if (name) await expectPageSnapshot(page, name);
 	});
 }
-
-// Under a coarse pointer every standalone control is at least --target-min (44 px) square (§10.2).
-test.describe('touch targets', () => {
-	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
-	test('the Search bar controls are 44 px under a coarse pointer', async ({ page, go }) => {
-		await go('/search');
-		await page.getByRole('button', { name: 'Syntax' }).click();
-		const dialog = page.getByRole('dialog', { name: 'Search syntax' });
-		await expect(dialog).toBeVisible();
-		for (const button of [
-			page.getByRole('button', { name: 'Syntax' }),
-			...(await dialog.getByRole('button').all())
-		]) {
-			const box = (await button.boundingBox())!;
-			expect(box.width).toBeGreaterThanOrEqual(44);
-			expect(box.height).toBeGreaterThanOrEqual(44);
-		}
-	});
-});

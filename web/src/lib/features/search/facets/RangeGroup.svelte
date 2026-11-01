@@ -35,14 +35,13 @@
 				: name === 'year'
 					? String(e)
 					: formatDate(e, locale);
-	// The open top bin has no upper edge: label it "<last edge> +" rather than a dash.
-	const edges = $derived.by(() => {
-		const raw = edgesOf(hist.bins);
-		const text = raw.map(edgeText);
-		if (raw.length > 1 && raw[raw.length - 1] === null)
-			text[text.length - 1] = `${text[text.length - 2]} +`;
-		return text;
-	});
+	const edges = $derived(edgesOf(hist.bins).map(edgeText));
+	// The open top bin has no upper edge: the tick under it reads "<last edge> +", not a dash.
+	const tickLabels = $derived(
+		edges.length > 1 && edgesOf(hist.bins).at(-1) === null
+			? [...edges.slice(0, -1), `${edges.at(-2)} +`]
+			: edges
+	);
 	const counts = $derived(hist.bins.map((b) => ({ value: b.count, approx: hist.approx })));
 	const brush = $derived(brushOfRange(hist.bins, range));
 	const peak = $derived(Math.max(0, ...hist.bins.map((b) => b.count)));
@@ -78,6 +77,7 @@
 		<Histogram
 			{counts}
 			{edges}
+			{tickLabels}
 			label={m.search_facets_histogram({ facet: title, summary })}
 			handleLabels={{ from: m.search_facets_from(), to: m.search_facets_to() }}
 			selection={brush}

@@ -25,9 +25,7 @@
 	font-size: var(--text-small);
 }
 .rp-pick {
-	display: flex;
-	align-items: center;
-	padding-inline-start: calc(var(--spacing) * 3);
+	margin-inline-start: calc(var(--spacing) * 3);
 }
 
 @media (pointer: coarse) {

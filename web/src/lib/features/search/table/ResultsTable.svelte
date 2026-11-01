@@ -7,6 +7,7 @@
 	import { onMount, tick } from 'svelte';
 	import ArrowDown from '~icons/ph/arrow-down-bold';
 	import ArrowUp from '~icons/ph/arrow-up-bold';
+	import { FOCUS_RING } from '$lib/ui/classes';
 	import Columns from '~icons/ph/columns-bold';
 	import { formatBytes, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -160,7 +161,7 @@
 						<th scope="col" class="rt-check">
 							<input
 								type="checkbox"
-								class="checkbox checkbox-sm border-field-border"
+								class="checkbox checkbox-sm border-field-border {FOCUS_RING}"
 								aria-label={m.search_bulk_select_all()}
 								checked={everyRow}
 								data-testid="table-select-all"
@@ -208,7 +209,7 @@
 							<td class="rt-check">
 								<input
 									type="checkbox"
-									class="checkbox checkbox-sm border-field-border"
+									class="checkbox checkbox-sm border-field-border {FOCUS_RING}"
 									tabindex="-1"
 									checked={selected}
 									aria-label={m.search_bulk_select_row({ name: hit.title ?? hit.name })}

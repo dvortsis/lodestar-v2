@@ -95,7 +95,7 @@
 
 <search
 	data-search-bar
-	class="flex flex-col gap-1 px-4 py-2 xx-large:mx-auto xx-large:w-full xx-large:max-w-6xl"
+	class="flex flex-col gap-1 px-4 py-2 xx-large:max-w-6xl"
 	aria-labelledby={LABEL}
 >
 	<span id={LABEL} class="sr-only">{m.search_query_label()}</span>

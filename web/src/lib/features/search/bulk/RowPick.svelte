@@ -1,6 +1,7 @@
 <script lang="ts">
 	// A row's select checkbox (list view), loaded when select mode first shows. Out of the tab order:
 	// the list is one tab stop, and `x` selects the active row.
+	import { FOCUS_RING } from '$lib/ui/classes';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { SearchHit } from '../results/ResultRow.svelte';
 	import './bulk.css';
@@ -12,7 +13,7 @@
 
 <input
 	type="checkbox"
-	class="checkbox checkbox-sm rp-pick border-field-border"
+	class="checkbox checkbox-sm rp-pick border-field-border {FOCUS_RING}"
 	tabindex="-1"
 	checked={selection.has(hit.hash)}
 	aria-label={m.search_bulk_select_row({ name: hit.title ?? hit.name })}

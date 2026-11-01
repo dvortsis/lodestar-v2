@@ -106,11 +106,11 @@
 }
 
 /* A popover never outgrows the viewport less the 16 px gutter; below `medium` (480) it fills it. */
-.ls-pop {
+.ls-popover {
 	max-inline-size: calc(100vw - 2 * var(--spacing) * 4);
 }
-@media (max-width: 29.999rem) {
-	.ls-pop {
+@media (width < 30rem) {
+	.ls-popover {
 		inline-size: calc(100vw - 2 * var(--spacing) * 4);
 	}
 }

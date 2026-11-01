@@ -125,7 +125,7 @@
 			onOpenAutoFocus={(e) => e.preventDefault()}
 			onCloseAutoFocus={(e) => e.preventDefault()}
 			aria-label={label}
-			class="ls-pop z-50 rounded-box border border-base-300 bg-base-100 p-3 text-body text-base-content"
+			class="ls-pop ls-popover z-50 rounded-box border border-base-300 bg-base-100 p-3 text-body text-base-content"
 		>
 			<div use:focusOnMount>{@render children()}</div>
 		</Popover.Content>
