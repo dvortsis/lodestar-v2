@@ -2578,6 +2578,11 @@
       "at": "2026-11-01T12:35Z",
       "by": "runner §2.26",
       "what": "X-web-polish-1101e: StateScene with no appearance cache shows no scene (no observer, ~0 B); Discover j/k failure toast dropped (+0.45 KB); retry-on-press only if <=0.05 KB"
+    },
+    {
+      "at": "2026-11-01T13:13Z",
+      "by": "runner §2.26",
+      "what": "Reversed 12:35Z ruling: StateScene keeps showing scenes when the appearance cache is missing (first-run empty states matter more than the one-off scene for an illustrations-off user). #317 follow-up closed as not fixed (UX/cost)."
     }
   ],
   "runner_notes": {
@@ -3308,7 +3313,14 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-11-01T12:58Z",
-  "open_prs": {},
+  "open_prs": {
+    "339": {
+      "slice": "X-web-polish-1101e",
+      "head": "82e39f3",
+      "verdict": "CHANGES r1: revert StateScene (runner reverses own ruling: no-cache must show scene for first-run empty states); bulk bar MERGE",
+      "session": "session_01MMjhnBCyarPyutpaXadHCe"
+    }
+  },
   "merged_log": [
     {
       "pr": 331,
