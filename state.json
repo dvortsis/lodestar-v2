@@ -591,7 +591,7 @@
       "merged_at": "2026-11-01T04:26Z"
     },
     "G-m5": {
-      "status": "G-m5b report #340 (7 blocking); FX-1..4 clear blocking; FX-2 launching 14:05Z",
+      "status": "exit-met; decisions PR #352 waits on all-themes dispatch on main",
       "model": "opus",
       "session": null,
       "pr": null,
@@ -3126,6 +3126,11 @@
       "id": "note-filter-load-fail-closed",
       "status": "to-send",
       "text": "Found in review: the filter loader silently skips stored rules it cannot parse (pre-existing). A slice will make it fail closed for block and adult rules (tightening only)."
+    },
+    {
+      "id": "m5-exit",
+      "status": "to-send",
+      "text": "M5 exit gate met (analytics matrix, overhead bench, design review with all 7 blocking findings fixed, Playwright/axe/Lighthouse). Decisions file #352 lists the runner rulings for your review."
     }
   ],
   "external_gates": {
@@ -3280,6 +3285,10 @@
     {
       "t": "2026-11-01T19:30Z",
       "event": "Launched S-doc-shots (Sonnet). S-blocklists not ready: no subscriptions connect/remove/accept API yet (only /filters/strictness) -> needs B-subscriptions-api (Opus + /security-review: weakening = password + effect warning; fetch limits exist in lodestar_filter::lists) before the web slice. Plan after G-m5 closes. 1 slot reserved for F-filter-load-fail-closed (after #350)."
+    },
+    {
+      "t": "2026-11-01T19:45Z",
+      "event": "merged #350 FX-6-I9 stage 1 (6ef00355; all 28 checks green incl windows). G-m5 EXIT MET. Opened #352 (runner, G-m5 decisions file). Dispatched e2e.yml on main (all-themes) as exit evidence; merge #352 after it is green. Launched F-filter-load-fail-closed (Opus, session_01MMjhnAvepJm7UgCAppGN9s). Slots: appearance-undo, S-doc-shots, fail-closed (+ runner #352)."
     }
   ],
   "reviews": {
