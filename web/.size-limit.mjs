@@ -64,6 +64,12 @@ const manifest = existsSync('.svelte-kit/output/client/.vite/manifest.json')
 	? JSON.parse(readFileSync('.svelte-kit/output/client/.vite/manifest.json', 'utf8'))
 	: {};
 const keyOf = new Map(Object.entries(manifest).map(([key, chunk]) => [`build/${chunk.file}`, key]));
+// The filters flows' door (S-filters-2c): every view that can open a flow reaches it, on demand.
+// A walk that reaches it as on demand stops there, so the flows count only in "Filters dialogs"
+// and, in the entries that collect what loads later, don't hide modules the view shares with them
+// (Banner, Input, Radio). A walk that reaches it as part of a first view walks on, so a view that
+// loads the flows at mount counts them, and the guard by "Filters dialogs" names it.
+const FLOWS_DOOR = /features\/filters\/flows-door\.ts$/;
 const walk = (route, onDemand, collectOnDemand, beyond = []) => {
 	const mine = routeFiles(route);
 	const shared = new Set([...search.js, ...search.css, ...beyond]);
@@ -75,6 +81,7 @@ const walk = (route, onDemand, collectOnDemand, beyond = []) => {
 		const chunk = manifest[key];
 		if (!chunk || shared.has(`build/${chunk.file}`)) return;
 		const demand = demanded || matches(key);
+		if (demand && FLOWS_DOOR.test(key)) return;
 		const id = `${demand}:${key}`;
 		if (seen.has(id)) return;
 		seen.add(id);
@@ -105,6 +112,7 @@ const ownChunk = (sourceKey, onDemand = [], collectOnDemand = false, beyond = []
 		const chunk = manifest[key];
 		if (!chunk || shared.has(`build/${chunk.file}`)) return;
 		const demand = demanded || matches(key, chunk);
+		if (demand && key !== sourceKey && FLOWS_DOOR.test(key)) return;
 		const id = `${demand}:${key}`;
 		if (seen.has(id)) return;
 		seen.add(id);
@@ -136,7 +144,9 @@ const detailLazy = [
 	/^chunk:magnet$/,
 	/features\/detail\/commands\.ts$/,
 	// The settings subscription (event client and SSE) starts right after mount, not before paint.
-	/features\/detail\/visibility-events\.ts$/
+	/features\/detail\/visibility-events\.ts$/,
+	// "Block this…" loads the filters flows on the press (S-filters-2c).
+	...filtersDoor
 ];
 
 // Settings: the form engine loads these on demand (its README), so a screen's first view stops at
@@ -146,7 +156,9 @@ const detailLazy = [
 const settingsOnDemand = [
 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
 	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
-	/features\/settings\/form\/ConfirmDialog\.svelte$/
+	/features\/settings\/form\/ConfirmDialog\.svelte$/,
+	// Filters & Safety loads its change flows on the first change (S-filters-2c).
+	...filtersDoor
 ];
 // The edit chunk (owner, 2026-10-24; docs/decisions/2026-10-30-S-settings-reconcile.md): the save
 // pipeline and what it shows load with the first edit, a stored draft or an event. It is gated on
@@ -930,8 +942,8 @@ if (carried.length)
 // The views that open "Block this…" or a filters change carry none of the flows (S-filters-2c):
 // they load through `flows-door.ts` alone. A static import of `flows/**`, or a second dynamic root
 // that makes the bundler regroup the flows with a first view, fails here before measuring.
-const drawerView = ownChunk(DRAWER, [...detailLazy, ...filtersDoor]);
-const torrentView = own('/t/[hash]', { onDemand: [...detailLazy, ...filtersDoor] });
+const drawerView = ownChunk(DRAWER, detailLazy);
+const torrentView = own('/t/[hash]', { onDemand: detailLazy });
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-root\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],

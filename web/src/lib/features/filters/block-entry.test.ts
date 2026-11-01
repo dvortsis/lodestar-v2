@@ -1,8 +1,9 @@
 // "Block this…" from a result's More menu and from the detail drawer's actions (S-filters-2c),
 // over a scripted fetch: the safety rules of the entry points (only an added rule, Cancel sends
 // nothing, a refused apply keeps the server's answer, nothing beyond what the view shows).
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { clearDetailCaches } from '$lib/features/detail/cache';
 import { torrentDetail } from '$lib/features/detail/fixtures';
 import DetailActions from '$lib/features/detail/DetailActions.svelte';
 import { hit } from '$lib/features/search/results/fixtures';
@@ -24,7 +25,13 @@ beforeEach(() => {
 	net.on('POST /filters/preview/jobs/{id}/cancel', { body: { ok: true } });
 	net.on('POST /filters/apply', { body: applied(strengthening(), { id: 9 }) });
 });
-afterEach(() => vi.unstubAllGlobals());
+// The flows and Bits UI transform slowly on a cold cache (CI): load them outside any test's timeout.
+beforeAll(() => import('./flows-root'), 60_000);
+vi.setConfig({ testTimeout: 30_000 });
+afterEach(async () => {
+	await vi.dynamicImportSettled();
+	vi.unstubAllGlobals();
+});
 
 /** Each entry point: render it for a torrent with this name, and press "Block this…". */
 const entries = {
@@ -127,4 +134,19 @@ it('the drawer drops a press whose torrent changed before the flows loaded', asy
 	await vi.dynamicImportSettled();
 	expect(screen.queryByRole('dialog')).toBeNull();
 	expect(net.sent).toEqual([]);
+});
+
+it('the drawer closes the dialog when its torrent stops being the one shown', async () => {
+	const detail = torrentDetail({ hash: HASH, name: 'Lantern.Keeper.1' });
+	const view = render(DetailActions, { detail });
+	await fireEvent.click(screen.getByTestId('detail-block'));
+	await opened();
+	await view.rerender({ detail: null });
+	await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+	await view.rerender({ detail });
+	await fireEvent.click(screen.getByTestId('detail-block'));
+	await opened();
+	clearDetailCaches(false); // visibility changed, e.g. "Show adult content" turned off
+	await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+	expect(changes()).toEqual([]);
 });

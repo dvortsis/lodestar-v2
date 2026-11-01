@@ -96,6 +96,8 @@ test('from a result: Shift+F10, Block this…, preview, Apply adds one rule', as
 	expect(sent).toEqual([{ op: 'add_rule', query: `hash:${hashOf(1)}`, action: 'hide' }]);
 	await kbd.press('Escape');
 	await expect(blockDialog(page)).toHaveCount(0);
+	// Back to the row, the list's one tab stop, so j/k and Shift+F10 keep working.
+	await expect(rowOf(page, 1)).toBeFocused();
 	mock.assertNoFailures();
 });
 

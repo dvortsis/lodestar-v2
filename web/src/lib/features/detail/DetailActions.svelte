@@ -4,7 +4,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { isMagnet } from '$lib/util/magnet';
-	import { detailGeneration, type TorrentDetail } from './cache';
+	import { detailGeneration, onDetailInvalidated, type TorrentDetail } from './cache';
 
 	interface Props {
 		detail: TorrentDetail | null;
@@ -23,11 +23,14 @@
 	}
 
 	// "Block this…" (§20.2) through the flows' one door (S-filters-2c): it only ever adds a rule,
-	// previewed first, for the torrent shown when it was pressed (its hash and name).
+	// previewed first, for the torrent shown when it was pressed (its hash and name), and only
+	// while that torrent is still the one shown.
 	type Target = { hash: string; hash_v2: string | null; name: string };
 	let Block = $state.raw<typeof import('$lib/features/filters/flows-root').BlockThisDialog>();
 	let target = $state.raw<Target>();
 	let blocking = $state(false);
+	// Visibility changed (e.g. "Show adult content" turned off): the dialog goes with what it showed.
+	onDestroy(onDetailInvalidated(() => (target = undefined)));
 	async function block() {
 		if (!detail) return;
 		const { hash, hash_v2, name } = detail;
@@ -50,6 +53,6 @@
 <Button dense disabled={!detail} data-testid="detail-block" onclick={block}
 	>{m.detail_block()}</Button
 >
-{#if Block && target}
+{#if Block && target && target.hash === detail?.hash}
 	<Block torrent={target} bind:open={blocking} />
 {/if}
