@@ -117,7 +117,8 @@
 		<p>{m.settings_shell_unavailable()}</p>
 	{:else}
 		{@const text = about?.id === screen.id ? about.value : undefined}
-		{#if text?.purpose}<p class="text-muted-text">{text.purpose()}</p>{/if}
+		<!-- The purpose arrives with its chunk: its line is kept free meanwhile, so nothing shifts. -->
+		<p class={text ? 'text-muted-text' : 'h-6'}>{text?.purpose?.()}</p>
 		{#if failed}
 			<Banner kind="error"
 				>{m.settings_form_load_error()}{#snippet action()}<Button dense onclick={() => attempt++}
