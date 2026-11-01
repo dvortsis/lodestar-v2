@@ -580,13 +580,15 @@
       "merged_at": "2026-11-01T03:52Z"
     },
     "H-zh": {
-      "status": "pr-fixing",
+      "status": "merged",
       "model": "haiku",
       "session": "session_01MMjhn8pbNzRQPDMtoEPfEw",
       "pr": 315,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (\u00a72.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file. | 03:32Z PR #315 head dcea076a (473 filled; locale tests stubbed; Natural phrasing 1.75). Opus reviewer session_01MMjhnAxHndkhC8BH4gveMt (mechanical placeholder check + translation sample incl. all content-safety keys). | 03:45Z reviewer CHANGES: B1 \u7ed3\u7b97->\u5df2\u5904\u7406; I content-safety wording, natural_applied info drop, en-fallback test; Playwright core red on dcea076a. Relayed in one push; runner checks delta."
+      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (\u00a72.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file. | 03:32Z PR #315 head dcea076a (473 filled; locale tests stubbed; Natural phrasing 1.75). Opus reviewer session_01MMjhnAxHndkhC8BH4gveMt (mechanical placeholder check + translation sample incl. all content-safety keys). | 03:45Z reviewer CHANGES: B1 \u7ed3\u7b97->\u5df2\u5904\u7406; I content-safety wording, natural_applied info drop, en-fallback test; Playwright core red on dcea076a. Relayed in one push; runner checks delta.",
+      "merge_sha": "8e8fa701",
+      "merged_at": "2026-11-01T04:26Z"
     },
     "G-m5": {
       "status": "pending",
@@ -2841,9 +2843,9 @@
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
     "S-updates-3: wire Install now (and Roll back if B-update-5 adds it) once B-update-5 lands POST /updates/install; un-skip the Install-now test TODO (#306/#310).",
     "ui/status.ts: Badge pulls all four status icons; load only the one it renders (from X-detail-headroom #313). lib/ui is shared with Alert/Search, so measure those too.",
-    "App gap (S-e2e #314, \u00a710.19 gate): the \"Show illustrations\" toggle hides nothing and Save-Data is not honoured; illustrations must hide in both cases. Fix + e2e.",
     "App gap (S-e2e #314, \u00a710.17 flow): no Send button in the UI although the API has sendToClient; the keyboard flow search -> open -> send stops at copy. Add Send to client in the detail/row actions (size budget!) + e2e.",
-    "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage."
+    "e2e (S-e2e #314): only one illustrated scene is snapshotted; the *.fixture.test.ts specs run in no Playwright project. Wire them and widen scene coverage.",
+    "Runner: H-zh en-fallback test stubs the zh path itself (tautological); replace with a real fixture key if the catalogue ever gains an untranslated key (#315)"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
