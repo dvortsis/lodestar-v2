@@ -29,6 +29,8 @@ Every detail open revalidates `GET /torrents/{hash}` before showing either cache
 ## Files
 
 - `open.ts`, `commands.ts`, `magnet.ts`, `cache.ts`: the API above, the keys, copy/open magnet, the hit and detail caches.
+- `visibility.ts`, `visibility-events.ts`: `watchDetailVisibility()` and, loaded on demand after mount, the settings subscription it installs (keeps the event client out of the first view).
+- `detail.css` (shared), `host.css` (drawer host only), `page.css` (`/t` only), `raw.css` (the raw viewer only): keep each rule in the file of the one entry that uses it.
 - `model.svelte.ts`: one torrent's data (detail, hit, errors, latest-wins).
 - `DetailHost.svelte`, `DetailView.svelte`, `DetailActions.svelte`, `ErrorState.svelte`, `Contents.svelte`, `ManualMagnet.svelte`.
 - `summary/`, `composition/`, `parsed/`, `files/` (`build.ts`, `tree.worker.ts`, `load.ts`, `FileTree.svelte`), `raw/RawViewer.svelte` (not mounted in the drawer yet: no endpoint serves an info dict).

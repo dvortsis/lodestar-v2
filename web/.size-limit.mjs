@@ -1097,8 +1097,8 @@ export default [
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
 	entry('Natural phrasing (on demand)', naturalLazy, '1.64 KB'),
 	entry('Builder (on demand)', builderLazy, '5.69 KB'),
-	// 29 KB (runner, 2026-10-30, L3–L5 landing): visibility revalidation (L3) subscribes the drawer to
-	// settings events, so the event client (2.1 KB) now loads with it until the shell loads it too.
+	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
+	// load on demand, from visibility-events.ts, so they are no longer in this first view.
 	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
 	// only), page.css (/t only), raw.css (RawViewer, dev route only). Keep page, host and raw rules out
 	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
@@ -1112,8 +1112,8 @@ export default [
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
 		'37.3 KB' // owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
-		// first views (-2.25 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
-		// error toasts add ~0.13 KB. Was 34.5 KB.
+		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
+		// error toasts add ~0.17 KB. Was 34.5 KB.
 	),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.

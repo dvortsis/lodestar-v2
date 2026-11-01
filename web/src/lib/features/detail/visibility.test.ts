@@ -21,4 +21,5 @@ it('subscribes once and invalidates for content settings from any tab and every 
 	cacheDetail(HASH, torrentDetail());
 	options.onResync();
 	expect(cachedDetail(HASH)).toBeUndefined();
+	expect(on).toHaveBeenCalledTimes(1);
 });

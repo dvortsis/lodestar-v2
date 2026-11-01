@@ -32,7 +32,7 @@
 		event.stopPropagation(); // not the row's activation (it would open the drawer)
 		void import('$lib/features/detail/magnet').then(
 			(mod) => mod.copyMagnet({ hash: hit.hash }),
-			() => toast.push({ kind: 'error', text: m.search_results_copy_failed() })
+			() => toast.push({ kind: 'error', text: m.detail_magnet_unavailable() })
 		);
 	}
 
