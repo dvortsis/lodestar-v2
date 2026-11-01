@@ -3013,7 +3013,6 @@
     "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)",
     "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
     "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
-    "B-search-recovery (backend, Opus): per-clause counts on /search or /parse for zero-result recovery (\u00a710.4 \"Removing X gives N\"), an index-state endpoint for the cold-start banner, and a query-scoped live feed via the B9 percolator for exact \"N new\" (S-search-6 deferrals)",
     "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
     "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
     "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
