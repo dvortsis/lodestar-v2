@@ -166,7 +166,6 @@ test.describe('keyboard: Settings → Updates', () => {
 		kbd,
 		mock
 	}) => {
-		const patches: unknown[] = [];
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		const inner = new SettingsBackend(index, values);
 		inner.attach(mock as unknown as MockLike);
@@ -179,16 +178,16 @@ test.describe('keyboard: Settings → Updates', () => {
 		const nightly = page.getByTestId('updates-channel-nightly');
 		await expect(nightly).toBeVisible();
 		await kbd.tabTo(page.getByTestId('updates-channel-stable'), 20);
-		await kbd.press('ArrowDown');
-		await kbd.press('ArrowDown');
+		await kbd.press('ArrowUp');
 		const dialog = page.getByRole('dialog', { name: 'Switch to Nightly?' });
 		await expect(dialog).toBeVisible();
 		await expect(dialog).toContainText('for testing only');
+		await expect(page.getByRole('dialog')).toHaveCount(1);
 		await expectNoA11yViolations(page);
 		await kbd.press('Escape');
 		await expect(dialog).toBeHidden();
+		await expect(page.getByRole('dialog')).toHaveCount(0);
 		await expect(page.getByTestId('updates-channel-stable')).toBeChecked();
-		expect(patches).toEqual([]);
 		expect(inner.patches).toEqual([]);
 		await expectNoA11yViolations(page);
 	});

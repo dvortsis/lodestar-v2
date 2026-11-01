@@ -24,17 +24,23 @@
 
 	let root = $state<HTMLElement>();
 	let wait = $state('');
-	let window = $state('');
+	let installWindow = $state('');
 	let focused = $state(false);
 	// The text fields start from, and go back to, the server's value.
 	function reset() {
 		wait = String(values.wait_days ?? '');
-		window = String(values.window ?? '');
+		installWindow = String(values.window ?? '');
 	}
 	$effect(() => {
 		if (!focused) reset();
 	});
 
+	const failure: Record<string, () => string> = {
+		setting: m.settings_updates_error_setting,
+		locked: m.settings_updates_error_locked,
+		stale: m.settings_updates_error_stale,
+		busy: m.settings_updates_error_busy
+	};
 	const channels = ['stable', 'beta', 'nightly'] as const;
 	type Channel = (typeof channels)[number];
 	const channelText: Record<Channel, [() => string, () => string]> = {
@@ -59,12 +65,25 @@
 		reset();
 	}
 
-	async function pickChannel(to: (typeof channels)[number]) {
+	// One question at a time: arrowing through the radios fires a change for each step, and a second
+	// dialog opened over the first could save a channel nobody chose.
+	let asking = false;
+	const rank = { stable: 0, beta: 1, nightly: 2 } as const;
+	async function pickChannel(to: Channel) {
 		if (to === values.channel) return;
+		if (asking) {
+			await sync();
+			return;
+		}
+		asking = true;
+		// Moving to a more stable channel doesn't warn about snapshots; it never goes back a version.
+		const from = values.channel as Channel;
+		const warn =
+			rank[to] < (rank[from] ?? 0) ? m.settings_updates_adv_switch_back : channelWarn[to];
 		const answer = await ask(
 			{
 				title: m.settings_updates_adv_switch_title({ channel: channelText[to][0]() }),
-				body: [channelWarn[to](), m.settings_updates_adv_switch_when()],
+				body: [warn({ channel: channelText[to][0]() }), m.settings_updates_adv_switch_when()],
 				actions: [
 					{ id: 'cancel', label: m.settings_updates_cancel() },
 					{ id: 'switch', label: m.settings_updates_adv_switch_action(), variant: 'primary' }
@@ -73,11 +92,17 @@
 			},
 			store.signal
 		);
+		asking = false;
 		if (answer === 'switch') await store.set('channel', to);
 		await sync();
 	}
 
 	async function save(name: string, value: unknown) {
+		// An empty or non-whole number is not an answer: put the server's value back, send nothing.
+		if (name === 'wait_days' && (value === '' || value === null || !Number.isInteger(value))) {
+			await sync();
+			return;
+		}
 		await store.set(name, value);
 		await sync();
 	}
@@ -89,8 +114,10 @@
 </script>
 
 <div class="flex flex-col gap-4" bind:this={root} data-testid="updates-advanced">
-	{#if store.error === 'setting' && store.reason}
-		<p role="alert" data-testid="updates-adv-reason">{store.reason}</p>
+	{#if store.error && store.error !== 'load'}
+		<p role="alert" data-testid="updates-adv-reason">
+			{store.reason || failure[store.error]?.()}
+		</p>
 	{/if}
 
 	<fieldset class="flex flex-col gap-2" data-testid="updates-channel">
@@ -131,7 +158,7 @@
 			data-testid="updates-adv-wait"
 			onfocus={() => (focused = true)}
 			onblur={() => (focused = false)}
-			onchange={() => void save('wait_days', Number(wait))}
+			onchange={() => void save('wait_days', wait === '' || wait == null ? null : Number(wait))}
 		/>
 		<p id="updates-adv-wait-help" class="text-small text-muted-text">
 			{m.settings_updates_adv_wait_help()}
@@ -143,13 +170,13 @@
 		<label for="updates-adv-window" class="font-semibold">{m.settings_updates_adv_window()}</label>
 		<Input
 			id="updates-adv-window"
-			bind:value={window}
+			bind:value={installWindow}
 			disabled={!!lock('window')}
 			aria-describedby="updates-adv-window-help"
 			data-testid="updates-adv-window"
 			onfocus={() => (focused = true)}
 			onblur={() => (focused = false)}
-			onchange={() => void save('window', window)}
+			onchange={() => void save('window', installWindow)}
 		/>
 		<p id="updates-adv-window-help" class="text-small text-muted-text">
 			{m.settings_updates_adv_window_help()}

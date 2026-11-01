@@ -7,12 +7,14 @@ import Advanced from './Advanced.svelte';
 import { UpdatesStore } from './store.svelte';
 
 const asked = vi.hoisted(() => ({
+	hold: null as null | Promise<void>,
 	answer: 'cancel' as string | null,
 	questions: [] as { title: string; body: string[] }[]
 }));
 vi.mock('../form/dialogs', () => ({
 	ask: async (q: { title: string; body: string[] }) => {
 		asked.questions.push(q);
+		if (asked.hold) await asked.hold;
 		return asked.answer;
 	}
 }));
@@ -24,6 +26,7 @@ type F = { value: unknown; env: string | null; read_only: boolean };
 let fields: Record<string, F>;
 let sent: string[];
 let refuse: boolean;
+let networkDown = false;
 const reply = (code: number, b: unknown) =>
 	new Response(JSON.stringify(b), {
 		status: code,
@@ -48,6 +51,8 @@ beforeEach(() => {
 	sent = [];
 	refuse = false;
 	asked.answer = 'cancel';
+	asked.hold = null;
+	networkDown = false;
 	asked.questions = [];
 	vi.stubGlobal(
 		'fetch',
@@ -56,6 +61,7 @@ beforeEach(() => {
 			const method = init.method ?? 'GET';
 			if (path === '/settings/updates' && method === 'PATCH') {
 				sent.push(String(init.body));
+				if (networkDown) throw new TypeError('network down');
 				if (refuse)
 					return reply(400, {
 						error: { code: 'invalid_setting', message: 'The window is not valid.' }
@@ -146,5 +152,57 @@ describe('Advanced', () => {
 		await fireEvent.click(t);
 		await until(() => expect(screen.getByTestId('updates-adv-reason')).toBeTruthy());
 		await until(() => expect(t.checked).toBe(false));
+	});
+
+	it('a second channel step while a question is open opens no second dialog', async () => {
+		await open();
+		let release: () => void = () => {};
+		asked.hold = new Promise<void>((r) => (release = r));
+		asked.answer = 'switch';
+		await fireEvent.click(radio('beta'));
+		await until(() => expect(asked.questions).toHaveLength(1));
+		await fireEvent.click(radio('nightly'));
+		release();
+		await until(() => expect(sent).toHaveLength(1));
+		expect(asked.questions).toHaveLength(1);
+		expect(JSON.parse(sent[0]!)).toMatchObject({ channel: 'beta' });
+	});
+
+	it('moving to a more stable channel doesn’t warn about snapshots', async () => {
+		fields.channel!.value = 'nightly';
+		await open();
+		await fireEvent.click(radio('beta'));
+		await until(() => expect(asked.questions).toHaveLength(1));
+		const text = asked.questions[0]!.body.join(' ');
+		expect(text).toContain('never goes back to an older version');
+		expect(text).not.toContain('restore from a snapshot');
+	});
+
+	it('an emptied wait is not saved as 0', async () => {
+		await open();
+		const input = screen.getByTestId('updates-adv-wait') as HTMLInputElement;
+		await fireEvent.input(input, { target: { value: '' } });
+		await fireEvent.change(input);
+		await until(() => expect(input.value).toBe('3'));
+		expect(sent).toEqual([]);
+	});
+
+	it('a failed save says so next to the control and keeps the server’s value', async () => {
+		await open();
+		networkDown = true;
+		const t = screen.getByTestId('updates-adv-reindex') as HTMLInputElement;
+		await fireEvent.click(t);
+		await until(() => expect(screen.getByTestId('updates-adv-reason').textContent).toBeTruthy());
+		await until(() => expect(t.checked).toBe(false));
+	});
+
+	it('a change made while another is saving says to try again', async () => {
+		const store = await open();
+		store.busy = 'check';
+		await fireEvent.click(screen.getByTestId('updates-adv-reindex'));
+		await until(() =>
+			expect(screen.getByTestId('updates-adv-reason').textContent).toContain('still being saved')
+		);
+		expect(sent).toEqual([]);
 	});
 });

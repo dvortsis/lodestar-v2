@@ -18,7 +18,7 @@ export interface Settings {
 }
 
 export type Failure =
-	'load' | 'check' | 'pause' | 'skip' | 'clear' | 'setting' | 'locked' | 'stale';
+	'load' | 'check' | 'pause' | 'skip' | 'clear' | 'setting' | 'locked' | 'stale' | 'busy';
 
 const SECTION = { path: { section: 'updates' } };
 
@@ -139,7 +139,11 @@ export class UpdatesStore {
 	}
 
 	private async run(name: string, kind: Failure, f: () => Promise<Status | void>) {
-		if (this.busy) return false;
+		if (this.busy) {
+			this.error = 'busy';
+			this.reason = '';
+			return false;
+		}
 		this.busy = name;
 		this.error = null;
 		this.reason = '';

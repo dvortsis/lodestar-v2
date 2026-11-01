@@ -126,7 +126,6 @@
 	"settings_updates_clear_body": "The list of past updates is deleted. Installed versions aren't affected.",
 	"settings_updates_clear_action": "Clear history",
 	"settings_updates_adv_heading": "Advanced",
-	"settings_updates_adv_loading": "Loading advanced settings",
 	"settings_updates_adv_channel": "Channel",
 	"settings_updates_adv_channel_stable": "Stable",
 	"settings_updates_adv_channel_stable_help": "Version releases. The default.",
@@ -150,5 +149,7 @@
 	"settings_updates_adv_notify_help": "Saved now. Messages are sent once notification channels are set up.",
 	"settings_updates_adv_notify_before": "Before an automatic install",
 	"settings_updates_adv_notify_after": "After an update",
-	"settings_updates_adv_notify_failure": "When an update fails or is rolled back"
+	"settings_updates_adv_notify_failure": "When an update fails or is rolled back",
+	"settings_updates_error_busy": "Another change is still being saved. Try again in a moment.",
+	"settings_updates_adv_switch_back": "Lodestar never goes back to an older version, so moving to {channel} waits for the next release on that channel."
 }

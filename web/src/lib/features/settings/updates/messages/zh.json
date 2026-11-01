@@ -126,7 +126,6 @@
 	"settings_updates_clear_body": "过去的更新列表将被删除。已安装的版本不受影响。",
 	"settings_updates_clear_action": "清除历史记录",
 	"settings_updates_adv_heading": "高级",
-	"settings_updates_adv_loading": "正在加载高级设置",
 	"settings_updates_adv_channel": "渠道",
 	"settings_updates_adv_channel_stable": "稳定版",
 	"settings_updates_adv_channel_stable_help": "正式版本发布。默认选项。",
@@ -150,5 +149,7 @@
 	"settings_updates_adv_notify_help": "已保存。设置好通知渠道后才会发送消息。",
 	"settings_updates_adv_notify_before": "自动安装之前",
 	"settings_updates_adv_notify_after": "更新之后",
-	"settings_updates_adv_notify_failure": "更新失败或被回滚时"
+	"settings_updates_adv_notify_failure": "更新失败或被回滚时",
+	"settings_updates_error_busy": "另一项更改仍在保存。请稍后再试。",
+	"settings_updates_adv_switch_back": "Lodestar 不会回退到旧版本，所以切换到{channel}后会等待该渠道的下一个版本。"
 }

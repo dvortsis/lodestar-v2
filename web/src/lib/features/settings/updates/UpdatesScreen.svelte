@@ -165,7 +165,8 @@
 		clear: m.settings_updates_error_clear,
 		setting: m.settings_updates_error_setting,
 		locked: m.settings_updates_error_locked,
-		stale: m.settings_updates_error_stale
+		stale: m.settings_updates_error_stale,
+		busy: m.settings_updates_error_busy
 	};
 
 	/** The confirmation: Cancel and Esc send nothing. */
