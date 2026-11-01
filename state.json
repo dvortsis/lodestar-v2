@@ -2045,14 +2045,16 @@
       "note": "dispatched run 41283672405 green; fixture jobs ~7.8 min"
     },
     "X-flows-door-2": {
-      "status": "review-ready",
+      "status": "merged",
       "session": "session_01MMjhn8oozjo15ZdpPkcC1u",
       "model": "opus",
       "brief": "briefs/X-flows-door-2.md",
       "launched_at": "2026-11-01T06:58Z",
       "review": "runner MERGE at 0c97ae90 (safety checked: adult on via confirm; off = same PATCH)",
       "pr": 325,
-      "head": "0c97ae90"
+      "head": "0c97ae90",
+      "merge_sha": "90e18103",
+      "merged_at": "2026-11-01T08:04Z"
     },
     "X-flake-security-test": {
       "status": "building",
@@ -3001,7 +3003,8 @@
     "Discover (#322): j/k silently do nothing if the after-mount key-registry import fails",
     "Possible flake: e2e/insights-print.routes.test.ts:57 \"one page on A4 and Letter at 1024 px\" [core] printed 2 Letter pages on #322 b58f4ea (06:42Z), outside the diff; passed on #320 minutes earlier. Runner re-ran once. If it recurs: likely content- or time-dependent height (freeze clock / fixed fixture), fix once.",
     "e2e fixture specs (#323): the 5 fixture files use exactly the 5-login burst; a sixth fixture file needs a shared storageState sign-in (docs/decisions/2026-11-01-X-e2e-fixture-ci.md)",
-    "Updates (#324 optional): journal.rs:172 unparsable version returns kept=true (fail-closed would be false); GET /updates runs snapshots::list each call via rollback_target (cache per status call if polled heavily); tests for not_supervised and restart-pending busy reasons"
+    "Updates (#324 optional): journal.rs:172 unparsable version returns kept=true (fail-closed would be false); GET /updates runs snapshots::list each call via rollback_target (cache per status call if polled heavily); tests for not_supervised and restart-pending busy reasons",
+    "Flows guard (#325): a direct import() of filters/flows-root.ts (bypassing flows-door) is not caught by the first-load guard; extend the guard to flag any importer of flows-root/flows-adult other than flows-door.ts"
   ],
   "main_health": [
     "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
