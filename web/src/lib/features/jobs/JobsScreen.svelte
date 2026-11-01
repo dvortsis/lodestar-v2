@@ -30,9 +30,10 @@
 	let jobs = $state.raw<Job[]>([]);
 	/** The last refresh failed: the rows may be out of date. */
 	let stale = $state(false);
-	/** Jobs with a control request in flight, and the reason a request was refused. */
+	/** Jobs with a control request in flight. */
 	let busy = $state<Record<number, JobControl | undefined>>({});
-	let refused = $state<Record<number, string | undefined>>({});
+	/** Why the last control was refused: outside the list, so it outlives the row. */
+	let refusal = $state('');
 	let announcement = $state('');
 	/** Bumped by every control answer, so a list fetched before it can't overwrite it. */
 	let epoch = 0;
@@ -59,6 +60,9 @@
 		done: 'success',
 		failed: 'error'
 	};
+	/** Whole percent, rounded down so a running job never shows 100% early. */
+	const percent = (share: number) =>
+		formatPercent(Math.floor(share * 100 + 1e-6) / 100, locale(), 0);
 	const count = (n: number) => formatCount(n, locale());
 	const rate = (r: number) =>
 		m.jobs_rate({
@@ -94,8 +98,11 @@
 		await tick();
 		if (!alive || (document.activeElement && document.activeElement !== document.body)) return;
 		const row = document.getElementById(rowId);
+		// A row that has expired is gone: focus the page heading rather than let it fall to <body>.
 		(
-			row?.querySelector<HTMLElement>('[data-control]') ?? row?.querySelector<HTMLElement>('h2')
+			row?.querySelector<HTMLElement>('[data-control]') ??
+			row?.querySelector<HTMLElement>('h2') ??
+			document.getElementById('jobs-title')
 		)?.focus();
 	}
 
@@ -127,7 +134,7 @@
 	async function control(j: Job, c: JobControl) {
 		if (busy[j.id]) return;
 		busy[j.id] = c;
-		refused[j.id] = undefined;
+		refusal = '';
 		try {
 			const path = `/jobs/{id}/${c}` as const;
 			const next = await api.post(path, { path: { id: j.id }, body: {} });
@@ -147,8 +154,13 @@
 		} catch (e) {
 			if (isAbort(e) || !alive) return;
 			const row = focusedRow();
-			refused[j.id] = m.jobs_action_failed({
-				reason: e instanceof ApiError ? e.message : String(e)
+			refusal = m.jobs_action_failed({
+				reason:
+					e instanceof ApiError && e.status !== 0
+						? e.message
+						: e instanceof ApiError
+							? m.jobs_unreachable()
+							: String(e)
 			});
 			// The job may have finished or expired meanwhile: show what the server has now.
 			void refresh().then(() => restoreFocus(row));
@@ -166,7 +178,11 @@
 		alive = true;
 		void refresh();
 		const onVisible = () => {
-			if (!document.hidden) void refresh();
+			if (document.hidden) {
+				// Nothing polls while hidden: drop the timer and any request still out.
+				clearTimeout(timer);
+				ctl?.abort();
+			} else void refresh();
 		};
 		document.addEventListener('visibilitychange', onVisible);
 		return () => {
@@ -195,6 +211,9 @@
 {:else}
 	{#if stale}
 		<Banner kind="warning"><span data-testid="jobs-stale">{m.jobs_refresh_error()}</span></Banner>
+	{/if}
+	{#if refusal}
+		<p role="alert" class="text-small text-error" data-testid="jobs-refused">{refusal}</p>
 	{/if}
 	{#if jobs.length === 0}
 		<EmptyState
@@ -228,11 +247,7 @@
 							<span>{m.jobs_field_progress()}</span>
 							<span data-testid="job-{j.id}-progress">
 								{progressText(j)}{#if share !== null}
-									({j.total_approx ? '≈' : ''}{formatPercent(
-										Math.floor(share * 100) / 100,
-										locale(),
-										0
-									)}){/if}
+									({j.total_approx ? '≈' : ''}{percent(share)}){/if}
 							</span>
 						</div>
 						<progress
@@ -255,7 +270,9 @@
 							{/if}
 							{#if j.eta_s !== null}
 								<dt class="text-muted-text">{m.jobs_field_eta()}</dt>
-								<dd data-testid="job-{j.id}-eta">{formatSpan(j.eta_s, locale())}</dd>
+								<dd data-testid="job-{j.id}-eta">
+									{j.total_approx ? '≈' : ''}{formatSpan(j.eta_s, locale())}
+								</dd>
 							{/if}
 						{/if}
 						<dt class="text-muted-text">{m.jobs_field_started()}</dt>
@@ -286,11 +303,6 @@
 					{/if}
 					{#if j.error}
 						<p class="text-small text-error" data-testid="job-{j.id}-error">{j.error.message}</p>
-					{/if}
-					{#if refused[j.id]}
-						<p role="alert" class="text-small text-error" data-testid="job-{j.id}-refused">
-							{refused[j.id]}
-						</p>
 					{/if}
 
 					{#if controls(j).length}

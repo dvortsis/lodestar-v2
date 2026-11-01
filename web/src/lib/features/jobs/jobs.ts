@@ -17,9 +17,11 @@ export const processed = (j: Job): number => j.done + j.skipped;
 
 /** 0–1, or null while the total is unknown. */
 export function ratio(j: Job): number | null {
+	// Only a job that is done is whole: a running one stays under 100%, whatever its estimate.
+	if (j.state === 'done') return 1;
 	if (j.total === null) return null;
-	if (j.total === 0) return j.finished_at === null ? 0 : 1;
-	return Math.min(1, processed(j) / j.total);
+	if (j.finished_at !== null) return j.total === 0 ? 1 : Math.min(1, processed(j) / j.total);
+	return j.total === 0 ? 0 : Math.min(0.99, processed(j) / j.total);
 }
 
 /** The controls the server will accept for this job right now. */

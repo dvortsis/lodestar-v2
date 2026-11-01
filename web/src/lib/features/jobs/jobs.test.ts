@@ -38,8 +38,16 @@ describe('ratio and processed', () => {
 	it('is null while the total is unknown', () => {
 		expect(ratio(job({ done: 3 }))).toBeNull();
 	});
-	it('never passes 1', () => {
-		expect(ratio(job({ done: 12, total: 10 }))).toBe(1);
+	it('stays under 100% while running, even past an estimate that was too low', () => {
+		expect(ratio(job({ done: 12, total: 10, total_approx: true }))).toBe(0.99);
+		expect(ratio(job({ done: 999, total: 1000 }))).toBe(0.99);
+	});
+	it('follows an estimate that was too high up to the end', () => {
+		expect(ratio(job({ done: 300, total: 1000, total_approx: true }))).toBe(0.3);
+		expect(ratio(job({ done: 300, total: 1000, state: 'done', finished_at: 5 }))).toBe(1);
+	});
+	it('caps a finished, not done, job at 1', () => {
+		expect(ratio(job({ done: 12, total: 10, state: 'failed', finished_at: 5 }))).toBe(1);
 	});
 	it('handles an empty total', () => {
 		expect(ratio(job({ total: 0 }))).toBe(0);

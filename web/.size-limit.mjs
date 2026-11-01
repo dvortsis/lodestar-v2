@@ -216,7 +216,9 @@ const bodyMaps = {
 	InsightsScreen: ['insights'],
 	// Security reads no section map: secure cookies is a status line, not an engine field.
 	SecurityScreen: [],
-	LoggingScreen: ['logging']
+	LoggingScreen: ['logging'],
+	// Jobs reads no settings section.
+	JobsScreen: []
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -337,7 +339,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates)|filters)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates)|filters|jobs)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -1154,7 +1156,7 @@ export default [
 	// icon; those now load after the first view, so every view has ≥ 1.3 KB headroom.
 	// runner §2.26, S-filters-2c: Filters & Safety keeps its −2.43 KB (the change flow loads on the
 	// first change, through the flows' door): measured 30.54 KB, limit = measured + ~10% of the cut.
-	// SRC-16: the Jobs screen's first view measured 27.57 KB, limit = measured + ~3.4%.
+	// SRC-16: the Jobs screen's first view measured 27.59 KB, limit = measured + ~3.3%.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,

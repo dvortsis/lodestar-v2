@@ -95,7 +95,7 @@ describe('JobsScreen', () => {
 		get.mockResolvedValue({ jobs: [job({ state: 'done', finished_at: 1_700_000_100 })] });
 		await fireEvent.click(screen.getByTestId('job-3-cancel'));
 		await wait(() => expect(screen.getByTestId('job-3-state').textContent).toBe('Done'));
-		expect(screen.getByTestId('job-3-refused').textContent).toContain('already finished');
+		expect(screen.getByTestId('jobs-refused').textContent).toContain('already finished');
 	});
 
 	it('shows a failed job’s error and a truncated export', async () => {
@@ -162,6 +162,7 @@ describe('JobsScreen', () => {
 			await fireEvent.click(screen.getByTestId('job-3-cancel'));
 			await wait(() => expect(screen.getByTestId('job-3-state').textContent).toBe('Cancelling'));
 			late({ jobs: [job()] });
+			await vi.advanceTimersByTimeAsync(0);
 			expect(screen.getByTestId('job-3-state').textContent).toBe('Cancelling');
 			get.mockResolvedValue({ jobs: [job({ state: 'cancelled', finished_at: 1_700_000_100 })] });
 			await vi.advanceTimersByTimeAsync(2100);
@@ -184,5 +185,59 @@ describe('JobsScreen', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('keeps the reason and focuses the heading when the refused job has expired', async () => {
+		get.mockResolvedValueOnce({ jobs: [job()] });
+		post.mockRejectedValue(new ApiError(404, 'job_not_found', "There's no such job."));
+		render(JobsScreen);
+		await wait(() => expect(screen.getByTestId('job-3-pause')).toBeTruthy());
+		screen.getByTestId('job-3-pause').focus();
+		get.mockResolvedValue({ jobs: [] });
+		await fireEvent.click(screen.getByTestId('job-3-pause'));
+		await wait(() => expect(screen.getByTestId('jobs-empty')).toBeTruthy());
+		expect(screen.getByTestId('jobs-refused').textContent).toContain('no such job');
+		await wait(() => expect(document.activeElement).toBe(document.getElementById('jobs-title')));
+	});
+
+	it('says in the UI language when the server can not be reached', async () => {
+		get.mockResolvedValueOnce({ jobs: [job()] });
+		post.mockRejectedValue(new ApiError(0, 'network', 'Failed to fetch'));
+		render(JobsScreen);
+		await wait(() => expect(screen.getByTestId('job-3-pause')).toBeTruthy());
+		await fireEvent.click(screen.getByTestId('job-3-pause'));
+		await wait(() =>
+			expect(screen.getByTestId('jobs-refused').textContent).toBe(
+				"That didn't work: Couldn't reach Lodestar."
+			)
+		);
+	});
+
+	it('does not poll in a hidden tab, and refreshes once when it shows again', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		let hidden = false;
+		const spy = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+		try {
+			get.mockResolvedValue({ jobs: [job()] });
+			render(JobsScreen);
+			await wait(() => expect(screen.getByTestId('job-3')).toBeTruthy());
+			hidden = true;
+			document.dispatchEvent(new Event('visibilitychange'));
+			const calls = get.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(get.mock.calls.length).toBe(calls);
+			hidden = false;
+			document.dispatchEvent(new Event('visibilitychange'));
+			await wait(() => expect(get.mock.calls.length).toBe(calls + 1));
+		} finally {
+			spy.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it('marks the time left of an estimated total with ≈', async () => {
+		get.mockResolvedValue({ jobs: [job({ total_approx: true })] });
+		render(JobsScreen);
+		await wait(() => expect(screen.getByTestId('job-3-eta').textContent).toBe('≈1.5 min'));
 	});
 });

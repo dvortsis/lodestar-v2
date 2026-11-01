@@ -4,7 +4,7 @@
 	"jobs_purpose": "正在运行或刚刚结束的导出和导入。结束的任务会在此保留 10 分钟。",
 	"jobs_loading": "正在加载任务…",
 	"jobs_load_error": "无法加载任务。",
-	"jobs_refresh_error": "无法刷新，显示的内容可能已过期。",
+	"jobs_refresh_error": "无法刷新。显示的内容可能已过期。",
 	"jobs_retry": "重试",
 	"jobs_empty_title": "目前没有任务",
 	"jobs_empty_text": "导出和导入在运行期间以及结束后的 10 分钟内会显示在这里。",
@@ -23,7 +23,7 @@
 	"jobs_progress_approx": "{read} / ≈{total}",
 	"jobs_progress_unknown": "已处理 {read}",
 	"jobs_field_progress": "进度",
-	"jobs_field_done": "已完成",
+	"jobs_field_done": "已写入",
 	"jobs_field_skipped": "已跳过",
 	"jobs_field_rate": "速度",
 	"jobs_field_eta": "剩余时间",
@@ -41,5 +41,6 @@
 	"jobs_export_details": "{format} 导出，最多 {cap} 行",
 	"jobs_export_truncated": "已达到上限：文件只包含前 {cap} 行。",
 	"jobs_action_failed": "操作未成功：{reason}",
-	"jobs_announce": "{kind} #{id}：{state}"
+	"jobs_announce": "{kind} #{id}：{state}",
+	"jobs_unreachable": "无法连接到 Lodestar。"
 }

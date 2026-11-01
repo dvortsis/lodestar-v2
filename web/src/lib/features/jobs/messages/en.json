@@ -23,7 +23,7 @@
 	"jobs_progress_approx": "{read} of ≈{total}",
 	"jobs_progress_unknown": "{read} so far",
 	"jobs_field_progress": "Progress",
-	"jobs_field_done": "Done",
+	"jobs_field_done": "Written",
 	"jobs_field_skipped": "Skipped",
 	"jobs_field_rate": "Speed",
 	"jobs_field_eta": "Time left",
@@ -41,5 +41,6 @@
 	"jobs_export_details": "{format} export, up to {cap} rows",
 	"jobs_export_truncated": "Stopped at the limit: the file holds the first {cap} rows.",
 	"jobs_action_failed": "That didn't work: {reason}",
-	"jobs_announce": "{kind} #{id}: {state}"
+	"jobs_announce": "{kind} #{id}: {state}",
+	"jobs_unreachable": "Couldn't reach Lodestar."
 }
