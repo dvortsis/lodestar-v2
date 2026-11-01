@@ -3289,6 +3289,10 @@
     {
       "t": "2026-11-01T19:45Z",
       "event": "merged #350 FX-6-I9 stage 1 (6ef00355; all 28 checks green incl windows). G-m5 EXIT MET. Opened #352 (runner, G-m5 decisions file). Dispatched e2e.yml on main (all-themes) as exit evidence; merge #352 after it is green. Launched F-filter-load-fail-closed (Opus, session_01MMjhnAvepJm7UgCAppGN9s). Slots: appearance-undo, S-doc-shots, fail-closed (+ runner #352)."
+    },
+    {
+      "t": "2026-11-01T20:00Z",
+      "event": "#353 X-appearance-undo d6c1fc0f: review fixes in (saved/was split; ThemePicker effect.pre); runner MERGE on green. #354 S-doc-shots runner MERGE on green. #352 waits all-themes dispatch (check-in 20:20). Settings section 44.4/45 kB (0.6 kB headroom) noted."
     }
   ],
   "reviews": {
