@@ -39,7 +39,7 @@ export function registerDetailCommands(): Promise<void> {
 			}
 		});
 		// `s` registers itself from send.ts once a download client is known.
-		void import('./send').then((mod) => mod.clientName());
+		void import('./send').then((mod) => mod.clientName(), failed);
 	});
 	return registered;
 }

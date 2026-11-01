@@ -23,17 +23,17 @@
 	let sendLabel = $state<string | null>(null);
 	function more(event: MouseEvent) {
 		event.stopPropagation();
-		void Promise.all([
-			import('$lib/ui/overlays/Menu.svelte'),
-			import('$lib/features/detail/send').then(
-				(s) => s.clientName(),
-				() => null
-			)
-		]).then(([mod, label]) => {
-			sendLabel = label;
+		void import('$lib/ui/overlays/Menu.svelte').then((mod) => {
 			Menu = mod.default;
 			open = true;
 		});
+		// The Send item joins when the client's name arrives; the menu doesn't wait for it.
+		void import('$lib/features/detail/send')
+			.then((s) => s.sendLabel())
+			.then(
+				(label) => (sendLabel = label),
+				() => {}
+			);
 	}
 
 	function copy(event: MouseEvent) {

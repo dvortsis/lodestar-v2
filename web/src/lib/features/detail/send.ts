@@ -46,7 +46,11 @@ export function clientName(): Promise<string | null> {
 			known = undefined; // offline or signed out: the next ask tries again
 			return null;
 		})
-		.then((name) => (name && registerKey(), name));
+		.then((name) => {
+			if (name) registerKey();
+			else known = undefined; // none saved yet: Settings may add one, so ask again next time
+			return name;
+		});
 	return known;
 }
 

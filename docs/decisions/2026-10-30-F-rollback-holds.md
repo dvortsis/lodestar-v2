@@ -11,6 +11,7 @@ Builds on `2026-10-30-F-rollback-journal.md` (#241). It closes the gap that file
   - a floor-marked list's pending removals (`floor.pending:list:<id>`) come along under the copy's id, and stay blocked until they're settled in the app.
 
   A copy before V6 has no subscription tables. There, the entries of the store's floor-marked content lists, both applied and pending removal, are added as imported CS-1 entries instead.
+
 - **Conflicts keep the stronger hold, then the later one.**
   - A CS-1 entry is merged as `add_cs_hashes` merges it: your own confirmation or report outranks an import, and its time stays.
   - For tombstone and quarantine rows, the floor's rules (`CS-1a`, `CS-1b`, `CS-8a`) outrank an adult hold, and an adult hold outranks any other. An adult hold is the one filtering can't rebuild, and an adult hold's expiry never replaces a floor tombstone. Between equals, the later `at` wins, and the current store's on a tie. The whole row comes from the winner.
@@ -22,7 +23,7 @@ Builds on `2026-10-30-F-rollback-journal.md` (#241). It closes the gap that file
 - **Limits, inherent to restoring an older store, for the owner's flag:**
   - **Rolling forward from a store before V12 can bring back what it deleted (O2).** Such a store keeps no deletion journal, so rolling it forward (undoing a rollback to a schema before V12, say) has no record of what it deleted since the copy it restores was taken. Its holds still apply and are carried.
   - **A rollback to a schema before V4 drops every hold.** That copy has no hold tables, and nothing is added to its schema: the held torrents still leave it, but the release it belongs to has no content filter, and once it's upgraded again its hold tables start empty. Carrying the holds after that upgrade would need the next start to know a rollback happened, so it's raised with the runner as a follow-up.
-  - **Your other filter settings go back to the snapshot's:** your rules, the override list, exceptions and *Always allow* (core switches merge, above). An exception deleted since can be back. These aren't merged: which side is stronger depends on the setting (an exception loosens, a rule tightens), and merging them is a design of its own. The user guide's rollback page tells the user to check Filters after a rollback; that rides with the v0.5.1 docs pass.
+  - **Your other filter settings go back to the snapshot's:** your rules, the override list, exceptions and _Always allow_ (core switches merge, above). An exception deleted since can be back. These aren't merged: which side is stronger depends on the setting (an exception loosens, a rule tightens), and merging them is a design of its own. The user guide's rollback page tells the user to check Filters after a rollback; that rides with the v0.5.1 docs pass.
 - **Tests:**
   - a rollback with holds recorded after the snapshot keeps every one, and the restored store's filter state (which intake refuses from at start) refuses the reported hash and holds the tombstoned and quarantined ones;
   - each conflict rule is pinned, the time tiebreak included, as are signatures and core switches;
