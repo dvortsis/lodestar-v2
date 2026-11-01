@@ -20,7 +20,7 @@ export function registerDetailCommands(): Promise<void> {
 			when,
 			run: () => {
 				const hash = target();
-				if (hash) void import('./magnet').then((mod) => mod.copyMagnet({ hash }));
+				if (hash) void import('./magnet').then((mod) => mod.copyMagnet({ hash })).catch(() => {});
 			}
 		});
 		keys.register({
@@ -31,7 +31,7 @@ export function registerDetailCommands(): Promise<void> {
 			when,
 			run: () => {
 				const hash = target();
-				if (hash) void import('./magnet').then((mod) => mod.openMagnet({ hash }));
+				if (hash) void import('./magnet').then((mod) => mod.openMagnet({ hash })).catch(() => {});
 			}
 		});
 	});

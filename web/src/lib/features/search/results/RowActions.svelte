@@ -30,7 +30,9 @@
 
 	function copy(event: MouseEvent) {
 		event.stopPropagation(); // not the row's activation (it would open the drawer)
-		void import('$lib/features/detail/magnet').then((mod) => mod.copyMagnet({ hash: hit.hash }));
+		void import('$lib/features/detail/magnet')
+			.then((mod) => mod.copyMagnet({ hash: hit.hash }))
+			.catch(() => {});
 	}
 
 	async function select(id: string) {

@@ -75,7 +75,8 @@
 
 	onMount(() => {
 		// The key commands load after mount; they pull in the magnet code only when one runs.
-		void import('./commands').then((mod) => mod.registerDetailCommands());
+		// A failed chunk load only leaves the shortcuts unregistered; the page works without them.
+		void import('./commands').then((mod) => mod.registerDetailCommands()).catch(() => {});
 		if (typeof matchMedia !== 'function') return;
 		const lists = (Object.entries(queries) as [keyof typeof queries, string][]).map(
 			([name, q]) => [name, matchMedia(q)] as const

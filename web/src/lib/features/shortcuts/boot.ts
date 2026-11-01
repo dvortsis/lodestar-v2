@@ -136,7 +136,7 @@ export function startShortcuts(): () => void {
 			section: () => m.shortcuts_section_general(),
 			keys: [],
 			keywords: ['keyboard', 'shortcuts', 'wcag'],
-			run: () => void import('./toggle').then((t) => t.toggleSingleKeys())
+			run: () => void import('./toggle').then((t) => t.toggleSingleKeys()).catch(() => {})
 		}),
 		onceLive(() => {
 			fetchOnce();

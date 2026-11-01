@@ -192,7 +192,9 @@
 			() => {}
 		);
 		// `c` and `o` work with the drawer closed: S-detail's commands act on the focused row.
-		void import('$lib/features/detail/commands').then((mod) => mod.registerDetailCommands());
+		void import('$lib/features/detail/commands')
+			.then((mod) => mod.registerDetailCommands())
+			.catch(() => {});
 		let offKeys: (() => void) | undefined;
 		void Promise.all([import('$lib/keys'), import('./commands')]).then(([{ keys }, cmd]) => {
 			if (gone) return;

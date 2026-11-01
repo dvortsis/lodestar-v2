@@ -22,7 +22,10 @@
 		};
 	});
 	onMount(
-		() => void import('$lib/features/detail/commands').then((mod) => mod.registerDetailCommands())
+		() =>
+			void import('$lib/features/detail/commands')
+				.then((mod) => mod.registerDetailCommands())
+				.catch(() => {})
 	);
 </script>
 

@@ -1,8 +1,12 @@
 // @vitest-environment node
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
 	BARREL,
 	findStrays,
+	modulesIn,
 	preloadedJs,
 	routeNodes,
 	routePreloads,
@@ -162,5 +166,22 @@ describe('preloadedJs', () => {
 			preloadedJs('const __vite__mapDeps=(i,m,d=(m.f||(m.f=["../assets/0.b.css"])))=>0;')
 		).toEqual([]);
 		expect(preloadedJs('import "x";')).toEqual([]);
+	});
+});
+
+describe('modulesIn', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'first-load-'));
+	const graph = join(dir, 'chunk-graph.json');
+	const manifest = join(dir, 'manifest.json');
+	it('is empty before any build exists', () => {
+		expect(modulesIn(['build/a.js'], graph, manifest)).toEqual([]);
+	});
+	it('throws when the build has a manifest but no chunk graph', () => {
+		writeFileSync(manifest, '{}');
+		expect(() => modulesIn(['build/a.js'], graph, manifest)).toThrow(/no chunk graph/);
+	});
+	it('reads the modules of a chunk from the graph', () => {
+		writeFileSync(graph, JSON.stringify({ chunks: { 'a.js': { modules: ['/x/web/src/a.ts'] } } }));
+		expect(modulesIn(['build/a.js'], graph, manifest)).toHaveLength(1);
 	});
 });
