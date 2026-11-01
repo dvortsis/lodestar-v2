@@ -956,7 +956,7 @@
       "pr2": 310
     },
     "S-doc-shots": {
-      "status": "pending",
+      "status": "building",
       "model": "sonnet",
       "session": null,
       "pr": null,
@@ -3276,6 +3276,10 @@
     {
       "t": "2026-11-01T19:25Z",
       "event": "merged #351 gate-file-cold (6551de9c); archived. Open: #350 (CI on 661f9e40), X-appearance-undo (building). 2 slots free; F-filter-load-fail-closed waits for #350."
+    },
+    {
+      "t": "2026-11-01T19:30Z",
+      "event": "Launched S-doc-shots (Sonnet). S-blocklists not ready: no subscriptions connect/remove/accept API yet (only /filters/strictness) -> needs B-subscriptions-api (Opus + /security-review: weakening = password + effect warning; fetch limits exist in lodestar_filter::lists) before the web slice. Plan after G-m5 closes. 1 slot reserved for F-filter-load-fail-closed (after #350)."
     }
   ],
   "reviews": {
