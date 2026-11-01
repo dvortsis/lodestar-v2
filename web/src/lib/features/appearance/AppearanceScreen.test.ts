@@ -200,3 +200,20 @@ describe('AppearanceScreen', () => {
 		expect(await screen.findByText(/Couldn't load your appearance/)).toBeTruthy();
 	});
 });
+
+describe('Save-Data hint', () => {
+	const hint = /data saver is on/;
+	it('shows under the toggle while Save-Data is on', async () => {
+		vi.stubGlobal('navigator', { ...navigator, connection: { saveData: true } });
+		get.mockResolvedValue(prefs());
+		render(AppearanceScreen);
+		expect(await screen.findByText(hint)).toBeTruthy();
+		vi.unstubAllGlobals();
+	});
+	it('is absent otherwise', async () => {
+		get.mockResolvedValue(prefs());
+		render(AppearanceScreen);
+		await screen.findByText('Show illustrations');
+		expect(screen.queryByText(hint)).toBeNull();
+	});
+});
