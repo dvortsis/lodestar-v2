@@ -3273,7 +3273,14 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-10-31T13:07Z",
-  "open_prs": {},
+  "open_prs": {
+    "336": {
+      "slice": "S-privacy-banner",
+      "head": "594316fa37e72fd02e2b6674717577db9e200e0e",
+      "verdict": "runner MERGE pending CI; Overview +80 B accepted §2.26; carrier GET /insights/overview privacy",
+      "session": "session_01MMjhnATZedJze4kWMUf3Pg"
+    }
+  },
   "merged_log": [
     {
       "pr": 331,
