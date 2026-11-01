@@ -93,10 +93,11 @@ export const NOTICE_ORDER = [
 export type NoticeCode = (typeof NOTICE_ORDER)[number];
 
 /** The notices to show: known codes in order, then `held_in_process`. `rolled_back` is the status's. */
-export function noticesOf(status: Status): (NoticeCode | 'held_in_process')[] {
-	const out: (NoticeCode | 'held_in_process')[] = NOTICE_ORDER.filter((c) =>
-		status.notices.includes(c)
-	);
+export function noticesOf(status: Status): string[] {
+	const known: readonly string[] = [...NOTICE_ORDER, 'rolled_back'];
+	// A code this screen has no words for still shows, so a new server notice is never silent.
+	const unknown = status.notices.filter((c) => !known.includes(c));
+	const out: string[] = [...NOTICE_ORDER.filter((c) => status.notices.includes(c)), ...unknown];
 	const held = status.policy.held_in_process && !out.includes('updater_unreadable');
 	return held ? [...out, 'held_in_process'] : out;
 }

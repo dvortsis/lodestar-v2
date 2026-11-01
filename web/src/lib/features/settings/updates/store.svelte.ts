@@ -83,8 +83,10 @@ export class UpdatesStore {
 		const ticket = this.seq;
 		try {
 			const s = await api.get('/updates');
-			if (ticket === this.seq) this.take(s);
-			this.unavailable = false;
+			if (ticket === this.seq) {
+				this.take(s);
+				this.unavailable = false;
+			}
 		} catch (e) {
 			if (e instanceof ApiError && e.code === 'updates_unavailable') this.unavailable = true;
 			else this.fail('load', e);
@@ -174,7 +176,8 @@ export class UpdatesStore {
 			} catch (e) {
 				if (e instanceof ApiError && e.status === 409) {
 					await this.loadSettings();
-					this.error = e.code === 'stale_revision' ? 'stale' : 'locked';
+					// A reload that failed already said so; keep that rather than hide it.
+					if (this.error === null) this.error = e.code === 'stale_revision' ? 'stale' : 'locked';
 					return;
 				}
 				throw e;

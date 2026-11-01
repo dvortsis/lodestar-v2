@@ -256,8 +256,13 @@
 		{#if status}
 			<div class="flex flex-col gap-3" data-testid="updates-notices">
 				{#each noticesOf(status) as code (code)}
-					<Banner kind="warning" title={notice[code]?.[0]()}>
-						<span data-testid="updates-notice-{code}">{notice[code]?.[1]()}</span>
+					<Banner
+						kind="warning"
+						title={notice[code]?.[0]() ?? m.settings_updates_notice_unknown({ code })}
+					>
+						<span data-testid="updates-notice-{code}"
+							>{notice[code]?.[1]() ?? m.settings_updates_notice_unknown_body()}</span
+						>
 					</Banner>
 				{/each}
 			</div>
@@ -267,11 +272,12 @@
 					{m.settings_updates_status_heading()}
 				</h2>
 				{#if store.step}
+					{@const stepVersion = store.stepVersion ?? status.pending?.version}
 					<div data-testid="updates-progress" role="status">
 						<p class="font-semibold">
-							{m.settings_updates_progress_heading({
-								version: store.stepVersion ?? release?.version ?? status.running.version
-							})}
+							{stepVersion
+								? m.settings_updates_progress_heading({ version: stepVersion })
+								: m.settings_updates_progress_heading_unversioned()}
 						</p>
 						<ol class="flex flex-wrap gap-x-4 gap-y-1">
 							{#each STEPS as s (s)}

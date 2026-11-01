@@ -15,7 +15,10 @@ vi.mock('../form/dialogs', () => ({
 		return asked.answer;
 	}
 }));
-vi.mock('$lib/state/events.svelte', () => ({ events: { on: () => () => {} } }));
+const events = vi.hoisted(() => ({
+	on: vi.fn<(t: string, h: (e: unknown) => void) => () => void>(() => () => {})
+}));
+vi.mock('$lib/state/events.svelte', () => ({ events }));
 vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 
@@ -225,6 +228,8 @@ describe('the Updates screen', () => {
 		expect(mutations().join()).toContain('0.6.0');
 	});
 
+	// TODO(part 2): Install now has no API yet (decisions file, "Slots"). When the button exists,
+	// rewrite this against it: with `trust_damaged` it must not be offered.
 	it('offers no Install now with damaged trust data', async () => {
 		status.releases = [release];
 		status.notices = ['trust_damaged'];
@@ -354,5 +359,37 @@ describe('the Updates screen', () => {
 		await fireEvent.click(await screen.findByTestId('updates-history-clear'));
 		await until(() => expect(asked.count).toBe(1));
 		expect(mutations()).toEqual([]);
+	});
+
+	it('names no version for an install step the server gave none for', async () => {
+		let push: (e: unknown) => void = () => {};
+		events.on.mockImplementation((_t: string, h: (e: unknown) => void) => {
+			push = h;
+			return () => {};
+		});
+		render(UpdatesScreen);
+		await screen.findByTestId('updates-state');
+		push({ state: 'installing', version: null, bytes_done: null, bytes_total: null, error: null });
+		const text = (await screen.findByTestId('updates-progress')).textContent ?? '';
+		expect(text).not.toContain('0.5.2');
+		expect(text).toContain('Installing an update');
+		push({
+			state: 'installing',
+			version: '0.6.0',
+			bytes_done: null,
+			bytes_total: null,
+			error: null
+		});
+		await until(() =>
+			expect(screen.getByTestId('updates-progress').textContent).toContain('0.6.0')
+		);
+	});
+
+	it('shows a notice code it has no words for', async () => {
+		status.notices = ['brand_new_code'];
+		render(UpdatesScreen);
+		expect((await screen.findByTestId('updates-notice-brand_new_code')).textContent).toContain(
+			'no explanation'
+		);
 	});
 });
