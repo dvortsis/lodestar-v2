@@ -54,6 +54,20 @@ describe('withNode', () => {
 	});
 });
 
+describe('rows from queries', () => {
+	it('names season and episode as the query does', () => {
+		expect(rowOf({ op: 'range', field: 'season', lo: 2, hi: null })).toEqual({
+			field: 's',
+			op: '>=',
+			value: '2'
+		});
+		expect(rowOf({ op: 'range', field: 'episode', lo: 3, hi: 3 })!.field).toBe('e');
+	});
+	it('keeps several values of a listed field as the row value', () => {
+		expect(rowOf({ op: 'tag', key: 'type', any: ['movie', 'tv'] })!.value).toBe('movie,tv');
+	});
+});
+
 describe('rows and text fields', () => {
 	it('leaves byte-valued ranges read-only when the server types the field as a size', () => {
 		const find = (n: string) =>

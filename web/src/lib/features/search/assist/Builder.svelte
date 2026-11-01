@@ -30,6 +30,8 @@
 	/** Bumped after an add, so the draft row is a fresh, empty one. */
 	let draftKey = $state(0);
 
+	const textOf = (r: Row) => rowText(r, source.find(r.field)?.type);
+
 	function fail(text: string) {
 		error = text;
 		announce(text);
@@ -41,7 +43,7 @@
 		if (!row.value.trim()) return fail(m.search_assist_builder_empty());
 		try {
 			const parsed = await api.get('/parse', {
-				query: { q: rowText(row, source.find(row.field)?.type) }
+				query: { q: textOf(row) }
 			});
 			// One clause: a value that reads as several (loose words, `|`) is not a row.
 			if (topLevel(parsed.ast).length !== 1) return fail(m.search_assist_builder_failed());
@@ -49,9 +51,7 @@
 			if (index === -1) return fail(m.search_assist_builder_stale());
 			await apply(withNode(ast, index, parsed.ast));
 			if (index === null) draftKey++;
-			announce(
-				m.search_assist_builder_applied({ text: rowText(row, source.find(row.field)?.type) })
-			);
+			announce(m.search_assist_builder_applied({ text: textOf(row) }));
 		} catch (e) {
 			fail(
 				e instanceof ApiError && e.code === 'query_syntax'
@@ -81,16 +81,12 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section class="assist-panel" aria-label={m.search_assist_builder_title()} {onkeydown}>
-	{#if source.status === 'loading'}
-		<p class="assist-note">{m.search_assist_builder_loading()}</p>
-	{:else if source.status === 'error'}
+	{#if source.status === 'error'}
 		<div class="assist-row">
-			<p class="assist-note assist-error assist-grow" role="alert">
-				{m.search_assist_builder_fields_failed()}
-			</p>
+			<p class="assist-note assist-error assist-grow">{m.search_assist_builder_fields_failed()}</p>
 			<Button dense onclick={() => void source.refresh()}>{m.search_assist_builder_retry()}</Button>
 		</div>
-	{:else}
+	{:else if source.status === 'ready'}
 		{#each clauses as clause, i (i)}
 			{@const index = topLevel(ast).indexOf(clause.node)}
 			{@const row = rowOf(clause.node, source.find)}

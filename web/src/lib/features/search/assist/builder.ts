@@ -37,12 +37,14 @@ export function rowOf(node: Ast, find?: (name: string) => Field | undefined): Ro
 		case 'word':
 			return node.field === 'any' ? null : { field: node.field, op: ':', value: node.word };
 		case 'range': {
-			if (find?.(node.field)?.type === 'size') return null; // bytes: a number the user never typed
+			const field =
+				node.field === 'season' || node.field === 'episode' ? node.field[0]! : node.field; // the AST says season, the query s
+			if (find?.(field)?.type === 'size') return null; // bytes: a number the user never typed
 			const { lo, hi } = node;
 			if (lo !== null && hi !== null)
-				return lo === hi ? { field: node.field, op: ':', value: String(lo) } : null;
-			if (lo !== null) return { field: node.field, op: '>=', value: String(lo) };
-			if (hi !== null) return { field: node.field, op: '<=', value: String(hi) };
+				return lo === hi ? { field, op: ':', value: String(lo) } : null;
+			if (lo !== null) return { field, op: '>=', value: String(lo) };
+			if (hi !== null) return { field, op: '<=', value: String(hi) };
 			return null;
 		}
 		default:

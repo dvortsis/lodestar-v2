@@ -43,7 +43,13 @@
 	const spec = $derived(fields.find((f) => f.name === field));
 	const ops = $derived(opsOf(spec));
 	const opt = (value: string) => ({ value, label: value });
-	const valueOptions = $derived(spec?.values?.map(opt));
+	// A fixed list is a Select only for one listed value; several (`movie,tv`) or a share's
+	// `video>=50%` stay text.
+	const valueOptions = $derived(
+		spec?.values && spec.type !== 'share' && (!value || spec.values.includes(value))
+			? spec.values.map(opt)
+			: undefined
+	);
 	const dirty = $derived(field !== row.field || op !== row.op || value !== row.value);
 	const OP_LABEL: Record<Op, () => string> = {
 		':': m.search_assist_op_is,
@@ -84,12 +90,7 @@
 	<label class="assist-field assist-grow"
 		>{m.search_assist_builder_value()}
 		{#if valueOptions}
-			<Select
-				dense
-				bind:value
-				options={valueOptions}
-				placeholder={m.search_assist_builder_choose()}
-			/>
+			<Select dense bind:value options={valueOptions} placeholder="" />
 		{:else}
 			<Input
 				dense

@@ -9,7 +9,6 @@ import type { components } from '$lib/api/schema';
 
 export type Field = components['schemas']['SearchField'];
 export type Op = ':' | '>=' | '<=' | '>' | '<';
-export type FieldsStatus = 'loading' | 'ready' | 'error';
 
 const OPS: Partial<Record<Field['operators'][number], Op>> = {
 	eq: ':',
@@ -19,14 +18,15 @@ const OPS: Partial<Record<Field['operators'][number], Op>> = {
 	lt: '<'
 };
 
-/** The operators a row can offer for a field: the server's, in the Builder's order. */
+/** The operators a row can offer for a field: the server's, in the server's order. */
 export function opsOf(field: Field | undefined): Op[] {
+	if (field?.type === 'share') return [':']; // `cat:video>=50%`: the comparison is in the value
 	const ops = field?.operators.map((o) => OPS[o]).filter((o): o is Op => o !== undefined) ?? [];
 	return ops.length ? ops : [':'];
 }
 
 export function createFields() {
-	let status = $state<FieldsStatus>('loading');
+	let status = $state<'loading' | 'ready' | 'error'>('loading');
 	let list = $state.raw<Field[]>([]);
 	let run = 0;
 
@@ -52,7 +52,7 @@ export function createFields() {
 		get fields() {
 			return list;
 		},
-		find: (name: string) => list.find((f) => f.name === name || f.aliases.includes(name)),
+		find: (name: string) => list.find((f) => f.name === name),
 		/** Asks again each time the Builder opens: the list can't outlive a change of the setting. */
 		ensure: fetchFields,
 		/** Retry after a failure, or refetch. */

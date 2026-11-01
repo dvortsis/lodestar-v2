@@ -193,9 +193,7 @@
 	"search_assist_op_gt": "大于",
 	"search_assist_op_lt": "小于",
 	"search_assist_builder_apply": "应用",
-	"search_assist_builder_loading": "正在加载字段…",
 	"search_assist_builder_fields_failed": "无法加载字段列表。",
-	"search_assist_builder_choose": "请选择…",
 	"search_assist_builder_retry": "重试",
 	"search_assist_builder_stale": "检查期间查询已更改。请重试。"
 }

@@ -75,15 +75,16 @@ describe('operators per type', () => {
 		expect(opsOf(f('date', ['lt', 'gt']))).toEqual(['<', '>']);
 		expect(opsOf(f('keyword', ['eq', 'any_of']))).toEqual([':']);
 		expect(opsOf(undefined)).toEqual([':']);
+		expect(opsOf(f('share', ['gte', 'lte']))).toEqual([':']);
 	});
 });
 
 describe('the field store', () => {
-	it('finds aliases, drops the list while asking again, and retries after a failure', async () => {
+	it('finds a field, drops the list while asking again, and retries after a failure', async () => {
 		const s = createFields();
 		s.ensure();
 		await waitFor(() => expect(s.status).toBe('ready'), LAZY);
-		expect(s.find('age')?.name).toBe('discovered');
+		expect(s.find('discovered')?.aliases).toEqual(['age']);
 		failing = true;
 		const again = s.ensure();
 		expect(s.fields).toEqual([]);
@@ -129,13 +130,22 @@ describe('the Builder', () => {
 		expect(await open()).not.toContain('adult');
 	});
 
+	it('keeps a row with several listed values as text, and a share field as text', async () => {
+		const view = render(Builder, {
+			...props(),
+			ast: { op: 'tag', key: 'type', any: ['movie', 'tv'] } as never
+		});
+		const row = await view.findByRole('group', { name: /movie/i }, LAZY);
+		const value = within(row).getByLabelText('Value') as HTMLInputElement;
+		expect(value.tagName).toBe('INPUT');
+		expect(value.value).toBe('movie,tv');
+	});
+
 	it('says so when the fields fail, offers Retry, and never lists a built-in set', async () => {
 		failing = true;
 		render(Builder, props());
 		const panel = await screen.findByRole('region', { name: 'Query builder' });
-		expect(
-			await within(panel).findByText(/Couldn't load the list of fields/, {}, LAZY)
-		).toBeTruthy();
+		expect(await within(panel).findByText(/Couldn't load the fields/, {}, LAZY)).toBeTruthy();
 		expect(within(panel).queryByLabelText('Field')).toBeNull();
 		failing = false;
 		await fireEvent.click(within(panel).getByRole('button', { name: 'Retry' }));
