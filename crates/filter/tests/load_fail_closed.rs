@@ -44,7 +44,17 @@ fn rank(a: Option<Action>) -> u8 {
 
 /// The decision and classification correction for `name`.
 fn judge(e: &Engine, name: &str, hash: [u8; 20]) -> (Option<(RuleRef, Action)>, Option<bool>) {
-    let f = vec![FileInfo::new(vec![format!("{name}.mkv")], 900 << 20)];
+    judge_file(e, name, &format!("{name}.mkv"), hash)
+}
+
+/// [`judge`] with a file of this name.
+fn judge_file(
+    e: &Engine,
+    name: &str,
+    file: &str,
+    hash: [u8; 20],
+) -> (Option<(RuleRef, Action)>, Option<bool>) {
+    let f = vec![FileInfo::new(vec![file.to_owned()], 900 << 20)];
     let class = classify(name, &f);
     let facts = Facts {
         class: &class,
@@ -296,7 +306,7 @@ fn unreadable_releases_are_skipped_and_listed() {
             (RowKind::Allow, 6)
         ]
     );
-    assert!(broken.unreadable.iter().all(|u| !u.kind.loosening()));
+    assert!(broken.unreadable.iter().all(|u| !u.fails_closed));
     assert_floor_intact(&broken);
 }
 
@@ -365,4 +375,75 @@ fn a_stand_in_never_preempts_a_later_drop() {
         Some((RuleRef::List(3), Action::Drop)),
         "a list's drop stays a drop"
     );
+}
+
+/// An unreadable `unless` makes its rule match more, so the rule must not
+/// stop a later rule, pack or list that the real `unless` would have let
+/// decide (runner's review of #357).
+#[test]
+fn a_rule_without_its_unless_never_preempts_later_layers() {
+    let set = |unless: &str| RuleSet {
+        rules: vec![
+            rule(1, "movie", Action::Flag, Some(unless)),
+            rule(2, "documentary", Action::Drop, None),
+        ],
+        pack_switches: vec![("malware".into(), true)],
+        ..RuleSet::default()
+    };
+    let list = ListLayer {
+        id: 3,
+        action: Action::Drop,
+        hashes: std::sync::Arc::new([[3; 20]].into_iter().collect()),
+    };
+    let mut good = load(&set("documentary"), &[]);
+    let mut broken = load(&set(BAD), &[]);
+    good.set_list(Some(list.clone()), 3);
+    broken.set_list(Some(list), 3);
+    assert_not_looser(&good, &broken);
+    assert!(broken.unreadable.iter().all(|u| u.fails_closed));
+    // A later rule's drop.
+    let name = "Movie documentary 2020";
+    assert_eq!(
+        judge(&good, name, [1; 20]).0,
+        Some((RuleRef::User(2), Action::Drop))
+    );
+    assert_eq!(
+        judge(&broken, name, [1; 20]).0,
+        judge(&good, name, [1; 20]).0
+    );
+    // A list's drop.
+    assert_eq!(
+        judge(&broken, "Movie documentary 2020", [3; 20]).0,
+        Some((RuleRef::User(2), Action::Drop))
+    );
+    assert_eq!(
+        judge(&broken, "Other Movie 2021", [3; 20]).0,
+        Some((RuleRef::List(3), Action::Drop))
+    );
+    // The pack layer is consulted too: its hide is stronger than the
+    // flag, so it applies (the readable rule matched first and flagged).
+    let exe = "Movie.2019.mp4.exe";
+    let at = |e: &Engine| judge_file(e, "Movie 2019", exe, [1; 20]).0;
+    assert_eq!(at(&good), Some((RuleRef::User(1), Action::Flag)));
+    assert_eq!(at(&broken).map(|d| d.1), Some(Action::Hide));
+    // Where nothing later decides, it still applies, now without its
+    // exception.
+    assert_eq!(
+        judge(&broken, "Other Movie 2021", [1; 20]).0,
+        Some((RuleRef::User(1), Action::Flag))
+    );
+}
+
+#[test]
+fn an_unreadable_not_adult_rule_is_skipped_not_failing_closed() {
+    let e = load(
+        &RuleSet::default(),
+        &[(1, BAD.into(), false), (2, BAD.into(), true)],
+    );
+    let closed: Vec<_> = e
+        .unreadable
+        .iter()
+        .map(|u| (u.id, u.fails_closed))
+        .collect();
+    assert_eq!(closed, [(1, false), (2, true)]);
 }

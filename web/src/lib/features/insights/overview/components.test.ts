@@ -213,7 +213,7 @@ describe('Exceptions', () => {
 			]
 		});
 		const row = screen.getByTestId('insights-exception-filter_rows_unreadable');
-		expect(row.textContent).toContain("2 saved filter rows can't be read (C-2, U-3)");
+		expect(row.textContent).toContain("Saved filter rows that can't be read: 2 (C-2, U-3)");
 		expect(
 			screen.getByTestId('insights-exception-filter_rows_unreadable-fix').getAttribute('href')
 		).toBe('/settings/filters');

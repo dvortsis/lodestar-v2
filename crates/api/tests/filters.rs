@@ -2656,3 +2656,63 @@ async fn unreadable_rows_fail_closed_on_apply_until_fixed() {
         (Action::Hide, "cam".into())
     );
 }
+
+/// An unreadable rule stored disabled has no stand-in; enabling it, which
+/// needs no password, makes one at the reload and releases nothing.
+#[tokio::test]
+async fn enabling_an_unreadable_rule_makes_its_stand_in() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let rule = {
+        let mut s = f.api.store.lock().unwrap();
+        let id = s
+            .add_rule("size:>>", Action::Drop.code(), None, None)
+            .unwrap();
+        s.update_rule(&lodestar_store::RuleRow {
+            id,
+            query: "size:>>".into(),
+            action: Action::Drop.code(),
+            enabled: false,
+            shadow_until: None,
+            unless_query: None,
+        })
+        .unwrap();
+        id
+    };
+    let stand_in = |f: &Fixture| {
+        f.api
+            .engine
+            .current()
+            .rules
+            .iter()
+            .find(|r| i64::from(r.id) == rule)
+            .map(|r| (r.action, r.query.clone()))
+    };
+    let (status, _) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "add_rule", "query": "spamword", "action": "flag" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stand_in(&f), None, "disabled: nothing to stand in for");
+    let e = f.api.engine.current();
+    assert_eq!(e.unreadable.len(), 1);
+    assert!(!e.unreadable[0].fails_closed);
+    drop(e);
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "update_rule", "id": rule, "enabled": true }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["released"].is_null(), "{body}");
+    assert_eq!(
+        stand_in(&f),
+        Some((Action::Quarantine, lodestar_search::Node::All))
+    );
+    assert!(f.api.engine.current().unreadable[0].fails_closed);
+}

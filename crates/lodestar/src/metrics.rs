@@ -1620,7 +1620,12 @@ mod tests {
     fn unreadable_filter_rows_render_by_kind() {
         use lodestar_filter::load::{RowKind, Unreadable};
         let mut out = String::new();
-        let row = |kind, id| Unreadable { kind, id, since: 0 };
+        let row = |kind, id| Unreadable {
+            kind,
+            id,
+            since: 0,
+            fails_closed: false,
+        };
         render_filter(
             &mut out,
             &[

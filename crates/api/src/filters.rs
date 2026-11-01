@@ -2497,10 +2497,10 @@ impl FiltersApi {
         };
         // Pending before the removal, as for an added rule.
         let rules = store.class_rules().map_err(internal)?;
-        let q = rules
+        let (q, adult) = rules
             .into_iter()
             .find(|r| r.0 == id)
-            .map(|r| r.1)
+            .map(|r| (r.1, r.2))
             .ok_or_else(missing)?;
         let added = push_pending_requeue(&mut store, &q)?;
         let Some(q) = store.remove_class_rule(id).map_err(internal)? else {
@@ -2512,6 +2512,16 @@ impl FiltersApi {
             }
             return Err(missing());
         };
+        // An unreadable Not adult rule was skipped while loaded, so it
+        // marked nothing: nothing to classify again.
+        if !adult && parse(&q).is_err() {
+            drop_pending_requeue(&mut store, &q)?;
+            self.rules_changed(&mut store)?;
+            return Ok(ClassRuleRemoved {
+                queued: None,
+                truncated: false,
+            });
+        }
         self.rules_changed(&mut store)?;
         drop(store);
         let (queued, truncated) = self.requeue_text(&q, now)?;

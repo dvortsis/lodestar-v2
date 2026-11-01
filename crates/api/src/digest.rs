@@ -508,6 +508,7 @@ fn exception_value(e: &InsightsException) -> Option<String> {
         "s" => Some(format_span(v)),
         "torrents" if v >= 0.0 => Some(format_count(v.round() as u64)),
         "ratio" => Some(format_percent(v, 1)),
+        "rows" if v >= 0.0 => Some(format_count(v.round() as u64)),
         _ => None,
     }
 }
@@ -526,9 +527,10 @@ fn alert(e: &InsightsException) -> Alert {
         ("yield_below_baseline", Some(v)) => {
             format!("Yield is {v} for the newest completed cohorts, below the 7 days before them.")
         }
-        ("filter_rows_unreadable", _) => format!(
-            "Some filter rows can't be read ({}): filtering holds back more until you fix \
-             or remove them in Filters & Safety.",
+        ("filter_rows_unreadable", value) => format!(
+            "Saved filter rows that can't be read: {} ({}). Filtering holds back more until \
+             you fix or remove them in Filters & Safety.",
+            value.as_deref().unwrap_or("some"),
             e.rows.join(", ")
         ),
         ("yield_below_baseline", None) => {

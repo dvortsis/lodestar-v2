@@ -1882,7 +1882,7 @@ fn unreadable_rows(rows: &[lodestar_filter::load::Unreadable]) -> Option<Insight
         },
         kind: "filter_rows_unreadable".into(),
         rows: labels,
-        severity: if rows.iter().any(|u| u.kind.loosening()) {
+        severity: if rows.iter().any(|u| u.fails_closed) {
             Severity::Error
         } else {
             Severity::Warning
@@ -2622,7 +2622,12 @@ mod tests {
     #[test]
     fn unreadable_filter_rows_are_an_exception_until_fixed() {
         use lodestar_filter::load::{RowKind, Unreadable};
-        let row = |kind, id, since| Unreadable { kind, id, since };
+        let row = |kind, id, since| Unreadable {
+            kind,
+            id,
+            since,
+            fails_closed: matches!(kind, RowKind::Rule | RowKind::Unless),
+        };
         assert_eq!(unreadable_rows(&[]), None);
         let e =
             unreadable_rows(&[row(RowKind::Allow, 6, 50), row(RowKind::Override, 2, 40)]).unwrap();

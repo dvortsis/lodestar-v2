@@ -106,13 +106,6 @@ impl RowKind {
             RowKind::Allow => "allow",
         }
     }
-
-    /// Losing a row of this kind would loosen filtering, so it fails
-    /// closed instead of being skipped. The others only release, so
-    /// skipping them tightens.
-    pub fn loosening(self) -> bool {
-        matches!(self, RowKind::Rule | RowKind::Unless | RowKind::ClassRule)
-    }
 }
 
 /// A stored row the engine couldn't read (docs/decisions/
@@ -125,6 +118,11 @@ pub struct Unreadable {
     pub id: i64,
     /// Unix seconds it was first found unreadable, kept across reloads.
     pub since: i64,
+    /// Losing it would have loosened filtering, so it fails closed: an
+    /// enabled rule that withholds, an `unless` of an enabled rule, an Is
+    /// adult classification rule. The rest are skipped, which only
+    /// tightens.
+    pub fails_closed: bool,
 }
 
 impl Unreadable {
@@ -182,17 +180,22 @@ fn fail_closed(
 impl Engine {
     /// Records the rows of `kinds` found unreadable by this load, keeping
     /// when each was first found.
-    fn set_unreadable(&mut self, kinds: &[RowKind], found: Vec<(RowKind, i64)>) {
+    fn set_unreadable(&mut self, kinds: &[RowKind], found: Vec<(RowKind, i64, bool)>) {
         let now = unix_now();
         let before = std::mem::take(&mut self.unreadable);
         let (mut keep, before): (Vec<_>, Vec<_>) =
             before.into_iter().partition(|u| !kinds.contains(&u.kind));
-        for (kind, id) in found {
+        for (kind, id, fails_closed) in found {
             let since = before
                 .iter()
                 .find(|u| u.kind == kind && u.id == id)
                 .map_or(now, |u| u.since);
-            keep.push(Unreadable { kind, id, since });
+            keep.push(Unreadable {
+                kind,
+                id,
+                since,
+                fails_closed,
+            });
         }
         self.unreadable = keep;
     }
@@ -213,7 +216,7 @@ impl Engine {
                 let query = match parse(q) {
                     Ok(query) => query,
                     Err(_) => {
-                        found.push((RowKind::ClassRule, *id));
+                        found.push((RowKind::ClassRule, *id, *adult));
                         notes.push(format!(
                             "classification rule {id} {}: it no longer parses",
                             if *adult { "fails closed" } else { "skipped" }
@@ -253,29 +256,39 @@ impl Engine {
                 let query = parse(&r.query).ok();
                 let unless = r.unless_query.as_deref().map(parse);
                 let action = Action::from_code(r.action);
+                let unless_lost = matches!(unless, Some(Err(_)));
                 let unless = match unless {
                     None => None,
                     Some(Ok(u)) => Some(u),
                     Some(Err(_)) => {
-                        found.push((RowKind::Unless, r.id));
+                        found.push((RowKind::Unless, r.id, r.enabled));
                         notes.push(format!(
-                            "rule U-{} fails closed: its unless no longer parses",
-                            r.id
+                            "rule U-{} {}: its unless no longer parses",
+                            r.id,
+                            if r.enabled { "fails closed" } else { "skipped" }
                         ));
                         None
                     }
                 };
                 match (query, action) {
-                    (Some(query), Some(action)) => Some(UserRule {
-                        id: r.id as u32,
-                        query,
-                        action,
-                        enabled: r.enabled,
-                        shadow_until: r.shadow_until,
-                        unless,
-                    }),
+                    (Some(query), Some(action)) => {
+                        // Without its `unless` it matches more than the
+                        // real rule, so it must not stop the layers after
+                        // it from deciding where the real `unless` would
+                        // have let them: it's a stand-in too.
+                        if unless_lost {
+                            stand_ins.push(r.id as u32);
+                        }
+                        Some(UserRule {
+                            id: r.id as u32,
+                            query,
+                            action,
+                            enabled: r.enabled,
+                            shadow_until: r.shadow_until,
+                            unless,
+                        })
+                    }
                     (query, action) => {
-                        found.push((RowKind::Rule, r.id));
                         let query_read = query.is_some();
                         let rule = fail_closed(
                             r.id as u32,
@@ -285,6 +298,7 @@ impl Engine {
                             r.shadow_until,
                             unless,
                         );
+                        found.push((RowKind::Rule, r.id, rule.is_some()));
                         notes.push(format!(
                             "rule U-{} {}: {}",
                             r.id,
@@ -331,7 +345,7 @@ impl Engine {
                         shadow_until: o.shadow_until,
                     }),
                     _ => {
-                        found.push((RowKind::Override, o.id));
+                        found.push((RowKind::Override, o.id, false));
                         notes.push(format!("override O-{} skipped: unreadable", o.id));
                         None
                     }
@@ -350,7 +364,7 @@ impl Engine {
                         what,
                     }),
                     _ => {
-                        found.push((RowKind::Exception, e.id));
+                        found.push((RowKind::Exception, e.id, false));
                         notes.push(format!("exception {} skipped: unreadable", e.id));
                         None
                     }
@@ -366,7 +380,7 @@ impl Engine {
                     query,
                 }),
                 Err(_) => {
-                    found.push((RowKind::Allow, *id));
+                    found.push((RowKind::Allow, *id, false));
                     notes.push(format!("always-allow {id} skipped: it no longer parses"));
                     None
                 }

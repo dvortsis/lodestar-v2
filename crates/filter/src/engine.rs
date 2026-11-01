@@ -137,8 +137,8 @@ pub struct Engine {
     pub class_rules: ClassRules,
     /// Stored rows the last load couldn't read ([`crate::load`]).
     pub unreadable: Vec<crate::load::Unreadable>,
-    /// Your rules that are stand-ins for unreadable rows, by id: usually
-    /// none.
+    /// Your rules that are stand-ins for unreadable rows, or lost their
+    /// `unless`, by id: usually none.
     pub stand_ins: Vec<u32>,
     pub version: u64,
 }
@@ -327,11 +327,12 @@ impl Engine {
                 shadow.push(d);
                 continue;
             }
-            // A stand-in for an unreadable rule ([`crate::load`]) never
-            // pre-empts what the layers after it would decide: the
-            // stronger of the two applies, so a drop stays a drop.
+            // A stand-in for an unreadable rule, or a rule whose `unless`
+            // was dropped ([`crate::load`]), never pre-empts what the
+            // layers after it would decide: the strongest of them applies,
+            // so a drop stays a drop.
             if self.stand_ins.contains(&r.id) {
-                held = held.or(Some(d));
+                held = stronger_of(held, Some(d));
                 continue;
             }
             return stronger_of(held, Some(d));
@@ -428,12 +429,12 @@ impl Engine {
     }
 }
 
-/// The stronger of a stand-in's decision and the real one; the real one
-/// on a tie, so it's named.
-fn stronger_of(stand_in: Option<Decision>, real: Option<Decision>) -> Option<Decision> {
-    match (stand_in, real) {
-        (Some(s), Some(r)) => Some(if s.action > r.action { s } else { r }),
-        (s, r) => r.or(s),
+/// The stronger of two decisions; the second on a tie (a real rule over
+/// a stand-in, so it's the one named).
+fn stronger_of(first: Option<Decision>, second: Option<Decision>) -> Option<Decision> {
+    match (first, second) {
+        (Some(f), Some(s)) => Some(if f.action > s.action { f } else { s }),
+        (f, s) => s.or(f),
     }
 }
 
