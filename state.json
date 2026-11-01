@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T22:40:00Z",
+  "updated_at": "2026-11-01T22:59:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2184,11 +2184,13 @@
       "notes": "#341"
     },
     "F-filter-load-fail-closed": {
-      "status": "ci",
+      "status": "merged",
       "notes": "Opus + /security-review; session_01MMjhnAvepJm7UgCAppGN9s; stored rule/unless/class rows that fail to parse must fail closed (tightening only)",
       "pr": 357,
       "head": "3eeb08df",
-      "note": "runner MERGE on green; /t raised 21.14→21.20 KB (§2.26) because CI GITHUB_SHA in kit.version.name shifts chunk hashes ~30 B"
+      "note": "runner MERGE on green; /t raised 21.14→21.20 KB (§2.26) because CI GITHUB_SHA in kit.version.name shifts chunk hashes ~30 B",
+      "merge": "736a3028",
+      "session": "session_01MMjhnAvepJm7UgCAppGN9s (archived)"
     },
     "P-v06-sources-plan": {
       "status": "merged",
@@ -2202,19 +2204,22 @@
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
     },
     "B-subscriptions-api": {
-      "status": "queued",
-      "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)"
+      "status": "building",
+      "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)",
+      "model": "opus",
+      "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L",
+      "launched": "2026-11-01T22:58Z"
     },
     "i9-stage2": {
       "status": "queued",
       "notes": "queued: one release after the a..<b parser ships"
     },
     "CR-1b": {
-      "status": "fixing",
+      "status": "ci",
       "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware",
       "pr": 359,
-      "head": "f949e6b4",
-      "note": "Opus review MERGE; runner asked one push: throttled explore prefix_pending fix, rename dht_sample_sent_total, test comment, decisions"
+      "head": "28250fd6",
+      "note": "review fixes verified; runner MERGE on green"
     },
     "X-web-followups-1101f": {
       "status": "merged",
@@ -2226,12 +2231,13 @@
       "session": "session_01MMjhn9y1RFyN62gb7BnJQW (archived)"
     },
     "SRC-0": {
-      "status": "in-review",
+      "status": "changes",
       "model": "opus",
       "session": "session_01MMjhnDAGAiTp7Vw2eCzbsH",
       "launched": "2026-11-01T21:30Z",
       "pr": 360,
-      "head": "200e7a41"
+      "head": "200e7a41",
+      "note": "Opus review CHANGES: plugin caps need floors (blocking); clamp capacity; url host keying (approved url dep); Client::poll; streaming note; polish"
     },
     "F-filter-standin-undo": {
       "status": "queued",
@@ -3896,5 +3902,5 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "Next as slots free: B-subscriptions-api and openapi-example-size (after F-filter-load-fail-closed merges), SRC-6, SRC-16, CR-4 (after CR-1b, both touch the DHT node), S-blocklists (after B-subscriptions-api), i9-stage2 (one release later)."
+  "queue_note": "Next as slots free: openapi-example-size (Sonnet), F-filter-standin-undo (Opus+SR), X-size-deterministic (Sonnet), SRC-6 (Opus+SR), CR-4 (after CR-1b merges), S-blocklists (after B-subscriptions-api), i9-stage2 (one release later)."
 }
