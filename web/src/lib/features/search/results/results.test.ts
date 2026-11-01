@@ -288,4 +288,34 @@ describe('reload keeping the place', () => {
 		expect(r.hits.map((h) => h.hash)).toEqual([1, 3, 4, 5].map((n) => page([n]).hits[0]!.hash));
 		expect(post).toHaveBeenCalledTimes(4);
 	});
+
+	it('asks for the API’s largest pages, so 450 rows take three requests, not nine', async () => {
+		post.mockReset();
+		const ids = (from: number, n: number) => Array.from({ length: n }, (_, i) => from + i);
+		post.mockResolvedValueOnce(page(ids(1, 50), { next_cursor: 'c1' }));
+		const r = createResults();
+		await r.load(query());
+		for (const [from, cursor] of [
+			[51, 'c2'],
+			[101, 'c3'],
+			[151, 'c4'],
+			[201, 'c5'],
+			[251, 'c6'],
+			[301, 'c7'],
+			[351, 'c8'],
+			[401, null]
+		] as const) {
+			post.mockResolvedValueOnce(page(ids(from, 50), { next_cursor: cursor }));
+			await r.loadMore();
+		}
+		expect(r.hits).toHaveLength(450);
+		post.mockReset();
+		post.mockResolvedValueOnce(page(ids(1, 200), { next_cursor: 'a' }));
+		post.mockResolvedValueOnce(page(ids(201, 200), { next_cursor: 'b' }));
+		post.mockResolvedValueOnce(page(ids(401, 49)));
+		await r.reload(450);
+		expect(r.hits).toHaveLength(449);
+		expect(post).toHaveBeenCalledTimes(3);
+		expect(post.mock.calls.map((c) => c[1].body.limit)).toEqual([200, 200, 200]);
+	});
 });

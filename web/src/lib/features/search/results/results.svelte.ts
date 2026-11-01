@@ -20,6 +20,8 @@ type Notice = components['schemas']['SearchNotice'];
 type Recovery = components['schemas']['SearchRecovery'];
 
 export const PAGE = 50;
+/** The API's largest page (`MAX_LIMIT`, crates/api/src/search.rs). */
+const MAX_LIMIT = 200;
 
 /** What the results depend on. `ast` null means no query (the empty state). */
 export interface ResultsQuery {
@@ -74,11 +76,11 @@ export function createResults() {
 	const slot = latest();
 	let current: ResultsQuery | null = null;
 
-	const body = (q: ResultsQuery, after: string | null) => ({
+	const body = (q: ResultsQuery, after: string | null, limit = PAGE) => ({
 		ast: q.ast,
 		q: null,
 		sort: q.sort,
-		limit: PAGE,
+		limit,
 		offset: null,
 		cursor: after,
 		hidden: q.hidden,
@@ -124,12 +126,16 @@ export function createResults() {
 		error = null;
 		inflightKey = key;
 		try {
-			let r = await slot.run((signal) => api.post('/search', { body: body(q, null), signal }));
+			// A reload that keeps the place refetches as many rows as were shown, so the scroll holds:
+			// in the API's largest pages (MAX_LIMIT), not the list's.
+			const size = keep > PAGE ? MAX_LIMIT : PAGE;
+			let r = await slot.run((signal) =>
+				api.post('/search', { body: body(q, null, size), signal })
+			);
 			let rows = r.hits;
-			// A reload that keeps the place refetches as many rows as were shown, so the scroll holds.
 			while (rows.length < keep && r.next_cursor) {
 				const after = r.next_cursor;
-				r = await slot.run((signal) => api.post('/search', { body: body(q, after), signal }));
+				r = await slot.run((signal) => api.post('/search', { body: body(q, after, size), signal }));
 				rows = [...rows, ...r.hits];
 			}
 			hits = rows;

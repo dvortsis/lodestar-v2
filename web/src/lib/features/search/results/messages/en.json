@@ -50,7 +50,8 @@
 	"search_results_announce_one": "1 torrent",
 	"search_results_announce_other": "{count} torrents",
 	"search_results_announce_about": "About {count} torrents",
-	"search_results_blocked": "Blocked. {count} result removed.",
+	"search_results_blocked_one": "Blocked. 1 result removed.",
+	"search_results_blocked_other": "Blocked. {count} results removed.",
 	"search_results_load_more": "Load more torrents",
 	"search_results_end": "End of the results"
 }

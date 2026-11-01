@@ -754,6 +754,8 @@ const tableOnDemand = [/search\/table\/(ResultsTable|ColumnChooser)\.svelte$/];
 const bulkOnDemand = [/search\/bulk\/(BulkBar|RowPick)\.svelte$/, /search\/bulk\/ops\.ts$/];
 const recoverOnDemand = [/search\/results\/Recover\.svelte$/];
 const indexStateOnDemand = [/search\/results\/IndexState\.svelte$/];
+// After a Block applies, the list keeps its place (X-web-polish-1101d): loaded on that press only.
+const settleOnDemand = [/search\/results\/settle\.ts$/];
 const resultsOnDemand = [
 	/features\/detail\//,
 	/features\/search\/(live|cards)\//,
@@ -763,7 +765,8 @@ const resultsOnDemand = [
 	...tableOnDemand,
 	...bulkOnDemand,
 	...recoverOnDemand,
-	...indexStateOnDemand
+	...indexStateOnDemand,
+	...settleOnDemand
 ];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
@@ -802,6 +805,14 @@ const FACETS = [
 const recoverLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/Recover.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
+];
+const settleLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/results/settle.ts', [], false, [
 			...engagedSearch,
 			...resultsLazy
 		])
@@ -1209,6 +1220,7 @@ export default [
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.
 	entry('Search recovery counts (on demand)', recoverLazy, '0.84 KB'),
 	entry('Search index-state banners (on demand)', indexStateLazy, '3.3 KB'),
+	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
 	entry('Facet rail (lazy)', facetsLazy, '16.8 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).

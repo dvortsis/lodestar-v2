@@ -3,7 +3,7 @@
 import { expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import { hit, page } from './fixtures';
-import BlockStub from './BlockStub.svelte';
+import BlockStub from './BlockDialog.test-double.svelte';
 
 vi.setConfig({ testTimeout: 20_000 });
 const post = vi.hoisted(() => vi.fn());
@@ -12,7 +12,9 @@ vi.mock('$lib/api/client', async (original) => ({
 	api: { post }
 }));
 vi.mock('$lib/features/filters/flows-door', async () => ({
-	load: async () => ({ BlockThisDialog: (await import('./BlockStub.svelte')).default })
+	load: async () => ({
+		BlockThisDialog: (await import('./BlockDialog.test-double.svelte')).default
+	})
 }));
 vi.mock('$lib/features/detail/send', () => ({ sendLabel: async () => null, sendHash: vi.fn() }));
 
