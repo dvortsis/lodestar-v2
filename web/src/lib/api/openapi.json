@@ -14910,7 +14910,15 @@
             "description": "The period of equal length just before, in the same shape;\npresent only with `compare=1`, and never for `all`."
           },
           "privacy": {
-            "$ref": "#/components/schemas/PrivacySummary"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PrivacySummary",
+                "description": "Null while nothing identifying is recorded (the Overview then loads\nno banner code)."
+              }
+            ]
           },
           "range": {
             "$ref": "#/components/schemas/InsightsRange"

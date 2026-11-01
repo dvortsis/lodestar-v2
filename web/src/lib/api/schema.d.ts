@@ -5597,7 +5597,7 @@ export interface components {
              *     present only with `compare=1`, and never for `all`.
              */
             previous?: components["schemas"]["PreviousPeriod"];
-            privacy: components["schemas"]["PrivacySummary"];
+            privacy: null | components["schemas"]["PrivacySummary"];
             range: components["schemas"]["InsightsRange"];
             segments: components["schemas"]["Segments"];
             serve: components["schemas"]["Serve"];
