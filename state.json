@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T21:10Z",
+  "updated_at": "2026-11-01T21:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2202,6 +2202,14 @@
     "i9-stage2": {
       "status": "queued",
       "notes": "queued: one release after the a..<b parser ships"
+    },
+    "CR-1b": {
+      "status": "building",
+      "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware"
+    },
+    "X-web-followups-1101f": {
+      "status": "building",
+      "notes": "Sonnet; session_01MMjhn9y1RFyN62gb7BnJQW; Discover j/k import failure, #317 first-visit scene, QueryBar popover flake"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2223,7 +2231,8 @@
     "filter_budget_owner_auth": "2026-10-22 22:20 owner authorised changing the filter budget gate",
     "owner_2026_10_22_rules": "Owner in runner session 22:2x: 'Yes, I agree to 1 and 2'. (1) a check also red on main, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block merge; comment on PR. (2) runner decides refinements of owner decisions that don't reverse/loosen them, weaken security/content-safety, or change owner numbers; record in docs/decisions and flag to owner. Repo doc update (diff in scratchpad/owner-rules.diff) was denied by the permission classifier; owner to commit or allow.",
     "merge_freeze_for_48": "CANCELLED 00:42: no freeze. M4 stops chasing main; reviewers review #48's own diff; one final main merge after reviews, mechanical delta verified by runner.",
-    "push_state_every_wake": "Watchdog trig_0172BngAUoA4NRaRWBYiRWVf (every 4h from 04:12) judges liveness by runner-state commit age: push state.json on every wake, even if nothing changed."
+    "push_state_every_wake": "Watchdog trig_0172BngAUoA4NRaRWBYiRWVf (every 4h from 04:12) judges liveness by runner-state commit age: push state.json on every wake, even if nothing changed.",
+    "slots_always_full": "owner 2026-11-01 21:08Z: keep 4 slice sessions busy whenever unblocked slices exist; runner picks order; holds unchanged (E-v06-workers/companions, E-M6 until soak verdict; no migrations on main before release cut; owner questions wait)"
   },
   "watched_sessions": {
     "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session — owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning §10.10 Settings, §12.1 logging, §12.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
@@ -3383,6 +3392,10 @@
     {
       "t": "2026-11-01T21:10Z",
       "event": "Dashboard reported stale state (updated_at stuck at 15:38Z though ops were pushed). Refreshed updated_at + slice statuses for everything merged today. Runner will set updated_at on every push from now."
+    },
+    {
+      "t": "2026-11-01T21:12Z",
+      "event": "Owner: keep 4 slots full. Launched CR-1b (Opus) + X-web-followups-1101f (Sonnet). 4/4: F-filter-load-fail-closed, P-v06-sources-plan, CR-1b, X-web-followups-1101f. Next when a slot frees: B-subscriptions-api (after fail-closed), openapi-example-size, CR-4 (uTP wiring + IPv6, behind switch)."
     }
   ],
   "reviews": {
