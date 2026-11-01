@@ -7,8 +7,7 @@
 	import IconLock from '~icons/ph/lock-simple';
 	import Radio from '$lib/ui/fields/Radio.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import { createSettingsForm } from '../settings/form';
-	import SettingsForm from '../settings/form/SettingsForm.svelte';
+	import { SettingsForm, createSettingsForm } from '../settings/form/embed';
 
 	const KEY = 'updates.mode';
 	const form = untrack(() =>

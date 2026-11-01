@@ -3,10 +3,12 @@
 	// previews and validation, saved through the same multi-section patch. Skip never reaches this
 	// component's save, so it sends nothing.
 	import { onDestroy, untrack } from 'svelte';
-	import { createSettingsForm } from '../settings/form';
-	import type { FieldKey } from '../settings/form';
-	import SettingField from '../settings/form/SettingField.svelte';
-	import SettingsForm from '../settings/form/SettingsForm.svelte';
+	import {
+		SettingField,
+		SettingsForm,
+		createSettingsForm,
+		type FieldKey
+	} from '../settings/form/embed';
 
 	interface Props {
 		/** The draft scope: `wizard.intensity`. */
