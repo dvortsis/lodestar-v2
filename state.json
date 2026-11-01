@@ -3285,6 +3285,12 @@
       "head": "217eb16ad25ab2c79fd484dd2a80278f41678a7c",
       "verdict": "runner MERGE pending CI (r1 fixed)",
       "session": "session_01MMjhnBgKsNwUQtRhVBqSsX"
+    },
+    "335": {
+      "slice": "B-search-meta",
+      "head": "5b4a0bb7976e73dec007581b19ef703e13bdf994",
+      "verdict": "runner MERGE pending CI (count_approx naming accepted; no §2.19)",
+      "session": "session_01MMjhnAoWChkh36XUhq2grc"
     }
   },
   "merged_log": [
@@ -3327,5 +3333,13 @@
       "launched": "2026-11-01T10:23Z",
       "brief": "briefs/S-updates-5.md"
     }
-  }
+  },
+  "queued_followups": [
+    {
+      "id": "F-suggest-adult-field",
+      "what": "/suggest field_names offers `adult:` (and maybe adult values) while Show adult is off; /search/fields already hides it. Content-safety tightening (Opus, /security-review). Small.",
+      "from": "#335",
+      "at": "2026-11-01T11:15Z"
+    }
+  ]
 }
