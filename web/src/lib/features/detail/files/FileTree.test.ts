@@ -74,6 +74,20 @@ describe('FileTree', () => {
 		expect(root().getAttribute('aria-busy')).toBe('false');
 	});
 
+	it('sizes the frame to the visible rows: a collapsed folder is one row, opening it adds its files', async () => {
+		render(FileTree, { detail: torrentDetail() });
+		await waitFor(() => expect(rows().length).toBeGreaterThan(0));
+		const rowsVar = () => root().style.getPropertyValue('--ls-tree-rows');
+		expect(rowsVar()).toBe(String(rows().length));
+		const collapsed = rows().length;
+		const folder = rows().find((r) => r.getAttribute('aria-expanded') === 'false');
+		expect(folder).toBeTruthy();
+		folder!.focus();
+		await fireEvent.keyDown(folder!, { key: 'ArrowRight' });
+		await waitFor(() => expect(rows().length).toBeGreaterThan(collapsed));
+		expect(rowsVar()).toBe(String(Math.min(rows().length, 10)));
+	});
+
 	it('pages the rest after the first 500 and says so while it does', async () => {
 		let release!: () => void;
 		get.mockImplementation(

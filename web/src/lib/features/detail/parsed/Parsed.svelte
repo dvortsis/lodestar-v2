@@ -42,12 +42,22 @@
 		return () => slot.cancel();
 	});
 
+	const pick = (v: string[], one: () => string, many: () => string) =>
+		(v.length === 1 && !v[0]!.includes('-') ? one : many)();
 	const rows = $derived(
 		identity
 			? (
 					[
-						[m.detail_parsed_years(), joinSpans(identity.years), 'years'],
-						[m.detail_parsed_seasons(), joinSpans(identity.seasons), 'seasons'],
+						[
+							pick(identity.years, m.search_filters_year, m.detail_parsed_years),
+							joinSpans(identity.years),
+							'years'
+						],
+						[
+							pick(identity.seasons, m.search_filters_season, m.detail_parsed_seasons),
+							joinSpans(identity.seasons),
+							'seasons'
+						],
 						[m.detail_parsed_episodes(), joinSpans(identity.episodes), 'episodes'],
 						[m.detail_parsed_absolute(), joinSpans(identity.absolute), 'absolute']
 					] as const
@@ -64,7 +74,7 @@
 		<dd data-testid="detail-parsed-title">
 			{#if hit?.title}
 				<span>{showBidi(hit.title)}</span>
-				<span class="text-small text-muted-text" data-testid="detail-parsed-provenance"
+				<span class="block text-small text-muted-text" data-testid="detail-parsed-provenance"
 					>{hit.resolved_via
 						? m.detail_resolved_via({ method: resolvedVia(hit.resolved_via) })
 						: m.detail_from_name()}</span
@@ -77,8 +87,8 @@
 		<dd data-testid="detail-parsed-type">
 			{#if type}{type}{#if adult}, {adult}{/if}{:else}{m.detail_parsed_none()}{/if}
 		</dd>
-		{#each rows as [label, value, key] (key)}
-			<dt>{label}</dt>
+		{#each rows as [name, value, key] (key)}
+			<dt>{name}</dt>
 			<dd class="tabular-nums" data-testid="detail-parsed-{key}">{value}</dd>
 		{/each}
 	</dl>

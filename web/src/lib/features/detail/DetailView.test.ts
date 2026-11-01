@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 import { HASH, searchHit, torrentDetail } from './fixtures';
@@ -31,6 +31,14 @@ const flush = async () => {
 beforeEach(() => {
 	get.mockReset();
 	clearDetailCaches();
+});
+// A ready view starts the lazy Contents chunk at once; let it finish importing before the
+// environment is torn down (a stray import after teardown fails the run).
+afterEach(async () => {
+	if (!document.querySelector('[data-section="contents"]')) return;
+	await waitFor(() => expect(screen.getByTestId('detail-file-tree')).toBeTruthy(), {
+		timeout: 10_000
+	});
 });
 
 describe('DetailView states', () => {

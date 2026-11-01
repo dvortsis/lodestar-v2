@@ -54,9 +54,12 @@ for (const [themeId, colorMode] of [
 				// Parsed loads when its section scrolls near
 				await page.locator('[data-section="parsed"]').scrollIntoViewIfNeeded();
 				await expect(page.getByTestId('detail-parsed-years')).toHaveText('2019');
-				// the page column is capped at the manuscript width
+				// the page is the results-column width; its header keeps the manuscript width
 				const box = await page.locator('.ls-detail-page').boundingBox();
-				expect(box!.width).toBeLessThanOrEqual(720 + 1);
+				const head = await page.locator('.ls-detail-page > header').boundingBox();
+				expect(head!.width).toBeLessThanOrEqual(720 + 1);
+				const want = Math.min(page.viewportSize()!.width, 1120);
+				expect(Math.abs(box!.width - want)).toBeLessThanOrEqual(1);
 				await settled(page);
 				await expectNoA11yViolations(page);
 			});
