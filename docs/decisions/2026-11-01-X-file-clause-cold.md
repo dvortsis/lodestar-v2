@@ -65,7 +65,7 @@ In `bench/src/bin/search-bench.rs`, `file_sets_path`: add `file:(size:>1GB)` and
 ## Addendum: measured by gate-file-cold (200,000 torrents, release, two runs)
 | class | p50 | p95 | p99 | max |
 |---|---|---|---|---|
-| broad file (cold, 4 at once), run 1 | 26.70 ms | 38.61 ms | 41.89 ms | 52.02 ms |
-| broad file (cold, 4 at once), run 2 | 26.45 ms | 37.20 ms | 41.45 ms | 43.60 ms |
+| broad file (cold, 4 at once), run 1 | 27.75 ms | 39.53 ms | 44.10 ms | 48.25 ms |
+| broad file (cold, 4 at once), run 2 | 26.64 ms | 37.88 ms | 43.72 ms | 44.35 ms |
 
-For reference the single cold class measured p95 10.45 / 10.30 ms (gate 150 ms) and the warm class 3.02 / 3.17 ms (gate 30 ms), all PASS. The new class is reported, not gated. Each thread opens its own reader, because a `Store` reader is one SQLite connection.
+Machine: 4 cores. For reference the single cold class measured p95 11.13 / 10.47 ms (gate 150 ms) and the warm class 3.05 / 3.08 ms (gate 30 ms), all PASS. The new class is reported, not gated. Each of the four threads owns one long-lived reader (a `Store` reader is one SQLite connection), and a barrier starts the four timers together. Rounds are `ceil(queries/4)`, so up to 3 more samples than `--queries`.

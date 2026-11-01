@@ -870,7 +870,8 @@ fn recovery_path(
 /// id sets need against the file-set cache's budget, then the search
 /// with a cold cache (emptied before each query) and a warm one (all the
 /// clauses in turn, so they compete for the budget), with the warm
-/// loop's cache hit rate. Cold is gated at [`FILE_P95`] (X-search-files-2),
+/// loop's cache hit rate. A concurrent cold class (four size clauses at
+/// once, one reader each) is reported, not gated. Cold is gated at [`FILE_P95`] (X-search-files-2),
 /// warm at [`KEYWORD_P95`].
 fn file_sets_path(
     a: &Args,
@@ -949,20 +950,27 @@ fn file_sets_path(
     // round: what concurrent cold users see (X-file-clause-cold). Every
     // thread's time is one sample.
     let mut cold4 = Vec::with_capacity(a.queries);
+    let mut readers = (0..4)
+        .map(|_| Store::open_reader(db, StoreConfig::default()))
+        .collect::<Result<Vec<_>, _>>()?;
     let sizes = [10, 25, 50, 100, 200, 400, 700, 1000];
     for round in 0..a.queries.div_ceil(4) {
         index.clear_cache();
         let qs: Vec<String> = (0..4)
             .map(|k| format!("file:(size:>{}MB)", sizes[(round * 4 + k) % sizes.len()]))
             .collect();
-        // A `Store` reader is one SQLite connection, so each thread opens its own.
-        let times = std::thread::scope(|s| {
-            let hs: Vec<_> = qs
-                .iter()
-                .map(|q| {
-                    s.spawn(move || -> Result<Duration, String> {
-                        let r = Store::open_reader(db, StoreConfig::default())
-                            .map_err(|e| e.to_string())?;
+        // A `Store` reader is one SQLite connection, so each thread owns one,
+        // opened once and handed back each round. The barrier starts the four
+        // timers together, so the queries overlap.
+        let barrier = std::sync::Barrier::new(4);
+        let done = std::thread::scope(|s| {
+            let hs: Vec<_> = std::mem::take(&mut readers)
+                .into_iter()
+                .zip(&qs)
+                .map(|(r, q)| {
+                    let barrier = &barrier;
+                    s.spawn(move || -> Result<(Duration, Store), String> {
+                        barrier.wait();
                         let started = Instant::now();
                         let ast = parse(q).map_err(|e| e.to_string())?;
                         let (res, _) = index
@@ -971,7 +979,7 @@ fn file_sets_path(
                         for h in &res.hits {
                             r.torrent(h.id as i64).map_err(|e| e.to_string())?;
                         }
-                        Ok(started.elapsed())
+                        Ok((started.elapsed(), r))
                     })
                 })
                 .collect();
@@ -980,6 +988,13 @@ fn file_sets_path(
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(|e| format!("cold4: {e}"))?;
+        let times: Vec<Duration> = done
+            .into_iter()
+            .map(|(t, r)| {
+                readers.push(r);
+                t
+            })
+            .collect();
         cold4.extend(times);
     }
     index.clear_cache();
