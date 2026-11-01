@@ -46,6 +46,8 @@ pub mod policy;
 #[cfg(unix)]
 pub mod probation;
 #[cfg(unix)]
+pub mod rollback_cache;
+#[cfg(unix)]
 pub mod supervisor;
 #[cfg(unix)]
 pub mod testing;

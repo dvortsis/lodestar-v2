@@ -56,6 +56,7 @@ impl Unavailable {
                 reason: Some(self.why.code().to_string()),
                 to_version: None,
                 lost_torrents: None,
+                restores_store: None,
             },
             notices: vec![],
             history: vec![],

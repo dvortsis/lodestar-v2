@@ -128,6 +128,7 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
                 reason: Some("busy".into()),
                 to_version: Some("image".into()),
                 lost_torrents: Some(12),
+                restores_store: Some(true),
             }
         } else {
             RollbackInfo {
@@ -135,6 +136,7 @@ fn status(e: &FakeEngine) -> UpdatesStatus {
                 reason: None,
                 to_version: Some("image".into()),
                 lost_torrents: Some(12),
+                restores_store: Some(true),
             }
         },
         notices: vec![],
