@@ -2516,7 +2516,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-01T15:38Z",
+  "last_heartbeat": "2026-11-01T18:42Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
@@ -3242,6 +3242,10 @@
     {
       "t": "2026-11-01T18:35Z",
       "event": "FX-6-I9 opened #350 (fa8e556e): IEC printer + new `a..<b` syntax. Author caveat: stored filter rules with `..<` are skipped by an older binary after rollback -> possible content-safety loosening. Held; Opus security-focused review running. Follow-up queued: openapi-example-size (dto/search.rs:42 `size:>=10GB` example + regen openapi.json/schema.d.ts). New syntax = §2.19 flag (flag-i9-range-syntax) if it survives review."
+    },
+    {
+      "t": "2026-11-01T18:42Z",
+      "event": "Heartbeat: 4 slots = FX-6 (#348 c56b1fc, CI), X-web-cleanup-1 (#349 baselines 7a711e2e ok settings 54/welcome 60, nudged), FX-6-I9 (#350 held, Opus security review running), gate-file-cold (building). Runner disk filled (session allowance): removed own target/ and stale scratch l5; rebuildable."
     }
   ],
   "reviews": {
