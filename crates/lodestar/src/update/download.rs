@@ -145,7 +145,9 @@ pub async fn download(
 /// [`download`] within `limits`. A failure removes the `.part` file only
 /// once the writer thread has finished with it, the overall timeout
 /// included, so no write (or the file's creation) lands after the
-/// removal.
+/// removal. The join itself isn't bounded: a disk write that hangs keeps
+/// the download past `limits.overall` rather than remove the file under
+/// the writer.
 async fn download_with(
     src: &dyn Source,
     bin: &Bin,

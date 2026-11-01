@@ -2794,11 +2794,12 @@ mod tests {
         assert_eq!(bin_names(&e), clean);
     }
 
-    /// The log over a whole install against the loopback source, through a
-    /// redirect whose URL carries a credential: the catalogue's events by
-    /// name (`update.available` at the check; `update.install_failed` with
-    /// its code only for the failed attempt), and no URL, host, query or
-    /// credential anywhere.
+    /// The log over a whole install against the loopback source. The
+    /// first attempt is redirected, with a credential in the URL, to a host
+    /// off the allowlist: `update.install_failed` with `redirect_refused`,
+    /// a line no other engine test logs, so it's this install's. The second
+    /// goes through a signed asset URL carrying a signature and a
+    /// credential, and installs. No URL, host, query or credential appears.
     #[tokio::test]
     async fn the_log_over_an_install_names_events_and_never_urls() {
         crate::test_log::install();
@@ -2807,6 +2808,22 @@ mod tests {
         let server = super::super::download::tests::Loopback::start().await;
         *lock(&e.downloads.forward) = Some(server.base.clone());
         let path = artifact_path("0.6.0");
+        server.serve(
+            &path,
+            302,
+            Some("https://zq7evil.example/lodestar?token=Zq7EvilSecret"),
+            b"",
+        );
+        e.engine.run_check().await.unwrap();
+        e.engine
+            .install_request("0.6.0", InstallWhen::Now, false)
+            .await
+            .unwrap();
+        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
+            .await;
+        let failed = lock(&e.events).last().cloned().unwrap();
+        assert_eq!(failed.error.as_deref(), Some("redirect_refused"));
+
         let asset = "/zq7asset/lodestar?sig=Zq7InstallSecret&X-Amz-Credential=zq7cred";
         server.serve(
             &path,
@@ -2816,14 +2833,6 @@ mod tests {
             )),
             b"",
         );
-        server.serve(asset, 200, None, b"binarY");
-        e.engine.run_check().await.unwrap();
-        e.engine
-            .install_request("0.6.0", InstallWhen::Now, false)
-            .await
-            .unwrap();
-        e.until("failed", |e| e.states().contains(&UpdatesState::Failed))
-            .await;
         server.serve(asset, 200, None, BINARY);
         lock(&e.events).clear();
         e.engine
@@ -2831,22 +2840,22 @@ mod tests {
             .await
             .unwrap();
         e.until("switched", |e| !e.switched().is_empty()).await;
-        // Every test's events are in the capture: these are the lines
-        // naming this install's codes, and its secrets appear nowhere.
+
+        // Every test's events are in the capture: the failed attempt is
+        // the only `install_failed` line with `redirect_refused`.
         let text = crate::test_log::text();
-        assert!(
-            text.lines().any(|l| l.contains("update.available")),
-            "{text}"
-        );
-        assert!(
-            text.lines()
-                .any(|l| l.contains("update.install_failed") && l.contains("download_mismatch")),
-            "{text}"
-        );
+        let failures: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                l.contains(r#"event="update.install_failed""#) && l.contains("redirect_refused")
+            })
+            .collect();
+        assert_eq!(failures.len(), 1, "{text}");
+        assert!(failures[0].contains("error=redirect_refused"), "{text}");
         // The credentials appear nowhere, not even in the HTTP client's
         // own trace lines (third-party lines are capped at warnings and
         // scrubbed in production anyway).
-        for secret in ["Zq7InstallSecret", "zq7cred"] {
+        for secret in ["Zq7EvilSecret", "zq7evil", "Zq7InstallSecret", "zq7cred"] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
         // Lodestar's own events name no URL, host or address.

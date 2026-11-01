@@ -184,7 +184,11 @@ pub fn kept(ctx: &Ctx, failed: &str) -> bool {
                 && matches!(s.kind, SnapKind::PreMigration { version, .. } if version == m.from + 1)
         })
     });
-    listed || matches!(store_schema(&ctx.db), Ok(None)) || store_schema(&ctx.db) == Ok(Some(m.from))
+    if listed {
+        return true;
+    }
+    let schema = store_schema(&ctx.db);
+    matches!(schema, Ok(None)) || schema == Ok(Some(m.from))
 }
 
 /// What a rollback of `failed` restores. Without `<failed>/migration.json`
