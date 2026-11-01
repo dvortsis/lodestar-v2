@@ -51,8 +51,9 @@ describe('wizard shell', () => {
 	it('resumes after a reload and moves focus to each step heading', async () => {
 		start('how');
 		await heading('How it works');
+		await screen.findByRole('button', { name: 'Continue' });
 		expect(screen.queryByRole('button', { name: 'Back' })).toBeTruthy();
-		await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
 		const next = await heading('Crawl intensity');
 		await waitFor(() => expect(document.activeElement).toBe(next));
 		expect(JSON.parse(sessionStorage.getItem('lodestar.wizard')!)).toMatchObject({
@@ -64,12 +65,14 @@ describe('wizard shell', () => {
 	it('has no Back on the first step and no Skip on the informational ones', async () => {
 		start('network');
 		await heading('Network check');
+		await screen.findByRole('button', { name: 'Continue' });
 		expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
 		expect(screen.getByRole('button', { name: 'Skip this step' })).toBeTruthy();
-		await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
 		await heading('How it works');
+		await screen.findByRole('button', { name: 'Continue' });
 		expect(screen.queryByRole('button', { name: 'Skip this step' })).toBeNull();
-		await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
 		await heading('Network check');
 	});
 
@@ -77,7 +80,7 @@ describe('wizard shell', () => {
 		start('intensity');
 		await heading('Crawl intensity');
 		await fireEvent.click(await screen.findByRole('radio', { name: 'low' }));
-		await fireEvent.click(screen.getByRole('button', { name: 'Skip this step' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
 		await heading('Storage & retention');
 		expect(patches()).toHaveLength(0);
 		expect(server.calls.filter((c) => c.method !== 'GET')).toEqual([]);
@@ -88,7 +91,7 @@ describe('wizard shell', () => {
 		start('intensity');
 		await heading('Crawl intensity');
 		await fireEvent.click(await screen.findByRole('radio', { name: 'low' }));
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Storage & retention');
 		expect(patches().map((c) => c.body)).toEqual([
 			{ crawler: { if_revision: 3, intensity: 'low' } }
@@ -99,7 +102,7 @@ describe('wizard shell', () => {
 		start('intensity');
 		await heading('Crawl intensity');
 		await screen.findByRole('radio', { name: 'low' });
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Storage & retention');
 		expect(patches()).toHaveLength(0);
 	});
@@ -112,7 +115,7 @@ describe('wizard shell', () => {
 			'PATCH /settings',
 			server.err(422, 'invalid_setting', { section: 'crawler', field: 'intensity' })
 		);
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await screen.findByTestId('error-summary');
 		expect(screen.getByRole('heading', { level: 2, name: 'Crawl intensity' })).toBeTruthy();
 		expect(screen.queryByRole('heading', { level: 2, name: 'Storage & retention' })).toBeNull();
@@ -126,7 +129,7 @@ describe('wizard shell', () => {
 		await heading('Storage & retention');
 		await fireEvent.click(await screen.findByRole('switch'));
 		server.next('PATCH /settings', { status: 0, body: null });
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await waitFor(() => expect(patches()).toHaveLength(1));
 		expect(screen.getByRole('heading', { level: 2, name: 'Storage & retention' })).toBeTruthy();
 	});
@@ -156,7 +159,7 @@ describe('network check step', () => {
 		server.setNetwork(() =>
 			server.json(429, { error: { code: 'rate_limited', message: 'x' } }, { 'Retry-After': '20' })
 		);
-		await fireEvent.click(screen.getByRole('button', { name: 'Retest' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Retest' }));
 		await waitFor(() =>
 			expect(screen.getByTestId('wizard-net-limited').textContent).toContain(
 				'Try again in 20 seconds'
@@ -176,7 +179,7 @@ describe('network check step', () => {
 		writeProgress({ step: 'network', skipped: [], done: [] });
 		render(WizardPage);
 		await screen.findByText('Measuring');
-		await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
 		await heading('How it works');
 		expect(signals.length).toBeGreaterThan(0);
 		await waitFor(() => expect(signals.every((s) => s.aborted)).toBe(true));
@@ -229,7 +232,7 @@ describe('updates step', () => {
 	it('saves the choice through the multi-section patch', async () => {
 		start('updates');
 		await fireEvent.click(await screen.findByRole('radio', { name: 'Check and notify' }));
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Done');
 		expect(patches().map((c) => c.body)).toEqual([{ updates: { if_revision: 1, mode: 'notify' } }]);
 	});
@@ -262,9 +265,9 @@ describe('restart and load failures', () => {
 				}
 			};
 		});
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		await heading('Updates');
-		await fireEvent.click(screen.getByRole('button', { name: 'Skip this step' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
 		expect((await screen.findByTestId('wizard-restart')).textContent).toContain('Restart');
 	});
 
@@ -276,7 +279,7 @@ describe('restart and load failures', () => {
 		render(WizardPage);
 		await heading('Crawl intensity');
 		await screen.findByRole('button', { name: 'Retry' });
-		await fireEvent.click(screen.getByRole('button', { name: 'Save and continue' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save and continue' }));
 		expect(screen.getByRole('heading', { level: 2, name: 'Crawl intensity' })).toBeTruthy();
 		expect(JSON.parse(sessionStorage.getItem('lodestar.wizard')!).done).toEqual([]);
 	});

@@ -156,7 +156,7 @@
 		</ol>
 	</nav>
 
-	<section class="flex min-h-96 flex-col gap-4" aria-labelledby="wizard-heading">
+	<section class="flex flex-col gap-4" aria-labelledby="wizard-heading">
 		<h2
 			id="wizard-heading"
 			bind:this={heading}
@@ -179,7 +179,7 @@
 		{/if}
 	</section>
 
-	{#if progress.step !== 'done'}
+	{#if progress.step !== 'done' && Step}
 		<div class="flex flex-wrap items-center gap-3">
 			{#if index > 0}
 				<Button onclick={previous} disabled={working}>{m.wizard_back()}</Button>

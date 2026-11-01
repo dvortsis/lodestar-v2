@@ -46,7 +46,8 @@
 	{#if net.failed && !check}
 		<Banner kind="error">{m.wizard_net_error()}</Banner>
 	{:else if !check}
-		<p class="text-muted-text" aria-busy="true">{m.wizard_net_loading()}</p>
+		<Banner kind="info" title={m.wizard_net_loading()}>&nbsp;</Banner>
+		<p class="text-body" aria-hidden="true">&nbsp;</p>
 	{:else}
 		{#if off}
 			<Banner kind="info" title={m.wizard_net_off()}>{reasons[check.reason]()}</Banner>
