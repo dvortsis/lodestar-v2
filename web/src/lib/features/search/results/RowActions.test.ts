@@ -14,6 +14,6 @@ it('toasts an error when the magnet chunk fails to load', async () => {
 	screen.getByTestId('r-copy').click();
 	await vi.waitFor(() => expect(toasts.items).toHaveLength(1), { timeout: 10_000 });
 	expect(toasts.items.map((t) => [t.kind, t.text])).toEqual([
-		['error', "Couldn't get the magnet link."]
+		['error', "Lodestar didn't answer. Check that it's running, then try again."]
 	]);
 });
