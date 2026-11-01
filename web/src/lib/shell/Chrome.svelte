@@ -26,6 +26,7 @@
 
 	let Toaster = $state<typeof import('$lib/ui/feedback/Toaster.svelte').default>();
 	let Palette = $state<typeof import('./CommandPalette.svelte').default>();
+	let Stale = $state<typeof import('./StaleBanner.svelte').default>();
 
 	function loadToaster() {
 		if (!Toaster)
@@ -59,6 +60,7 @@
 		return stop;
 	}
 
+	let offStale: (() => void) | undefined;
 	let offCommands: (() => void) | undefined;
 	let offShortcuts: (() => void) | undefined;
 	let offAppearance: (() => void) | undefined;
@@ -96,10 +98,19 @@
 			// when it is down.
 			loadToaster();
 			void import('./ErrorView.svelte');
+			// A newer server build is noticed when the tab is shown again (dev builds have none).
+			if (!import.meta.env.DEV && !bare)
+				void import('./stale').then((mod) => {
+					if (!disposed)
+						offStale = mod.watchStale(() =>
+							import('./StaleBanner.svelte').then((b) => (Stale = b.default))
+						);
+				});
 		});
 		return () => {
 			disposed = true;
 			stopWaiting();
+			offStale?.();
 			detachKeys?.();
 			offCommands?.();
 			offShortcuts?.();
@@ -144,5 +155,6 @@
 </script>
 
 {#if !bare}<TopBar />{/if}
+{#if !bare && Stale}<Stale />{/if}
 {#if Toaster}<Toaster />{/if}
 {#if !bare && Palette}<Palette bind:open={shell.paletteOpen} />{/if}

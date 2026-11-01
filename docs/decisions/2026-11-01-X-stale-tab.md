@@ -1,0 +1,9 @@
+# X-stale-tab decisions
+
+- **Signal: `GET /_app/version.json` on `visibilitychange`.** The server embeds the bundle's `_app/version.json`, and `/system` `ui_build_id` is that same id (`crates/lodestar/build.rs`). The shell compares it with `__SVELTEKIT_APP_VERSION__`, read directly, never through `$app/environment` (it renames the shared runtime chunk's exports and grows every route). The answer is about 40 bytes and the server already revalidates it. The other options lose: (a) no request the shell already makes carries the build id, and (c) `GET /system` carries the whole About payload, not a 40-byte id (not measured separately).
+- **When it runs:** when the tab becomes visible, at most once per 5 minutes (counted from page load), never two at once, and it stops after the first difference. A failed, non-OK or malformed answer shows nothing. Dev builds never check.
+- **Where it loads:** `stale.ts` loads from `Chrome.svelte` at the same moment as the stream (first interaction or 30 s), so nothing is added to any first load. `StaleBanner.svelte` loads only when the builds differ.
+- **Banner:** the existing `Banner` (polite `role="status"`, no focus move) and `Button`; no new CSS. Never reloads by itself.
+- **Unsaved changes:** the banner adds "Save or discard your changes first." when a leave guard objects. It asks the way the browser does: a cancelable `beforeunload` event, which kit answers by running every `beforeNavigate` guard (Settings form, Security). This needs no coupling to `features/settings/**`. Reload then goes through the same guards.
+- **About unchanged:** it already holds `/system`, so its own comparison costs nothing; left as is to keep its behaviour and the shared chunk untouched.
+- **Strings:** `shell_stale_text`, `shell_stale_unsaved`, `shell_stale_reload` (en, zh).
