@@ -2104,12 +2104,14 @@
       "merged_at": "2026-11-01T09:15Z"
     },
     "B-update-6": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhn9Jg52uqLHmWj6STnH",
       "model": "opus",
       "brief": "briefs/B-update-6.md",
       "launched_at": "2026-11-01T08:33Z",
-      "review": "runner + /security-review; full-ci"
+      "review": "runner MERGE at 4e8d1438 (fail-closed + fresh request path verified)",
+      "pr": 330,
+      "head": "4e8d1438"
     },
     "X-search-headroom-2": {
       "status": "building",
