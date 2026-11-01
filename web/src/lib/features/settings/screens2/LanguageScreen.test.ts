@@ -125,7 +125,7 @@ describe('Language & region', () => {
 		await until(() =>
 			expect(patches().at(-1)?.body).toMatchObject({ preferences: { time_zone: 'Europe/Berlin' } })
 		);
-		expect(screen.queryByRole('alert')).toBeNull();
+		await until(() => expect(screen.queryByRole('alert')).toBeNull());
 		// Nothing invalid was ever sent.
 		expect(JSON.stringify(patches())).not.toMatch(/Foo|Europe\/Ber"/);
 	});

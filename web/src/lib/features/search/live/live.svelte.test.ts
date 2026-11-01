@@ -297,24 +297,34 @@ it('announces a count that changed inside the throttle window on a later tick', 
 
 let statusNow = $state('live');
 let totalNow = $state(10);
-it('coalesces the visibility and status re-registrations, and the status effect does not track search state', async () => {
-	vi.useFakeTimers();
+const track = () => {
 	let reads = 0;
 	ev.status = () => {
 		reads++;
 		return statusNow;
 	};
+	post.mockReset();
+	del.mockReset();
+	del.mockResolvedValue(undefined);
+	registers('a1');
+	const live = createLive({
+		shown: () => ({ query: q, total: totalNow, approx: false }),
+		paused: () => false,
+		intervalMs: 30_000
+	});
+	stops.push(live.start());
+	return { live, reads: () => reads };
+};
+const reset = () => {
+	ev.status = () => 'live';
+	statusNow = 'live';
+	vi.useRealTimers();
+};
+
+it('coalesces the visibility and status re-registrations of one return', async () => {
+	vi.useFakeTimers();
 	try {
-		post.mockReset();
-		del.mockReset();
-		del.mockResolvedValue(undefined);
-		registers('a1');
-		const live = createLive({
-			shown: () => ({ query: q, total: totalNow, approx: false }),
-			paused: () => false,
-			intervalMs: 30_000
-		});
-		stops.push(live.start());
+		const { live } = track();
 		await live.follow(q);
 		// The tab is hidden and the stream is down for the same 30 s: both paths fire on return.
 		const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
@@ -329,14 +339,30 @@ it('coalesces the visibility and status re-registrations, and the status effect 
 		await vi.advanceTimersByTimeAsync(0);
 		expect(liveCalls()).toHaveLength(2); // one re-registration, not two
 		hidden.mockRestore();
-		// `again()` read the shown query inside the effect: a search-state change must not re-run it.
-		const before = reads;
+	} finally {
+		reset();
+	}
+});
+
+it('the status effect does not track search state', async () => {
+	vi.useFakeTimers();
+	try {
+		const { live, reads } = track();
+		await live.follow(q);
+		// Only the status path fires (the tab stays visible): `again()` runs inside the effect.
+		statusNow = 'down';
+		flushSync();
+		await vi.advanceTimersByTimeAsync(30_000);
+		statusNow = 'live';
+		flushSync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(liveCalls()).toHaveLength(2);
+		// A search-state change must not re-run the effect.
+		const before = reads();
 		totalNow = 11;
 		flushSync();
-		expect(reads).toBe(before);
+		expect(reads()).toBe(before);
 	} finally {
-		ev.status = () => 'live';
-		statusNow = 'live';
-		vi.useRealTimers();
+		reset();
 	}
 });

@@ -1,5 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => vi.unstubAllGlobals());
 import {
 	formatCompact,
 	formatCount,
@@ -264,7 +266,6 @@ describe('imports (IMP-5)', () => {
 			expect(li.getAttribute('tabindex')).toBe('0');
 			expect(li.getAttribute('aria-label')).toContain(li.querySelector('span')!.textContent!);
 		}
-		vi.unstubAllGlobals();
 	});
 	it('lists keyboard-reachable markers, and nothing without an import', () => {
 		const { unmount } = render(ImportMarkers, { annotations: IMPORT_ANNOTATIONS, tz: 'UTC' });
