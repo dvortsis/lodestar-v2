@@ -6,6 +6,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import DetailActions from '$lib/features/detail/DetailActions.svelte';
 	import DetailView from '$lib/features/detail/DetailView.svelte';
+	import { setDrawerTarget } from '$lib/features/detail/target';
 	import { DetailModel } from '$lib/features/detail/model.svelte';
 	import '$lib/features/detail/detail.css';
 	import '$lib/features/detail/page.css';
@@ -15,8 +16,10 @@
 
 	$effect(() => {
 		untrack(() => model.load(data.hash));
+		setDrawerTarget(data.hash);
 		return () => {
 			model.destroy();
+			setDrawerTarget(null);
 		};
 	});
 	onMount(

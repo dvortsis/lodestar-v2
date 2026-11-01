@@ -124,6 +124,23 @@ describe('the s key', () => {
 		await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1), { timeout: 10_000 });
 		setCommandTarget(null);
 	});
+
+	it('waits for the open drawer’s torrent to load, but not for a focused row', async () => {
+		const { setCommandTarget, setDrawerTarget, setLoadedHash } = await import('./target');
+		get.mockResolvedValue(section([{ id: 'q', name: 'qBittorrent' }]));
+		await mod.clientName();
+		await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+		const when = register.mock.calls[0]![0].when as () => boolean;
+		setCommandTarget(HASH);
+		expect(when()).toBe(true); // a row, no drawer
+		setDrawerTarget(HASH);
+		expect(when()).toBe(false); // the drawer’s torrent is still loading
+		setLoadedHash(HASH);
+		expect(when()).toBe(true);
+		setDrawerTarget(null);
+		setLoadedHash(null);
+		setCommandTarget(null);
+	});
 });
 
 describe('freshness', () => {

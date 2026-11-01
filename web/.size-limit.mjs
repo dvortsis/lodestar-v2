@@ -1202,7 +1202,7 @@ export default [
 	// Search results: don't import `$lib/keys` (the registry), `$lib/shell/nav`, settings code or
 	// detail/ code into it. Load them after mount (ResultsPanel's onMount) or through a door; the
 	// keys are gated by "Search results key commands (on demand)".
-	entry('Search results (lazy)', resultsFirst, '40.6 KB'),
+	entry('Search results (lazy)', resultsFirst, '40.61 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.

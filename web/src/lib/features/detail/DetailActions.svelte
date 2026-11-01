@@ -48,7 +48,7 @@
 		const generation = detailGeneration();
 		const mod = await import('$lib/features/filters/flows-door')
 			.then((door) => door.load())
-			.catch(() => (void import('./commands').then((c) => c.flowsFailed()), null));
+			.catch(() => (void import('./commands').then((c) => c.failed(true)), null));
 		if (!mod) return; // offline or a stale build: the button stays, a press tries again
 		if (gone || generation !== detailGeneration() || hash !== detail?.hash) return;
 		Block = mod.BlockThisDialog;

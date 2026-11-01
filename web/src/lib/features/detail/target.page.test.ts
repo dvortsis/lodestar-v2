@@ -12,23 +12,42 @@ vi.mock('$lib/api/client', async (original) => ({
 }));
 
 const { default: Page } = await import('../../../routes/t/[hash]/+page.svelte');
-const { commandTarget } = await import('./target');
+const target = await import('./target');
+const sendTarget = () => (target.loadedHash === target.drawerHash ? target.drawerHash : null);
+const { ApiError } = await import('$lib/api/client');
 
 beforeEach(() => {
 	get.mockReset();
 	clearDetailCaches();
 });
 
-it('/t sets the key target (so `s`, `c`, `o` act) only once the torrent has loaded', async () => {
+const pending = () => {
 	let finish: (v: unknown) => void = () => {};
+	let fail: (e: unknown) => void = () => {};
 	get.mockImplementation((path: string) =>
 		path === '/torrents/{hash}'
-			? new Promise((resolve) => (finish = resolve))
+			? new Promise((resolve, reject) => ((finish = resolve), (fail = reject)))
 			: Promise.resolve({ hits: [] })
 	);
+	return { finish: (v: unknown) => finish(v), fail: (e: unknown) => fail(e) };
+};
+
+it('/t: `s` waits for the torrent to load, and stops when the page goes', async () => {
+	const load = pending();
+	const { unmount } = render(Page, { data: { hash: HASH } });
+	await waitFor(() => expect(get).toHaveBeenCalled(), { timeout: 10_000 });
+	expect(sendTarget()).toBeNull();
+	load.finish(torrentDetail({ hash: HASH }));
+	await waitFor(() => expect(sendTarget()).toBe(HASH), { timeout: 10_000 });
+	unmount();
+	expect(sendTarget()).toBeNull();
+});
+
+it('/t: a torrent that fails to load never becomes the target', async () => {
+	const load = pending();
 	render(Page, { data: { hash: HASH } });
 	await waitFor(() => expect(get).toHaveBeenCalled(), { timeout: 10_000 });
-	expect(commandTarget()).toBeNull();
-	finish(torrentDetail({ hash: HASH }));
-	await waitFor(() => expect(commandTarget()).toBe(HASH), { timeout: 10_000 });
+	load.fail(new ApiError(404, 'torrent_not_found', 'x'));
+	await waitFor(() => expect(get).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+	expect(sendTarget()).toBeNull();
 });
