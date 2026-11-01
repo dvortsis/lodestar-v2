@@ -591,7 +591,7 @@
       "merged_at": "2026-11-01T04:26Z"
     },
     "G-m5": {
-      "status": "in progress: G-m5a (matrix + overhead bench) launching 12:45Z; G-m5b design-review next",
+      "status": "in progress: G-m5a (matrix+bench) and G-m5b (design-review) running",
       "model": "opus",
       "session": null,
       "pr": null,
@@ -3374,6 +3374,12 @@
       "model": "opus",
       "launched": "2026-11-01T12:42Z",
       "brief": "briefs/G-m5a.md"
+    },
+    "G-m5b": {
+      "session": "session_01MMjhnByisxRDJSU7rGJj7o",
+      "model": "opus",
+      "launched": "2026-11-01T12:48Z",
+      "brief": "briefs/G-m5b.md"
     }
   },
   "queued_followups": [
