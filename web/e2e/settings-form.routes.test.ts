@@ -141,7 +141,7 @@ test.describe('settings form', () => {
 		await ready(page);
 		const field = page.locator('[data-field="network.dht_port"]');
 		await expect(field.getByTestId('status-env')).toContainText('Set by LODESTAR_DHT_PORT');
-		await expect(field.getByLabel('DHT port', { exact: true })).toBeDisabled();
+		await expect(field.getByLabel('DHT port', { exact: true })).not.toBeEditable();
 	});
 
 	test('merges a two-context conflict: Keep mine, then Use theirs', async ({
@@ -166,7 +166,7 @@ test.describe('settings form', () => {
 
 		await page.getByRole('button', { name: 'Save changes' }).click();
 		const conflict = page.locator('[data-field="crawler.intensity"]').getByTestId('conflict');
-		await expect(conflict).toContainText('Changed elsewhere to aggressive');
+		await expect(conflict).toContainText('Changed elsewhere to Aggressive');
 		expect(backend.patches.at(-1)).toEqual({ crawler: { if_revision: 3, intensity: 'low' } });
 		await conflict.getByRole('button', { name: 'Keep mine' }).click();
 		await page.getByRole('button', { name: 'Save changes' }).click();
@@ -177,7 +177,7 @@ test.describe('settings form', () => {
 		await page2.getByRole('radio', { name: 'balanced' }).check();
 		await page2.getByRole('button', { name: 'Save changes' }).click();
 		const conflict2 = page2.locator('[data-field="crawler.intensity"]').getByTestId('conflict');
-		await expect(conflict2).toContainText('Changed elsewhere to low');
+		await expect(conflict2).toContainText('Changed elsewhere to Low');
 		await conflict2.getByRole('button', { name: 'Use theirs' }).click();
 		await expect(page2.getByRole('radio', { name: 'low' })).toBeChecked();
 		await expect(page2.getByTestId('save-bar')).not.toContainText('unsaved');

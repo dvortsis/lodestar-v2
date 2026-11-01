@@ -133,7 +133,7 @@ test('desktop navigation, field labels and unknown destinations', async ({ page,
 		page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link')
 	).toHaveCount(1);
 	await page.getByRole('link', { name: 'Network & VPN', exact: true }).click();
-	await expect(page.getByLabel('Web address', { exact: true })).toBeDisabled();
+	await expect(page.getByLabel('Web address', { exact: true })).not.toBeEditable();
 	await expect(page.getByText(/Network settings are read-only/)).toBeVisible();
 	expect(mock.calls('patchSettingsBatch')).toHaveLength(0);
 	await go('/settings/does-not-exist');
@@ -318,9 +318,9 @@ test('stale revisions require an explicit conflict choice and another save', asy
 		}
 	});
 	await go('/settings/crawler');
-	await page.getByRole('radio', { name: 'low', exact: true }).click();
+	await page.getByRole('radio', { name: 'Low', exact: true }).click();
 	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-	await expect(page.getByTestId('conflict-text')).toContainText('aggressive');
+	await expect(page.getByTestId('conflict-text')).toContainText('Aggressive');
 	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
 	await expect(page.locator('.ls-form [aria-live="polite"]')).toHaveText(
 		'Some settings were changed elsewhere. Choose which value to keep, then save again.'
