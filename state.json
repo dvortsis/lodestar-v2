@@ -1911,13 +1911,23 @@
       "merge": "88dfc592"
     },
     "X-detail-headroom": {
-      "status": "pr-fixing",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01MMjhnCWhTw1CWQNwZ3Gocu",
       "pr": 313,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet. | 03:12Z draft #313: only ~40 B found (css split). Runner ruled (§2.26) option 1 as a MOVE: event client+SSE (~2.3 KB) from drawer and /t first view to Detail sections; lower drawer and /t limits, raise Detail sections by at most the moved bytes (+10%), keep >=0.2 KB for magnet toasts. | 03:13Z measured move: drawer 28,899->26,637, /t 22,539->20,287, sections 34,458->36,967 (+0.25 KB compression cost). Runner ruled (a): sections limit 37.3, drawer 27.2, /t 20.8, toasts added. | 03:28Z #313 ready at 5acfa059: drawer 26,686/27.2, /t 20,328/20.8, sections 37,139/37.3; Search results +183 B (row toast message). Asked: use generic message already in results chunk for the row; then merge. Opus self-review done (2B/3I fixed)."
+      "notes": "03:01Z brief briefs/X-detail-headroom.md (drawer/t >=0.5 KB, Detail sections >=0.2 KB; magnet toasts if room). | 03:01Z launched Sonnet. | 03:12Z draft #313: only ~40 B found (css split). Runner ruled (§2.26) option 1 as a MOVE: event client+SSE (~2.3 KB) from drawer and /t first view to Detail sections; lower drawer and /t limits, raise Detail sections by at most the moved bytes (+10%), keep >=0.2 KB for magnet toasts. | 03:13Z measured move: drawer 28,899->26,637, /t 22,539->20,287, sections 34,458->36,967 (+0.25 KB compression cost). Runner ruled (a): sections limit 37.3, drawer 27.2, /t 20.8, toasts added. | 03:28Z #313 ready at 5acfa059: drawer 26,686/27.2, /t 20,328/20.8, sections 37,139/37.3; Search results +183 B (row toast message). Asked: use generic message already in results chunk for the row; then merge. Opus self-review done (2B/3I fixed). | 03:43Z merged #313 (96e436f2); session archived.",
+      "merge": "96e436f2"
+    },
+    "S-filters-2c": {
+      "status": "launching",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "03:44Z brief briefs/S-filters-2c.md (Block this… hooks; single forwarder door into filters/flows to stop the regroup; guard)."
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -2814,7 +2824,6 @@
     "Smoke torrent snapshot flake: e2e/smoke.test.ts torrent bp320-riverstone-dark-comfortable failed once on #289 4a010809 (9134 px, 2%), passed on re-run; not in that diff. Artifact download blocked by proxy, so diff unseen. Suspect unfrozen clock/time-dependent text on torrent page. Fix once (freeze clock / mask volatile region) if it recurs or in next e2e-touching slice.",
     "Settings purpose line layout shift (#293 optional 2): generated screens' purpose line now arrives with the ~0.9 KB about chunk, so 'Loading settings' can shift down once; reserve the line height. Also optional 1: a failed about.ts load hides the form on every generated screen (could block only read-only sections). Ride the next Settings shell slice (after X-form-remount).",
     "Possible flake: e2e/detail.routes.test.ts:327 'the drawer on /dev/detail > an overlay at 1024 keeps the list visible' expected drawer right edge 1024, got 1190 (#295 95559ef4, outside diff; re-run queued). Likely reads layout before the viewport/drawer settles; fix once with a condition wait if it recurs.",
-    "S-filters-2c: \"Block this…\" hooks in RowActions/DetailActions, after X-alert-search-headroom; needs a filters/flows on-demand chunk group and ~0.3 KB on Search results, Detail drawer (29), /t/[hash] (22.6). Groups are impossible (#304): use one forwarder module as the only entry into filters/flows/**; Drawer 28.87/29, /t 22.51/22.6 have no headroom for +0.3 KB, so 2c needs a cut there too.",
     "web vitest flake: settings/security/security.test.ts two 10 s timeouts under full-suite load (#304 reviewer local run, 00:20Z); passes alone. Distinct from the #301 teardown fix. Fix if it shows in CI.",
     "Possible flake: e2e/search-results.keyboard.test.ts:70 \"c copies the focused row's magnet with the drawer closed\" [keyboard-only] failed once on #306 746ba13a (01:48Z), outside the diff (settings/updates only); failed job re-run once. If it recurs, brief a fix (clipboard permission / focus wait).",
     "Silent failure on c/o magnet shortcuts when the magnet chunk fails to load (#308 kept silent: a toast cost 130 B on Detail sections 34.44/34.5). Revisit when Detail sections has headroom; remaining bare imports listed in docs/decisions/2026-11-01-X-web-hygiene-1101.md.",
