@@ -156,7 +156,7 @@
 		</ol>
 	</nav>
 
-	<section class="flex flex-col gap-4" aria-labelledby="wizard-heading">
+	<section class="flex min-h-96 flex-col gap-4" aria-labelledby="wizard-heading">
 		<h2
 			id="wizard-heading"
 			bind:this={heading}

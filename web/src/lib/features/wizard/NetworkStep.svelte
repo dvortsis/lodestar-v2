@@ -38,6 +38,11 @@
 <div class="sr-only" role="status" aria-live="polite">{verdict}</div>
 
 <div class="flex flex-col gap-3" data-testid="wizard-net">
+	<div>
+		<Button onclick={() => net.retestNow()} loading={net.retest === 'busy'}>
+			{net.retest === 'busy' ? m.wizard_net_retesting() : m.wizard_net_retest()}
+		</Button>
+	</div>
 	{#if net.failed && !check}
 		<Banner kind="error">{m.wizard_net_error()}</Banner>
 	{:else if !check}
@@ -79,11 +84,6 @@
 	{:else if net.retest === 'error'}
 		<Banner kind="error">{m.wizard_net_retest_error()}</Banner>
 	{/if}
-	<div>
-		<Button onclick={() => net.retestNow()} loading={net.retest === 'busy'}>
-			{net.retest === 'busy' ? m.wizard_net_retesting() : m.wizard_net_retest()}
-		</Button>
-	</div>
 </div>
 
 {#if check && check.reachable !== true && !off}

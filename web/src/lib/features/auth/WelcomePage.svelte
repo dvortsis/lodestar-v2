@@ -56,7 +56,7 @@
 	{#if signedIn}
 		<WizardPage />
 	{:else}
-		<div class="mx-auto flex max-w-sm flex-col gap-4 px-4 py-8">
+		<div class="mx-auto flex max-w-xl flex-col gap-4 px-4 py-8">
 			<h1 class="w-fit max-w-full text-display font-semibold text-base-content">
 				{m.auth_checking()}
 			</h1>
