@@ -290,6 +290,8 @@
 		for (;;) {
 			const lost = status?.rollback.lost_torrents;
 			const ctl = (rollbackAsk = new AbortController());
+			const close = () => ctl.abort();
+			store.signal.addEventListener('abort', close, { once: true });
 			answer = await ask(
 				{
 					title: m.settings_updates_rollback_title({ version: name }),
@@ -323,9 +325,10 @@
 					],
 					initial: 'cancel'
 				},
-				AbortSignal.any([store.signal, ctl.signal])
+				ctl.signal
 			);
-			if (!(ctl.signal.aborted && !store.signal.aborted)) break;
+			store.signal.removeEventListener('abort', close);
+			if (answer !== null || !ctl.signal.aborted || store.signal.aborted) break;
 		}
 		rollbackAsk = undefined;
 		if (answer === 'rollback') await store.rollback();

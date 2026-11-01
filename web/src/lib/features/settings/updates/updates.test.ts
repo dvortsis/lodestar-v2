@@ -2,7 +2,7 @@
 // failed request keeps the last server state, Cancel sends nothing, a locked value can't change,
 // the security toggle follows the server per mode, and the notices appear.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { initLocale } from '$lib/i18n/locale.svelte';
 import UpdatesScreen from './UpdatesScreen.svelte';
 import type { Release, Status } from './logic';
@@ -11,6 +11,7 @@ import { cannotAuto, noticesOf, safeHttps, securityDefault, securityVisible } fr
 const asked = vi.hoisted(() => ({
 	answer: 'cancel' as string | null,
 	count: 0,
+	release: undefined as ((id: string | null) => void) | undefined,
 	last: undefined as { title: string; body: string[] } | undefined
 }));
 vi.mock('../form/dialogs', () => ({
@@ -19,7 +20,10 @@ vi.mock('../form/dialogs', () => ({
 		asked.last = q;
 		if (asked.answer !== 'hold') return asked.answer;
 		// An open question: it ends only when the screen closes it.
-		return new Promise((resolve) => signal?.addEventListener('abort', () => resolve(null)));
+		return new Promise((resolve) => {
+			asked.release = resolve;
+			signal?.addEventListener('abort', () => resolve(null));
+		});
 	}
 }));
 const events = vi.hoisted(() => ({
@@ -643,17 +647,40 @@ describe('the Updates screen', () => {
 				}
 			});
 
-			it('follows the field while the dialog is open; Cancel sends nothing', async () => {
+			it('follows the field while the dialog is open; Cancel then sends nothing', async () => {
 				asked.answer = 'hold';
-				const body = await ask1(true);
-				expect(body).toContain('goes back to its state');
+				expect(await ask1(true)).toContain('goes back to its state');
+				const before = asked.count;
 				status.rollback = { ...status.rollback, restores_store: false };
 				const handler = events.on.mock.calls.findLast((c) => c[0] === 'updates')![1];
 				handler({ state: 'idle', version: null, bytes_done: null, bytes_total: null, error: null });
 				await until(() => expect(asked.last!.body.join(' ')).toContain('stay as they are'));
+				expect(asked.count).toBe(before + 1);
 				expect(mutations()).toEqual([]);
 				asked.answer = 'cancel';
 				document.body.innerHTML = '';
+			});
+
+			it('after a re-ask, Roll back sends confirm once', async () => {
+				asked.answer = 'hold';
+				await ask1(true);
+				status.rollback = { ...status.rollback, restores_store: false };
+				const handler = events.on.mock.calls.findLast((c) => c[0] === 'updates')![1];
+				handler({ state: 'idle', version: null, bytes_done: null, bytes_total: null, error: null });
+				await until(() => expect(asked.last!.body.join(' ')).toContain('stay as they are'));
+				asked.release?.('rollback');
+				await until(() => expect(mutations()).toEqual(['POST /updates/rollback {"confirm":true}']));
+			});
+
+			it('leaving the screen mid-question ends it without asking again', async () => {
+				asked.answer = 'hold';
+				await ask1(true);
+				const before = asked.count;
+				cleanup();
+				// A looping re-ask would show up within microtasks; no timer needed.
+				for (let i = 0; i < 50; i++) await Promise.resolve();
+				expect(asked.count).toBe(before);
+				expect(mutations()).toEqual([]);
 			});
 		});
 
