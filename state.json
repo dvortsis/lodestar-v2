@@ -3111,6 +3111,11 @@
       "id": "flag-fx4-limits",
       "status": "to-send",
       "text": "FX-4 raised \"Settings logging messages (on demand)\" to 1.05 kB (runner §2.26) for real labels on the two log-level fields."
+    },
+    {
+      "id": "flag-logging-parts-limit",
+      "status": "to-send",
+      "text": "Settings logging parts limit 17.1 → 17.15 KB (runner §2.26): main went red on CI build variance (+3 B), not new code."
     }
   ],
   "external_gates": {
@@ -3221,6 +3226,10 @@
     {
       "t": "2026-11-01T18:05Z",
       "event": "MAIN RED (Web, run 41332558044 on 7ea22803): Detail sections 37313 B > 37310 B, cumulative FX-2 + FX-4 bytes after FX-1 set 37.31. Fix lands with #347 (FX-5 raises to 37.52); FX-5 told to prioritise push. #348 size red is this (not FX-6). Lesson: re-measure tight on-demand entries on the merge result before merging back-to-back web PRs."
+    },
+    {
+      "t": "2026-11-01T18:20Z",
+      "event": "Main red root cause: local build of 7ea22803 passes (Detail 37.30/37.31, Settings logging parts 17.1/17.1); CI measures +3 B (build variance). Fix via #347: Detail 37.52 + Settings logging parts 17.15 KB (runner §2.26). Follow-up: entries within ~10 B of their limit flake on CI; consider a headroom check in size-limit review (runner)."
     }
   ],
   "reviews": {
