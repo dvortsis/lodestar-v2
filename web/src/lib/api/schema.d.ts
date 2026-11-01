@@ -671,6 +671,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/filters/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The one-click catalog and your lists, each with what it blocks, and
+         *     how strict the enabled lists are together (§2.9, §20.13). Connect,
+         *     pause, remove or settle a held version with `/filters/preview` and
+         *     `/filters/apply`.
+         */
+        get: operations["getFilterSubscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/filters/test": {
         parameters: {
             query?: never;
@@ -2337,7 +2359,11 @@ export interface components {
             id?: number;
             /** @description `reveal_name`: the sealed name. */
             name?: string;
-            /** @description `core_switch` off: quarantined items released. */
+            /**
+             * @description `core_switch` off, `remove_rule`, `unsubscribe`,
+             *     `pause_subscription` off, `resolve_held` accepted: hashes released
+             *     from quarantine and tombstones.
+             */
             released?: number;
             /** @description `remove_cs1`: hashes removed. */
             removed?: number;
@@ -2365,6 +2391,12 @@ export interface components {
             floor_entries?: string[];
             neutralize: null | components["schemas"]["Preview"];
             preview: components["schemas"]["Preview"];
+            /**
+             * @description For a subscription change: how strict your lists would be after
+             *     it, as the enabled lists together (§2.9). Subscribing shows what
+             *     a list adds; unsubscribing or pausing shows what's left.
+             */
+            strictness?: components["schemas"]["Strictness"];
             /** @description The plain-language effect warning; null for a strengthening change. */
             warning: string | null;
             weakening: boolean;
@@ -2617,6 +2649,28 @@ export interface components {
              *     automatically then behaves as Check and notify.
              */
             reason: string | null;
+        };
+        /**
+         * @description A list in the one-click catalog. Send `url`, `kind` and `format` as a
+         *     `subscribe` change to connect it.
+         */
+        CatalogList: {
+            /** @description What it blocks, in plain language. */
+            about: string;
+            /** @description Its catalog measurement, or its own data once connected. */
+            figures: components["schemas"]["StrictnessList"];
+            /** @description `hashes`, `p2p`, `dat` or `cidr`. */
+            format: string;
+            key: string;
+            /** @description `content` or `ip`. */
+            kind: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description The subscription's id once you connected it.
+             */
+            subscription: number | null;
+            url: string;
         };
         /** @description One change to filtering (§20.7), tagged by `op`. */
         Change: {
@@ -3140,6 +3194,16 @@ export interface components {
              *     `confirm_required`.
              */
             password?: string;
+        };
+        /** @description One of your lists and its own figures. */
+        ConnectedList: {
+            figures: components["schemas"]["StrictnessList"];
+            /**
+             * @description A version the sanity gates held back waits for *Accept anyway*
+             *     or *Keep previous* (`resolve_held`).
+             */
+            held: boolean;
+            subscription: components["schemas"]["SubscriptionEntry"];
         };
         Connection: {
             /**
@@ -7593,6 +7657,19 @@ export interface components {
             url: string;
         };
         /**
+         * @description `GET /filters/subscriptions`: the one-click catalog, your lists, and
+         *     how strict the enabled ones are together (§2.9, §20.13). Nothing is
+         *     subscribed by default; connecting is `subscribe` through
+         *     `/filters/preview` and `/filters/apply`.
+         */
+        Subscriptions: {
+            catalog: components["schemas"]["CatalogList"][];
+            /** @description Your lists, paused ones included, each with its own figures. */
+            connected: components["schemas"]["ConnectedList"][];
+            /** @description The enabled lists together. */
+            strictness: components["schemas"]["Strictness"];
+        };
+        /**
          * @description One suggestion: replace the query's characters `replace.start` to
          *     `replace.end` (end exclusive) with `insert`. A leading `-` or `!`
          *     stays outside the range.
@@ -9666,6 +9743,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Strictness"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getFilterSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscriptions"];
                 };
             };
             default: components["responses"]["Error"];

@@ -22,6 +22,9 @@ use tower::ServiceExt;
 
 const PASSWORD: &str = "correct horse battery";
 
+#[path = "filters/subscriptions.rs"]
+mod subscriptions;
+
 struct Fixture {
     app: Router,
     auth: Arc<Auth>,
@@ -2448,7 +2451,8 @@ async fn a_change_that_became_weakening_since_its_preview_is_refused() {
     assert!(f.api.held.contains(&[0x51; 20]), "nothing released");
     assert_eq!(core_on(&overview(&f, &c).await, "CS-3a"), json!(true));
 
-    // Accepting a held list version: previewed before one shrank.
+    // Accepting a held list version: previewed while the held version
+    // only grew, applied after one that drops entries replaced it.
     let id = f
         .api
         .store
@@ -2466,11 +2470,22 @@ async fn a_change_that_became_weakening_since_its_preview_is_refused() {
         .unwrap();
     let accept: Change =
         serde_json::from_value(json!({ "op": "resolve_held", "id": id, "accept": true })).unwrap();
+    let data = [[1u8; 20], [2; 20], [3; 20]].concat();
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let grown = lodestar_store::Refresh::Held {
+            data: &data,
+            entries: 3,
+            etag: None,
+            last_modified: None,
+            why: "grew",
+        };
+        store.record_refresh(id, 0, &grown).unwrap();
+    }
     let stale = f.api.assess(&accept, now).unwrap();
     assert!(!stale.confirm);
     {
         let mut store = f.api.store.lock().unwrap();
-        let data = [[1u8; 20], [2; 20], [3; 20]].concat();
         fn refresh(data: &[u8], held: bool) -> lodestar_store::Refresh<'_> {
             if held {
                 lodestar_store::Refresh::Held {

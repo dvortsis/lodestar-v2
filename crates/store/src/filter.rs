@@ -91,6 +91,9 @@ pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 const ADULT_HOLD: &str = "+adult";
 
 /// The stored rule id of a held hash.
+/// The hashes one rule holds: quarantined, then tombstoned.
+pub type RuleHolds = (Vec<[u8; 20]>, Vec<[u8; 20]>);
+
 fn held_rule(rule: &str, adult_hold: bool) -> String {
     if adult_hold {
         format!("{rule}{ADULT_HOLD}")
@@ -450,6 +453,78 @@ impl Store {
                     }
                 }
             }
+        }
+        if deleted_any || self.scrub_pending {
+            self.scrub_wal();
+        }
+        Ok(total)
+    }
+
+    /// Every hash `rule` holds, adult holds included: the quarantined and
+    /// the tombstoned ones. A scan, as `rule` has no index (§20.7).
+    pub fn held_by_rule(&self, rule: &str) -> Result<RuleHolds> {
+        let mut out = (Vec::new(), Vec::new());
+        for (table, into) in [("quarantine", &mut out.0), ("tombstones", &mut out.1)] {
+            let mut stmt = self
+                .conn
+                .prepare_cached(&format!("SELECT hash FROM {table} WHERE rule IN (?1, ?2)"))?;
+            let rows = stmt.query_map(params![rule, held_rule(rule, true)], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })?;
+            for h in rows {
+                into.push(hash20(h?)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Releases what `rule` holds of `hashes` only, quarantine and
+    /// tombstones: a list version that no longer lists them. A hold by
+    /// another rule stays. Deletes in transactions of up to
+    /// [`MARK_CHUNK`](crate::MARK_CHUNK) hashes and calls `released`
+    /// after each with the hashes no longer held by anything. Returns how
+    /// many were released.
+    pub fn release_rule_hashes(
+        &mut self,
+        rule: &str,
+        hashes: &[[u8; 20]],
+        mut released: impl FnMut(&[[u8; 20]]),
+    ) -> Result<usize> {
+        let adult = held_rule(rule, true);
+        let mut total = 0;
+        let mut deleted_any = false;
+        for chunk in hashes.chunks(crate::MARK_CHUNK) {
+            let tx = self.conn.transaction()?;
+            let mut free = Vec::new();
+            {
+                let mut del = [
+                    tx.prepare_cached(
+                        "DELETE FROM quarantine WHERE hash = ?1 AND rule IN (?2, ?3)",
+                    )?,
+                    tx.prepare_cached(
+                        "DELETE FROM tombstones WHERE hash = ?1 AND rule IN (?2, ?3)",
+                    )?,
+                ];
+                let mut held = tx.prepare_cached(
+                    "SELECT 1 FROM quarantine WHERE hash = ?1
+                     UNION ALL SELECT 1 FROM tombstones WHERE hash = ?1",
+                )?;
+                for h in chunk {
+                    let mut n = 0;
+                    for d in &mut del {
+                        n += d.execute(params![&h[..], rule, adult])?;
+                    }
+                    if n > 0 {
+                        deleted_any = true;
+                        if !held.exists([&h[..]])? {
+                            free.push(*h);
+                        }
+                    }
+                }
+            }
+            tx.commit()?;
+            released(&free);
+            total += free.len();
         }
         if deleted_any || self.scrub_pending {
             self.scrub_wal();

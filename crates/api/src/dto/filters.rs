@@ -214,6 +214,12 @@ pub struct Assessment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub floor_entries: Option<Vec<String>>,
+    /// For a subscription change: how strict your lists would be after
+    /// it, as the enabled lists together (§2.9). Subscribing shows what
+    /// a list adds; unsubscribing or pausing shows what's left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub strictness: Option<Strictness>,
     /// All of them, for applying.
     #[serde(skip)]
     pub(crate) settles: Option<Vec<[u8; 20]>>,
@@ -243,7 +249,9 @@ pub struct ApplyResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub name: Option<String>,
-    /// `core_switch` off: quarantined items released.
+    /// `core_switch` off, `remove_rule`, `unsubscribe`,
+    /// `pause_subscription` off, `resolve_held` accepted: hashes released
+    /// from quarantine and tombstones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub released: Option<usize>,
@@ -505,6 +513,49 @@ pub struct StrictnessList {
     /// The figures are a catalog measurement, not this list's data.
     pub measured: bool,
     pub name: String,
+}
+
+/// `GET /filters/subscriptions`: the one-click catalog, your lists, and
+/// how strict the enabled ones are together (§2.9, §20.13). Nothing is
+/// subscribed by default; connecting is `subscribe` through
+/// `/filters/preview` and `/filters/apply`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Subscriptions {
+    pub catalog: Vec<CatalogList>,
+    /// Your lists, paused ones included, each with its own figures.
+    pub connected: Vec<ConnectedList>,
+    /// The enabled lists together.
+    pub strictness: Strictness,
+}
+
+/// A list in the one-click catalog. Send `url`, `kind` and `format` as a
+/// `subscribe` change to connect it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CatalogList {
+    /// What it blocks, in plain language.
+    pub about: String,
+    /// Its catalog measurement, or its own data once connected.
+    pub figures: StrictnessList,
+    /// `hashes`, `p2p`, `dat` or `cidr`.
+    pub format: String,
+    pub key: String,
+    /// `content` or `ip`.
+    pub kind: String,
+    pub name: String,
+    /// The subscription's id once you connected it.
+    #[schema(required = true)]
+    pub subscription: Option<i64>,
+    pub url: String,
+}
+
+/// One of your lists and its own figures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ConnectedList {
+    pub figures: StrictnessList,
+    /// A version the sanity gates held back waits for *Accept anyway*
+    /// or *Keep previous* (`resolve_held`).
+    pub held: bool,
+    pub subscription: SubscriptionEntry,
 }
 
 /// A list subscription (§20.6).

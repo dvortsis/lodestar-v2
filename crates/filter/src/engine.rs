@@ -427,6 +427,11 @@ impl Engine {
             self.lists.push(l);
         }
     }
+
+    /// Keeps only the list layers `keep` names.
+    pub fn retain_lists(&mut self, keep: impl Fn(u32) -> bool) {
+        self.lists.retain(|l| keep(l.id));
+    }
 }
 
 /// The stronger of two decisions; the second on a tie (a real rule over
