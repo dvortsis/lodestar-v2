@@ -2,25 +2,26 @@
 // E2E_FIXTURE_URL names it (and E2E_FIXTURE_PASSWORD its sign-in). Plain Playwright `test`, not
 // the harness one: no OpenAPI mock. /dev/shortcuts exists only in a build made with
 // VITE_DEV_ROUTES=1, which the server must embed.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const url = process.env.E2E_FIXTURE_URL;
 const password = process.env.E2E_FIXTURE_PASSWORD ?? 'correct horse battery';
 
 test.skip(!url, 'set E2E_FIXTURE_URL to run against serve --fixture');
-test.use({ baseURL: url });
 
-test.beforeEach(async ({ page }) => {
-	await page.goto('/login');
-	await page.getByLabel('Password').fill(password);
-	await page.getByRole('button', { name: 'Sign in' }).click();
-	await page.waitForURL((u) => !u.pathname.startsWith('/login'));
+// One sign-in for the file: the server rate-limits logins (a burst of 5 per address), and the
+// fixture files together sign in 5 times, so a second sign-in here would be refused.
+test.describe.configure({ mode: 'serial' });
+let page: Page;
+test.beforeAll(async ({ browser }) => {
+	const context = await browser.newContext({ baseURL: url });
+	const res = await context.request.post('/api/v1/login', { data: { password } });
+	expect(res.ok(), `login: ${res.status()}`).toBe(true);
+	page = await context.newPage();
 });
+test.afterAll(() => page?.context().close());
 
-test('a saved remap holds after a reload, and the server refuses a clash', async ({
-	page,
-	request
-}) => {
+test('a saved remap holds after a reload, and the server refuses a clash', async () => {
 	// Start from defaults.
 	await page.request.patch('/api/v1/settings/preferences', { data: { shortcut_keys: {} } });
 	await page.goto('/dev/shortcuts');
@@ -39,12 +40,9 @@ test('a saved remap holds after a reload, and the server refuses a clash', async
 	expect(res.status()).toBe(422);
 	const error = (await res.json()).error as { message: string };
 	expect(error.message).toContain('both use k');
-	void request;
 });
 
-test('a clash the editor cannot see is refused with a 422 and the message shows under its row', async ({
-	page
-}) => {
+test('a clash the editor cannot see is refused with a 422 and the message shows under its row', async () => {
 	await page.request.patch('/api/v1/settings/preferences', { data: { shortcut_keys: {} } });
 	await page.goto('/dev/shortcuts');
 	await expect(page.getByRole('switch', { name: 'Single-key shortcuts' })).toBeVisible();

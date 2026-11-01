@@ -1,5 +1,5 @@
 // The query bar against the real server (`lodestar serve --fixture`, bench/README.md "Fixture
-// backend"), not the OpenAPI mock. Local only until S-e2e wires a fixture job: it skips unless
+// backend"), not the OpenAPI mock. Runs nightly in e2e.yml (the fixture job): it skips unless
 // E2E_FIXTURE_URL is set, and imports @playwright/test directly so no mock is installed. Run it with
 // a copied local config (`testMatch: /\.fixture\.test\.ts$/`, a private port) after
 //   npm run build && LODESTAR_HTTP_BIND=127.0.0.1:<port> LODESTAR_FIXTURE_PASSWORD=… \
@@ -34,6 +34,14 @@ test('lantern type:movie is highlighted, gets a Type chip, and removing it leave
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern type:movie');
 	await expect(bar(page)).not.toHaveAttribute('aria-invalid');
 	await expect(page.getByRole('alert')).toHaveCount(0);
+	// The suggestions popup can still be open over the chip just after the search runs: close it,
+	// and wait until it is gone before clicking.
+	if (await page.getByRole('listbox', { name: 'Suggestions' }).isVisible()) {
+		await page.keyboard.press('Escape');
+	}
+	await expect(page.getByRole('listbox', { name: 'Suggestions' })).toHaveCount(0, {
+		timeout: 10_000
+	});
 	const chip = page.getByRole('button', { name: 'Remove filter: Type: Movie' });
 	await expect(chip).toBeVisible();
 	await chip.click();
