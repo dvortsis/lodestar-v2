@@ -63,7 +63,7 @@
 		const ids = (packs ?? []).filter((p) => !p.on && checked[p.id]).map((p) => p.id);
 		problem = undefined;
 		if (!ids.length) return true;
-		const flows = await import('../filters/flows');
+		const flows = await import('../filters/flows/flow.svelte');
 		const result = await applyPacks(ids, flows, stop.signal);
 		if (!result.failed) {
 			await load();

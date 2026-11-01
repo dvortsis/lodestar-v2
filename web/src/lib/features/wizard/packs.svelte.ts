@@ -5,8 +5,17 @@
 // by the pack step, so none of this is in the wizard's first view.
 import type { FlowState } from '../filters/flows/machine';
 import type { ChangeFlow } from '../filters/flows/flow.svelte';
+import type { Change } from '../filters/flows/types';
 
-export type Flows = typeof import('../filters/flows');
+const packOn = (id: string): Change => ({ op: 'pack_switch', id, on: true });
+/** What a refused change says: the server's sentence, or nothing, so the caller words it. */
+const said = (e: { message: string; code: string }) => e.message.trim() || e.code;
+
+// Only what the Filters screen itself loads, loaded the same way (`flows/flow.svelte`, a dynamic
+// import of a module that screen already imports dynamically), and the change as a typed literal:
+// importing the flows' index or `errors.ts` from here would make a second consumer of the dialogs'
+// code and split its chunks (docs/decisions/2026-10-31-S-wizard.md, part 2).
+export type Flows = typeof import('../filters/flows/flow.svelte');
 
 export interface PackFailure {
 	id: string;
@@ -58,10 +67,10 @@ export async function applyPacks(
 		const stopOnAbort = () => flow.cancel();
 		signal.addEventListener('abort', stopOnAbort, { once: true });
 		try {
-			flow.start(flows.packSwitch(id, true));
+			flow.start(packOn(id));
 			const preview = await settle(flow, ['review', 'confirm', 'failed', 'closed'], signal);
 			if (preview.kind === 'failed')
-				return { applied, failed: { id, message: flows.errorText(preview.error) } };
+				return { applied, failed: { id, message: said(preview.error) } };
 			// Only a plain strengthening change goes through here. A warning or a password means the
 			// server sees it as weakening something: the wizard doesn't take that decision.
 			if (preview.kind !== 'review' || preview.assessment.weakening || preview.assessment.confirm) {
@@ -74,7 +83,7 @@ export async function applyPacks(
 				applied.push(id);
 				continue;
 			}
-			const message = result.kind === 'failed' ? flows.errorText(result.error) : null;
+			const message = result.kind === 'failed' ? said(result.error) : null;
 			flow.cancel();
 			return { applied, failed: { id, message } };
 		} finally {
