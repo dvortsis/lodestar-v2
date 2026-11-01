@@ -1296,3 +1296,119 @@ async fn the_gate_counts_new_records_apart_from_each_exclusion() {
     assert_eq!(buckets[buckets.len() - 1], 1);
     assert_eq!(gate.dropped.load(Ordering::Relaxed), 0);
 }
+
+/// §10.17: the Discover and Fetch pages' event-time counters (metrics 1–4
+/// and 14) equal the counters `/metrics` renders from the same stats
+/// (`crates/lodestar/src/metrics.rs`: `intake_received_total`,
+/// `writer_rediscovered_total`, `intake_dropped_total`,
+/// `writer_stored_total`, `intake_refused_total`,
+/// `fetch_lost_total{reason}`) within one flush, read beside the running
+/// pipeline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rollups_equal_the_metrics_counters_within_a_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seeds: Vec<Seed> = ["One", "Two", "Three", "Held"]
+        .iter()
+        .map(|n| Seed::v1(info_dict(n)))
+        .collect();
+    let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let (feed, feed_tx) = scripted("feed");
+    let (other, other_tx) = scripted("other");
+    let finder = Arc::new(PeerTable {
+        manifest: manifest("finder", &[Kind::PeerFinder]),
+        peers: HashMap::new(),
+    });
+    let cfg = config();
+    cfg.filter
+        .update(|core| core.cs.add_hash(keys[3].0, Origin::Imported));
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(cfg, store, vec![feed, other, finder])
+        .await
+        .unwrap();
+    for (i, k) in keys.iter().enumerate() {
+        let found = Found::key(*k, i as u8 % 2).with_peers(vec![peer.addr()]);
+        feed_tx.send(found).await.unwrap();
+    }
+    for b in 0..3u8 {
+        feed_tx
+            .send(Found::key(InfoHash([0xe0 + b; 20]), 0))
+            .await
+            .unwrap();
+    }
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 3
+    })
+    .await;
+    for k in &keys[..2] {
+        other_tx.send(Found::key(*k, 1)).await.unwrap();
+    }
+    until("settled", || {
+        pipeline.pool_stats().lost_count(Loss::NoPeers) == 3
+            && pipeline.writer_stats().rediscovered.load(Ordering::Relaxed) == 2
+    })
+    .await;
+
+    let (i, w, p) = (
+        pipeline.intake_stats(),
+        pipeline.writer_stats(),
+        pipeline.pool_stats(),
+    );
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed) as i64;
+    let want = [
+        ("reported", get(&i.received)),
+        ("rediscovered", get(&w.rediscovered)),
+        ("dropped", get(&i.dropped)),
+        ("stored", get(&w.stored)),
+        ("blocked", get(&i.refused)),
+        ("no_peers", p.lost_count(Loss::NoPeers) as i64),
+    ];
+    // Pinned, so a counter that never moved can't pass as 0 = 0 (only
+    // `dropped` is 0: nothing here is dropped).
+    assert_eq!(
+        want.map(|(_, n)| n),
+        [9, 2, 0, 3, 1, 3],
+        "seven keys and two rediscoveries"
+    );
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let sum = |metric: u32, dim: Option<u32>, key: Option<i64>| -> i64 {
+        reader
+            .rollup(metric, 0, i64::MAX)
+            .unwrap()
+            .iter()
+            .filter(|c| dim.is_none_or(|d| c.dim == d) && key.is_none_or(|k| c.key == k))
+            .map(|c| c.value)
+            .sum()
+    };
+    let lost = |loss: Loss| {
+        sum(
+            metric::FUNNEL_EVENTS,
+            Some(Stage::Lost as u32),
+            Some(loss as i64),
+        )
+    };
+    let got = || {
+        [
+            ("reported", sum(metric::HARVESTED, None, None)),
+            ("rediscovered", sum(metric::REDISCOVERED, None, None)),
+            ("dropped", sum(metric::DROPPED, None, None)),
+            ("stored", sum(metric::STORED, None, None)),
+            ("blocked", lost(Loss::Blocked)),
+            ("no_peers", lost(Loss::NoPeers)),
+        ]
+    };
+    // The writer flushes every 100 ms here; 10 s is the slowest runner's
+    // allowance, not the flush interval.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while got() != want && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(got(), want);
+    // Fetched by event time is what the writer was handed: the three stored.
+    assert_eq!(
+        sum(metric::FUNNEL_EVENTS, Some(Stage::Fetched as u32), Some(0)),
+        get(&w.stored)
+    );
+    pipeline.shutdown().await.unwrap();
+}
