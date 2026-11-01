@@ -3074,6 +3074,12 @@
       "id": "flag-fx1-limits",
       "status": "to-send",
       "text": "§2.19/§2.26 (FX-1, design-review B2): 'Search index-state banners (on demand)' limit 3.3 -> 4.1 KB and 'Detail sections (on demand)' 37.3 -> 37.31 KB, because illustrated states now share one §10.19-compliant EmptyState primitive; first views shrank: Discover -1.55 KB, Logs -1.45 KB, Alerts -1.58 KB, drawer -0.23 KB."
+    },
+    {
+      "id": "soak-r3-go",
+      "status": "asked",
+      "text": "r2 soak stopped early (host event suspected). Runner recommends: find cause, disable it, fresh r3 on rc.2 (~30.5 h). Owner says 'start r3'.",
+      "at": "2026-11-01T14:58Z"
     }
   ],
   "external_gates": {
@@ -3497,5 +3503,12 @@
       "what": "After #340 merges: launch FX-1 (Sonnet). Then FX-3 (Opus), FX-4 (Sonnet), FX-5 (Sonnet), FX-6 UI (Sonnet) + FX-6 I9 (Opus) as slots free.",
       "at": "2026-11-01T14:04Z"
     }
-  ]
+  ],
+  "soak_r2": {
+    "status": "stopped early 2026-11-01T11:00:57Z (operator_stop + already_exited_0; ~2.3 h into baseline); not gate evidence",
+    "runner_read": "collector got SIGTERM/SIGINT or stop.request ~simultaneously with a graceful container stop: host-level event (backup/auto-update plugin, Docker restart, array stop, reboot). 11:00Z = 05:00 MDT on DST-end night.",
+    "plan": "owner/Antigravity find cause read-only; disable it; fresh r3 on rc.2 6be95525 + collector 673692a4, ~30.5 h; r2 recorded as interrupted; gluetun leg waits for owner",
+    "awaiting": "owner 'start r3'",
+    "at": "2026-11-01T14:58Z"
+  }
 }
