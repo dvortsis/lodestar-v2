@@ -111,11 +111,14 @@ describe('startAppearance', () => {
 		// The server still holds the pick before this one (the echo of an earlier save).
 		get.mockResolvedValue(section({ ...DEFAULTS, mode: 'light' }));
 		markSave(true);
-		await refresh();
-		expect(root.dataset.theme).toBe('nord-light');
-		markSave(false);
-		await refresh();
-		expect(root.dataset.theme).toBe('riverstone-light');
+		try {
+			await refresh();
+			expect(root.dataset.theme).toBe('nord-light');
+		} finally {
+			// The skipped refresh runs once the save ends, with the server's answer by then.
+			markSave(false);
+		}
+		await vi.waitFor(() => expect(root.dataset.theme).toBe('riverstone-light'));
 	});
 
 	it('does not overwrite a choice made while the fetch was in flight', async () => {
