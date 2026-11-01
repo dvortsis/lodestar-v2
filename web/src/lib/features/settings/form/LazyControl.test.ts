@@ -96,7 +96,7 @@ describe('a control loaded on demand', { timeout: 20_000 }, () => {
 		const input = await screen.findByLabelText('Fetch timeout', {}, { timeout: 10_000 });
 		await fireEvent.input(input, { target: { value: '30' } });
 		expect(form.field('crawler.timeout_secs').value).toBe(30);
-		await until(() => expect(screen.getByRole('radio', { name: 'balanced' })).toBeTruthy());
+		await until(() => expect(screen.getByRole('radio', { name: 'Balanced' })).toBeTruthy());
 	});
 
 	it('loads only what a form’s fields need, once', async () => {

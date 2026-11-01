@@ -18,6 +18,12 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_notifications_email_port_label: m.settings_notifications_email_port_label,
 	settings_notifications_email_security_help: m.settings_notifications_email_security_help,
 	settings_notifications_email_security_label: m.settings_notifications_email_security_label,
+	settings_notifications_email_security_option_none:
+		m.settings_notifications_email_security_option_none,
+	settings_notifications_email_security_option_starttls:
+		m.settings_notifications_email_security_option_starttls,
+	settings_notifications_email_security_option_tls:
+		m.settings_notifications_email_security_option_tls,
 	settings_notifications_email_to_help: m.settings_notifications_email_to_help,
 	settings_notifications_email_to_label: m.settings_notifications_email_to_label,
 	settings_notifications_email_username_help: m.settings_notifications_email_username_help,

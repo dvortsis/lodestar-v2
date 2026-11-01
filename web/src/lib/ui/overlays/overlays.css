@@ -104,3 +104,13 @@
 	outline: var(--focus-ring-width) solid var(--color-primary);
 	outline-offset: calc(var(--focus-ring-width) * -1);
 }
+
+/* A popover never outgrows the viewport less the 16 px gutter; below `medium` (480) it fills it. */
+.ls-popover {
+	max-inline-size: calc(100vw - 2 * var(--spacing) * 4);
+}
+@media (width < 30rem) {
+	.ls-popover {
+		inline-size: calc(100vw - 2 * var(--spacing) * 4);
+	}
+}

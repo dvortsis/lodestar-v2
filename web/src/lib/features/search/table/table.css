@@ -68,6 +68,7 @@
 	text-align: center !important;
 }
 .rt-sort {
+	/* Standalone control: the global coarse rule sizes it (app.css). */
 	display: inline-flex;
 	align-items: center;
 	gap: var(--spacing);

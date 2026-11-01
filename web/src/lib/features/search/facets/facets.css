@@ -154,13 +154,8 @@
 	height: var(--icon-size-row);
 }
 @media (pointer: coarse) {
-	.fr-value,
-	.fr-preset,
-	.fr-icon-button {
+	.fr-value {
 		min-height: var(--target-min);
-	}
-	.fr-icon-button {
-		min-width: var(--target-min);
 	}
 }
 .fr-find {

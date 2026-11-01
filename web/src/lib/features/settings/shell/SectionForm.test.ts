@@ -144,7 +144,7 @@ it('waits for a lazy choice and focuses its selected option instead of the menu'
 		})
 	]);
 	await waitFor(
-		() => expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'balanced' })),
+		() => expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Balanced' })),
 		{ timeout: 10_000 }
 	);
 });

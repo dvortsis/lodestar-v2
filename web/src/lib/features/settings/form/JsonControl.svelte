@@ -56,7 +56,8 @@
 	mono
 	rows={4}
 	value={text}
-	disabled={f.locked}
+	readonly={f.locked}
+	class={f.locked ? 'text-base-content' : ''}
 	spellcheck={false}
 	aria-invalid={invalid || controlProps['aria-invalid']}
 	aria-describedby={[controlProps['aria-describedby'], invalid && !f.error ? errorId : '']

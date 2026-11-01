@@ -12,10 +12,10 @@
 	@apply flex gap-2;
 }
 .as-h1 {
-	@apply text-display font-semibold;
+	@apply text-title font-semibold;
 }
 .as-h2 {
-	@apply text-title font-semibold;
+	@apply text-body-lg font-semibold;
 }
 .as-text {
 	@apply text-body text-muted-text;
