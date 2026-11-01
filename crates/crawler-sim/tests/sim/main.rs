@@ -710,7 +710,8 @@ fn target_prefixes_sweep_deterministically() {
     let secs = 60 * u64::from(on.minutes);
     let qps = u64::from(on.intensity.queries_per_sec());
     assert!(b.dht.queries_out <= qps * (secs + 1), "{}", b.text);
-    assert!(b.net.sample_early <= a.net.sample_early, "{}", b.text);
+    assert_eq!(b.net.sample_early, 0, "{}", b.text);
+    assert!(b.net.rate_limited <= a.net.rate_limited, "{}", b.text);
     assert_eq!(simulate(&on).text, b.text);
 }
 

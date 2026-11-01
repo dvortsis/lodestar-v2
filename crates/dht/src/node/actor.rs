@@ -2292,7 +2292,16 @@ impl Actor {
                     if let Some(l) = self.lookups.get_mut(&lid) {
                         l.explore = true;
                     }
-                    self.advance_prefix(f, TargetKind::Explore);
+                    // CR-1b: only a lookup that sent a query used its prefix.
+                    // One with no usable candidate finished at once, unsent.
+                    if self.prefixes.is_some()
+                        && self
+                            .pending
+                            .values()
+                            .any(|p| matches!(p.purpose, Purpose::Lookup(l) if l == lid))
+                    {
+                        self.advance_prefix(f, TargetKind::Explore);
+                    }
                 }
             }
         }

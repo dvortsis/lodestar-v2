@@ -80,15 +80,17 @@ fn samples_pending(a: &Actor) -> usize {
 fn switch_off_draws_each_target_uniformly_as_before() {
     let (mut a, sockets) = actor(false);
     assert!(a.prefixes.is_none(), "off allocates no cursor");
-    let p = peer(&mut a);
+    let (p1, p2) = (peer(&mut a), peer(&mut a));
     // Before CR-1b a tick with a low frontier drew the exploration target,
-    // then each sample's, as one uniform 20-byte draw apiece.
+    // then each sample's in frontier order, as one uniform 20-byte draw
+    // apiece.
     a.rng = StdRng::seed_from_u64(9);
     let mut rng = StdRng::seed_from_u64(9);
     let _explore: [u8; 20] = rng.random();
-    let want: [u8; 20] = rng.random();
+    let (want1, want2): ([u8; 20], [u8; 20]) = (rng.random(), rng.random());
     a.sample_tick(&sockets, Instant::now());
-    assert_eq!(sample_target(&p), want);
+    assert_eq!(sample_target(&p1), want1);
+    assert_eq!(sample_target(&p2), want2);
     let st = a.stats.snapshot();
     assert_eq!(st.target_prefix_queries, [0, 0]);
     assert_eq!(st.target_prefix_cycles, 0);
@@ -103,21 +105,23 @@ fn switch_on_walks_the_prefixes_and_holds_on_throttle_and_pause() {
     at.sort_unstable();
     assert_eq!(at, [0, 1, 2]);
     assert_eq!(cursor(&a, TargetKind::Sample), 3);
-    assert_eq!(cursor(&a, TargetKind::Explore), 1, "one exploration lookup");
-    assert_eq!(a.stats.snapshot().target_prefix_queries, [1, 3]);
+    assert_eq!(
+        cursor(&a, TargetKind::Explore),
+        0,
+        "the exploration lookup had no candidate, so it sent nothing"
+    );
+    assert_eq!(a.stats.snapshot().target_prefix_queries, [0, 3]);
 
     // Throttled: the sample isn't sent and its prefix isn't skipped.
     let p = peer(&mut a);
-    let rate = a.query_rate.rate;
+    let (rate, burst, tokens) = (a.query_rate.rate, a.query_rate.burst, a.query_rate.tokens);
     a.query_rate.rate = 0.0;
     a.query_rate.tokens = 0.0;
     let before = samples_pending(&a);
     a.sample_tick(&sockets, Instant::now());
     assert_eq!(samples_pending(&a), before);
     assert_eq!(cursor(&a, TargetKind::Sample), 3);
-    a.query_rate.rate = rate;
-    a.query_rate.burst = rate;
-    a.query_rate.tokens = rate;
+    (a.query_rate.rate, a.query_rate.burst, a.query_rate.tokens) = (rate, burst, tokens);
 
     // Paused: no tick samples or explores, so no cursor moves.
     let explore = cursor(&a, TargetKind::Explore);
@@ -244,4 +248,22 @@ fn the_exploration_lookup_is_marked_and_its_contacts_count_as_explore() {
     };
     a.on_response(&sockets, 0, &msg, Some(&response), x);
     assert_eq!(a.stats.snapshot().target_novel_nodes, [1, 0]);
+}
+
+#[test]
+fn the_explore_cursor_moves_only_when_its_lookup_sends() {
+    let (mut a, sockets) = actor(true);
+    a.families[0].table.insert(
+        NodeInfo {
+            id: NodeId([9; 20]),
+            addr: "127.0.0.1:40200".parse().unwrap(),
+        },
+        Contact::Response,
+        0,
+    );
+    a.sample_tick(&sockets, Instant::now());
+    assert_eq!(cursor(&a, TargetKind::Explore), 1);
+    assert_eq!(a.stats.snapshot().target_prefix_queries[0], 1);
+    let target = a.lookups.values().find(|l| l.explore).unwrap().target;
+    assert_eq!(target.0[0], 0, "position 0's prefix");
 }

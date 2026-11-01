@@ -762,7 +762,7 @@ With `dht.target_prefixes` on ([the decision](decisions/2026-11-01-CR-1b.md)), e
 | Series | Meaning |
 |---|---|
 | `dht_target_novel_nodes_total{kind}` | Contacts in replies that entered the sampler's frontier as new, by the kind of random target the query carried: `sample` or `explore`. Contacts from other replies (pings, peer lookups, refreshes) aren't counted. **Counts with the switch on or off**, so both arms of an A/B have it. |
-| `dht_target_prefix_queries_total{kind}` | Queries sent with a prefix target. A cursor moves only when its query is sent, so throttling, the pause and the restart suppression don't skip a prefix. Stays 0 with the switch off. |
+| `dht_target_prefix_queries_total{kind}` | Uses of a prefix target that went out: each `sample_infohashes` sent (`sample`), and each exploration lookup that sent at least one `find_node` (`explore`, one per lookup, however many queries it sends). A cursor moves only when its query is sent, so throttling, the pause and the restart suppression don't skip a prefix. Stays 0 with the switch off. |
 | `dht_samples_sent_total` | BEP 51 `sample_infohashes` queries sent. Always counts; exported with CR-1b so hashes can be attributed per call. |
 | `dht_target_prefix_cycles_total` | Full passes of a cursor over the 256 prefixes, summed over families and kinds. A pass isn't a claim that the keyspace was covered. Stays 0 with the switch off. |
 

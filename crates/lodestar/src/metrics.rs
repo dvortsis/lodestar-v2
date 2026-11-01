@@ -543,6 +543,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             d.sample_deferred,
         );
         o.one(
+            "dht_samples_sent_total",
+            "counter",
+            "BEP 51 sample_infohashes queries sent.",
+            d.samples_sent,
+        );
+        o.one(
             "dht_lookups_completed_total",
             "counter",
             "get_peers lookups finished.",
@@ -1150,12 +1156,6 @@ fn render_target_prefixes(o: &mut Out, d: &StatsSnapshot) {
         "Full passes of a prefix cursor over the 256 eight-bit prefixes.",
         d.target_prefix_cycles,
     );
-    o.one(
-        "dht_samples_sent_total",
-        "counter",
-        "BEP 51 sample_infohashes queries sent.",
-        d.samples_sent,
-    );
 }
 
 /// CR-0d's restart-proof families (docs/metrics.md).
@@ -1634,7 +1634,6 @@ mod tests {
             target_novel_nodes: [1, 2],
             target_prefix_queries: [3, 4],
             target_prefix_cycles: 5,
-            samples_sent: 6,
             ..StatsSnapshot::default()
         };
         let mut o = Out(String::new());
@@ -1646,7 +1645,6 @@ mod tests {
             "lodestar_dht_target_prefix_queries_total{kind=\"explore\"} 3",
             "lodestar_dht_target_prefix_queries_total{kind=\"sample\"} 4",
             "lodestar_dht_target_prefix_cycles_total 5",
-            "lodestar_dht_samples_sent_total 6",
         ] {
             assert!(
                 o.0.lines().any(|l| l == line),
