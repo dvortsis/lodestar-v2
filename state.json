@@ -3299,6 +3299,10 @@
     {
       "t": "2026-11-01T21:06Z",
       "event": "merged #355 X-pw-local-chromium (33106eef; no baseline regen). Archived. Future briefs: say \"set PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1243/chrome-linux64/chrome\" instead of the symlink trick. Open: F-filter-load-fail-closed only."
+    },
+    {
+      "t": "2026-11-01T21:12Z",
+      "event": "Launched P-v06-sources-plan (Opus, docs-only planning: SRC-* slices, store impact vs V13/V14 order + no migrations before v0.5.1 cut, owner-question list). Running: F-filter-load-fail-closed, P-v06-sources-plan."
     }
   ],
   "reviews": {
