@@ -295,7 +295,7 @@
 	"settings_form_pending_reset": "保存时将恢复为默认值。",
 	"settings_form_conflict": "已在其他地方更改为 {value}",
 	"settings_form_keep_mine": "保留我的",
-	"settings_form_use_theirs": "使用其他的",
+	"settings_form_use_theirs": "使用对方的",
 	"settings_form_saved": "已保存",
 	"settings_form_saved_restart": "已保存 · 重启后生效",
 	"settings_form_undo": "撤销",

@@ -1,5 +1,19 @@
 import { render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// Lets a test make the zh message for scrape_age look missing; everything else is the real catalogue.
+const stub = vi.hoisted(() => ({ zhMissing: false }));
+vi.mock('$lib/paraglide/messages.js', async (importOriginal) => {
+	const real = await importOriginal<typeof import('$lib/paraglide/messages.js')>();
+	return {
+		...real,
+		m: {
+			...real.m,
+			scrape_age: (params: { relative: string }, opts: { locale?: 'en' | 'zh' } = {}) =>
+				real.m.scrape_age(params, stub.zhMissing ? { ...opts, locale: 'en' as const } : opts)
+		}
+	};
+});
 import {
 	applyLocale,
 	currentLocale,
@@ -10,6 +24,7 @@ import {
 import Probe from './testing/Probe.svelte';
 
 afterEach(() => {
+	stub.zhMissing = false;
 	applyLocale('en');
 	vi.doUnmock('./coverage.generated');
 	vi.resetModules();
@@ -73,6 +88,13 @@ describe('rendered messages', () => {
 		applyLocale('en');
 		render(Probe, { relative: '3 hours ago' });
 		expect(screen.getByTestId('probe-language').textContent).toBe('English');
+		expect(screen.getByTestId('probe-age').textContent).toBe('Seen 3 hours ago');
+	});
+	it('renders the en message where a zh message is missing', () => {
+		// Simulate a key with no zh entry: the zh path yields the en text, as the runtime does.
+		stub.zhMissing = true;
+		applyLocale('zh');
+		render(Probe, { relative: '3 hours ago' });
 		expect(screen.getByTestId('probe-age').textContent).toBe('Seen 3 hours ago');
 	});
 	it('renders zh where zh is translated', () => {
