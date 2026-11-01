@@ -271,3 +271,21 @@ describe('the results store', () => {
 		expect(r.notices).toEqual(['adult_hidden']);
 	});
 });
+
+describe('reload keeping the place', () => {
+	it('refetches as many rows as were shown, across pages, and swaps them in one go', async () => {
+		post.mockReset();
+		post.mockResolvedValueOnce(page([1, 2], { next_cursor: 'c1' }));
+		post.mockResolvedValueOnce(page([3, 4]));
+		const r = createResults();
+		await r.load(query());
+		await r.loadMore();
+		expect(r.hits).toHaveLength(4);
+		// Row 2 is now blocked: the first page answers [1, 3], the second [4, 5].
+		post.mockResolvedValueOnce(page([1, 3], { next_cursor: 'c2' }));
+		post.mockResolvedValueOnce(page([4, 5]));
+		await r.reload(4);
+		expect(r.hits.map((h) => h.hash)).toEqual([1, 3, 4, 5].map((n) => page([n]).hits[0]!.hash));
+		expect(post).toHaveBeenCalledTimes(4);
+	});
+});
