@@ -1103,14 +1103,17 @@ export default [
 	// only), page.css (/t only), raw.css (RawViewer, dev route only). Keep page, host and raw rules out
 	// of detail.css, and don't import `$lib/state/events.svelte` or `$lib/keys` from the first view
 	// (visibility.ts and commands.ts are the only doors).
-	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29 KB'),
+	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '27.2 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '22.6 KB'),
+	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '20.8 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
-		'34.5 KB' // owner ruling, 2026-10-30: see the Alerts entries
+		'37.3 KB' // owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
+		// first views (-2.25 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
+		// error toasts add ~0.13 KB. Was 34.5 KB.
 	),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
