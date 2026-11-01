@@ -274,35 +274,63 @@
 		if (answer === 'skip') await store.skip(version);
 	}
 
-	/** Roll back: the confirmation says what is lost; only Roll back sends `confirm: true`. */
+	/** Whether the rollback restores the pre-update snapshot: true, false, or unknown (absent). */
+	const restores = $derived(status?.rollback.restores_store ?? null);
+	let rollbackAsk: AbortController | undefined;
+	// The status refreshed while the question is open and the field changed: ask again with the new words.
+	$effect(() => {
+		void restores;
+		rollbackAsk?.abort();
+	});
+
+	/** Roll back: the confirmation follows `restores_store`; only Roll back sends `confirm: true`. */
 	async function rollBack(to: string) {
-		const lost = status?.rollback.lost_torrents;
 		const name = to === 'image' ? m.settings_updates_rollback_dialog_image() : to;
-		const answer = await ask(
-			{
-				title: m.settings_updates_rollback_title({ version: name }),
-				body: [
-					m.settings_updates_rollback_body({ version: name }),
-					lost == null
-						? m.settings_updates_rollback_lost_unknown()
-						: lost === 0
-							? m.settings_updates_rollback_lost_none()
-							: lost === 1
-								? m.settings_updates_rollback_lost_one()
-								: m.settings_updates_rollback_lost({ count: formatCount(lost, currentLocale()) })
-				],
-				actions: [
-					{ id: 'cancel', label: m.settings_updates_cancel() },
-					{
-						id: 'rollback',
-						label: m.settings_updates_rollback_button({ version: name }),
-						variant: 'danger'
-					}
-				],
-				initial: 'cancel'
-			},
-			store.signal
-		);
+		let answer: string | null;
+		for (;;) {
+			const lost = status?.rollback.lost_torrents;
+			const ctl = (rollbackAsk = new AbortController());
+			const close = () => ctl.abort();
+			store.signal.addEventListener('abort', close, { once: true });
+			answer = await ask(
+				{
+					title: m.settings_updates_rollback_title({ version: name }),
+					body: [
+						restores === true
+							? m.settings_updates_rollback_body_restores({ version: name })
+							: restores === false
+								? m.settings_updates_rollback_body_keeps({ version: name })
+								: m.settings_updates_rollback_body_unknown({ version: name }),
+						...(restores !== true
+							? []
+							: [
+									lost == null
+										? m.settings_updates_rollback_lost_unknown()
+										: lost === 0
+											? m.settings_updates_rollback_lost_none()
+											: lost === 1
+												? m.settings_updates_rollback_lost_one()
+												: m.settings_updates_rollback_lost({
+														count: formatCount(lost, currentLocale())
+													})
+								])
+					],
+					actions: [
+						{ id: 'cancel', label: m.settings_updates_cancel() },
+						{
+							id: 'rollback',
+							label: m.settings_updates_rollback_button({ version: name }),
+							variant: 'danger'
+						}
+					],
+					initial: 'cancel'
+				},
+				ctl.signal
+			);
+			store.signal.removeEventListener('abort', close);
+			if (answer !== null || !ctl.signal.aborted || store.signal.aborted) break;
+		}
+		rollbackAsk = undefined;
 		if (answer === 'rollback') await store.rollback();
 	}
 
