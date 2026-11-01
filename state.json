@@ -2045,12 +2045,14 @@
       "note": "dispatched run 41283672405 green; fixture jobs ~7.8 min"
     },
     "X-flows-door-2": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhn8oozjo15ZdpPkcC1u",
       "model": "opus",
       "brief": "briefs/X-flows-door-2.md",
       "launched_at": "2026-11-01T06:58Z",
-      "review": "runner + /security-review"
+      "review": "runner MERGE at 0c97ae90 (safety checked: adult on via confirm; off = same PATCH)",
+      "pr": 325,
+      "head": "0c97ae90"
     },
     "X-flake-security-test": {
       "status": "building",
@@ -2943,6 +2945,11 @@
       "id": "flag-321-send-limits",
       "status": "to-send",
       "text": "\u00a72.19/\u00a72.26 (#321 S-send): /t limit 20.8 -> 21.0 KB and drawer 27.2 -> 27.4 KB for Send to client, the \u00a710.5 primary action (+~0.16 KB each). Offset: #322 cut Discover 45.08 -> 42.39 KB and lowered its limit 45.2 -> 43 KB."
+    },
+    {
+      "id": "flag-325-flows-door-2",
+      "status": "to-send",
+      "text": "\u00a72.19/\u00a72.26 (#325 X-flows-door-2): a second flows root (flows-adult.ts via door.loadAdult) for the Appearance 18+ dialog; the wizard's first Continue now loads the flows' on-demand chunk; turning adult OFF sends its request directly (no door load; tightening only). Appearance first view \u22120.32 KB, Wizard steps \u22122.1 KB."
     }
   ],
   "external_gates": {
