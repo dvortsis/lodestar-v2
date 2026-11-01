@@ -1925,7 +1925,7 @@
       "merge": "96e436f2"
     },
     "S-filters-2c": {
-      "status": "CI red: axe contrast on Block button (rose-pine-dark) + torrent baselines; relayed 05:03Z; Opus review running session_01MMjhnCAEQS72P4aZv139Es",
+      "status": "fix pushed (contrast race + baselines marker); /t 135 B headroom accepted \u00a72.26; Opus review pending",
       "model": "opus",
       "session": "session_01MMjhnBEzcgRDjcmTd73NYJ",
       "pr": 316,
@@ -1933,7 +1933,7 @@
       "review_rounds": 0,
       "notes": "03:44Z brief briefs/S-filters-2c.md (Block this\u2026 hooks; single forwarder door into filters/flows to stop the regroup; guard). | 03:43Z launched Opus.",
       "ruling": "\u00a72.26: Filters dialogs 34.4->35.9 KB (move from first view -2.43 KB), Filters first view limit 45->31.0 KB",
-      "head": "ea3c4082"
+      "head": "3f2fb5da"
     },
     "B-update-5": {
       "review": "MERGE at 5fe6738 (session_01MMjhn9NMLTHdjwMAZFVDP8); ubuntu test red, logs pending",
@@ -1963,14 +1963,16 @@
       "review": "runner MERGE at bc6d2ba"
     },
     "S-updates-3": {
-      "status": "review-ready",
+      "status": "merged",
       "session": "session_01MMjhnCk7MrRze9Ggp9P3k8",
       "model": "sonnet",
       "brief": "briefs/S-updates-3.md",
       "launched_at": "2026-11-01T04:33Z",
       "review": "runner MERGE at ec5b3b2 (+author fresh Opus self-review)",
       "pr": 318,
-      "head": "ec5b3b2"
+      "head": "ec5b3b2",
+      "merge_sha": "f4e571a1",
+      "merged_at": "2026-11-01T05:19Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
