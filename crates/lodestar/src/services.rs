@@ -465,7 +465,19 @@ impl Services {
             system::address::bind(address, config, &control, &system::address::SystemClock).await?;
         let served = bound.serving;
         // The update engine (B-update): none for a fixture.
-        let updates = crate::update::start(config, &settings, &events);
+        let rebuilding = search.clone();
+        let updates = crate::update::start(
+            config,
+            &settings,
+            &events,
+            Box::new(move || {
+                rebuilding
+                    .as_ref()
+                    .and_then(|s| s.progress())
+                    .filter(|p| p.phase != lodestar_search::RebuildPhase::Failed)
+                    .map(|_| "rebuild_running")
+            }),
+        );
         let system = system::System::start(
             config,
             bound,
