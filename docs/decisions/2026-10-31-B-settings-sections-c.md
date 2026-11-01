@@ -31,6 +31,5 @@
 - **`ClientError::AlreadyThere` and `clients::is_already_there`** are new in `crates/integrations`, outside the brief's "Own" list (accepted by the runner): the typed answer to an all-duplicate add, and its check. The adapters' tests that matched the old wording now match the variant.
 
 ## What S-search-5 binds to
-
 - **Send:** `POST /send` `{hashes, client?}`. Show each result's `message`. `sent` is the count to announce, duplicates included.
 - **A `timeout_unknown` failure** should prompt a look at the client, not a Retry button.

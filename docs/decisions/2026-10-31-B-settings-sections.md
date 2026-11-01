@@ -25,7 +25,6 @@
 - **No `config.toml` keys or variables for integrations, notifications or insights.** Credentials belong in the app, where they're sealed; adding file keys for the rest would mean new `Config` tables for values nothing reads from the file yet.
 
 ## What S-settings-2b's screens bind to
-
 - **Remove a secret** (a field's, or a client's password) runs as its own confirmed `PATCH` from the field's menu, not as part of Save (§10.10.7's Destructive row): `null` for a secret field, `""` for a client's `password`.
 - **Integrations:** `GET/PATCH /settings/integrations`. `clients` is an array of objects (a hand-built list of client cards; the schema's item `password` is `writeOnly`), with `secrets_set` for each card's password state. `default_client` is a select over the clients' ids. `torznab_url` and `torznab_api_key` (secret field) render from the schema. **Test connection** posts the card's values to `POST /settings/test` (`kind: download_client` today; `torznab` in part b).
 - **Notifications:** `GET/PATCH /settings/notifications`, groups `ntfy`, `discord`, `email`, `webhook` and `routing`; generated from the schema. **Send test** comes in part b (`kind: ntfy | discord | email | webhook`).

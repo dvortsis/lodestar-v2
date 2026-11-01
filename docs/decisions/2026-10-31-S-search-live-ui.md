@@ -13,7 +13,6 @@ Runner brief, 2026-10-31. Builds on `2026-10-31-B-search-live.md` (the API) and 
 - **Mock.** `e2e/mock/openapi-mock.ts` answers `releaseSearchLive` with 204 by default, as it does for `listSavedSearches`; `DELETE /search/live/{id}` has no example, and every search spec now releases on exit.
 
 ## Carried from #271
-
 - Zero-result lead "Remove a filter to widen the search:" shows only with filter clauses. A words-only query shows `search_results_none_words`, with the recovery counts if the server sent any. Tested.
 - `IndexState.test.ts` restores the "no `/h`" test for `growth_per_hour` null, 0 and 0.5.
 - The search vitest suite ran 10× clean (595 tests each). The one failure seen earlier in the session was `QueryBar.test.ts`'s Syntax dialog, in a run that shared the machine with another job; it did not recur in 10 solo runs plus the full suite, so no `ResultsPanel` flake was reproduced.
