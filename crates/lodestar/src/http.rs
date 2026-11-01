@@ -33,6 +33,8 @@ pub struct AppState {
     pub search: Option<SearchState>,
     /// The storage sampler's last values (R-gauges).
     pub storage: Option<Arc<crate::storage::Gauges>>,
+    /// The filter engine, for its unreadable stored rows.
+    pub filter: Option<Arc<lodestar_filter::Handle>>,
 }
 
 #[derive(Clone)]
@@ -118,6 +120,9 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     }
     if let Some(hot) = s.monitor.hot() {
         metrics::render_hot(&mut body, hot);
+    }
+    if let Some(filter) = &s.filter {
+        metrics::render_filter(&mut body, &filter.current().unreadable);
     }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }

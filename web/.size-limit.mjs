@@ -1279,7 +1279,10 @@ export default [
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
 	// runner §2.26, FX-5 incl. review fixes: I2 connecting glyph (+~0.15 KB, StatusPill) / I1 tree height + P4 parsed rows (+~0.13 KB)
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.14 KB'),
+	// runner §2.26 2026-11-01: not /t code (#357 adds 0 B here). CI's build version carries the commit
+	// SHA, which changes the app id and chunk names /t imports; the same source measured 21,115–21,144 B
+	// across SHAs. 21.14 → 21.20 KB.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.20 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],

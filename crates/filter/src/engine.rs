@@ -135,6 +135,11 @@ pub struct Engine {
     /// Classification rules (§20.9): they decide what's stored, and an
     /// Is adult one adds the Adult-only core checks.
     pub class_rules: ClassRules,
+    /// Stored rows the last load couldn't read ([`crate::load`]).
+    pub unreadable: Vec<crate::load::Unreadable>,
+    /// Your rules that are stand-ins for unreadable rows, or lost their
+    /// `unless`, by id: usually none.
+    pub stand_ins: Vec<u32>,
     pub version: u64,
 }
 
@@ -150,6 +155,8 @@ impl Engine {
             exceptions: Vec::new(),
             allow: Vec::new(),
             class_rules: ClassRules::default(),
+            unreadable: Vec::new(),
+            stand_ins: Vec::new(),
             version: 1,
         }
     }
@@ -299,6 +306,7 @@ impl Engine {
         }) {
             return None;
         }
+        let mut held: Option<Decision> = None;
         for i in doc.candidates(&self.rules, neutral_words) {
             let (query, unless) = self.rules.compiled(i);
             if !doc.matches_compiled(query, neutral_words)
@@ -319,7 +327,15 @@ impl Engine {
                 shadow.push(d);
                 continue;
             }
-            return Some(d);
+            // A stand-in for an unreadable rule, or a rule whose `unless`
+            // was dropped ([`crate::load`]), never pre-empts what the
+            // layers after it would decide: the strongest of them applies,
+            // so a drop stays a drop.
+            if self.stand_ins.contains(&r.id) {
+                held = stronger_of(held, Some(d));
+                continue;
+            }
+            return stronger_of(held, Some(d));
         }
         let ctx = facts.map(|f| packs::Ctx::new(item, f, neutral_words));
         let packs = PackRule::ALL
@@ -333,10 +349,11 @@ impl Engine {
         // Each pack and list is excepted on its own (§20.12), before the
         // strongest action left wins (§20.6): an exception to one list
         // never lifts another that also has the torrent.
-        packs
+        let rest = packs
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc))
-            .max_by_key(|d| d.action)
+            .max_by_key(|d| d.action);
+        stronger_of(held, rest)
     }
 
     /// How many of your rules a torrent meets: those the narrowing
@@ -409,6 +426,15 @@ impl Engine {
         if let Some(l) = layer {
             self.lists.push(l);
         }
+    }
+}
+
+/// The stronger of two decisions; the second on a tie (a real rule over
+/// a stand-in, so it's the one named).
+fn stronger_of(first: Option<Decision>, second: Option<Decision>) -> Option<Decision> {
+    match (first, second) {
+        (Some(f), Some(s)) => Some(if f.action > s.action { f } else { s }),
+        (f, s) => s.or(f),
     }
 }
 

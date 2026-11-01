@@ -396,14 +396,20 @@ pub struct Stale {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct InsightsException {
     pub fix: Fix,
-    /// `index_lag` (the index more than 30 s behind) or `cohort_stalled`
+    /// `index_lag` (the index more than 30 s behind), `cohort_stalled`
     /// (hashes in progress, the crawler running, and nothing stored for
-    /// 2 full hours).
+    /// 2 full hours), `yield_below_baseline`, or `filter_rows_unreadable`
+    /// (stored filter rows that no longer read; filtering fails closed
+    /// for them until they're fixed in Filters & Safety).
     pub kind: String,
+    /// The rows an exception is about, as the Filters & Safety screens
+    /// name them (`U-3`, `C-2`, …); empty for the other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<String>,
     pub severity: Severity,
     /// Unix seconds.
     pub since: i64,
-    /// `s` or `torrents`.
+    /// `s`, `torrents`, `ratio` or `rows`.
     #[schema(required = true)]
     pub unit: Option<String>,
     #[schema(required = true)]

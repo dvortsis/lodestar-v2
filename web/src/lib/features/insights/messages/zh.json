@@ -237,6 +237,7 @@
 	"insights_overview_exc_since": "起始于",
 	"insights_overview_exc_index_lag": "搜索索引落后于新种子 {lag}。",
 	"insights_overview_exc_cohort_stalled": "有 {count} 个键在等待，但已有一段时间没有存储任何内容。",
+	"insights_overview_exc_filter_rows_unreadable": "有 {count} 条已保存的过滤条目无法读取（{rows}）。在“设置”→“过滤与安全”中修复或删除它们之前，过滤会拦截更多内容。",
 	"insights_overview_exc_unknown": "需要处理：{kind}",
 	"insights_overview_exc_fix": "查看详情",
 	"insights_overview_exc_fix_stage": "打开{stage}页面",

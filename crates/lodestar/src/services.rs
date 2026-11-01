@@ -410,6 +410,7 @@ impl Services {
             reader,
             search: search_state,
             storage: Some(storage),
+            filter: api.filters.as_ref().map(|f| f.engine.clone()),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and

@@ -126,6 +126,12 @@ test.describe('keyboard: Settings → About', () => {
 		});
 	});
 
+	test('the logo stays visible when illustrations are off', async ({ page, go }) => {
+		await go('/settings/about');
+		await page.evaluate(() => (document.documentElement.dataset.illustrations = 'false'));
+		await expect(page.getByRole('img', { name: 'Lodestar', exact: true })).toBeVisible();
+	});
+
 	test('renders the build and what it connects to, and passes axe', async ({ page, go }) => {
 		await go('/settings/about');
 		await expect(page.getByRole('heading', { level: 2, name: 'Lodestar 0.5.2' })).toBeVisible();
