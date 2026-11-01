@@ -3324,14 +3324,7 @@
     "2.26": "2026-10-31 owner: 'follow your recommendations for the best performance and UX' for these and similar future decisions. Runner decides perf/UX incl. owner-set numbers; records in docs/decisions + flags (§2.19). Security/content-safety loosening still to owner."
   },
   "last_daily_summary": "2026-11-01T12:58Z",
-  "open_prs": {
-    "340": {
-      "slice": "G-m5b",
-      "head": "0cec6bb2f768414fc71555c6c77b6cdd23bb1dae",
-      "verdict": "runner MERGE pending CI (report 7B/10I/11P; batches FX-1..6)",
-      "session": "session_01MMjhnByisxRDJSU7rGJj7o"
-    }
-  },
+  "open_prs": {},
   "merged_log": [
     {
       "pr": 331,
@@ -3393,6 +3386,12 @@
       "sha": "11279c049a081914d1c480dc0973456d9c469e5c",
       "at": "2026-11-01T13:37Z",
       "slice": "X-web-polish-1101e (bulk bar only)"
+    },
+    {
+      "pr": 340,
+      "sha": "b1fd9fe85862d13f46be512daaeb9e67a8c3237e",
+      "at": "2026-11-01T14:21Z",
+      "slice": "G-m5b"
     }
   ],
   "active_sessions": {
@@ -3457,6 +3456,12 @@
       "model": "sonnet",
       "launched": "2026-11-01T14:03Z",
       "brief": "briefs/FX-batch.md (FX-2)"
+    },
+    "FX-1": {
+      "session": "session_01MMjhn8Y4DKBsAvcLSueLk5",
+      "model": "sonnet",
+      "launched": "2026-11-01T14:21Z",
+      "brief": "briefs/FX-batch.md (FX-1)"
     }
   },
   "queued_followups": [
