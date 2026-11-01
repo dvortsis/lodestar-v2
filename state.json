@@ -2057,11 +2057,14 @@
       "merged_at": "2026-11-01T08:04Z"
     },
     "X-flake-security-test": {
-      "status": "building",
+      "status": "review-ready",
       "session": "session_01MMjhn9LQVnHae8mnKtTLab",
       "model": "sonnet",
       "brief": "briefs/X-flake-security-test.md",
-      "launched_at": "2026-11-01T07:31Z"
+      "launched_at": "2026-11-01T07:31Z",
+      "pr": 329,
+      "head": "341fe76",
+      "review": "runner MERGE at 341fe76 (land before other web PRs)"
     },
     "X-detail-polish": {
       "status": "review-ready",
