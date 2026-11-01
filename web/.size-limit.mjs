@@ -775,9 +775,21 @@ const engagedSearch = viewOf([
 	'src/lib/features/search/query/Live.svelte',
 	[/query\/(FilterStrip|SyntaxPopover)\.svelte$/, /features\/search\/assist\//]
 ]);
+// Everything the panel loads once rows show, key registration included: the "beyond" list of the
+// entries that load later, so none of them re-counts it.
 const resultsLazy = [
 	...new Set(RESULTS.flatMap((k) => ownChunk(k, resultsOnDemand, false, engagedSearch)))
 ];
+// The entry itself leaves out the j/k / x registration (X-search-headroom-2): `$lib/keys` and
+// `results/commands.ts` are imported after mount and nothing waits on them, as Discover's and the
+// Alerts' are (X-discover-headroom). Gated on their own below.
+const resultsKeys = [/^chunk:keys$/, /features\/search\/results\/commands\.ts$/];
+const resultsFirst = [
+	...new Set(
+		RESULTS.flatMap((k) => ownChunk(k, [...resultsOnDemand, ...resultsKeys], false, engagedSearch))
+	)
+];
+const resultsKeysLazy = resultsLazy.filter((f) => !resultsFirst.includes(f));
 // The facet rail (S-search-2b): its host loads with the results, and the rail with it where the
 // rail shows (x-large); below that, on the first Filters press, which also brings the sheet (on
 // demand). Measured beyond the engaged view and the results panel it loads with.
@@ -1187,7 +1199,11 @@ export default [
 	// Raised by the runner (§2.26): +92 B from the chunk re-split when /logs was added (S-logs-1).
 	// X-alert-search-headroom: 42.73 KB (−0.54 KB, links no longer load the nav table); the limit is
 	// kept so the cut is the headroom. Build links with `$lib/shell/density`.
-	entry('Search results (lazy)', resultsLazy, '43.3 KB'),
+	// Search results: don't import `$lib/keys` (the registry), `$lib/shell/nav`, settings code or
+	// detail/ code into it. Load them after mount (ResultsPanel's onMount) or through a door; the
+	// keys are gated by "Search results key commands (on demand)".
+	entry('Search results (lazy)', resultsFirst, '40.6 KB'),
+	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
 	// The FacetRail chunk is 9.9 KB, the host 3.1 KB, facets.css 0.9 KB, Checkbox and input 1.1 KB.

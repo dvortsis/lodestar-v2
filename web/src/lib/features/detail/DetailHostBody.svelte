@@ -11,7 +11,6 @@
 	import { tokenPx } from '$lib/ui/overlays/motion';
 	import DetailActions from './DetailActions.svelte';
 	import DetailView from './DetailView.svelte';
-	import { setDrawerTarget } from './target';
 	import { coverBackground } from './fullscreen';
 	import { DetailModel } from './model.svelte';
 	import { closeDetail, markClosed, returnFocusTarget } from './open';
@@ -70,7 +69,6 @@
 	onDestroy(() => {
 		gone = true;
 		model.destroy();
-		setDrawerTarget(null);
 		markClosed();
 	});
 
@@ -143,10 +141,8 @@
 				wasOpen = true;
 				model.load(hash);
 			});
-			setDrawerTarget(hash);
 		} else {
 			model.destroy();
-			setDrawerTarget(null);
 			markClosed();
 			// Closed by the browser's Back: focus has nowhere to be, so it goes back to the invoker.
 			if (wasOpen) {

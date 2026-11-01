@@ -11,6 +11,7 @@ import {
 	type TorrentDetail
 } from './cache';
 import { adoptPrefetch } from './prefetch';
+import { setDrawerTarget } from './target';
 import { watchDetailVisibility } from './visibility';
 
 export type Status = 'loading' | 'ready' | 'error';
@@ -61,6 +62,7 @@ export class DetailModel {
 		this.slot.cancel();
 		this.hitSlot.cancel();
 		this.detail = null;
+		setDrawerTarget(null);
 		this.hit = null;
 		this.hitDone = false;
 		this.error = null;
@@ -89,6 +91,7 @@ export class DetailModel {
 			if (!this.current(generation, visibility)) return;
 			cacheDetail(hash, detail);
 			this.detail = detail;
+			setDrawerTarget(hash); // `s`, `c` and `o` wait for the torrent to load
 			const hit = cachedHit(hash) ?? null;
 			this.hit = hit;
 			this.hitDone = !!hit;

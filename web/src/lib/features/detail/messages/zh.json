@@ -16,6 +16,7 @@
 	"detail_press_copy": "按 Ctrl+C 复制",
 	"detail_press_copy_mac": "按 ⌘C 复制",
 	"detail_magnet_unavailable": "无法获取磁力链接。",
+	"detail_action_unavailable": "无法打开。请重试。",
 	"detail_resolved_via": "解析自{method}",
 	"detail_via_files": "文件",
 	"detail_via_folder": "文件夹",

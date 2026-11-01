@@ -10,6 +10,9 @@ export { commandTarget, setCommandTarget, setDrawerTarget } from './target';
 // A failed chunk load is an interaction that did nothing: say so.
 export const failed = () => toast.push({ kind: 'error', text: m.detail_magnet_unavailable() });
 
+/** The change flows (Block this…) didn't load: a plain message, not the magnet's. */
+export const flowsFailed = () => toast.push({ kind: 'error', text: m.detail_action_unavailable() });
+
 let registered: Promise<void> | undefined;
 
 /** Idempotent: a second call returns the first registration. */
