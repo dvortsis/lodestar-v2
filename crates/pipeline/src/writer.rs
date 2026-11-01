@@ -97,6 +97,8 @@ pub(crate) struct Writer {
     /// it has found nothing left to do.
     pub backfill_after: i64,
     pub backfill_done: bool,
+    /// The backfill's wait after a store error.
+    pub backfill_backoff: Backoff,
     /// Starts another background-enrichment pass (see `PipelineConfig`).
     pub reenrich: Arc<AtomicBool>,
     pub cfg: WriterConfig,
@@ -149,6 +151,48 @@ fn hold_committed(store: &Store, pending: Option<Pending<'_>>, ingest: bool) {
     }
 }
 
+/// A store-error backoff shared by the background sweeps (the candidate
+/// refile and the enrichment backfill): after an error the sweep waits,
+/// longer after each error in a row, and the flush tick ends the wait.
+/// It tries the same batch again, so a transient error doesn't end the
+/// sweep and a persistent one doesn't spin.
+#[derive(Debug, Default)]
+pub(crate) struct Backoff {
+    /// After a store error, when the flush tick lets it try again (Unix
+    /// seconds); it waits until then.
+    pub retry_at: Option<i64>,
+    /// Store errors in a row.
+    pub failures: u32,
+}
+
+impl Backoff {
+    /// Not waiting out an error.
+    fn ready(&self) -> bool {
+        self.retry_at.is_none()
+    }
+
+    /// A store error (`SQLITE_BUSY` past the busy timeout, say).
+    fn failed(&mut self, now: i64) {
+        self.failures = self.failures.saturating_add(1);
+        let backoff = RETRY_FIRST
+            .saturating_mul(1 << (self.failures - 1).min(10))
+            .min(RETRY_MAX);
+        self.retry_at = Some(now.saturating_add(backoff));
+    }
+
+    /// A batch went through: the next error waits the shortest time.
+    fn succeeded(&mut self) {
+        self.failures = 0;
+    }
+
+    /// Ends the wait once it's due.
+    fn retry_due(&mut self, now: i64) {
+        if self.retry_at.is_some_and(|at| now >= at) {
+            self.retry_at = None;
+        }
+    }
+}
+
 /// The sweep that judges waiting import candidates again whenever the
 /// filter engine changes, and once per start
 /// (`docs/decisions/2026-10-31-B-import-refile.md`).
@@ -160,34 +204,14 @@ pub(crate) struct CandidateSweep {
     pub after: i64,
     /// Nothing is left to judge under `version`.
     pub done: bool,
-    /// After a store error, when the flush tick lets it try again (Unix
-    /// seconds); it waits until then.
-    pub retry_at: Option<i64>,
-    /// Store errors in a row, for the backoff.
-    pub failures: u32,
+    /// The wait after a store error.
+    pub backoff: Backoff,
 }
 
 impl CandidateSweep {
     /// Has a batch to judge now.
     fn ready(&self) -> bool {
-        !self.done && self.retry_at.is_none()
-    }
-
-    /// A store error (`SQLITE_BUSY` past the busy timeout, say): waits,
-    /// longer after each error in a row, and tries the same batch again.
-    fn failed(&mut self, now: i64) {
-        self.failures = self.failures.saturating_add(1);
-        let backoff = REFILE_RETRY_FIRST
-            .saturating_mul(1 << (self.failures - 1).min(10))
-            .min(REFILE_RETRY_MAX);
-        self.retry_at = Some(now.saturating_add(backoff));
-    }
-
-    /// Ends the wait once it's due.
-    fn retry_due(&mut self, now: i64) {
-        if self.retry_at.is_some_and(|at| now >= at) {
-            self.retry_at = None;
-        }
+        !self.done && self.backoff.ready()
     }
 }
 
@@ -249,7 +273,9 @@ impl Writer {
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
                 // Always ready until done; the unbiased select gives it a
                 // fair share between ingest batches.
-                () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
+                () = std::future::ready(()), if !self.backfill_done && self.backfill_backoff.ready() => {
+                    self.backfill().await
+                }
                 () = std::future::ready(()), if self.candidates.ready() => self.refile_candidates().await,
                 _ = flush.tick() => {
                     if self.reenrich.swap(false, Ordering::AcqRel) {
@@ -257,7 +283,8 @@ impl Writer {
                         self.backfill_done = false;
                     }
                     self.note_engine();
-                    self.candidates.retry_due(unix_now());
+                    self.candidates.backoff.retry_due(unix_now());
+                    self.backfill_backoff.retry_due(unix_now());
                     self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
@@ -652,14 +679,19 @@ impl Writer {
             Ok(Some(b)) if b.rejected => {}
             Ok(Some(b)) => {
                 self.backfill_after = b.last;
+                self.backfill_backoff.succeeded();
                 self.stats
                     .enriched
                     .fetch_add(b.enriched as u64, Ordering::Relaxed);
             }
-            Ok(None) => self.backfill_done = true,
-            Err(e) => {
-                // Tried again at the next start.
+            Ok(None) => {
                 self.backfill_done = true;
+                self.backfill_backoff.succeeded();
+            }
+            Err(e) => {
+                // The same batch again after a backoff (#282): a transient
+                // error doesn't end backfill for the run.
+                self.backfill_backoff.failed(unix_now());
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::log_events::ENRICHMENT_FAILED,
@@ -742,17 +774,17 @@ impl Writer {
             }
             Ok(Some(b)) => {
                 self.candidates.after = b.last;
-                self.candidates.failures = 0;
+                self.candidates.backoff.succeeded();
             }
             Ok(None) => {
                 self.candidates.done = true;
-                self.candidates.failures = 0;
+                self.candidates.backoff.succeeded();
             }
             Err(e) => {
                 // The same batch again after a backoff, so names the
                 // current rules hold don't stay at rest until the next
                 // rule change or start. The error carries no name.
-                self.candidates.failed(unix_now());
+                self.candidates.backoff.failed(unix_now());
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 lodestar_log::log_event!(
                     crate::log_events::ENRICHMENT_FAILED,
@@ -844,10 +876,10 @@ const BACKFILL_BATCH: usize = 256;
 
 /// Import candidates judged per refile step: one short transaction each.
 const REFILE_BATCH: usize = 512;
-/// The wait after a refile sweep's first store error in a row, doubling
-/// after each further one up to the cap (seconds).
-const REFILE_RETRY_FIRST: i64 = 5;
-const REFILE_RETRY_MAX: i64 = 300;
+/// The wait after a sweep's first store error in a row, doubling after
+/// each further one up to the cap (seconds).
+const RETRY_FIRST: i64 = 5;
+const RETRY_MAX: i64 = 300;
 
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
@@ -1085,6 +1117,7 @@ mod tests {
             store: Some(store),
             backfill_after: 0,
             backfill_done: true,
+            backfill_backoff: Default::default(),
             reenrich: Arc::default(),
             cfg: WriterConfig {
                 flush_every: Duration::from_secs(60),
@@ -1389,21 +1422,21 @@ mod tests {
         let before = unix_now();
         w.refile_candidates().await;
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), errors + 1);
-        let at = w.candidates.retry_at.expect("waits after an error");
-        assert!(at >= before + REFILE_RETRY_FIRST, "{at} {before}");
+        let at = w.candidates.backoff.retry_at.expect("waits after an error");
+        assert!(at >= before + RETRY_FIRST, "{at} {before}");
         assert!(!w.candidates.done && !w.candidates.ready());
-        w.candidates.retry_due(at - 1);
+        w.candidates.backoff.retry_due(at - 1);
         assert!(!w.candidates.ready(), "not before it's due");
-        w.candidates.retry_due(at);
+        w.candidates.backoff.retry_due(at);
         assert!(w.candidates.ready());
         let before = unix_now();
         w.refile_candidates().await;
-        let again = w.candidates.retry_at.expect("waits longer");
-        assert!(again >= before + 2 * REFILE_RETRY_FIRST, "{again} {before}");
+        let again = w.candidates.backoff.retry_at.expect("waits longer");
+        assert!(again >= before + 2 * RETRY_FIRST, "{again} {before}");
         conn(&w, "DROP TABLE temp.import_candidates;");
-        w.candidates.retry_due(again);
+        w.candidates.backoff.retry_due(again);
         sweep(&mut w).await;
-        assert!(w.candidates.done && w.candidates.failures == 0);
+        assert!(w.candidates.done && w.candidates.backoff.failures == 0);
 
         // The sink is live: the error's event reached it (so the checks
         // below would see a name that reached one).
@@ -1812,11 +1845,11 @@ mod tests {
         assert!(w.held.contains(&stored), "the adult hold, now a tombstone");
     }
 
-    /// The refile sweep's backoff doubles after each error in a row, up to
-    /// its cap.
+    /// The sweeps' backoff doubles after each error in a row, up to its
+    /// cap.
     #[test]
-    fn the_refile_backoff_doubles_to_a_cap() {
-        let mut c = CandidateSweep::default();
+    fn the_backoff_doubles_to_a_cap() {
+        let mut c = Backoff::default();
         let waits: Vec<i64> = (0..10)
             .map(|_| {
                 c.failed(1_000);
@@ -1827,6 +1860,82 @@ mod tests {
         c.failures = u32::MAX;
         c.failed(i64::MAX);
         assert_eq!(c.retry_at, Some(i64::MAX));
+    }
+
+    /// A store error doesn't end backfill for the run (#282): it waits,
+    /// longer after each error in a row, then takes the same batch again
+    /// and finishes. While it waits, the run loop doesn't call it (no hot
+    /// loop) and shuts down promptly.
+    #[tokio::test]
+    async fn backfill_backs_off_after_a_store_error_and_resumes() {
+        let (mut w, _) = arms_writer();
+        let conn = |w: &Writer, sql: &str| {
+            w.store
+                .as_ref()
+                .unwrap()
+                .connection()
+                .execute_batch(sql)
+                .unwrap();
+        };
+        // A temporary table shadows `torrent_parsed` without the column
+        // the backfill's query reads: every batch fails.
+        conn(&w, "CREATE TEMP TABLE torrent_parsed (x INTEGER);");
+        let errors = w.stats.errors.load(Ordering::Relaxed);
+        let before = unix_now();
+        w.backfill().await;
+        assert_eq!(w.stats.errors.load(Ordering::Relaxed), errors + 1);
+        let at = w.backfill_backoff.retry_at.expect("waits after an error");
+        assert!(at >= before + RETRY_FIRST, "{at} {before}");
+        assert!(!w.backfill_done && !w.backfill_backoff.ready());
+        assert_eq!(w.backfill_after, 0, "where it left off");
+        w.backfill_backoff.retry_due(at - 1);
+        assert!(!w.backfill_backoff.ready(), "not before it's due");
+        w.backfill_backoff.retry_due(at);
+        let before = unix_now();
+        w.backfill().await;
+        let again = w.backfill_backoff.retry_at.expect("waits longer");
+        assert!(again >= before + 2 * RETRY_FIRST, "{again} {before}");
+        assert!(!w.backfill_done);
+
+        // The error clears: the same batch, then done.
+        conn(&w, "DROP TABLE temp.torrent_parsed;");
+        w.backfill_backoff.retry_due(again);
+        w.backfill().await;
+        assert!(w.backfill_after > 0, "the batch went through");
+        assert_eq!(w.stats.enriched.load(Ordering::Relaxed), 1);
+        w.backfill().await;
+        assert!(w.backfill_done && w.backfill_backoff.failures == 0);
+
+        // Waiting out an error, the run loop leaves backfill alone and
+        // stops as soon as its inputs close.
+        conn(&w, "CREATE TEMP TABLE torrent_parsed (x INTEGER);");
+        w.backfill_after = 0;
+        w.backfill_done = false;
+        w.candidates.done = true;
+        w.backfill().await;
+        let errors = w.stats.errors.load(Ordering::Relaxed);
+        let stats = w.stats.clone();
+        let (results_tx, results) = mpsc::channel(1);
+        let (touches_tx, touches) = mpsc::channel(1);
+        let (queues_tx, queues) = mpsc::channel(1);
+        let (swarm_tx, swarm) = mpsc::channel(1);
+        let (retry, _retry_rx) = mpsc::channel(1);
+        let (finish_tx, finish) = oneshot::channel();
+        let run = tokio::spawn(w.run(WriterIo {
+            results,
+            touches,
+            queues,
+            retry,
+            finish,
+            swarm,
+        }));
+        drop((results_tx, touches_tx, queues_tx, swarm_tx));
+        finish_tx.send(Vec::new()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .expect("prompt shutdown")
+            .unwrap();
+        assert_eq!(stats.errors.load(Ordering::Relaxed), errors, "no retry");
     }
 
     /// Every log event this test binary emits, rendered with every field
