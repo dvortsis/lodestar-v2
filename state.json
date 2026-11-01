@@ -3292,6 +3292,10 @@
     {
       "t": "2026-11-01T20:12Z",
       "event": "G-m5 DONE: merged #352 (5107710e) after all-themes dispatch green. Open: #353 (runner MERGE on green), #354 (runner MERGE on green), F-filter-load-fail-closed building."
+    },
+    {
+      "t": "2026-11-01T20:13Z",
+      "event": "merged #353 X-appearance-undo (7be005dc); archived. Open: #354 (CI), F-filter-load-fail-closed (building)."
     }
   ],
   "reviews": {
