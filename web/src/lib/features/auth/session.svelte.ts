@@ -30,7 +30,10 @@ export function setSession(status: SessionStatus): void {
 		status === 'signed_in' &&
 		(!initialConfirmation || /^\/(login|setup)\b/.test(location.pathname))
 	)
-		void import('$lib/i18n/boot').then((m) => m.refetchRegion()).catch(() => {});
+		void import('$lib/i18n/boot').then(
+			(m) => m.refetchRegion(),
+			() => {}
+		);
 }
 
 /**

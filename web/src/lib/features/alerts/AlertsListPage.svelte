@@ -98,11 +98,12 @@
 	onMount(() => {
 		let off: (() => void) | undefined;
 		let gone = false;
-		void import('./commands')
-			.then(({ registerAlertsListCommands }) => {
+		void import('./commands').then(
+			({ registerAlertsListCommands }) => {
 				if (!gone) off = registerAlertsListCommands(() => void openCreate());
-			})
-			.catch(() => {}); // Shortcuts only: the page works without them.
+			},
+			() => {}
+		); // Shortcuts only: the page works without them.
 		return () => {
 			gone = true;
 			off?.();

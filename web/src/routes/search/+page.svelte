@@ -23,11 +23,12 @@
 		let off: (() => void) | undefined;
 		let gone = false;
 		const stop = onFirstInteraction(() => {
-			void import('$lib/keys')
-				.then(({ keys }) => {
+			void import('$lib/keys').then(
+				({ keys }) => {
 					if (!gone) off = registerSearchCommands(keys, () => bar?.focusEnd());
-				})
-				.catch(() => {}); // Shortcuts only: search works without them.
+				},
+				() => {}
+			); // Shortcuts only: search works without them.
 		}, KEYS_AFTER_MS);
 		return () => {
 			gone = true;

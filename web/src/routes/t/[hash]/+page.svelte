@@ -23,9 +23,10 @@
 	});
 	onMount(
 		() =>
-			void import('$lib/features/detail/commands')
-				.then((mod) => mod.registerDetailCommands())
-				.catch(() => {})
+			void import('$lib/features/detail/commands').then(
+				(mod) => mod.registerDetailCommands(),
+				() => {}
+			)
 	);
 </script>
 

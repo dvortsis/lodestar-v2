@@ -7,6 +7,7 @@ import { api, latest } from '$lib/api/client';
 import { events } from '$lib/state/events.svelte';
 import { keys } from '$lib/keys';
 import { m } from '$lib/paraglide/messages.js';
+import { toast } from '$lib/ui/feedback/toasts.svelte';
 import { ACTION_IDS } from './actions';
 import { onceLive } from './follow.svelte';
 import { sheet } from './sheet.svelte';
@@ -136,7 +137,11 @@ export function startShortcuts(): () => void {
 			section: () => m.shortcuts_section_general(),
 			keys: [],
 			keywords: ['keyboard', 'shortcuts', 'wcag'],
-			run: () => void import('./toggle').then((t) => t.toggleSingleKeys()).catch(() => {})
+			run: () =>
+				void import('./toggle').then(
+					(t) => t.toggleSingleKeys(),
+					() => toast.push({ kind: 'error', text: m.shortcuts_toast_failed() })
+				)
 		}),
 		onceLive(() => {
 			fetchOnce();
