@@ -1,6 +1,6 @@
 //! Natural phrasing (§10.4, B7): plain words like "4k movies from 2020
 //! over 10gb" read as the query `res:2160p type:movie year:2020
-//! size:>=10GB`, for the UI to preview as chips. The server never applies
+//! size:>=10GiB`, for the UI to preview as chips. The server never applies
 //! it; `/parse` only proposes it.
 //!
 //! It's deterministic and rule-based: each rule recognises a few words
@@ -21,7 +21,7 @@
 //! Input the strict parser rejects isn't read (`/parse` answers it with
 //! the syntax error).
 //!
-//! Sizes: "over"/"under" are inclusive (`size:>=10GB`), since a byte
+//! Sizes: "over"/"under" are inclusive (`size:>=10GiB`), since a byte
 //! either way means nothing; years and counts keep the strict sense
 //! ("after 2010" is `year:>=2011`).
 

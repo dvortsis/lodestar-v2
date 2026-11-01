@@ -1409,8 +1409,8 @@ impl Node {
                 let v = |n: u64| if count { n.to_string() } else { bytes_text(n) };
                 // A byte bound one short of (or past) a whole unit reads as
                 // the exclusive form: a brush's `[1GiB, 4GiB)` is `1GiB..<4GiB`.
-                let below = |n: u64| n.checked_add(1).filter(|&m| !count && in_unit(m, n));
-                let above = |n: u64| n.checked_sub(1).filter(|&m| !count && in_unit(m, n));
+                let below = |n: u64| n.checked_add(1).filter(|&m| !count && in_unit(m));
+                let above = |n: u64| n.checked_sub(1).filter(|&m| !count && in_unit(m));
                 let _ = match (lo, hi) {
                     (Some(l), Some(h)) if l == h => write!(out, "{name}:{}", v(*l)),
                     (Some(l), Some(h)) => match below(*h) {
@@ -1527,10 +1527,9 @@ pub(crate) fn is_plain_word(w: &str) -> bool {
     )
 }
 
-/// Whether `m` is a whole number of KiB and its neighbour `n` isn't.
-fn in_unit(m: u64, n: u64) -> bool {
-    let whole = |x: u64| x >= 1 << 10 && x.is_multiple_of(1 << 10);
-    whole(m) && !whole(n)
+/// Whether `m` is a whole, nonzero number of KiB.
+fn in_unit(m: u64) -> bool {
+    m >= 1 << 10 && m.is_multiple_of(1 << 10)
 }
 
 /// Bytes in the largest IEC unit that divides them exactly (§10.12), else
@@ -2064,6 +2063,20 @@ mod tests {
         assert!(parse("size:..<0").is_err());
         assert!(parse("size:1GiB..<1GiB").is_err());
         assert!(parse("size:1..<").is_err());
+        assert!(parse("cat:video=0..<0").is_err());
+        // Counts and shares read it too, though they never print it.
+        let year = Node::Range {
+            field: NumField::Year,
+            lo: Some(2019),
+            hi: Some(2020),
+        };
+        assert_eq!(parse("year:2019..<2021").unwrap(), year);
+        assert_eq!(
+            parse("bytes:video=10..<50").unwrap(),
+            parse("bytes:video=10..49").unwrap()
+        );
+        let brushed = parse("file:(size:1GiB..<4GiB)").unwrap();
+        assert_eq!(brushed.to_query(), "file:(size:1GiB..<4GiB)");
     }
 
     #[test]
