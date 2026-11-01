@@ -3535,6 +3535,7 @@
     "awaiting": "owner 'start r3'",
     "at": "2026-11-01T14:58Z",
     "cause": "CA Docker Auto Update (cron 0 4 * * 0, update all) at 11:00:02Z stopped lodestar 11:00:55Z + collector 11:00:56Z (SIGTERM), restarted both 11:03:58Z; lodestar still running unmonitored on lodestar-r2; collector exited 2. Appdata Backup daily 04:00 MST also present (config unknown).",
-    "runner_reply": "15:02Z: fresh data dir lodestar-r3 / run dir v051-rc2-main-r3; rc.2 digest sha256:8abcaf52… (image id 00257522…); steps 1 stop r2 container, 2 exclude from Auto Update, 3 check Appdata Backup, 4 verify collector sha a49f3b43, 5 start r3; awaiting owner 'go 1-5'"
+    "runner_reply": "15:02Z: fresh data dir lodestar-r3 / run dir v051-rc2-main-r3; rc.2 digest sha256:8abcaf52… (image id 00257522…); steps 1 stop r2 container, 2 exclude from Auto Update, 3 check Appdata Backup, 4 verify collector sha a49f3b43, 5 start r3; awaiting owner 'go 1-5'",
+    "checks_1505Z": "image unchanged (00257522/8abcaf52 = rc.2); Appdata Backup aborted (dest full) but would stop both daily (next 11-02 11:00Z); CA auto-update no exclusions (next 11-08). Owner approved ONLY settings changes (skip both in Auto Update + Appdata Backup). Stop stray r2 container + start r3 still await owner go."
   }
 }
