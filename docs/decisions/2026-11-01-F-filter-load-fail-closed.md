@@ -35,6 +35,8 @@ Losing a row that **withholds** loosens filtering, so it fails closed. Losing a 
 - **One new string, en and zh** (`insights_overview_exc_filter_rows_unreadable`, in the Insights feature's own messages). The generic fallback would have shown the raw kind, which tells the user nothing.
 - **Budgets (§20.8).** The hot path is unchanged when every row reads. While an Is adult rule is unreadable, every torrent is judged twice (as detected and as adult), as an Is adult rule that matches it already does.
 
+- **`/t/[hash]` size limit 21.14 → 21.20 KB** (runner, §2.26). This PR adds nothing to `/t`: `main` and the merge build byte-identical there for the same commit SHA. CI's build version carries the SHA, which changes the app id and chunk names `/t` imports, so the same source measured 21,115–21,144 B across SHAs. The PR's CI run landed at 21,145 B, against 7 B of headroom.
+
 ## Known limitation: fixing by upgrading back
 The repairs above run when you edit or remove the row in Filters & Safety. If instead you upgrade back to a version that reads the row, the exception clears on that load, but what the stand-ins did stays:
 - torrents stored meanwhile keep the Adult label an unreadable Is adult rule gave them, until they're next re-enriched;
