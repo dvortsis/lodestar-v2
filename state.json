@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T21:31:00Z",
+  "updated_at": "2026-11-01T21:40:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2184,8 +2184,10 @@
       "notes": "#341"
     },
     "F-filter-load-fail-closed": {
-      "status": "building",
-      "notes": "Opus + /security-review; session_01MMjhnAvepJm7UgCAppGN9s; stored rule/unless/class rows that fail to parse must fail closed (tightening only)"
+      "status": "in-review",
+      "notes": "Opus + /security-review; session_01MMjhnAvepJm7UgCAppGN9s; stored rule/unless/class rows that fail to parse must fail closed (tightening only)",
+      "pr": 357,
+      "head": "9062155e"
     },
     "P-v06-sources-plan": {
       "status": "merged",
@@ -2211,8 +2213,10 @@
       "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware"
     },
     "X-web-followups-1101f": {
-      "status": "building",
-      "notes": "Sonnet; session_01MMjhn9y1RFyN62gb7BnJQW; Discover j/k import failure, #317 first-visit scene, QueryBar popover flake"
+      "status": "in-review",
+      "notes": "Sonnet; session_01MMjhn9y1RFyN62gb7BnJQW; Discover j/k import failure, #317 first-visit scene, QueryBar popover flake",
+      "pr": 358,
+      "head": "dd3f912e"
     },
     "SRC-0": {
       "status": "building",
@@ -2600,7 +2604,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 32,
-  "last_heartbeat": "2026-11-01T21:10Z",
+  "last_heartbeat": "2026-11-01T21:40:00Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [],
