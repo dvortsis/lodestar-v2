@@ -2067,14 +2067,16 @@
       "review": "runner MERGE at 341fe76 (land before other web PRs)"
     },
     "X-detail-polish": {
-      "status": "review-ready",
+      "status": "merged",
       "session": "session_01MMjhnCYpDYsdfoATJ22wVM",
       "model": "sonnet",
       "brief": "briefs/X-detail-polish.md",
       "launched_at": "2026-11-01T07:42Z",
       "pr": 327,
       "head": "6095299",
-      "review": "runner MERGE at 6095299"
+      "review": "runner MERGE at 6095299",
+      "merge_sha": "1914ab64",
+      "merged_at": "2026-11-01T09:11Z"
     },
     "S-updates-4": {
       "status": "merged",
