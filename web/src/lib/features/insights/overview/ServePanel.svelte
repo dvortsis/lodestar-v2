@@ -43,7 +43,7 @@
 				>{m.insights_overview_not_measured()}</span
 			>{/if}
 		<a
-			class="ins-link"
+			class="ins-link target"
 			href={resolve(stageHref('serve', query) as Route)}
 			data-testid="insights-serve-zero-link">{m.insights_overview_serve_zero_link()}</a
 		>

@@ -283,7 +283,7 @@
 	<nav aria-label={m.insights_stage_breadcrumb()} data-testid="insights-breadcrumb">
 		<ol class="ins-row">
 			<li>
-				<a class="ins-link" href={resolve(overviewHref as Route)} data-testid="insights-back"
+				<a class="ins-link target" href={resolve(overviewHref as Route)} data-testid="insights-back"
 					>{m.insights_overview_title()}</a
 				>
 			</li>
@@ -297,7 +297,7 @@
 			{#each STAGES as s (s)}
 				<li>
 					<a
-						class="ins-link"
+						class="ins-link target"
 						href={resolve(stageLink(s) as Route)}
 						aria-current={s === stage ? 'page' : undefined}
 						data-testid="insights-stage-{s}">{names[s]()}</a
@@ -327,7 +327,7 @@
 		{/if}
 		{#if reason}
 			<a
-				class="ins-link"
+				class="ins-link target"
 				href={resolve(withContext(`/insights/${stage}`, query) as Route)}
 				data-testid="insights-reason-chip"
 				>{m.insights_stage_reason_reset({ reason: reasonName(reason) })}</a
@@ -466,7 +466,7 @@
 					</ChartPanel>
 					{#if reason && c.csv}
 						<a
-							class="ins-link"
+							class="ins-link target"
 							href={resolve(csv(c.csv) as Route)}
 							download
 							data-testid="insights-chart-{c.id}-csv">{m.insights_overview_csv()}</a
@@ -488,7 +488,7 @@
 							<h3 class="ins-card-title">{b.title}</h3>
 							{#if b.csv}
 								<a
-									class="ins-link"
+									class="ins-link target"
 									href={resolve(csv(b.csv) as Route)}
 									download
 									data-testid="insights-bars-{b.id}-csv">{m.insights_overview_csv()}</a
@@ -597,7 +597,7 @@
 				<h2 id="ins-t-{t.id}" class="ins-heading">{t.title}</h2>
 				{#if t.csv}
 					<a
-						class="ins-link"
+						class="ins-link target"
 						href={resolve(csv(t.csv) as Route)}
 						download
 						data-testid="insights-table-{t.id}-csv">{m.insights_overview_csv()}</a

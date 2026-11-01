@@ -172,7 +172,7 @@
 				{#each losses as l (l.reason)}
 					<li class="ins-item-row" data-testid="insights-loss-{l.reason}">
 						<a
-							class="ins-link"
+							class="ins-link target"
 							href={resolve(stageHref('fetch', query, { reason: l.reason }) as Route)}
 							>{reasonName(l.reason)}</a
 						>

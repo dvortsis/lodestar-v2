@@ -68,7 +68,7 @@
 						</p>
 						{#if href}
 							<a
-								class="ins-link"
+								class="ins-link target"
 								href={resolve(href as Route)}
 								data-testid="insights-exception-{e.kind}-fix">{fixText(e)}</a
 							>

@@ -108,16 +108,6 @@
 	outline: var(--focus-ring-width) solid var(--color-primary);
 	outline-offset: var(--focus-ring-offset);
 }
-@media (pointer: coarse) {
-	.ins-link,
-	.ins-stage {
-		min-height: var(--target-min);
-	}
-	.ins-link {
-		display: inline-flex;
-		align-items: center;
-	}
-}
 
 /* Levels */
 .ins-section {

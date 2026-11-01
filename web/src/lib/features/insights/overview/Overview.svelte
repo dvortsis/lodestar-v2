@@ -262,7 +262,7 @@
 			<div class="ins-card">
 				<Exceptions exceptions={overview.exceptions} />
 				<a
-					class="ins-link"
+					class="ins-link target"
 					href={resolve(csvHref('exceptions', query) as Route)}
 					download
 					data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
