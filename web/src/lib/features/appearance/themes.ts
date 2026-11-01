@@ -92,6 +92,29 @@ const vars = (keys: string[], t: ThemeEntry) =>
 /** Bumped by every call: a call that finds a newer one after its fetch leaves the page alone. */
 let generation = 0;
 
+let saving = 0;
+
+/** The Appearance screen marks a save as pending (true) and done (false); the boot path waits it out. */
+export function markSave(on: boolean): void {
+	saving = Math.max(0, saving + (on ? 1 : -1));
+	if (saving === 0 && afterSaves) {
+		const run = afterSaves;
+		afterSaves = undefined;
+		run();
+	}
+}
+
+let afterSaves: (() => void) | undefined;
+
+/** Runs `fn` once, when the last pending save ends (now, if none is pending). */
+export function whenSaved(fn: () => void): void {
+	if (saving === 0) fn();
+	else afterSaves = fn;
+}
+
+/** Whether a save from the Appearance screen is still on its way to the server. */
+export const savePending = () => saving > 0;
+
 /** How many themes have been applied so far; a caller compares it across an await. */
 export const themeGeneration = () => generation;
 

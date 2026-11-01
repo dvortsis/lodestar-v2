@@ -6072,6 +6072,14 @@ export interface components {
              *     schema yet, so clients built before it still type-check.
              */
             reason?: string | null;
+            /**
+             * @description Whether a rollback replaces the store with the snapshot taken
+             *     before this version upgraded its schema (`false`: the store is
+             *     kept as it is). Sent when Roll back's check found the version to
+             *     roll back; absent otherwise. The snapshot is verified only when
+             *     the rollback begins.
+             */
+            restores_store?: boolean | null;
             /** @description `image` or a version. */
             to_version: string | null;
         };

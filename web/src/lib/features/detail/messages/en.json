@@ -16,6 +16,7 @@
 	"detail_press_copy": "Press Ctrl+C to copy",
 	"detail_press_copy_mac": "Press ⌘C to copy",
 	"detail_magnet_unavailable": "Couldn't get the magnet link.",
+	"detail_action_unavailable": "Couldn’t open that.",
 	"detail_resolved_via": "Resolved via {method}",
 	"detail_via_files": "files",
 	"detail_via_folder": "folder",

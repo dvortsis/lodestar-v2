@@ -57,6 +57,8 @@ export interface ChartSpec {
 	approx?: boolean;
 	/** A series of readings at the end of each bucket, not counts per bucket: no rate unit. */
 	snapshot?: boolean;
+	/** The axis unit of a snapshot chart; torrents when absent. */
+	snapshotUnit?: string;
 }
 
 export interface Table {

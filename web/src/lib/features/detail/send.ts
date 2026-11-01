@@ -4,7 +4,7 @@
 import { ApiError, api } from '$lib/api/client';
 import { toast } from '$lib/ui/feedback/toasts.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { commandTarget } from './target';
+import { commandTarget, drawerHash, loadedHash } from './target';
 
 // `s` (§10.16) exists only once a client is known: registered here, so with none it does nothing.
 let registered = false;
@@ -17,7 +17,7 @@ function registerKey() {
 			title: () => m.shortcuts_action_detail_send(),
 			section: () => m.torrent(),
 			keys: ['s'],
-			when: () => commandTarget() !== null,
+			when: () => (drawerHash === null || drawerHash === loadedHash) && commandTarget() !== null,
 			run: () => {
 				const hash = commandTarget();
 				if (hash) void sendHash(hash);

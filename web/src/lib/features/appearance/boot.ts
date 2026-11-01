@@ -6,7 +6,7 @@ import { latest } from '$lib/api/client';
 import { events } from '$lib/state/events.svelte';
 import { onceLive } from '$lib/features/shortcuts/follow.svelte';
 import { applyLook, familyFor, load, prefersDark, type Appearance } from './prefs';
-import { THEME_CACHE, applyTheme, themeGeneration } from './themes';
+import { THEME_CACHE, applyTheme, savePending, themeGeneration, whenSaved } from './themes';
 
 const FALLBACK_MS = 10_000;
 const slot = latest();
@@ -47,7 +47,12 @@ export async function refresh(): Promise<void> {
 	try {
 		const loaded = await slot.run((signal) => load(signal));
 		// A choice made on the Appearance screen meanwhile is newer than this answer.
+		// A save still pending means the server's answer is the older choice: applying it flickers.
 		if (!loaded || themeGeneration() !== before) return;
+		if (savePending()) {
+			whenSaved(() => void refresh());
+			return;
+		}
 		// The pre-paint script sets the theme only, so the look is set on every start.
 		if (!lookShown(loaded.prefs)) applyLook(loaded.prefs);
 		// A custom theme this browser lacks falls back to Riverstone inside, without an error.

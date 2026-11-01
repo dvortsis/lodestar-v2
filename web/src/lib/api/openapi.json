@@ -15922,6 +15922,13 @@
             ],
             "description": "Why not, when `available` is false: `not_supervised`,\n`image_mode`, `busy`, `no_previous_version` or `snapshot_missing`\n(or the `unavailable` reason). Always sent; not `required` in the\nschema yet, so clients built before it still type-check."
           },
+          "restores_store": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether a rollback replaces the store with the snapshot taken\nbefore this version upgraded its schema (`false`: the store is\nkept as it is). Sent when Roll back's check found the version to\nroll back; absent otherwise. The snapshot is verified only when\nthe rollback begins."
+          },
           "to_version": {
             "type": [
               "string",
