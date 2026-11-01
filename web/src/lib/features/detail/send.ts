@@ -29,7 +29,8 @@ function registerKey() {
 let known: Promise<string | null> | undefined;
 
 /** The default client's name (else the first's), or null when none is saved or it can't be read. */
-export function clientName(): Promise<string | null> {
+export function clientName(fresh = false): Promise<string | null> {
+	if (fresh) known = undefined; // the drawer asks again: Settings may have renamed or removed it
 	known ??= api
 		.get('/settings/{section}', { path: { section: 'integrations' } })
 		.then((res) => {
@@ -55,7 +56,8 @@ export function clientName(): Promise<string | null> {
 }
 
 /** The button's and the menu item's text ("Send to qBittorrent"), or null with no client. */
-export const sendLabel = () => clientName().then((name) => name && m.detail_send({ name }));
+export const sendLabel = (fresh = false) =>
+	clientName(fresh).then((name) => name && m.detail_send({ name }));
 
 /** Send one torrent to the default client and say what happened. No retries. */
 export async function sendHash(hash: string) {
