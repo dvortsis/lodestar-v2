@@ -27,6 +27,7 @@ describe('the screen registry', () => {
 			'notifications',
 			'insights',
 			'general',
+			'updates',
 			'logging',
 			'security',
 			'about'

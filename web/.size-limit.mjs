@@ -284,7 +284,9 @@ const settingsSecurity = [
 	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
 	/features\/settings\/security\/icon\.ts$/
 ];
-const securityLoader = [/features\/(?:settings\/(?:security|logging|about)|filters)\/body\.ts$/];
+const securityLoader = [
+	/features\/(?:settings\/(?:security|logging|about|updates)|filters)\/body\.ts$/
+];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
 const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
@@ -295,6 +297,14 @@ const settingsAboutModules = [/features\/settings\/about\/(icon|about)\.ts$/];
 const settingsAboutParts = [
 	/features\/settings\/about\/(Diagnostics|Licences)\.svelte$/,
 	...settingsAboutModules
+];
+// Updates (S-updates): the release notes and history load after the first view, and its navigation
+// icon and purpose line (for the filter) on demand; gated on their own below. They only load from
+// Updates' body.
+const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/];
+const settingsUpdatesParts = [
+	/features\/settings\/updates\/Releases\.svelte$/,
+	...settingsUpdatesModules
 ];
 // Logging (S-logs-2): the Verbosity control, the event list and the component levels (loaded when
 // their fields are on the page), `parts.ts` (the catalog, the banners and the data kinds, which all
@@ -331,6 +341,7 @@ const settingsFirstView = [
 	...settingsSecurity,
 	...settingsSecurityLater,
 	...settingsAboutParts,
+	...settingsUpdatesParts,
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
@@ -397,6 +408,7 @@ const registryLazyKeys = Object.keys(manifest).filter((key) =>
 );
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
 const aboutBody = /features\/settings\/about\/AboutScreen\.svelte$/;
+const updatesBody = /features\/settings\/updates\/UpdatesScreen\.svelte$/;
 // Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
 // body is of code already loaded.
 const filtersLater = [/features\/filters\/screens\/Queue\.svelte$/];
@@ -411,6 +423,8 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
 		// The same for About's parts: they load from its body, whose chunk holds what they share.
 		.filter((key) => !(settingsAboutParts.some((re) => re.test(from)) && aboutBody.test(key)))
+		// The same for Updates' parts: they load from its body, whose chunk holds what they share.
+		.filter((key) => !(settingsUpdatesParts.some((re) => re.test(from)) && updatesBody.test(key)))
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
@@ -421,7 +435,9 @@ if (staticHits.length)
 // The same for Security's later parts: they load by dynamic import after mount, so nothing may
 // import them statically, or their code would leave the first-view gates unmeasured.
 const laterKeys = Object.keys(manifest).filter((key) =>
-	[...settingsSecurityLater, ...settingsAboutParts].some((re) => re.test(key))
+	[...settingsSecurityLater, ...settingsAboutParts, ...settingsUpdatesParts].some((re) =>
+		re.test(key)
+	)
 );
 const laterStatic = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? []).filter((key) => laterKeys.includes(key)).map((key) => `${from} -> ${key}`)
@@ -461,6 +477,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsSecurity,
 					...settingsSecurityLater,
 					...settingsAboutParts,
+					...settingsUpdatesParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
 					...settingsLoggingNames,
@@ -524,6 +541,39 @@ const settingsAboutModulesLazy = requireMeasuredJs('Settings about icon and purp
 			)
 	)
 ]);
+// What Updates' release notes and history add to its first view (the body is loaded when they load).
+const updatesFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'UpdatesScreen')?.files ?? [];
+const settingsUpdatesPartsLazy = requireMeasuredJs('Settings updates parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter(
+				(key) =>
+					settingsUpdatesParts.some((re) => re.test(key)) &&
+					!settingsUpdatesModules.some((re) => re.test(key))
+			)
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...updatesFirstView
+				])
+			)
+	)
+]);
+// The icon and the purpose line load from every Settings page, so what they share with Updates' body
+// is measured here too (beyond the shell only).
+const settingsUpdatesModulesLazy = requireMeasuredJs(
+	'Settings updates icon and purpose (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsUpdatesModules.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
+				)
+		)
+	]
+);
 const appearanceBody = bodyKeys.find((key) => key.startsWith(`${APPEARANCE}/`));
 const appearanceFirst = appearanceBody
 	? ownChunk(
@@ -794,6 +844,27 @@ for (const [name, files] of [
 if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Results toolbar (lazy): no chunk found for the toolbar in the manifest');
 
+// The first-run wizard (S-wizard): its steps load when they open (`WizardPage` LOADERS).
+const wizardSteps = [/features\/wizard\/\w+Step\.svelte$/];
+const wizardFirst = own('/welcome', { onDemand: wizardSteps });
+// A step is measured from its own module, beyond the first view, and stops at the engine's lazy
+// parts (controls, previews, the edit chunk, the section maps), which "Settings controls (on
+// demand)", "Settings edit chunk (on demand)" and "Settings messages (on demand)" gate already.
+const wizardLazy = requireMeasuredJs('Wizard steps (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => wizardSteps.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(
+					key,
+					[...settingsOnDemand, ...settingsEdit, ...settingsMessages],
+					false,
+					wizardFirst
+				)
+			)
+	)
+]);
+
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
 // Both pages' keys (the list's New alert, the alert page's j/k) and the key registry load after
@@ -895,6 +966,9 @@ export default [
 	// About's diagnostics block and licence list (S-about): LIMIT_ABOUT_PARTS
 	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.44 KB'),
 	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
+	// Updates' release notes and history (S-updates): measured + 10%.
+	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
+	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).
@@ -1025,7 +1099,13 @@ export default [
 		'Insights stage charts (uPlot, on demand)',
 		onDemandOf('/insights/[stage]', stageLazy),
 		'24.2 KB'
-	)
+	),
+	// The first-run wizard (S-wizard): /welcome's first view is the auth check, the shell and the
+	// progress list. Each step is a dynamic import made when it opens, so the first view stops at
+	// them and "Wizard steps (on demand)" gates what they bring, the Settings engine's parts among
+	// them. Limits: measured + 10%.
+	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
+	entry('Wizard steps (on demand)', wizardLazy, '36.9 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
 ];
