@@ -284,10 +284,18 @@ const settingsSecurity = [
 	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
 	/features\/settings\/security\/icon\.ts$/
 ];
-const securityLoader = [/features\/(?:settings\/(?:security|logging)|filters)\/body\.ts$/];
+const securityLoader = [/features\/(?:settings\/(?:security|logging|updates)|filters)\/body\.ts$/];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
 const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
+// Updates (S-updates): the release notes and history load after the first view, and its navigation
+// icon and purpose line (for the filter) on demand; gated on their own below. They only load from
+// Updates' body.
+const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/];
+const settingsUpdatesParts = [
+	/features\/settings\/updates\/Releases\.svelte$/,
+	...settingsUpdatesModules
+];
 // Logging (S-logs-2): the Verbosity control, the event list and the component levels (loaded when
 // their fields are on the page), `parts.ts` (the catalog, the banners and the data kinds, which all
 // wait on `GET /logs/catalog`), the privacy requests with their dialogs, and the navigation icon load
@@ -322,6 +330,7 @@ const settingsFirstView = [
 	...settingsConnections,
 	...settingsSecurity,
 	...settingsSecurityLater,
+	...settingsUpdatesParts,
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
@@ -387,6 +396,7 @@ const registryLazyKeys = Object.keys(manifest).filter((key) =>
 	[...settingsAbout, ...settingsIcons].some((re) => re.test(key))
 );
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
+const updatesBody = /features\/settings\/updates\/UpdatesScreen\.svelte$/;
 // Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
 // body is of code already loaded.
 const filtersLater = [/features\/filters\/screens\/Queue\.svelte$/];
@@ -399,6 +409,8 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		// Security's later parts load only from its body, so their imports of that body alone are
 		// of code already loaded; any other body they import still trips this.
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
+		// The same for Updates' parts: they load from its body, whose chunk holds what they share.
+		.filter((key) => !(settingsUpdatesParts.some((re) => re.test(from)) && updatesBody.test(key)))
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
 		.map((key) => `${from} -> ${key}`)
 );
@@ -409,7 +421,7 @@ if (staticHits.length)
 // The same for Security's later parts: they load by dynamic import after mount, so nothing may
 // import them statically, or their code would leave the first-view gates unmeasured.
 const laterKeys = Object.keys(manifest).filter((key) =>
-	settingsSecurityLater.some((re) => re.test(key))
+	[...settingsSecurityLater, ...settingsUpdatesParts].some((re) => re.test(key))
 );
 const laterStatic = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? []).filter((key) => laterKeys.includes(key)).map((key) => `${from} -> ${key}`)
@@ -448,6 +460,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsConnections,
 					...settingsSecurity,
 					...settingsSecurityLater,
+					...settingsUpdatesParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
 					...settingsLoggingNames,
@@ -478,6 +491,39 @@ const settingsSecurityLaterLazy = requireMeasuredJs(
 						...settingsShellView,
 						...securityFirstView
 					])
+				)
+		)
+	]
+);
+// What Updates' release notes and history add to its first view (the body is loaded when they load).
+const updatesFirstView =
+	settingsHandBuilt.find(({ name }) => name === 'UpdatesScreen')?.files ?? [];
+const settingsUpdatesPartsLazy = requireMeasuredJs('Settings updates parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter(
+				(key) =>
+					settingsUpdatesParts.some((re) => re.test(key)) &&
+					!settingsUpdatesModules.some((re) => re.test(key))
+			)
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...updatesFirstView
+				])
+			)
+	)
+]);
+// The icon and the purpose line load from every Settings page, so what they share with Updates' body
+// is measured here too (beyond the shell only).
+const settingsUpdatesModulesLazy = requireMeasuredJs(
+	'Settings updates icon and purpose (on demand)',
+	[
+		...new Set(
+			Object.keys(manifest)
+				.filter((key) => settingsUpdatesModules.some((re) => re.test(key)))
+				.flatMap((key) =>
+					ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
 				)
 		)
 	]
@@ -850,6 +896,9 @@ export default [
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
+	// Updates' release notes and history (S-updates): measured + 10%.
+	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
+	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
 	// Logging (S-logs-2): its server labels, and the event list, data kinds and privacy dialogs.
 	// Measured 0.78 KB and 15.48 KB at first (limits = measured + 10%); 16.48 KB after the review
 	// round (the unreadable-state banner, closing dialogs on leave).

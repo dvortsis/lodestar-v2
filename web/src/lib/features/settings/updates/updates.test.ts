@@ -1,0 +1,277 @@
+// Settings → Updates' blocking rules (S-updates): the screen shows only what the server says, a
+// failed request keeps the last server state, Cancel sends nothing, a locked value can't change,
+// the security toggle follows the server per mode, and the notices appear.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { initLocale } from '$lib/i18n/locale.svelte';
+import UpdatesScreen from './UpdatesScreen.svelte';
+import type { Release, Status } from './logic';
+import { cannotAuto, noticesOf, safeHttps, securityDefault, securityVisible } from './logic';
+
+const asked = vi.hoisted(() => ({ answer: 'cancel' as string | null, count: 0 }));
+vi.mock('../form/dialogs', () => ({
+	ask: async () => {
+		asked.count++;
+		return asked.answer;
+	}
+}));
+vi.mock('$lib/state/events.svelte', () => ({ events: { on: () => () => {} } }));
+vi.setConfig({ testTimeout: 30_000 });
+const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
+
+const release: Release = {
+	version: '0.6.0',
+	date: 1_700_000_000,
+	level: 'fix',
+	security: true,
+	manual_steps: false,
+	migrates: false,
+	reindex: false,
+	reindex_bytes: 0,
+	eligible: false,
+	installs_at: null,
+	blocked_by: [],
+	notes: 'Fixes a crash.',
+	notes_url: 'https://github.com/o/r/releases/tag/v0.6.0'
+};
+const base = (): Status => ({
+	capability: { can_install: true, reason: null },
+	history: [],
+	notices: [],
+	pending: null,
+	policy: {
+		allow_reindex: false,
+		held_in_process: false,
+		level: 'fixes',
+		mode: 'notify',
+		next_window_at: null,
+		paused_until: null,
+		security_fixes: false,
+		wait_days: 3,
+		window: '02:00-05:00',
+		window_zone: 'UTC'
+	},
+	releases: [],
+	rollback: { available: false, lost_torrents: null, to_version: null },
+	running: {
+		channel: 'stable',
+		image_version: null,
+		overlay: false,
+		revoked_key: false,
+		version: '0.5.2',
+		withdrawn: false
+	},
+	status: { checked_at: 1_699_990_000, error: null, next_check_at: null, state: 'ok' },
+	unavailable: null
+});
+
+let status: Status;
+let fields: Record<string, { value: unknown; env: string | null; read_only: boolean }>;
+let sent: string[];
+let failNext: string | null;
+
+const reply = (code: number, b: unknown) =>
+	new Response(JSON.stringify(b), {
+		status: code,
+		headers: { 'Content-Type': 'application/json' }
+	});
+
+beforeEach(() => {
+	initLocale('en');
+	status = base();
+	fields = {
+		mode: { value: 'notify', env: null, read_only: false },
+		level: { value: 'fixes', env: null, read_only: false },
+		security_fixes: { value: 'auto', env: null, read_only: false }
+	};
+	sent = [];
+	failNext = null;
+	asked.answer = 'cancel';
+	asked.count = 0;
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async (url: string, init: RequestInit = {}) => {
+			const path = new URL(url, 'http://x').pathname.replace('/api/v1', '');
+			const method = init.method ?? 'GET';
+			if (method !== 'GET') sent.push(`${method} ${path} ${init.body ?? ''}`);
+			if (method !== 'GET' && failNext === path) {
+				failNext = null;
+				return reply(500, { error: { code: 'updates_not_saved', message: 'nope' } });
+			}
+			if (path === '/system') return reply(200, { deployment: { kind: 'docker' } });
+			if (path === '/settings/updates' && method === 'GET')
+				return reply(200, { section: 'updates', revision: 1, restart_required: [], fields });
+			if (path === '/settings/updates') {
+				const patch = JSON.parse(String(init.body));
+				for (const [k, v] of Object.entries(patch)) if (fields[k]) fields[k].value = v;
+				if (patch.mode) status.policy.mode = patch.mode;
+				return reply(200, { section: 'updates', revision: 2, restart_required: [], fields });
+			}
+			if (path === '/updates/pause') {
+				status.policy.paused_until = JSON.parse(String(init.body)).days ? 1_800_000_000 : null;
+				return reply(200, status);
+			}
+			if (path === '/updates/check' || path === '/updates/skip') return reply(200, status);
+			return reply(200, status);
+		})
+	);
+});
+afterEach(() => {
+	vi.unstubAllGlobals();
+	document.body.innerHTML = '';
+});
+
+const mutations = () => sent.filter((s) => !s.startsWith('GET'));
+
+describe('logic', () => {
+	it('security fixes default on under automatic, off under notify, hidden otherwise', () => {
+		expect(securityDefault('auto')).toBe(true);
+		expect(securityDefault('notify')).toBe(false);
+		expect(securityVisible('auto') && securityVisible('notify')).toBe(true);
+		expect(securityVisible('off') || securityVisible('image')).toBe(false);
+	});
+	it('only https links are used', () => {
+		expect(safeHttps('https://github.com/o/r')).toBe('https://github.com/o/r');
+		for (const bad of ['http://x.test', 'javascript:alert(1)', 'https://u:p@x.test', '', null])
+			expect(safeHttps(bad)).toBeNull();
+	});
+	it('names the reason automatic installs are off', () => {
+		const s = base();
+		expect(cannotAuto(s as never)).toBeNull();
+		s.capability = { can_install: false, reason: 'noexec' };
+		expect(cannotAuto(s as never)).toBe('noexec');
+	});
+	it('lists the three F-updater notices', () => {
+		const s = base();
+		s.notices = ['check_not_saved', 'updater_unreadable', 'rolled_back'];
+		s.policy.held_in_process = true;
+		expect(noticesOf(s as never)).toEqual(['updater_unreadable', 'check_not_saved']);
+		s.notices = [];
+		expect(noticesOf(s as never)).toEqual(['held_in_process']);
+	});
+});
+
+describe('the Updates screen', () => {
+	it('says up to date only with a response saying so', async () => {
+		render(UpdatesScreen);
+		expect((await screen.findByTestId('updates-state')).textContent).toContain('up to date');
+		document.body.innerHTML = '';
+		status.status = { checked_at: null, error: null, next_check_at: null, state: 'idle' };
+		render(UpdatesScreen);
+		await until(() =>
+			expect(screen.getByTestId('updates-state').textContent).toContain('not checked yet')
+		);
+		expect(screen.getByTestId('updates-state').textContent).not.toContain('up to date');
+	});
+
+	it('keeps Off off until the user picks, and says checking contacts GitHub', async () => {
+		fields.mode!.value = 'off';
+		status.policy.mode = 'off';
+		render(UpdatesScreen);
+		expect(((await screen.findByTestId('updates-mode-off')) as HTMLInputElement).checked).toBe(
+			true
+		);
+		expect(screen.getByTestId('updates-contacts').textContent).toContain('contacts GitHub');
+		expect(screen.queryByTestId('updates-security-toggle')).toBeNull();
+		expect(mutations()).toEqual([]);
+	});
+
+	it('a failed change leaves the server’s choice on screen with an error', async () => {
+		render(UpdatesScreen);
+		const off = (await screen.findByTestId('updates-mode-off')) as HTMLInputElement;
+		failNext = '/settings/updates';
+		await fireEvent.click(off);
+		await until(() => expect(screen.getByTestId('updates-error')).toBeTruthy());
+		await until(() =>
+			expect((screen.getByTestId('updates-mode-notify') as HTMLInputElement).checked).toBe(true)
+		);
+		expect(off.checked).toBe(false);
+	});
+
+	it('a locked value shows its reason and no control changes it', async () => {
+		fields.mode!.env = 'LODESTAR_UPDATES';
+		render(UpdatesScreen);
+		expect((await screen.findByTestId('updates-locked-mode')).textContent).toContain(
+			'LODESTAR_UPDATES'
+		);
+		for (const id of ['off', 'notify', 'auto'])
+			expect((screen.getByTestId(`updates-mode-${id}`) as HTMLInputElement).disabled).toBe(true);
+		expect(mutations()).toEqual([]);
+	});
+
+	it('the security toggle shows the server’s effective value and saves a change', async () => {
+		status.policy.security_fixes = true;
+		render(UpdatesScreen);
+		const t = (await screen.findByTestId('updates-security-toggle')) as HTMLInputElement;
+		expect(t.checked).toBe(true);
+		await fireEvent.click(t);
+		await until(() => expect(mutations().join()).toContain('"security_fixes":"off"'));
+	});
+
+	it('Skip asks first: Cancel sends nothing, Skip sends the version', async () => {
+		status.releases = [release];
+		render(UpdatesScreen);
+		const skip = await screen.findByTestId('updates-skip');
+		await fireEvent.click(skip);
+		await until(() => expect(asked.count).toBe(1));
+		expect(mutations()).toEqual([]);
+		asked.answer = 'skip';
+		await fireEvent.click(skip);
+		await until(() => expect(mutations().join()).toContain('/updates/skip'));
+		expect(mutations().join()).toContain('0.6.0');
+	});
+
+	it('offers no Install now with damaged trust data', async () => {
+		status.releases = [release];
+		status.notices = ['trust_damaged'];
+		status.capability = { can_install: false, reason: 'trust_damaged' };
+		render(UpdatesScreen);
+		expect((await screen.findByTestId('updates-notice-trust_damaged')).textContent).toContain(
+			'blocked'
+		);
+		expect(screen.queryByRole('button', { name: /install now/i })).toBeNull();
+		expect(screen.getByTestId('updates-cannot-auto').textContent).toContain('trust data');
+	});
+
+	it('shows the three F-updater notices', async () => {
+		status.notices = ['updater_unreadable', 'check_not_saved'];
+		render(UpdatesScreen);
+		expect(await screen.findByTestId('updates-notice-updater_unreadable')).toBeTruthy();
+		expect(screen.getByTestId('updates-notice-check_not_saved')).toBeTruthy();
+		document.body.innerHTML = '';
+		status.notices = [];
+		status.policy.held_in_process = true;
+		render(UpdatesScreen);
+		expect(await screen.findByTestId('updates-notice-held_in_process')).toBeTruthy();
+	});
+
+	it('disables Install automatically with the reason beside it', async () => {
+		status.capability = { can_install: false, reason: 'noexec' };
+		render(UpdatesScreen);
+		expect(((await screen.findByTestId('updates-mode-auto')) as HTMLInputElement).disabled).toBe(
+			true
+		);
+		expect(screen.getByTestId('updates-cannot-auto').textContent).toContain('noexec');
+	});
+
+	it('pauses and resumes, and a failed pause keeps the last state', async () => {
+		render(UpdatesScreen);
+		failNext = '/updates/pause';
+		await fireEvent.click(await screen.findByTestId('updates-pause-7'));
+		await until(() => expect(screen.getByTestId('updates-error')).toBeTruthy());
+		expect(screen.queryByTestId('updates-paused')).toBeNull();
+		await fireEvent.click(screen.getByTestId('updates-pause-7'));
+		await until(() => expect(screen.getByTestId('updates-paused')).toBeTruthy());
+		await fireEvent.click(screen.getByTestId('updates-resume'));
+		await until(() => expect(screen.queryByTestId('updates-paused')).toBeNull());
+	});
+
+	it('release notes link only to https, in a new tab', async () => {
+		status.releases = [release, { ...release, version: '0.5.9', notes_url: 'http://bad.test' }];
+		render(UpdatesScreen);
+		const a = (await screen.findByRole('link', { name: 'Read on GitHub' })) as HTMLAnchorElement;
+		expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+		expect(a.target).toBe('_blank');
+		expect(screen.getAllByRole('link', { name: 'Read on GitHub' })).toHaveLength(1);
+	});
+});
