@@ -312,14 +312,16 @@
 			options={ranges}
 			value={query.range}
 			label={m.insights_overview_range_label()}
-			onchange={(r) => void goto(resolve(rangeLink(r as RangeId) as Route))}
+			onchange={(r) =>
+				void goto(resolve(rangeLink(r as RangeId) as Route), { keepFocus: true, noScroll: true })}
 		/>
 		{#if query.range !== 'all'}
 			<Button
 				variant={query.compare ? 'primary' : 'secondary'}
 				dense
 				aria-pressed={query.compare}
-				onclick={() => void goto(resolve(compareLink as Route))}
+				onclick={() =>
+					void goto(resolve(compareLink as Route), { keepFocus: true, noScroll: true })}
 				data-testid="insights-stage-compare"
 			>
 				{m.insights_overview_compare()}

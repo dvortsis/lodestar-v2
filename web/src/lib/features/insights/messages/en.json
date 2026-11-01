@@ -285,8 +285,6 @@
 	"insights_stage_serve_col_count": "Searches",
 	"insights_stage_serve_col_zero": "No results",
 	"insights_stage_serve_logging_off": "Query logging is off, so there is nothing to list. Turn it on in Settings, Insights.",
-	"insights_stage_compare_on": "on",
-	"insights_stage_compare_off": "off",
 	"insights_stage_nothing_measured": "Nothing was measured in this range.",
 	"insights_stage_hist_summary": "{title}: how many torrents fall in each range, as of now.",
 	"insights_stage_discover_harvested": "Unique harvested",

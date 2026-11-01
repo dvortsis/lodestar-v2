@@ -460,7 +460,7 @@
 		}
 		.logs-toolbar :global(.logs-filter) {
 			flex: 1 1 auto;
-			max-width: 40rem;
+			max-width: var(--manuscript-width);
 		}
 	}
 	.logs-level {

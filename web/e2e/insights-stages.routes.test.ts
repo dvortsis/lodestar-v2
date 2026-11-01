@@ -8,6 +8,7 @@ import {
 	serveFixture,
 	understandFixture
 } from '../src/lib/features/insights/stages/fixtures';
+import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 import { expect, test } from './support/test';
 
 const pages = [
@@ -160,4 +161,38 @@ test('keyboard: breadcrumb back to the overview keeps the context', async ({
 	await go('/insights/fetch?range=24h');
 	await kbd.tabTo(page.getByTestId('insights-back'));
 	await expect(page.getByTestId('insights-back')).toHaveAttribute('href', /range=24h/);
+});
+
+test('keyboard: focus stays on the range group and on Compare after they navigate', async ({
+	page,
+	mock,
+	go
+}) => {
+	mock.on('getInsightsFetch', fetchFixture());
+	await go('/insights/fetch?range=7d');
+	const group = page.getByRole('radiogroup', { name: 'Time range' });
+	await page.getByRole('radio', { name: '7 d' }).focus();
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('ArrowRight');
+	await expect(page).toHaveURL(/range=all/);
+	await expect(group.getByRole('radio', { checked: true })).toBeFocused();
+	await go('/insights/fetch?range=7d');
+	const compare = page.getByTestId('insights-stage-compare');
+	await compare.focus();
+	await page.keyboard.press('Enter');
+	await expect(page).toHaveURL(/compare=1/);
+	await expect(compare).toBeFocused();
+});
+
+test.describe('under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+	test('the stage links on the overview are 44 px targets', async ({ page, mock, go }) => {
+		mock.on('getInsightsOverview', overviewFixture());
+		mock.on('getCrawler', crawlerFixture());
+		await go('/insights');
+		for (const stage of ['discover', 'fetch', 'understand', 'index', 'serve']) {
+			const box = (await page.getByTestId(`insights-detail-${stage}`).boundingBox())!;
+			expect(box.height).toBeGreaterThanOrEqual(44);
+		}
+	});
 });

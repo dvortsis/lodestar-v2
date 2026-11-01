@@ -190,14 +190,12 @@
 	.line-chart :global(.u-legend .u-marker) {
 		width: calc(var(--spacing) * 4);
 		height: calc(var(--spacing) * 0.5);
-		border-width: 0;
-		border-radius: 0;
 		vertical-align: middle;
 	}
-	.line-chart:not(:hover) :global(.u-legend .u-value) {
+	.line-chart:not(:hover):not(:focus-within) :global(.u-legend .u-value) {
 		visibility: hidden;
 	}
-	.line-chart:not(:hover) :global(.u-legend .u-series:first-child) {
+	.line-chart:not(:hover):not(:focus-within) :global(.u-legend .u-series:first-child) {
 		visibility: hidden;
 	}
 </style>
