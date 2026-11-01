@@ -547,13 +547,13 @@
       "catch_ups": 1
     },
     "S-filters": {
-      "status": "running-2b",
+      "status": "merged-2a-2b",
       "model": "sonnet",
       "session": "session_01MMjhn8oardod2iyMtn27tK",
       "pr": 300,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet. | 22:58Z PR #300 (2a) head f1781c2d: Filters 32.96 KB; no about/iconLoad (Alert/Search headroom); no queue expiry yet. Opus reviewer + security review; subscribed. | 23:09Z MERGE at f1781c2d (invariants verified; security reviewed by hand). Author: after baselines, one push removing marker + O1/O2 + doc fix; runner checks delta, merges on green; then 2b. | 23:38Z merged #300 2a (17ed97ec). 2b (Block this…, Adult facets) started in the same session on slice/S-filters-2b. | 23:48Z 2b size block: Block-this hooks +0.3 KB on Search results/drawer//t and flows-chunk regroup (Filters first view 32.99->59.48). Runner chose B: 2b = Adult facets only; 2c = hooks after X-alert-search-headroom (asked it to isolate filters/flows + overlays). | 23:55Z PR #303 (2b: adult facet labels, ~50 lines) head 5f9f400d; runner review MERGE (server gates via FacetParams !visibility.adult). Merge on green.",
+      "notes": " | 22:15Z brief briefs/S-filters.md (Sonnet build, Opus+security review, safety invariants blocking; split 2a/2b if >1.5k). | 22:13Z launched Sonnet. | 22:58Z PR #300 (2a) head f1781c2d: Filters 32.96 KB; no about/iconLoad (Alert/Search headroom); no queue expiry yet. Opus reviewer + security review; subscribed. | 23:09Z MERGE at f1781c2d (invariants verified; security reviewed by hand). Author: after baselines, one push removing marker + O1/O2 + doc fix; runner checks delta, merges on green; then 2b. | 23:38Z merged #300 2a (17ed97ec). 2b (Block this…, Adult facets) started in the same session on slice/S-filters-2b. | 23:48Z 2b size block: Block-this hooks +0.3 KB on Search results/drawer//t and flows-chunk regroup (Filters first view 32.99->59.48). Runner chose B: 2b = Adult facets only; 2c = hooks after X-alert-search-headroom (asked it to isolate filters/flows + overlays). | 23:55Z PR #303 (2b: adult facet labels, ~50 lines) head 5f9f400d; runner review MERGE (server gates via FacetParams !visibility.adult). Merge on green. | 00:08Z merged #303 (b570c30e); session archived. 2c follows (followup).",
       "reviewer": "session_01MMjhnBh8166qRogaECZ665"
     },
     "S-keys": {
@@ -924,7 +924,7 @@
       "pr": 299,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet. | 22:41Z PR #299 head 3802a214: About 31.9 KB; other Settings +160-205 B (vs #293 note); Alerts route 29,168->29,200 (=limit) - reviewer to root-cause, no raise. Approved shell test edits; marker next push. Reviewer launched; subscribed. | 22:51Z E2E core red on 3802a214 (expected: Settings nav baselines; marker rides post-review push). | 23:08Z review CHANGES: B1 $app/environment import re-split shared runtime chunk (Alerts +32 B etc.) -> __SVELTEKIT_APP_VERSION__ in logic.ts; B2 registry load preload list -> body.ts forwarder (~100 B/entry). Should-fix diagnostics copy test. Fold: hide Updates link until screen exists, main merge, snapshot marker. | 23:17Z author pushed B1/B2/tests/links/decisions + main merge + snapshot marker; registry cost now +81..+93 B; Alert 45,976, Alerts 29,164, Search 43,280, Toolbar 4,594. Waiting CI baselines -> marker removal -> merge. | 23:38Z baselines ed326113 verified; told to merge main after #300 and regenerate (marker kept).",
+      "notes": "from #86 | 22:01Z brief briefs/S-about.md; launched Sonnet. | 22:41Z PR #299 head 3802a214: About 31.9 KB; other Settings +160-205 B (vs #293 note); Alerts route 29,168->29,200 (=limit) - reviewer to root-cause, no raise. Approved shell test edits; marker next push. Reviewer launched; subscribed. | 22:51Z E2E core red on 3802a214 (expected: Settings nav baselines; marker rides post-review push). | 23:08Z review CHANGES: B1 $app/environment import re-split shared runtime chunk (Alerts +32 B etc.) -> __SVELTEKIT_APP_VERSION__ in logic.ts; B2 registry load preload list -> body.ts forwarder (~100 B/entry). Should-fix diagnostics copy test. Fold: hide Updates link until screen exists, main merge, snapshot marker. | 23:17Z author pushed B1/B2/tests/links/decisions + main merge + snapshot marker; registry cost now +81..+93 B; Alert 45,976, Alerts 29,164, Search 43,280, Toolbar 4,594. Waiting CI baselines -> marker removal -> merge. | 23:38Z baselines ed326113 verified; told to merge main after #300 and regenerate (marker kept). | 00:08Z held: Search results 43,291 + #303 ~10 B risks the 43,300 limit; lands after #304, then merges main and pushes once.",
       "reviewer": "session_01MMjhnC8GLv5c2AvePdXugB"
     },
     "B-update": {
