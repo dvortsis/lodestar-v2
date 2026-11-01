@@ -2116,6 +2116,13 @@
       "model": "sonnet",
       "brief": "briefs/X-search-headroom-2.md",
       "launched_at": "2026-11-01T09:11Z"
+    },
+    "X-web-polish-1101c": {
+      "status": "building",
+      "session": "session_01MMjhn9QxqquJeb25KvJGuM",
+      "model": "sonnet",
+      "brief": "briefs/X-web-polish-1101c.md",
+      "launched_at": "2026-11-01T09:15Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3010,11 +3017,9 @@
     "X-clippy-msrv part 3: drop the chunks_exact_to_as_chunks allow once CI or the local clippy is 1.99+ (run clippy --fix for that lint)",
     "Themes: Light-first/Dark-first picker filters need an origin-mode field in web/themes/*.json (\u00a710.18 lists them; deferred in #243, \u00a72.19 owner flag)",
     "Rollback: carry holds into a restored pre-V4 store once it is upgraded (#245 limit)",
-    "Appearance: quick successive theme picks can flicker; needs a pending-save marker from AppearanceScreen for the boot/apply path (#247)",
     "IMP-0 runbook polish: revoke pg_logical_emit_message (both overloads) and consider pg_notify for the reader role (IMP-0 review polish A; WAL/transient only). Check IMP-3/IMP-4 docs for importer credential-file ownership (reader_pw 70:70 600 vs Lodestar PUID 65532/99)",
     "API: SuggestItem has no approximate flag (counts never show \u2248) and there is no field catalogue endpoint (Builder field list typed from schema enums) (#250)",
     "Search bulk: the manual-copy textarea stays open after the selection changes (#254 delta nit)",
-    "Insights: snapshot chart axis unit is hard-coded \"torrents\"; make it a per-chart field before a second snapshot chart (#258 nit)",
     "Cloud sessions: the repo's Playwright expects chromium_headless_shell-1194 but /opt/pw-browsers has 1243; sessions use an untracked config with executablePath. Consider a documented local override (e.g. PW_CHROMIUM_PATH env in playwright.config) so local runs match CI (#263, #264)",
     "checks/tests.rs a_saved_client_password_is_used_only_for_its_url_and_kind: 'localhost' case depends on localhost -> 127.0.0.1; use the test resolver with a made-up host if it ever flakes on Windows/::1 (#269 review)",
     "send: if /send ever uploads .torrent files, a qBittorrent HTTP 415 (invalid .torrent) reads 'it isn't this client's API' under #274's HTTP-status arm; give it its own message (#274)",
@@ -3022,7 +3027,6 @@
     "web vitest flake: query/QueryBar.test.ts 'the Syntax popover > opens on its button, and Try sets and submits' failed 1 of 3 cold local runs in #275 author's and reviewer's sessions (passes alone; waits already 10 s). Not seen in CI yet; get the error text before a fix slice (#275 review)",
     "web size headroom (#275): Search cards 8.16/8.19 KB, Search results 43.14/43.2 KB; chunk-hash noise may tip them on a later merge (decide under \u00a72.26 if so)",
     "Settings: expose secrets_set on FieldState so the client list needs no own GET (#277 review)",
-    "Logging slice: the \u00a710.10.7 banner while query_logging is on (#277 review; left to \u00a710.10.12)",
     "hint_tests.rs:388 send_failed relies on IPv4 socket -> IPv6 send failing; if Windows ever passes it, use an always-erroring SendSocket stand-in (#279 review 2)",
     "B-import-server-2 (when un-deferred): restart the candidate refile sweep when an online job reaches indexing (#280)",
     "Possible Windows flake: crates/dht/tests/network.rs:54 nodes_find_each_other_through_one_bootstrap_node, Node::start WSAENOBUFS (10055) starting 40 nodes (seen on #279). If it recurs: fewer nodes on Windows, or retry bind on 10055 with a deadline",
