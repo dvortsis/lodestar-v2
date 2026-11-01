@@ -409,3 +409,19 @@ export function findStrays({ chunks, modules }, files, roots, route = '/search')
 	}
 	return problems;
 }
+
+/**
+ * The source modules (paths from `web/`) bundled into `files` (`build/…` paths), from the recorded
+ * chunk graph; [] before a build exists. `.size-limit.mjs` uses it to keep shared code a view must
+ * not carry out of it (X-alert-search-headroom).
+ * @param {string[]} files
+ * @returns {string[]}
+ */
+export function modulesIn(files) {
+	if (!existsSync(GRAPH)) return [];
+	/** @type {Graph} */
+	const { chunks } = JSON.parse(readFileSync(GRAPH, 'utf8'));
+	return files.flatMap((f) =>
+		(chunks[f.replace(/^build\//, '')]?.modules ?? []).map((id) => id.replace(at(''), ''))
+	);
+}

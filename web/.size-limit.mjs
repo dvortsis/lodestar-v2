@@ -3,7 +3,7 @@
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import { checkFirstLoad, preloadedJs } from './scripts/first-load.mjs';
+import { checkFirstLoad, modulesIn, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
@@ -644,12 +644,15 @@ const facetsLazy = [
 	)
 ];
 // The results toolbar (S-search-3): loads with the results and shows once there is a query.
-// Save search's dialog (the alerts', with Bits UI's overlay code) loads on the first press.
+// Save search's dialog (the alerts', with Bits UI's overlay code) loads on the first press, through
+// save-dialog.ts: the dialog's preload list (~30 files, ~290 B gzip) rides in that forwarder, not in
+// the toolbar (X-alert-search-headroom). Import the dialog only through it.
 const TOOLBAR = [
 	'src/lib/features/search/toolbar/ResultsToolbar.svelte',
 	'src/lib/features/search/toolbar/toolbar.css'
 ];
-const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/];
+const saveLoader = [/features\/search\/toolbar\/save-dialog\.ts$/];
+const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/, ...saveLoader];
 const toolbarLazy = [
 	...new Set(
 		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))
@@ -751,8 +754,36 @@ if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
 
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
-// The alert page's j/k (and the key registry) load after mount, as Detail's commands do.
-const alertOnDemand = [...alertDialogs, /features\/alerts\/commands\.ts$/];
+// Both pages' keys (the list's New alert, the alert page's j/k) and the key registry load after
+// mount, as Detail's commands do (X-alert-search-headroom moved the list's there too). An exception
+// to "mount-time imports count" above: key registration is not part of what the page shows, so it
+// is gated on its own below ("Alerts key commands (on demand)").
+const alertCommands = [/features\/alerts\/commands\.ts$/];
+const alertOnDemand = [...alertDialogs, ...alertCommands];
+// Keep these routes apart from shared churn (X-alert-search-headroom): build links with
+// `$lib/shell/density` (not `$lib/shell/nav`, which carries the destination table and its labels),
+// register keys from commands.ts after mount (not `$lib/keys` in a page), and load dialogs through
+// `import()`. The check below fails the build's size step if one of them comes back.
+const alertsView = own('/alerts', { onDemand: alertOnDemand });
+const alertView = own('/alerts/[id]', { onDemand: alertOnDemand });
+const NAV = /^src\/lib\/shell\/nav\.ts$/;
+const KEYS = /^src\/lib\/keys\//;
+const SETTINGS = /^src\/lib\/features\/settings\//;
+const carried = [
+	// The results panel registers j/k with its first rows, so it carries the key registry.
+	['Search results (lazy)', resultsLazy, [NAV, SETTINGS]],
+	['Results toolbar (lazy)', toolbarLazy, [NAV, KEYS, SETTINGS]],
+	['Alerts route', alertsView, [NAV, KEYS, SETTINGS]],
+	['Alert route', alertView, [NAV, KEYS, SETTINGS]]
+].flatMap(([name, files, banned]) =>
+	modulesIn(files)
+		.filter((id) => banned.some((re) => re.test(id)))
+		.map((id) => `${name}: ${id}`)
+);
+if (carried.length)
+	throw new Error(
+		`A view carries shared code it should load later or not at all (X-alert-search-headroom):\n  ${carried.join('\n  ')}`
+	);
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
@@ -790,12 +821,16 @@ export default [
 	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
 	// sections 33.9 → 34.5 KB.
 	// Raised by the runner (§2.26): +69 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29.2 KB'),
+	// X-alert-search-headroom: 29.2 → 26.3 KB. The New alert key loads after mount (−2.7 KB) and links
+	// no longer load the nav table (−0.6 KB); measured 25.73 KB. Keep the rules by `alertOnDemand`.
+	entry('Alerts route (own JS + CSS)', alertsView, '26.3 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	// Raised from 45.8 KB by the runner under owner-decisions §2.26 (docs/decisions/2026-10-31-owner-delegation.md).
 	// Raised by the runner (§2.26): +86 B from the chunk re-split when /logs was added (S-logs-1).
-	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertOnDemand }), '46 KB'),
+	// X-alert-search-headroom: 45.40 KB (−0.57 KB, links no longer load the nav table); the limit is
+	// kept so the cut is the headroom. Keep the rules by `alertOnDemand`.
+	entry('Alert route (own JS + CSS)', alertView, '46 KB'),
 	entry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
@@ -863,6 +898,29 @@ export default [
 		],
 		'27 KB'
 	),
+	// The Alerts pages' key commands with the key registry, and Save search's one-hop loader
+	// (X-alert-search-headroom): loaded after mount or on the first press.
+	entry(
+		'Alerts key commands (on demand)',
+		requireMeasuredJs(
+			'Alerts key commands (on demand)',
+			ownChunk('src/lib/features/alerts/commands.ts', [], false, [...alertsView, ...alertView])
+		),
+		'3.5 KB' // measured 3.17 KB + 10%
+	),
+	entry(
+		'Save search loader (on demand)',
+		requireMeasuredJs(
+			'Save search loader (on demand)',
+			ownChunk(
+				'src/lib/features/search/toolbar/save-dialog.ts',
+				[/features\/alerts\/SaveSearchDialog\.svelte$/],
+				false,
+				[...engagedSearch, ...resultsLazy, ...toolbarLazy]
+			)
+		),
+		'0.55 KB' // measured 0.49 KB + 10%
+	),
 	// Limits are measured + 10%. Over the 15 KB target (§10.1) because the first view carries the
 	// Drawer primitive, ~40 messages, the Svelte runtime and key registry only this view uses so far, and
 	// the format and API helpers; the tree and virtual list are in the on-demand entry.
@@ -875,6 +933,8 @@ export default [
 	// runner, 2026-10-31, S-search-5: +1.5 KB for the view switch, selection store, `x` key and announce;
 	// still under the 45 KB per-view cap (§10.1).
 	// Raised by the runner (§2.26): +92 B from the chunk re-split when /logs was added (S-logs-1).
+	// X-alert-search-headroom: 42.73 KB (−0.54 KB, links no longer load the nav table); the limit is
+	// kept so the cut is the headroom. Build links with `$lib/shell/density`.
 	entry('Search results (lazy)', resultsLazy, '43.3 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
@@ -885,7 +945,9 @@ export default [
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
-	entry('Results toolbar (lazy)', toolbarLazy, '4.65 KB'),
+	// X-alert-search-headroom: 4.65 → 4.6 KB. Save search's preload list moved to save-dialog.ts
+	// (−0.31 KB); measured 4.29 KB. Import the dialog only through save-dialog.ts.
+	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
 	entry('Search live banner (lazy)', liveLazy, '3.02 KB'),
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
 	entry('Search cards (lazy)', cardsLazy, '8.3 KB'),

@@ -212,9 +212,26 @@ describe('the list page', () => {
 		const { unmount } = render(AlertsListPage);
 		await screen.findByTestId('alerts-row-1');
 		const info = () => keys.list().find((c) => c.id === 'alerts.new');
-		expect(info()).toMatchObject({ title: 'New alert…', scope: 'alerts', palette: true, keys: [] });
+		// Registered after mount, once commands.ts has loaded.
+		await waitFor(
+			() =>
+				expect(info()).toMatchObject({
+					title: 'New alert…',
+					scope: 'alerts',
+					palette: true,
+					keys: []
+				}),
+			{ timeout: 10_000 }
+		);
 		unmount();
 		expect(info()).toBeUndefined();
+	});
+	it('registers nothing when the page goes before its commands have loaded', async () => {
+		api.listSavedSearches.mockResolvedValue(three);
+		const { unmount } = render(AlertsListPage);
+		unmount();
+		await vi.dynamicImportSettled();
+		expect(keys.list().find((c) => c.id === 'alerts.new')).toBeUndefined();
 	});
 	it('moves focus to the next row’s name after a delete, else the previous, else the heading', async () => {
 		api.listSavedSearches.mockResolvedValue(three);

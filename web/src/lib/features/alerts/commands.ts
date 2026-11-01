@@ -1,5 +1,6 @@
-// The alert page's keys (§10.16): j/k step through its alerts, in the `alerts` scope. Loaded after
-// mount with the key registry, so the page's first view doesn't carry them (as Detail's commands).
+// The Alerts pages' keys (§10.16), in the `alerts` scope: the list's New alert command, and j/k
+// stepping through an alert's matches. Loaded after mount with the key registry, so neither page's
+// first view carries them (as Detail's commands).
 import { keys } from '$lib/keys';
 import { m } from '$lib/paraglide/messages.js';
 
@@ -25,6 +26,21 @@ export function registerAlertDetailCommands(step: (by: 1 | -1) => void): () => v
 	];
 	return () => {
 		offs.forEach((off) => off());
+		pop();
+	};
+}
+
+export function registerAlertsListCommands(create: () => void): () => void {
+	const pop = keys.pushScope('alerts');
+	const off = keys.register({
+		id: 'alerts.new',
+		title: () => m.alerts_new_command(),
+		section: () => m.alerts_section(),
+		scope: 'alerts',
+		run: create
+	});
+	return () => {
+		off();
 		pop();
 	};
 }
