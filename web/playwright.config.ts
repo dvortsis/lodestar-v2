@@ -12,7 +12,7 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 //   reduced-motion                axe + motion tokens with prefers-reduced-motion: reduce (no baselines)
 //   keyboard-only                 *.keyboard.test.ts flows (no pointer allowed)
 //   fixture                       *.fixture.test.ts against a real `lodestar serve --fixture` server
-//                                 (opt-in: --project=fixture or E2E_FIXTURE=1; no CI job yet)
+//                                 (opt-in: --project=fixture or E2E_FIXTURE=1; nightly in e2e.yml)
 //   all-themes                    axe on every route in all 48 themes + the 46-theme key-route
 //                                 baselines (nightly; opt-in: --project=all-themes or E2E_ALL_THEMES=1)
 

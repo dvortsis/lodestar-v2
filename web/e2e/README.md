@@ -14,7 +14,7 @@ Filter with `--project=<name>` (globs work). Every project starts the web server
 | `sample-<theme-id>`       | the same smoke at 1366 for a rotating 6 non-Riverstone themes                                                                                                                                                           | `npm run e2e:sample`                    |
 | `reduced-motion`          | smoke + the motion-token test under `prefers-reduced-motion: reduce`                                                                                                                                                    | `npm run e2e:motion`                    |
 | `keyboard-only`           | `*.keyboard.test.ts`                                                                                                                                                                                                    | `npm run e2e:keyboard`                  |
-| `fixture`                 | `*.fixture.test.ts` against a real `lodestar serve --fixture` server, not the mock. Opt-in (`--project=fixture` or `E2E_FIXTURE=1`); not in CI yet                                                                      | `npx playwright test --project=fixture` |
+| `fixture`                 | `*.fixture.test.ts` against a real `lodestar serve --fixture` server, not the mock. Opt-in (`--project=fixture` or `E2E_FIXTURE=1`); nightly in CI                                                                      | `npx playwright test --project=fixture` |
 | `all-themes`              | axe on every route in all 48 themes, plus the 46-theme baselines. Opt-in (`--project=all-themes` or `E2E_ALL_THEMES=1`); nightly in CI                                                                                  | `npm run e2e:all-themes`                |
 
 `npx playwright test` runs everything except `all-themes` and `fixture`.
@@ -29,6 +29,8 @@ E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
   E2E_FIXTURE_PASSWORD='correct horse battery' LODESTAR_FIXTURE_PASSWORD='correct horse battery' \
   npx playwright test --project=fixture
 ```
+
+**In CI** the `fixture` job in `e2e.yml` runs nightly and on manual dispatch (Actions → E2E → Run workflow, on any branch; leave `update_snapshots` off). It is not a pull-request check and not part of `ci-ok`. A `fixture-build` job builds the release binary (UI embedded) on `ubuntu-latest`; the Playwright container downloads it, starts it on `127.0.0.1:8291`, waits up to 120 s for `/healthz`, and runs this project with `E2E_FIXTURE=1` set (the workers need it to find the project). A failure uploads `playwright-report-fixture` with the server log.
 
 Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on :4173 is reused); the fixture specs never use it.
 
