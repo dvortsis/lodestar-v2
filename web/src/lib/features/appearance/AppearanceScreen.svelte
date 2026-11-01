@@ -233,6 +233,7 @@
 			<h2 id="ap-theme" class="as-h2">{m.appearance_theme()}</h2>
 			<p class="as-text">{m.appearance_theme_help()}</p>
 			<SegmentedControl
+				class="self-start"
 				label={m.appearance_mode()}
 				options={modeOptions}
 				value={prefs.mode}
@@ -263,6 +264,7 @@
 		<section class="as-section" aria-labelledby="ap-density">
 			<h2 id="ap-density" class="as-h2">{m.appearance_density()}</h2>
 			<SegmentedControl
+				class="self-start"
 				label={m.appearance_density()}
 				options={densityOptions}
 				value={prefs.density}
@@ -274,6 +276,7 @@
 			<h2 id="ap-motion" class="as-h2">{m.appearance_motion()}</h2>
 			<p class="as-text">{m.appearance_motion_help()}</p>
 			<SegmentedControl
+				class="self-start"
 				label={m.appearance_motion()}
 				options={motionOptions}
 				value={prefs.motion}

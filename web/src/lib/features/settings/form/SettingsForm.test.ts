@@ -285,7 +285,7 @@ describe('SettingsForm', () => {
 	});
 
 	it.each([
-		['a radio group', 'crawler.encryption', 'radio', 'prefer'],
+		['a radio group', 'crawler.encryption', 'radio', 'Prefer encryption'],
 		['a segmented control', 'crawler.intensity', 'radio', 'balanced'],
 		['a toggle', 'crawler.paused', 'switch', 'Pause crawling']
 	] as const)(

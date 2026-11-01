@@ -10,6 +10,15 @@ export const ARBITRARY_VALUE =
 	/(?:^|[\s"'`:!])-?[a-z][a-z0-9-]*-\[[^\]\s]+\]|(?:^|[\s"'`:!])\[[a-z-]+:[^\]\s]+\]/;
 
 /**
+ * A `text-*` size class outside the §8 scale (`caption`, `small`, `body`, `body-lg`, `title`,
+ * `display`): Tailwind's default steps are reset (`--text-*: initial`), so `text-h2` or `text-lg`
+ * compiles to nothing and the text silently renders unstyled (M5 review B4/P11). Colours
+ * (`text-muted-text`), alignment and wrapping utilities are not sizes and stay allowed.
+ */
+export const OFF_SCALE_TEXT =
+	/(?:^|[\s"'`:!(])text-(?:xs|sm|base|lg|xl|[2-9]xl|h[1-6]|heading|headline|subtitle|large|huge|tiny|md|medium)(?=$|[\s"'`)!])/;
+
+/**
  * Spacing steps allowed in utilities (design-tokens.md §5): the §10.2 ramp as Tailwind steps,
  * where step n is n x 4px. Anything else (`p-11`, `gap-15`, `m-3.5`, `w-64`) is off the ramp.
  * Fixed sizes are not steps: they are named layout tokens from design-tokens.md §7, written
@@ -76,7 +85,7 @@ function stripFragmentValues(line) {
 	);
 }
 
-/** @returns {{ line: number, kind: 'hex' | 'arbitrary' | 'spacing' }[]} */
+/** @returns {{ line: number, kind: 'hex' | 'arbitrary' | 'spacing' | 'text' }[]} */
 export function findViolations(source) {
 	const found = [];
 	stripComments(source)
@@ -85,6 +94,7 @@ export function findViolations(source) {
 			if (HEX_COLOUR.test(stripFragmentValues(line))) found.push({ line: i + 1, kind: 'hex' });
 			if (ARBITRARY_VALUE.test(line)) found.push({ line: i + 1, kind: 'arbitrary' });
 			if (hasOffRampStep(line)) found.push({ line: i + 1, kind: 'spacing' });
+			if (OFF_SCALE_TEXT.test(line)) found.push({ line: i + 1, kind: 'text' });
 		});
 	return found;
 }

@@ -183,6 +183,14 @@ describe('SettingField', () => {
 		expect(screen.getByText('Goes back to the default when you save.')).toBeTruthy();
 	});
 
+	it('shows a locked text value as a readonly input in the text colour, not a disabled one', () => {
+		show('general.data_dir');
+		const input = screen.getByDisplayValue('/data') as HTMLInputElement;
+		expect(input.readOnly).toBe(true);
+		expect(input.disabled).toBe(false);
+		expect(input.classList.contains('text-base-content')).toBe(true);
+	});
+
 	it('hides Reset for a default, file or locked value', async () => {
 		show('network.http_bind');
 		await fireEvent.click(screen.getByRole('button', { name: 'Options for Web address' }));
@@ -305,7 +313,7 @@ describe('SettingField', () => {
 		expect(form.field('crawler.intensity').value).toBe('low');
 
 		show('crawler.encryption');
-		await fireEvent.click(screen.getByRole('radio', { name: 'require' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Require encryption' }));
 		expect(form.field('crawler.encryption').value).toBe('require');
 
 		show('crawler.paused');

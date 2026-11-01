@@ -4,6 +4,9 @@ import { m } from '$lib/paraglide/messages.js';
 export const MESSAGES: Record<string, () => string> = {
 	settings_crawler_encryption_help: m.settings_crawler_encryption_help,
 	settings_crawler_encryption_label: m.settings_crawler_encryption_label,
+	settings_crawler_encryption_option_disable: m.settings_crawler_encryption_option_disable,
+	settings_crawler_encryption_option_prefer: m.settings_crawler_encryption_option_prefer,
+	settings_crawler_encryption_option_require: m.settings_crawler_encryption_option_require,
 	settings_crawler_intensity_help: m.settings_crawler_intensity_help,
 	settings_crawler_intensity_label: m.settings_crawler_intensity_label,
 	settings_crawler_max_metadata_mib_help: m.settings_crawler_max_metadata_mib_help,
