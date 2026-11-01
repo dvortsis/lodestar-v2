@@ -30,7 +30,7 @@ E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
   npx playwright test --project=fixture
 ```
 
-**In CI** the `fixture` job in `e2e.yml` runs nightly and on manual dispatch (Actions → E2E → Run workflow, on any branch; leave `update_snapshots` off). It is not a pull-request check and not part of `ci-ok`. A `fixture-build` job builds the release binary (UI embedded) on `ubuntu-latest`; the Playwright container downloads it, starts it on `127.0.0.1:8291`, waits up to 120 s for `/healthz`, and runs this project. A failure uploads `playwright-report-fixture` with the server log.
+**In CI** the `fixture` job in `e2e.yml` runs nightly and on manual dispatch (Actions → E2E → Run workflow, on any branch; leave `update_snapshots` off). It is not a pull-request check and not part of `ci-ok`. A `fixture-build` job builds the release binary (UI embedded) on `ubuntu-latest`; the Playwright container downloads it, starts it on `127.0.0.1:8291`, waits up to 120 s for `/healthz`, and runs this project with `E2E_FIXTURE=1` set (the workers need it to find the project). A failure uploads `playwright-report-fixture` with the server log.
 
 Name the project exactly (`--project=fixture`; a glob does not select it). Each spec's header names the variables it reads. Playwright still starts the preview server from `playwright.config.ts` (an already-running one on :4173 is reused); the fixture specs never use it.
 
