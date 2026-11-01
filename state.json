@@ -1867,13 +1867,13 @@
       "merge": "064f69c8"
     },
     "X-pipeline-1101": {
-      "status": "running",
+      "status": "pr-review",
       "model": "opus",
       "session": "session_01MMjhn9qYxKgGn7fsP4e54P",
-      "pr": null,
+      "pr": 305,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus."
+      "notes": "00:08Z brief briefs/X-pipeline-1101.md (B-refetch-funnel, backfill retry #282, #274 comment). Launched Opus. | 00:54Z PR #305 head 248b0df7: refetch funnel already correct (test kept); backfill retry with shared writer::Backoff (5s->300s), supersedes §16 \"backfill stops until next start\"; comment fixed. Reviewer session_01MMjhnCBdkNBBzZQnidQxb1."
     },
     "X-stale-tab": {
       "status": "running",
@@ -2691,6 +2691,12 @@
       "item": "FYI (§2.19) #297 X-polish-1031d merged: classification re-queue list capped at 64 texts, then one full re-mark stored under classify.requeue_all (survives downgrade; runs on next start with search on, in range-UPDATE chunks). Content safety: marks more, never fewer.",
       "status": "to-send",
       "at": "2026-10-31T22:14Z"
+    },
+    {
+      "id": "flag-backfill-retry",
+      "status": "to-send",
+      "text": "§2.19 flag: backfill now retries with backoff (5 s doubling to 300 s) after a store error instead of stopping until the next start (supersedes architecture.md §16 line; X-pipeline-1101, #305).",
+      "unblocks": "nothing (information)"
     }
   ],
   "external_gates": {
