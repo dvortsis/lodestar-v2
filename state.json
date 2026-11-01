@@ -3362,12 +3362,6 @@
       "verdict": "runner MERGE pending CI; local baselines risk -> marker if state-* fail",
       "session": "session_01MMjhn8Y4DKBsAvcLSueLk5"
     },
-    "341": {
-      "slice": "X-file-clause-cold",
-      "head": "c62dbe8c02e42fddd86c69ddd2aea65506b82cf0",
-      "verdict": "runner MERGE pending CI; 1M cold broad p95 95.75->53.3 ms",
-      "session": "session_01MMjhnCgGvjvQEZp75TiWKa"
-    },
     "343": {
       "slice": "FX-2",
       "head": "81dcaec",
@@ -3448,6 +3442,12 @@
       "sha": "b1fd9fe85862d13f46be512daaeb9e67a8c3237e",
       "at": "2026-11-01T14:21Z",
       "slice": "G-m5b"
+    },
+    {
+      "pr": 341,
+      "sha": "a2c9e9557880b4dab16ea1353ad0b1cca0d0bf8b",
+      "at": "2026-11-01T15:44Z",
+      "slice": "X-file-clause-cold"
     }
   ],
   "active_sessions": {
@@ -3518,6 +3518,12 @@
       "model": "sonnet",
       "launched": "2026-11-01T14:21Z",
       "brief": "briefs/FX-batch.md (FX-1)"
+    },
+    "FX-3": {
+      "session": "session_01MMjhnBdqZKXW2cvhkgVWwo",
+      "model": "opus",
+      "launched": "2026-11-01T15:44Z",
+      "brief": "briefs/FX-batch.md (FX-3)"
     }
   },
   "queued_followups": [
