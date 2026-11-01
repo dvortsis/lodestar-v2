@@ -3217,6 +3217,10 @@
     {
       "t": "2026-11-01T17:56Z",
       "event": "FX-6 opened #348 (b901957a); Opus review running. Web job red = vitest EnvironmentTeardownError in detail/target.page.test.ts (lazy Composition import after teardown) — not FX-6; re-ran once; FX-5 (owns detail) fixes it in its marker-removal push (§2.18)."
+    },
+    {
+      "t": "2026-11-01T18:05Z",
+      "event": "MAIN RED (Web, run 41332558044 on 7ea22803): Detail sections 37313 B > 37310 B, cumulative FX-2 + FX-4 bytes after FX-1 set 37.31. Fix lands with #347 (FX-5 raises to 37.52); FX-5 told to prioritise push. #348 size red is this (not FX-6). Lesson: re-measure tight on-demand entries on the merge result before merging back-to-back web PRs."
     }
   ],
   "reviews": {
