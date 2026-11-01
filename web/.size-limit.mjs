@@ -284,10 +284,20 @@ const settingsSecurity = [
 	/features\/settings\/security\/(PasswordDialog|Lockout)\.svelte$/,
 	/features\/settings\/security\/icon\.ts$/
 ];
-const securityLoader = [/features\/(?:settings\/(?:security|logging|updates)|filters)\/body\.ts$/];
+const securityLoader = [
+	/features\/(?:settings\/(?:security|logging|about|updates)|filters)\/body\.ts$/
+];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
 const settingsSecurityLater = [/features\/settings\/security\/(Keys|Proxy|Reveal)\.svelte$/];
+// About (S-about): the diagnostics block with Report a problem and the licence list load when their
+// buttons are pressed, and its navigation icon and purpose line (for the filter) on demand; gated on
+// their own below. The parts only load from About's body.
+const settingsAboutModules = [/features\/settings\/about\/(icon|about)\.ts$/];
+const settingsAboutParts = [
+	/features\/settings\/about\/(Diagnostics|Licences)\.svelte$/,
+	...settingsAboutModules
+];
 // Updates (S-updates): the release notes and history load after the first view, and its navigation
 // icon and purpose line (for the filter) on demand; gated on their own below. They only load from
 // Updates' body.
@@ -330,6 +340,7 @@ const settingsFirstView = [
 	...settingsConnections,
 	...settingsSecurity,
 	...settingsSecurityLater,
+	...settingsAboutParts,
 	...settingsUpdatesParts,
 	...securityLoader,
 	...settingsLogging,
@@ -396,6 +407,7 @@ const registryLazyKeys = Object.keys(manifest).filter((key) =>
 	[...settingsAbout, ...settingsIcons].some((re) => re.test(key))
 );
 const securityBody = /features\/settings\/security\/SecurityScreen\.svelte$/;
+const aboutBody = /features\/settings\/about\/AboutScreen\.svelte$/;
 const updatesBody = /features\/settings\/updates\/UpdatesScreen\.svelte$/;
 // Filters & Safety (S-filters): the review queue loads from its body alone, so its import of the
 // body is of code already loaded.
@@ -409,6 +421,8 @@ const staticHits = Object.entries(manifest).flatMap(([from, chunk]) =>
 		// Security's later parts load only from its body, so their imports of that body alone are
 		// of code already loaded; any other body they import still trips this.
 		.filter((key) => !(settingsSecurityLater.some((re) => re.test(from)) && securityBody.test(key)))
+		// The same for About's parts: they load from its body, whose chunk holds what they share.
+		.filter((key) => !(settingsAboutParts.some((re) => re.test(from)) && aboutBody.test(key)))
 		// The same for Updates' parts: they load from its body, whose chunk holds what they share.
 		.filter((key) => !(settingsUpdatesParts.some((re) => re.test(from)) && updatesBody.test(key)))
 		.filter((key) => !(filtersLater.some((re) => re.test(from)) && filtersBody.test(key)))
@@ -421,7 +435,9 @@ if (staticHits.length)
 // The same for Security's later parts: they load by dynamic import after mount, so nothing may
 // import them statically, or their code would leave the first-view gates unmeasured.
 const laterKeys = Object.keys(manifest).filter((key) =>
-	[...settingsSecurityLater, ...settingsUpdatesParts].some((re) => re.test(key))
+	[...settingsSecurityLater, ...settingsAboutParts, ...settingsUpdatesParts].some((re) =>
+		re.test(key)
+	)
 );
 const laterStatic = Object.entries(manifest).flatMap(([from, chunk]) =>
 	(chunk.imports ?? []).filter((key) => laterKeys.includes(key)).map((key) => `${from} -> ${key}`)
@@ -460,6 +476,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsConnections,
 					...settingsSecurity,
 					...settingsSecurityLater,
+					...settingsAboutParts,
 					...settingsUpdatesParts,
 					...settingsLogging,
 					...settingsLoggingFiles,
@@ -495,6 +512,35 @@ const settingsSecurityLaterLazy = requireMeasuredJs(
 		)
 	]
 );
+// What About's parts add to its first view (the body is loaded when they load).
+const aboutFirstView = settingsHandBuilt.find(({ name }) => name === 'AboutScreen')?.files ?? [];
+const settingsAboutPartsLazy = requireMeasuredJs('Settings about parts (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter(
+				(key) =>
+					settingsAboutParts.some((re) => re.test(key)) &&
+					!settingsAboutModules.some((re) => re.test(key))
+			)
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+					...settingsShellView,
+					...aboutFirstView
+				])
+			)
+	)
+]);
+// The icon and the purpose line load from every Settings page, not from About's body, so what they
+// share with About's body is measured here too (beyond the shell only).
+const settingsAboutModulesLazy = requireMeasuredJs('Settings about icon and purpose (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsAboutModules.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, settingsShellView)
+			)
+	)
+]);
 // What Updates' release notes and history add to its first view (the body is loaded when they load).
 const updatesFirstView =
 	settingsHandBuilt.find(({ name }) => name === 'UpdatesScreen')?.files ?? [];
@@ -896,6 +942,9 @@ export default [
 	entry('Settings security parts (on demand)', settingsSecurityLazy, '26 KB'),
 	// Security's key manager, proxy section and reveal dialog: measured + 10%.
 	entry('Settings security keys and proxy (on demand)', settingsSecurityLaterLazy, '33.1 KB'),
+	// About's diagnostics block and licence list (S-about): LIMIT_ABOUT_PARTS
+	entry('Settings about parts (on demand)', settingsAboutPartsLazy, '3.44 KB'),
+	entry('Settings about icon and purpose (on demand)', settingsAboutModulesLazy, '0.39 KB'),
 	// Updates' release notes and history (S-updates): measured + 10%.
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),

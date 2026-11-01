@@ -42,7 +42,8 @@ const EN = [
 	'General',
 	'Updates',
 	'Logging',
-	'Security'
+	'Security',
+	'About'
 ];
 
 it('renders every title at once, in navigation order', () => {

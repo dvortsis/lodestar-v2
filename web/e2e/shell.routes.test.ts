@@ -47,7 +47,16 @@ test.describe('navigation', () => {
 		await expect(page).toHaveURL(/\/search/);
 	});
 
-	test('the overflow menu lists available routes and opens a destination', async ({ page, go }) => {
+	test('the overflow menu lists available routes and opens a destination', async ({
+		page,
+		go,
+		mock
+	}) => {
+		// About (S-about) reads the update state; this test only needs it to answer.
+		mock.on('getUpdates', {
+			status: 503,
+			body: { error: { code: 'unavailable', message: 'No update engine.' } }
+		});
 		await go('/search');
 		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
