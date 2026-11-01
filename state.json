@@ -2006,13 +2006,13 @@
       "note": "Playwright core 10m40s on normal run (no trim needed)"
     },
     "S-send": {
-      "status": "CI green at faf3384 but merge conflict with main (#322 .size-limit.mjs); author merging main",
+      "status": "main merged, conflict resolved (only .size-limit.mjs); runner MERGE stands; CI on 76b93a9",
       "session": "session_01MMjhn9Bf9rWaxk6ywGj3MY",
       "model": "sonnet",
       "brief": "briefs/S-send.md",
       "launched_at": "2026-11-01T05:52Z",
       "pr": 321,
-      "head": "faf3384",
+      "head": "76b93a9",
       "ruling": "\u00a72.26: /t 20.8 -> 21.0 KB, drawer 27.2 -> 27.4 KB (Send = \u00a710.5 primary action)",
       "review": "runner MERGE at faf3384"
     },
