@@ -34,9 +34,10 @@
 	const status = $derived(store.status);
 	const settings = $derived(store.settings);
 	const mode = $derived<Mode>(settings?.mode ?? 'off');
-	const noAuto = $derived(cannotAuto(status));
+	const noEngine = $derived(store.unavailable || !!status?.unavailable);
+	const noAuto = $derived(noEngine ? (status?.unavailable ?? 'unavailable') : cannotAuto(status));
 	const release = $derived(status ? newest(status) : undefined);
-	const rolledBack = $derived(status?.history.find((h) => h.result === 'rolled_back'));
+	const rolledBack = $derived(status?.history.findLast((h) => h.result === 'rolled_back'));
 	/** A time as the server gave it, in words that carry their own date. */
 	const when = (seconds: number) => whenOf(seconds, currentLocale());
 	const lock = (name: string) => settings?.locks[name];
@@ -58,7 +59,7 @@
 			const f = i.dataset.field;
 			i.checked =
 				f === 'security_fixes'
-					? securityValue(status, mode)
+					? securityValue(status, mode, settings?.securityFixes)
 					: f === 'mode'
 						? settings.mode === i.value
 						: settings.level === i.value;
@@ -169,15 +170,18 @@
 
 	/** The confirmation: Cancel and Esc send nothing. */
 	async function skip(version: string) {
-		const answer = await ask({
-			title: m.settings_updates_skip_title({ version }),
-			body: [m.settings_updates_skip_body()],
-			actions: [
-				{ id: 'cancel', label: m.settings_updates_cancel() },
-				{ id: 'skip', label: m.settings_updates_skip(), variant: 'primary' }
-			],
-			initial: 'cancel'
-		});
+		const answer = await ask(
+			{
+				title: m.settings_updates_skip_title({ version }),
+				body: [m.settings_updates_skip_body()],
+				actions: [
+					{ id: 'cancel', label: m.settings_updates_cancel() },
+					{ id: 'skip', label: m.settings_updates_skip(), variant: 'primary' }
+				],
+				initial: 'cancel'
+			},
+			store.signal
+		);
 		if (answer === 'skip') await store.skip(version);
 	}
 
@@ -241,7 +245,7 @@
 				><span data-testid="updates-error">{errors[store.error]?.()}</span></Banner
 			>
 		{/if}
-		{#if store.unavailable}
+		{#if noEngine}
 			<Banner kind="info"
 				><span data-testid="updates-unavailable"
 					>{m.settings_updates_unavailable({ reason: status?.unavailable ?? '—' })}</span
@@ -266,7 +270,7 @@
 					<div data-testid="updates-progress" role="status">
 						<p class="font-semibold">
 							{m.settings_updates_progress_heading({
-								version: release?.version ?? status.running.version
+								version: store.stepVersion ?? release?.version ?? status.running.version
 							})}
 						</p>
 						<ol class="flex flex-wrap gap-x-4 gap-y-1">
@@ -365,7 +369,7 @@
 									value: o.id,
 									label: o.label(),
 									checked: mode === o.id,
-									disabled: !!lock('mode') || blocked || !!store.busy,
+									disabled: !!lock('mode') || blocked,
 									onchange: () => void change('mode', o.id)
 								})}
 								<p id="updates-mode-{o.id}-help" class="ps-4 text-small text-muted-text">
@@ -389,7 +393,7 @@
 											value: l,
 											label: levels[l][0](),
 											checked: settings.level === l,
-											disabled: !!lock('level') || !!store.busy,
+											disabled: !!lock('level'),
 											onchange: () => void change('level', l)
 										})}
 										<p id="updates-level-{l}-help" class="ps-4 text-small text-muted-text">
@@ -411,8 +415,8 @@
 								type="checkbox"
 								role="switch"
 								class="toggle border-field-border {FOCUS_RING}"
-								checked={securityValue(status, mode)}
-								disabled={!!lock('security_fixes') || !!store.busy}
+								checked={securityValue(status, mode, settings?.securityFixes)}
+								disabled={!!lock('security_fixes')}
 								aria-describedby="updates-security-help"
 								data-field="security_fixes"
 								data-testid="updates-security-toggle"

@@ -36,14 +36,19 @@ export function securityDefault(mode: Mode): boolean {
 export const securityVisible = (mode: Mode): boolean => mode === 'notify' || mode === 'auto';
 
 /**
- * The toggle's value is the server's effective one (`policy.security_fixes`). Until the server has
- * said, it is the mode's default, never a guess beyond that.
+ * The toggle's value is the server's effective one (`policy.security_fixes`). Without it, the saved
+ * `on` or `off`, and the mode's default only for the saved `auto`.
  */
-export function securityValue(status: Status | undefined, mode: Mode): boolean {
-	return status ? status.policy.security_fixes : securityDefault(mode);
+export function securityValue(
+	status: Status | undefined,
+	mode: Mode,
+	saved: string | undefined
+): boolean {
+	if (status) return status.policy.security_fixes;
+	return saved === 'on' ? true : saved === 'off' ? false : securityDefault(mode);
 }
 
-/** The newest release that is not skipped by the server's own reasons. */
+/** The newest release the server lists. */
 export const newest = (status: Status): Release | undefined => status.releases[0];
 
 /** The automatic options are disabled with this reason beside them; null when they work. */

@@ -143,7 +143,7 @@ test.describe('keyboard: Settings → Updates', () => {
 
 		await kbd.tabTo(page.getByTestId('updates-skip'), 200);
 		await kbd.press('Enter');
-		await dialog.getByRole('button', { name: 'Skip this version' }).focus();
+		await kbd.tabTo(dialog.getByRole('button', { name: 'Skip this version' }), 10);
 		await kbd.press('Enter');
 		await expect.poll(() => sent.map((s) => s.op)).toEqual(['checkUpdates', 'skipUpdate']);
 		expect(sent[1]?.body).toEqual({ version: '0.5.3' });

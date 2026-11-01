@@ -35,8 +35,15 @@ export class UpdatesStore {
 	reason = $state('');
 	/** `GET /updates` said this process serves no update engine. */
 	unavailable = $state(false);
+	/** The version the live install step concerns. */
+	stepVersion = $state<string | null>(null);
+	/** Aborted on leave: closes a confirmation still open. */
+	private ctl = new AbortController();
+	readonly signal = this.ctl.signal;
 	private off: (() => void) | undefined;
 	private live = true;
+	/** A response only replaces the status when no newer one has been taken since it was asked. */
+	private seq = 0;
 
 	start() {
 		this.live = true;
@@ -45,15 +52,23 @@ export class UpdatesStore {
 			'updates',
 			(e) => {
 				this.step = isStep(e.state) ? e.state : null;
+				this.stepVersion = this.step ? e.version : null;
 				this.progress = { done: e.bytes_done, total: e.bytes_total };
 				if (!isStep(e.state)) void this.refresh();
 			},
-			{ onResync: () => void this.refresh() }
+			{
+				onResync: () => {
+					// The stream was lost: what it said about a step is no longer known.
+					this.step = null;
+					void this.refresh();
+				}
+			}
 		);
 	}
 
 	stop() {
 		this.live = false;
+		this.ctl.abort();
 		this.off?.();
 	}
 
@@ -65,8 +80,10 @@ export class UpdatesStore {
 
 	/** Takes `GET /updates`; on failure the last status stays. */
 	async refresh() {
+		const ticket = this.seq;
 		try {
-			this.take(await api.get('/updates'));
+			const s = await api.get('/updates');
+			if (ticket === this.seq) this.take(s);
 			this.unavailable = false;
 		} catch (e) {
 			if (e instanceof ApiError && e.code === 'updates_unavailable') this.unavailable = true;
@@ -75,6 +92,7 @@ export class UpdatesStore {
 	}
 
 	private take(s: Status) {
+		this.seq++;
 		if (this.live) this.status = s;
 	}
 

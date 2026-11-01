@@ -30,15 +30,18 @@
 	const day = (s: number) => dayOf(s, currentLocale());
 
 	async function clear() {
-		const answer = await ask({
-			title: m.settings_updates_clear_title(),
-			body: [m.settings_updates_clear_body()],
-			actions: [
-				{ id: 'cancel', label: m.settings_updates_cancel() },
-				{ id: 'clear', label: m.settings_updates_clear_action(), variant: 'danger' }
-			],
-			initial: 'cancel'
-		});
+		const answer = await ask(
+			{
+				title: m.settings_updates_clear_title(),
+				body: [m.settings_updates_clear_body()],
+				actions: [
+					{ id: 'cancel', label: m.settings_updates_cancel() },
+					{ id: 'clear', label: m.settings_updates_clear_action(), variant: 'danger' }
+				],
+				initial: 'cancel'
+			},
+			store.signal
+		);
 		if (answer === 'clear') await store.clearHistory();
 	}
 </script>

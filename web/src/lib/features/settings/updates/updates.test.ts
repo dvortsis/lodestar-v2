@@ -69,6 +69,7 @@ let status: Status;
 let fields: Record<string, { value: unknown; env: string | null; read_only: boolean }>;
 let sent: string[];
 let failNext: string | null;
+let failStatus = false;
 
 const reply = (code: number, b: unknown) =>
 	new Response(JSON.stringify(b), {
@@ -86,6 +87,7 @@ beforeEach(() => {
 	};
 	sent = [];
 	failNext = null;
+	failStatus = false;
 	asked.answer = 'cancel';
 	asked.count = 0;
 	vi.stubGlobal(
@@ -98,6 +100,8 @@ beforeEach(() => {
 				failNext = null;
 				return reply(500, { error: { code: 'updates_not_saved', message: 'nope' } });
 			}
+			if (path === '/updates' && method === 'GET' && failStatus)
+				return reply(500, { error: { code: 'internal', message: 'down' } });
 			if (path === '/system') return reply(200, { deployment: { kind: 'docker' } });
 			if (path === '/settings/updates' && method === 'GET')
 				return reply(200, { section: 'updates', revision: 1, restart_required: [], fields });
@@ -273,5 +277,82 @@ describe('the Updates screen', () => {
 		expect(a.getAttribute('rel')).toBe('noopener noreferrer');
 		expect(a.target).toBe('_blank');
 		expect(screen.getAllByRole('link', { name: 'Read on GitHub' })).toHaveLength(1);
+	});
+
+	it('explains the newest rollback, not the oldest', async () => {
+		status.notices = ['rolled_back'];
+		status.history = [
+			{
+				at: 1,
+				from: '0.4.0',
+				level: 'fix',
+				lost_torrents: null,
+				reason: 'old reason',
+				result: 'rolled_back',
+				version: '0.5.0'
+			},
+			{
+				at: 2,
+				from: '0.5.2',
+				level: 'fix',
+				lost_torrents: null,
+				reason: 'health check failed',
+				result: 'rolled_back',
+				version: '0.6.0'
+			}
+		];
+		render(UpdatesScreen);
+		const text = (await screen.findByTestId('updates-rolled-back')).textContent ?? '';
+		expect(text).toContain('0.6.0');
+		expect(text).toContain('health check failed');
+		expect(text).not.toContain('old reason');
+	});
+
+	it('shows the saved security choice when the status can’t load', async () => {
+		fields.mode!.value = 'auto';
+		fields.security_fixes!.value = 'off';
+		failStatus = true;
+		render(UpdatesScreen);
+		const t = (await screen.findByTestId('updates-security-toggle')) as HTMLInputElement;
+		expect(t.checked).toBe(false);
+	});
+
+	it('a failed Check now keeps what was shown, with an error', async () => {
+		render(UpdatesScreen);
+		const before = (await screen.findByTestId('updates-state')).textContent;
+		failNext = '/updates/check';
+		await fireEvent.click(screen.getByTestId('updates-check'));
+		await until(() => expect(screen.getByTestId('updates-error')).toBeTruthy());
+		expect(screen.getByTestId('updates-state').textContent).toBe(before);
+	});
+
+	it('a locked level and a locked security choice can’t be changed', async () => {
+		fields.mode!.value = 'auto';
+		fields.level!.env = 'LODESTAR_UPDATES_LEVEL';
+		fields.security_fixes!.env = 'LODESTAR_UPDATES_SECURITY_FIXES';
+		render(UpdatesScreen);
+		expect(((await screen.findByTestId('updates-level-fixes')) as HTMLInputElement).disabled).toBe(
+			true
+		);
+		expect((screen.getByTestId('updates-security-toggle') as HTMLInputElement).disabled).toBe(true);
+		expect(mutations()).toEqual([]);
+	});
+
+	it('Clear history: Cancel sends nothing', async () => {
+		status.history = [
+			{
+				at: 1,
+				from: '0.5.1',
+				level: 'fix',
+				lost_torrents: null,
+				reason: null,
+				result: 'installed',
+				version: '0.5.2'
+			}
+		];
+		render(UpdatesScreen);
+		await fireEvent.click(await screen.findByTestId('updates-history-clear'));
+		await until(() => expect(asked.count).toBe(1));
+		expect(mutations()).toEqual([]);
 	});
 });
