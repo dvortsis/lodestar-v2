@@ -18,9 +18,10 @@
 //!   keeps at most `keep` hits (the highest ids). The token is checked
 //!   between searches and between segments, and, once a search has
 //!   completed in the run, every few thousand documents inside a scan
-//!   too, so one heavy search can't overrun the budget by much. A run's
-//!   first search is never stopped inside its scan, so a run that starts
-//!   one always finishes one. A search the token stops is reported as
+//!   too, so one heavy search can't overrun the budget by much. The same
+//!   holds for a search's `file:(…)` clauses, whose file-index scan stops
+//!   under the token too. A run's first search is never stopped inside
+//!   its scans, so a run that starts one always finishes one. A search the token stops is reported as
 //!   not run; what a run didn't reach runs next time.
 //!
 //! No store writes here: the caller records the result in one
@@ -44,7 +45,7 @@ use tantivy::{DocId, Score, Searcher, SegmentOrdinal, SegmentReader, Term};
 
 use crate::cancel::{CHECK_EVERY, CancelToken};
 use crate::filter::PostFilter;
-use crate::index::{Result, SearchIndex};
+use crate::index::{Error, Result, SearchIndex};
 use crate::query::Node;
 
 /// How far one run goes.
@@ -150,7 +151,24 @@ pub fn percolate(
             out.stopped = true;
             break;
         }
-        let compiled = index.compile(d.query, now, d.utc_offset, d.stems);
+        // A search that may stop inside its scan may stop inside its
+        // `file:(…)` clauses' file-index scan too, under the same token
+        // and budget; the run's first stays whole unless it's stoppable.
+        let scan_cancel = (d.stoppable || !out.matched.is_empty()).then(|| cancel.clone());
+        let compiled = match &scan_cancel {
+            Some(token) => {
+                match index.compile_cancelled(d.query, now, d.utc_offset, d.stems, token) {
+                    Ok(compiled) => compiled,
+                    // Not run: it keeps its watermark, as a stopped scan does.
+                    Err(Error::Cancelled | Error::OutOfTime) => {
+                        out.stopped = true;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            None => index.compile(d.query, now, d.utc_offset, d.stems),
+        };
         let range: Box<dyn Query> = Box::new(RangeQuery::new(
             Bound::Excluded(term(d.watermark)),
             Bound::Included(term(end)),
@@ -167,7 +185,7 @@ pub fn percolate(
                 keep: if d.count_only { 0 } else { limits.keep },
                 // The first search of a run always completes, unless
                 // it's stoppable.
-                cancel: (d.stoppable || !out.matched.is_empty()).then(|| cancel.clone()),
+                cancel: scan_cancel,
                 stopped: stopped.clone(),
             },
         };
@@ -365,7 +383,9 @@ mod tests {
 
     use super::*;
     use crate::query::parse;
-    use crate::testing::{append, delete, index_with};
+    use crate::testing::{
+        FILE_QUERY, append, append_files, delete, index_with, slow, tripwire,
+    };
 
     const ALL: PercolateLimits = PercolateLimits {
         keep: usize::MAX,
@@ -661,6 +681,69 @@ mod tests {
         assert_eq!(n, u64::from(seg.num_docs()));
         assert!(seg.num_docs() > CHECK_EVERY);
         assert_eq!(ids.len(), seg.num_docs() as usize);
+    }
+
+    fn file_due(id: i64, node: &Node, stoppable: bool) -> Due<'_> {
+        Due {
+            id,
+            watermark: 0,
+            query: node,
+            utc_offset: 0,
+            count_only: false,
+            stems: false,
+            stoppable,
+        }
+    }
+
+    /// A stoppable search's `file:(…)` scan stops once the token does,
+    /// within `CHECK_EVERY` files, is reported as not run, and caches
+    /// no file set.
+    #[test]
+    fn a_cancelled_file_scan_stops_the_run() {
+        let (index, _) = index_with(10, 1);
+        let per = u64::from(CHECK_EVERY);
+        append_files(&index, 1..11, per);
+        let node = parse("file:(size:>0)").unwrap();
+        let token = CancelToken::new();
+        let (trip, visits) = tripwire(100, &token);
+        FILE_QUERY.with(|q| *q.borrow_mut() = Some(trip.query));
+        let p = percolate(&index, &[file_due(1, &node, true)], 10, ALL, 0, &token).unwrap();
+        FILE_QUERY.with(|q| q.borrow_mut().take());
+        assert!(p.stopped && p.more() && p.matched.is_empty() && p.failed.is_empty());
+        let seen = visits.load(Ordering::Relaxed);
+        assert!((100..=per as usize).contains(&seen), "{seen} files visited");
+        assert_eq!(index.cache_usage().file_set_entries, 0);
+    }
+
+    /// A broad file clause that would take minutes stops at the run's
+    /// budget once a search has completed; the first stays whole.
+    #[test]
+    fn an_over_budget_file_scan_stops_promptly() {
+        let (index, _) = index_with(10, 1);
+        append_files(&index, 1..11, 10_000);
+        let plain = parse("Common").unwrap();
+        let files = parse("file:(size:>0)").unwrap();
+        let due = [file_due(1, &plain, false), file_due(2, &files, false)];
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                // 100,000 files at 200 µs each: 20 s, far past the budget.
+                let q = slow(&index, Duration::from_micros(200)).query;
+                FILE_QUERY.with(|f| *f.borrow_mut() = Some(q));
+                let token = CancelToken::new().with_budget(Duration::from_millis(200));
+                let p = percolate(&index, &due, 10, ALL, 0, &token);
+                FILE_QUERY.with(|f| f.borrow_mut().take());
+                let _ = tx.send(p);
+            });
+            let p = rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the run stops within its budget")
+                .unwrap();
+            assert!(p.stopped);
+            assert_eq!(p.matched.len(), 1);
+            assert_eq!(p.matched[0].id, 1);
+        });
+        assert_eq!(index.cache_usage().file_set_entries, 0);
     }
 
     #[test]
