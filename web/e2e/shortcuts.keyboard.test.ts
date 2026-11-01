@@ -1,4 +1,5 @@
-// Remapping with no pointer: capture a key, save, and the registry follows (architecture §10.16).
+// Remapping with no pointer: capture a key, it saves at once, and the registry follows
+// (architecture §10.16, §10.10.1).
 import type { Page, Request } from '@playwright/test';
 import { liveEvents, openPaletteWithKey } from './support/events-server';
 import { expect, test } from './support/test';
@@ -29,7 +30,7 @@ const body = (s: State) => ({
 const fired = (page: Page) => page.getByTestId('fired');
 const count = async (page: Page) => Number(await fired(page).textContent());
 
-test('remap j to n by keyboard, save; n fires the command and j no longer does', async ({
+test('remap j to n by keyboard; it saves at once, n fires the command and j no longer does', async ({
 	page,
 	mock,
 	go,
@@ -56,22 +57,20 @@ test('remap j to n by keyboard, save; n fires the command and j no longer does',
 	await expect(page.getByRole('status').filter({ hasText: 'Press a key' })).toBeAttached();
 	await kbd.press('n');
 	await expect(page.getByTestId('shortcut-key-results.next')).toContainText('N');
+	await expect(page.getByText('Saved.')).toBeVisible();
+	expect(patches).toEqual([{ shortcut_keys: { 'results.next': 'n' }, if_revision: 1 }]);
+	await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
 
-	// Choosing c (Copy magnet's key) shows the conflict, and Cancel leaves n in place.
+	// Choosing c (Copy magnet's key) shows the conflict, and Cancel leaves n in place, unsaved.
 	await kbd.tabTo(page.getByRole('button', { name: 'Change the key for Next result' }));
 	await kbd.press('Enter');
 	await kbd.press('c');
 	await expect(page.getByText('Already used by Copy magnet')).toBeVisible();
-	await kbd.tabTo(page.getByRole('button', { name: 'Cancel' }).first());
+	await kbd.tabTo(page.getByRole('button', { name: 'Cancel' }));
 	await kbd.press('Enter');
 	await expect(page.getByText('Already used by Copy magnet')).toBeHidden();
 	await expect(page.getByTestId('shortcut-key-results.next')).toContainText('N');
-
-	const save = page.getByRole('button', { name: 'Save' });
-	await kbd.tabTo(save);
-	await kbd.press('Enter');
-	await expect(page.getByText('Keyboard settings saved')).toBeVisible();
-	expect(patches).toEqual([{ shortcut_keys: { 'results.next': 'n' }, if_revision: 1 }]);
+	expect(patches).toHaveLength(1);
 
 	// The shell attaches its listener on the first interaction: press until n lands.
 	await expect.poll(async () => (await kbd.press('n'), count(page)), { timeout: 10_000 }).toBe(1);
@@ -84,9 +83,6 @@ test('remap j to n by keyboard, save; n fires the command and j no longer does',
 	const toggle = page.getByRole('switch', { name: 'Single-key shortcuts' });
 	await kbd.tabTo(toggle);
 	await kbd.press('Space');
-	await kbd.tabTo(save);
-	await kbd.press('Enter');
-	await expect(page.getByText('Keyboard settings saved').first()).toBeVisible();
 	await expect.poll(() => patches.length).toBe(2);
 	expect(patches[1]).toEqual({ shortcuts: false, if_revision: 2 });
 	await page.locator('body').press('Escape');

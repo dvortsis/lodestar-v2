@@ -185,6 +185,12 @@ for (const width of [390, 1366]) {
 			restart_required: [],
 			fields: { shortcuts: field(true), shortcut_keys: field({}) }
 		});
+		mock.on('patchSettings', {
+			section: 'preferences',
+			revision: 2,
+			restart_required: [],
+			fields: { shortcuts: field(false), shortcut_keys: field({}) }
+		});
 		await page.setViewportSize({ width, height: 900 });
 		await go('/settings');
 		const nav = page.getByRole('navigation', { name: 'Settings sections' });
@@ -199,6 +205,14 @@ for (const width of [390, 1366]) {
 		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
 			true
 		);
+		// A preference: it applies at once with Undo, never Save and Cancel (§10.10.1).
+		await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
+		await page.getByRole('switch', { name: 'Single-key shortcuts' }).click();
+		await expect(page.getByText('Saved.')).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+		expect(mock.calls('patchSettings').map((request) => request.postDataJSON())).toEqual([
+			{ shortcuts: false, if_revision: 1 }
+		]);
 		await expectNoA11yViolations(page);
 	});
 }
