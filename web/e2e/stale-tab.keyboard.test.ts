@@ -57,8 +57,16 @@ test("the banner shows although the old build's chunks are gone from the new ser
 		asked++;
 		return route.fulfill({ json: { version: 'another-build' } });
 	});
+	// The chunk names are hashed: the banner's is the one whose body holds its test id.
+	let loaded = false;
+	page.on('response', async (res) => {
+		if (!res.url().includes('/_app/immutable/')) return;
+		if ((await res.text().catch(() => '')).includes('stale-banner')) loaded = true;
+	});
 	await go('/search');
 	await expect(page.getByTestId('status-pill')).toBeVisible();
+	// The check and the banner are fetched together, ahead of the upgrade.
+	await expect.poll(() => loaded, { timeout: 15_000 }).toBe(true);
 	// The new server answers any `_app/` file of the old build with a 404.
 	await page.route('**/_app/immutable/**', (route) => route.fulfill({ status: 404, body: '' }));
 	await expect.poll(() => shown(page).then(() => asked), { timeout: 15_000 }).toBeGreaterThan(0);

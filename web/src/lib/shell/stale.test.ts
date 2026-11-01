@@ -132,25 +132,28 @@ describe('while hidden or after a rejected check', () => {
 });
 
 describe('the banner', () => {
-	it('says a newer version is running, and nothing about changes when there are none', () => {
+	it('mounts the live region empty, with Reload, and fills it afterwards', async () => {
 		render(StaleBanner);
-		expect(screen.getByTestId('stale-banner').textContent).toContain(
-			'A newer version of Lodestar is running. Reload to update.'
-		);
+		expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
+		expect(screen.getByRole('status').textContent).not.toContain('A newer version');
+		await screen.findByText(/A newer version of Lodestar is running/);
+	});
+
+	it('says a newer version is running, and nothing about changes when there are none', async () => {
+		render(StaleBanner);
+		await screen.findByText(/A newer version of Lodestar is running\. Reload to update\./);
 		expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
 		expect(screen.getByTestId('stale-banner').textContent).not.toContain('Save or discard');
 		expect(screen.getByRole('status')).toBeTruthy();
 	});
 
-	it('asks to save or discard when a leave guard objects', () => {
+	it('asks to save or discard when a leave guard objects', async () => {
 		const guard = (e: Event) => e.preventDefault();
 		window.addEventListener('beforeunload', guard);
 		try {
 			expect(hasUnsaved()).toBe(true);
 			render(StaleBanner);
-			expect(screen.getByTestId('stale-banner').textContent).toContain(
-				'Save or discard your changes first.'
-			);
+			await screen.findByText(/Save or discard your changes first\./);
 		} finally {
 			window.removeEventListener('beforeunload', guard);
 		}

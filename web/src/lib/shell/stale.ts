@@ -36,6 +36,7 @@ export function watchStale(onStale: () => void, deps: StaleDeps = {}): () => voi
 	const get = deps.fetchBuild ?? fetchBuild;
 	const now = deps.now ?? Date.now;
 	const mine = deps.build ?? __SVELTEKIT_APP_VERSION__;
+	// The throttle counts from here: when the chrome loads (first interaction, or 30 s).
 	let last = now();
 	let busy = false;
 	const stop = () => document.removeEventListener('visibilitychange', check);
