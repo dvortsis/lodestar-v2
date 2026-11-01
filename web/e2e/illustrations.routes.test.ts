@@ -70,3 +70,17 @@ test('Save-Data hides illustrations whatever the stored preference', async ({ pa
 	await go('/definitely-not-a-page');
 	await expectNoScene(page, seen);
 });
+
+test('first visit with no cache: the scene is hidden once the account answer says off, keeping its space', async ({
+	page,
+	go
+}) => {
+	await go('/definitely-not-a-page');
+	const scene = page.locator('[data-testid="state-screen"] picture');
+	await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
+	// `applyLook` sets this attribute when the appearance answer arrives (boot.test.ts); the mocked
+	// shell has no live stream, so set it as the boot does.
+	await page.evaluate(() => (document.documentElement.dataset.illustrations = 'false'));
+	await expect(scene).toHaveCSS('visibility', 'hidden');
+	expect((await scene.boundingBox())?.height).toBeGreaterThan(0);
+});
