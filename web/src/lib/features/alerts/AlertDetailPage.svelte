@@ -105,9 +105,12 @@
 	onMount(() => {
 		let off: (() => void) | undefined;
 		let gone = false;
-		void import('./commands').then(({ registerAlertDetailCommands }) => {
-			if (!gone) off = registerAlertDetailCommands((by) => void step(by));
-		});
+		void import('./commands').then(
+			({ registerAlertDetailCommands }) => {
+				if (!gone) off = registerAlertDetailCommands((by) => void step(by));
+			},
+			() => {}
+		); // Shortcuts only: the page works without them.
 		return () => {
 			gone = true;
 			off?.();

@@ -316,6 +316,9 @@ export function preloadedJs(appJs) {
 export const GRAPH = fileURLToPath(
 	new URL('../.svelte-kit/output/chunk-graph.json', import.meta.url)
 );
+const MANIFEST = fileURLToPath(
+	new URL('../.svelte-kit/output/client/.vite/manifest.json', import.meta.url)
+);
 
 /** @returns {import('vite').Plugin} */
 export function chunkGraph() {
@@ -412,15 +415,21 @@ export function findStrays({ chunks, modules }, files, roots, route = '/search')
 
 /**
  * The source modules (paths from `web/`) bundled into `files` (`build/…` paths), from the recorded
- * chunk graph; [] before a build exists. `.size-limit.mjs` uses it to keep shared code a view must
+ * chunk graph; [] before a build exists, and throws when a build has no graph. `.size-limit.mjs` uses it to keep shared code a view must
  * not carry out of it (X-alert-search-headroom).
  * @param {string[]} files
+ * @param {string} [GRAPH_FILE] the graph file (tests pass their own)
+ * @param {string} [MANIFEST_FILE] the client manifest
  * @returns {string[]}
  */
-export function modulesIn(files) {
-	if (!existsSync(GRAPH)) return [];
+export function modulesIn(files, GRAPH_FILE = GRAPH, MANIFEST_FILE = MANIFEST) {
+	if (!existsSync(GRAPH_FILE)) {
+		// No build at all: nothing to check. A build without its graph would pass every check vacuously.
+		if (!existsSync(MANIFEST_FILE)) return [];
+		throw new Error(`The build has a client manifest but no chunk graph at ${GRAPH_FILE}: rebuild`);
+	}
 	/** @type {Graph} */
-	const { chunks } = JSON.parse(readFileSync(GRAPH, 'utf8'));
+	const { chunks } = JSON.parse(readFileSync(GRAPH_FILE, 'utf8'));
 	return files.flatMap((f) =>
 		(chunks[f.replace(/^build\//, '')]?.modules ?? []).map((id) => id.replace(at(''), ''))
 	);

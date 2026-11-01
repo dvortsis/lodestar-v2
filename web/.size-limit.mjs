@@ -900,7 +900,7 @@ if (carried.length)
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
-	entry('CSS', search.css, '20 KB'),
+	entry('CSS', search.css, '19.65 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
