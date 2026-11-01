@@ -55,5 +55,15 @@
 	"shortcuts_load_failed": "无法加载键盘设置。",
 	"shortcuts_err_plus": "+ 键不能用作快捷键",
 	"shortcuts_nothing_to_save": "没有需要保存的更改。",
-	"shortcuts_read_only_banner": "这些设置已锁定，您的更改未保存。"
+	"shortcuts_read_only_banner": "这些设置已锁定，您的更改未保存。",
+	"shortcuts_key_comma": "逗号",
+	"shortcuts_key_period": "句号",
+	"shortcuts_key_minus": "减号",
+	"shortcuts_key_equals": "等号",
+	"shortcuts_key_semicolon": "分号",
+	"shortcuts_key_apostrophe": "撇号",
+	"shortcuts_key_backslash": "反斜杠",
+	"shortcuts_key_bracket_left": "左方括号",
+	"shortcuts_key_bracket_right": "右方括号",
+	"shortcuts_key_backtick": "反引号"
 }
