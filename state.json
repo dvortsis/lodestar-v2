@@ -584,7 +584,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku."
+      "notes": " | 03:11Z brief briefs/H-zh.md (473 missing zh keys; completeness test). | 03:11Z launched Haiku. | 03:25Z all 473 gaps filled locally; blocked on locale.test (zh auto-select now on at coverage 1.0) and Natural phrasing +60 B. Runner ruled (§2.26): keep auto-select as designed (tests stub coverage + fixture probe), Natural phrasing limit 1.64->1.75 KB with comment; decisions file."
     },
     "G-m5": {
       "status": "pending",
@@ -2760,6 +2760,12 @@
       "id": "flag-wizard-packs",
       "status": "to-send",
       "text": "§2.19 flag: the wizard pre-checks all five packs again when every pack is off, because the API has no \"choice stored\" flag (refines §2.8; turning them on still needs Continue; S-wizard-2, #309).",
+      "unblocks": "nothing (information)"
+    },
+    {
+      "id": "flag-zh-autoselect",
+      "status": "to-send",
+      "text": "§2.19 flag: with the zh catalogue complete (H-zh), browsers set to Chinese now get the Chinese UI automatically (the existing 0.95 coverage gate); the Natural phrasing chunk limit rose 1.64 -> 1.75 KB for the inlined zh strings.",
       "unblocks": "nothing (information)"
     }
   ],
