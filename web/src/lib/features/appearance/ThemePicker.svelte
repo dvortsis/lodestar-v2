@@ -108,7 +108,10 @@
 	}
 
 	let different = $state(false);
-	onMount(() => (different = prefs.theme_dark !== ''));
+	// Follows `theme_dark` as it changes (Undo included), not only on mount.
+	$effect.pre(() => {
+		if (prefs.theme_dark) different = true;
+	});
 	const darkOptions = $derived([
 		{ value: '', label: m.appearance_dark_same() },
 		...families.map((f) => ({ value: f.id, label: f.name }))

@@ -29,6 +29,8 @@
 
 	let status = $state<'loading' | 'ready' | 'failed'>('loading');
 	let prefs = $state<Appearance>({ ...DEFAULTS });
+	/** What the server last confirmed; `prefs` is this plus any change still saving. */
+	let saved = $state.raw<Appearance>({ ...DEFAULTS });
 	let locks = $state<Loaded['locks']>({});
 	let revision = 0;
 	let failed = $state(false);
@@ -111,6 +113,7 @@
 				return;
 			}
 			({ prefs, locks, revision } = res);
+			saved = res.prefs;
 			for (const p of pending) prefs = { ...prefs, ...p };
 			status = 'ready';
 			void apply(prefs);
@@ -123,7 +126,8 @@
 	function change(patch: Partial<Appearance>, undoing = false): Promise<void> {
 		const keys = Object.keys(patch) as Name[];
 		if (keys.some(locked)) return Promise.resolve();
-		const before = Object.fromEntries(keys.map((k) => [k, prefs[k]])) as Partial<Appearance>;
+		const pick = (p: Appearance) =>
+			Object.fromEntries(keys.map((k) => [k, p[k]])) as Partial<Appearance>;
 		prefs = { ...$state.snapshot(prefs), ...patch } as Appearance;
 		failed = false;
 		undo = null;
@@ -132,19 +136,22 @@
 		saving++;
 		pending.push(patch);
 		queue = queue.then(async () => {
+			// What the server held before this change: Undo never restores a value that never saved.
+			const was = pick(saved);
 			try {
 				revision = await save(patch, revision);
+				saved = { ...saved, ...patch };
 				failed = false;
 				// Offered only once nothing later is queued, so Undo always belongs to the latest
 				// change. Undoing is a change of its own and isn't itself undoable.
-				if (!undoing && saving === 1) undo = before;
+				if (!undoing && saving === 1) undo = was;
 			} catch (e) {
 				pending = pending.filter((p) => p !== patch);
 				// A 2xx that can't be read may have landed: re-read rather than say it failed.
 				if (e instanceof Unreadable) return void (await refresh());
 				// Put back only the fields this change set, and only if nothing newer replaced them.
 				const now = $state.snapshot(prefs) as Record<Name, unknown>;
-				for (const k of keys) if (now[k] === patch[k]) now[k] = before[k];
+				for (const k of keys) if (now[k] === patch[k]) now[k] = saved[k];
 				prefs = now as unknown as Appearance;
 				void apply(prefs);
 				if (e instanceof ApiError && e.code === 'stale_revision') await refresh();

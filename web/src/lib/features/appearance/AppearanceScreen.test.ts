@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
 
 const get = vi.hoisted(() => vi.fn());
@@ -28,6 +28,18 @@ const hold = () => {
 	);
 	return h;
 };
+/** Serves a `themes.json` with one family, Moss. */
+const stubThemes = () => {
+	const entry = (id: string, mode: string) => ({
+		...{ id, name: id, family: 'Moss', group: 'original', mode, contrast: 'AA' },
+		...{ values: [`#${(0x111111).toString(16)}`], keys: ['--color-base-100'] }
+	});
+	const file = {
+		...{ v: 1, keys: ['--color-base-100'] },
+		themes: [entry('moss-light', 'light'), entry('moss-dark', 'dark')]
+	};
+	vi.stubGlobal('fetch', async () => new Response(JSON.stringify(file)));
+};
 const lockedDensity = () => ({
 	...prefs(),
 	fields: { ...prefs().fields, density: field('comfortable', { env: 'LODESTAR_DENSITY' }) }
@@ -52,6 +64,8 @@ const content = (on = false) => ({
 	revision: 2,
 	fields: { show_adult: field(on) }
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 beforeEach(() => {
 	vi.stubGlobal('matchMedia', () => ({
@@ -259,13 +273,7 @@ describe('AppearanceScreen', () => {
 	});
 
 	it('Undo of a theme focuses the checked theme in the picker', async () => {
-		const entry = (id: string, mode: string) => ({
-			...{ id, name: id, family: 'Moss', group: 'original', mode, contrast: 'AA' },
-			...{ values: [`#${(0x111111).toString(16)}`], keys: ['--color-base-100'] }
-		});
-		const themes = { v: 1, keys: ['--color-base-100'] };
-		const file = { ...themes, themes: [entry('moss-light', 'light'), entry('moss-dark', 'dark')] };
-		vi.stubGlobal('fetch', async () => new Response(JSON.stringify(file)));
+		stubThemes();
 		render(AppearanceScreen);
 		await fireEvent.click(await screen.findByRole('button', { name: 'Browse themes' }));
 		const other = await screen.findByRole('radio', { name: /Moss/ });
@@ -274,7 +282,63 @@ describe('AppearanceScreen', () => {
 		await wait(() => expect((document.activeElement as HTMLInputElement).checked).toBe(true));
 		expect((document.activeElement as HTMLInputElement).type).toBe('radio');
 		expect(document.activeElement).not.toBe(other);
-		vi.unstubAllGlobals();
+	});
+
+	it('Undo of a theme whose tile is filtered out focuses the filter', async () => {
+		stubThemes();
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Browse themes' }));
+		await fireEvent.click(await screen.findByRole('radio', { name: /Moss/ }));
+		const filter = document.querySelector<HTMLSelectElement>('#ap-filter')!;
+		await fireEvent.change(filter, { target: { value: 'community' } });
+		await wait(() => expect(screen.queryByRole('radio', { name: /Moss/ })).toBeNull());
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() => expect(document.activeElement).toBe(filter));
+		expect(patch.mock.calls[1]![1].body.theme).toBe('riverstone');
+	});
+
+	it('Undo of turning the dark theme off turns it back on and focuses its select', async () => {
+		stubThemes();
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content' ? content() : prefs({ theme_dark: 'moss' })
+		);
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Browse themes' }));
+		const other = await screen.findByRole('switch', { name: /different theme in dark mode/i });
+		await wait(() => expect((other as HTMLInputElement).checked).toBe(true));
+		await fireEvent.click(other);
+		await wait(() => expect(patch.mock.calls[0]![1].body.theme_dark).toBe(''));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() => expect(document.activeElement?.id).toBe('ap-dark'));
+		expect(patch.mock.calls[1]![1].body.theme_dark).toBe('moss');
+		expect(
+			(screen.getByRole('switch', { name: /different theme in dark mode/i }) as HTMLInputElement)
+				.checked
+		).toBe(true);
+	});
+
+	it('Undo of the mode focuses the mode that is back', async () => {
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Dark' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() =>
+			expect(document.activeElement).toBe(
+				within(screen.getByRole('radiogroup', { name: 'Mode' })).getByRole('radio', {
+					name: 'System'
+				})
+			)
+		);
+	});
+
+	it('Undo never restores a value that never saved', async () => {
+		const a = hold();
+		render(AppearanceScreen);
+		await fireEvent.click(await screen.findByRole('radio', { name: 'Compact' }));
+		await fireEvent.click(screen.getByRole('radio', { name: 'Cards' }));
+		a.fail(new ApiError(500, 'internal', 'x'));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+		await wait(() => expect(patch).toHaveBeenCalledTimes(3));
+		expect(patch.mock.calls[2]![1].body.density).toBe('comfortable');
 	});
 
 	it('a re-read keeps a change that is still waiting to save', async () => {
