@@ -1,7 +1,7 @@
 // Settings → Security (M-security-settings) against a stubbed fetch: the password confirmation
 // (Cancel sends nothing, a wrong password shows the server's words, the lock-out, the field
 // cleared), Change password's rules and result, and the read-only secure cookies status.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { initLocale } from '$lib/i18n/locale.svelte';
 import { dismissAll } from '../form/dialogs';
@@ -43,6 +43,12 @@ const NETWORK = (env: string | null, value = false) => ({
 		secure_cookies: { value, env, read_only: true, restart_required: true, source: 'default' }
 	}
 });
+
+// The dialog is a lazy chunk. Cold, under a full parallel run, its first transform can outlast the
+// 10 s waits below; the dialog then mounted late, in the next test. Load it before any test.
+beforeAll(async () => {
+	await Promise.all([import('./PasswordDialog.svelte'), import('./Lockout.svelte')]);
+}, 120_000);
 
 beforeEach(() => {
 	initLocale('en');
