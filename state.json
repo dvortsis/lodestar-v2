@@ -3106,6 +3106,11 @@
       "id": "flag-fx3-stale-resend",
       "status": "to-send",
       "text": "FX-3: with no Save button, a stale-revision Keyboard change now re-sends itself once (merged with the server state). Recorded in 2026-11-01-FX-3.md."
+    },
+    {
+      "id": "flag-fx4-limits",
+      "status": "to-send",
+      "text": "FX-4 raised \"Settings logging messages (on demand)\" to 1.05 kB (runner §2.26) for real labels on the two log-level fields."
     }
   ],
   "external_gates": {
@@ -3180,6 +3185,10 @@
     {
       "t": "2026-11-01T16:35Z",
       "event": "FX-3 opened #346 (head cabff97c); Opus review started. Follow-up queued: appearance-undo-focus (Appearance Undo loses focus when its button removes itself; features/appearance, after FX-4 merges). FX-4 #345 CHANGES relayed (enum exemptions, zh 哈希, I3 number/slider/json, bans lookahead) + E2E 45 fails (merge main, settings.routes:116, marker)."
+    },
+    {
+      "t": "2026-11-01T16:40Z",
+      "event": "FX-4 size ruling (runner §2.26): Settings logging messages (on demand) → 1.05 kB for B6 logging level labels. Follow-up adds .css spacing ramp hits (appearance/editor.css, shortcuts/shortcuts.css) to text-label-token follow-up."
     }
   ],
   "reviews": {
