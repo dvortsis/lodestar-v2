@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-01T22:59:00Z",
+  "updated_at": "2026-11-01T23:36:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -2204,11 +2204,12 @@
       "notes": "queued: waits for F-filter-load-fail-closed (shared crates/api files)"
     },
     "B-subscriptions-api": {
-      "status": "building",
+      "status": "pre-pr",
       "notes": "queued: Opus + /security-review; prerequisite of S-blocklists; waits for F-filter-load-fail-closed (crates/api/src/filters.rs)",
       "model": "opus",
       "session": "session_01MMjhn8f4Pt2y2Vtwi6Wo7L",
-      "launched": "2026-11-01T22:58Z"
+      "launched": "2026-11-01T22:58Z",
+      "note": "~1,880 lines accepted as one PR (tests+generated); 3 security fixes found need regression tests"
     },
     "i9-stage2": {
       "status": "queued",
@@ -2218,8 +2219,8 @@
       "status": "ci",
       "notes": "Opus; session_01MMjhn8LGnvvgvzGLXVaKuH; behind switch default off; CR-SIM screen; live A/B later on owner hardware",
       "pr": 359,
-      "head": "28250fd6",
-      "note": "review fixes verified; runner MERGE on green"
+      "head": "1673b3c4",
+      "note": "main merged in; MERGE on green"
     },
     "X-web-followups-1101f": {
       "status": "merged",
@@ -2231,13 +2232,14 @@
       "session": "session_01MMjhn9y1RFyN62gb7BnJQW (archived)"
     },
     "SRC-0": {
-      "status": "changes",
+      "status": "merged",
       "model": "opus",
-      "session": "session_01MMjhnDAGAiTp7Vw2eCzbsH",
+      "session": "session_01MMjhnDAGAiTp7Vw2eCzbsH (archived)",
       "launched": "2026-11-01T21:30Z",
       "pr": 360,
       "head": "200e7a41",
-      "note": "Opus review CHANGES: plugin caps need floors (blocking); clamp capacity; url host keying (approved url dep); Client::poll; streaming note; polish"
+      "note": "Opus review CHANGES: plugin caps need floors (blocking); clamp capacity; url host keying (approved url dep); Client::poll; streaming note; polish",
+      "merge": "d79ce25b"
     },
     "F-filter-standin-undo": {
       "status": "queued",
@@ -2245,15 +2247,23 @@
       "note": "From #357 review: undo effects of fail-closed stand-ins after an upgrade that reads the row again; Is-adult stand-in holds tombstone after 30 days and are not released by removing the rule (§20 false positives must be correctable). Needs persisted state. /security-review. After #357 merges."
     },
     "SRC-16": {
-      "status": "building",
+      "status": "changes",
       "model": "sonnet",
       "session": "session_01MMjhnBWJ84LfMg2vn3RGTr",
-      "launched": "2026-11-01T22:14Z"
+      "launched": "2026-11-01T22:14Z",
+      "pr": 361,
+      "note": "Opus review CHANGES: 404 focus/announce, hidden-tab poll test, 0.99 cap, body.ts forward, polish; also Playwright red on b573f66f"
     },
     "X-size-deterministic": {
       "status": "queued",
       "model": "sonnet",
       "note": "Size job builds with a fixed version name / GITHUB_SHA so size-limit is deterministic (SHA noise ~30 B > many entries' headroom; root cause of the recurring \"+3 B in CI\"). Owns web/scripts/build-version.mjs and the web.yml size step; full-ci not needed."
+    },
+    "SRC-6": {
+      "status": "building",
+      "model": "opus",
+      "session": "session_01MMjhnD7opuLZGiYgUPxKba",
+      "launched": "2026-11-01T23:35Z"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -3275,6 +3285,11 @@
       "id": "flag-cr1b-order",
       "status": "to-send",
       "text": "§2.19 flag from CR-1b (#359): 256-prefix targets (switch off by default) visit prefixes in bit-reversed order with a cursor per kind (sample, find_node) and per family. The order was chosen after a first CR-SIM screen on the same seeds (sequential cost ~6% of new contacts), so CR-SIM is not independent evidence for it; the order is frozen before the live A/B. CR-SIM verdict: neutral, inside noise; expected live result \"inconclusive, stays off\"."
+    },
+    {
+      "id": "flag-src0-floors",
+      "status": "to-send",
+      "text": "§2.26/§2.19 from SRC-0 (#360): global floors under every source plugin's declared caps: ≥1 s between requests to one host, burst ≤4, polls ≥60 s apart, back-off base ≥1 s, ≤1 full scrape per tracker per day (BEP 48). They only tighten; owner-set per-source numbers (Nyaa ≥5 min) stay above them."
     }
   ],
   "external_gates": {
