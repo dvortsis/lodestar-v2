@@ -26,6 +26,7 @@
 	"appearance_motion_full": "完整",
 	"appearance_illustrations": "显示插图",
 	"appearance_illustrations_help": "空状态和首次运行页面中的图片。低资源模式下会自动关闭。",
+	"appearance_illustrations_save_data": "浏览器的流量节省模式开启时，图片会保持关闭。",
 	"appearance_adult": "成人内容",
 	"appearance_adult_help": "默认关闭。此设置对整个服务器生效，而不仅是你。",
 	"appearance_adult_label": "显示成人内容",
