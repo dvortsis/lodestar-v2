@@ -687,15 +687,47 @@ impl FileSetCache {
     }
 }
 
+/// A segment with more file documents than this is scanned in pieces,
+/// in parallel: merging leaves one segment with most of the files (at 1M
+/// torrents, 17.7M of 29.5M), and scanned whole it held a cold clause
+/// to one thread while the others sat idle (X-file-clause-cold).
+const PIECE_DOCS: DocId = 1 << 21;
+
+/// At most this many pieces a segment, as many as the file index's
+/// search threads: each piece's gather is transient (a bitset over the
+/// segment's id span when dense), so this bounds them to four a segment.
+const MAX_PIECES: DocId = 4;
+
+/// The doc ranges a segment of `max_doc` documents is scanned in.
+fn pieces(max_doc: DocId, piece_docs: DocId) -> impl Iterator<Item = (DocId, DocId)> {
+    let n = max_doc.div_ceil(piece_docs.max(1)).clamp(1, MAX_PIECES);
+    let len = max_doc.div_ceil(n).max(1);
+    (0..n).map(move |i| {
+        let lo = i.saturating_mul(len).min(max_doc);
+        (lo, lo.saturating_add(len).min(max_doc))
+    })
+}
+
 /// The torrents with a file matching `query`, the clause known as `key`.
 /// Segments the cache misses are scanned in parallel on the file index's
-/// executor, as the torrent index's searches are.
+/// executor, as the torrent index's searches are, a large one in pieces.
 pub(crate) fn torrent_ids(
     searcher: &Searcher,
     query: &dyn Query,
     key: &str,
     cache: &FileSetCache,
     cancel: &crate::CancelToken,
+) -> crate::index::Result<IdSet> {
+    torrent_ids_in_pieces(searcher, query, key, cache, cancel, PIECE_DOCS)
+}
+
+fn torrent_ids_in_pieces(
+    searcher: &Searcher,
+    query: &dyn Query,
+    key: &str,
+    cache: &FileSetCache,
+    cancel: &crate::CancelToken,
+    piece_docs: DocId,
 ) -> crate::index::Result<IdSet> {
     cancel.check()?;
     let segs = searcher.segment_readers();
@@ -714,25 +746,31 @@ pub(crate) fn torrent_ids(
         // which may be a sibling's stop).
         let failed = AtomicBool::new(false);
         let first_err = Mutex::new(None);
+        let tasks: Vec<(usize, DocId, DocId)> = missed
+            .iter()
+            .flat_map(|&i| pieces(segs[i].max_doc(), piece_docs).map(move |(lo, hi)| (i, lo, hi)))
+            .collect();
         let scanned = searcher
             .index()
             .search_executor()
             .map(
-                |i: usize| {
-                    scan_segment(weight.as_ref(), &segs[i], cancel, &failed).map_err(|e| {
-                        // A stop by the token or by a sibling is not this
-                        // segment's own error.
-                        if !cancel.is_stopped() && !failed.load(Ordering::Acquire) {
-                            let mut slot = first_err.lock().unwrap_or_else(|p| p.into_inner());
-                            slot.get_or_insert(e);
-                            failed.store(true, Ordering::Release);
-                            crate::cancel::interrupted()
-                        } else {
-                            e
-                        }
-                    })
+                |(i, lo, hi): (usize, DocId, DocId)| {
+                    scan_segment(weight.as_ref(), &segs[i], (lo, hi), cancel, &failed).map_err(
+                        |e| {
+                            // A stop by the token or by a sibling is not this
+                            // segment's own error.
+                            if !cancel.is_stopped() && !failed.load(Ordering::Acquire) {
+                                let mut slot = first_err.lock().unwrap_or_else(|p| p.into_inner());
+                                slot.get_or_insert(e);
+                                failed.store(true, Ordering::Release);
+                                crate::cancel::interrupted()
+                            } else {
+                                e
+                            }
+                        },
+                    )
                 },
-                missed.iter().copied(),
+                tasks.iter().copied(),
             )
             .map_err(|e| {
                 let first = first_err.lock().unwrap_or_else(|p| p.into_inner()).take();
@@ -741,8 +779,19 @@ pub(crate) fn torrent_ids(
         cancel.check()?;
         // Cached only once every segment is whole: a scan cut short
         // caches nothing.
-        for (i, ids) in missed.into_iter().zip(scanned) {
-            let ids = Arc::new(ids);
+        // A segment's pieces are adjacent in `tasks`: join them.
+        let mut joined: Vec<(usize, Gather)> = Vec::with_capacity(missed.len());
+        for ((i, _, _), gather) in tasks.into_iter().zip(scanned) {
+            match joined.last_mut() {
+                Some((at, g)) if *at == i => {
+                    let first = std::mem::replace(g, Gather::List(Vec::new()));
+                    *g = first.join(gather);
+                }
+                _ => joined.push((i, gather)),
+            }
+        }
+        for (i, gather) in joined {
+            let ids = Arc::new(gather.finish());
             cache.insert(keys[i].clone(), ids.clone());
             parts[i] = Some(ids);
         }
@@ -789,6 +838,34 @@ impl Gather {
         }
     }
 
+    /// Both pieces' ids: their bitsets or'd when they cover the same
+    /// span (a segment's pieces always do), else one list.
+    fn join(self, other: Gather) -> Gather {
+        match (self, other) {
+            (Gather::Bits { lo, mut words }, Gather::Bits { lo: lo2, words: w2 })
+                if lo == lo2 && words.len() == w2.len() =>
+            {
+                for (a, b) in words.iter_mut().zip(&w2) {
+                    *a |= b;
+                }
+                Gather::Bits { lo, words }
+            }
+            (a, b) => {
+                let mut ids = Vec::new();
+                a.for_each(|id| ids.push(id));
+                b.for_each(|id| ids.push(id));
+                Gather::List(ids)
+            }
+        }
+    }
+
+    fn for_each(&self, mut f: impl FnMut(u64)) {
+        match self {
+            Gather::List(ids) => ids.iter().copied().for_each(f),
+            Gather::Bits { lo, words } => for_each_bit(*lo, words, &mut f),
+        }
+    }
+
     fn finish(self) -> IdPart {
         match self {
             Gather::List(mut ids) => {
@@ -801,14 +878,16 @@ impl Gather {
     }
 }
 
-/// One file-index segment's torrent ids. Documents come from the scorer
-/// 64 at a time, with their torrent ids read in one call.
+/// The torrent ids of one file-index segment's documents in `[lo, hi)`.
+/// Documents come from the scorer 64 at a time, with their torrent ids
+/// read in one call.
 fn scan_segment(
     weight: &dyn Weight,
     seg: &SegmentReader,
+    (lo, hi): (DocId, DocId),
     cancel: &crate::CancelToken,
     failed: &AtomicBool,
-) -> tantivy::Result<IdPart> {
+) -> tantivy::Result<Gather> {
     let stopped = || {
         if cancel.is_stopped() || failed.load(Ordering::Acquire) {
             Err(crate::cancel::interrupted())
@@ -835,6 +914,9 @@ fn scan_segment(
     const BLOCK: usize = tantivy::COLLECT_BLOCK_BUFFER_LEN;
     const CHECK_BLOCKS: u32 = crate::cancel::CHECK_EVERY / 2 / BLOCK as u32;
     const _: () = assert!(CHECK_BLOCKS > 0);
+    if scorer.doc() < lo {
+        scorer.seek(lo);
+    }
     let mut docs = [0 as DocId; BLOCK];
     let mut ids = [None; BLOCK];
     let mut blocks = 0u32;
@@ -843,7 +925,9 @@ fn scan_segment(
             stopped()?;
         }
         blocks = blocks.wrapping_add(1);
-        let n = scorer.fill_buffer(&mut docs);
+        let filled = scorer.fill_buffer(&mut docs);
+        // Docs come in order; those from `hi` on are the next piece's.
+        let n = docs[..filled].partition_point(|d| *d < hi);
         if n == 0 {
             break;
         }
@@ -858,9 +942,12 @@ fn scan_segment(
                 gather.push(id);
             }
         }
+        if n < filled {
+            break;
+        }
     }
     stopped()?;
-    Ok(gather.finish())
+    Ok(gather)
 }
 
 /// Calls `f` with the id of each bit set, in order; bit `i` is `base + i`.
@@ -1423,6 +1510,86 @@ mod scan_tests {
         let again = torrent_ids(&searcher, &AllQuery, "all", &cache, &token).unwrap();
         assert_eq!(again, set);
         assert_eq!(cache.hits(), (4, 4));
+    }
+
+    /// A segment is cut into at most `MAX_PIECES` adjacent ranges that
+    /// cover it exactly.
+    #[test]
+    fn pieces_cover_a_segment_in_order() {
+        for (max_doc, piece) in [(0, 10), (1, 10), (10, 10), (11, 10), (35, 10), (1000, 10)] {
+            let got: Vec<_> = pieces(max_doc, piece).collect();
+            assert!(!got.is_empty() && got.len() <= MAX_PIECES as usize);
+            assert_eq!(got[0].0, 0);
+            assert_eq!(got.last().unwrap().1, max_doc);
+            assert!(got.windows(2).all(|w| w[0].1 == w[1].0 && w[0].0 < w[0].1));
+        }
+        assert_eq!(pieces(11, 10).collect::<Vec<_>>(), [(0, 6), (6, 11)]);
+        assert_eq!(pieces(5, 10).count(), 1);
+    }
+
+    /// Scanned in pieces (here a few hundred documents each, so every
+    /// segment is cut, with pieces ending inside a torrent's files), a
+    /// clause finds what a whole-segment scan finds, in both forms.
+    #[test]
+    fn a_scan_in_pieces_finds_what_a_whole_scan_does() {
+        let mut builder = Schema::builder();
+        let torrent = builder.add_u64_field("torrent", FAST);
+        let size = builder.add_u64_field("size", FAST);
+        let mut index = tantivy::Index::create_in_ram(builder.build());
+        index.set_multithread_executor(3).unwrap();
+        let mut writer = index
+            .writer_with_num_threads::<TantivyDocument>(1, 15 << 20)
+            .unwrap();
+        writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for ids in [0..400u64, 400..1_000] {
+            for id in ids {
+                for f in 0..(1 + id % 4) {
+                    let mut doc = TantivyDocument::new();
+                    doc.add_u64(torrent, id);
+                    doc.add_u64(size, id * 7 + f);
+                    writer.add_document(doc).unwrap();
+                }
+            }
+            writer.commit().unwrap();
+        }
+        writer.delete_term(Term::from_field_u64(torrent, 401));
+        writer.commit().unwrap();
+        let searcher = index.reader().unwrap().searcher();
+        let token = crate::CancelToken::new();
+        let queries: [(&str, Q); 3] = [
+            ("all", Box::new(AllQuery)),
+            (
+                "big",
+                Box::new(RangeQuery::new(
+                    Bound::Included(Term::from_field_u64(size, 3_000)),
+                    Bound::Unbounded,
+                )),
+            ),
+            (
+                "few",
+                Box::new(RangeQuery::new(
+                    Bound::Included(Term::from_field_u64(size, 10)),
+                    Bound::Included(Term::from_field_u64(size, 40)),
+                )),
+            ),
+        ];
+        for (key, q) in &queries {
+            let whole =
+                torrent_ids(&searcher, q.as_ref(), key, &FileSetCache::default(), &token).unwrap();
+            for piece_docs in [1, 97, 300] {
+                let cut = torrent_ids_in_pieces(
+                    &searcher,
+                    q.as_ref(),
+                    key,
+                    &FileSetCache::default(),
+                    &token,
+                    piece_docs,
+                )
+                .unwrap();
+                assert_eq!(cut, whole, "{key} in pieces of {piece_docs}");
+            }
+            assert!(!whole.contains(401));
+        }
     }
 
     /// One segment's scan fails while its siblings are mid-scan: the

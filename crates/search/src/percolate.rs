@@ -383,9 +383,7 @@ mod tests {
 
     use super::*;
     use crate::query::parse;
-    use crate::testing::{
-        FILE_QUERY, append, append_files, delete, index_with, slow, tripwire,
-    };
+    use crate::testing::{FILE_QUERY, append, append_files, delete, index_with, slow, tripwire};
 
     const ALL: PercolateLimits = PercolateLimits {
         keep: usize::MAX,
