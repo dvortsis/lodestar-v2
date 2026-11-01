@@ -3238,6 +3238,10 @@
     {
       "t": "2026-11-01T18:26Z",
       "event": "merged #347 FX-5 (7fdae787): main green expected (Detail 37.52, logging parts 17.15). Archived FX-5. Told FX-6 (#348) and X-web-cleanup-1 (#349, runner MERGE) to merge main. Launched gate-file-cold (Sonnet, bench only). appearance-undo (Opus) waits for #349 (touches appearance/editor.css)."
+    },
+    {
+      "t": "2026-11-01T18:35Z",
+      "event": "FX-6-I9 opened #350 (fa8e556e): IEC printer + new `a..<b` syntax. Author caveat: stored filter rules with `..<` are skipped by an older binary after rollback -> possible content-safety loosening. Held; Opus security-focused review running. Follow-up queued: openapi-example-size (dto/search.rs:42 `size:>=10GB` example + regen openapi.json/schema.d.ts). New syntax = §2.19 flag (flag-i9-range-syntax) if it survives review."
     }
   ],
   "reviews": {
