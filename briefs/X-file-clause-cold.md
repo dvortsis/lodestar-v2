@@ -19,12 +19,12 @@
    Target: cold broad p95 ≤ 150 ms at 1M. **Don't change the index format, and don't raise the 8 MiB cache budget** (an owner-set number via §16; a change goes to the runner).
 3. **If the target needs an index-format change** (size in the file index), stop at a measured proposal: what changes, the space cost at 1M/10M, the rebuild path. The runner decides; the owner sees format changes.
 4. **Percolator:** pass the real request/job `CancelToken` (with its budget) into the file-clause path. Add a test that a cancelled or over-budget percolation with a broad file clause stops promptly (condition wait, ≥ 10 s deadline).
-5. **Gate it:** add the cold broad file clause to `search-bench --gate` at 1M with the §3 bound, if it fits CI time.
+5. **Gate it later:** G-m5a is editing `bench/**` and `ci.yml` right now (one session per file set). Measure with the existing `search-bench` (its query options) or a local harness outside `bench/`. Write the exact gate line you'd add in the decisions file; the runner adds it after G-m5a merges.
 6. **Decisions file:** `docs/decisions/<date>-X-file-clause-cold.md` with before/after numbers.
 
 ## Own
-`crates/search/src/files.rs`, `crates/search/src/percolate.rs` (the file-clause cancel path), `bench/**` additions, the CI gate line for search latency (only that job), tests, your decisions file.
-**Don't edit** the store schema, the index schema or `crates/search/src/suggest/**`.
+`crates/search/src/files.rs`, `crates/search/src/percolate.rs` (the file-clause cancel path), tests, your decisions file.
+**Don't edit** `bench/**` or `.github/workflows/**` (G-m5a owns them now), the store schema, the index schema or `crates/search/src/suggest/**`.
 
 ## Size
 ≲ 600 changed lines.
